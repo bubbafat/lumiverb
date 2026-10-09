@@ -625,27 +625,24 @@ def test_delete_project_preserves_assets(projects_env):
 
 
 # ---------------------------------------------------------------------------
-# Pre-rename paths: macOS/iOS builds and share links still use /collections
+# Projects only: the pre-rename /collections paths are gone (Robert, Oct 9:
+# the API as it should be, whatever the clients)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-def test_legacy_collections_path_serves_projects(projects_env):
+def test_the_pre_rename_collections_paths_are_gone(projects_env):
     client, api_key, _ = projects_env
-    r = client.post("/v1/collections", json={"name": "Legacy client"}, headers=_headers(api_key))
-    assert r.status_code == 201, r.text
-    created = r.json()
-    assert created["collection_id"] == created["project_id"]
-
-    listed = client.get("/v1/projects", headers=_headers(api_key)).json()["items"]
-    assert created["project_id"] in {p["project_id"] for p in listed}
-    legacy = client.get(f"/v1/collections/{created['project_id']}", headers=_headers(api_key))
-    assert legacy.status_code == 200
-    assert legacy.json()["collection_id"] == created["project_id"]
+    assert client.post("/v1/collections", json={"name": "Old client"}, headers=_headers(api_key)).status_code == 404
+    project_id = _project(client, api_key, "No alias")
+    assert client.get(f"/v1/collections/{project_id}", headers=_headers(api_key)).status_code == 404
+    assert client.get(f"/v1/public/collections/{project_id}").status_code in (401, 404)
+    item = client.get(f"/v1/projects/{project_id}", headers=_headers(api_key)).json()
+    assert "collection_id" not in item
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("prefix", ["/v1/public/projects", "/v1/public/collections"])
+@pytest.mark.parametrize("prefix", ["/v1/public/projects"])
 def test_public_project_readable_without_auth(projects_env, prefix):
     client, api_key, library_id = projects_env
     asset_id = _ingest_asset(client, api_key, library_id, f"public/{prefix.rsplit('/', 1)[1]}.jpg")
@@ -663,7 +660,6 @@ def test_public_project_readable_without_auth(projects_env, prefix):
     detail = client.get(f"{prefix}/{project_id}")
     assert detail.status_code == 200, detail.text
     assert detail.json()["project_id"] == project_id
-    assert detail.json()["collection_id"] == project_id
     assets = client.get(f"{prefix}/{project_id}/assets")
     assert assets.status_code == 200, assets.text
     assert [a["asset_id"] for a in assets.json()["items"]] == [asset_id]
@@ -986,16 +982,6 @@ def test_a_trashed_project_is_gone_everywhere_else(projects_env):
     assert client.post(f"/v1/projects/{project_id}/assets", json={"asset_ids": [other]}, headers=h).status_code == 404
     assert client.patch(f"/v1/projects/{project_id}", json={"name": "Renamed"}, headers=h).status_code == 404
     assert client.delete(f"/v1/projects/{project_id}", headers=h).status_code == 404
-    # The Swift apps still use the old paths.
-    assert client.get(f"/v1/collections/{project_id}", headers=h).status_code == 404
-
-
-@pytest.mark.slow
-def test_the_old_collections_path_moves_to_the_trash_too(projects_env):
-    client, api_key, _ = projects_env
-    project_id = _project(client, api_key, "Deleted from the Mac app")
-    assert client.delete(f"/v1/collections/{project_id}", headers=_headers(api_key)).status_code == 204
-    assert project_id in _trashed(client, api_key)
 
 
 @pytest.mark.slow
@@ -1525,13 +1511,14 @@ def test_clips_in_a_trashed_library_are_counted_apart_and_come_back_with_it(proj
 
 
 @pytest.mark.slow
-def test_export_notes_count_only_videos(projects_env):
+def test_export_notes_count_photos_too(projects_env):
+    # Photos export as stills (Robert, Oct 9), so a trashed one is left out like a video.
     client, api_key, library_id = projects_env
     photo = _ingest_asset(client, api_key, library_id, "videos-only/photo.jpg")
     video = _ingest_asset(client, api_key, library_id, "videos-only/clip.mov", "video")
     project_id = _project(client, api_key, "Photo and video in the trash", [photo, video])
     _trash_clips(client, api_key, photo, video)
-    assert _export_trashed_header(client, api_key, project_id) == "1"
+    assert _export_trashed_header(client, api_key, project_id) == "2"
 
 
 @pytest.mark.slow

@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   exportProject,
   getDefaultExportFormat,
-  getDefaultExportPrefix,
   listExportFormats,
   setDefaultExportFormat,
 } from "../api/client";
@@ -19,14 +18,13 @@ function plural(n: number, one: string, many: string): string {
  * Split Export button for a project (send to editor).
  *
  * "Export" uses the remembered default format, or opens the chooser the
- * first time; the arrow always opens the chooser, which can also set a
- * media location (where the originals live on this machine) and make the
- * chosen format the default.
+ * first time; the arrow always opens the chooser, which can make the chosen
+ * format the default. Clips point at the originals as the libraries know
+ * them; the editor relinks them where its paths differ.
  */
 export function ExportButton({ projectId }: { projectId: string }) {
   const [chooserOpen, setChooserOpen] = useState(false);
   const [format, setFormat] = useState<string | null>(null);
-  const [prefix, setPrefix] = useState("");
   const [makeDefault, setMakeDefault] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -38,12 +36,12 @@ export function ExportButton({ projectId }: { projectId: string }) {
     staleTime: Infinity,
   });
 
-  async function run(formatId: string, mediaPrefix?: string) {
+  async function run(formatId: string) {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const file = await exportProject(projectId, formatId, mediaPrefix);
+      const file = await exportProject(projectId, formatId);
       const url = URL.createObjectURL(file.blob);
       const link = document.createElement("a");
       link.href = url;
@@ -53,10 +51,8 @@ export function ExportButton({ projectId }: { projectId: string }) {
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), REVOKE_DOWNLOAD_URL_MS);
       const notes: string[] = [];
-      if (file.skippedStills > 0) {
-        notes.push(
-          `${plural(file.skippedStills, "photo wasn't", "photos weren't")} included: exports are video only for now.`,
-        );
+      if (file.stills > 0) {
+        notes.push(`${plural(file.stills, "photo is", "photos are")} in it as stills.`);
       }
       if (file.skippedNoDuration > 0) {
         notes.push(
@@ -96,24 +92,22 @@ export function ExportButton({ projectId }: { projectId: string }) {
 
   function openChooser() {
     setFormat(getDefaultExportFormat() ?? formats?.[0]?.id ?? null);
-    setPrefix(getDefaultExportPrefix() ?? "");
     setMakeDefault(false);
     setChooserOpen(true);
   }
 
   function onExportClick() {
     const remembered = getDefaultExportFormat();
-    if (remembered) void run(remembered, getDefaultExportPrefix() ?? undefined);
+    if (remembered) void run(remembered);
     else openChooser();
   }
 
   async function onChooserSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!format) return;
-    const location = prefix.trim() || undefined;
-    if (makeDefault) setDefaultExportFormat(format, location);
+    if (makeDefault) setDefaultExportFormat(format);
     setChooserOpen(false);
-    await run(format, location);
+    await run(format);
   }
 
   return (
@@ -187,20 +181,6 @@ export function ExportButton({ projectId }: { projectId: string }) {
                 </label>
               ))}
             </fieldset>
-            <label className="block text-sm">
-              <span className="mb-1 block text-gray-400">Media location</span>
-              <input
-                type="text"
-                value={prefix}
-                onChange={(e) => setPrefix(e.target.value)}
-                placeholder="Library folder (default), e.g. /Volumes/Travel SSD"
-                aria-label="Media location"
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600"
-              />
-              <span className="mt-1 block text-xs text-gray-500">
-                Where the original files are on the editing machine, if not in the library's folder.
-              </span>
-            </label>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"

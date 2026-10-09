@@ -2490,13 +2490,10 @@ class ProjectRepository:
         " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
     )
 
-    def hidden_clip_counts(self, project_id: str, *, videos_only: bool = False) -> dict[str, int]:
+    def hidden_clip_counts(self, project_id: str) -> dict[str, int]:
         """{"trashed", "missing", "library_trashed", "archived"} for the project's
-        hidden clips, in one query. videos_only for what an export leaves out."""
-        sql = self._HIDDEN_CLIPS_SQL
-        if videos_only:
-            sql += " AND a.media_type = 'video'"  # as export decides what's a video
-        row = self._session.execute(text(sql), {"pid": project_id}).one()
+        hidden clips, in one query."""
+        row = self._session.execute(text(self._HIDDEN_CLIPS_SQL), {"pid": project_id}).one()
         return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2]),
                 "archived": int(row[3])}
 

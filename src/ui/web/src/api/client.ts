@@ -1474,8 +1474,8 @@ export async function listExportFormats(): Promise<ExportFormat[]> {
 export interface ProjectExportFile {
   blob: Blob;
   filename: string;
-  /** Photos in the project that the export left out (video only for now). */
-  skippedStills: number;
+  /** Photos in the project, exported as stills. */
+  stills: number;
   /** Videos with no known length, left out (a zero-length clip breaks Final Cut). */
   skippedNoDuration: number;
   /** Videos exported at a fallback frame rate because they haven't been probed. */
@@ -1503,14 +1503,10 @@ function filenameFromDisposition(header: string | null): string | null {
   return plain ? plain[1] : null;
 }
 
-/** Export a project as a bin of master clips for an editor. */
-export async function exportProject(
-  projectId: string,
-  format: string,
-  prefix?: string,
-): Promise<ProjectExportFile> {
+/** Export a project as a bin of master clips for an editor: videos, and photos as
+ * stills, pointing at the originals as the libraries know them (relinked in the editor). */
+export async function exportProject(projectId: string, format: string): Promise<ProjectExportFile> {
   const qs = new URLSearchParams({ format });
-  if (prefix) qs.set("prefix", prefix);
   const url = `/v1/projects/${projectId}/export?${qs.toString()}`;
   let res = await fetch(url, { headers: authHeaders() });
   if (res.status === 401 && (await tryRefresh())) {
@@ -1529,7 +1525,7 @@ export async function exportProject(
   return {
     blob: await res.blob(),
     filename: filenameFromDisposition(res.headers.get("Content-Disposition")) ?? "project-export",
-    skippedStills: Number(res.headers.get("X-Lumiverb-Skipped-Stills") ?? 0) || 0,
+    stills: Number(res.headers.get("X-Lumiverb-Stills") ?? 0) || 0,
     skippedNoDuration: Number(res.headers.get("X-Lumiverb-Skipped-No-Duration") ?? 0) || 0,
     unprobed: Number(res.headers.get("X-Lumiverb-Unprobed") ?? 0) || 0,
     skippedTrashed: Number(res.headers.get("X-Lumiverb-Skipped-Trashed") ?? 0) || 0,
@@ -1540,7 +1536,6 @@ export async function exportProject(
 }
 
 const DEFAULT_EXPORT_FORMAT_KEY = "lumiverb.defaultExportFormat";
-const DEFAULT_EXPORT_PREFIX_KEY = "lumiverb.defaultExportPrefix";
 
 /** The format the Export button uses without asking; null until the user picks one. */
 export function getDefaultExportFormat(): string | null {
@@ -1551,22 +1546,11 @@ export function getDefaultExportFormat(): string | null {
   }
 }
 
-/** The media location saved with the default format, if any. */
-export function getDefaultExportPrefix(): string | null {
-  try {
-    return localStorage.getItem(DEFAULT_EXPORT_PREFIX_KEY);
-  } catch {
-    return null;
-  }
-}
-
-/** Remember a format (and the media location to use with it) for one-click Export. */
-export function setDefaultExportFormat(format: string | null, prefix?: string): void {
+/** Remember a format for one-click Export. */
+export function setDefaultExportFormat(format: string | null): void {
   try {
     if (format) localStorage.setItem(DEFAULT_EXPORT_FORMAT_KEY, format);
     else localStorage.removeItem(DEFAULT_EXPORT_FORMAT_KEY);
-    if (format && prefix) localStorage.setItem(DEFAULT_EXPORT_PREFIX_KEY, prefix);
-    else localStorage.removeItem(DEFAULT_EXPORT_PREFIX_KEY);
   } catch {
     /* storage unavailable: the chooser just opens each time */
   }

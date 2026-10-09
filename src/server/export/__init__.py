@@ -6,7 +6,7 @@ touch the endpoint. Each one renders an ExportBin to bytes.
 
 from __future__ import annotations
 
-from src.server.export.base import ExportBin, ExportClip, ExportProvider, timecode_to_frames
+from src.server.export.base import STILL_SEC, ExportBin, ExportClip, ExportProvider, still, timecode_to_frames
 from src.server.export.fcp7 import Fcp7XmlProvider
 from src.server.export.fcpxml import FcpxmlProvider
 
@@ -19,5 +19,7 @@ __all__ = [
     "ExportBin",
     "ExportClip",
     "ExportProvider",
+    "STILL_SEC",
+    "still",
     "timecode_to_frames",
 ]

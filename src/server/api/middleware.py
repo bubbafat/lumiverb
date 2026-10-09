@@ -158,11 +158,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     return await call_next(request)
 
             # Also try public_project_id for asset proxy/thumbnail
-            # (public_collection_id: the pre-rename name, still sent by
-            # macOS/iOS builds and old share links).
-            project_id = request.query_params.get("public_project_id") or request.query_params.get(
-                "public_collection_id"
-            )
+            project_id = request.query_params.get("public_project_id")
             if project_id:
                 with get_control_session() as session:
                     pub = PublicProjectRepository(session).get(project_id)
@@ -176,11 +172,9 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     return await call_next(request)
 
         # --- Unauthenticated path: attempt public project resolution ---
-        if request.method == "GET" and request.url.path.startswith(
-            ("/v1/public/projects/", "/v1/public/collections/")
-        ):
+        if request.method == "GET" and request.url.path.startswith("/v1/public/projects/"):
             parts = request.url.path.split("/")
-            # /v1/public/projects/{project_id}[/assets] (or the legacy /collections/ path)
+            # /v1/public/projects/{project_id}[/assets]
             project_id = parts[4] if len(parts) > 4 else None
             if project_id:
                 with get_control_session() as session:

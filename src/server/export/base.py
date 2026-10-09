@@ -13,6 +13,10 @@ from urllib.parse import quote
 # on import; the XML only needs a consistent one.
 FALLBACK_RATE = (30, 1)
 
+# How long a photo lasts on the timeline, as a still (Robert, Oct 9:
+# exports include photos).
+STILL_SEC = 5.0
+
 # Rates editors expect. A variable-frame-rate phone clip can average 29.92
 # fps; within 1% of a standard rate, the standard one is used.
 STANDARD_RATES = [
@@ -39,6 +43,8 @@ class ExportClip:
     drop_frame: bool | None
     audio_channels: int | None
     audio_sample_rate: int | None
+    # A photo: a still of STILL_SEC, video only (no rate, timecode or audio of its own).
+    still: bool = False
 
     @property
     def rate(self) -> tuple[int, int]:
@@ -120,9 +126,11 @@ def timecode_to_frames(tc: str, timebase: int, drop_frame: bool) -> int:
 
 
 def timeline_lead(clips: list[ExportClip]) -> ExportClip:
-    """The clip whose rate and size the timeline takes: the first one with
-    a known frame size (an unprobed clip has none), else the first."""
-    return next((c for c in clips if c.width and c.height), clips[0])
+    """The clip whose rate and size the timeline takes: the first video with
+    a known frame size (an unprobed clip has none), else the first video,
+    else the first (only stills)."""
+    videos = [c for c in clips if not c.still] or clips
+    return next((c for c in videos if c.width and c.height), videos[0])
 
 
 def timeline_frames(clip: ExportClip, lead: ExportClip) -> int:
@@ -132,3 +140,10 @@ def timeline_frames(clip: ExportClip, lead: ExportClip) -> int:
         return clip.duration_frames
     num, den = lead.rate
     return math.floor((clip.duration_sec or 0.0) * num / den)
+
+
+def still(asset_id: str, name: str, path: str, width: int | None, height: int | None) -> ExportClip:
+    """A photo as a still of STILL_SEC."""
+    return ExportClip(asset_id=asset_id, name=name, path=path, duration_sec=STILL_SEC, frame_rate_num=None,
+                      frame_rate_den=None, width=width, height=height, start_timecode=None, drop_frame=None,
+                      audio_channels=None, audio_sample_rate=None, still=True)

@@ -7,7 +7,6 @@ const api = vi.hoisted(() => ({
   listExportFormats: vi.fn(),
   exportProject: vi.fn(),
   getDefaultExportFormat: vi.fn(),
-  getDefaultExportPrefix: vi.fn(),
   setDefaultExportFormat: vi.fn(),
 }));
 vi.mock("../api/client", () => api);
@@ -29,11 +28,10 @@ beforeEach(() => {
   api.exportProject.mockResolvedValue({
     blob: new Blob(["<x/>"]),
     filename: "Job.fcpxml",
-    skippedStills: 0,
+    stills: 0,
     skippedNoDuration: 0,
     unprobed: 0,
   });
-  api.getDefaultExportPrefix.mockReturnValue(null);
   URL.createObjectURL = vi.fn(() => "blob:fake");
   URL.revokeObjectURL = vi.fn();
 });
@@ -53,8 +51,8 @@ describe("ExportButton", () => {
     fireEvent.click(screen.getByLabelText("Make default"));
     fireEvent.click(screen.getByRole("button", { name: "Export file" }));
 
-    await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcpxml", undefined));
-    expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml", undefined);
+    await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcpxml"));
+    expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml");
   });
 
   it("exports straight away with a default format", async () => {
@@ -63,70 +61,43 @@ describe("ExportButton", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Export" }));
 
-    await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcp7", undefined));
+    await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcp7"));
     expect(screen.queryByLabelText("Make default")).toBeNull();
   });
 
-  it("the menu arrow always opens the chooser, with a media location", async () => {
+  it("the menu arrow always opens the chooser, with no media location to give", async () => {
+    // Robert, Oct 9: just the brain's paths; the editor relinks.
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     renderButton();
 
     fireEvent.click(screen.getByRole("button", { name: "Export options" }));
-    fireEvent.change(await screen.findByLabelText("Media location"), {
-      target: { value: "/Volumes/Travel SSD" },
-    });
+    expect(await screen.findByRole("dialog", { name: "Export project" })).toBeTruthy();
+    expect(screen.queryByLabelText("Media location")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Export file" }));
 
-    await waitFor(() =>
-      expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcp7", "/Volumes/Travel SSD"),
-    );
+    await waitFor(() => expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcp7"));
     expect(api.setDefaultExportFormat).not.toHaveBeenCalled();
   });
 
-  it("says when photos were left out", async () => {
+  it("says the photos are in it as stills", async () => {
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     api.exportProject.mockResolvedValue({
-      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 3, skippedNoDuration: 0, unprobed: 0,
+      blob: new Blob(["x"]), filename: "a.xml", stills: 3, skippedNoDuration: 0, unprobed: 0,
     });
     renderButton();
 
     fireEvent.click(screen.getByRole("button", { name: "Export" }));
 
-    expect(await screen.findByText(/3 photos weren't included/)).toBeTruthy();
+    expect(await screen.findByText(/3 photos are in it as stills/)).toBeTruthy();
   });
 });
 
 
-describe("ExportButton remembered location and reports", () => {
-  it("one click uses the remembered media location", async () => {
-    api.getDefaultExportFormat.mockReturnValue("fcpxml");
-    api.getDefaultExportPrefix.mockReturnValue("/Volumes/DAS");
-    renderButton();
-
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
-
-    await waitFor(() =>
-      expect(api.exportProject).toHaveBeenCalledWith("prj_1", "fcpxml", "/Volumes/DAS"),
-    );
-  });
-
-  it("make default saves the location too", async () => {
-    api.getDefaultExportFormat.mockReturnValue(null);
-    renderButton();
-
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
-    fireEvent.click(await screen.findByLabelText("Final Cut Pro"));
-    fireEvent.change(screen.getByLabelText("Media location"), { target: { value: "/Volumes/DAS" } });
-    fireEvent.click(screen.getByLabelText("Make default"));
-    fireEvent.click(screen.getByRole("button", { name: "Export file" }));
-
-    await waitFor(() => expect(api.setDefaultExportFormat).toHaveBeenCalledWith("fcpxml", "/Volumes/DAS"));
-  });
-
+describe("ExportButton reports", () => {
   it("says when clips were left out or exported at a fallback rate", async () => {
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     api.exportProject.mockResolvedValue({
-      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 0, skippedNoDuration: 2, unprobed: 5,
+      blob: new Blob(["x"]), filename: "a.xml", stills: 0, skippedNoDuration: 2, unprobed: 5,
     });
     renderButton();
 
@@ -139,7 +110,7 @@ describe("ExportButton remembered location and reports", () => {
   it("says when trashed clips or clips with missing files were left out", async () => {
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     api.exportProject.mockResolvedValue({
-      blob: new Blob(["x"]), filename: "a.xml", skippedStills: 0, skippedNoDuration: 0, unprobed: 0,
+      blob: new Blob(["x"]), filename: "a.xml", stills: 0, skippedNoDuration: 0, unprobed: 0,
       skippedTrashed: 2, skippedMissing: 1, skippedLibraryTrashed: 3,
     });
     renderButton();

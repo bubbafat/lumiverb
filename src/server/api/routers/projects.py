@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
@@ -79,13 +79,6 @@ class ProjectItem(BaseModel):
     status: str = "active"  # active | archived
     archived_at: str | None = None
     deleted_at: str | None = None  # in the trash when set
-    # Pre-rename name of project_id, for macOS/iOS builds that still read it.
-    collection_id: str | None = None
-
-    @model_validator(mode="after")
-    def _legacy_collection_id(self):
-        self.collection_id = self.project_id
-        return self
 
 
 class ProjectListResponse(BaseModel):
@@ -810,41 +803,6 @@ def _content_disposition(filename: str) -> str:
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
-def _media_bases(roots: dict[str, str], prefix: str | None) -> dict[str, str]:
-    """Where each library's files are, as the editing machine sees them.
-
-    Without a prefix, each library's root. With one, the prefix replaces
-    the libraries' common parent folder, so a project spanning
-    /mnt/das/2024 and /mnt/das/2025 exported to /Volumes/DAS points at
-    /Volumes/DAS/2024/... and /Volumes/DAS/2025/... (one library: the
-    prefix replaces its root).
-    """
-    import posixpath
-
-    if not prefix:
-        return dict(roots)
-    if not roots:
-        return {}
-    # A relative root (a library created that way) is taken as relative to "/".
-    clean = {lid: posixpath.normpath(posixpath.join("/", root)) for lid, root in roots.items()}
-    common = posixpath.commonpath(list(clean.values())) if len(set(clean.values())) > 1 else next(iter(clean.values()))
-    base = posixpath.normpath(prefix)
-    return {
-        lid: posixpath.join(base, posixpath.relpath(root, common)) if root != common else base
-        for lid, root in clean.items()
-    }
-
-
-def _validate_prefix(prefix: str | None) -> None:
-    if prefix is None or prefix == "":
-        return
-    if not prefix.startswith("/") or "\\" in prefix or ".." in prefix.split("/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Media location must be an absolute path on the editing machine, e.g. /Volumes/DAS",
-        )
-
-
 @router.get("/{project_id}/export")
 def export_project(
     project_id: str,
@@ -853,26 +811,24 @@ def export_project(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     format: str = Query(..., description="Export provider id: fcp7 or fcpxml"),  # noqa: A002
-    prefix: str | None = Query(
-        None, description="Path the originals live under on the editing machine; default: each library's root"
-    ),
 ) -> Response:
     """Export a project as a bin of master clips for an editor.
 
-    Clips point at the originals: each library's ingest root, or `prefix`
-    in place of the libraries' common parent folder, plus rel_path. Video
-    only for now. Headers count what needs the user's attention:
-    X-Lumiverb-Skipped-Stills (photos left out), X-Lumiverb-Skipped-No-Duration
-    (videos with no known length, left out), X-Lumiverb-Unprobed (videos
-    exported at a fallback frame rate), X-Lumiverb-Skipped-Trashed (clips
-    someone trashed, left out until restored), X-Lumiverb-Skipped-Missing
-    (clips whose files went missing) and X-Lumiverb-Skipped-Library-Trashed
-    (clips whose library is in the trash); these count videos only.
-    Archived projects export too.
+    Clips point at the originals as the libraries know them (each library's
+    root plus rel_path; Robert, Oct 9: the brain's paths, relinked in the
+    editor when they differ). Videos and photos: a photo is a still of
+    STILL_SEC (Robert, Oct 9). Headers count what needs the user's
+    attention: X-Lumiverb-Stills (photos, as stills),
+    X-Lumiverb-Skipped-No-Duration (videos with no known length, left out),
+    X-Lumiverb-Unprobed (videos exported at a fallback frame rate),
+    X-Lumiverb-Skipped-Trashed (clips someone trashed, left out until
+    restored), X-Lumiverb-Skipped-Missing (clips whose files went missing),
+    X-Lumiverb-Skipped-Library-Trashed (clips whose library is in the
+    trash) and X-Lumiverb-Skipped-Archived. Archived projects export too.
     """
     import posixpath
 
-    from src.server.export import EXPORT_PROVIDERS, ExportBin, ExportClip
+    from src.server.export import EXPORT_PROVIDERS, ExportBin, ExportClip, still
     from src.server.models.tenant import Library, VideoFacetRow
 
     provider = EXPORT_PROVIDERS.get(format)
@@ -881,7 +837,6 @@ def export_project(
             status_code=400,
             detail=f"Unknown format. Must be one of: {', '.join(EXPORT_PROVIDERS)}",
         )
-    _validate_prefix(prefix)
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     if not _can_view(col, user_id):
@@ -889,21 +844,19 @@ def export_project(
 
     assets = _all_project_assets(col, request, session, user_id)
     videos = [a for a in assets if a.media_type == "video"]
-    skipped_stills = len(assets) - len(videos)
-    # Hidden clips are still in a static project but never exported; only
-    # videos count, since photos aren't exported anyway.
+    # Hidden clips are still in a static project but never exported.
     is_smart = getattr(col, "type", "static") == "smart"
     hidden = (
         {"trashed": 0, "missing": 0, "library_trashed": 0, "archived": 0}
-        if is_smart else repo.hidden_clip_counts(col.project_id, videos_only=True)
+        if is_smart else repo.hidden_clip_counts(col.project_id)
     )
 
     roots = {
         lib.library_id: lib.root_path
         for lib in session.exec(
-            select(Library).where(Library.library_id.in_({a.library_id for a in videos}))  # type: ignore[attr-defined]
+            select(Library).where(Library.library_id.in_({a.library_id for a in assets}))  # type: ignore[attr-defined]
         ).all()
-    }
+    } if assets else {}
     facets = {
         f.asset_id: f
         for f in session.exec(
@@ -911,11 +864,20 @@ def export_project(
         ).all()
     } if videos else {}
 
-    bases = _media_bases(roots, prefix)
+    def where(a) -> str:
+        # A relative root (a library created that way) is taken as relative to "/".
+        root = posixpath.normpath(posixpath.join("/", roots.get(a.library_id) or "/"))
+        return posixpath.join(root, a.rel_path.lstrip("/"))
+
     clips = []
+    stills = 0
     skipped_no_duration = 0
     unprobed = 0
-    for a in videos:
+    for a in assets:
+        if a.media_type != "video":
+            clips.append(still(a.asset_id, posixpath.basename(a.rel_path), where(a), a.width, a.height))
+            stills += 1
+            continue
         f = facets.get(a.asset_id)
         duration = f.duration_sec if f and f.duration_sec is not None else a.duration_sec
         if not duration:
@@ -927,7 +889,7 @@ def export_project(
         clips.append(ExportClip(
             asset_id=a.asset_id,
             name=posixpath.basename(a.rel_path),
-            path=posixpath.join(bases.get(a.library_id, "/"), a.rel_path.lstrip("/")),
+            path=where(a),
             duration_sec=duration,
             frame_rate_num=f.frame_rate_num if f else None,
             frame_rate_den=f.frame_rate_den if f else None,
@@ -946,7 +908,7 @@ def export_project(
         media_type=provider.content_type,
         headers={
             "Content-Disposition": _content_disposition(filename),
-            "X-Lumiverb-Skipped-Stills": str(skipped_stills),
+            "X-Lumiverb-Stills": str(stills),
             "X-Lumiverb-Skipped-No-Duration": str(skipped_no_duration),
             "X-Lumiverb-Unprobed": str(unprobed),
             "X-Lumiverb-Skipped-Trashed": str(hidden["trashed"]),
@@ -954,7 +916,7 @@ def export_project(
             "X-Lumiverb-Skipped-Library-Trashed": str(hidden["library_trashed"]),
             "X-Lumiverb-Skipped-Archived": str(hidden["archived"]),
             "Access-Control-Expose-Headers": (
-                "Content-Disposition, X-Lumiverb-Skipped-Stills, "
+                "Content-Disposition, X-Lumiverb-Stills, "
                 "X-Lumiverb-Skipped-No-Duration, X-Lumiverb-Unprobed, "
                 "X-Lumiverb-Skipped-Trashed, X-Lumiverb-Skipped-Missing, "
                 "X-Lumiverb-Skipped-Library-Trashed, X-Lumiverb-Skipped-Archived"

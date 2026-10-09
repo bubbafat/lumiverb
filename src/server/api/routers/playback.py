@@ -328,9 +328,7 @@ def get_playback(
     public_library_id = public_project_id = None
     if getattr(request.state, "is_public_request", False):
         public_library_id = request.query_params.get("public_library_id")
-        public_project_id = request.query_params.get("public_project_id") or request.query_params.get(
-            "public_collection_id"
-        )
+        public_project_id = request.query_params.get("public_project_id")
         if public_library_id and public_project_id:
             raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
         _check_public(session, asset, public_library_id, public_project_id)
