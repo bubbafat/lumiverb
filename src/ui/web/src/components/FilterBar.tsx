@@ -361,8 +361,10 @@ export function FilterBar({
 
   const showQChiclet = q !== null && q.length > 0;
   const showTagChiclet = tag !== null && tag.length > 0;
+  // Any chiclet shown (every filter but the library scope, a folder's path
+  // too): they can be cleared, or saved as a project.
   const hasActiveChiclets = showQChiclet || showTagChiclet ||
-    hasDateFilter || hasActiveFilters;
+    hasDateFilter || filters.some((f) => f.type !== "library");
   const presets = getDatePresets();
 
   const selectCls = "rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";

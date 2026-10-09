@@ -79,3 +79,30 @@ describe("FilterBar for a public page's visitor", () => {
     screen.getByTitle("3 stars");
   });
 });
+
+describe("FilterBar saving a search", () => {
+  function barWith(filters: { type: string; value: string }[], onSaveAsProject = vi.fn()) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FilterBar filters={filters} sort="taken_at" dir="desc" onSetFilter={() => {}} onSetSort={() => {}}
+            onClearAll={() => {}} facets={facets} onSaveAsProject={onSaveAsProject} isPublic={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return onSaveAsProject;
+  }
+
+  it("a folder's search can be saved as a project", () => {
+    const save = barWith([{ type: "library", value: "lib_1" }, { type: "path", value: "Shoots/2026" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Save as project" }));
+    expect(save).toHaveBeenCalled();
+    screen.getByRole("button", { name: "Clear filters" });
+  });
+
+  it("a library alone isn't a search to save", () => {
+    barWith([{ type: "library", value: "lib_1" }]);
+    expect(screen.queryByRole("button", { name: "Save as project" })).toBeNull();
+  });
+});
