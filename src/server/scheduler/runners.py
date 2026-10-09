@@ -395,12 +395,10 @@ def scan(acct: Account, job: Job, *, now: float) -> None:
     acct.set_reachable(scan_pass(acct.client, libraries, acct.scan_state, now=now, on_roots=acct.set_reachable))
 
 
-def _runners() -> dict[str, Callable[[Account, Job], Outcome]]:
-    """The function each producer the scheduler runs names (its ``run``)."""
+def runners() -> dict[str, Callable[[Account, Job], Outcome]]:
+    """The function each producer the scheduler runs names (its ``run``),
+    loaded when first asked for: a producer's run module may import this one."""
     from src.producers import load
     from src.shared.producers import PRODUCERS
 
     return {p.kind: load(p.run) for p in PRODUCERS.values() if p.scheduled}
-
-
-RUNNERS: dict[str, Callable[[Account, Job], Outcome]] = _runners()

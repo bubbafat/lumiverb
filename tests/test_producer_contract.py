@@ -3,13 +3,15 @@ folder (src/producers/<artifact>/), and everything that lists producers
 reads them from the registry.
 
 The test of that: a producer added as one folder, and nothing else, shows
-in the queue, the reconciler, the runners and the list GET /v1/producers
-serves (which Settings → Processing renders as it comes).
+in the scheduler's queue, kinds, pools and runners, the reconciler, and
+PRODUCERS, which GET /v1/producers lists (Settings → Processing renders it
+as it comes). What's still named by hand is listed in contract.py.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import textwrap
@@ -54,7 +56,7 @@ from src.producers.contract import IMAGE, ProducerSpec
 PRODUCER = ProducerSpec(
     artifact="example", producer="example", version="1", media=IMAGE, title="An example", order=999,
     applies="a.media_type = 'image'", made="false", defaults={"strength": 3}, needs=("proxy",),
-    kind="example", flag="missing_example", run="example_runner:run", pool="gpu",
+    kind="example", flag="missing_example", run="example_runner:run", pool="example-pool", slots=2,
 )
 '''
 
@@ -74,7 +76,8 @@ def test_a_producer_is_one_folder(tmp_path):
         from src.server.repository import lineage
         from src.server.repository.tenant import MISSING_CONDITIONS
         from src.server.scheduler.kinds import KINDS
-        from src.server.scheduler.runners import RUNNERS
+        from src.server.scheduler.runners import runners
+        from src.server.scheduler.service import default_capacity
 
         print(json.dumps({{
             "listed": list(PRODUCERS)[-1],
@@ -87,7 +90,8 @@ def test_a_producer_is_one_folder(tmp_path):
             "missing": "missing_example" in MISSING_CONDITIONS,
             "kind": [KINDS["example"].spec.tier, KINDS["example"].spec.pool, KINDS["example"].extra],
             "redo_kind": KINDS["redo_example"].spec.tier,
-            "runner": RUNNERS["example"].__module__,
+            "runner": runners()["example"].__module__,
+            "slots": default_capacity(type("Cfg", (), {{"render_concurrency": 1}})())["example-pool"],
         }}))
     ''')
     out = subprocess.run([sys.executable, "-c", script], cwd=REPO, capture_output=True, text=True,
@@ -97,8 +101,31 @@ def test_a_producer_is_one_folder(tmp_path):
     assert seen == {
         "listed": "example", "flag": "example", "settings": {"strength": 3},
         "applies": "a.media_type = 'image'", "due": True, "redo": True, "joined": True, "missing": True,
-        "kind": [3, "gpu", "(a.proxy_key IS NOT NULL)"], "redo_kind": 4, "runner": "example_runner",
+        "kind": [3, "example-pool", "(a.proxy_key IS NOT NULL)"], "redo_kind": 4, "runner": "example_runner",
+        "slots": 2,
     }
+
+
+@pytest.mark.parametrize("change, says", [
+    (('artifact="example"', 'artifact="clip"'), "Two producers share a artifact"),
+    (('kind="example"', 'kind="clip"'), "Two producers share a kind"),
+    (('run="example_runner:run", ', ''), "needs a flag, a run and a pool"),
+    (('needs=("proxy",)', 'needs=("teleport",)'), "needs what no producer makes"),
+    (('pool="example-pool", slots=2', 'pool="gpu", per_account=True, job="vision"'), "pool = job"),
+    (("PRODUCER = ProducerSpec(", "NOT_A_PRODUCER = ProducerSpec("), "declares no PRODUCER"),
+])
+def test_a_folder_that_doesnt_declare_a_whole_producer_is_refused(tmp_path, monkeypatch, change, says):
+    # Left out or half-wired quietly, it would never run and nothing would say why.
+    import src.producers as producers
+
+    folder = tmp_path / "broken"
+    folder.mkdir()
+    (folder / "__init__.py").write_text(_EXAMPLE.replace(*change))
+    monkeypatch.delitem(sys.modules, "src.producers.broken", raising=False)  # each case's own
+    monkeypatch.setattr(producers, "__path__", [*producers.__path__, str(tmp_path)])
+    monkeypatch.setattr(producers, "_registry", None)
+    with pytest.raises(ValueError, match=re.escape(says)):
+        producers.registry()
 
 
 def test_two_producers_cant_make_one_artifact(tmp_path, monkeypatch):
@@ -106,8 +133,9 @@ def test_two_producers_cant_make_one_artifact(tmp_path, monkeypatch):
 
     folder = tmp_path / "again"
     folder.mkdir()
+    monkeypatch.delitem(sys.modules, "src.producers.again", raising=False)
     (folder / "__init__.py").write_text(_EXAMPLE.replace('artifact="example"', 'artifact="clip"'))
     monkeypatch.setattr(producers, "__path__", [*producers.__path__, str(tmp_path)])
     monkeypatch.setattr(producers, "_registry", None)
-    with pytest.raises(ValueError, match="Two producers make one artifact"):
+    with pytest.raises(ValueError, match="Two producers share a artifact"):
         producers.registry()

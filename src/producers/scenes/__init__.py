@@ -1,4 +1,5 @@
-"""A video's scenes, found from its analysis copy (src/client/video/...)."""
+"""A video's scenes, found from its analysis copy (src/client/video/scene_segmenter.py,
+run by src/client/cli/video_index.py)."""
 
 from src.producers.contract import VIDEO, ProducerSpec
 

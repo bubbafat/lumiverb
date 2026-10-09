@@ -5,9 +5,18 @@ in one place, everything the rest of Lumiverb needs to know about it: what
 it makes and at which version, what it's made from, which clips it applies
 to and how a clip shows it's made, the settings that change its output,
 the resource its work waits on, its tier, whether it can be made again in
-place, and the function the scheduler runs. The scheduler, the reconciler,
-Settings → Processing and the lineage all read it from the registry
-(src/producers/__init__.py); nothing else lists producers.
+place, and the function the scheduler runs. The scheduler (its queue, kinds, pools
+and runners), the reconciler, the lineage and GET /v1/producers (which
+Settings → Processing shows as it comes) read it from the registry
+(src/producers/__init__.py). Still named by hand: the repair summary's
+counts and the asset page's missing_* filters (the older enrich flow), and
+a new AI job's machines (src/shared/ai_jobs.py and its guard).
+
+A producer's ``__init__`` only declares: it imports this module (and
+src/producers/prompts.py), never what imports the registry
+(src/shared/producers.py, the server, the workers), or it would be found
+half-loaded. Its ``run`` function lives in a module of its own, imported
+when the scheduler first needs it, and may import anything.
 
 SQL fragments are conditions on ``active_assets a``.
 """
@@ -48,11 +57,12 @@ class ProducerSpec:
     job: str = ""
     # Why it can't be made again in place yet; its stale artifacts wait.
     cant_redo: str = ""
-    # Handed out again when its clip's file changes. Not for what's made from
-    # parts that would be stale too (scenes and what's made from them).
+    # Handed out again when its clip's file changes. Not the analysis copy
+    # and what's made from it: scenes can't be found again in place, and a
+    # new copy would leave them describing the old file.
     redo_on_source_change: bool = True
-    # Where it shows in lists (Settings → Processing).
-    order: int = 0
+    # Where it shows in lists (Settings → Processing); one without sorts last.
+    order: int = 1000
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)
@@ -61,7 +71,11 @@ class ProducerSpec:
     tier: int = FIND
     pool: str = ""  # the resource its work waits on
     batch: int = 1  # clips a job
-    per_account: bool = False  # the pool is each account's own (its AI machines)
+    # The pool is each account's own: its AI job's machines (the pool is the job's name).
+    per_account: bool = False
+    # Jobs at once in its pool, when the scheduler doesn't size the pool
+    # itself (scan, probe, render, gpu, scenes) and machines don't (an AI job's).
+    slots: int = 1
     storage: bool = False  # reads the originals: only libraries reachable now
 
     @property

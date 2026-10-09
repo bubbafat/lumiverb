@@ -29,7 +29,10 @@ from typing import Any
 from src.producers import registry
 from src.producers.clip import CLIP_MODEL_ID  # noqa: F401 — the vectors' model_id
 from src.producers.contract import ALL, IMAGE, VIDEO, ProducerSpec  # noqa: F401
-from src.producers.prompts import OCR_PROMPT, VISION_PROMPT  # noqa: F401 — output-affecting settings
+from src.producers.prompts import (  # noqa: F401 — output-affecting settings
+    OCR_PROMPT,
+    VISION_PROMPT,
+)
 
 # A producer, as each one declares itself (src/producers/<artifact>/).
 Producer = ProducerSpec

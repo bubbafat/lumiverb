@@ -3,7 +3,7 @@ each clip still needs (ADR-016 phase 3).
 
 An artifact is missing when it doesn't exist (MADE), whatever its lineage
 says. One that exists is current when its lineage names the producer
-registered for it now (src/shared/producers.py), at its version, with the
+declared for it now (src/producers/<artifact>/), at its version, with the
 hash of the settings in force, made from the clip's file as it is now;
 otherwise it's stale, and with no lineage at all it's an unknown producer's,
 so stale too. A person's artifact (a transcript they wrote) is current
@@ -30,7 +30,6 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.shared.producers import (
-    CLIP_MODEL_ID,
     MISSING_FLAGS,
     PERSON,
     PRODUCERS,
@@ -111,17 +110,17 @@ LINEAGE_JOIN = (f"LEFT JOIN LATERAL (SELECT {_lineage_cols()} FROM artifact_line
                 " WHERE l.asset_id = a.asset_id) la ON TRUE")
 
 
-# Not handed out again when their clip's file changes: what's made from
-# parts that would be stale too, which can't be redone in place. (A
-# different file at a path is a new clip, so a file seldom changes under one.)
-RESET_AT_INGEST = frozenset(a for a, p in PRODUCERS.items() if not p.redo_on_source_change)
+# Not handed out again when their clip's file changes (each producer's
+# redo_on_source_change). A different file at a path is a new clip, so a
+# file seldom changes under one.
+NOT_REDONE_ON_SOURCE_CHANGE = frozenset(a for a, p in PRODUCERS.items() if not p.redo_on_source_change)
 
 
 def source_changed(artifact: str) -> str:
     """Made from a file whose content has since changed. A person's never
     counts, nor one made before the file's SHA-256 was known (unknown isn't
     changed: it's stale, waiting for approval like any other)."""
-    if artifact in RESET_AT_INGEST:
+    if artifact in NOT_REDONE_ON_SOURCE_CHANGE:
         return "false"
     return f"(a.sha256 IS NOT NULL AND la.src_{artifact} IS NOT NULL AND la.src_{artifact} <> a.sha256)"
 
