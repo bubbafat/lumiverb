@@ -455,6 +455,11 @@ def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_te
     return {"recorded": recorded}
 
 
+class PausedProducer(BaseModel):
+    artifact: str
+    title: str
+
+
 class SchedulerStatus(BaseModel):
     """What the scheduler is doing for the account (written every few seconds)."""
 
@@ -475,6 +480,9 @@ class SchedulerStatus(BaseModel):
     scans_paused: bool = False
     scans_paused_by: str | None = None  # admins only
     scans_paused_at: datetime | None = None
+    # Producers an admin paused on their own (POST /v1/producers/{artifact}/pause), whatever
+    # scope a page's counts are for, so a pause shows wherever the status does.
+    paused_producers: list[PausedProducer] = Field(default_factory=list)
 
 
 @router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
@@ -501,6 +509,8 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     if (pause := held.get(PAUSE_SCANS)) is not None:
         status.scans_paused, status.scans_paused_at = True, pause["paused_at"]
         status.scans_paused_by = pause["paused_by"] if admin else None
+    status.paused_producers = [PausedProducer(artifact=a, title=PRODUCERS[a].title)
+                               for a in sorted(held) if a in PRODUCERS]
     return status
 
 

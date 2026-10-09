@@ -51,7 +51,10 @@ beforeEach(() => {
     if (path === "/libraries") return json([{ library_id: "lib_1", name: "Footage", root_path: "/f", status: "active" }]);
     if (path === "/projects") return json({ items: [{ project_id: "col_1", name: "Wedding" }] });
     if (path === "/producers") return json({ producers });
-    if (path === "/producers/queue") return json(queue);
+    if (path === "/producers/queue") {  // as the server: the producers paused on their own, whatever the scope
+      return json({ paused_producers: producers.filter((p) => p.paused).map((p) => ({ artifact: p.artifact, title: p.title })),
+                    ...queue });
+    }
     if (path === "/producers/failures" && method === "GET") return json({ items: failures, next_cursor: null });
     if (path === "/producers/failures/retry" && method === "POST") {
       const n = body.asset_ids ? body.asset_ids.length : failures.length;
@@ -316,6 +319,17 @@ describe("ProcessingSection", () => {
     await waitFor(async () => expect((await row("Text in images (OCR)")).textContent).not.toContain("Paused"));
   });
 
+  it("the header says what's paused even when the counts can't load or are for another scope", async () => {
+    queue = { ...queue, live: true, at: new Date().toISOString(),
+              paused_producers: [{ artifact: "ocr", title: "Text in images (OCR)" }] };
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+      new URL(url, "http://x").pathname === "/v1/producers" ? err(403, "forbidden", "Editors only.") : base(url, init));
+    renderSection();
+    expect(await screen.findByText("Partly paused")).toBeTruthy();
+    expect((await screen.findByText(/^Paused on their own:/)).textContent).toContain("Text in images (OCR)");
+  });
+
   it("shows everyone what's paused; only admins pause or resume", async () => {
     role = "viewer";
     queue = { ...queue, live: true, at: new Date().toISOString(), scans_paused: true,
@@ -327,6 +341,9 @@ describe("ProcessingSection", () => {
     expect((await row("Descriptions and tags")).textContent).toContain("Paused: nothing more of it starts");
     expect(screen.queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
     expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
+    // What Pause all and Resume all would do is for those who can press them.
+    expect((await screen.findByText(/^Paused on their own:/)).textContent).toBe(
+      "Paused on their own: scans, Descriptions and tags.");
   });
 
   it("says one clip right", async () => {

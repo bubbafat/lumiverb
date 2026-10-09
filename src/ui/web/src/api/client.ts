@@ -1001,6 +1001,8 @@ export interface SchedulerStatus {
   /** Admins only. */
   scans_paused_by: string | null;
   scans_paused_at: string | null;
+  /** Producers an admin paused on their own, whatever scope the counts are for. */
+  paused_producers: { artifact: string; title: string }[];
 }
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {

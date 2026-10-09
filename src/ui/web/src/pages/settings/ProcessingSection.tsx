@@ -65,12 +65,12 @@ export default function ProcessingSection() {
       <div>
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
-          {status && <MasterSwitch status={status} parts={pausedParts(status, producers)} admin={admin} />}
+          {status && <MasterSwitch status={status} parts={pausedParts(status)} admin={admin} />}
         </div>
-        {status && !status.paused && pausedParts(status, producers).length > 0 && (
+        {status && !status.paused && pausedParts(status).length > 0 && (
           <p className="mt-1 text-sm text-amber-300">
-            Paused on their own: {pausedParts(status, producers).join(", ")}. Pause all stops everything; Resume all
-            then turns everything back on, these included.
+            Paused on their own: {pausedParts(status).join(", ")}.
+            {admin && " Pause all stops everything; Resume all then turns everything back on, these included."}
           </p>
         )}
         <p className="mt-1 text-sm text-gray-400">
@@ -282,8 +282,9 @@ function listKinds(counts: Record<string, number>): string {
 }
 
 /** What's paused on its own (scans, producers), named, while the kill switch is off. */
-function pausedParts(status: SchedulerStatus, producers: Producer[] | undefined): string[] {
-  return [...(status.scans_paused ? ["scans"] : []), ...(producers ?? []).filter((p) => p.paused).map((p) => p.title)];
+function pausedParts(status: SchedulerStatus): string[] {
+  // From the status, not the producers list: that one is for the "Counts for" scope and refetches less often.
+  return [...(status.scans_paused ? ["scans"] : []), ...(status.paused_producers ?? []).map((p) => p.title)];
 }
 
 const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", all: "bg-red-500" };

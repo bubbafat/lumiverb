@@ -68,10 +68,13 @@ def test_an_admin_pauses_one_producer_and_resumes_it(env):
         assert producers["vision"]["paused_by"]
         assert not producers["ocr"]["paused"] and _queue(env)["paused"] is False
         assert _on_hold_in_database(env[4]) == {"vision"}
+        # The queue names it too, whatever scope the counts are for (the page's header reads it there).
+        assert _queue(env)["paused_producers"] == [{"artifact": "vision", "title": producers["vision"]["title"]}]
     finally:
         assert client.post("/v1/producers/vision/resume", headers=headers).status_code == 204
     assert _producers(env)["vision"]["paused"] is False and _producers(env)["vision"]["paused_at"] is None
     assert _on_hold_in_database(env[4]) == set()
+    assert _queue(env)["paused_producers"] == []
 
 
 def test_pausing_a_producer_and_stopping_its_redo_are_apart(env):
@@ -314,3 +317,21 @@ def test_while_everything_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_
     with _db(env) as session:
         assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_libraries == 1
     assert not stray.exists()
+
+
+def test_while_everything_is_paused_the_trash_days_question_says_the_purge_waits(env):
+    from tests.test_archive_trash_safety import _age, _ingest, _settings, _trash
+
+    client, headers, *_ = env
+    clip = _ingest(env, "pause/short.mov", sha=_sha())
+    _trash(env, clip)
+    _age(env, "assets", "deleted_at", "asset_id", clip, 10)
+    try:
+        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        r = _settings(env, trash_days=7)
+        assert r.status_code == 409 and r.json()["error"]["code"] == "trash_days_shortened", r.text
+        message = r.json()["error"]["message"]
+        assert "within minutes" not in message and "once processing is resumed" in message
+    finally:
+        client.post("/v1/producers/resume", headers=headers)
+    assert "within minutes" in _settings(env, trash_days=7).json()["error"]["message"]
