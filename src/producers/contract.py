@@ -133,6 +133,9 @@ class ProducerSpec:
     # itself (scan, probe, render, gpu, scenes) and machines don't (an AI job's).
     slots: int = 1
     storage: bool = False  # reads the originals: only libraries reachable now
+    # What its work grows with, for how long is left: "second" (of video:
+    # a render, a transcript) or "clip" (a photo described).
+    unit: str = "clip"
 
     @property
     def scheduled(self) -> bool:

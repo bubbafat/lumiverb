@@ -24,7 +24,8 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for name, stub in (("_paused_in_database", lambda tenant_id: set()),
                        ("_retry_requested_in_database", lambda tenant_id: None),
-                       ("_status_to_database", lambda tenant_id, status: None)):
+                       ("_status_to_database", lambda tenant_id, status: None),
+                       ("_status_from_database", lambda tenant_id: None)):
         monkeypatch.setattr(service, name, stub, raising=False)
 
 
@@ -831,3 +832,13 @@ def test_a_redo_is_listed_with_its_settings_and_the_account_follows_them() -> No
     s.tick()
     _settle(s)
     assert acct.followed == [("vision", "new")]  # before its clips are handed out
+
+
+@pytest.mark.fast
+def test_each_accounts_pace_starts_from_its_last_status_after_a_restart() -> None:
+    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
+                  runners=Recorder().all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None,
+                  last_status=lambda tenant_id: {"pace": {"render": 0.4, "vision": 9.0}})
+    s.tick()
+    assert s.status("t1")["pace"] == {"render": 0.4, "vision": 9.0}

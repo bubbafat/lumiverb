@@ -188,6 +188,26 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
             "missing": n_missing, "failing": failing, "given_up": given_up}
 
 
+def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool) -> dict[str, float]:
+    """What's left to make of an artifact kind, over clips in sight: those
+    missing it, and when redo, those it's stale on. Given-up clips aren't
+    counted (they aren't tried until someone asks). {"clips", "seconds"}:
+    how many, and their seconds of video."""
+    if artifact not in MADE:
+        raise KeyError(artifact)
+    made = f"({MADE[artifact]})"
+    stale = f" OR ({made} AND (l.asset_id IS NULL OR {_stale_sql()}))" if redo else ""
+    row = session.execute(text(
+        "SELECT count(*), COALESCE(sum(a.duration_sec), 0)"
+        " FROM active_assets a"
+        " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
+        f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
+        "   AND l.retry_at IS DISTINCT FROM 'infinity'"
+        f"   AND (NOT {made}{stale})"
+    ), _stale_params(artifact, want, None, None)).one()
+    return {"clips": float(row[0]), "seconds": float(row[1])}
+
+
 # ---------------------------------------------------------------------------
 # Redo on change: a settings change is the approval (Robert, Oct 9)
 # ---------------------------------------------------------------------------

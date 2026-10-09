@@ -65,3 +65,33 @@ def test_a_machine_can_share_the_gpu_and_the_built_in_one_always_does(env):
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
                 client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
+
+
+def test_the_queue_says_how_long_until_each_producer_and_everything_is_made(env):
+    from tests.test_lineage_api import _ingest_with, _sha
+    from tests.test_reconciler import _library
+
+    client, headers, *_ = env
+    lib = _library(env, "Eta")
+    _ingest_with(lib, "a.jpg", _sha(), None)  # a photo nothing has described yet
+    _write(env, {"at": utcnow().isoformat(), "running": {"vision": 1}, "waiting": {},
+                 "pools": {"vision": [1, 3], "gpu": [0, 1], "probe": [0, 1]},
+                 "pace": {"vision": 6.0, "ocr": 3.0, "clip": 0.5, "faces": 0.5},
+                 "jobs": [{"kind": "vision", "units": 1.0, "elapsed": 2.0}]})
+    body = client.get("/v1/producers/queue", headers=headers).json()
+    eta = body["eta"]
+    left = client.get("/v1/producers", params={"library_id": lib[2]}, headers=headers).json()
+    assert eta["producers"]["vision"] == pytest.approx(6.0 / 3 * _missing(client, headers, "vision"))
+    assert eta["pools"]["vision"] == pytest.approx(eta["producers"]["vision"] + eta["producers"]["ocr"])
+    assert eta["caught_up"] == pytest.approx(max(v for v in eta["pools"].values()))
+    [job] = eta["jobs"]
+    assert job["artifact"] == "vision" and job["left"] == pytest.approx(4.0, abs=1.0)
+    assert {p["artifact"]: p["unit"] for p in left["producers"]}["transcript"] == "second"
+    # A scheduler that stopped saying: nothing to time.
+    _write(env, {"at": (utcnow() - timedelta(minutes=2)).isoformat(), "running": {}, "waiting": {}, "pools": {}})
+    assert client.get("/v1/producers/queue", headers=headers).json()["eta"] is None
+
+
+def _missing(client, headers, artifact: str) -> int:
+    counts = {p["artifact"]: p["counts"] for p in client.get("/v1/producers", headers=headers).json()["producers"]}
+    return counts[artifact]["missing"] + counts[artifact]["stale"] - counts[artifact]["given_up"]

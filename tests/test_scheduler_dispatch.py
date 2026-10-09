@@ -308,3 +308,89 @@ def test_forgetting_an_accounts_taken_clips() -> None:
     job = d.take("vision")
     assert (job.tenant_id, job.items[0]["asset_id"]) == ("t1", "a")
     assert d.take("vision") is None  # t2's still waits its hour
+
+
+# --- How long things take: each kind's pace, from the jobs it finished ------
+# Seconds a slot spends per unit of work: a second of video for the kinds
+# whose work grows with it (by_seconds), else a clip. Settings → Processing
+# turns it into time left.
+
+PACED = {
+    "render": KindSpec(tier=2, pool="render", by_seconds=True),
+    "vision": KindSpec(tier=3, pool="vision"),
+    "redo_vision": KindSpec(tier=4, pool="vision", same_as="vision"),
+}
+
+
+def _video(asset_id: str, seconds: float) -> dict:
+    return {"asset_id": asset_id, "created_at": "2026-10-01", "duration_sec": seconds}
+
+
+def _run(d: Dispatcher, clock: Clock, pool: str, took: float) -> None:
+    """Take a job, let it run so long, and say each clip was saved (as the scheduler does)."""
+    job = d.take(pool)
+    assert job is not None
+    clock.now += took
+    d.done(job, waiting=())
+
+
+@pytest.mark.fast
+def test_a_finished_job_teaches_its_kinds_pace_per_second_of_video() -> None:
+    clock = Clock()
+    d = Dispatcher(PACED, {"render": 1}, clock=clock)
+    d.offer("t1", "render", [_video("a", 120), _video("b", 120)], complete=True)
+    _run(d, clock, "render", 60)
+    assert d.status("t1")["pace"] == {"render": 0.5}
+    _run(d, clock, "render", 120)  # smoothed, not replaced
+    assert d.status("t1")["pace"]["render"] == pytest.approx(0.6)
+
+
+@pytest.mark.fast
+def test_a_redo_and_its_kind_share_one_pace_per_clip() -> None:
+    clock = Clock()
+    d = Dispatcher(PACED, {"vision": 1}, clock=clock)
+    d.offer("t1", "redo_vision", [_item("a", "2026-10-01")], complete=True)
+    _run(d, clock, "vision", 8)
+    assert d.status("t1")["pace"] == {"vision": 8.0}
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("done", [{"tried": False}, {"waiting": None}, {"waiting": ["a"]}])
+def test_a_job_that_made_nothing_it_can_count_teaches_nothing(done) -> None:
+    clock = Clock()
+    d = Dispatcher(PACED, {"vision": 1}, clock=clock)
+    d.offer("t1", "vision", [_item("a", "2026-10-01")], complete=True)
+    job = d.take("vision")
+    clock.now += 5
+    if "waiting" in done and done["waiting"] is None:
+        d.done(job)  # it can't say what it saved
+    else:
+        d.done(job, **done)
+    assert d.status("t1")["pace"] == {}
+
+
+@pytest.mark.fast
+def test_running_jobs_say_how_big_they_are_and_how_long_theyve_run() -> None:
+    clock = Clock()
+    d = Dispatcher(PACED, {"render": 2, "vision": 1}, clock=clock)
+    d.offer("t1", "render", [_video("a", 90)], complete=True)
+    d.offer("t1", "vision", [_item("p", "2026-10-01")], complete=True)
+    d.take("render")
+    clock.now += 10
+    d.take("vision")
+    clock.now += 5
+    jobs = sorted(d.status("t1")["jobs"], key=lambda j: j["kind"])
+    assert jobs == [{"kind": "render", "units": 90.0, "elapsed": 15.0},
+                    {"kind": "vision", "units": 1.0, "elapsed": 5.0}]
+    assert d.status("t2")["jobs"] == []
+
+
+@pytest.mark.fast
+def test_a_pace_known_before_a_restart_is_where_it_starts() -> None:
+    clock = Clock()
+    d = Dispatcher(PACED, {"render": 1}, clock=clock)
+    d.seed_pace("t1", {"render": 0.4, "gone_kind": 3.0, "vision": "nonsense"})
+    assert d.status("t1")["pace"] == {"render": 0.4}
+    d.offer("t1", "render", [_video("a", 100)], complete=True)
+    _run(d, clock, "render", 100)
+    assert d.status("t1")["pace"]["render"] == pytest.approx(0.8 * 0.4 + 0.2 * 1.0)

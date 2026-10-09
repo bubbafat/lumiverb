@@ -110,6 +110,7 @@ export default function ProcessingSection() {
               admin={admin}
               canRetry={canRetry}
               libraryId={kind === "library" ? id : undefined}
+              wholeAccount={kind === "all"}
             />
           ))}
         </ul>
@@ -137,14 +138,20 @@ function ProducerRow({
   admin,
   canRetry,
   libraryId,
+  wholeAccount = true,
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
   libraryId?: string;
+  // Time left is the whole account's: shown only when the counts are too.
+  wholeAccount?: boolean;
 }) {
   const [showFailures, setShowFailures] = useState(false);
   const c = producer.counts;
+  const { data: status } = useQuery({ queryKey: ["scheduler-status"], queryFn: getSchedulerStatus,
+                                      refetchInterval: 5_000 });
+  const left = wholeAccount && status?.live ? status.eta?.producers[producer.artifact] : undefined;
   const headingId = `producer-${producer.artifact}`;
   return (
     <li className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2" aria-labelledby={headingId}>
@@ -174,6 +181,7 @@ function ProducerRow({
                   {!!c.given_up && ` (${n(c.given_up)} given up)`}
                 </span>
               )}
+              {!!left && <span> · about {duration(left)} left</span>}
             </>
           )}
         </p>
@@ -238,6 +246,24 @@ export function kindCount(kind: string, count: number): string {
   return `${n(count)} ${count === 1 ? one : many}`;
 }
 
+/** One job of a kind: "analysis copy", "redo of transcripts". */
+function jobLabel(kind: string): string {
+  if (kind.startsWith("redo_")) return `redo of ${KIND_LABELS[kind.slice(5)]?.[1] ?? kind.slice(5)}`;
+  return KIND_LABELS[kind]?.[0] ?? kind;
+}
+
+/** A span of time, roughly: "under a minute", "4 min", "2 h 5 min", "13 h", "2 days 3 h". */
+export function duration(seconds: number): string {
+  if (seconds < 60) return "under a minute";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 10) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  if (hours < 48) return `${Math.round(minutes / 60)} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} days ${hours % 24} h` : `${days} days`;
+}
+
 function listKinds(counts: Record<string, number>): string {
   return Object.entries(counts)
     .filter(([, c]) => c > 0)
@@ -261,12 +287,34 @@ function NowPanel() {
   }
   const running = listKinds(status.running);
   const waiting = listKinds(status.waiting);
+  const eta = status.eta;
   return (
     <div className="space-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-3 py-2 text-sm" aria-label="Now">
+      {eta && (
+        <p className="font-medium text-gray-100">
+          {eta.caught_up === null
+            ? "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
+            : eta.caught_up === 0
+              ? "Caught up: everything is made."
+              : `Caught up in about ${duration(eta.caught_up)}.`}
+        </p>
+      )}
       <p className="text-gray-200">
         <span className="text-gray-400">Now: </span>
         {running || "nothing to make"}
       </p>
+      {eta && eta.jobs.length > 0 && (
+        <ul className="space-y-0.5 pl-3 text-gray-400">
+          {eta.jobs.slice(0, 8).map((job, i) => (
+            <li key={i}>
+              {jobLabel(job.kind)}
+              {job.unit === "second" && job.units > 0 && ` of ${duration(job.units)} of video`}
+              {" · "}
+              {job.left === null ? "time left not known yet" : job.left < 1 ? "about to finish" : `about ${duration(job.left)} left`}
+            </li>
+          ))}
+        </ul>
+      )}
       {waiting && (
         <p className="text-gray-400">
           <span>Next: </span>

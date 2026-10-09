@@ -94,6 +94,7 @@ class Scheduler:
         inline_refill: bool = False,
         gpu_decodes: int = 0,
         write_status: Callable[[str, dict], None] | None = None,
+        last_status: Callable[[str], dict | None] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -102,6 +103,9 @@ class Scheduler:
         self._paused = paused or _paused_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         self._retry_seen: dict[str, str | None] = {}
+        # Each account's last status, read once: its paces start there.
+        self._last_status = last_status or _status_from_database
+        self._paced: set[str] = set()
         self._runners = dict(runners or runner_mod.runners())
         self._scan = scan or runner_mod.scan
         self._clock = clock
@@ -187,6 +191,12 @@ class Scheduler:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
             logger.exception("scheduler: refreshing %s failed", tenant_id)
+        if tenant_id not in self._paced:
+            self._paced.add(tenant_id)
+            try:
+                self.dispatcher.seed_pace(tenant_id, (self._last_status(tenant_id) or {}).get("pace") or {})
+            except Exception:  # noqa: BLE001 — it learns them again from its jobs
+                logger.exception("scheduler: reading %s's last pace failed", tenant_id)
         if self._clock() - self._status_at.get(tenant_id, float("-inf")) >= STATUS_EVERY_SEC:
             self._status_at[tenant_id] = self._clock()
             try:
@@ -365,6 +375,23 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
             "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.status', :v, now())"
             " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"v": json.dumps(status)})
         session.commit()
+
+
+def _status_from_database(tenant_id: str) -> dict | None:
+    """The status the scheduler last wrote for the account (its paces)."""
+    import json
+
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
 
 
 def _paused_in_database(tenant_id: str) -> set[str]:

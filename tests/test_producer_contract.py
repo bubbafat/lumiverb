@@ -111,6 +111,7 @@ def test_a_producer_is_one_folder(tmp_path):
     (('kind="example"', 'kind="clip"'), "Two producers share a kind"),
     (('run="example_runner:run", ', ''), "needs a flag, a run and a pool"),
     (('needs=("proxy",)', 'needs=("teleport",)'), "needs what no producer makes"),
+    (('pool="example-pool", slots=2', 'pool="example-pool", slots=2, unit="minute"'), "unit is a second"),
     (('pool="example-pool", slots=2', 'pool="gpu", per_account=True, job="vision"'), "pool = job"),
     (("PRODUCER = ProducerSpec(", "NOT_A_PRODUCER = ProducerSpec("), "declares no PRODUCER"),
 ])
@@ -174,3 +175,14 @@ def test_the_image_size_sent_goes_no_larger_than_the_proxies_it_comes_from():
 
     for artifact in ("vision", "ocr", "scene_vision"):
         assert PRODUCERS[artifact].setting("max_edge").maximum <= PROXY_CACHE_EDGE, artifact
+
+
+
+def test_video_producers_are_timed_by_the_second_and_the_rest_by_the_clip():
+    from src.server.scheduler.kinds import KINDS
+    from src.shared.producers import PRODUCERS
+
+    by_second = {a for a, p in PRODUCERS.items() if p.unit == "second"}
+    assert by_second == {"analysis_proxy", "transcript", "scenes", "scene_vision"}
+    assert KINDS["render"].spec.by_seconds and KINDS["redo_transcript"].spec.by_seconds
+    assert not KINDS["vision"].spec.by_seconds

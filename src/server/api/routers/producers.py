@@ -148,6 +148,8 @@ class ProducerItem(BaseModel):
     paused_at: datetime | None = None
     # Why its work waits now (its AI job has no machine, none online, or is off).
     waiting: str | None = None
+    # What its work grows with: "second" (of video) or "clip"; time left is reckoned in it.
+    unit: str = "clip"
 
 
 class ProducerList(BaseModel):
@@ -211,7 +213,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> 
                              advanced=s.advanced, fixed=s.fixed or None)
                 for s in p.settings],
         redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
-        waiting=waits.get(p.job) if p.job else None,
+        waiting=waits.get(p.job) if p.job else None, unit=p.unit,
     )
 
 
@@ -356,14 +358,44 @@ class SchedulerStatus(BaseModel):
     pools: dict[str, list[int]] = Field(default_factory=dict)  # each pool's [busy, slots]
     # Requests the AI machines sharing its GPU give up while video is decoded there.
     gpu_hold: int = 0
+    # Seconds a slot spends per unit of work, by kind (learned from finished jobs).
+    pace: dict[str, float] = Field(default_factory=dict)
+    # Jobs running now: {kind, units, elapsed}.
+    jobs: list[dict[str, Any]] = Field(default_factory=list)
+    # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
+    eta: Eta | None = None
+
+
+class JobLeft(BaseModel):
+    kind: str
+    artifact: str | None  # the producer whose job it is
+    unit: str = "clip"  # the producer's: "second" (of video) or "clip"
+    units: float  # its work, in that unit
+    elapsed: float  # seconds it has run
+    left: float | None  # seconds left at its pace; None: no pace yet
+
+
+class Eta(BaseModel):
+    # Seconds until each producer, each pool and everything is caught up
+    # (None: not known yet: no pace, or no machine doing its work).
+    producers: dict[str, float | None]
+    pools: dict[str, float | None]
+    caught_up: float | None
+    jobs: list[JobLeft]
+
+
+SchedulerStatus.model_rebuild()
 
 
 @router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
-def scheduler_status(session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
-    """What the scheduler is doing now; live is false when it hasn't said for 30 seconds."""
+def scheduler_status(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
+    """What the scheduler is doing now; live is false when it hasn't said
+    for 30 seconds. While it's live, eta says how long until each producer
+    and everything is caught up, from each kind's pace and what's left."""
     import json
     from datetime import timedelta
 
+    from src.server.scheduler.eta import eta
     from src.shared.utils import utcnow
 
     raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
@@ -373,8 +405,26 @@ def scheduler_status(session: Annotated[Session, Depends(get_tenant_session)]) -
         status = SchedulerStatus(**json.loads(raw))
     except (ValueError, TypeError):
         return SchedulerStatus()
-    status.live = status.at is not None and utcnow() - status.at < timedelta(seconds=30)
+    now = utcnow()
+    status.live = status.at is not None and now - status.at < timedelta(seconds=30)
+    if status.live:
+        status.eta = Eta(**eta(status.model_dump(), _work_left(request, session), now=now))
     return status
+
+
+def _work_left(request: Request, session: Session) -> dict[str, float]:
+    """Each scheduled producer's work left in its unit: what's missing, and
+    what's stale when its redo runs (not stopped)."""
+    models, _ = tenant_ai(request)
+    stopped = lineage.paused(session)
+    out = {}
+    for artifact, p in PRODUCERS.items():
+        if not p.scheduled:
+            continue
+        left = lineage.work_left(session, artifact, lineage.desired(session, artifact, models),
+                                 redo=lineage.redoable(artifact) and artifact not in stopped)
+        out[artifact] = left["seconds"] if p.unit == "second" else left["clips"]
+    return out
 
 
 class FailingClip(BaseModel):

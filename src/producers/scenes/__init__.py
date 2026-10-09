@@ -4,7 +4,7 @@ run by src/client/cli/video_index.py)."""
 from src.producers.contract import NOT_READ_YET, VIDEO, ProducerSpec, Setting
 
 PRODUCER = ProducerSpec(
-    artifact="scenes", producer="scene-detect", version="1", media=VIDEO, title="Scenes", order=50,
+    artifact="scenes", producer="scene-detect", version="1", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.video_indexed",
