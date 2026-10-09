@@ -1625,7 +1625,9 @@ def run_repair(
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)
+                # As many scenes at once as the online machines take together (Settings → AI).
                 done, failed = run_video_enrich(
+                    concurrency=vision.capacity(),
                     client=client,
                     source_for=lambda v: analysis_cache.get(v["asset_id"]),
                     videos=_until(lambda: stop() or vision.down, videos, _taking("scene-vision")),

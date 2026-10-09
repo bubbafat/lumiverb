@@ -4,7 +4,8 @@ Scene detection: runs VideoScanner + SceneSegmenter on each video's
 analysis proxy, submits scene boundaries to the server via the chunk API.
 
 Scene enrichment: extracts rep frame JPEGs at each scene's timestamp,
-uploads as artifacts, runs vision AI, and syncs to search.
+uploads as artifacts, runs vision AI, and syncs to search. Scenes go to
+the vision machines as many at once as they take together, across videos.
 
 Used by `lumiverb ingest` (stages 2+3) and `lumiverb repair`.
 """
@@ -16,6 +17,8 @@ import logging
 import tempfile
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
@@ -215,126 +218,99 @@ def run_video_index(
 # ---------------------------------------------------------------------------
 
 
-def enrich_video_scenes(
+class _NoFrameError(Exception):
+    """The scene's representative frame couldn't be read from the proxy."""
+
+
+def enrich_scene(
     *,
     client: LumiverbClient,
     source_path: Path,
     asset_id: str,
     rel_path: str,
+    scene: dict,
     vision_provider: object | None,
     vision_model_id: str | None,
     lineage: dict | None = None,
-) -> dict:
-    """Extract rep frames, run vision AI, and sync scenes to search.
-    lineage: how the descriptions are made, recorded with each.
+) -> None:
+    """Extract one scene's rep frame, run vision AI, and sync it to search.
+    lineage: how the description is made, recorded with it.
 
-    Returns {"enriched": N, "skipped": N, "failed": N, "errors": [...], "elapsed": float}.
-    The vision endpoint failing (CaptionError with endpoint_fault) stops the
-    video and is raised: it isn't the scenes' fault.
+    Raises when it can't be done. The vision endpoint failing raises
+    CaptionError with endpoint_fault: it isn't the scene's fault.
     """
-    from src.client.workers.captions.base import CaptionError
+    scene_id = scene["scene_id"]
+    rep_frame_ms = scene["rep_frame_ms"]
 
-    t0 = time.perf_counter()
-    enriched = 0
-    skipped = 0
-    failed = 0
-    errors: list[str] = []
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        # 1. Extract rep frame JPEG
+        attempt = extract_video_frame_detailed(
+            source_path, tmp_path,
+            timestamp=rep_frame_ms / 1000.0,
+        )
+        if not attempt.ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
+            raise _NoFrameError(f"no frame at {rep_frame_ms} ms")
 
-    # List all scenes for this asset
-    resp = client.get(f"/v1/video/{asset_id}/scenes")
-    scenes = resp.json().get("scenes", [])
-
-    for scene in scenes:
-        scene_id = scene["scene_id"]
-        rep_frame_ms = scene["rep_frame_ms"]
-
-        # Skip scenes that already have vision descriptions
-        if scene.get("description"):
-            skipped += 1
-            continue
-
-        tmp_path = None
-        try:
-            # 1. Extract rep frame JPEG
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-
-            attempt = extract_video_frame_detailed(
-                source_path, tmp_path,
-                timestamp=rep_frame_ms / 1000.0,
+        # 2. Upload rep frame artifact
+        with open(tmp_path, "rb") as f:
+            client.post(
+                f"/v1/assets/{asset_id}/artifacts/scene_rep",
+                files={"file": ("rep.jpg", f, "image/jpeg")},
+                data={"rep_frame_ms": str(rep_frame_ms)},
             )
-            if not attempt.ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
-                logger.warning(
-                    "scene-enrich: %s scene %s — rep frame extraction failed at %dms",
-                    rel_path, scene_id, rep_frame_ms,
-                )
-                failed += 1
-                errors.append(f"no frame at {rep_frame_ms} ms")
-                continue
 
-            # 2. Upload rep frame artifact
-            with open(tmp_path, "rb") as f:
+        # 3. Run vision AI (if provider available)
+        if vision_provider is not None and vision_model_id:
+            result = vision_provider.describe(tmp_path)
+            if result:
+                description = (result.get("description") or "").strip()
+                tags = [
+                    t.strip()
+                    for t in (result.get("tags") or [])
+                    if isinstance(t, str) and t.strip()
+                ]
+
+                # 4. PATCH scene with vision results
+                client.patch(
+                    f"/v1/video/scenes/{scene_id}",
+                    json={
+                        "model_id": vision_model_id,
+                        "model_version": "1",
+                        "description": description,
+                        "tags": tags,
+                        "lineage": lineage,
+                    },
+                )
+
+                # 5. Sync scene to Quickwit
                 client.post(
-                    f"/v1/assets/{asset_id}/artifacts/scene_rep",
-                    files={"file": ("rep.jpg", f, "image/jpeg")},
-                    data={"rep_frame_ms": str(rep_frame_ms)},
+                    f"/v1/video/scenes/{scene_id}/sync",
+                    json={"asset_id": asset_id},
                 )
 
-            # 3. Run vision AI (if provider available)
-            if vision_provider is not None and vision_model_id:
-                result = vision_provider.describe(tmp_path)
-                if result:
-                    description = (result.get("description") or "").strip()
-                    tags = [
-                        t.strip()
-                        for t in (result.get("tags") or [])
-                        if isinstance(t, str) and t.strip()
-                    ]
+        logger.info(
+            "scene-enrich: %s scene %s — rep frame at %dms%s",
+            rel_path, scene_id, rep_frame_ms,
+            " + vision" if vision_provider else "",
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
-                    # 4. PATCH scene with vision results
-                    client.patch(
-                        f"/v1/video/scenes/{scene_id}",
-                        json={
-                            "model_id": vision_model_id,
-                            "model_version": "1",
-                            "description": description,
-                            "tags": tags,
-                            "lineage": lineage,
-                        },
-                    )
 
-                    # 5. Sync scene to Quickwit
-                    client.post(
-                        f"/v1/video/scenes/{scene_id}/sync",
-                        json={"asset_id": asset_id},
-                    )
-
-            enriched += 1
-            logger.info(
-                "scene-enrich: %s scene %s — rep frame at %dms%s",
-                rel_path, scene_id, rep_frame_ms,
-                " + vision" if vision_provider else "",
-            )
-
-        except CaptionError as e:
-            if e.endpoint_fault:
-                raise
-            logger.warning("scene-enrich: %s scene %s — the model couldn't describe it: %s", rel_path, scene_id, e)
-            failed += 1
-            errors.append(str(e))
-        except Exception as e:
-            logger.exception(
-                "scene-enrich: %s scene %s — failed: %s",
-                rel_path, scene_id, e,
-            )
-            failed += 1
-            errors.append(str(e) or type(e).__name__)
-        finally:
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
-
-    elapsed = time.perf_counter() - t0
-    return {"enriched": enriched, "skipped": skipped, "failed": failed, "errors": errors, "elapsed": elapsed}
+@dataclass(eq=False)
+class _VideoScenes:
+    """A video's scenes under way: it's reported once every one handed out is back."""
+    video: dict
+    t0: float
+    skipped: int = 0
+    pending: int = 0
+    enriched: int = 0
+    errors: list[str] = field(default_factory=list)
+    # The vision endpoint failed (or stopped the run) before its scenes were done: not its fault.
+    fault: Exception | None = None
+    handed_out: bool = False
 
 
 def run_video_enrich(
@@ -349,61 +325,133 @@ def run_video_enrich(
     task_id: object,
     lineage_for: "Callable[[dict], dict] | None" = None,
     on_fail: "Callable[[str, object], None] | None" = None,
+    concurrency: int = 1,
 ) -> tuple[int, int]:
-    """Run scene enrichment on a batch of videos, updating progress.
-    on_fail(asset_id, error) hears of each video it couldn't do.
+    """Run scene enrichment on a batch of videos, updating progress per video.
+    on_fail(asset_id, error) hears of each video it couldn't do; a scene's
+    failure is reported for its video once all its scenes are back.
+
+    Scenes go out `concurrency` at once, across videos, so short videos
+    don't leave the vision machines idle; results are gathered here. The
+    vision endpoint failing (CaptionError with endpoint_fault: no machine
+    left) stops handing out scenes, and each video it cut short hears of
+    it with that error, which is no video's fault.
 
     Each video dict must have: asset_id, rel_path.
-    Videos are processed sequentially (vision API is the bottleneck).
     Returns (ok, failed).
     """
+    from src.client.workers.captions.base import CaptionError
+
+    concurrency = max(1, concurrency)
     ok = 0
     fail = 0
+    fault: CaptionError | None = None
 
-    for video in videos:
-        asset_id = video["asset_id"]
-        rel_path = video["rel_path"]
-        source_path = source_for(video)
-
-        if source_path is None or not source_path.is_file():
-            logger.warning("scene-enrich: %s — no analysis proxy, skipping", rel_path)
-            fail += 1
-            progress.advance(task_id, 1)
-            progress.update(task_id, ok=ok, fail=fail)
-            continue
-
-        try:
-            result = enrich_video_scenes(
-                client=client,
-                source_path=source_path,
-                asset_id=asset_id,
-                rel_path=rel_path,
-                vision_provider=vision_provider,
-                vision_model_id=vision_model_id,
-                lineage=lineage_for(video) if lineage_for else None,
-            )
-            logger.info(
-                "scene-enrich: %s — %d enriched, %d skipped, %d failed (%.1fs)",
-                rel_path, result["enriched"], result["skipped"],
-                result["failed"], result["elapsed"],
-            )
-            if result["failed"]:
-                # Its undescribed scenes are handed out again once its turn comes.
-                total = result["enriched"] + result["failed"]
-                errors = result.get("errors") or ["see the log"]
-                if on_fail:
-                    on_fail(asset_id, f"{result['failed']} of {total} scenes failed: {errors[0]}")
-                fail += 1
-            else:
-                ok += 1
-        except Exception as e:
-            logger.exception("scene-enrich: %s — failed: %s", rel_path, e)
+    def _report(v: _VideoScenes) -> None:
+        nonlocal ok, fail
+        asset_id, rel_path = v.video["asset_id"], v.video["rel_path"]
+        logger.info(
+            "scene-enrich: %s — %d enriched, %d skipped, %d failed (%.1fs)",
+            rel_path, v.enriched, v.skipped, len(v.errors), time.perf_counter() - v.t0,
+        )
+        if v.fault is not None:
+            logger.warning("scene-enrich: %s — stopped: %s", rel_path, v.fault)
             if on_fail:
-                on_fail(asset_id, e)
+                on_fail(asset_id, v.fault)
             fail += 1
-            progress.console.print(f"[red]scene-enrich \u2717[/red] {rel_path}: {e}")
-
+            progress.console.print(f"[red]scene-enrich \u2717[/red] {rel_path}: {v.fault}")
+        elif v.errors:
+            # Its undescribed scenes are handed out again once its turn comes.
+            if on_fail:
+                on_fail(asset_id, f"{len(v.errors)} of {v.enriched + len(v.errors)} scenes failed: {v.errors[0]}")
+            fail += 1
+        else:
+            ok += 1
         progress.advance(task_id, 1)
         progress.update(task_id, ok=ok, fail=fail)
+
+    def _enrich(v: _VideoScenes, source_path: Path, scene: dict, lineage: dict | None) -> tuple[_VideoScenes, object]:
+        """enrich_scene, on a worker thread: (v, None) when done, else (v, why)."""
+        rel_path, scene_id = v.video["rel_path"], scene["scene_id"]
+        try:
+            enrich_scene(client=client, source_path=source_path, asset_id=v.video["asset_id"], rel_path=rel_path,
+                         scene=scene, vision_provider=vision_provider, vision_model_id=vision_model_id,
+                         lineage=lineage)
+            return v, None
+        except CaptionError as e:
+            if e.endpoint_fault:
+                return v, e
+            logger.warning("scene-enrich: %s scene %s — the model couldn't describe it: %s", rel_path, scene_id, e)
+            return v, str(e)
+        except _NoFrameError as e:
+            logger.warning("scene-enrich: %s scene %s — rep frame extraction failed: %s", rel_path, scene_id, e)
+            return v, str(e)
+        except Exception as e:
+            logger.exception("scene-enrich: %s scene %s — failed: %s", rel_path, scene_id, e)
+            return v, str(e) or type(e).__name__
+
+    def _gather(fut: Future) -> None:
+        nonlocal fault
+        v, error = fut.result()
+        v.pending -= 1
+        if error is None:
+            v.enriched += 1
+        elif isinstance(error, CaptionError):
+            v.fault = error
+            fault = fault or error
+        else:
+            v.errors.append(error)
+        if v.handed_out and v.pending == 0:
+            _report(v)
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scene-vision") as pool:
+        inflight: set[Future] = set()
+        for video in videos:
+            if fault is not None:
+                break
+            asset_id = video["asset_id"]
+            rel_path = video["rel_path"]
+            source_path = source_for(video)
+
+            if source_path is None or not source_path.is_file():
+                logger.warning("scene-enrich: %s — no analysis proxy, skipping", rel_path)
+                fail += 1
+                progress.advance(task_id, 1)
+                progress.update(task_id, ok=ok, fail=fail)
+                continue
+
+            try:
+                scenes = client.get(f"/v1/video/{asset_id}/scenes").json().get("scenes", [])
+                lineage = lineage_for(video) if lineage_for else None
+            except Exception as e:
+                logger.exception("scene-enrich: %s — failed: %s", rel_path, e)
+                if on_fail:
+                    on_fail(asset_id, e)
+                fail += 1
+                progress.console.print(f"[red]scene-enrich \u2717[/red] {rel_path}: {e}")
+                progress.advance(task_id, 1)
+                progress.update(task_id, ok=ok, fail=fail)
+                continue
+
+            v = _VideoScenes(video=video, t0=time.perf_counter())
+            for scene in scenes:
+                # Skip scenes that already have vision descriptions
+                if scene.get("description"):
+                    v.skipped += 1
+                    continue
+                if fault is not None:
+                    v.fault = v.fault or fault
+                    break
+                v.pending += 1
+                inflight.add(pool.submit(_enrich, v, source_path, scene, lineage))
+                if len(inflight) >= concurrency:
+                    done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        _gather(fut)
+            v.handed_out = True
+            if v.pending == 0:
+                _report(v)
+        for fut in as_completed(inflight):
+            _gather(fut)
 
     return ok, fail
