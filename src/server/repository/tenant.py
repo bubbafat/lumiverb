@@ -3178,14 +3178,24 @@ class UnifiedBrowseRepository:
                 )
                 params["ordered_candidate_ids"] = ordered_candidate_ids
 
-        # --- Composite cursor (skipped in relevance mode) ---
-        # The composite cursor below paginates by (sort_col, asset_id),
-        # which doesn't make sense when results are ordered by an
-        # ad-hoc candidate score that isn't a column. For text search
-        # we keep it simple: cap at the first `limit` results sorted
-        # by score. The candidate set is already capped at
-        # MAX_CANDIDATE_IDS=5000 upstream, so the user is paging
-        # through a bounded list and most queries fit a single page.
+        # --- Cursor in relevance mode: a place in the ranked list ---
+        # Results ordered by an ad-hoc score page by position in the
+        # ordered candidate list: after the cursor's clip (the last of the
+        # page before). Ignoring the cursor here made page 2 repeat page 1.
+        if after is not None and relevance_order:
+            try:
+                cursor_id = json.loads(_b64.urlsafe_b64decode(after + "=="))["id"]
+            except (ValueError, KeyError, TypeError):
+                cursor_id = after
+            # A cursor whose clip left the list (it changed between pages)
+            # ends the paging rather than starting it over.
+            conditions.append(
+                "array_position(:ordered_candidate_ids, a.asset_id)"
+                " > array_position(:ordered_candidate_ids, CAST(:cursor_id AS text))"
+            )
+            params["cursor_id"] = cursor_id
+
+        # --- Composite cursor: by (sort column, asset_id) ---
         if after is not None and not relevance_order:
             cursor_value = None
             cursor_id = after

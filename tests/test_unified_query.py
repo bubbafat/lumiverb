@@ -508,3 +508,31 @@ def test_capabilities_endpoint(monkeypatch):
     assert "camera_make" in prefixes
     assert "iso" in prefixes
     assert "favorite" in prefixes
+
+
+@pytest.mark.slow
+def test_query_text_search_pages_through_every_match_in_relevance_order(query_env):
+    """A text search's next_cursor goes on past the first page. It used to be
+    ignored in relevance order, so page 2 repeated page 1 (Oct 9 review)."""
+    e = query_env
+    ranked = [v for v in e.values() if isinstance(v, str) and v.startswith("ast_")]
+    assert len(ranked) >= 4
+
+    mock_qw = MagicMock()
+    mock_qw.enabled = True
+    mock_qw.search_tenant.return_value = [{"asset_id": a, "score": 1.0 - i / 100} for i, a in enumerate(ranked)]
+    mock_qw.search_tenant_scenes.return_value = []
+    mock_qw.search_tenant_transcripts.return_value = []
+
+    seen: list[str] = []
+    after = None
+    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
+        for _ in range(len(ranked)):
+            url = "/v1/query?f=query:landscape&limit=2" + (f"&after={after}" if after else "")
+            r = e["client"].get(url, headers=_headers(e["api_key"]))
+            assert r.status_code == 200, r.text
+            seen += [i["asset_id"] for i in r.json()["items"]]
+            after = r.json().get("next_cursor")
+            if not after:
+                break
+    assert seen == ranked
