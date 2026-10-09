@@ -26,17 +26,35 @@ def test_the_hash_ignores_key_order_and_follows_any_value():
     assert len(P.settings_hash(a)) == 16
 
 
-def test_the_account_fills_the_vision_model_and_overrides_win():
-    s = P.effective_settings("vision", account={"model": "qwen3-vl:8b"})
+def test_each_ai_producer_takes_its_jobs_model():
+    """One model per job (Settings → AI): the job's, wherever else a model is said."""
+    from src.shared.ai_jobs import JOBS
+
+    assert {a: p.job for a, p in P.PRODUCERS.items() if p.job} == {
+        "vision": "vision", "ocr": "vision", "scene_vision": "vision", "transcript": "transcripts"}
+    assert all(p.job in JOBS for p in P.PRODUCERS.values() if p.job)
+    models = {"vision": "qwen3-vl:8b", "transcripts": "medium"}
+    s = P.effective_settings("vision", account=models)
     assert s["model"] == "qwen3-vl:8b" and s["prompt"] == P.VISION_PROMPT
-    s = P.effective_settings("vision", overrides={"model": "llava:13b"}, account={"model": "qwen3-vl:8b"})
-    assert s["model"] == "llava:13b"
+    assert P.effective_settings("transcript", account=models)["model"] == "medium"
+    # A job's model comes from the job alone: an override can't say another.
+    assert P.effective_settings("vision", overrides={"model": "llava:13b"}, account=models)["model"] == "qwen3-vl:8b"
+    assert P.effective_settings("transcript", overrides={"model": "large-v3", "vad_min_silence_ms": 700},
+                                account=models) == {"model": "medium", "vad_min_silence_ms": 700}
     # Only declared settings count: anything else can't change output.
     assert P.effective_settings("transcript", overrides={"nonsense": 1}) == P.PRODUCERS["transcript"].defaults
 
 
-def test_the_account_only_fills_what_comes_from_it():
-    assert P.effective_settings("transcript", account={"model": "large"})["model"] == "small"
+def test_a_job_without_a_model_leaves_the_producers_default():
+    assert P.effective_settings("transcript", account={"vision": "qwen3-vl:8b"})["model"] == "small"
+    assert P.effective_settings("transcript", account={"transcripts": ""})["model"] == "small"
+    assert P.effective_settings("vision", account={"transcripts": "medium"})["model"] == ""
+
+
+def test_transcripts_made_with_small_stay_current():
+    """The transcripts job starts at small, what every transcript so far recorded."""
+    assert P.settings_hash(P.effective_settings("transcript", account={"transcripts": "small"})) == \
+        P.settings_hash({"model": "small", "vad_min_silence_ms": 500})
 
 
 def test_lineage_names_the_producer_version_settings_and_source():

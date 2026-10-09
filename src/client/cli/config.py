@@ -20,9 +20,8 @@ class CLIConfig(BaseModel):
     face_batch_size: int = 25
     face_batch_limit: int = 20
     max_concurrency: int = 4
-    # How many vision requests go at once is each AI machine's (Settings → AI).
+    # How many vision and transcription requests go at once is each AI machine's (Settings → AI).
     ocr_batch_size: int = 25
-    transcribe_concurrency: int = 1
     # Library roots as stored on the server -> where they are on this
     # machine, by path prefix (src/client/cli/roots.py).
     root_map: dict[str, str] = {}

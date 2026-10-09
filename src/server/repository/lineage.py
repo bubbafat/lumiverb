@@ -18,6 +18,7 @@ up to a day.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -80,10 +81,10 @@ def _meta(session: Session, key: str) -> str | None:
     return row[0] if row else None
 
 
-def account_settings(session: Session, tenant_vision_model: str | None = None) -> dict[str, Any]:
-    """Account-wide values producers take: the vision model chosen in
+def account_settings(session: Session, job_models: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Account-wide values producers take: each AI job's model, chosen in
     Settings → AI (the tenant's, in the control plane)."""
-    return {"model": tenant_vision_model or ""}
+    return {job: model for job, model in (job_models or {}).items() if model}
 
 
 def overrides(session: Session, artifact: str) -> dict[str, Any]:
@@ -94,11 +95,11 @@ def overrides(session: Session, artifact: str) -> dict[str, Any]:
         return {}
 
 
-def desired(session: Session, artifact: str, tenant_vision_model: str | None = None) -> dict[str, Any]:
+def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:
     """What a current artifact of this kind is made with now: producer,
-    version, settings and their hash."""
+    version, settings and their hash. job_models: the account's model per AI job."""
     p = PRODUCERS[artifact]
-    settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, tenant_vision_model))
+    settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, job_models))
     return {"producer": p.producer, "version": p.version, "settings": settings,
             "settings_hash": settings_hash(settings)}
 

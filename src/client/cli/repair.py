@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
     from src.client.cli.producer_settings import ProducerSettings
     from src.client.proxy.analysis_cache import AnalysisProxyCache
+    from src.client.workers.transcripts.base import Transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -231,19 +232,25 @@ def _render_one(
 
 def _transcribe_one(
     source_path: "Path",
-    whisper_model: str = "small",
+    transcriber: "Transcriber",
     vad_min_silence_ms: int = 500,
 ) -> tuple[str, str] | None:
-    """Transcribe a video file using faster-whisper in a subprocess.
+    """Transcribe a video: every audio track mixed into a 16 kHz mono WAV,
+    its speech found here with the producer's VAD setting, and only the
+    speech heard by whichever of the transcripts job's machines is free
+    (transcriber). Times come back onto the clip.
 
-    Returns (srt_text, language) on success. srt_text is empty string if no
-    speech was detected. Returns None on transient failure.
+    Returns (srt_text, language); srt_text is "" when nothing is said. None
+    when it couldn't be tried this time (the audio tracks couldn't be read,
+    finding the speech failed): left missing, tried again later. Raises
+    TranscriptError when the machines couldn't hear it (it says whose fault).
     """
-    import json as _json
     import subprocess
-    import sys
     import tempfile
     from pathlib import Path
+
+    from src.client.workers.transcripts.speech import SpeechError, find_speech, restore, to_srt
+    from src.shared.whisper_models import language_code
 
     try:
         tracks = audio_tracks(source_path)
@@ -254,13 +261,14 @@ def _transcribe_one(
         logger.info("No audio track in %s", source_path)
         return ("", "")
 
-    try:
-        # Every audio track mixed into a 16 kHz mono WAV: a lav may be on any track.
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            wav_path = tmp.name
-
-        cmd = speech_wav_command(source_path, Path(wav_path), tracks)
-        result = subprocess.run(cmd, capture_output=True, timeout=1800)
+    with tempfile.TemporaryDirectory(prefix="lumiverb-speech-") as tmp:
+        # Every audio track mixed: a lav may be on any track.
+        wav, speech = Path(tmp) / "audio.wav", Path(tmp) / "speech.wav"
+        try:
+            result = subprocess.run(speech_wav_command(source_path, wav, tracks), capture_output=True, timeout=1800)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning("Reading the audio of %s failed; trying again later: %s", source_path, e)
+            return None
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""
             if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
@@ -268,90 +276,27 @@ def _transcribe_one(
                 return ("", "")  # deterministic: no audio
             logger.warning("ffmpeg audio extraction failed for %s: %s", source_path, stderr[:500])
             return ("", "")  # treat as no audio (deterministic)
-
-        import os
-        wav_size = os.path.getsize(wav_path)
-        if wav_size < 1000:  # < 1KB = essentially empty
+        if not wav.exists() or wav.stat().st_size < 1000:  # < 1KB = essentially empty
             logger.info("Audio track too short/empty for %s", source_path)
-            os.unlink(wav_path)
             return ("", "")
 
-        # Run Whisper in subprocess for memory isolation
-        worker_code = f'''
-import json, sys
-try:
-    from faster_whisper import WhisperModel
-    model = WhisperModel("{whisper_model}", device="auto", compute_type="auto")
-    segments, info = model.transcribe(
-        sys.argv[1],
-        vad_filter=True,
-        vad_parameters=dict(min_silence_duration_ms={int(vad_min_silence_ms)}),
-    )
-    srt_parts = []
-    for i, seg in enumerate(segments, 1):
-        start_h = int(seg.start // 3600)
-        start_m = int((seg.start % 3600) // 60)
-        start_s = int(seg.start % 60)
-        start_ms = int((seg.start % 1) * 1000)
-        end_h = int(seg.end // 3600)
-        end_m = int((seg.end % 3600) // 60)
-        end_s = int(seg.end % 60)
-        end_ms = int((seg.end % 1) * 1000)
-        text = seg.text.strip()
-        if not text:
-            continue
-        srt_parts.append(
-            f"{{i}}\\n"
-            f"{{start_h:02d}}:{{start_m:02d}}:{{start_s:02d}},{{start_ms:03d}} --> "
-            f"{{end_h:02d}}:{{end_m:02d}}:{{end_s:02d}},{{end_ms:03d}}\\n"
-            f"{{text}}\\n"
-        )
-    result = {{"srt": "\\n".join(srt_parts), "language": info.language or ""}}
-    print(json.dumps(result))
-except Exception as e:
-    print(json.dumps({{"error": str(e)}}), file=sys.stderr)
-    sys.exit(1)
-'''
-        proc = subprocess.run(
-            [sys.executable, "-c", worker_code, wav_path],
-            capture_output=True,
-            text=True,
-            timeout=3600,  # 1 hour max for very long videos
-        )
-
-        # Clean up WAV
         try:
-            os.unlink(wav_path)
-        except OSError:
-            pass
-
-        if proc.returncode != 0:
-            logger.warning(
-                "Whisper subprocess failed for %s: %s",
-                source_path, (proc.stderr or "")[:500],
-            )
-            return None  # transient failure — retry on next run
-
-        try:
-            output = _json.loads(proc.stdout.strip())
-        except _json.JSONDecodeError:
-            logger.warning("Whisper returned invalid JSON for %s: %s", source_path, proc.stdout[:200])
+            chunks = find_speech(wav, speech, vad_min_silence_ms)
+        except SpeechError as e:
+            logger.warning("Couldn't find the speech in %s; trying again later: %s", source_path, e)
             return None
-
-        srt_text = output.get("srt", "")
-        language = output.get("language", "")
-        if srt_text:
-            logger.info("Transcribed %s: %d chars, language=%s", source_path.name, len(srt_text), language)
-        else:
+        if not chunks:
             logger.info("No speech detected in %s", source_path.name)
-        return (srt_text, language)
+            return ("", "")
+        heard = transcriber.transcribe(speech)
 
-    except subprocess.TimeoutExpired:
-        logger.warning("Transcription timed out for %s", source_path)
-        return None
-    except Exception as e:
-        logger.exception("Transcription failed for %s: %s", source_path, e)
-        return None
+    srt_text = to_srt(restore(heard.segments, chunks))
+    language = language_code(heard.language)
+    if srt_text:
+        logger.info("Transcribed %s: %d chars, language=%s", source_path.name, len(srt_text), language)
+    else:
+        logger.info("No speech detected in %s", source_path.name)
+    return (srt_text, language)
 
 
 def _page_missing(
@@ -1032,12 +977,22 @@ def run_repair(
     failures = FailureReport(client)
     # Vision steps run only while a machine doing vision offers the account's model.
     vision = VisionGuard(client, failures)
+    # Transcription only while a machine doing transcripts can (the built-in Whisper, or a server).
+    from src.client.cli.transcript_guard import TranscriptGuard
+    transcripts = TranscriptGuard(client, failures)
 
     def _vision_ready() -> bool:
         if vision.check():
             console.print(f"  Vision AI: {vision.describe()}")
             return True
         console.print(f"[yellow]  Vision AI can't be used: {vision.error}[/yellow]")
+        return False
+
+    def _transcripts_ready() -> bool:
+        if transcripts.check():
+            console.print(f"  Transcripts: {transcripts.describe()}")
+            return True
+        console.print(f"[yellow]  Transcripts wait: {transcripts.error}[/yellow]")
         return False
     max_conc = min(concurrency, _cfg.max_concurrency)
     embed_conc = min(max_conc, concurrency)  # embed is CPU-bound (CLIP), full concurrency
@@ -1506,6 +1461,8 @@ def run_repair(
 
         elif repair_type == "transcribe":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
+            if not _transcripts_ready():
+                continue
 
             assets = _filter(_page_missing(client, library_id, missing_transcription=True))
             if not assets:
@@ -1518,40 +1475,57 @@ def run_repair(
             if not assets:
                 continue
 
-            progress = _make_progress(console)
-            with progress:
-                tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
-                for a in _until(stop, assets, _taking("transcribe")):
-                    rel_path = a["rel_path"]
-                    asset_id = a["asset_id"]
+            from src.client.workers.transcripts.base import TranscriptError
 
-                    source_path = analysis_cache.get(asset_id)
-                    if source_path is None:
-                        logger.warning("No analysis proxy for %s: %s", asset_id, rel_path)
-                        with stats.lock:
+            # The silences skipped are the producer's; the model is the one the
+            # guard just read, which may be newer than the run's settings.
+            vad_ms = producers.settings("transcript")["vad_min_silence_ms"]
+            transcript_settings = producers.with_model("transcript", transcripts.model)
+            transcriber = transcripts.transcriber()
+            transcript_fail = transcripts.on_fail("transcript")
+
+            def _hear(a: dict) -> tuple[dict, tuple[str, str] | str | None, TranscriptError | None]:
+                source_path = analysis_cache.get(a["asset_id"])
+                if source_path is None:
+                    return a, "no proxy", None
+                try:
+                    return a, _transcribe_one(source_path, transcriber, vad_ms), None
+                except TranscriptError as e:
+                    return a, None, e
+                except Exception:  # noqa: BLE001 — one clip's surprise doesn't stop the step
+                    logger.exception("Transcribing %s failed", a["rel_path"])
+                    return a, None, None
+
+            def _heard(fut: Future) -> None:
+                a, result, error = fut.result()
+                asset_id = a["asset_id"]
+                if result == "no proxy":
+                    logger.warning("No analysis proxy for %s: %s", asset_id, a["rel_path"])
+                    with stats.lock:
+                        stats.skipped += 1
+                elif error is not None:
+                    # The machines' trouble stops transcription, charging no clip;
+                    # the clip's is charged once a check finds the machine fine.
+                    transcript_fail(asset_id, error)
+                    with stats.lock:
+                        if error.endpoint_fault:
                             stats.skipped += 1
-                        progress.advance(tid, 1)
-                        continue
-
-                    whisper = producers.settings("transcript")
-                    result = _transcribe_one(source_path, whisper["model"], whisper["vad_min_silence_ms"])
-
-                    if result is None:
-                        # Left missing, and tried again once its turn comes.
-                        failures.add("transcript", asset_id, "transcription failed (see the log)")
-                        with stats.lock:
+                        else:
                             stats.failed += 1
-                        progress.advance(tid, 1)
-                        progress.update(tid, ok=stats.processed, fail=stats.failed)
-                        continue
-
+                elif result is None:
+                    # Left missing, and tried again once its turn comes.
+                    failures.add("transcript", asset_id, "transcription failed (see the log)")
+                    with stats.lock:
+                        stats.failed += 1
+                else:
                     srt_text, language = result
                     # Submit transcript (empty string = no speech, sets has_transcript=false)
                     try:
                         client.post(
                             f"/v1/assets/{asset_id}/transcript",
                             json={"srt": srt_text, "language": language, "source": "whisper",
-                                  "lineage": producers.lineage("transcript", a.get("sha256"))},
+                                  "lineage": producers.lineage("transcript", a.get("sha256"),
+                                                               used=transcript_settings)},
                         )
                         with stats.lock:
                             stats.processed += 1
@@ -1560,11 +1534,29 @@ def run_repair(
                         failures.add("transcript", asset_id, e)
                         with stats.lock:
                             stats.failed += 1
+                with stats.lock:
+                    ok_count, fail_count = stats.processed, stats.failed
+                progress.advance(tid, 1)
+                progress.update(tid, ok=ok_count, fail=fail_count)
 
-                    with stats.lock:
-                        ok_count, fail_count = stats.processed, stats.failed
-                    progress.advance(tid, 1)
-                    progress.update(tid, ok=ok_count, fail=fail_count)
+            # Twice as many as the online machines take together (Settings → AI): each
+            # clip's audio and speech are got ready while the machines work on others
+            # (the pool holds each machine to its own limit). Results are posted from
+            # here, one at a time.
+            transcribe_conc = 2 * transcripts.capacity()
+            progress = _make_progress(console)
+            with progress:
+                tid = progress.add_task("Transcribe", total=len(assets), ok=0, fail=0)
+                with ThreadPoolExecutor(max_workers=transcribe_conc, thread_name_prefix="transcribe") as hear_pool:
+                    inflight: set[Future] = set()
+                    for a in _until(lambda: stop() or transcripts.down, assets, _taking("transcribe")):
+                        inflight.add(hear_pool.submit(_hear, a))
+                        if len(inflight) >= transcribe_conc:
+                            done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+                            for f in done:
+                                _heard(f)
+                    for f in as_completed(inflight):
+                        _heard(f)
 
         elif repair_type == "video-scenes":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")

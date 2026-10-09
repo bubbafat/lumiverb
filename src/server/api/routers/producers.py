@@ -89,17 +89,18 @@ class ProducerList(BaseModel):
     producers: list[ProducerItem]
 
 
-def tenant_vision_model(request: Request) -> str:
-    """The tenant's vision model from the control plane, if any."""
+def tenant_job_models(request: Request) -> dict[str, str]:
+    """The tenant's model per AI job (Settings → AI), from the control plane."""
     from src.server.database import get_control_session
+    from src.server.repository.ai_machines import job_models
     from src.server.repository.control_plane import TenantRepository
 
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
-        return ""
+        return {}
     with get_control_session() as ctrl:
         tenant = TenantRepository(ctrl).get_by_id(tenant_id)
-    return (tenant.vision_model_id if tenant else "") or ""
+    return job_models(tenant)
 
 
 @router.get("", response_model=ProducerList, dependencies=[Depends(require_signed_in)])
@@ -111,10 +112,10 @@ def list_producers(
 ) -> ProducerList:
     """Every producer with its settings now; counts (in one library when given)
     unless counts=false, as the worker asks."""
-    vision_model = tenant_vision_model(request)
+    models = tenant_job_models(request)
     items = []
     for artifact, p in PRODUCERS.items():
-        want = lineage.desired(session, artifact, vision_model)
+        want = lineage.desired(session, artifact, models)
         items.append(ProducerItem(
             artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
             uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],

@@ -36,10 +36,13 @@ class TenantRepository:
         )
         self._session.add(tenant)
         self._session.flush()
-        # A vision endpoint given now is its first AI machine (routers/ai.py).
-        if vision_api_url.strip():
-            from src.server.repository.ai_machines import new_vision_machine
+        from src.server.repository.ai_machines import new_built_in_machine, new_vision_machine
 
+        # Its built-in Whisper, so transcripts run with nothing set up (routers/ai.py).
+        self._session.add(new_built_in_machine(tenant_id))
+        self._session.flush()
+        # A vision endpoint given now is its first AI machine.
+        if vision_api_url.strip():
             self._session.add(new_vision_machine(self._session, tenant_id, vision_api_url, vision_api_key))
         self._session.commit()
         self._session.refresh(tenant)

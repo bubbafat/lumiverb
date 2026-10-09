@@ -5,13 +5,38 @@ from __future__ import annotations
 from sqlmodel import Session, select
 from ulid import ULID
 
-from src.server.models.control_plane import AiMachine
+from src.server.models.control_plane import AiMachine, Tenant
+
+# Where each AI job's model is kept on the tenant (one model per job).
+JOB_MODEL_FIELDS: dict[str, str] = {"vision": "vision_model_id", "transcripts": "transcript_model_id"}
+
+BUILT_IN_NAME = "Built in"
 
 
 def machines(ctrl: Session, tenant_id: str) -> list[AiMachine]:
-    """A tenant's machines, in the order added."""
+    """A tenant's machines: the built-in one first, then in the order added."""
     return list(ctrl.exec(select(AiMachine).where(AiMachine.tenant_id == tenant_id)
-                          .order_by(AiMachine.created_at, AiMachine.machine_id)).all())
+                          .order_by(AiMachine.built_in.desc(), AiMachine.created_at, AiMachine.machine_id)).all())
+
+
+def job_model(tenant: Tenant | None, job: str) -> str:
+    """The job's model for the tenant; "" when the job is off."""
+    return (getattr(tenant, JOB_MODEL_FIELDS[job], "") or "") if tenant else ""
+
+
+def set_job_model(tenant: Tenant, job: str, model: str) -> None:
+    setattr(tenant, JOB_MODEL_FIELDS[job], model)
+
+
+def job_models(tenant: Tenant | None) -> dict[str, str]:
+    """{job: model} for the tenant, for the producers (src/shared/producers.py)."""
+    return {job: job_model(tenant, job) for job in JOB_MODEL_FIELDS}
+
+
+def new_built_in_machine(tenant_id: str) -> AiMachine:
+    """The tenant's built-in machine: the worker's own Whisper, transcripts one at a time."""
+    return AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=BUILT_IN_NAME, api_url="",
+                     jobs=["transcripts"], at_once=1, built_in=True)
 
 
 def first_vision_machine(ctrl: Session, tenant_id: str) -> AiMachine | None:

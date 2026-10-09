@@ -1135,7 +1135,7 @@ def enrich(
       faces           — Detect faces using InsightFace (face recognition)
       redetect-faces  — Re-run face detection on ALL images with quality gates
       ocr             — Extract text from images via vision AI
-      transcribe      — Transcribe video audio via faster-whisper (from analysis proxies)
+      transcribe      — Transcribe speech in videos on the AI machines doing transcripts (from analysis proxies)
       video-scenes    — Run scene detection on unindexed videos
       scene-vision    — Extract rep frames + run vision AI on scenes
       search-sync     — Push stale assets to Quickwit search index

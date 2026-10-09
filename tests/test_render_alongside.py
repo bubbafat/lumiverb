@@ -19,6 +19,7 @@ from rich.console import Console
 
 from src.client.cli.config import CLIConfig, save_config
 from src.client.cli.repair import run_repair
+from tests.ai_machine_fakes import built_in_whisper
 
 pytestmark = pytest.mark.fast
 
@@ -59,6 +60,7 @@ def _run(library: dict, *, render_alongside: bool, render, transcribe, should_st
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
         patch("src.client.cli.repair._render_one", side_effect=render),
         patch("src.client.cli.repair._transcribe_one", side_effect=transcribe),
+        built_in_whisper(),
     ):
         run_repair(MagicMock(), library, job_type="all", console=console, should_stop=should_stop,
                    render_alongside=render_alongside)

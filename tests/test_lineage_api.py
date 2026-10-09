@@ -168,13 +168,14 @@ def test_changing_one_producers_setting_makes_exactly_its_artifacts_stale(env):
     before = _producers(env)
     with _db(env) as s:
         s.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.transcript',"
-                       " '{\"model\": \"medium\"}', now())"))
+                       " '{\"vad_min_silence_ms\": 700, \"model\": \"medium\"}', now())"))
         s.commit()
     try:
         after = _producers(env)
         assert _state(env, clip, "transcript") == "stale"
         assert _state(env, clip, "proxy") == "current"
-        assert after["transcript"]["settings"]["model"] == "medium"
+        # The model is the transcripts job's (Settings → AI), whatever an override says.
+        assert after["transcript"]["settings"] == {"model": "small", "vad_min_silence_ms": 700}
         assert after["transcript"]["counts"]["stale"] == before["transcript"]["counts"]["stale"] + 1
         for artifact in set(P.ARTIFACTS) - {"transcript"}:
             assert after[artifact]["counts"] == before[artifact]["counts"], artifact
