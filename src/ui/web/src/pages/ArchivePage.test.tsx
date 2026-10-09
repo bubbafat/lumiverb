@@ -99,7 +99,7 @@ describe("ArchivePage", () => {
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
     api.listArchive.mockResolvedValue({ items: [clip("a2", "Trips/Paris/b.mov", true)], next_cursor: null, total: 1 });
     api.deleteMissingClips
-      .mockRejectedValueOnce(new ApiError(409, "1 clip", "confirm_delete_missing", { count: 1 }))
+      .mockRejectedValueOnce(new ApiError(409, "1 clip", "confirm_delete_missing", { count: 1, listed_at: "T" }))
       .mockRejectedValueOnce(new ApiError(409, "in projects", "in_projects", {
         assets_in_projects: 1,
         projects: [{ project_id: "col_1", name: "Promo", status: "active", in_trash: false, clips: 1 }],
@@ -112,10 +112,12 @@ describe("ArchivePage", () => {
     expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined }, undefined, false);
     fireEvent.click(screen.getByRole("button", { name: "Delete 1 clip for good" }));
     expect(await screen.findByText("Promo: 1 clip")).toBeTruthy();
-    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined }, 1, false);
+    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined },
+      { count: 1, listedAt: "T" }, false);
     fireEvent.click(screen.getByRole("button", { name: "Delete and remove from projects" }));
     expect((await screen.findByRole("status")).textContent).toContain("Deleted 1 clip for good.");
-    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined }, 1, true);
+    expect(api.deleteMissingClips).toHaveBeenLastCalledWith({ libraryId: "lib_1", path: undefined },
+      { count: 1, listedAt: "T" }, true);
   });
 
   it("only admins see Delete these for good, and only on missing clips", async () => {

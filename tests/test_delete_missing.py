@@ -31,6 +31,14 @@ def _delete_missing(env, headers=None, **body):
     return client.request("DELETE", "/v1/archive/missing", json=body, headers=headers or own)
 
 
+def _confirm(env, **scope) -> dict:
+    """What the API asks with: the count and when it listed them (sent back to go ahead)."""
+    r = _delete_missing(env, **scope)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "confirm_delete_missing", r.text
+    d = r.json()["error"]["details"]
+    return {"count": d["count"], "missing_before": d["listed_at"]}
+
+
 def _exists(env, asset_id: str) -> bool:
     from sqlalchemy import text
 
@@ -46,15 +54,14 @@ def test_deleting_missing_clips_asks_first_with_the_count(env):
     assert _archive(env, asset_ids=[by_hand]).status_code == 200
     client, headers, library_id, *_ = env
 
-    r = _delete_missing(env, library_id=library_id)
-    assert r.status_code == 409, r.text
-    error = r.json()["error"]
-    assert error["code"] == "confirm_delete_missing" and error["details"] == {"count": 3}
+    asked = _confirm(env, library_id=library_id)
+    assert asked["count"] == 3
     assert all(_exists(env, a) for a in gone)  # nothing yet
 
     # A count that's no longer right asks again.
-    assert _delete_missing(env, library_id=library_id, count=2).status_code == 409
-    r = _delete_missing(env, library_id=library_id, count=3)
+    assert _delete_missing(env, library_id=library_id, count=2,
+                           missing_before=asked["missing_before"]).status_code == 409
+    r = _delete_missing(env, library_id=library_id, **asked)
     assert r.status_code == 200 and r.json() == {"deleted": 3}
     assert not any(_exists(env, a) for a in gone)
     assert _exists(env, kept) and _row(env, kept)[0] is None
@@ -67,9 +74,9 @@ def test_only_under_a_folder_when_asked(env):
     inside = _ingest(env, "dm-folder/licensed/a.jpg", media_type="image", sha=_sha())
     outside = _ingest(env, "dm-folder/own/b.jpg", media_type="image", sha=_sha())
     _missing(env, inside, outside)
-    r = _delete_missing(env, library_id=library_id, path="dm-folder/licensed")
-    assert r.json()["error"]["details"] == {"count": 1}
-    assert _delete_missing(env, library_id=library_id, path="dm-folder/licensed", count=1).json() == {"deleted": 1}
+    asked = _confirm(env, library_id=library_id, path="dm-folder/licensed")
+    assert asked["count"] == 1
+    assert _delete_missing(env, library_id=library_id, path="dm-folder/licensed", **asked).json() == {"deleted": 1}
     assert not _exists(env, inside) and _exists(env, outside)
 
 
@@ -79,10 +86,11 @@ def test_clips_in_projects_ask_about_the_projects_too(env):
     r = client.post("/v1/projects", json={"name": "Delete missing", "asset_ids": [clip]}, headers=headers)
     assert r.status_code in (200, 201), r.text
     _missing(env, clip)
-    r = _delete_missing(env, library_id=library_id, path="dm-project", count=1)
+    asked = _confirm(env, library_id=library_id, path="dm-project")
+    r = _delete_missing(env, library_id=library_id, path="dm-project", **asked)
     assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects"
     assert _exists(env, clip)
-    r = _delete_missing(env, library_id=library_id, path="dm-project", count=1, remove_from_projects=True)
+    r = _delete_missing(env, library_id=library_id, path="dm-project", remove_from_projects=True, **asked)
     assert r.json() == {"deleted": 1}
 
 
@@ -91,7 +99,7 @@ def test_a_file_that_comes_back_after_is_a_new_clip(env):
     sha = _sha()
     clip = _ingest(env, "dm-back/a.jpg", media_type="image", sha=sha)
     _missing(env, clip)
-    _delete_missing(env, library_id=library_id, path="dm-back", count=1)
+    _delete_missing(env, library_id=library_id, path="dm-back", **_confirm(env, library_id=library_id, path="dm-back"))
     again = _ingest(env, "dm-back/a.jpg", media_type="image", sha=sha)  # not ignored: the file is welcome back
     assert again != clip and _row(env, again)[0] is None
 
@@ -102,5 +110,35 @@ def test_only_admins_delete_missing_clips(env):
     _missing(env, clip)
     for role in ("editor", "viewer"):
         assert _delete_missing(env, headers=_key_with_role(env, role), library_id=library_id,
-                               path="dm-role", count=1).status_code == 403
+                               path="dm-role", count=1, missing_before="2100-01-01T00:00:00Z").status_code == 403
     assert _exists(env, clip)
+
+
+def test_a_clip_gone_missing_since_the_admin_looked_isnt_deleted(env):
+    # Review: a count alone approved a set that had changed (a mount glitch).
+    client, headers, library_id, *_ = env
+    first = _ingest(env, "dm-since/a.jpg", media_type="image", sha=_sha())
+    later = _ingest(env, "dm-since/b.jpg", media_type="image", sha=_sha())
+    _missing(env, first)
+    asked = _confirm(env, library_id=library_id, path="dm-since")
+    _missing(env, later)  # goes missing after the admin was told
+    r = _delete_missing(env, library_id=library_id, path="dm-since", **asked)
+    assert r.json() == {"deleted": 1}
+    assert not _exists(env, first) and _exists(env, later)
+
+
+def test_projects_are_asked_about_before_any_clip_goes(env, monkeypatch):
+    # Review: past one batch, earlier batches were deleted before the question.
+    import src.server.api.routers.archive as archive
+
+    monkeypatch.setattr(archive, "_DELETE_BATCH", 1)
+    client, headers, library_id, *_ = env
+    free = _ingest(env, "dm-batches/a.jpg", media_type="image", sha=_sha())
+    used = _ingest(env, "dm-batches/b.jpg", media_type="image", sha=_sha())
+    client.post("/v1/projects", json={"name": "Uses b", "asset_ids": [used]}, headers=headers)
+    _missing(env, free)
+    _missing(env, used)
+    asked = _confirm(env, library_id=library_id, path="dm-batches")
+    r = _delete_missing(env, library_id=library_id, path="dm-batches", **asked)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "in_projects"
+    assert _exists(env, free) and _exists(env, used)  # nothing went

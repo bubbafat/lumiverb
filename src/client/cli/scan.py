@@ -142,8 +142,8 @@ def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
             return paths
 
 
-# A scan that would archive more than 50 files AND more than half of the
-# scanned files as missing skips that: a half-mounted volume looks exactly
+# A scan that would archive more than 50 clips AND more than half of the
+# library's clips in what it scanned as missing skips that: a half-mounted volume looks exactly
 # like it. Half, not 5% (Robert, Oct 9): missing clips are archived, not
 # deleted, and come back by themselves when the files do.
 MASS_DELETE_MIN_FILES = 50

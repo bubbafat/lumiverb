@@ -175,6 +175,7 @@ def archive_delete_missing(
                 console.print("Aborted.")
                 raise typer.Exit(0)
             body["count"] = n
+            body["missing_before"] = details.get("listed_at")  # nothing gone missing since
             continue
         if r.status_code == 409 and err.get("code") == "in_projects" and not remove_from_projects:
             if not projects_say_yes(details, yes=yes, what="deleted for good, they leave"):
