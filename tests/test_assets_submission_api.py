@@ -446,7 +446,8 @@ def test_a_transcript_says_whose_it_is(submission_client) -> None:
     client, auth, _, _, video_asset_id = submission_client
     r = client.post(f"/v1/assets/{video_asset_id}/transcript", json={"srt": _VALID_SRT, "language": "en"},
                     headers=auth)
-    assert r.status_code == 422, r.text
+    assert r.status_code == 422 and "source" in r.text, r.text
+    assert client.get(f"/v1/assets/{video_asset_id}", headers=auth).json()["transcript_srt"] is None
 
 
 @pytest.mark.slow

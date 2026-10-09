@@ -17,6 +17,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made
 
 
 @pytest.fixture(scope="module")
@@ -214,7 +215,7 @@ def test_stream_thumbnail_happy_path(
     thumbnail_key = f"{tenant_id}/{library_id}/thumbnails/00/{asset_id}.jpg"
     r_key = client.post(
         f"/v1/assets/{asset_id}/thumbnail-key",
-        json={"thumbnail_key": thumbnail_key},
+        json={"thumbnail_key": thumbnail_key, "lineage": made("proxy")},
         headers=auth,
     )
     assert r_key.status_code == 200
@@ -241,7 +242,7 @@ def test_set_thumbnail_key(assets_api_client: tuple[TestClient, str, str, list[s
     thumbnail_key = "tenant/lib/thumb/test.jpg"
     r = client.post(
         f"/v1/assets/{asset_id}/thumbnail-key",
-        json={"thumbnail_key": thumbnail_key},
+        json={"thumbnail_key": thumbnail_key, "lineage": made("proxy")},
         headers=auth,
     )
     assert r.status_code == 200
