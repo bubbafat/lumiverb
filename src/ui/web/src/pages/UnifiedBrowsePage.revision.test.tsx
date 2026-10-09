@@ -61,11 +61,17 @@ const clip = {
   created_at: null,
 };
 
+// How wide the scroll container measures; anything else inside it, the
+// page's padding narrower. Both 1200 unless a test says otherwise.
+let widths = { scroller: 1200, inside: 1200 };
+let scrollerEl: Element | null = null;
+
 class FakeResizeObserver {
   constructor(private cb: ResizeObserverCallback) {}
   observe(target: Element) {
+    const width = target === scrollerEl ? widths.scroller : widths.inside;
     this.cb(
-      [{ target, contentRect: { width: 1200, height: 800 } } as unknown as ResizeObserverEntry],
+      [{ target, contentRect: { width, height: 800 }, borderBoxSize: [{ inlineSize: width, blockSize: 800 }] } as unknown as ResizeObserverEntry],
       this as unknown as ResizeObserver,
     );
   }
@@ -81,6 +87,7 @@ beforeEach(() => {
     { library_id: "lib_2", revision: 5 },
   ];
   gridFetches = 0;
+  widths = { scroller: 1200, inside: 1200 };
   api.listLibraries.mockImplementation(async () =>
     libraries.map((l) => ({
       ...l,
@@ -124,6 +131,7 @@ function renderPage(at = "/browse") {
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
   const scroller = document.createElement("div");
+  scrollerEl = scroller;
   const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
@@ -255,5 +263,24 @@ describe("saving a search as a project", () => {
     const { queryByRole } = renderPage("/browse?f=path:Shoots");
     await advance(100);
     expect(queryByRole("button", { name: "Save as project" })).toBeNull();
+  });
+});
+
+describe("the grid's width", () => {
+  it("is the grid's own box, not the padded page's", async () => {
+    // On a phone the page's padding left the last column hanging off the
+    // right edge: rows were laid out to the scroll container's width.
+    widths = { scroller: 1200, inside: 360 };
+    api.queryAssets.mockImplementation(async () => ({
+      items: Array.from({ length: 12 }, (_, i) => ({ ...clip, asset_id: `ast_${i}` })),
+      next_cursor: null,
+      total_estimate: 12,
+    }));
+    const { container } = renderPage();
+    await advance(100);
+    const tiles = [...container.querySelectorAll<HTMLElement>("div.absolute")].filter((el) => el.style.left !== "");
+    expect(tiles.length).toBeGreaterThan(0);
+    const rightmost = Math.max(...tiles.map((el) => parseFloat(el.style.left) + parseFloat(el.style.width)));
+    expect(rightmost).toBeLessThanOrEqual(360);
   });
 });
