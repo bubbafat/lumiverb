@@ -152,7 +152,7 @@ def test_more_days_or_off_keeps_it(env):
     assert _exists(env, "assets", "asset_id", clip)
     _settings(env, trash_days=None)
     _age(env, "assets", "deleted_at", "asset_id", clip, 4000)
-    assert _upkeep(env) == {"clips": 0, "libraries": 0, "projects": 0}
+    assert _upkeep(env) == {"clips": 0, "libraries": 0, "projects": 0, "paused": False, "paused_tenants": []}
     assert _exists(env, "assets", "asset_id", clip)
 
 

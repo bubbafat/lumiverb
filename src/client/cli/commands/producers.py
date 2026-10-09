@@ -1,10 +1,12 @@
-"""`lumiverb producers`: what each producer has made, and stopping or resuming its redo.
+"""`lumiverb producers`: what each producer has made, pausing and resuming, and stopping or resuming a redo.
 
 Mirrors the web's Settings → Processing (ADR-016 phase 4). An artifact is
 current, missing, stale (made with another producer, model or settings
 than now) or failing. Stale ones are made again after anything missing:
 changing a setting was the approval (Robert, Oct 9). An admin can stop a
-producer's redo and resume it; a new model for it resumes it.
+producer's redo and resume it; a new model for it resumes it. An admin can
+also pause all processing, or one producer's, and resume it: nothing more
+of it starts, and what's running finishes.
 """
 
 from __future__ import annotations
@@ -21,9 +23,11 @@ from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import library_id_for
 
 producers_app = typer.Typer(
-    help="What each producer has made (current, missing, stale, failing), and stopping or resuming its redo.",
+    help="What each producer has made (current, missing, stale, failing), pausing and resuming, and its redo.",
     invoke_without_command=True,
 )
+redo_app = typer.Typer(help="Stop or resume redoing a producer's stale clips (admins).")
+producers_app.add_typer(redo_app, name="redo")
 console = Console()
 
 
@@ -51,14 +55,16 @@ def _n(value: int) -> str:
     return f"{value:,}" if value else "-"
 
 
-def _redo(p: dict) -> str:
-    """What happens to its stale clips."""
+def _redo(p: dict, all_paused: bool = False) -> str:
+    """What happens to its stale clips: redone, stopped, waiting for a pause to end, or not yet possible."""
     stale = (p.get("counts") or {}).get("stale", 0)
     if not stale:
         return ""
     if not p.get("redoable", True):
         return "not yet"
-    return "stopped" if p.get("paused") else "redoing"
+    if p.get("redo_stopped"):
+        return "stopped"
+    return "paused" if p.get("paused") or all_paused else "redoing"
 
 
 def _duration(seconds: float) -> str:
@@ -82,11 +88,14 @@ def _duration(seconds: float) -> str:
 def _caught_up(eta: dict) -> str:
     """The headline, as Settings → Processing says it: when everything is
     made, leaving out (and naming) what has no time."""
-    left = [f"{n['title'][:1].lower()}{n['title'][1:]} "
-            f"({'no machine doing them now' if n.get('why') == 'no_machine' else 'not known yet'})"
+    why = {"no_machine": "no machine doing them now", "paused": "paused"}
+    left = [f"{n['title'][:1].lower()}{n['title'][1:]} ({why.get(n.get('why', ''), 'not known yet')})"
             for n in eta.get("not_counted") or []]
     caught_up = eta.get("caught_up")
     if caught_up is None:
+        whys = [n.get("why") for n in eta.get("not_counted") or []]
+        if whys and all(w == "paused" for w in whys):
+            return "Paused."
         return "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
     if caught_up == 0 and not left:
         return "Caught up: everything is made."
@@ -109,10 +118,18 @@ def producers_list(
     client = LumiverbClient()
     params = _scope(client, library, project)
     producers = client.get("/v1/producers", params=params).json().get("producers", [])
+    queue = client.get("/v1/producers/queue").json() or {}
+    all_paused = bool(queue.get("paused"))
+    if all_paused:
+        console.print(f"[yellow]All processing is paused{_since(queue.get('paused_at'))}: nothing more "
+                      "starts. lumiverb producers resume carries on.[/yellow]")
+    if queue.get("scans_paused") and not all_paused:
+        console.print(f"[yellow]Scans are paused{_since(queue.get('scans_paused_at'))}: no new or changed files "
+                      "are found. lumiverb producers resume scans carries on.[/yellow]")
     # How long is left is the whole account's: only with its counts, and while the scheduler runs.
-    status = client.get("/v1/producers/queue").json() if not params else {}
-    eta = (status.get("eta") or {}) if status.get("live") else {}
+    eta = (queue.get("eta") or {}) if queue.get("live") and not params else {}
     left = eta.get("producers") or {}
+    paused_left = {n.get("artifact") for n in eta.get("not_counted") or [] if n.get("why") == "paused"}
     table = Table(show_header=True, header_style="bold")
     columns = ("Producer", "Current", "Missing", "Stale", "Failing", "Redo", *(("Left",) if eta else ()))
     for col in columns:
@@ -120,14 +137,18 @@ def producers_list(
     notes = []
     for p in producers:
         c = p.get("counts") or {}
+        paused = " [yellow]paused[/yellow]" if p.get("paused") and not all_paused else ""
         took = left.get(p["artifact"])
-        table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]", _n(c.get("current", 0)),
-                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p),
-                      *((_duration(took) if took else "",) if eta else ()))
+        held = p["artifact"] in paused_left
+        table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
+                      _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused),
+                      *(("Paused" if held else _duration(took) if took else "",) if eta else ()))
+        if p.get("paused") and not all_paused:
+            notes.append(f"{p['title']}: paused; lumiverb producers resume {p['artifact']} carries on.")
         if c.get("stale") and not p.get("redoable", True):
             notes.append(f"{p['title']} isn't made again yet: {p.get('why_not') or ''}")
-        elif p.get("paused"):
-            notes.append(f"{p['title']}: redo stopped; lumiverb producers resume {p['artifact']} carries on.")
+        elif p.get("redo_stopped"):
+            notes.append(f"{p['title']}: redo stopped; lumiverb producers redo resume {p['artifact']} carries on.")
     console.print(table)
     if eta:
         console.print(escape(_caught_up(eta)))
@@ -135,6 +156,11 @@ def producers_list(
         console.print(escape(note))
     console.print("[dim]Stale ones were made with another model or settings than now; they're made again "
                   "after anything missing.[/dim]")
+
+
+def _since(at: object) -> str:
+    at = str(at or "")[:16].replace("T", " ")
+    return f" (since {at})" if at else ""
 
 
 def _error(r) -> str:
@@ -145,8 +171,46 @@ def _error(r) -> str:
     return (body.get("error") or {}).get("message") or body.get("detail") or r.text
 
 
-@producers_app.command("stop")
-def producers_stop(
+@producers_app.command("pause")
+def producers_pause(
+    artifact: Annotated[str | None, typer.Argument(
+        help="Only this producer (e.g. vision, transcript), or scans; without it, all processing.")] = None,
+) -> None:
+    """Pause all processing, scans alone, or one producer's (admins): nothing
+    more of it starts until it's resumed; what's running finishes."""
+    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/pause" if artifact else "/v1/producers/pause")
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't pause: {escape(_error(r))}[/red]")
+        raise typer.Exit(1)
+    if artifact == "scans":
+        console.print("Paused scans: no new or changed files are found, and no thumbnails or video previews made, "
+                      "until lumiverb producers resume scans. The rest goes on.")
+    elif artifact:
+        console.print(f"Paused {escape(artifact)}: nothing more of it starts until lumiverb producers resume "
+                      f"{escape(artifact)}. What's running finishes.")
+    else:
+        console.print("Paused all processing: nothing more starts, scans included, and upkeep changes nothing, "
+                      "until lumiverb producers resume. What's running finishes; the website stays up.")
+
+
+@producers_app.command("resume")
+def producers_resume(
+    artifact: Annotated[str | None, typer.Argument(
+        help="Only this producer, or scans; without it, all processing.")] = None,
+) -> None:
+    """Carry on with all processing, scans, or one paused producer (admins)."""
+    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/resume" if artifact else "/v1/producers/resume")
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't resume: {escape(_error(r))}[/red]")
+        raise typer.Exit(1)
+    if artifact:
+        console.print(f"Resumed {escape(artifact)}.")
+    else:
+        console.print("Resumed all processing: scans and every producer are on again.")
+
+
+@redo_app.command("stop")
+def redo_stop(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. vision, ocr, clip).")],
 ) -> None:
     """Stop redoing a producer's stale clips (admins). What's missing is still made."""
@@ -154,12 +218,12 @@ def producers_stop(
     if r.status_code >= 400:
         console.print(f"[red]Couldn't stop: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
-    console.print(f"Stopped redoing {escape(artifact)}: its stale clips stay as they are until you resume it "
-                  "(or its model changes).")
+    console.print(f"Stopped redoing {escape(artifact)}: its stale clips stay as they are until lumiverb producers "
+                  f"redo resume {escape(artifact)} (or its model or settings change).")
 
 
-@producers_app.command("resume")
-def producers_resume(
+@redo_app.command("resume")
+def redo_resume(
     artifact: Annotated[str, typer.Argument(help="The producer whose redo carries on.")],
 ) -> None:
     """Redo a producer's stale clips again (admins), after anything missing."""

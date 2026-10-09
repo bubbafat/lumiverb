@@ -310,6 +310,42 @@ def test_forgetting_an_accounts_taken_clips() -> None:
     assert d.take("vision") is None  # t2's still waits its hour
 
 
+@pytest.mark.fast
+def test_clearing_a_kind_asks_the_database_again_at_once_when_it_can_be() -> None:
+    d = _d()
+    d.offer("t1", "vision", [])  # nothing due: not asked again for a while
+    assert not d.wanted("t1", "vision")
+    d.clear("t1", "vision")
+    assert d.wanted("t1", "vision")
+
+
+@pytest.mark.fast
+def test_a_held_kind_hands_out_nothing_and_takes_no_offer_until_let_go() -> None:
+    # Pausing (Robert, Oct 9): what was waiting is let go at once, and an
+    # answer that was on its way when the pause came isn't kept.
+    d = _d({"vision": 2})
+    d.offer("t1", "vision", [_item("a", "2026-10-01"), _item("b", "2026-10-02")])
+    d.offer("t2", "vision", [_item("c", "2026-10-03")])
+    d.hold("t1", {"vision"})
+    assert d.status("t1")["waiting"] == {}
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert [j.tenant_id for j in (d.take("vision"), d.take("vision")) if j] == ["t2"]  # the other account goes on
+    d.hold("t1", set())
+    assert d.wanted("t1", "vision")
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.status("t1")["waiting"] == {"vision": 1}
+
+
+@pytest.mark.fast
+def test_an_older_read_of_whats_paused_never_undoes_a_newer_one() -> None:
+    # Two threads read what's paused; a slow, older read lands last.
+    d = _d({"vision": 2})
+    d.hold("t1", set(), seq=2)  # resumed, read second
+    d.hold("t1", {"vision"}, seq=1)  # paused, read first, landed late: ignored
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is not None
+
+
 # --- How long things take: each kind's pace, from the jobs it finished ------
 # Seconds a slot spends per unit of work: a second of video for the kinds
 # whose work grows with it (by_seconds), else a clip. Settings → Processing
