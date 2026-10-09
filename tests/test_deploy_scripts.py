@@ -162,12 +162,14 @@ def test_a_rerun_keeps_settings_added_to_the_env_file_by_hand(tmp_path):
     assert "kept" not in fresh.read_text()
 
 
-def test_worker_caches_live_in_the_data_dir():
-    # The worker's home is on the root disk, beside Postgres and Docker; its
+def test_scheduler_caches_live_in_the_data_dir():
+    # The service's home is on the root disk, beside Postgres and Docker; its
     # proxy caches belong on the data disk.
     text = DEPLOY_API.read_text()
-    worker_unit = text.split("Description=Lumiverb worker", 1)[1].split("UNIT", 1)[0]
-    assert "Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" in worker_unit
+    unit = text.split("Description=Lumiverb scheduler", 1)[1].split("UNIT", 1)[0]
+    assert "Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" in unit
+    assert "ExecStart=${APP_DIR}/.venv/bin/python -m src.server.scheduler" in unit
+    assert "lumiverb-worker.service <<UNIT" not in text
 
 
 def test_api_buffers_uploads_on_the_data_disk():
@@ -225,79 +227,100 @@ def test_update_makes_the_api_tmpdir():
     assert 'chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"' in data_step
 
 
-WORKER_UNIT = """\
-[Service]
-EnvironmentFile=/etc/lumiverb/env
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/lumiverb/.venv/bin/lumiverb worker
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/mnt/ssd2/lumiverb
-"""
-
-
-def _update_worker_unit(tmp_path: Path, unit: Path, env_text: str) -> str:
-    """Run update-api.sh's worker-unit step against `unit`; returns its output."""
+def _update_scheduler(tmp_path: Path, env_text: str, *, processing: bool = True,
+                      worker: bool = True) -> tuple[str, list[str], Path]:
+    """Run update-api.sh's scheduler step; returns its output, the systemctl
+    calls and where the unit was written."""
     env = tmp_path / "env"
     env.write_text(env_text)
+    units = tmp_path / "units"
+    units.mkdir(exist_ok=True)
+    if worker:
+        (units / "lumiverb-worker.service").write_text("[Service]\nExecStart=/opt/lumiverb/.venv/bin/lumiverb worker\n")
+    calls = tmp_path / "systemctl-calls"
+    calls.write_text("")
     text = UPDATE_API.read_text()
-    block = text.split('step "Updating the worker unit"', 1)[1].split("# ----", 1)[0]
+    block = text.split('step "Installing the scheduler', 1)[1].split("\n", 1)[1].split("# ----", 1)[0]
     script = (
-        'step() { :; }; ok() { :; }; warn() { echo "warn: $1"; }; systemctl() { :; }\n'
-        f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb\n'
-        + block.replace("/etc/systemd/system/lumiverb-worker.service", str(unit))
+        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }; chown() { :; }\n'
+        'fail() { echo "fail: $1"; exit 1; }\n'
+        f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
+        f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb; SVC_USER=lumiverb\n'
+        f'PROCESSING={"true" if processing else "false"}\n'
+        + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stdout + out.stderr
-    return out.stdout
+    return out.stdout + out.stderr, calls.read_text().splitlines(), units
 
 
-def test_update_puts_the_worker_s_caches_on_the_data_disk(tmp_path):
-    unit = tmp_path / "lumiverb-worker.service"
-    unit.write_text(WORKER_UNIT)
-    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")
-    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")  # reruns change nothing
-    lines = unit.read_text().splitlines()
-    assert lines.count("Environment=XDG_CACHE_HOME=/mnt/ssd2/lumiverb/cache") == 1
-    assert lines.count("ReadWritePaths=/mnt/ssd2/lumiverb /var/lib/lumiverb") == 1
+def test_update_replaces_the_worker_with_the_scheduler(tmp_path):
+    data = tmp_path / "data"
+    out, calls, units = _update_scheduler(tmp_path, f"DATA_DIR={data}\n")
+    unit = (units / "lumiverb-scheduler.service").read_text()
+    assert "ExecStart=/opt/lumiverb/.venv/bin/python -m src.server.scheduler" in unit
+    assert f"Environment=XDG_CACHE_HOME={data}/cache" in unit
+    assert f"Environment=TMPDIR={data}/worker-tmp" in unit
+    assert f"ExecStartPre=-/usr/bin/find {data}/worker-tmp -mindepth 1 -delete" in unit
+    assert f"ReadWritePaths={data} /var/lib/lumiverb" in unit
+    assert "After=network-online.target remote-fs.target lumiverb-api.service" in unit
+    # The worker goes: the two never run together.
+    assert "disable --now lumiverb-worker" in calls
+    assert not (units / "lumiverb-worker.service").exists()
+    assert "enable lumiverb-scheduler" in calls
+    assert (data / "worker-tmp").is_dir() and (data / "cache").is_dir()
 
 
-def test_update_without_a_data_dir_leaves_the_worker_s_caches_alone(tmp_path):
+def test_rerunning_the_update_writes_the_same_scheduler(tmp_path):
+    data = tmp_path / "data"
+    _, _, units = _update_scheduler(tmp_path, f"DATA_DIR={data}\n")
+    first = (units / "lumiverb-scheduler.service").read_text()
+    _, calls, _ = _update_scheduler(tmp_path, f"DATA_DIR={data}\n", worker=False)
+    assert (units / "lumiverb-scheduler.service").read_text() == first
+    assert not any("lumiverb-worker" in c for c in calls)
+
+
+def test_the_scheduler_needs_the_data_disk(tmp_path):
     # XDG_CACHE_HOME=/cache would be read-only under ProtectSystem=strict:
-    # the worker couldn't make its lock, and wouldn't start.
-    unit = tmp_path / "lumiverb-worker.service"
-    unit.write_text(WORKER_UNIT)
-    out = _update_worker_unit(tmp_path, unit, "API_PORT=8100\n")
-    assert "XDG_CACHE_HOME" not in unit.read_text()
-    assert "TMPDIR" not in unit.read_text()
-    assert "No DATA_DIR" in out
+    # the scheduler couldn't make its lock, and wouldn't start.
+    out, calls, units = _update_scheduler(tmp_path, "API_PORT=8100\n")
+    assert "fail: No DATA_DIR" in out
+    assert not (units / "lumiverb-scheduler.service").exists()
+    assert (units / "lumiverb-worker.service").exists()
 
 
-def test_worker_temp_files_go_on_the_data_disk():
+def test_a_machine_without_processing_gets_no_scheduler(tmp_path):
+    out, calls, units = _update_scheduler(tmp_path, f"DATA_DIR={tmp_path}/data\n", processing=False, worker=False)
+    assert not (units / "lumiverb-scheduler.service").exists()
+    assert calls == []
+
+
+def test_processing_keeps_its_packages_whichever_service_it_has():
+    text = UPDATE_API.read_text()
+    deps = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
+    assert "is-enabled lumiverb-scheduler" in deps and "is-enabled lumiverb-worker" in deps
+    assert "--extra workers" in deps
+
+
+def test_scheduler_temp_files_go_on_the_data_disk():
     # Whisper's WAVs (hundreds of MB for a long clip) went to PrivateTmp's
     # /tmp, RAM on the brain. Not the API's tmp: each API start empties that.
     text = DEPLOY_API.read_text()
-    worker_unit = text.split("Description=Lumiverb worker", 1)[1].split("UNIT", 1)[0]
-    assert "Environment=TMPDIR=${DATA_DIR}/worker-tmp" in worker_unit
-    assert "ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" in worker_unit
+    unit = text.split("Description=Lumiverb scheduler", 1)[1].split("UNIT", 1)[0]
+    assert "Environment=TMPDIR=${DATA_DIR}/worker-tmp" in unit
+    assert "ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" in unit
     assert '"$DATA_DIR"/worker-tmp' in text.split('step "Creating service user and directories"', 1)[1].split("ok ", 1)[0]
 
 
-def test_update_moves_an_existing_worker_s_temp_files_to_the_data_disk(tmp_path):
-    unit = tmp_path / "lumiverb-worker.service"
-    unit.write_text(WORKER_UNIT)
-    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")
-    _update_worker_unit(tmp_path, unit, "DATA_DIR=/mnt/ssd2/lumiverb\n")  # reruns change nothing
-    lines = unit.read_text().splitlines()
-    assert lines.count("Environment=TMPDIR=/mnt/ssd2/lumiverb/worker-tmp") == 1
-    assert lines.count("ExecStartPre=-/usr/bin/find /mnt/ssd2/lumiverb/worker-tmp -mindepth 1 -delete") == 1
-    data = tmp_path / "data"
-    _update_data_dir(tmp_path, f"DATA_DIR={data}\n")
-    assert (data / "worker-tmp").is_dir()
+def test_a_fresh_install_starts_the_scheduler_not_the_worker():
+    text = DEPLOY_API.read_text()
+    start = text.split("# 14. Scheduler", 1)[1]
+    assert "systemctl enable lumiverb-scheduler" in start
+    assert "systemctl disable --now lumiverb-worker" in start
+    assert "systemctl enable lumiverb-worker" not in text
 
 
-def test_a_manual_worker_run_finds_the_service_s_lock():
-    # `sudo -u lumiverb -H lumiverb worker --once` gets neither the unit's
+def test_a_command_run_as_the_service_user_finds_the_service_s_lock():
+    # `sudo -u lumiverb -H lumiverb ...` gets neither the unit's
     # XDG_CACHE_HOME nor the env file (root only); the CLI config carries it.
     text = DEPLOY_API.read_text()
     env_block = text.split('cat > "$ENV_FILE" <<ENVEOF', 1)[1].split("ENVEOF", 1)[0]
@@ -331,7 +354,7 @@ def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
     return env.read_text(), calls.read_text().splitlines()
 
 
-def test_update_points_caches_and_the_worker_lock_at_the_data_disk(tmp_path):
+def test_update_points_caches_and_the_scheduler_lock_at_the_data_disk(tmp_path):
     data = tmp_path / "data"
     _update_data_dir(tmp_path, f"DATA_DIR={data}\nAPI_PORT=8100\n")
     env, calls = _update_data_dir(tmp_path, (tmp_path / "env").read_text())  # reruns add nothing
@@ -405,13 +428,13 @@ VENV_CFG = "home = /usr/bin\nimplementation = CPython\nuv = 0.7.12\nversion_info
 
 def test_a_new_python_is_built_beside_the_running_one_then_swapped_in(tmp_path):
     # uv sync deletes the 3.14 venv and downloads GBs of 3.12 wheels: do the
-    # downloading into a side venv while the API and worker run, then stop
+    # downloading into a side venv while the API and scheduler run, then stop
     # them only for the quick swap from the warm cache.
     calls, out, _ = _update_python(tmp_path, VENV_CFG.format("3.14.4"))
     assert "Python changes from 3.14 to 3.12" in out
     install = next(i for i, c in enumerate(calls) if "python install 3.12" in c)
     side = next(i for i, c in enumerate(calls) if "UV_PROJECT_ENVIRONMENT=" in c and ".venv-next" in c)
-    stop_worker = calls.index("systemctl stop lumiverb-worker")
+    stop_worker = calls.index("systemctl stop lumiverb-scheduler")
     stop_api = calls.index("systemctl stop lumiverb-api")
     swap = max(i for i, c in enumerate(calls) if " sync " in c and "UV_PROJECT_ENVIRONMENT" not in c)
     assert install < side < stop_worker < swap and side < stop_api < swap
@@ -526,14 +549,16 @@ def test_a_dry_run_that_cannot_read_the_settings_says_so(tmp_path, script, locke
 
 
 @pytest.mark.parametrize(("enabled", "flag", "worker"), [
-    (True, (), "true"), (False, (), "false"), (False, ("--worker",), "true"),
+    ("lumiverb-worker", (), "true"), ("lumiverb-scheduler", (), "true"), ("", (), "false"),
+    ("", ("--worker",), "true"),
 ])
-def test_a_dry_run_reports_the_worker_as_a_real_run_decides(tmp_path, enabled, flag, worker):
-    # A real run keeps an installed worker without --worker.
+def test_a_dry_run_reports_processing_as_a_real_run_decides(tmp_path, enabled, flag, worker):
+    # A real run keeps installed processing (the scheduler, or the worker it
+    # replaces) without --worker.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     systemctl = bin_dir / "systemctl"
-    systemctl.write_text("#!/bin/sh\n" + ('[ "$1 $2" = "is-enabled lumiverb-worker" ] && exit 0\n' if enabled else "")
+    systemctl.write_text("#!/bin/sh\n" + (f'[ "$1 $2" = "is-enabled {enabled}" ] && exit 0\n' if enabled else "")
                          + "exit 1\n")
     systemctl.chmod(0o755)
     assert _settings(tmp_path, *flag, env_file=REMEMBERED, path_prefix=bin_dir)["WORKER"] == worker
@@ -544,6 +569,7 @@ def test_the_real_run_uses_the_worker_setting_the_dry_run_shows():
     deps = text.split('step "Installing Python dependencies"', 1)[1].split("# ----", 1)[0]
     assert "is-enabled" not in deps
     assert text.index("systemctl is-enabled lumiverb-worker") < text.index('if [[ "$DRY_RUN" == "true" ]]')
+    assert text.index("systemctl is-enabled lumiverb-scheduler") < text.index('if [[ "$DRY_RUN" == "true" ]]')
 
 
 def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
@@ -694,10 +720,10 @@ def test_tenant_migrations_log_to_a_private_temp_file():
     assert "trap" in text and "rm -f" in text
 
 
-def test_update_restarts_the_worker_only_once_the_api_answers():
-    """Else the worker's first cycle meets a refused connection mid-restart."""
+def test_update_restarts_the_scheduler_only_once_the_api_answers():
+    """Else its first jobs meet a refused connection mid-restart."""
     text = UPDATE_API.read_text()
     step = text[text.index('step "Restarting services"'):]
-    api, health, worker = (step.index("systemctl restart lumiverb-api"), step.index("/health"),
-                           step.index("systemctl restart lumiverb-worker"))
-    assert api < health < worker
+    api, health, scheduler = (step.index("systemctl restart lumiverb-api"), step.index("/health"),
+                              step.index("systemctl restart lumiverb-scheduler"))
+    assert api < health < scheduler

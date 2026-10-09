@@ -9,7 +9,7 @@
 #   bash scripts/deploy-api.sh --domain api.example.com
 #
 # The brain (ADR-016 phase 2), a LAN/Tailscale box that shares its ports
-# with other services and runs the worker:
+# with other services and runs the scheduler (all processing):
 #   sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 \
 #     --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall \
 #     --data-dir /mnt/ssd2/lumiverb --worker \
@@ -92,7 +92,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --app-host       Base URL people reach Lumiverb at, instead of https://<domain> (e.g. http://192.168.86.166)"
       echo "  --no-firewall    Leave ufw alone (the host runs other services); remembered"
       echo "  --firewall       Turn ufw on again after --no-firewall"
-      echo "  --worker         Install and start lumiverb-worker: scan and enrich on this machine (ffmpeg, Whisper, ...)"
+      echo "  --worker         Install and start lumiverb-scheduler: all processing on this machine (ffmpeg, Whisper, ...)"
       echo "  --root-map       Where a library root prefix is on this machine, e.g. /Volumes/media-01=/mnt/media-01"
       echo "  --dry-run        Print the settings this run would use (flags, else values remembered from"
       echo "                   an earlier run, else defaults) and stop. Changes nothing."
@@ -157,8 +157,10 @@ if [[ -z "$PG_VERSION" && -f "$ENV_FILE" ]]; then
   PG_VERSION="$(pg_lsclusters -h 2>/dev/null | awk -v p="$PG_PORT" '$3 == p { print $1; exit }' || true)"
 fi
 PG_VERSION="${PG_VERSION:-18}"
-# An installed worker stays, with its packages, without --worker.
-if [[ "$WITH_WORKER" != "true" ]] && systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+# Installed processing stays, with its packages, without --worker (the
+# scheduler, or the worker it replaced).
+if [[ "$WITH_WORKER" != "true" ]] && { systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 \
+    || systemctl is-enabled lumiverb-worker >/dev/null 2>&1; }; then
   WITH_WORKER=true
 fi
 
@@ -525,11 +527,12 @@ ReadWritePaths=${DATA_DIR}
 WantedBy=multi-user.target
 UNIT
 
-# Scan what changed and enrich what's missing (ADR-016 phase 2). Everything
-# outside DATA_DIR and its home is read-only to it, storage mounts included.
-cat > /etc/systemd/system/lumiverb-worker.service <<UNIT
+# All processing (ADR-016 phase 4): scans, previews, analysis copies, the
+# AI, in one ranked queue. Everything outside DATA_DIR and its home is
+# read-only to it, storage mounts included.
+cat > /etc/systemd/system/lumiverb-scheduler.service <<UNIT
 [Unit]
-Description=Lumiverb worker (scan and enrich)
+Description=Lumiverb scheduler (all processing)
 After=network-online.target remote-fs.target lumiverb-api.service
 Wants=network-online.target lumiverb-api.service
 
@@ -544,13 +547,14 @@ Environment=HOME=${SVC_HOME}
 # Proxy caches go on the data disk, not the root disk with Postgres.
 Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
 # Temp files too (Whisper's WAVs): PrivateTmp's /tmp can be RAM. Not the
-# API's tmp, which each API start empties; this one each worker start.
+# API's tmp, which each API start empties; this one each scheduler start.
 Environment=TMPDIR=${DATA_DIR}/worker-tmp
 ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete
-ExecStart=${APP_DIR}/.venv/bin/lumiverb worker
+ExecStart=${APP_DIR}/.venv/bin/python -m src.server.scheduler
 Restart=on-failure
 RestartSec=30s
-TimeoutStopSec=30s
+# It lets jobs in hand finish for up to 25 s.
+TimeoutStopSec=40s
 LimitNOFILE=65535
 NoNewPrivileges=true
 PrivateTmp=true
@@ -710,20 +714,25 @@ ok "CLI configured for tenant"
 fi
 
 # ---------------------------------------------------------------------------
-# 14. Worker: where library roots are on this machine, then start it
+# 14. Scheduler: where library roots are on this machine, then start it
 # ---------------------------------------------------------------------------
-# Caches, and the worker's lock and state, on the data disk for manual runs
-# as the service user too (sudo -u lumiverb -H lumiverb worker --once), so
-# one never runs beside the service.
+# Caches, and the scheduler's lock and state, on the data disk for commands
+# run as the service user too, so they find the service's.
 sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
 for map in "${ROOT_MAPS[@]}"; do
   sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config map-root "${map%%=*}" "${map#*=}"
 done
 if [[ "$WITH_WORKER" == "true" ]]; then
-  step "Starting the worker"
-  systemctl enable lumiverb-worker
-  systemctl restart lumiverb-worker
-  ok "lumiverb-worker running (journalctl -u lumiverb-worker -f)"
+  step "Starting the scheduler"
+  # It replaces the worker: the two never run together.
+  if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    systemctl disable --now lumiverb-worker 2>/dev/null || true
+    rm -f /etc/systemd/system/lumiverb-worker.service
+    systemctl daemon-reload
+  fi
+  systemctl enable lumiverb-scheduler
+  systemctl restart lumiverb-scheduler
+  ok "lumiverb-scheduler running (journalctl -u lumiverb-scheduler -f)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -745,7 +754,7 @@ echo "     bash scripts/deploy-web.sh --domain app.lumiverb.io --api-upstream ht
 echo ""
 echo "Useful commands:"
 echo "  journalctl -u lumiverb-api -f          # API logs"
-echo "  journalctl -u lumiverb-worker -f       # Worker logs"
+echo "  journalctl -u lumiverb-scheduler -f    # Scheduler logs (all processing)"
 echo "  systemctl restart lumiverb-api          # Restart API"
 echo ""
 echo "Config: ${ENV_FILE} (contains secrets — use 'sudo cat' with care)"

@@ -106,14 +106,6 @@ def test_the_cli_still_renders_first(library: dict) -> None:
     assert order == ["render", "transcribe"]
 
 
-def test_the_worker_renders_alongside() -> None:
-    import inspect
-
-    from src.client.cli import worker
-
-    assert "render_alongside=True" in inspect.getsource(worker._enrich_library)
-
-
 def test_several_render_at_once(library: dict, tmp_path: Path) -> None:
     """Two renders that each need the other running at the same time finish."""
     for name in ("c.mov", "d.mov"):
