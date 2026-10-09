@@ -152,11 +152,13 @@ def test_a_file_without_a_hash_is_a_new_asset(env):
 
 
 @pytest.mark.slow
-def test_a_path_the_user_emptied_from_the_trash_isnt_a_way_back(env):
-    """A path in ignored_files is refused before any content match: the
-    archived asset with the same content stays archived."""
+def test_a_path_the_user_emptied_from_the_trash_refuses_only_that_file(env):
+    """ignored_files names a file at a path: that file is refused there. Any
+    other file at the path is its own (a changed file is a new clip), so a
+    missing clip whose content turns up there has moved there."""
     client, headers, *_ = env
-    gone = _ingest(env, "ignored/O001.mov", sha=_sha())
+    gone_sha = _sha()
+    gone = _ingest(env, "ignored/O001.mov", sha=gone_sha)
     _archive(env, gone, reason="user")
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [gone]}, headers=headers)
     assert r.json()["deleted"] == 1
@@ -167,11 +169,16 @@ def test_a_path_the_user_emptied_from_the_trash_isnt_a_way_back(env):
     import io
     import json
 
-    r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
-                    data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
-                          "media_type": "video", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made()})
-    assert r.status_code == 409
-    assert _get(env, archived) == {"status_code": 404}  # not restored at the ignored path
+    def post(content: str):
+        return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
+                           data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
+                                 "media_type": "video", "exif": json.dumps({"sha256": content}),
+                                 "lineage": ingest_made(content)})
+
+    assert post(gone_sha).status_code == 409  # the file deleted for good
+    assert _get(env, archived) == {"status_code": 404}
+    r = post(sha)
+    assert r.status_code == 200 and r.json()["asset_id"] == archived  # moved there, with what it had
 
 
 # Two ingests at once (the scanner sends four at a time): the file back at its

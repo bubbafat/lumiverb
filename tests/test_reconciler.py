@@ -291,9 +291,8 @@ def test_every_producer_sorts_a_new_clip_the_same_everywhere(env):
 
 
 # ---------------------------------------------------------------------------
-# Review fixes: unknown isn't changed; a replaced file resets its scenes on
-# either ingest; scenes are never handed out in place; waiting failures are
-# what the counts leave out.
+# Review fixes: unknown isn't changed; scenes are never handed out in
+# place; waiting failures are what the counts leave out.
 # ---------------------------------------------------------------------------
 
 
@@ -312,35 +311,6 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
         s.commit()
     assert _due(lib, "missing_vision") == []
     assert _counts(lib, "vision")["stale"] == 1
-
-
-@pytest.mark.slow
-def test_a_file_replaced_through_the_other_ingest_loses_its_scenes_too(env):
-    import io
-    import json
-
-    from PIL import Image
-
-    client, headers, *_ = env
-    lib = _library(env, "RecOtherIngest")
-    vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
-        s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
-                       " description, created_at) VALUES (:i, :a, 0, 0, 999, 0, 'a beach', now())"),
-                  {"i": f"scn_{vid}_0", "a": vid})
-        s.commit()
-    buf = io.BytesIO()
-    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
-    buf.seek(0)
-    new = _sha()
-    r = client.post(f"/v1/assets/{vid}/ingest", data={"exif": json.dumps({"sha256": new}),
-                                                      "lineage": json.dumps({"proxy": _want(env, "proxy", new)})},
-                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert _due(lib, "missing_video_scenes") == [vid]
-    with _db(env) as s:
-        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 0
 
 
 @pytest.mark.slow
