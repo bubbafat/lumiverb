@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssetPageItem } from "../api/types";
 import type { DateGroup } from "./groupByDate";
-import { anchoredScroll, clipsOnScreen } from "./useScrollAnchor";
+import { anchoredScroll, clipsAbove, clipsOnScreen, newClipsLabel } from "./useScrollAnchor";
 import { buildFixedGridRows } from "./virtualRows";
 
 // Two clips a row, rows 100 px plus a 4 px gap, a 40 px header per day.
@@ -59,5 +59,34 @@ describe("anchoredScroll", () => {
     const on = clipsOnScreen(before.rows, before.groups, 50, 100);
     const after = grid([["x", "y"]]);
     expect(anchoredScroll(after.rows, after.groups, on)).toBeNull();
+  });
+});
+
+describe("clipsAbove", () => {
+  const { rows, groups } = grid([["a", "b", "c", "d"], ["e", "f"]]);
+  // header 0–40, [a b] 40–144, [c d] 144–248, header 248–288, [e f] 288–392
+
+  it("is the ones whose row is wholly above the screen", () => {
+    expect(clipsAbove(rows, groups, 250, ["a", "c", "e"])).toEqual(new Set(["a", "c"]));
+  });
+
+  it("leaves out a row cut off at the top: it's on screen", () => {
+    expect(clipsAbove(rows, groups, 143, ["a", "c"])).toEqual(new Set());
+    expect(clipsAbove(rows, groups, 144, ["a", "c"])).toEqual(new Set(["a"]));
+  });
+
+  it("leaves out clips no longer in the grid", () => {
+    expect(clipsAbove(rows, groups, 400, ["a", "gone"])).toEqual(new Set(["a"]));
+  });
+
+  it("is none while the grid's top is on screen", () => {
+    expect(clipsAbove(rows, groups, 0, ["a"])).toEqual(new Set());
+  });
+});
+
+describe("newClipsLabel", () => {
+  it("counts clips tersely", () => {
+    expect(newClipsLabel(1)).toBe("1 new clip");
+    expect(newClipsLabel(3)).toBe("3 new clips");
   });
 });

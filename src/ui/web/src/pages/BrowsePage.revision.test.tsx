@@ -5,13 +5,13 @@
  * the grid on every poll.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { NavigateFunction } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import BrowsePage from "./BrowsePage";
-import { clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
+import { clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout, stubScrollTo } from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   getApiKey: vi.fn(),
@@ -416,6 +416,96 @@ describe("BrowsePage scrolled grid during a refresh", () => {
     await advance(100);
 
     expect(scroller.scrollTop).toBe(1500);
+  });
+});
+
+describe("BrowsePage new clips pill", () => {
+  /** 7 new clips per revision on top of 60 older ones; sorted another way, reversed. */
+  function serveClips() {
+    api.queryAssets.mockImplementation(async (_filters: unknown, opts?: { sort?: string }) => {
+      gridFetches.push(serverRevision);
+      const items = clipsWith(clip, (serverRevision - 1) * 7);
+      if (opts?.sort && opts.sort !== "taken_at") items.reverse();
+      return { items, next_cursor: null, total_estimate: items.length };
+    });
+  }
+  const pill = () => screen.queryByRole("button", { name: /new clip/ });
+
+  async function scrolledThenRefreshed() {
+    serveClips();
+    const view = renderPage(stubLayout);
+    await advance(100);
+    scrollTo(view.scroller, 1500);
+    await advance(100);
+    expect(pill()).toBeNull();
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+    return view;
+  }
+
+  it("counts the clips a refresh adds above a scrolled grid, without moving what's on screen", async () => {
+    const { scroller } = await scrolledThenRefreshed();
+    const before = firstOnScreen(scroller);
+    expect(pill()?.textContent).toBe("7 new clips");
+    // Showing the pill doesn't move the grid.
+    reportScroll(scroller);
+    expect(firstOnScreen(scroller)).toEqual(before);
+  });
+
+  it("adds up across refreshes", async () => {
+    await scrolledThenRefreshed();
+    serverRevision = 3;
+    await advance(30_000);
+    await advance(100);
+    expect(pill()?.textContent).toBe("14 new clips");
+  });
+
+  it("scrolls to the top on a click, and goes away", async () => {
+    const { scroller } = await scrolledThenRefreshed();
+    const calls = stubScrollTo(scroller);
+    fireEvent.click(pill()!);
+    expect(calls).toEqual([{ top: 0, behavior: "smooth" }]);
+    expect(pill()).toBeNull();
+    expect(firstOnScreen(scroller).name).toBe("clip67.mov");
+  });
+
+  it("goes away when the grid is scrolled to the top by hand", async () => {
+    const { scroller } = await scrolledThenRefreshed();
+    scrollTo(scroller, 0);
+    expect(pill()).toBeNull();
+  });
+
+  it("counts down as the new clips are scrolled onto the screen", async () => {
+    const { scroller } = await scrolledThenRefreshed();
+    // The new clips are the grid's first rows: scroll up to just past them.
+    let n = 7;
+    for (let top = scroller.scrollTop; top > 0 && n === 7; top -= 50) {
+      scrollTo(scroller, top);
+      n = Number(pill()?.textContent?.split(" ")[0] ?? 0);
+    }
+    expect(n).toBeLessThan(7);
+    scrollTo(scroller, 1500);
+    expect(Number(pill()?.textContent?.split(" ")[0] ?? 0)).toBe(n);
+  });
+
+  it("doesn't show when new clips arrive at the top of a grid scrolled to its top", async () => {
+    serveClips();
+    renderPage(stubLayout);
+    await advance(100);
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+    expect(pill()).toBeNull();
+  });
+
+  it("doesn't carry over to another sort", async () => {
+    const { scroller } = await scrolledThenRefreshed();
+    act(() => navigate("/libraries/lib_1/browse?sort=file_size"));
+    await advance(100);
+    await advance(100);
+    reportScroll(scroller);
+    expect(pill()).toBeNull();
   });
 });
 

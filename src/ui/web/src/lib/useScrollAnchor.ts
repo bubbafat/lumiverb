@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DateGroup } from "./groupByDate";
 import type { VirtualRowKind } from "./virtualRows";
 
@@ -45,6 +45,52 @@ function rowClipIds(row: VirtualRowKind, groups: DateGroup[]): string[] {
   return row.justifiedRow.items.flatMap((i) => (assets[i] ? [assets[i].asset_id] : []));
 }
 
+// Each clip's row, worked out once per set of rows.
+const rowOfByRows = new WeakMap<VirtualRowKind[], Map<string, number>>();
+
+function rowIndex(rows: VirtualRowKind[], groups: DateGroup[]): Map<string, number> {
+  let rowOf = rowOfByRows.get(rows);
+  if (!rowOf) {
+    rowOf = new Map();
+    for (let i = 0; i < rows.length; i++) {
+      for (const id of rowClipIds(rows[i], groups)) rowOf.set(id, i);
+    }
+    rowOfByRows.set(rows, rowOf);
+  }
+  return rowOf;
+}
+
+/**
+ * Of `ids`, the ones whose row is wholly above the screen when the grid is
+ * scrolled `scrolled` px past its top. None when the grid's top is on screen.
+ */
+export function clipsAbove(
+  rows: VirtualRowKind[],
+  groups: DateGroup[],
+  scrolled: number,
+  ids: Iterable<string>,
+): Set<string> {
+  const above = new Set<string>();
+  if (scrolled <= 0) return above;
+  const starts = rowStarts(rows);
+  const rowOf = rowIndex(rows, groups);
+  for (const id of ids) {
+    const i = rowOf.get(id);
+    if (i !== undefined && starts[i] + rows[i].height <= scrolled) above.add(id);
+  }
+  return above;
+}
+
+/** Every clip in the grid. */
+export function clipIds(groups: DateGroup[]): Set<string> {
+  return new Set(groups.flatMap((g) => g.assets.map((a) => a.asset_id)));
+}
+
+/** "3 new clips", "1 new clip". */
+export function newClipsLabel(count: number): string {
+  return `${count} new ${count === 1 ? "clip" : "clips"}`;
+}
+
 /**
  * The clips on screen, first to last, with where each one's row sits, when
  * the grid is scrolled `scrolled` px past its top. None when the grid's top
@@ -79,15 +125,19 @@ export function anchoredScroll(
 ): number | null {
   if (clips.length === 0) return null;
   const starts = rowStarts(rows);
-  const rowOf = new Map<string, number>();
-  rows.forEach((row, i) => {
-    for (const id of rowClipIds(row, groups)) rowOf.set(id, i);
-  });
+  const rowOf = rowIndex(rows, groups);
   for (const clip of clips) {
     const i = rowOf.get(clip.assetId);
     if (i !== undefined) return starts[i] - clip.offset;
   }
   return null;
+}
+
+export interface ScrollAnchor {
+  /** Clips a refresh added above the screen that haven't been scrolled to yet. */
+  newAbove: number;
+  /** Scroll to the top, where they are. */
+  showNewAbove: () => void;
 }
 
 /**
@@ -100,6 +150,11 @@ export function anchoredScroll(
  * Not when the grid's top is on screen (new clips show at the top), and not
  * across a change of `resetKey` (another query: its clips start where they
  * start).
+ *
+ * Clips that a change adds above the screen while it holds the grid in place
+ * are counted in `newAbove`. A clip stops counting once its row is scrolled
+ * onto the screen or it leaves the grid, and all of them do once the grid's
+ * top is on screen.
  */
 export function useScrollAnchor(
   scrollEl: HTMLElement | null,
@@ -107,11 +162,16 @@ export function useScrollAnchor(
   rows: VirtualRowKind[],
   groups: DateGroup[],
   resetKey: string,
-): void {
+): ScrollAnchor {
   const anchorRef = useRef<AnchorClip[]>([]);
   const layoutRef = useRef({ rows, groups });
   layoutRef.current = { rows, groups };
   const keyRef = useRef(resetKey);
+  // The clips of the last rows laid out, to tell new ones by.
+  const shownRef = useRef<Set<string> | null>(null);
+  // New clips above the screen.
+  const newRef = useRef(new Set<string>());
+  const [newAbove, setNewAbove] = useState(0);
 
   // The grid's top, in the scroller's content.
   const gridTop = () => {
@@ -126,7 +186,10 @@ export function useScrollAnchor(
     if (!scrollEl) return;
     const { rows: r, groups: g } = layoutRef.current;
     if (r.length === 0) return; // still loading: keep what was on screen
-    anchorRef.current = clipsOnScreen(r, g, scrollEl.scrollTop - gridTopRef.current(), scrollEl.clientHeight);
+    const scrolled = scrollEl.scrollTop - gridTopRef.current();
+    anchorRef.current = clipsOnScreen(r, g, scrolled, scrollEl.clientHeight);
+    if (newRef.current.size > 0) newRef.current = clipsAbove(r, g, scrolled, newRef.current);
+    setNewAbove(newRef.current.size);
   };
 
   useEffect(() => {
@@ -142,13 +205,30 @@ export function useScrollAnchor(
     if (keyRef.current !== resetKey) {
       keyRef.current = resetKey;
       anchorRef.current = [];
+      shownRef.current = null;
+      newRef.current = new Set();
     } else if (rows.length > 0) {
       const target = anchoredScroll(rows, groups, anchorRef.current);
       if (target !== null) {
         const top = gridTopRef.current() + target;
         if (Math.abs(top - scrollEl.scrollTop) >= 1) scrollEl.scrollTop = top;
+        const shown = shownRef.current;
+        if (shown) {
+          const added = [...clipIds(groups)].filter((id) => !shown.has(id));
+          for (const id of clipsAbove(rows, groups, target, added)) newRef.current.add(id);
+        }
       }
     }
+    if (rows.length > 0) shownRef.current = clipIds(groups);
     captureRef.current();
   }, [scrollEl, rows, groups, resetKey]);
+
+  const showNewAbove = useCallback(() => {
+    newRef.current = new Set();
+    setNewAbove(0);
+    scrollEl?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [scrollEl]);
+
+  return { newAbove, showNewAbove };
 }
+

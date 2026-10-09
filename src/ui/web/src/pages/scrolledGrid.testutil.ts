@@ -77,6 +77,17 @@ export function reportScroll(scroller: HTMLElement) {
   });
 }
 
+/** jsdom has no element scrollTo: jump there, as a smooth scroll ends up. Returns its calls. */
+export function stubScrollTo(scroller: HTMLElement): ScrollToOptions[] {
+  const calls: ScrollToOptions[] = [];
+  scroller.scrollTo = ((opts: ScrollToOptions) => {
+    calls.push(opts);
+    scroller.scrollTop = opts.top ?? scroller.scrollTop;
+    scroller.dispatchEvent(new Event("scroll"));
+  }) as HTMLElement["scrollTo"];
+  return calls;
+}
+
 export function scrollTo(scroller: HTMLElement, top: number) {
   act(() => {
     scroller.scrollTop = top;

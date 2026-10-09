@@ -4,12 +4,12 @@
  * refetch, but not on every poll while a long ingest keeps changing it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import UnifiedBrowsePage from "./UnifiedBrowsePage";
-import { clipsWith, firstOnScreen, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
+import { clipsWith, firstOnScreen, placeOf, reportScroll, scrollTo, stubLayout, stubScrollTo } from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   listLibraries: vi.fn(),
@@ -309,5 +309,27 @@ describe("UnifiedBrowsePage scrolled grid during a refresh", () => {
     expect(gridFetches).toBe(2);
     expect(scroller.scrollTop).toBeGreaterThan(1500);
     expect(placeOf(scroller, before.name)).toEqual(before);
+  });
+
+  it("counts the new clips above in a pill that scrolls to them", async () => {
+    api.queryAssets.mockImplementation(async () => {
+      const items = clipsWith(clip, (libraries[0].revision - 1) * 7);
+      return { items, next_cursor: null, total_estimate: items.length };
+    });
+    const { scroller } = renderPage("/browse", stubLayout);
+    await advance(100);
+    scrollTo(scroller, 1500);
+    await advance(100);
+
+    bump("lib_1");
+    await advance(POLL_MS);
+    await advance(100);
+
+    const pill = screen.getByRole("button", { name: "7 new clips" });
+    const calls = stubScrollTo(scroller);
+    fireEvent.click(pill);
+    expect(calls).toEqual([{ top: 0, behavior: "smooth" }]);
+    expect(screen.queryByRole("button", { name: /new clip/ })).toBeNull();
+    expect(firstOnScreen(scroller).name).toBe("clip67.mov");
   });
 });
