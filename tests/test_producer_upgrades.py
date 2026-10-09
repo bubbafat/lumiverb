@@ -718,3 +718,107 @@ def test_counts_for_a_project_need_an_editor_and_only_admins_see_who_approved(en
     seen = client.get("/v1/producers", headers=viewer).json()["producers"]
     assert all(u["approved_by"] is None for p in seen for u in p["upgrades"])
     assert any(u["approved_by"] for u in _producer(lib)["upgrades"])
+
+
+# ---------------------------------------------------------------------------
+# Review round 2
+# ---------------------------------------------------------------------------
+
+SRT = "1\n00:00:00,000 --> 00:00:01,000\nhello\n"
+
+
+def _transcribed_old(lib) -> tuple[str, str]:
+    """A video with a machine transcript made with settings that aren't current."""
+    client, headers, *_ = lib
+    sha = _sha()
+    vid = _ingest_with(lib, "t.mov", sha, None, media_type="video")
+    with _db(lib) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
+        s.commit()
+    r = client.post(f"/v1/assets/{vid}/transcript", json={
+        "srt": SRT, "source": "whisper",
+        "lineage": {"producer": "whisper", "version": "1", "settings_hash": OLD, "source_sha256": sha}},
+        headers=headers)
+    assert r.status_code == 200, r.text
+    return vid, sha
+
+
+@pytest.mark.slow
+def test_a_persons_transcript_during_an_upgrade_finishes_that_clip(env):
+    """A person's transcript is never regenerated over: written during an
+    upgrade, the clip is done, not handed to Whisper every hour."""
+    lib = _library(env, "UpgPersonTranscript")
+    client, headers, *_ = lib
+    vid, _ = _transcribed_old(lib)
+    assert _upgrade(lib, "transcript", library_id=lib[2]).json()["upgrading"] == 1
+    assert _due(lib, "missing_transcription") == [vid]
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": SRT, "source": "manual"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _due(lib, "missing_transcription") == []
+    assert _mine(lib, "transcript") == []
+
+
+@pytest.mark.slow
+def test_turning_transcripts_off_or_on_with_the_same_settings_stops_nothing(env):
+    """The transcripts model starts at small, its default: off and back on
+    changes no transcript's settings, so no upgrade stops. Another model does."""
+    lib = _library(env, "UpgTranscriptModel")
+    client, headers, *_ = lib
+    _transcribed_old(lib)
+    assert _upgrade(lib, "transcript", library_id=lib[2]).status_code == 200
+    try:
+        assert client.put("/v1/ai/jobs/transcripts", json={"model": ""}, headers=headers).status_code == 200
+        assert client.put("/v1/ai/jobs/transcripts", json={"model": "small"}, headers=headers).status_code == 200
+        assert len(_mine(lib, "transcript")) == 1
+
+        r = client.put("/v1/ai/jobs/transcripts", json={"model": "medium"}, headers=headers)
+        assert r.status_code == 409, r.text
+        assert _error(r)["code"] == "upgrades_stop"
+        assert _error(r)["details"]["upgrades"] == [{"artifact": "transcript", "title": "Transcripts", "remaining": 1}]
+        assert "1 clip left" in _error(r)["message"]
+        assert len(_mine(lib, "transcript")) == 1
+    finally:
+        client.delete("/v1/producers/transcript/upgrade", headers=headers)
+        client.put("/v1/ai/jobs/transcripts", json={"model": "small", "stop_upgrades": True}, headers=headers)
+
+
+@pytest.mark.slow
+def test_batch_writes_replace_edits_as_each_clip_is_made_again(env):
+    lib = _library(env, "UpgReplaceBatch")
+    client, headers, *_ = lib
+    a, sha_a = _stale_clip(lib, "a.jpg")
+    b, sha_b = _stale_clip(lib, "b.jpg", artifact="ocr")
+    _correct(lib, a, description="My words")
+    _correct(lib, b, ocr_text="MY SIGN")
+    assert _upgrade(lib, library_id=lib[2], edits="replace").status_code == 200
+    assert _upgrade(lib, "ocr", library_id=lib[2], edits="replace").status_code == 200
+
+    r = client.post("/v1/assets/batch-vision", json={
+        "items": [{"asset_id": a, "model_id": "m", "description": "new words", "tags": [], "source_sha256": sha_a}],
+        "lineage": _want(lib, "vision", None)}, headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.post("/v1/assets/batch-ocr", json={
+        "items": [{"asset_id": b, "ocr_text": "NEW SIGN", "source_sha256": sha_b}],
+        "lineage": _want(lib, "ocr", None)}, headers=headers)
+    assert r.status_code == 200, r.text
+
+    assert client.get(f"/v1/assets/{a}", headers=headers).json()["ai_description"] == "new words"
+    assert client.get(f"/v1/assets/{b}", headers=headers).json()["ocr_text"] == "NEW SIGN"
+    assert [h[0] for h in _history(lib, a)] == ["description"]
+    assert [h[0] for h in _history(lib, b)] == ["ocr_text"]
+
+
+@pytest.mark.slow
+def test_a_scene_described_without_saying_how_keeps_the_video_stale(env):
+    lib = _library(env, "UpgSceneUnknown")
+    client, headers, *_ = lib
+    vid, sha, (first, second) = _video_with_scenes(lib)
+    _describe_scene(lib, first, sha)
+    r = client.patch(f"/v1/video/scenes/{second}", json={"model_id": "m", "model_version": "1",
+                                                         "description": "from the Mac", "tags": []}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _counts(lib, "scene_vision")["stale"] == 1  # half new, half unknown
+    scenes = client.get(f"/v1/video/{vid}/scenes", headers=headers).json()["scenes"]
+    assert scenes[1]["lineage"] == {"producer": "unknown", "version": "", "settings_hash": ""}
+    _describe_scene(lib, second, sha)
+    assert _counts(lib, "scene_vision")["current"] == 1

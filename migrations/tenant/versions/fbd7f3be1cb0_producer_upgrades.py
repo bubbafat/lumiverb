@@ -14,7 +14,9 @@ correction_history keeps the edits "Replace my edits" took away.
 
 video_scenes.lineage: how each scene's description was made, so a video's
 descriptions are current only once every scene's are (and an upgrade
-redoes just the scenes made otherwise). Backfilled from the clip's.
+redoes just the scenes made otherwise). Backfilled from the clip's: a
+video half-described with older settings before this can't be told apart,
+so every described scene takes the video's last record.
 """
 
 from __future__ import annotations

@@ -566,6 +566,23 @@ def test_a_video_part_described_picks_up_where_it_left_off(mock_enrich):
 
 
 @patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_handed_out_with_every_scene_made_this_way_is_described_again(mock_enrich):
+    """Every scene matches but the video was handed out: its own record is
+    what's stale (made before its file had a hash, say). Describing all its
+    scenes again records it; skipping them would hand it out forever."""
+    current = {k: NOW[k] for k in ("producer", "version", "settings_hash")}
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": [
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat", "lineage": current},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": "a dog", "lineage": current}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _enrich_videos(client, tmpdir, ["a1"], MagicMock(), lineage_for=lambda v: NOW)
+
+    assert sorted(c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list) == ["scn_1", "scn_2"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
 def test_a_server_that_doesnt_say_how_scenes_were_made_gets_the_old_rule(mock_enrich):
     client = MagicMock()
     client.get.return_value = _FakeResponse(data={"scenes": [

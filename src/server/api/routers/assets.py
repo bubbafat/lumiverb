@@ -528,7 +528,7 @@ def repair_summary(
     from src.server.repository.tenant import MISSING_CONDITIONS
     from src.shared.producers import MISSING_FLAGS
 
-    live = lineage.prepare(session, tenant_job_models(request)) if upgrades else set()
+    live = lineage.prepare(session, tenant_job_models(request)) if upgrades and lineage.any_upgrades(session) else set()
     c = dict(MISSING_CONDITIONS)
     for flag in MISSING_FLAGS:
         c[flag] = lineage.work(flag, live)
@@ -1401,13 +1401,17 @@ def submit_batch_ocr(
     updated = 0
     skipped = 0
 
+    # An upgrade that replaces a person's edits does it now, with the new
+    # text: every clip at once (one transaction, clips locked in one order).
+    in_sight = [item.asset_id for item in body.items
+                if (a := asset_repo.get_by_id(item.asset_id)) is not None and a.deleted_at is None]
+    lineage.replace_edits_as_made(session, "ocr", in_sight, lineage_dict(body.lineage))
     for item in body.items:
         asset = asset_repo.get_by_id(item.asset_id)
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
         ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
-        lineage.replace_edits_as_made(session, "ocr", [item.asset_id], lineage_dict(body.lineage, item.source_sha256))
         lineage.record(session, item.asset_id, "ocr", lineage_dict(body.lineage, item.source_sha256),
                        outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1

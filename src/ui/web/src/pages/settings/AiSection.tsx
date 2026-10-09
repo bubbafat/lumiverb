@@ -524,7 +524,7 @@ function JobModel({
   const [model, setModel] = useState(job.model);
   const [problem, setProblem] = useState<string | null>(null);
   // 409 upgrades_stop: the model change would stop upgrades under way; ask first.
-  const [stopping, setStopping] = useState<string | null>(null);
+  const [stopping, setStopping] = useState<{ message: string; next: string } | null>(null);
   // What the machines doing it offer (the server says).
   const offered = job.choices;
   const save = useMutation({
@@ -538,9 +538,9 @@ function JobModel({
       queryClient.setQueryData(AI_QUERY_KEY, next);
       setChanging(false);
     },
-    onError: (e) => {
+    onError: (e, { next }) => {
       if (e instanceof ApiError && e.code === "upgrades_stop") {
-        setStopping(e.message);
+        setStopping({ message: e.message, next });
       } else if (e instanceof ApiError && e.code === "model_not_offered") {
         const machines = (e.details?.machines as { name: string; models: string[]; error: string }[] | undefined) ?? [];
         setProblem(
@@ -597,14 +597,14 @@ function JobModel({
           )}
           {stopping && (
             <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-              <p className="text-sm text-amber-100">{stopping}</p>
+              <p className="text-sm text-amber-100">{stopping.message}</p>
               <button
                 type="button"
                 disabled={save.isPending}
                 className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
-                onClick={() => save.mutate({ next: model, stop: true })}
+                onClick={() => save.mutate({ next: stopping.next, stop: true })}
               >
-                Change it and stop them
+                {stopping.next ? "Change it and stop them" : "Turn it off and stop them"}
               </button>
             </div>
           )}

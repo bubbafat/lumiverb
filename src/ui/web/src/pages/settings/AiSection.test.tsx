@@ -415,6 +415,21 @@ describe("AiSection model change during an upgrade", () => {
   });
 });
 
+describe("AiSection turning a job off during an upgrade", () => {
+  it("asks, then turns it off (not whatever the picker shows)", async () => {
+    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN], checked_at: null } })];
+    offers = { [BRAIN]: [QWEN] };
+    upgrading = true;
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn off descriptions & text" }));
+    const alert = await screen.findByRole("alert");
+    fireEvent.click(within(alert).getByRole("button", { name: "Turn it off and stop them" }));
+    await waitFor(() => expect(model).toBe(""));
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "", stop_upgrades: true });
+  });
+});
+
 describe("aiHasProblem", () => {
   const ok = { machines: [machine({})], jobs: [{ job: "vision", label: "Descriptions & text", model: QWEN, machines: 1, offering: 1, choices: [QWEN], built_in: false }] };
   it("flags a job that can't run, or an offline machine doing one", () => {

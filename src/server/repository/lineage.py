@@ -126,10 +126,11 @@ def _lineage_cols() -> str:
         cols.append(f"max(l.source_sha256) FILTER (WHERE l.artifact = '{artifact}'"
                     f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
         cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
-        # When its producer last made it (a failed try, or a write that
-        # doesn't say how it was made, such as the macOS app's, leaves this alone).
+        # When its producer, or a person, last made it (a failed try, or a
+        # write that doesn't say how it was made, such as the macOS app's,
+        # leaves this alone).
         cols.append(f"max(l.produced_at) FILTER (WHERE l.artifact = '{artifact}'"
-                    f" AND l.producer = '{PRODUCERS[artifact].producer}' AND l.outcome <> 'failed')"
+                    f" AND l.producer IN ('{PRODUCERS[artifact].producer}', '{PERSON}') AND l.outcome <> 'failed')"
                     f" AS made_{artifact}")
     return ", ".join(cols)
 
@@ -327,6 +328,24 @@ def missing_among(session: Session, asset_ids: list[str], flags: list[str]) -> s
     ), {"ids": asset_ids})}
 
 
+def upgrades_a_change_stops(session: Session, job: str, job_models: Mapping[str, str],
+                            model: str) -> list[dict[str, Any]]:
+    """The upgrades a new model for a job would leave behind: those whose
+    settings it changes ({upgrade_id, artifact, remaining}). Turning a job
+    off or on with the same settings (a default model) stops none."""
+    new_models = {**job_models, job: model}
+    out = []
+    for artifact in JOB_ARTIFACTS.get(job, ()):
+        want = desired(session, artifact, new_models)
+        targets = {r[0]: (r[1], r[2], r[3]) for r in session.execute(text(
+            "SELECT upgrade_id, producer, producer_version, settings_hash FROM producer_upgrades"
+            " WHERE artifact = :a"), {"a": artifact})}
+        for u in upgrades(session, artifact):
+            if targets.get(u["upgrade_id"]) != (want["producer"], want["version"], want["settings_hash"]):
+                out.append({"upgrade_id": u["upgrade_id"], "artifact": artifact, "remaining": u["remaining"]})
+    return out
+
+
 def upgrades(session: Session, artifact: str) -> list[dict[str, Any]]:
     """The artifact's upgrades: how many clips each has left, and how many
     were made again but still aren't what it upgrades to. Finished ones
@@ -346,14 +365,15 @@ def upgrades(session: Session, artifact: str) -> list[dict[str, Any]]:
         total, remaining, mismatched = session.execute(text(
             "SELECT count(*),"
             f" count(*) FILTER (WHERE ({APPLIES[artifact]}) AND ({MADE[artifact]})"
-            "   AND NOT COALESCE(l.producer = :producer AND l.outcome <> 'failed' AND l.produced_at >= :at, false)),"
+            "   AND NOT COALESCE(l.producer IN (:producer, :person) AND l.outcome <> 'failed'"
+            "                    AND l.produced_at >= :at, false)),"
             " count(*) FILTER (WHERE l.producer = :producer AND l.produced_at >= :at AND l.outcome <> 'failed'"
             "   AND (l.producer_version <> :version OR l.settings_hash <> :hash))"
             " FROM producer_upgrade_items ui JOIN active_assets a ON a.asset_id = ui.asset_id"
             " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
             " WHERE ui.upgrade_id = :u"
         ), {"u": upgrade_id, "at": at, "artifact": artifact, "producer": producer, "version": version,
-            "hash": h}).one()
+            "hash": h, "person": PERSON}).one()
         if not remaining:
             finished.append(upgrade_id)
             continue
@@ -383,7 +403,9 @@ def replace_edits_as_made(session: Session, artifact: str, asset_ids: list[str],
     """'Replace my edits' happens as each clip is made again: when the
     producer writes what an upgrade approved with edits=replace asked for,
     the person's edits on those clips move to correction_history in the
-    same transaction. Doesn't commit. Returns how many clips had some."""
+    same transaction. Only the first time it's made again after the
+    approval: a write with other settings (still stale) takes that turn and
+    leaves the edits. Doesn't commit. Returns how many clips had some."""
     if artifact not in EDIT_FIELDS or not asset_ids or not made:
         return 0
     if made.get("producer") != PRODUCERS[artifact].producer:
@@ -391,6 +413,10 @@ def replace_edits_as_made(session: Session, artifact: str, asset_ids: list[str],
     if session.execute(text("SELECT 1 FROM producer_upgrades WHERE artifact = :artifact AND edits = 'replace' LIMIT 1"),
                        {"artifact": artifact}).first() is None:
         return 0
+    # The clips first (as a correction does), then whether they're due: a
+    # person's edit can't slip in between.
+    session.execute(text("SELECT 1 FROM assets WHERE asset_id = ANY(:ids) ORDER BY asset_id FOR UPDATE"),
+                    {"ids": asset_ids})
     rows = session.execute(text(
         "SELECT DISTINCT ui.asset_id, u.approved_by FROM producer_upgrade_items ui"
         " JOIN producer_upgrades u ON u.upgrade_id = ui.upgrade_id"

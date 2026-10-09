@@ -412,26 +412,28 @@ def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) 
         return _settings(ctrl, request.state.tenant_id)
 
 
-def _stop_upgrades(session: Session, job: str, stop: bool) -> None:
-    """A new model makes what upgrades under way would make stale: they stop,
-    once the request says so (409 upgrades_stop with each one's count left)."""
+def _upgrades_to_stop(session: Session, tenant: Tenant | None, job: str, model: str, stop: bool) -> list[str]:
+    """The upgrades a new model leaves behind (those whose settings it
+    changes): 409 upgrades_stop, with each producer's clips left, until the
+    request says to stop them. Returns their ids, to drop once the model is saved."""
     from src.server.repository import lineage
+    from src.server.repository.ai_machines import job_models
     from src.shared.producers import PRODUCERS
 
-    artifacts = lineage.JOB_ARTIFACTS.get(job, ())
-    running = [{"artifact": a, "title": PRODUCERS[a].title, "remaining": sum(u["remaining"] for u in ups)}
-               for a in artifacts if (ups := lineage.upgrades(session, a))]
-    if not running:
-        return
-    if not stop:
-        what = " and ".join(f"{r['title'].lower()} ({r['remaining']:,} clips left)" for r in running)
-        raise DecisionRequiredError(
-            "upgrades_stop",
-            f"Upgrades under way stop with a new model: {what}. What they haven't made yet stays stale.",
-            {"upgrades": running},
-        )
-    session.execute(text("DELETE FROM producer_upgrades WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
-    session.commit()
+    stopping = lineage.upgrades_a_change_stops(session, job, job_models(tenant), model)
+    if not stopping or stop:
+        return [u["upgrade_id"] for u in stopping]
+    left: dict[str, int] = {}
+    for u in stopping:
+        left[u["artifact"]] = left.get(u["artifact"], 0) + u["remaining"]
+    running = [{"artifact": a, "title": PRODUCERS[a].title, "remaining": n} for a, n in left.items()]
+    what = " and ".join(f"{r['title'].lower()} ({r['remaining']:,} clip{'' if r['remaining'] == 1 else 's'} left)"
+                        for r in running)
+    raise DecisionRequiredError(
+        "upgrades_stop",
+        f"Upgrades under way stop with a new model: {what}. What they haven't made yet stays stale.",
+        {"upgrades": running},
+    )
 
 
 @router.put("/jobs/{job}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
@@ -467,11 +469,14 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
                 raise ConflictError("model_not_offered",
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
-        if model != _job_model(tenant, job):
-            _stop_upgrades(session, job, body.stop_upgrades)
+        stopping = (_upgrades_to_stop(session, tenant, job, model, body.stop_upgrades)
+                    if model != _job_model(tenant, job) else [])
         _store_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()
+        if stopping:  # only once the model is saved
+            session.execute(text("DELETE FROM producer_upgrades WHERE upgrade_id = ANY(:ids)"), {"ids": stopping})
+            session.commit()
         return _settings(ctrl, tenant_id)
 
 
