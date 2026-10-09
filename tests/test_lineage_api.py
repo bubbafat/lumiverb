@@ -113,7 +113,8 @@ def _refused(r, code: str = "lineage_required") -> None:
 
 
 def _clips_at(env, rel_path: str) -> int:
-    client, headers, library_id, *_ = env
+    """How many clips the library keeps at the path."""
+    library_id = env[2]
     with _db(env) as s:
         return s.execute(text("SELECT count(*) FROM assets WHERE library_id = :l AND rel_path = :p"),
                          {"l": library_id, "p": rel_path}).scalar()

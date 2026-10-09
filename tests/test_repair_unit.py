@@ -654,8 +654,8 @@ def test_run_repair_redetect_faces_dry_run_pages_all_images(tmp_path: Path) -> N
 
 def test_probe_one_puts_facet(tmp_path: Path) -> None:
     from src.client.cli.repair import _probe_one
-    from src.shared import producers as P
     from src.client.video.probe import VideoFacet
+    from src.shared import producers as P
 
     (tmp_path / "a.mov").write_bytes(b"x")
     facet = VideoFacet(
