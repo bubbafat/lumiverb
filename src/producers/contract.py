@@ -23,6 +23,7 @@ SQL fragments are conditions on ``active_assets a``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -63,20 +64,34 @@ class Setting:
     def check(self, value: Any) -> Any:
         """The value as stored, or ValueError saying what's wrong with it."""
         if self.kind == "text":
-            if not isinstance(value, str) or not value.strip() or "\x00" in value or len(value) > 4000:
+            if not isinstance(value, str):
+                raise ValueError(f"{self.label} is text")
+            if not value.strip():
+                raise ValueError(f"{self.label} can't be empty")
+            if "\x00" in value or len(value) > 4000:
                 raise ValueError(f"{self.label} is text, up to 4,000 characters")
             return value
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{self.label} is a number")
+        try:
+            number = float(value)
+        except OverflowError:  # a whole number too big for a float
+            number = math.inf
+        # NaN and infinity are within no bounds (JSON parsers take them).
+        if not math.isfinite(number) or (self.minimum is not None and number < self.minimum) \
+                or (self.maximum is not None and number > self.maximum):
+            raise ValueError(self.bounds())
         if self.kind == "int":
-            if value != int(value):
+            if not number.is_integer():
                 raise ValueError(f"{self.label} is a whole number")
-            value = int(value)
-        else:
-            value = float(value)
-        if (self.minimum is not None and value < self.minimum) or (self.maximum is not None and value > self.maximum):
-            raise ValueError(f"{self.label} is from {self.minimum:g} to {self.maximum:g}{(' ' + self.unit) if self.unit else ''}")
-        return value
+            return int(number)
+        return number
+
+    def bounds(self) -> str:
+        unit = f" {self.unit}" if self.unit else ""
+        if self.minimum is None or self.maximum is None:
+            return f"{self.label} is a finite number"
+        return f"{self.label} is from {self.minimum:g} to {self.maximum:g}{unit}"
 
 
 @dataclass(frozen=True)

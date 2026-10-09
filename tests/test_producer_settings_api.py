@@ -130,3 +130,79 @@ def test_saving_the_same_settings_leaves_a_stopped_redo_stopped(env):
     r = _put(env, "analysis_proxy", settings={"crf": 28})  # its default: nothing changes
     assert r.status_code == 200 and r.json()["paused"] is True, r.text
     client.post("/v1/producers/analysis_proxy/redo/resume", headers=headers)
+
+
+def _stored(env, artifact: str) -> str | None:
+    """What system_metadata holds for the producer's changed settings."""
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(env[5])
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text("SELECT value FROM system_metadata WHERE key = :k"),
+                                {"k": f"producer.{artifact}"}).scalar()
+    finally:
+        engine.dispose()
+
+
+def test_only_whats_changed_is_stored_and_back_to_defaults_stores_nothing(env):
+    assert _put(env, "transcript", settings={"vad_min_silence_ms": 800}).status_code == 200
+    assert _stored(env, "transcript") == '{"vad_min_silence_ms": 800}'
+    assert _put(env, "transcript", settings={"vad_min_silence_ms": 500}).status_code == 200  # the default
+    assert _stored(env, "transcript") is None
+
+
+def test_the_count_asked_about_is_what_the_new_settings_would_redo(env):
+    lib = _library(env, "SettingsCount")
+    sha = _sha()
+    photo = _ingest_with(lib, "a.jpg", sha, None)
+    _describe(lib, photo, sha)
+    assert _put(env, "vision", settings={"temperature": 0.5}, redo=True).status_code == 200
+    assert _counts(lib, "vision")["stale"] == 1
+    # Back before anything was made again: nothing would be, so nothing asks.
+    r = _put(env, "vision", settings={"temperature": None})
+    assert r.status_code == 200, r.text
+    assert _counts(lib, "vision")["stale"] == 0
+
+
+def test_the_question_says_a_stopped_redo_starts_again(env):
+    client, headers, *_ = env
+    lib = _library(env, "SettingsStopped")
+    sha = _sha()
+    _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
+    assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204
+    try:
+        r = _put(env, "vision", settings={"temperature": 0.7})
+        assert r.status_code == 409, r.text
+        assert "stopped" in r.json()["error"]["message"] and r.json()["error"]["details"]["paused"] is True
+    finally:
+        client.post("/v1/producers/vision/redo/resume", headers=headers)
+
+
+@pytest.mark.parametrize("raw", [
+    '{"settings": {"temperature": NaN}, "redo": true}',
+    '{"settings": {"temperature": Infinity}, "redo": true}',
+    '{"settings": {"max_tokens": Infinity}, "redo": true}',
+    '{"settings": {"temperature": 1e400}, "redo": true}',
+    '{"settings": {"max_tokens": 10000000000000000000000000000000000000000}, "redo": true}',
+])
+def test_numbers_json_allows_but_no_bounds_do_are_refused(env, raw):
+    client, headers, *_ = env
+    before = _producer(env, "vision")["settings_hash"]
+    r = client.put("/v1/producers/vision/settings", content=raw,
+                   headers={**headers, "Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
+    assert _producer(env, "vision")["settings_hash"] == before
+
+
+@pytest.mark.parametrize("prompt, says", [("   ", "empty"), ("x" * 4001, "4,000")])
+def test_a_prompt_must_say_something_and_not_too_much(env, prompt, says):
+    r = _put(env, "vision", settings={"prompt": prompt}, redo=True)
+    assert r.status_code == 422 and says in r.json()["error"]["message"], r.text
+
+
+def test_a_new_prompt_is_saved_whole_with_its_equals_signs(env):
+    prompt = "List objects as key=value pairs.\nThen a line: done=1"
+    r = _put(env, "vision", settings={"prompt": prompt}, redo=True)
+    assert r.status_code == 200, r.text
+    assert _producer(env, "vision")["settings"]["prompt"] == prompt

@@ -22,7 +22,9 @@ def ai_settings(prompt: str, fixed: str = "") -> tuple:
     return (
         Setting("model", "", "Model", kind="text", fixed=ITS_JOBS),
         Setting("prompt", prompt, "Prompt", kind="text", fixed=fixed),
-        Setting("max_edge", 1280, "Image size sent", minimum=256, maximum=4096, unit="px", fixed=fixed),
+        # No larger than the proxies the images come from (PROXY_CACHE_EDGE):
+        # a larger size would send the same image and redo every clip for nothing.
+        Setting("max_edge", 1280, "Image size sent", minimum=256, maximum=1280, unit="px", fixed=fixed),
         Setting("temperature", 0.2, "Temperature", kind="float", minimum=0, maximum=2, advanced=True, fixed=fixed),
         Setting("max_tokens", 500, "Longest answer", minimum=50, maximum=4000, unit="tokens", advanced=True,
                 fixed=fixed),

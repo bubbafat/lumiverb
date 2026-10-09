@@ -239,6 +239,8 @@ def set_settings(
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
     p = producer_or_404(artifact)
+    # One change at a time per producer: two saves at once mustn't lose either's settings.
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"producer.{artifact}"})
     values = dict(lineage.overrides(session, artifact))
     for key, value in body.settings.items():
         setting = p.setting(key)
@@ -259,15 +261,17 @@ def set_settings(
     lineage.set_overrides(session, artifact, values)
     after = lineage.desired(session, artifact, models)
     if after["settings_hash"] != before["settings_hash"]:
-        clips = lineage.made_by_a_producer(session, [artifact])[artifact] if lineage.redoable(artifact) else 0
+        clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
+            stopped = artifact in lineage.paused(session)
             session.rollback()
             raise DecisionRequiredError(
                 "redo_on_change",
                 f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again. That "
-                "runs after anything missing; until it's done, results mix the old settings and the new.",
-                {"artifact": artifact, "clips": clips, "artifacts": [{"artifact": artifact, "title": p.title,
-                                                                       "clips": clips}]},
+                "runs after anything missing; until it's done, results mix the old settings and the new."
+                + (" Its stopped redo starts again." if stopped else ""),
+                {"artifact": artifact, "clips": clips, "paused": stopped,
+                 "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
         lineage.resume(session, [artifact])
     session.commit()

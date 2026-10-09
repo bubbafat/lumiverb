@@ -244,6 +244,13 @@ def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
         session.execute(text("DELETE FROM producer_redo_paused WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
 
 
+def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:
+    """Clips in sight whose artifact would be made again if it were made as
+    want says (desired): those a producer made another way. What the 409
+    before a new model or new settings counts."""
+    return counts(session, artifact, want)["stale"] if redoable(artifact) else 0
+
+
 def made_by_a_producer(session: Session, artifacts: list[str] | tuple[str, ...]) -> dict[str, int]:
     """Clips in sight whose artifact a producer (not a person) made, per artifact:
     what a new model for them would redo."""

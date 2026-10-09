@@ -419,13 +419,7 @@ function shown(field: SettingField, value: unknown): string {
 /** A producer's settings: changeable ones as a form for admins (advanced
  * ones folded away), the rest with why they can't be changed here. */
 function Settings({ producer, admin }: { producer: Producer; admin: boolean }) {
-  // A server that predates declared settings sends the values alone.
-  const fields: SettingField[] = producer.fields?.length
-    ? producer.fields
-    : Object.entries(producer.settings).map(([key, value]) => ({
-        key, label: key.replace(/_/g, " "), kind: "text", value, default: value, minimum: null, maximum: null,
-        unit: "", advanced: false, fixed: "This server doesn't say how it can change.",
-      }));
+  const fields = producer.fields ?? [];
   if (fields.length === 0) return null;
   const editable = admin && fields.some((f) => !f.fixed);
   return (
@@ -438,32 +432,57 @@ function Settings({ producer, admin }: { producer: Producer; admin: boolean }) {
   );
 }
 
+/** Why settings can't change, in words (a phone can't hover): once when
+ * every one has the same reason, else under each. */
 function SettingsList({ fields }: { fields: SettingField[] }) {
+  const reasons = new Set(fields.map((f) => f.fixed));
+  const one = reasons.size === 1 ? fields[0].fixed : null;
   return (
-    <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
-      {fields.map((f) => (
-        <div key={f.key} className="contents">
-          <dt className="text-gray-500">{f.label}</dt>
-          <dd className="min-w-0 whitespace-pre-wrap break-words text-gray-300" title={f.fixed ?? undefined}>
-            {shown(f, f.value)}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <div className="mt-2 space-y-2">
+      {one && <p className="text-xs text-gray-500">{one}</p>}
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
+        {fields.map((f) => (
+          <div key={f.key} className="contents">
+            <dt className="text-gray-500">{f.label}</dt>
+            <dd className="min-w-0 whitespace-pre-wrap break-words text-gray-300">
+              {shown(f, f.value)}
+              {f.fixed && !one && <span className="block text-xs text-gray-500">{f.fixed}</span>}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
+/** What a field holds as its setting: an empty field is the default (null), as the CLI's KEY= is. */
+function asSetting(f: SettingField, raw: string): unknown {
+  if (raw.trim() === "") return null;
+  return f.kind === "text" ? raw : Number(raw);
+}
+
+/** Whether a field says what the setting is now. */
+function same(f: SettingField, raw: string): boolean {
+  const value = asSetting(f, raw);
+  return value === null ? f.value === f.default : value === f.value;
+}
+
+const fromServer = (fields: SettingField[]) =>
+  Object.fromEntries(fields.filter((f) => !f.fixed).map((f) => [f.key, String(f.value ?? "")]));
+
 function SettingsForm({ producer, fields }: { producer: Producer; fields: SettingField[] }) {
   const queryClient = useQueryClient();
-  const initial = () => Object.fromEntries(fields.filter((f) => !f.fixed).map((f) => [f.key, String(f.value ?? "")]));
-  const [values, setValues] = useState<Record<string, string>>(initial);
+  const [values, setValues] = useState<Record<string, string>>(() => fromServer(fields));
   const [problem, setProblem] = useState<string | null>(null);
   // 409 redo_on_change: what the old settings made is made again; the API asks first.
   const [redoing, setRedoing] = useState<string | null>(null);
-  const changed = fields.filter((f) => !f.fixed && values[f.key] !== String(f.value ?? ""));
+  const changed = fields.filter((f) => !f.fixed && !same(f, values[f.key]));
+  const edit = (key: string, value: string) => {
+    setValues({ ...values, [key]: value });
+    setRedoing(null); // its answer was for the values asked about
+  };
   const asSent = (f: SettingField) => {
-    const raw = values[f.key];
-    const value = f.kind === "text" ? raw : Number(raw);
+    const value = asSetting(f, values[f.key]);
     return value === f.default ? null : value;
   };
   const save = useMutation({
@@ -473,7 +492,11 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       setProblem(null);
       setRedoing(null);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
+    onSuccess: (saved) => {
+      // What the server saved, as it says it (1.50 is 1.5).
+      if (saved?.fields) setValues(fromServer(saved.fields));
+      return queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY });
+    },
     onError: (e) => {
       if (e instanceof ApiError && e.code === "redo_on_change") setRedoing(e.message);
       else setProblem(message(e));
@@ -492,11 +515,11 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
           <p className="text-xs text-gray-500">{f.fixed}</p>
         ) : f.kind === "text" ? (
           <textarea id={id} rows={4} className={inputClass} value={values[f.key]}
-            onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
+            onChange={(e) => edit(f.key, e.target.value)} />
         ) : (
           <input id={id} type="number" className={`${inputClass} sm:max-w-[12rem]`} value={values[f.key]}
             min={f.minimum ?? undefined} max={f.maximum ?? undefined} step={f.kind === "int" ? 1 : "any"}
-            onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
+            onChange={(e) => edit(f.key, e.target.value)} />
         )}
       </div>
     );
@@ -529,9 +552,14 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       {redoing && (
         <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
           <p className="text-amber-100">{redoing}</p>
-          <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
-            Save and make them again
-          </button>
+          <div className="flex flex-wrap gap-4">
+            <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
+              Save and make them again
+            </button>
+            <button type="button" className={linkClass} onClick={() => setRedoing(null)}>
+              Cancel
+            </button>
+          </div>
         </div>
       )}
       <div className="flex flex-wrap gap-4">
@@ -540,8 +568,12 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
           {save.isPending ? "Saving…" : "Save"}
         </button>
         <button type="button" className={linkClass}
-          disabled={fields.every((f) => f.fixed || values[f.key] === String(f.default ?? ""))}
-          onClick={() => setValues(Object.fromEntries(fields.filter((f) => !f.fixed).map((f) => [f.key, String(f.default ?? "")])))}>
+          disabled={fields.every((f) => f.fixed || asSetting(f, values[f.key]) === null
+            || asSetting(f, values[f.key]) === f.default)}
+          onClick={() => {
+            setValues(Object.fromEntries(fields.filter((f) => !f.fixed).map((f) => [f.key, String(f.default ?? "")])));
+            setRedoing(null);
+          }}>
           Back to defaults
         </button>
       </div>
