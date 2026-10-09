@@ -145,7 +145,7 @@ Ctrl-C there only stops watching the log; the scheduler keeps going. To pause al
 sudo systemctl stop lumiverb-scheduler
 ```
 
-and `sudo systemctl start lumiverb-scheduler` to carry on. A stop lets jobs in hand finish for up to 25 seconds, saving nothing more after it began; restarts don't rescan from scratch, and what wasn't finished is simply due again. If the database restarts, the scheduler stops and systemd starts it again (it holds a lock there, so only one runs).
+and `sudo systemctl start lumiverb-scheduler` to carry on. A stop gives jobs in hand up to 25 seconds; once it begins, no more descriptions, OCR, CLIP or transcripts are saved (a face batch, a render or a probe in hand may still finish); restarts don't rescan from scratch, and what wasn't finished is simply due again. If the database restarts, the scheduler stops and systemd starts it again (it holds a lock there, so only one runs).
 
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot

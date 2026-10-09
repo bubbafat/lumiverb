@@ -482,3 +482,50 @@ def test_a_new_model_sends_nothing_to_a_machine_until_its_checked_with_it():
         pool.release(machine)
     studio = next(m for m in pool.machines if m.name == "Studio")
     assert not studio.online and llava in studio.error
+
+
+def test_work_started_with_one_model_isnt_served_by_the_next():
+    """Review round 3: a job that took its model before a change, reaching a
+    machine checked with the new one, was answered by the new model and
+    saved as the old one's. It waits instead, uncharged."""
+    llava = "llava:13b"
+    client = _client(machines=(BRAIN,))
+    with _offering({"http://brain/v1": (QWEN, llava)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        made = []
+
+        def make(machine):
+            made.append(machine.serves)
+            p = MagicMock()
+            p.describe.return_value = {"description": "", "tags": []}
+            return p
+
+        provider = PooledCaptionProvider(pool, make)  # made for qwen
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        pool.check()
+        with pytest.raises(CaptionError) as raised:
+            provider.describe("a.jpg")
+    assert raised.value.model_changed is True and raised.value.endpoint_fault is False
+    assert made == []  # nothing asked of the new model for it
+    assert all(m.busy == 0 for m in pool.machines)
+
+
+def test_a_check_for_a_model_no_longer_chosen_is_left_out():
+    """Review round 3: a check that started before a model change mustn't
+    mark the machine as serving the new model with the old one's answer."""
+    llava = "llava:13b"
+    client = _client(machines=(BRAIN,))
+    pool = MachinePool(client, "vision")
+
+    def list_models(url, key=None, **_):
+        # The model changes while the machine is being asked.
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        pool.load()
+        return [QWEN]
+
+    with patch("src.client.cli.ai_pool.list_models", side_effect=list_models):
+        pool.load()
+        pool._check(pool.machines[0])
+    brain = pool.machines[0]
+    assert not brain.online and brain.serves == "" and brain.checked_at is None  # checked again, with llava

@@ -47,6 +47,11 @@ FLUSH_EVERY_SEC = 10.0
 LOCK_ID = 0x6C756D76
 LOCK_CHECK_SEC = 60.0
 
+# A save the API refused for what's in it (not who asked, or a clip gone meanwhile).
+_REFUSED = {400, 413, 422}
+# The artifact each kind makes, where its name differs.
+_ARTIFACT_OF = {"render": "analysis_proxy"}
+
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
 
@@ -97,6 +102,7 @@ class Scheduler:
         self._inline_refill = inline_refill
         self._refill_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="refill")
         self._refilling: dict[str, Future] = {}
+        self._flushing: dict[str, Future] = {}
 
     # -- one tick -----------------------------------------------------------
 
@@ -117,12 +123,12 @@ class Scheduler:
         self.collect()
         if self._clock() - self._flushed_at >= FLUSH_EVERY_SEC:
             self._flushed_at = self._clock()
-            for acct in accounts.values():
+            for acct_id, acct in accounts.items():
                 # Off this thread: a slow server mustn't hold up the dispatching.
                 if self._inline_refill:
                     acct.failures.flush()
-                else:
-                    self._refill_pool.submit(acct.failures.flush)
+                elif (flushing := self._flushing.get(acct_id)) is None or flushing.done():
+                    self._flushing[acct_id] = self._refill_pool.submit(acct.failures.flush)
         return started
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
@@ -176,7 +182,14 @@ class Scheduler:
                 self._scan(acct, job, now=self._wall())
                 return None
             return self._runners[job.kind](acct, job)
-        except Exception:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
+        except Exception as e:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
+            if getattr(e, "status_code", None) in _REFUSED:
+                # The API can't take what was made: the clip's failure, reported
+                # (the server says when to try again), not made again every hour.
+                logger.warning("scheduler: the server refused %s for %s: %s", job.kind, ", ".join(job.asset_ids[:3]), e)
+                for asset_id in job.asset_ids:
+                    acct.failures.add(_ARTIFACT_OF.get(job.kind, job.kind), asset_id, f"The server refused it: {e}")
+                return None
             logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
             return list(job.asset_ids)  # none saved or reported: each waits the long while
 
@@ -398,16 +411,26 @@ def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None]
     return not lost
 
 
-def _still_holds(conn: Any) -> bool:
-    """The lock's connection still answers (a database restart ends it, and the lock)."""
+def _still_holds(conn: Any, timeout: float = 10.0) -> bool:
+    """The lock's connection still answers (a database restart ends it, and
+    the lock). One that doesn't answer within timeout (a dead connection can
+    block for many minutes) counts as lost."""
     from sqlalchemy import text
 
-    try:
-        conn.execute(text("SELECT 1")).scalar()
-        conn.commit()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+    answered: list[bool] = []
+
+    def ask() -> None:
+        try:
+            conn.execute(text("SELECT 1")).scalar()
+            conn.commit()
+            answered.append(True)
+        except Exception:  # noqa: BLE001
+            answered.append(False)
+
+    asking = threading.Thread(target=ask, name="lock-check", daemon=True)
+    asking.start()
+    asking.join(timeout)
+    return answered == [True]
 
 
 def _hold_the_lock() -> Any:
@@ -489,6 +512,9 @@ def entry() -> None:
     """The program: main(), then out at once. Jobs still running past the
     grace save nothing more (and their threads would otherwise be waited
     on at exit, until systemd's kill)."""
-    code = main()
-    logging.shutdown()
-    os._exit(code)
+    code = 1
+    try:
+        code = main()
+    finally:
+        logging.shutdown()
+        os._exit(code)

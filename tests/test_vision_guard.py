@@ -412,3 +412,15 @@ def test_each_machine_is_asked_for_the_model_by_its_own_name():
         make.return_value.describe.return_value = {"description": "a cat", "tags": []}
         guard.provider().describe("a.jpg")
     assert make.call_args.args[0] == "qwen3-vl:8b-q4"
+
+
+def test_a_clip_caught_in_a_model_change_isnt_charged_and_vision_goes_on():
+    client = _client()
+    _, guard, failures = _guard(client)
+    with _offers((QWEN,)):
+        guard.check()
+        error = CaptionError("The model changed to llava:13b: this clip waits.", endpoint_fault=False)
+        error.model_changed = True
+        assert guard.on_fail("vision")("ast_a", error) is False
+    failures.flush()
+    assert not _charged(client) and not guard.down

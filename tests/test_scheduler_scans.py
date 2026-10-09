@@ -170,6 +170,34 @@ def test_where_each_librarys_storage_is_is_said_before_any_scan(das: Path) -> No
 
 
 @pytest.mark.fast
+def test_storage_that_goes_away_during_an_earlier_librarys_scan_isnt_scanned(das: Path) -> None:
+    # Review round 3: looked at once before the pass, a share that slept
+    # during a long scan of another library was trusted (a stat with no
+    # timeout on it could block the only scan slot).
+    import shutil
+
+    (das / "Stills" / "Day 2").mkdir(parents=True)
+    (das / "Stills" / "Day 2" / "B.jpg").write_bytes(b"x")
+    lib2 = {"library_id": "lib_2", "name": "Stills", "root_path": f"{MAC}/Stills"}
+
+    def scan(client, library, **kw):
+        if library["library_id"] == "lib_1":  # meanwhile lib_2's storage goes away
+            shutil.rmtree(das / "Stills")
+            (das / "Stills").mkdir()  # an unmounted mount point: an empty folder
+        return ScanStats()
+
+    said: list[dict] = []
+    server = FakeServer([LIB, lib2], pending={"lib_1": [CHANGE], "lib_2": [
+        {"change_id": "chg_2", "rel_path": "Day 2/B.jpg", "reported_at": "x", "version": 1}]})
+    scan_mock = MagicMock(side_effect=scan)
+    _, _, reachable = _pass(server, ScanState(last_full_scan={"lib_1": 100 * HOUR - 1, "lib_2": 100 * HOUR - 1}),
+                            scan=scan_mock, on_roots=lambda roots: said.append(dict(roots)))
+    assert [c.args[1]["library_id"] for c in scan_mock.call_args_list] == ["lib_1"]
+    assert reachable == {"lib_1": True, "lib_2": False}
+    assert said[0]["lib_2"] is not None and said[-1]["lib_2"] is None  # jobs hear it went
+
+
+@pytest.mark.fast
 def test_a_folder_named_in_nfd_on_disk_is_scanned_itself(das: Path) -> None:
     import unicodedata
 
