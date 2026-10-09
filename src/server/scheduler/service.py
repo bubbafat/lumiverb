@@ -30,7 +30,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any
 
-from src.server.scheduler.dispatch import Dispatcher, Job
+from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
 
@@ -44,8 +44,10 @@ STOP_GRACE_SEC = 25.0
 FLUSH_EVERY_SEC = 10.0
 # What the scheduler is doing is written for Settings → Processing this often.
 STATUS_EVERY_SEC = 5.0
-# The control-plane lock only one scheduler holds ("lumv").
+# The control-plane lock only one scheduler holds ("lumv"), and how often
+# it's checked that the lock is still held.
 LOCK_ID = 0x6C756D76
+LOCK_CHECK_SEC = 60.0
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
@@ -75,7 +77,7 @@ class Scheduler:
         candidates: Callable[..., list[dict]] | None = None,
         paused: Callable[[str], set[str]] | None = None,
         retry_requested: Callable[[str], str | None] | None = None,
-        runners: Mapping[str, Callable[..., str | None]] | None = None,
+        runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
@@ -132,7 +134,11 @@ class Scheduler:
         if self._clock() - self._flushed_at >= FLUSH_EVERY_SEC:
             self._flushed_at = self._clock()
             for acct in accounts.values():
-                acct.failures.flush()
+                # Off this thread: a slow server mustn't hold up the dispatching.
+                if self._inline_refill:
+                    acct.failures.flush()
+                else:
+                    self._refill_pool.submit(acct.failures.flush)
         return started
 
     def _share_the_gpu(self, accounts: Mapping[str, Any]) -> None:
@@ -218,15 +224,17 @@ class Scheduler:
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
             libraries = acct.library_ids(storage=kind.storage)
+            if not libraries:  # nothing to ask yet (no storage reachable): not an empty answer to wait on
+                self.dispatcher.clear(tenant_id, kind.name)
+                continue
             try:
-                items = (self._candidates(tenant_id, kind, libraries, self.dispatcher.held(tenant_id, kind.name))
-                         if libraries else [])
+                items = self._candidates(tenant_id, kind, libraries, self.dispatcher.held(tenant_id, kind.name))
             except Exception:  # noqa: BLE001 — one kind's trouble doesn't hold up the others
                 logger.exception("scheduler: listing %s for %s failed", kind.name, tenant_id)
                 items = []
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
 
-    def _run(self, acct: Any, job: Job) -> str | None:
+    def _run(self, acct: Any, job: Job) -> Outcome:
         try:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
@@ -234,7 +242,7 @@ class Scheduler:
             return self._runners[KINDS[job.kind].base](acct, job)
         except Exception:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
             logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
-            return None
+            return list(job.asset_ids)  # none saved or reported: each waits the long while
 
     def collect(self, timeout: float | None = 0) -> None:
         """Free the slots of finished jobs (waiting up to timeout for one)."""
@@ -246,10 +254,13 @@ class Scheduler:
         for future in done:
             job = self._running.pop(future)
             try:
-                tried = future.result() != NOT_TRIED
+                outcome = future.result()
             except Exception:  # noqa: BLE001 — _run catches its own
-                tried = True
-            self.dispatcher.done(job, tried=tried)
+                outcome = list(job.asset_ids)
+            if outcome == NOT_TRIED:
+                self.dispatcher.done(job, tried=False)
+            else:
+                self.dispatcher.done(job, waiting=outcome or ())
 
     @property
     def running(self) -> int:
@@ -406,6 +417,8 @@ class Accounts:
     started again with a new one."""
 
     LIST_EVERY_SEC = 300.0
+    # A listing that failed (the control plane away) is tried again sooner.
+    LIST_RETRY_SEC = 30.0
 
     def __init__(self, scan_state: Any, *, url: str | None = None, clock: Callable[[], float] = time.monotonic) -> None:
         self._scan_state = scan_state
@@ -423,8 +436,12 @@ class Accounts:
                 logger.warning("scheduler: %s's key stopped working; making a new one", tenant_id)
                 self._accounts.pop(tenant_id).close()
             if revoked or self._listed_at is None or now - self._listed_at >= self.LIST_EVERY_SEC:
-                self._listed_at = now
-                self._list()
+                try:
+                    self._list()
+                    self._listed_at = now
+                except Exception:  # noqa: BLE001 — the accounts already known go on
+                    logger.exception("scheduler: listing the accounts failed; trying again shortly")
+                    self._listed_at = now - self.LIST_EVERY_SEC + self.LIST_RETRY_SEC
             return dict(self._accounts)
 
     def _list(self) -> None:
@@ -461,8 +478,12 @@ class Accounts:
 
 
 def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None] | None = None,
-        tick_sec: float = TICK_SEC, accounts: Callable[[], Mapping[str, Any]] | None = None) -> None:
-    """Tick until stopped, then let the jobs in hand finish (up to a grace period)."""
+        tick_sec: float = TICK_SEC, accounts: Callable[[], Mapping[str, Any]] | None = None,
+        holds_lock: Callable[[], bool] | None = None, lock_check_sec: float = LOCK_CHECK_SEC) -> bool:
+    """Tick until stopped, then let the jobs in hand finish (up to a grace
+    period). False when it stopped because the database lock was lost."""
+    checked_at = time.monotonic()
+    lost = False
 
     def save_now() -> None:
         if save is None:
@@ -473,6 +494,13 @@ def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None]
             logger.exception("scheduler: saving the scan state failed")
 
     while not stop.is_set():
+        if holds_lock is not None and time.monotonic() - checked_at >= lock_check_sec:
+            checked_at = time.monotonic()
+            if not holds_lock():
+                logger.error("scheduler: the control-plane lock was lost (the database restarted?); stopping")
+                lost = True
+                stop.set()
+                break
         try:
             scheduler.tick()
         except Exception:  # noqa: BLE001 — anything else is worth its traceback, not a stop
@@ -484,6 +512,19 @@ def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None]
             stop.wait(tick_sec)
     scheduler.stop(accounts() if accounts is not None else None)
     save_now()
+    return not lost
+
+
+def _still_holds(conn: Any) -> bool:
+    """The lock's connection still answers (a database restart ends it, and the lock)."""
+    from sqlalchemy import text
+
+    try:
+        conn.execute(text("SELECT 1")).scalar()
+        conn.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _hold_the_lock() -> Any:
@@ -501,6 +542,16 @@ def _hold_the_lock() -> Any:
     return None
 
 
+def configure_logging() -> None:
+    """INFO unless LOG_LEVEL says otherwise; never a line per HTTP request
+    (httpx says each at INFO: several per clip)."""
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger().setLevel(level)  # basicConfig leaves a configured root as it is
+    for noisy in ("httpx", "httpcore", "pyvips"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def main() -> int:
     """lumiverb-scheduler: run every account's processing on this machine."""
     from src.client.cache_dir import cache_dir
@@ -508,8 +559,7 @@ def main() -> int:
     from src.client.proxy.analysis_cache import clear_leftovers
     from src.server.scheduler.scans import STATE_FILE, ServiceLock, load_state, save_state, saved_form
 
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging()
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")
@@ -540,11 +590,24 @@ def main() -> int:
         scheduler = Scheduler(accounts, capacity=default_capacity(cfg), gpu_decodes=gpu_decodes)
         logger.info("scheduler: started")
         try:
-            run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all)
+            kept = run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all,
+                       holds_lock=lambda: _still_holds(held))
         finally:
             accounts.close()
         logger.info("scheduler: stopped")
-        return 0
+        return 0 if kept else 1
     finally:
-        held.close()
+        try:
+            held.close()
+        except Exception:  # noqa: BLE001 — a connection the database already ended
+            pass
         lock.release()
+
+
+def entry() -> None:
+    """The program: main(), then out at once. Jobs still running past the
+    grace save nothing more (and their threads would otherwise be waited
+    on at exit, until systemd's kill)."""
+    code = main()
+    logging.shutdown()
+    os._exit(code)

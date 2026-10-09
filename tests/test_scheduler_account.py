@@ -86,6 +86,25 @@ def test_idle_models_are_let_go_of(acct) -> None:
     assert acct._clip is None and faces.close.called
 
 
+def test_letting_go_of_the_face_process_is_said_once(acct, caplog) -> None:
+    # Review round 2: every refresh after the first said it again (1 a second).
+    from src.server.scheduler.runners import FaceRunner
+
+    acct.vision.check = MagicMock(return_value=True)
+    acct.transcripts.check = MagicMock(return_value=True)
+    acct.client.get.return_value.json.return_value = {"producers": []}
+    runner = FaceRunner(acct.client, MagicMock(), pool_factory=MagicMock)
+    runner._pool = MagicMock()  # a batch ran
+    acct._faces = runner
+    acct._used["faces"] = acct.clock.now
+    caplog.set_level("INFO", logger="src.server.scheduler.account")
+    for _ in range(5):
+        acct.clock.now += account_mod.IDLE_SEC + 1
+        acct.refresh()
+    assert sum("face detection process" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.fast
 def test_a_face_process_in_the_middle_of_a_batch_isnt_let_go_of(acct) -> None:
     acct.vision.check = MagicMock(return_value=True)
     acct.transcripts.check = MagicMock(return_value=True)

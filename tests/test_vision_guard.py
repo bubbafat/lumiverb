@@ -93,7 +93,7 @@ def test_a_clip_that_fails_while_a_machine_is_fine_is_charged():
     with _offers((QWEN,), (QWEN,)) as asked:
         guard.check()
         clock["now"] = 1.0
-        guard.on_fail("vision")("ast_a", "the model returned nothing")
+        assert guard.on_fail("vision")("ast_a", "the model returned nothing") is True  # charged
     assert asked.call_count == 2  # asked again after the failure, before charging
     failures.flush()
     [call] = _charged(client)
@@ -108,8 +108,8 @@ def test_when_the_model_goes_away_mid_run_no_clip_is_charged_and_work_stops():
     with _offers((QWEN,), VisionEndpointError("gone")):
         guard.check()
         clock["now"] = 1.0
-        guard.on_fail("ocr")("ast_a", "404 model not found")
-        guard.on_fail("ocr")("ast_b", "404 model not found")  # down: not asked again, not charged
+        assert guard.on_fail("ocr")("ast_a", "404 model not found") is False
+        assert guard.on_fail("ocr")("ast_b", "404 model not found") is False  # down: not asked again, not charged
     failures.flush()
     assert not _charged(client) and guard.down
 
@@ -121,9 +121,9 @@ def test_no_machine_left_stops_vision_without_asking_or_charging():
     _, guard, failures = _guard(client)
     with _offers((QWEN,)) as asked:
         guard.check()
-        guard.on_fail("vision")("ast_a", CaptionError("No machine doing descriptions & text is online (Brain: 503)",
-                                                      endpoint_fault=True))
-        guard.on_fail("vision")("ast_b", "x")  # stopped: nothing more is charged
+        assert guard.on_fail("vision")("ast_a", CaptionError(
+            "No machine doing descriptions & text is online (Brain: 503)", endpoint_fault=True)) is False
+        assert guard.on_fail("vision")("ast_b", "x") is False  # stopped: nothing more is charged
     failures.flush()
     assert asked.call_count == 1
     assert guard.down and "503" in guard.error
@@ -144,7 +144,7 @@ def test_a_clip_isnt_charged_when_the_machine_that_served_it_turns_out_down(serv
         clock["now"] = 1.0
         error = CaptionError("Empty completion content", endpoint_fault=False)
         error.machine = guard.pool.machines[0]
-        guard.on_fail("vision")("ast_a", error)
+        assert guard.on_fail("vision")("ast_a", error) is charged
     failures.flush()
     assert bool(_charged(client)) is charged
     assert not guard.down

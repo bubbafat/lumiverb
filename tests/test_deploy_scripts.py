@@ -245,7 +245,9 @@ def _update_scheduler(tmp_path: Path, env_text: str, *, processing: bool = True,
     script = (
         'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }; chown() { :; }\n'
         'fail() { echo "fail: $1"; exit 1; }\n'
-        f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
+        # Each call notes whether the worker's stop then reaches only its main process.
+        f'systemctl() {{ echo "$*$(grep -qs KillMode=mixed {units}/lumiverb-worker.service.d/*.conf'
+        f' && echo " [worker: KillMode=mixed]")" >> "{calls}"; }}\n'
         f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb; SVC_USER=lumiverb\n'
         f'PROCESSING={"true" if processing else "false"}\n'
         + block.replace("/etc/systemd/system/", f"{units}/")
@@ -266,9 +268,14 @@ def test_update_replaces_the_worker_with_the_scheduler(tmp_path):
     assert "After=network-online.target remote-fs.target lumiverb-api.service" in unit
     # Only the scheduler hears a stop: ffmpeg under a job isn't killed mid-clip.
     assert "KillMode=mixed" in unit
-    # The worker goes: the two never run together.
-    assert "disable --now lumiverb-worker" in calls
+    # The worker goes: the two never run together. Its stop reaches only its
+    # main process (review round 2): the old code, killed with its ffmpeg,
+    # would save an empty transcript one last time.
+    assert "disable --now lumiverb-worker [worker: KillMode=mixed]" in calls
+    assert calls.index("daemon-reload [worker: KillMode=mixed]") < calls.index(
+        "disable --now lumiverb-worker [worker: KillMode=mixed]")
     assert not (units / "lumiverb-worker.service").exists()
+    assert not (units / "lumiverb-worker.service.d").exists()
     assert "enable lumiverb-scheduler" in calls
     assert (data / "worker-tmp").is_dir() and (data / "cache").is_dir()
 
@@ -322,6 +329,9 @@ def test_a_fresh_install_starts_the_scheduler_not_the_worker():
     assert "systemctl enable lumiverb-scheduler" in start
     assert "systemctl disable --now lumiverb-worker" in start
     assert "systemctl enable lumiverb-worker" not in text
+    # Only the old worker's main process hears its stop (as in update-api.sh).
+    assert start.index("KillMode=mixed") < start.index("systemctl daemon-reload") < start.index(
+        "systemctl disable --now lumiverb-worker")
 
 
 def test_a_command_run_as_the_service_user_finds_the_service_s_lock():

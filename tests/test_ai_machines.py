@@ -67,9 +67,10 @@ def _add(env, headers=None, **body):
     return client.post("/v1/ai/machines", json=body, headers=headers or own)
 
 
-def _model(env, job: str, model: str, headers=None):
+def _model(env, job: str, model: str, headers=None, redo: bool | None = None):
     client, own, *_ = env
-    return client.put(f"/v1/ai/jobs/{job}", json={"model": model}, headers=headers or own)
+    body = {"model": model} if redo is None else {"model": model, "redo": redo}
+    return client.put(f"/v1/ai/jobs/{job}", json=body, headers=headers or own)
 
 
 def _job(ai: dict, job: str) -> dict:
@@ -409,7 +410,11 @@ def test_changing_the_model_makes_descriptions_stale(env, none):
     _describe(lib, clip, sha)
     assert _counts(lib, "vision")["current"] == 1
     with fake:
-        _model(env, "vision", LLAVA)
+        r = _model(env, "vision", LLAVA)  # asks first, with the count
+        assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
+        assert r.json()["error"]["details"]["clips"] >= 1
+        assert _counts(lib, "vision")["stale"] == 0  # nothing changed yet
+        assert _model(env, "vision", LLAVA, redo=True).status_code == 200
     assert _counts(lib, "vision")["stale"] == 1
 
 
@@ -639,7 +644,10 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
         "srt": SRT, "source": "whisper", "lineage": _want(lib, "transcript", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     assert _counts(lib, "transcript")["current"] == 1
-    assert _model(env, "transcripts", "medium").status_code == 200
+    r = _model(env, "transcripts", "medium")  # asks first, with the count
+    assert r.status_code == 409 and r.json()["error"]["details"]["job"] == "transcripts", r.text
+    assert _counts(lib, "transcript")["stale"] == 0
+    assert _model(env, "transcripts", "medium", redo=True).status_code == 200
     assert _counts(lib, "transcript")["stale"] == 1
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     assert {p["artifact"]: p for p in r.json()["producers"]}["transcript"]["settings"] == {
@@ -648,7 +656,7 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
     fake, _ = _machines({BRAIN: (QWEN,)})
     with fake:
         _add(env)
-        _model(env, "vision", QWEN)
+        assert _model(env, "vision", QWEN, redo=True).status_code == 200
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     settings = {p["artifact"]: p["settings"] for p in r.json()["producers"]}
     assert settings["transcript"]["model"] == "medium" and settings["vision"]["model"] == QWEN
@@ -685,7 +693,7 @@ def test_the_built_in_takes_transcripts_back_only_with_a_model_it_knows(env, non
         assert _model(env, "transcripts", "").status_code == 200
         assert _add(env, name="Server", api_url=SPEACHES, jobs=["transcripts"]).status_code == 201
         assert client.patch(f"/v1/ai/machines/{built_in}", json={"jobs": []}, headers=headers).status_code == 200
-        assert _model(env, "transcripts", "whisper-1").status_code == 200
+        assert _model(env, "transcripts", "whisper-1", redo=True).status_code == 200
     r = client.patch(f"/v1/ai/machines/{built_in}", json={"jobs": ["transcripts"]}, headers=headers)
     assert r.status_code == 409, r.text
     assert r.json()["error"]["code"] == "model_not_offered" and r.json()["error"]["details"]["model"] == "whisper-1"
