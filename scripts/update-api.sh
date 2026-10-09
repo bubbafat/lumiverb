@@ -227,10 +227,16 @@ ReadWritePaths=${DATA_DIR} ${SVC_HOME}
 [Install]
 WantedBy=multi-user.target
 UNIT
-  # The worker goes: the scheduler takes its lock, state and caches.
+  # The worker goes: the scheduler takes its lock, state and caches. Its stop
+  # reaches only its main process (the rest dies with it at the end): its old
+  # code, killed together with the ffmpeg under a transcription, would save
+  # an empty transcript.
   if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    mkdir -p /etc/systemd/system/lumiverb-worker.service.d
+    printf '[Service]\nKillMode=mixed\n' > /etc/systemd/system/lumiverb-worker.service.d/stop.conf
+    systemctl daemon-reload
     systemctl disable --now lumiverb-worker 2>/dev/null || true
-    rm -f /etc/systemd/system/lumiverb-worker.service
+    rm -rf /etc/systemd/system/lumiverb-worker.service /etc/systemd/system/lumiverb-worker.service.d
     ok "lumiverb-worker stopped and removed"
   fi
   systemctl daemon-reload
