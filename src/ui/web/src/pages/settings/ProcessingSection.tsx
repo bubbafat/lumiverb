@@ -45,7 +45,8 @@ const STATUS_QUERY_KEY = ["scheduler-status"];
  * for all of them (admins), and stopping or resuming a redo (admins). */
 export default function ProcessingSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
-  const { data: status } = useQuery({ queryKey: STATUS_QUERY_KEY, queryFn: getSchedulerStatus, refetchInterval: 5_000 });
+  const { data: status, isLoading: statusLoading } = useQuery({
+    queryKey: STATUS_QUERY_KEY, queryFn: getSchedulerStatus, refetchInterval: 5_000 });
   const { data: libraries = [] } = useQuery({ queryKey: ["libraries"], queryFn: () => listLibraries() });
   const { data: projects = [] } = useQuery({ queryKey: ["projects", "active"], queryFn: () => listProjects() });
   const [scopeValue, setScopeValue] = useState("all");
@@ -74,6 +75,14 @@ export default function ProcessingSection() {
           they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
         </p>
       </div>
+
+      {/* Only while the first status or counts are on their way: a background refresh keeps what's shown. */}
+      {(statusLoading || isLoading) && (
+        <div role="status" aria-label="Loading" className="flex items-center gap-2 text-sm text-gray-400">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-600 border-t-white" />
+          Loading…
+        </div>
+      )}
 
       {status && (
         <ul className="space-y-2">
@@ -121,7 +130,6 @@ export default function ProcessingSection() {
         </select>
       </label>
 
-      {isLoading && <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />}
       {error && (
         <p role="alert" className="text-sm text-red-300">
           {message(error)}
