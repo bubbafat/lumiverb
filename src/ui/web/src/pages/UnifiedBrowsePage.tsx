@@ -28,6 +28,7 @@ import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
+import { useScrollAnchor } from "../lib/useScrollAnchor";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import type { VirtualRowKind } from "../lib/virtualRows";
 import { buildSavedQuery, composeDate, composeNear } from "../lib/queryFilter";
@@ -387,13 +388,28 @@ export default function UnifiedBrowsePage() {
     return buildVirtualRows(groups, containerWidth, zoom.justifiedHeight, ROW_GAP);
   }, [groups, containerWidth, zoom]);
 
+  // A new key function for every new set of rows: the virtualizer only
+  // re-reads row heights when its count or key function changes, so a
+  // refresh that keeps the row count would otherwise keep the old heights.
+  const rowKey = useCallback((index: number) => index, [virtualRows]); // eslint-disable-line react-hooks/exhaustive-deps
   const rowVirtualizer = useVirtualizer({
     count: virtualRows.length,
     getScrollElement: () => parentEl,
     estimateSize: (index) =>
       virtualRows[index]?.height ?? zoom.justifiedHeight + ROW_GAP,
+    getItemKey: rowKey,
     overscan: 3,
   });
+
+  // A refresh that adds clips above a scrolled grid (newest first, during an
+  // ingest) or takes some away keeps the first clip on screen where it was.
+  useScrollAnchor(
+    parentEl,
+    gridEl,
+    virtualRows,
+    groups,
+    JSON.stringify([filters, browseSort, browseDir]),
+  );
 
   useEffect(() => {
     if (!gridEl) return;
