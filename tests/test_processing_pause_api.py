@@ -280,14 +280,17 @@ def test_while_everything_is_paused_upkeep_deletes_and_changes_nothing_but_searc
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200, r.text
             assert not propagate.called  # names aren't spread to faces meanwhile
+            # Skipped for the pause, which reads apart from "nothing to do".
+            assert r.json()["face_propagate"]["paused"] is True and r.json()["trash_purge"]["paused"] is True
             assert _exists(env, "assets", "asset_id", old)  # the trash isn't emptied meanwhile
     finally:
         assert client.post("/v1/producers/resume", headers=headers).status_code == 204
     with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
             patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
                   return_value={"assigned": 0, "scanned": 0}) as propagate:
-        assert client.post("/v1/upkeep", headers=headers).status_code == 200
-        assert propagate.called
+        r = client.post("/v1/upkeep", headers=headers)
+        assert r.status_code == 200 and propagate.called
+        assert r.json()["face_propagate"]["paused"] is False and r.json()["trash_purge"]["paused"] is False
     assert not _exists(env, "assets", "asset_id", old)  # resumed: it goes
 
 
@@ -309,9 +312,11 @@ def test_while_everything_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_
     try:
         assert client.post("/v1/producers/pause", headers=headers).status_code == 204
         with _db(env) as session:
-            assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_libraries == 0
+            skipped = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+            assert skipped.orphan_libraries == 0 and skipped.paused is True
             assert stray.exists()
-            assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True).orphan_libraries == 1
+            dry = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
+            assert dry.orphan_libraries == 1 and dry.paused is False
     finally:
         assert client.post("/v1/producers/resume", headers=headers).status_code == 204
     with _db(env) as session:

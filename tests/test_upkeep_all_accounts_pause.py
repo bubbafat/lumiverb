@@ -1,6 +1,8 @@
 """The kill switch on the paths the 5-minute upkeep timer takes (the admin
 key: every account). One account's Pause all skips only that account, and an
 account whose pause can't be read is skipped without stopping the others.
+A skipped account is named (`paused_tenants`) and logged, so a run skipped
+for a pause reads differently from one with nothing to do (Robert, Oct 9).
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ def _accounts():
         yield
 
 
-def test_faces_are_named_only_in_the_accounts_not_paused():
+def test_faces_are_named_only_in_the_accounts_not_paused(caplog):
     from src.server.api.routers.upkeep import _propagate_faces_all_tenants
 
     done: list[str] = []
@@ -52,9 +54,12 @@ def test_faces_are_named_only_in_the_accounts_not_paused():
 
     with _accounts(), patch("src.server.repository.tenant.FaceRepository.__init__",
                             lambda self, session: setattr(self, "session", session)), \
-            patch("src.server.repository.tenant.FaceRepository.propagate_assignments", propagate):
-        assert _propagate_faces_all_tenants() == {"assigned": 1, "scanned": 2}
+            patch("src.server.repository.tenant.FaceRepository.propagate_assignments", propagate), \
+            caplog.at_level("INFO", logger="src.server.api.routers.upkeep"):
+        assert _propagate_faces_all_tenants() == {"assigned": 1, "scanned": 2, "paused": True,
+                                                  "paused_tenants": [PAUSED]}
     assert done == [RUNNING]
+    assert any(PAUSED in r.getMessage() and "paused" in r.getMessage() for r in caplog.records)
 
 
 def test_the_trash_is_emptied_only_in_the_accounts_not_paused():
@@ -67,7 +72,8 @@ def test_the_trash_is_emptied_only_in_the_accounts_not_paused():
         return {"clips": 3, "libraries": 0, "projects": 1}
 
     with _accounts(), patch("src.server.api.routers.trash.purge_expired_trash", purge):
-        assert _purge_expired_trash_all_tenants() == {"clips": 3, "libraries": 0, "projects": 1}
+        assert _purge_expired_trash_all_tenants() == {"clips": 3, "libraries": 0, "projects": 1, "paused": True,
+                                                      "paused_tenants": [PAUSED]}
     assert done == [RUNNING]
 
 
@@ -86,7 +92,18 @@ def test_files_are_cleaned_up_only_in_the_accounts_not_paused(tmp_path):
             patch.object(cleanup, "run_cleanup_for_tenant", for_tenant):
         result = cleanup.run_cleanup_all_tenants(dry_run=False)
         assert done == [RUNNING] and result.orphan_files == 1
+        assert result.paused and result.paused_tenants == [PAUSED]
         assert any(BROKEN in e for e in result.errors)
         done.clear()
-        assert cleanup.run_cleanup_all_tenants(dry_run=True).orphan_files == 3  # a dry run deletes nothing: it reports
+        dry = cleanup.run_cleanup_all_tenants(dry_run=True)
+        assert dry.orphan_files == 3 and not dry.paused  # a dry run deletes nothing: it reports
     assert sorted(done) == [BROKEN, PAUSED, RUNNING]
+
+
+def test_nothing_paused_says_so():
+    from src.server.api.routers.upkeep import _purge_expired_trash_all_tenants
+
+    with _accounts(), patch("src.server.repository.lineage.all_paused", return_value=False), \
+            patch("src.server.api.routers.trash.purge_expired_trash", return_value={"clips": 0}):
+        assert _purge_expired_trash_all_tenants() == {"clips": 0, "libraries": 0, "projects": 0, "paused": False,
+                                                      "paused_tenants": []}

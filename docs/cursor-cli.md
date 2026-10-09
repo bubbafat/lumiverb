@@ -118,7 +118,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb admin vision-test --path <dir> [--url <url>] [--api-key <key>]` — Test vision API against images.
 
 #### Maintenance
-- `lumiverb maintenance cleanup [--library <name>] [--execute]` — Remove orphaned files (dry-run by default). Needs an admin API key.
+- `lumiverb maintenance cleanup [--library <name>] [--execute]` — Remove orphaned files (dry-run by default). Needs an admin API key. While all processing is paused, `--execute` deletes nothing and says it was skipped.
 - `lumiverb maintenance search-sync [--library <name>] [--force]` — Push stale assets to search index.
 - `lumiverb maintenance cleanup-dismissed` — Delete dismissed people with zero face matches.
 - `lumiverb maintenance upgrade [--dry-run] [--max-steps N] [--step <step_id>] [--force]` — Run tenant-level upgrade steps idempotently.

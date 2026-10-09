@@ -14,7 +14,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from sqlalchemy import text
@@ -52,11 +52,17 @@ class CleanupResultModel(BaseModel):
     skipped_libraries: int = 0
     errors: list[str] = []
     dry_run: bool = True
+    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    paused: bool = False
+    paused_tenants: list[str] = Field(default_factory=list)
 
 
 class FacePropagateResult(BaseModel):
     assigned: int = 0
     scanned: int = 0
+    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    paused: bool = False
+    paused_tenants: list[str] = Field(default_factory=list)
 
 
 class TrashPurgeResult(BaseModel):
@@ -64,6 +70,9 @@ class TrashPurgeResult(BaseModel):
     clips: int = 0
     libraries: int = 0
     projects: int = 0
+    # Skipped because all processing is paused, not "nothing to do"; with the admin key, which accounts.
+    paused: bool = False
+    paused_tenants: list[str] = Field(default_factory=list)
 
 
 class UpkeepResult(BaseModel):
@@ -112,6 +121,15 @@ def _all_paused(session) -> bool:
     return lineage.all_paused(session)
 
 
+def _skipped(what: str, tenant_id: str, paused: list[str] | None = None) -> dict:
+    """An account's upkeep skipped for its Pause all: logged, and said in the result
+    (paused), so it reads apart from a run with nothing to do."""
+    logger.info("%s for tenant %s: all processing is paused", what, tenant_id)
+    if paused is not None:
+        paused.append(tenant_id)
+    return {"paused": True, "paused_tenants": [tenant_id]}
+
+
 def _propagate_faces_all_tenants() -> dict:
     """Run face propagation across all tenants."""
     from src.server.database import get_control_session, get_tenant_session
@@ -119,6 +137,7 @@ def _propagate_faces_all_tenants() -> dict:
     from src.server.repository.tenant import FaceRepository
 
     totals = {"assigned": 0, "scanned": 0}
+    paused: list[str] = []
 
     with get_control_session() as ctrl:
         tenants = TenantRepository(ctrl).list_all()
@@ -127,6 +146,7 @@ def _propagate_faces_all_tenants() -> dict:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
                 if _all_paused(session):
+                    _skipped("Face names aren't spread", tenant.tenant_id, paused)
                     continue
                 result = FaceRepository(session).propagate_assignments()
                 totals["assigned"] += result["assigned"]
@@ -134,7 +154,7 @@ def _propagate_faces_all_tenants() -> dict:
         except Exception as exc:
             logger.warning("Face propagation failed for tenant %s: %s", tenant.tenant_id, exc)
 
-    return totals
+    return {**totals, "paused": bool(paused), "paused_tenants": paused}
 
 
 def _propagate_faces_single_tenant(authorization: str | None) -> dict:
@@ -149,7 +169,7 @@ def _propagate_faces_single_tenant(authorization: str | None) -> dict:
     _, connection_string, _ = tenant
     with TenantSession(get_engine_for_url(connection_string)) as session:
         if _all_paused(session):
-            return {"assigned": 0, "scanned": 0}
+            return {"assigned": 0, "scanned": 0, **_skipped("Face names aren't spread", tenant[0])}
         return FaceRepository(session).propagate_assignments()
 
 
@@ -160,18 +180,20 @@ def _purge_expired_trash_all_tenants() -> dict:
     from src.server.repository.control_plane import TenantRepository
 
     totals = {"clips": 0, "libraries": 0, "projects": 0}
+    paused: list[str] = []
     with get_control_session() as ctrl:
         tenants = TenantRepository(ctrl).list_all()
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
                 if _all_paused(session):
+                    _skipped("The expired trash isn't emptied", tenant.tenant_id, paused)
                     continue
                 for key, n in purge_expired_trash(session, tenant.tenant_id).items():
                     totals[key] += n
         except Exception as exc:
             logger.warning("Trash purge failed for tenant %s: %s", tenant.tenant_id, exc)
-    return totals
+    return {**totals, "paused": bool(paused), "paused_tenants": paused}
 
 
 def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
@@ -188,7 +210,7 @@ def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
     try:
         with TenantSession(get_engine_for_url(connection_string)) as session:
             if _all_paused(session):
-                return {}
+                return _skipped("The expired trash isn't emptied", tenant_id)
             return purge_expired_trash(session, tenant_id)
     except Exception as exc:
         logger.warning("Trash purge failed for tenant %s: %s", tenant_id, exc)
@@ -342,6 +364,8 @@ def run_cleanup(
         skipped_libraries=result.skipped_libraries,
         errors=result.errors,
         dry_run=dry_run,
+        paused=result.paused,
+        paused_tenants=result.paused_tenants,
     )
 
 

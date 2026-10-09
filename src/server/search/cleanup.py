@@ -40,6 +40,9 @@ class CleanupResult:
     bytes_freed: int = 0
     skipped_libraries: int = 0
     errors: list[str] = field(default_factory=list)
+    # Skipped because all processing is paused (not "nothing to clean up"), and which accounts.
+    paused: bool = False
+    paused_tenants: list[str] = field(default_factory=list)
 
 
 def _list_subdirs(parent: Path) -> list[str]:
@@ -298,6 +301,8 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
         try:
             with get_tenant_session(tenant_dir_name) as session:
                 if _paused(session, tenant_dir_name, dry_run):
+                    result.paused = True
+                    result.paused_tenants.append(tenant_dir_name)
                     continue
                 tenant_result = run_cleanup_for_tenant(
                     data_dir, tenant_dir_name, session, dry_run=dry_run,
@@ -329,7 +334,7 @@ def run_cleanup_single_tenant(
     if not data_dir.is_dir():
         return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
     if _paused(session, tenant_id, dry_run):
-        return CleanupResult()
+        return CleanupResult(paused=True, paused_tenants=[tenant_id])
     return run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run)
 
 
