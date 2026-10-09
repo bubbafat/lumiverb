@@ -343,6 +343,7 @@ Moving a project to the trash, or archiving clips, is reversible and needs no de
 Archived clips are out of sight but kept forever with everything they have: a person archived them (`POST /v1/assets/archive`, back with `POST /v1/assets/unarchive`), or their file went missing (back by itself when the file is). Deleting an archived clip moves it to the trash.
 
 - **GET /v1/archive** — Signed in. Archived clips, most recently archived first; clips of a library in the trash aren't listed. Query: `kind` (`all` default, `by_hand`, `missing`), `library_id`, `path` (a folder, recursive), `after` (cursor; 400 if malformed), `limit` (1–500, default 100). Returns `{ "items": [{ "asset_id", "library_id", "library_name", "rel_path", "media_type", "archived_at", "file_missing" }], "next_cursor", "total" }`.
+- **DELETE /v1/archive/missing** — Admins. Delete for good the clips whose files went missing (Robert, Oct 9: hundreds of licensed clips taken off the storage). Body: `{ "library_id"?, "path"?, "count"?, "remove_from_projects"? }`: only that library's, under that folder. The API asks first: 409 `confirm_delete_missing` with `details.count` until the request says that `count` (a different number asks again); then 409 `in_projects` (as emptying the trash) unless `remove_from_projects`. Clips archived by hand, in the trash or in sight never go. Returns `{ "deleted" }`. A file that comes back afterwards is a new clip.
 
 ## Projects API
 
