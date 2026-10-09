@@ -34,6 +34,17 @@ os.environ.setdefault("SQLALCHEMY_NULLPOOL", "1")
 # Sessions default to a timezone that isn't UTC, as on the brain (Ubuntu's
 # Postgres takes the machine's), so code that leans on UTC fails here first.
 os.environ.setdefault("PGTZ", "America/New_York")
+# The suite never talks to a real Quickwit: not the developer's (.env.local
+# turns it on, and every metadata write would wait on a forced commit there
+# and leave indexes behind), not any. Variables beat the env files in
+# Settings. The URL is a closed port, so a test that turns Quickwit on
+# without mocking the client fails at once instead of reaching one. Tests
+# that need a real Quickwit are marked `quickwit` and start their own
+# (tests/test_quickwit_real.py). `_quickwit_off` puts these back after
+# each test.
+os.environ["QUICKWIT_ENABLED"] = "false"
+os.environ["QUICKWIT_URL"] = "http://127.0.0.1:9"
+os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
 
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the
 # system dyld paths. uv's standalone Python builds do not have
@@ -58,6 +69,8 @@ import testcontainers.postgres
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
+
+_QUICKWIT_OFF = {k: os.environ[k] for k in ("QUICKWIT_ENABLED", "QUICKWIT_URL", "QUICKWIT_FALLBACK_TO_POSTGRES")}
 
 # The Postgres image tests run against. Keep it the version production runs
 # (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
@@ -377,6 +390,20 @@ class _AuthClient:
         kwargs.setdefault("headers", {})
         kwargs["headers"].update(self._headers)
         return self._client.request("DELETE", path, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _quickwit_off():
+    """Some tests set QUICKWIT_* in os.environ by hand and leave it set; put
+    the suite's values back so the next test (or module) doesn't inherit a
+    Quickwit turned on."""
+    yield
+    changed = {k: v for k, v in _QUICKWIT_OFF.items() if os.environ.get(k) != v}
+    if changed:
+        os.environ.update(changed)
+        from src.server.config import get_settings
+
+        get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
