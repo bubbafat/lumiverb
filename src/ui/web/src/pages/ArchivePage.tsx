@@ -35,7 +35,7 @@ export default function ArchivePage() {
   const canEdit = useCanEdit();
   const isAdmin = useRole() === "admin";
   // Deleting missing clips for good: how many the server said, and the projects using them once it asks.
-  const [purging, setPurging] = useState<{ count: number; usage?: ProjectUsage } | null>(null);
+  const [purging, setPurging] = useState<{ count: number; listedAt: string; usage?: ProjectUsage } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -90,18 +90,18 @@ export default function ArchivePage() {
   };
 
   /** Asks the server first: it says how many (and then which projects use them). */
-  const deleteMissing = async (count?: number, removeFromProjects = false) => {
+  const deleteMissing = async (told?: { count: number; listedAt: string }, removeFromProjects = false) => {
     setBusy(true);
     try {
-      const r = await deleteMissingClips({ libraryId, path }, count, removeFromProjects);
+      const r = await deleteMissingClips({ libraryId, path }, told, removeFromProjects);
       setPurging(null);
       void queryClient.invalidateQueries();
       setNotice({ text: r.deleted ? `Deleted ${clipCount(r.deleted)} for good.` : "No clips with missing files here." });
     } catch (err) {
       if (err instanceof ApiError && err.code === "confirm_delete_missing") {
-        setPurging({ count: Number(err.details?.count ?? 0) });
-      } else if (err instanceof ApiError && err.code === "in_projects" && err.details && count !== undefined) {
-        setPurging({ count, usage: err.details as unknown as ProjectUsage });
+        setPurging({ count: Number(err.details?.count ?? 0), listedAt: String(err.details?.listed_at ?? "") });
+      } else if (err instanceof ApiError && err.code === "in_projects" && err.details && told) {
+        setPurging({ ...told, usage: err.details as unknown as ProjectUsage });
       } else {
         setPurging(null);
         setNotice({ text: `Couldn't delete them: ${err instanceof Error ? err.message : String(err)}`, error: true });
@@ -307,7 +307,7 @@ export default function ArchivePage() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void deleteMissing(purging.count, Boolean(purging.usage))}
+                onClick={() => void deleteMissing({ count: purging.count, listedAt: purging.listedAt }, Boolean(purging.usage))}
                 className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
               >
                 {purging.usage ? "Delete and remove from projects" : `Delete ${clipCount(purging.count)} for good`}

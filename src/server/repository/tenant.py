@@ -349,28 +349,25 @@ class LibraryRepository:
         self._session.commit()
 
     def resolve_cover(self, library: Library) -> str | None:
-        """Return the effective cover asset_id, applying lazy self-healing.
-
-        If cover_asset_id is set and the asset is still active, return it.
-        Otherwise fall back to the most recent asset by taken_at, and null
-        out any stale cover_asset_id.
-        """
+        """The effective cover: the chosen one while it's in sight, else the
+        most recent clip by taken_at. A chosen cover whose file went missing
+        (or that's archived) is the cover again when it's back; one that's
+        gone from the library is cleared. (A person trashing it clears the
+        choice in trash_many, as for projects.)"""
         if library.cover_asset_id:
             row = self._session.execute(
-                select(Asset.asset_id).where(
+                select(Asset.asset_id, Asset.deleted_at).where(
                     Asset.asset_id == library.cover_asset_id,
                     Asset.library_id == library.library_id,
-                    Asset.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
             ).first()
-            if row:
+            if row and row[1] is None:
                 return library.cover_asset_id
-
-            # Stale — null it out (lazy self-healing)
-            library.cover_asset_id = None
-            library.updated_at = utcnow()
-            self._session.add(library)
-            self._session.commit()
+            if row is None:  # gone for good: clear it (lazy self-healing)
+                library.cover_asset_id = None
+                library.updated_at = utcnow()
+                self._session.add(library)
+                self._session.commit()
 
         # Fallback: most recent active asset by taken_at
         row = self._session.execute(
@@ -1376,7 +1373,7 @@ class AssetRepository:
         return list(self._session.exec(stmt).all())
 
     def list_missing(self, library_id: str | None = None, folder: str | None = None,
-                     limit: int | None = None) -> list[Asset]:
+                     limit: int | None = None, missing_before: datetime | None = None) -> list[Asset]:
         """Clips archived because their file went missing, matching the
         filters, longest missing first: what an admin can delete for good
         (Robert, Oct 9). Not those of a library in the trash: they go with it."""
@@ -1389,6 +1386,8 @@ class AssetRepository:
             stmt = stmt.where(Asset.library_id == library_id)
         if _under(folder) is not None:
             stmt = stmt.where(Asset.rel_path.like(_under(folder), escape="\\"))  # type: ignore[union-attr]
+        if missing_before is not None:
+            stmt = stmt.where(Asset.deleted_at < missing_before)
         stmt = stmt.order_by(Asset.deleted_at, Asset.asset_id)
         if limit is not None:
             stmt = stmt.limit(limit)
@@ -2699,13 +2698,13 @@ class ProjectRepository:
     # ---- Cover resolution ----
 
     def resolve_cover(self, project: Project) -> str | None:
-        """The cover to show: the chosen one if it's in the project and not
-        in the trash, else the first clip by position.
+        """The cover to show: the chosen one if it's in the project and in
+        sight, else the first active clip by position (Robert, Oct 9).
 
-        Reading never clears the choice: a chosen cover whose clip is only in
-        the trash comes back with it. The choice is cleared where the clip
-        really leaves, in remove_assets and when the clip is deleted for good.
-        """
+        Reading never clears the choice: a chosen cover whose file went
+        missing is the cover again when it's back. The choice is cleared when
+        a person trashes the clip (trash_many), it leaves the project
+        (remove_assets), or it's deleted for good."""
         if project.cover_asset_id:
             row = self._session.execute(
                 select(ProjectAsset.asset_id)
