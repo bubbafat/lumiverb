@@ -114,13 +114,13 @@ afterEach(() => {
 
 function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  return { client, ...render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
         <ProcessingSection />
       </QueryClientProvider>
     </MemoryRouter>,
-  );
+  ) };
 }
 
 async function row(title: string) {
@@ -128,6 +128,37 @@ async function row(title: string) {
 }
 
 describe("ProcessingSection", () => {
+  it("shows a loading indicator until the first status and counts arrive, and not on a refresh", async () => {
+    producers = [producer({})];
+    // Hold the queue and the counts until released, as a slow first load does.
+    let release: () => void = () => {};
+    let gate = new Promise<void>((r) => { release = r; });
+    const answer = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+      if (path === "/producers" || path === "/producers/queue") await gate;
+      return answer(url, init);
+    });
+    const { client } = renderSection();
+    const loading = await screen.findByRole("status", { name: "Loading" });
+    expect(loading.textContent).toContain("Loading…");
+
+    release();
+    await row("Descriptions and tags");
+    await waitFor(() => expect(screen.getByLabelText("All processing")).toBeTruthy());
+    expect(screen.queryByRole("status", { name: "Loading" })).toBeNull();
+
+    // A background refresh keeps what's shown and shows no indicator.
+    gate = new Promise<void>((r) => { release = r; });
+    const refetch = client.refetchQueries();
+    await waitFor(() => expect(client.isFetching()).toBeGreaterThan(0));
+    expect(screen.queryByRole("status", { name: "Loading" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Descriptions and tags" })).toBeTruthy();
+    release();
+    await refetch;
+    expect(screen.queryByRole("status", { name: "Loading" })).toBeNull();
+  });
+
   it("lists each producer with its counts, its settings and why one isn't made again yet", async () => {
     producers = [
       producer({}),
