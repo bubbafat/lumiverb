@@ -9,15 +9,34 @@ export interface AnchorClip {
   offset: number;
 }
 
-/** Each row's top, from the top of the grid. */
+// Each row's top, from the top of the grid; worked out once per set of rows,
+// not on every scroll event.
+const startsByRows = new WeakMap<VirtualRowKind[], number[]>();
+
 function rowStarts(rows: VirtualRowKind[]): number[] {
-  const starts: number[] = [];
-  let y = 0;
-  for (const row of rows) {
-    starts.push(y);
-    y += row.height;
+  let starts = startsByRows.get(rows);
+  if (!starts) {
+    starts = [];
+    let y = 0;
+    for (const row of rows) {
+      starts.push(y);
+      y += row.height;
+    }
+    startsByRows.set(rows, starts);
   }
   return starts;
+}
+
+/** The first row whose bottom is below `y`. */
+function firstRowBelow(rows: VirtualRowKind[], starts: number[], y: number): number {
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] + rows[mid].height <= y) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 function rowClipIds(row: VirtualRowKind, groups: DateGroup[]): string[] {
@@ -40,9 +59,8 @@ export function clipsOnScreen(
   if (scrolled <= 0) return [];
   const starts = rowStarts(rows);
   const clips: AnchorClip[] = [];
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = firstRowBelow(rows, starts, scrolled); i < rows.length; i++) {
     const top = starts[i];
-    if (top + rows[i].height <= scrolled) continue;
     // At least one row of clips, even with no viewport height to go on.
     if (top >= scrolled + viewportHeight && clips.length > 0) break;
     for (const assetId of rowClipIds(rows[i], groups)) clips.push({ assetId, offset: top - scrolled });

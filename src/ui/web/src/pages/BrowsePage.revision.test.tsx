@@ -11,7 +11,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { NavigateFunction } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import BrowsePage from "./BrowsePage";
-import { clipsWith, firstOnScreen, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
+import { clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   getApiKey: vi.fn(),
@@ -125,6 +125,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 // The library's settings page, with the sidebar's revision poll: it keeps
@@ -382,6 +383,25 @@ describe("BrowsePage scrolled grid during a refresh", () => {
 
     expect(scroller.scrollTop).toBe(0);
     expect(firstOnScreen(scroller).name).toBe("clip67.mov");
+  });
+
+  it("lays out new row heights when a refresh keeps the number of rows", async () => {
+    // 8 clips make a header and 3 rows either way; 16:10 rows are taller.
+    api.queryAssets.mockImplementation(async () => {
+      const height = serverRevision === 1 ? 1080 : 1200;
+      const items = Array.from({ length: 8 }, (_, i) => ({ ...clip, asset_id: `ast_${i}`, rel_path: `c${i}.mov`, height }));
+      return { items, next_cursor: null, total_estimate: 8 };
+    });
+    renderPage(stubLayout);
+    await advance(100);
+    await advance(100);
+    const before = gridHeight();
+
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+
+    expect(gridHeight()).toBeGreaterThan(before + 40);
   });
 
   it("doesn't hold on to a clip across a change of sort", async () => {

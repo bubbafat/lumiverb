@@ -125,6 +125,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 function renderPage(at = "/browse", prepareScroller?: (scroller: HTMLElement) => void) {
