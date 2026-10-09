@@ -501,6 +501,7 @@ class AssetRepository:
             .limit(1)
         )
         return self._session.exec(stmt).first()
+
     def create_asset(
         self,
         library_id: str,
@@ -1074,19 +1075,29 @@ class AssetRepository:
         for search, with their scenes. Returns (back, skipped), in the order given."""
         if not asset_ids:
             return [], []
-        result = self._session.execute(
-            text(
-                "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
-                " search_synced_at = NULL"
-                f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
-                # Not onto a path another clip in sight holds now (a different file there is its own clip).
-                "   AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = a.library_id"
-                "                   AND o.rel_path = a.rel_path AND o.deleted_at IS NULL AND o.asset_id <> a.asset_id)"
-                " RETURNING a.asset_id"
-            ),
-            {"ids": asset_ids},
+        sql = text(
+            "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
+            " search_synced_at = NULL"
+            f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
+            # Not onto a path another clip in sight holds now (a different file there is its own clip).
+            "   AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = a.library_id"
+            "                   AND o.rel_path = a.rel_path AND o.deleted_at IS NULL AND o.asset_id <> a.asset_id)"
+            " RETURNING a.asset_id"
         )
-        back = [row[0] for row in result.fetchall()]
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            with self._session.begin_nested():
+                back = [row[0] for row in self._session.execute(sql, {"ids": asset_ids}).fetchall()]
+        except IntegrityError:
+            # Two of them at one path: one at a time, so the first holds it and the rest are skipped.
+            back = []
+            for asset_id in asset_ids:
+                try:
+                    with self._session.begin_nested():
+                        back += [row[0] for row in self._session.execute(sql, {"ids": [asset_id]}).fetchall()]
+                except IntegrityError:
+                    pass
         if back:
             self._session.execute(
                 text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"), {"ids": back}
@@ -1135,6 +1146,22 @@ class AssetRepository:
         return list(self._session.execute(
             text("SELECT DISTINCT library_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}
         ).scalars().all())
+
+    def find_at(self, library_id: str, rel_path: str, sha256: str | None) -> Asset | None:
+        """The clip archived or trashed at this path with this content: the old
+        content back where it was. A person's trash or archive comes first (it
+        stands); else the most recently missing."""
+        if not sha256:
+            return None
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id, Asset.rel_path == rel_path, Asset.sha256 == sha256,
+                   Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
+                   Asset.deleted_reason.in_(("missing", "user", "archived")))  # type: ignore[union-attr]
+            .order_by((Asset.deleted_reason == "missing").asc(), Asset.deleted_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+        return self._session.exec(stmt).first()
 
     def find_missing_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently missing asset with this content,
@@ -1281,6 +1308,8 @@ class AssetRepository:
 
         "trashed" = in the trash by a person's choice; "archived" = a person
         archived it; "emptied" = a person deleted it for good (ignored_files).
+        Not a path a clip in sight holds now: that file is the new clip's (a
+        changed file is a new clip, and the old one may be trashed).
         """
         rows = self._session.execute(
             text(
@@ -1295,6 +1324,8 @@ class AssetRepository:
                     WHERE library_id = :lib
                 ) p
                 WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
+                  AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = :lib AND o.rel_path = p.rel_path
+                                  AND o.deleted_at IS NULL)
                 ORDER BY rel_path
                 LIMIT :limit
                 """
@@ -1337,9 +1368,14 @@ class AssetRepository:
             return None
         return {k: getattr(row, k) for k in self.VIDEO_FACET_FIELDS}
 
-    def is_ignored(self, library_id: str, rel_path: str) -> bool:
-        """True if the user emptied this file's trash (see ignored_files)."""
-        return self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path))) is not None
+    def is_ignored(self, library_id: str, rel_path: str, sha256: str | None = None) -> bool:
+        """True if the user emptied this file's trash (see ignored_files). A
+        different file at that path (both contents known) isn't: it's a new
+        file (Robert, Oct 9)."""
+        row = self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path)))
+        if row is None:
+            return False
+        return not (sha256 and row.sha256 and row.sha256 != sha256)
 
     def unignore(self, library_id: str, rel_paths: list[str]) -> int:
         """Forget emptied-trash records so the next scan picks the files up again."""
@@ -1443,9 +1479,12 @@ class AssetRepository:
         self._session.execute(
             text(
                 "INSERT INTO ignored_files (library_id, rel_path, sha256, created_at)"
-                " SELECT library_id, rel_path, sha256, :now FROM assets"
-                " WHERE asset_id = ANY(:asset_ids)"
-                "   AND deleted_at IS NOT NULL AND deleted_reason = 'user'"
+                " SELECT a.library_id, a.rel_path, a.sha256, :now FROM assets a"
+                " WHERE a.asset_id = ANY(:asset_ids)"
+                "   AND a.deleted_at IS NOT NULL AND a.deleted_reason = 'user'"
+                # Not a path a clip in sight holds now (a changed file is a new clip).
+                "   AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = a.library_id"
+                "                   AND o.rel_path = a.rel_path AND o.deleted_at IS NULL)"
                 " ON CONFLICT (library_id, rel_path) DO NOTHING"
             ),
             {**params, "now": utcnow()},

@@ -5,6 +5,9 @@ the old one goes missing: archived where it was, so the same path can name
 a clip in sight and archived ones. (library_id, rel_path) is unique only
 among clips in sight (deleted_at IS NULL).
 
+Downgrading fails once any path holds more than one clip (a file changed
+since this ran): those have to be deleted for good, or moved, first.
+
 Revision ID: b77f2a03eee2
 Revises: 0c663a6f08e1
 Create Date: 2026-10-09

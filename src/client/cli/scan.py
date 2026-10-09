@@ -770,6 +770,8 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
+    # Every file on disk, ingested or not: none of them is missing.
+    on_disk = local_files
     ignored = _fetch_ignored_paths(client, library_id)
     if ignored:
         before = len(local_files)
@@ -798,7 +800,7 @@ def run_scan(
     new_files, needs_hash, fast_unchanged = _split_files(
         settled, existing, thorough=thorough or force,
     )
-    local_rel_paths = {f["rel_path"] for f in local_files}
+    local_rel_paths = {f["rel_path"] for f in on_disk}
 
     # Deletions, and the mass-deletion guard, only consider what this scan
     # covers: a `--media-type image` scan doesn't see videos on disk, so it
@@ -813,7 +815,7 @@ def run_scan(
         scope_size = len(scope)
 
     # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
+    deleted_ids = _detect_deletions(on_disk, scope, root_path, path_prefix)
     if stats.unlisted:
         # Files in a folder that couldn't be listed may well be there, so
         # they're neither deleted nor the old half of a move.
