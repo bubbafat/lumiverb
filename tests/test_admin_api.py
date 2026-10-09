@@ -1,8 +1,6 @@
 """Admin API tests. Use TestClient and testcontainers Postgres; mock provision_tenant_database."""
 
 import os
-import subprocess
-import sys
 from unittest.mock import patch
 
 import pytest
@@ -13,27 +11,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
-from tests.conftest import PG_IMAGE
-
-
-def _ensure_psycopg2(url: str) -> str:
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return url
-
-
-def _run_control_migrations(url: str) -> None:
-    env = os.environ.copy()
-    env["ALEMBIC_CONTROL_URL"] = url
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _run_control_migrations
 
 
 @pytest.fixture(scope="module")

@@ -1,8 +1,6 @@
 """API tests for GET /v1/assets/by-path."""
 
 import os
-import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,45 +13,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
-from tests.conftest import PG_IMAGE
-
-
-def _ensure_psycopg2(url: str) -> str:
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return url
-
-
-def _run_control_migrations(url: str) -> None:
-    env = os.environ.copy()
-    env["ALEMBIC_CONTROL_URL"] = url
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-control.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
-
-
-def _provision_tenant_db(tenant_url: str, project_root: str) -> None:
-    engine = create_engine(tenant_url)
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    engine.dispose()
-    env = os.environ.copy()
-    env["ALEMBIC_TENANT_URL"] = tenant_url
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", "alembic-tenant.ini", "upgrade", "head"],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")

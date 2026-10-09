@@ -132,6 +132,9 @@ def test_the_search_sweep_covers_every_clip_and_carries_its_ocr(env):
     docs = {d["asset_id"]: d for call in qw.method_calls for arg in call.args if isinstance(arg, list)
             for d in arg if isinstance(d, dict) and "asset_id" in d}
     assert set(docs) == {undescribed} and docs[undescribed]["ocr_text"] == "PLATFORM 10"
+    with _db(env) as s:  # back from the future, or every sweep after this redoes it for a minute
+        s.execute(text("UPDATE asset_ocr SET generated_at = now() WHERE asset_id = :a"), {"a": undescribed})
+        s.commit()
 
 
 @pytest.mark.slow
