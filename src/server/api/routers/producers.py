@@ -5,7 +5,11 @@ artifacts with them, so what it records in lineage is what's current.
 
 Redo on change (Robert, Oct 9): changing a setting is the approval, so a
 producer's stale clips are made again after anything missing, everywhere.
-An admin can stop that for a producer and resume it."""
+An admin can stop that for a producer and resume it.
+
+Pausing (Robert, Oct 9): an admin pauses all of the account's processing,
+or one producer's, and resumes it. The scheduler starts nothing more of
+it; what's running finishes."""
 
 from __future__ import annotations
 
@@ -26,7 +30,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
-from src.shared.producers import PRODUCERS
+from src.shared.producers import PAUSE_ALL, PRODUCERS
 
 PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
@@ -142,7 +146,12 @@ class ProducerItem(BaseModel):
     # and if they can't be yet, why.
     redoable: bool = True
     why_not: str | None = None
-    # An admin stopped its redo: stale clips wait until it's resumed (or its settings change).
+    # An admin stopped its redo: stale clips wait until it's resumed (or its
+    # settings change). What's missing is still made.
+    redo_stopped: bool = False
+    redo_stopped_by: str | None = None  # admins only
+    redo_stopped_at: datetime | None = None
+    # An admin paused it: nothing more of it starts until it's resumed (what's running finishes).
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
@@ -178,27 +187,39 @@ def list_producers(
     project_id: str | None = None,
     counts: bool = True,
 ) -> ProducerList:
-    """Every producer with its settings now and whether its redo is stopped;
-    counts (in one library or project when given) unless counts=false, as the scheduler asks."""
+    """Every producer with its settings now, whether it's paused and whether
+    its redo is stopped; counts (in one library or project when given)
+    unless counts=false, as the scheduler asks."""
     models, waits = tenant_ai(request)
     asset_ids = None
     if counts and project_id:
         require_editor(request)  # like every project route
         asset_ids = _project_clips(request, session, user_id, project_id)
-    admin = getattr(request.state, "role", None) == "admin"
-    stopped = lineage.paused(session)
+    admin = _admin(request)
+    stopped, held = lineage.paused(session), lineage.processing_paused(session)
     items = []
     for artifact in PRODUCERS:
         want = lineage.desired(session, artifact, models)
-        item = _item(artifact, want, waits)
-        if artifact in stopped:
-            item.paused = True
-            item.paused_at = stopped[artifact]["paused_at"]
-            item.paused_by = stopped[artifact]["paused_by"] if admin else None
+        item = _with_state(_item(artifact, want, waits), stopped, held, admin)
         if counts:
             item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
         items.append(item)
     return ProducerList(producers=items)
+
+
+def _admin(request: Request) -> bool:
+    return getattr(request.state, "role", None) == "admin"
+
+
+def _with_state(item: ProducerItem, stopped: dict, held: dict, admin: bool) -> ProducerItem:
+    """Whether its redo is stopped and whether it's paused (who did it: admins only)."""
+    if (redo := stopped.get(item.artifact)) is not None:
+        item.redo_stopped, item.redo_stopped_at = True, redo["paused_at"]
+        item.redo_stopped_by = redo["paused_by"] if admin else None
+    if (pause := held.get(item.artifact)) is not None:
+        item.paused, item.paused_at = True, pause["paused_at"]
+        item.paused_by = pause["paused_by"] if admin else None
+    return item
 
 
 def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> ProducerItem:
@@ -235,7 +256,8 @@ def set_settings(
     settings make what the old ones made stale, and it's made again after
     anything missing (Robert, Oct 9: the change is the approval): 409
     redo_on_change with the count until redo says yes, as a model change in
-    Settings → AI asks. Saving resumes its redo if an admin had stopped it."""
+    Settings → AI asks. Saving resumes its redo if an admin had stopped it;
+    a pause stays."""
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
     p = producer_or_404(artifact)
@@ -264,6 +286,7 @@ def set_settings(
         clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
             stopped = artifact in lineage.paused(session)
+            held = artifact in lineage.processing_paused(session)
             session.rollback()
             also = " and ".join(PRODUCERS[a].title.lower() for a in p.redo_also)
             raise DecisionRequiredError(
@@ -271,17 +294,16 @@ def set_settings(
                 f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again"
                 + (f", and their {also} with them" if also else "") + ". That "
                 "runs after anything missing; until it's done, results mix the old settings and the new."
-                + (" Its stopped redo starts again." if stopped else ""),
-                {"artifact": artifact, "clips": clips, "paused": stopped,
+                + (" Its stopped redo starts again." if stopped else "")
+                + (" It's paused: none of it is made until it's resumed." if held else ""),
+                {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
                  "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
         lineage.resume(session, [artifact])
     session.commit()
-    item = _item(artifact, after, waits)
-    stopped = lineage.paused(session).get(artifact)  # settings unchanged leave a stopped redo stopped
-    if stopped:
-        item.paused, item.paused_at, item.paused_by = True, stopped["paused_at"], stopped["paused_by"]
-    return item
+    # Settings unchanged leave a stopped redo stopped.
+    return _with_state(_item(artifact, after, waits), lineage.paused(session), lineage.processing_paused(session),
+                       admin=True)
 
 
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
@@ -315,6 +337,52 @@ def resume_redo(artifact: str, session: Annotated[Session, Depends(get_tenant_se
     """Redo the producer's stale clips again, after anything missing."""
     producer_or_404(artifact)
     lineage.resume(session, [artifact])
+    session.commit()
+
+
+@router.post("/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def pause_all(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Pause all of the account's processing (admins): the scheduler starts
+    nothing more, scans included, until it's resumed; what's running
+    finishes. Again is fine: who paused it first, and when, stay."""
+    lineage.pause_processing(session, PAUSE_ALL, by=user_id)
+    session.commit()
+
+
+@router.post("/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def resume_all(session: Annotated[Session, Depends(get_tenant_session)]) -> None:
+    """Carry on with all of the account's processing (admins). Producers
+    paused one by one stay paused."""
+    lineage.resume_processing(session, PAUSE_ALL)
+    session.commit()
+
+
+@router.post("/{artifact}/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def pause_producer(
+    artifact: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Pause one producer (admins): nothing more of it starts, missing or
+    stale, until it's resumed; what's running finishes. 409 not_scheduled
+    for what scans make (proxies, video previews): pausing all processing
+    stops those."""
+    p = producer_or_404(artifact)
+    if not p.scheduled:
+        raise ConflictError("not_scheduled", f"{p.title} are made by scans, not on their own: pausing all "
+                                             "processing stops them.", {"artifact": artifact})
+    lineage.pause_processing(session, artifact, by=user_id)
+    session.commit()
+
+
+@router.post("/{artifact}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def resume_producer(artifact: str, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
+    """Carry on with a paused producer (admins)."""
+    producer_or_404(artifact)
+    lineage.resume_processing(session, artifact)
     session.commit()
 
 
@@ -358,24 +426,33 @@ class SchedulerStatus(BaseModel):
     pools: dict[str, list[int]] = Field(default_factory=dict)  # each pool's [busy, slots]
     # Requests the AI machines sharing its GPU give up while video is decoded there.
     gpu_hold: int = 0
+    # An admin paused all of the account's processing: nothing more starts
+    # until it's resumed (POST /v1/producers/pause, /resume).
+    paused: bool = False
+    paused_by: str | None = None  # admins only
+    paused_at: datetime | None = None
 
 
 @router.get("/queue", response_model=SchedulerStatus, dependencies=[Depends(require_signed_in)])
-def scheduler_status(session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
-    """What the scheduler is doing now; live is false when it hasn't said for 30 seconds."""
+def scheduler_status(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SchedulerStatus:
+    """What the scheduler is doing now, and whether an admin paused it all;
+    live is false when it hasn't said for 30 seconds."""
     import json
     from datetime import timedelta
 
     from src.shared.utils import utcnow
 
     raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
-    if not raw:
-        return SchedulerStatus()
-    try:
-        status = SchedulerStatus(**json.loads(raw))
-    except (ValueError, TypeError):
-        return SchedulerStatus()
+    status = SchedulerStatus()
+    if raw:
+        try:
+            status = SchedulerStatus(**json.loads(raw))
+        except (ValueError, TypeError):
+            pass
     status.live = status.at is not None and utcnow() - status.at < timedelta(seconds=30)
+    if (pause := lineage.processing_paused(session).get(PAUSE_ALL)) is not None:
+        status.paused, status.paused_at = True, pause["paused_at"]
+        status.paused_by = pause["paused_by"] if _admin(request) else None
     return status
 
 

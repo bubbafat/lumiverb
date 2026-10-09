@@ -264,13 +264,13 @@ def test_an_admin_stops_a_redo_and_resumes_it(env):
     try:
         assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204
         p = _producer(lib)
-        assert p["paused"] is True and p["paused_at"] and p["paused_by"]
+        assert p["redo_stopped"] is True and p["redo_stopped_at"] and p["redo_stopped_by"]
         assert "vision" in _paused_in_database(env[4])
         assert p["counts"]["stale"] >= 1  # still stale, waiting
         assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204  # again: fine
     finally:
         assert client.post("/v1/producers/vision/redo/resume", headers=headers).status_code == 204
-    assert _producer(lib)["paused"] is False
+    assert _producer(lib)["redo_stopped"] is False
     assert "vision" not in _paused_in_database(env[4])
 
 
@@ -286,7 +286,7 @@ def test_only_admins_stop_or_resume_and_only_they_see_who(env):
     try:
         assert client.post("/v1/producers/ocr/redo/stop", headers=headers).status_code == 204
         seen = _producer(lib, "ocr", headers=viewer)
-        assert seen["paused"] is True and seen["paused_by"] is None
+        assert seen["redo_stopped"] is True and seen["redo_stopped_by"] is None
     finally:
         client.post("/v1/producers/ocr/redo/resume", headers=headers)
 
@@ -349,11 +349,11 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
 
             # The same model again asks nothing.
             assert client.put("/v1/ai/jobs/vision", json={"model": "m1"}, headers=headers).status_code == 200
-            assert _producer(lib)["paused"] is True  # not a change: still stopped
+            assert _producer(lib)["redo_stopped"] is True  # not a change: still stopped
 
             r = client.put("/v1/ai/jobs/vision", json={"model": "m2", "redo": True}, headers=headers)
             assert r.status_code == 200, r.text
-            assert _producer(lib)["paused"] is False  # the newest ask wins
+            assert _producer(lib)["redo_stopped"] is False  # the newest ask wins
     finally:
         client.post("/v1/producers/vision/redo/resume", headers=headers)
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
