@@ -180,3 +180,78 @@ def producers_retry(
         raise typer.Exit(1)
     n = int(r.json().get("retried", 0))
     console.print(f"{n:,} clip{'' if n == 1 else 's'} will be tried again shortly." if n else "Nothing was failing.")
+
+
+def _bounds(f: dict) -> str:
+    if f.get("fixed"):
+        return "fixed"
+    if f.get("minimum") is None:
+        return f["kind"]
+    unit = f" {f['unit']}" if f.get("unit") else ""
+    return f"{f['minimum']:g}–{f['maximum']:g}{unit}"
+
+
+def _shown(value: object) -> str:
+    text = "—" if value in ("", None) else str(value)
+    return text if len(text) <= 60 else text[:57] + "…"
+
+
+@producers_app.command("settings")
+def producers_settings(
+    artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. transcript).")],
+    changes: Annotated[list[str] | None, typer.Argument(
+        help="KEY=VALUE to change (admins); KEY= puts it back to its default.")] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask; make again what the old settings made.")] = False,
+) -> None:
+    """A producer's settings, and changing the ones its code reads (admins).
+    New settings make what the old ones made again, after anything missing:
+    the server asks first, and so does this."""
+    client = LumiverbClient()
+    producers = {p["artifact"]: p for p in client.get("/v1/producers", params={"counts": "false"}).json()
+                 .get("producers", [])}
+    p = producers.get(artifact)
+    if p is None:
+        console.print(f"[red]No producer {escape(artifact)}: one of {', '.join(producers)}.[/red]")
+        raise typer.Exit(2)
+    fields = {f["key"]: f for f in p.get("fields") or []}
+    if not changes:
+        table = Table(show_header=True, header_style="bold", title=f"{p['title']} · version {p['version']}")
+        for col in ("Setting", "Key", "Now", "Default", "Can be"):
+            table.add_column(col)
+        for f in fields.values():
+            table.add_row(escape(f["label"]), f["key"], escape(_shown(f["value"])), escape(_shown(f["default"])),
+                          _bounds(f))
+        console.print(table)
+        for f in fields.values():
+            if f.get("fixed") and f["key"] != "model":
+                console.print(f"[dim]{escape(f['key'])}: {escape(f['fixed'])}[/dim]")
+        return
+    body: dict = {}
+    for change in changes:
+        key, sep, raw = change.partition("=")
+        f = fields.get(key)
+        if not sep or f is None:
+            console.print(f"[red]Give KEY=VALUE, with one of: {', '.join(fields)}.[/red]")
+            raise typer.Exit(2)
+        if raw == "":
+            body[key] = None
+        elif f["kind"] == "text":
+            body[key] = raw
+        else:
+            try:
+                body[key] = int(raw) if f["kind"] == "int" else float(raw)
+            except ValueError:
+                console.print(f"[red]{escape(f['label'])} is a {'whole ' if f['kind'] == 'int' else ''}number.[/red]")
+                raise typer.Exit(2) from None
+    r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": yes})
+    if r.status_code == 409 and ((r.json() or {}).get("error") or {}).get("code") == "redo_on_change":
+        console.print(f"[yellow]{escape(_error(r))}[/yellow]")
+        if not typer.confirm("Go ahead?", default=False):
+            console.print("Nothing changed.")
+            raise typer.Exit(0)
+        r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": True})
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't change them: {escape(_error(r))}[/red]")
+        raise typer.Exit(1)
+    now = r.json().get("settings", {})
+    console.print(", ".join(f"{escape(k)} = {escape(_shown(now.get(k)))}" for k in body))

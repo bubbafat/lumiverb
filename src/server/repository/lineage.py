@@ -74,6 +74,19 @@ def overrides(session: Session, artifact: str) -> dict[str, Any]:
         return {}
 
 
+def set_overrides(session: Session, artifact: str, values: Mapping[str, Any]) -> None:
+    """Store the settings an admin changed (only those that differ from the
+    producer's defaults). Doesn't commit."""
+    key = _OVERRIDES.format(artifact)
+    if values:
+        session.execute(text(
+            "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+            {"k": key, "v": json.dumps(dict(values), sort_keys=True)})
+    else:
+        session.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": key})
+
+
 def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:
     """What a current artifact of this kind is made with now: producer,
     version, settings and their hash. job_models: the account's model per AI job."""

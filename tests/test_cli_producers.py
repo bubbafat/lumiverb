@@ -176,3 +176,84 @@ def test_retry_refused_says_why(client):
     client.raw.return_value = _response(403, {"detail": "Editors only"})
     result = _run("retry")
     assert result.exit_code == 1 and "Editors only" in result.output
+
+
+# --- lumiverb producers settings: mirrors the form in Settings → Processing
+
+_FIELDS = [
+    {"key": "model", "label": "Model", "kind": "text", "value": "small", "default": "small", "minimum": None,
+     "maximum": None, "unit": "", "advanced": False, "fixed": "Chosen in Settings → AI, for every producer its machines run."},
+    {"key": "vad_min_silence_ms", "label": "Shortest silence skipped", "kind": "int", "value": 500, "default": 500,
+     "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None},
+]
+
+
+@pytest.fixture
+def settings_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    mod = importlib.import_module("src.client.cli.commands.producers")
+    c = MagicMock()
+    c.get.return_value.json.return_value = {"producers": [
+        _producer("transcript", "Transcripts", fields=_FIELDS, settings={"model": "small", "vad_min_silence_ms": 500})]}
+    monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
+    return c
+
+
+def _settings(*args: str, input: str | None = None):
+    from src.client.cli.main import app
+
+    return CliRunner().invoke(app, ["producers", "settings", *args], input=input)
+
+
+def test_settings_lists_each_with_what_it_can_be(settings_client):
+    result = _settings("transcript")
+    assert result.exit_code == 0, result.output
+    flat = " ".join(result.output.split())  # the table wraps at 80 columns
+    assert "Shortest" in flat and "100–2000" in flat and "fixed" in flat
+
+
+def test_settings_changes_one(settings_client):
+    settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
+    result = _settings("transcript", "vad_min_silence_ms=800")
+    assert result.exit_code == 0, result.output
+    settings_client.raw.assert_called_once_with("PUT", "/v1/producers/transcript/settings",
+                                                json={"settings": {"vad_min_silence_ms": 800}, "redo": False})
+    assert "vad_min_silence_ms = 800" in result.output
+
+
+def test_settings_asks_before_redoing_as_the_server_does(settings_client):
+    settings_client.raw.side_effect = [
+        _response(409, {"error": {"code": "redo_on_change", "message": "New settings make 12 clips of transcripts again."}}),
+        _response(200, {"settings": {"vad_min_silence_ms": 800}}),
+    ]
+    result = _settings("transcript", "vad_min_silence_ms=800", input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "12 clips" in result.output
+    assert settings_client.raw.call_args_list[1].kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": True}
+
+
+def test_settings_says_no_and_nothing_changes(settings_client):
+    settings_client.raw.return_value = _response(
+        409, {"error": {"code": "redo_on_change", "message": "New settings make 12 clips of transcripts again."}})
+    result = _settings("transcript", "vad_min_silence_ms=800", input="n\n")
+    assert result.exit_code == 0 and "Nothing changed" in result.output
+    assert settings_client.raw.call_count == 1
+
+
+def test_settings_puts_one_back_to_its_default(settings_client):
+    settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 500}})
+    _settings("transcript", "vad_min_silence_ms=")
+    assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": None}, "redo": False}
+
+
+def test_settings_refuses_what_isnt_a_setting_or_a_number(settings_client):
+    assert _settings("transcript", "silence=800").exit_code == 2
+    assert _settings("transcript", "vad_min_silence_ms=lots").exit_code == 2
+    assert _settings("teleport").exit_code == 2
+    settings_client.raw.assert_not_called()
+
+
+def test_settings_says_why_the_server_refused(settings_client):
+    settings_client.raw.return_value = _response(
+        422, {"error": {"code": "bad_setting", "message": "Shortest silence skipped is from 100 to 2000 ms"}})
+    result = _settings("transcript", "vad_min_silence_ms=50")
+    assert result.exit_code == 1 and "is from 100 to 2000 ms" in result.output

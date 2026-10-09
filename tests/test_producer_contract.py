@@ -51,11 +51,11 @@ def test_the_scheduler_waits_for_what_a_producer_is_made_from():
 
 
 _EXAMPLE = '''
-from src.producers.contract import IMAGE, ProducerSpec
+from src.producers.contract import IMAGE, ProducerSpec, Setting
 
 PRODUCER = ProducerSpec(
     artifact="example", producer="example", version="1", media=IMAGE, title="An example", order=999,
-    applies="a.media_type = 'image'", made="false", defaults={"strength": 3}, needs=("proxy",),
+    applies="a.media_type = 'image'", made="false", settings=(Setting("strength", 3, "Strength"),), needs=("proxy",),
     kind="example", flag="missing_example", run="example_runner:run", pool="example-pool", slots=2,
 )
 '''

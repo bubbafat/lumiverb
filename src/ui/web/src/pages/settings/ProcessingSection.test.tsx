@@ -48,6 +48,12 @@ beforeEach(() => {
       const n = body.asset_ids ? body.asset_ids.length : failures.length;
       return json({ retried: n });
     }
+    const set = path.match(/^\/producers\/([^/]+)\/settings$/);
+    if (set && method === "PUT") {
+      const next = answers.shift();
+      if (next) return next;
+      return json(producers.find((p) => p.artifact === set[1]));
+    }
     const m = path.match(/^\/producers\/([^/]+)\/redo\/(stop|resume)$/);
     if (m && method === "POST") {
       const next = answers.shift();
@@ -261,5 +267,69 @@ describe("ProcessingSection", () => {
     fireEvent.click(within(vision).getByRole("button", { name: "Show failures: Descriptions and tags" }));
     expect(await within(vision).findByText(/Being tried again\./)).toBeTruthy();
     expect(vision.textContent).not.toContain("Tried 0 times");
+  });
+});
+
+
+describe("ProcessingSection settings", () => {
+  const fields = [
+    { key: "model", label: "Model", kind: "text", value: "small", default: "small", minimum: null, maximum: null,
+      unit: "", advanced: false, fixed: "Chosen in Settings → AI, for every producer its machines run." },
+    { key: "vad_min_silence_ms", label: "Shortest silence skipped", kind: "int", value: 500, default: 500,
+      minimum: 100, maximum: 2000, unit: "ms", advanced: false, fixed: null },
+  ] as Producer["fields"];
+
+  async function openSettings() {
+    producers = [producer({ artifact: "transcript", title: "Transcripts", media: ["video"], fields })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+  }
+
+  it("lets an admin change what the producer reads, and says why the rest can't change", async () => {
+    await openSettings();
+    expect(screen.getByText(/Chosen in Settings → AI/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Model/)).toBeNull();  // no input for it
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    expect(screen.getByText(/made again with the new ones/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    const put = sent.find((r) => r.method === "PUT")!;
+    expect(put.url).toContain("/producers/transcript/settings");
+    expect(put.body).toEqual({ settings: { vad_min_silence_ms: 800 } });
+  });
+
+  it("asks before making again what the old settings made", async () => {
+    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save and make them again" }));
+    await waitFor(() => expect(sent.filter((r) => r.method === "PUT")).toHaveLength(2));
+    expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo: true });
+  });
+
+  it("sends a default as null, so the account goes back to following it", async () => {
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "500" } });
+    expect((screen.getByRole("button", { name: "Save the settings of Transcripts" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says why the server refused a value", async () => {
+    // The browser's own bounds stop most; the server's word is final.
+    answers = [err(422, "bad_setting", "Shortest silence skipped is from 100 to 2000 ms")];
+    await openSettings();
+    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+    expect(await screen.findByText(/is from 100 to 2000 ms/)).toBeTruthy();
+  });
+
+  it("shows editors the settings, not a form", async () => {
+    role = "editor";
+    await openSettings();
+    expect(screen.getByText("Shortest silence skipped")).toBeTruthy();
+    expect(screen.getByText("500 ms")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save the settings of Transcripts" })).toBeNull();
   });
 });

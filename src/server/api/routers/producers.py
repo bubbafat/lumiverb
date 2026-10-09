@@ -110,6 +110,22 @@ class ProducerCounts(BaseModel):
     given_up: int = 0  # failing, and no longer tried (after 10 tries) until someone asks
 
 
+class SettingField(BaseModel):
+    """A setting as Settings → Processing shows it: what it is, its bounds,
+    its value now. fixed: why it can't be changed here (None: it can)."""
+
+    key: str
+    label: str
+    kind: str  # "int" | "float" | "text"
+    value: Any
+    default: Any
+    minimum: float | None = None
+    maximum: float | None = None
+    unit: str = ""
+    advanced: bool = False
+    fixed: str | None = None
+
+
 class ProducerItem(BaseModel):
     artifact: str
     producer: str
@@ -120,6 +136,7 @@ class ProducerItem(BaseModel):
     uniform: bool
     settings: dict[str, Any]
     settings_hash: str
+    fields: list[SettingField] = []
     counts: ProducerCounts | None = None
     # Whether its stale artifacts are made again (after anything missing),
     # and if they can't be yet, why.
@@ -171,14 +188,9 @@ def list_producers(
     admin = getattr(request.state, "role", None) == "admin"
     stopped = lineage.paused(session)
     items = []
-    for artifact, p in PRODUCERS.items():
+    for artifact in PRODUCERS:
         want = lineage.desired(session, artifact, models)
-        item = ProducerItem(
-            artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
-            uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
-            redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
-            waiting=waits.get(p.job) if p.job else None,
-        )
+        item = _item(artifact, want, waits)
         if artifact in stopped:
             item.paused = True
             item.paused_at = stopped[artifact]["paused_at"]
@@ -187,6 +199,81 @@ def list_producers(
             item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
         items.append(item)
     return ProducerList(producers=items)
+
+
+def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> ProducerItem:
+    p = PRODUCERS[artifact]
+    return ProducerItem(
+        artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
+        uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
+        fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=want["settings"].get(s.key, s.default),
+                             default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
+                             advanced=s.advanced, fixed=s.fixed or None)
+                for s in p.settings],
+        redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
+        waiting=waits.get(p.job) if p.job else None,
+    )
+
+
+class SettingsIn(BaseModel):
+    # key → value; null puts a setting back to its default. Others stay as they are.
+    settings: dict[str, Any]
+    # Yes, make again what the old settings made (asked with 409 redo_on_change).
+    redo: bool = False
+
+
+@router.put("/{artifact}/settings", response_model=ProducerItem, dependencies=[Depends(require_tenant_admin)])
+def set_settings(
+    artifact: str,
+    body: SettingsIn,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> ProducerItem:
+    """Change a producer's output-affecting settings (admins). Only settings
+    its code reads can be changed: 422 unknown_setting, setting_fixed (why,
+    in the message) or bad_setting (out of bounds, the wrong kind). New
+    settings make what the old ones made stale, and it's made again after
+    anything missing (Robert, Oct 9: the change is the approval): 409
+    redo_on_change with the count until redo says yes, as a model change in
+    Settings → AI asks. Saving resumes its redo if an admin had stopped it."""
+    from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
+
+    p = producer_or_404(artifact)
+    values = dict(lineage.overrides(session, artifact))
+    for key, value in body.settings.items():
+        setting = p.setting(key)
+        if setting is None:
+            raise InvalidChoiceError("unknown_setting", f"{p.title} has no setting {key!r}", {"key": key})
+        if setting.fixed:
+            raise InvalidChoiceError("setting_fixed", f"{setting.label}: {setting.fixed}", {"key": key})
+        try:
+            checked = None if value is None else setting.check(value)
+        except ValueError as e:
+            raise InvalidChoiceError("bad_setting", str(e), {"key": key}) from None
+        if checked is None or checked == setting.default:
+            values.pop(key, None)
+        else:
+            values[key] = checked
+    models, waits = tenant_ai(request)
+    before = lineage.desired(session, artifact, models)
+    lineage.set_overrides(session, artifact, values)
+    after = lineage.desired(session, artifact, models)
+    if after["settings_hash"] != before["settings_hash"]:
+        clips = lineage.made_by_a_producer(session, [artifact])[artifact] if lineage.redoable(artifact) else 0
+        if clips and not body.redo:
+            session.rollback()
+            raise DecisionRequiredError(
+                "redo_on_change",
+                f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again. That "
+                "runs after anything missing; until it's done, results mix the old settings and the new.",
+                {"artifact": artifact, "clips": clips, "artifacts": [{"artifact": artifact, "title": p.title,
+                                                                       "clips": clips}]},
+            )
+        lineage.resume(session, [artifact])
+    session.commit()
+    item = _item(artifact, after, waits)
+    item.paused = artifact in lineage.paused(session)  # settings unchanged leave a stopped redo stopped
+    return item
 
 
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
