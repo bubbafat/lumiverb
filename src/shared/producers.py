@@ -41,11 +41,30 @@ Producer = ProducerSpec
 PRODUCERS: dict[str, Producer] = registry()
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
-# What an admin pauses (Settings → Processing): all of the account's
-# processing, its scans alone, or one producer's (its artifact).
+# Pause switches (Robert, Oct 9): one per processing action, each paused
+# and resumed on its own: Scans (finding files, thumbnails, video previews),
+# Upkeep (the trash purge, file cleanup, spreading face names) and each
+# producer the scheduler makes. Pause all pauses every switch; nothing stores
+# it. The account's state is derived from the switches (pause_state). "all"
+# is named, never inferred from a missing target (Robert, Oct 9).
 PAUSE_ALL = "all"
 PAUSE_SCANS = "scans"
-assert not {PAUSE_ALL, PAUSE_SCANS} & set(PRODUCERS), "a producer can't be named what pausing all or scans is"
+PAUSE_UPKEEP = "upkeep"
+assert not {PAUSE_ALL, PAUSE_SCANS, PAUSE_UPKEEP} & set(PRODUCERS), "a producer can't be named all, scans or upkeep"
+
+
+def pause_targets() -> tuple[str, ...]:
+    """Every pause switch: Scans, Upkeep, then each producer the scheduler makes."""
+    return (PAUSE_SCANS, PAUSE_UPKEEP, *(a for a, p in PRODUCERS.items() if p.scheduled))
+
+
+def pause_state(paused: set[str] | frozenset[str]) -> str:
+    """From the switches paused: "running" (none: green), "partly" (some:
+    yellow) or "paused" (all: red). A row for what's no longer a switch counts
+    for nothing, and a switch added since everything was paused runs."""
+    targets = pause_targets()
+    n = sum(1 for t in targets if t in paused)
+    return "running" if n == 0 else "paused" if n == len(targets) else "partly"
 
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.

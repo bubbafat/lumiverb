@@ -41,8 +41,8 @@ function mediaLabel(media: string[]): string {
 
 const STATUS_QUERY_KEY = ["scheduler-status"];
 
-/** Account-wide: what each producer has made for the clips, pausing all of it or one producer, and stopping or
- * resuming a redo (admins). */
+/** Account-wide: what each producer has made for the clips, a pause switch for each processing action and one
+ * for all of them (admins), and stopping or resuming a redo (admins). */
 export default function ProcessingSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: status } = useQuery({ queryKey: STATUS_QUERY_KEY, queryFn: getSchedulerStatus, refetchInterval: 5_000 });
@@ -58,6 +58,8 @@ export default function ProcessingSection() {
     refetchInterval: 30_000,
   });
   const admin = user?.role === "admin";
+  // Each switch's state comes from the queue (polled every 5 s), not the scoped counts.
+  const held = new Map((status?.switches ?? []).map((sw) => [sw.target, sw.paused]));
   const canRetry = user?.role === "admin" || user?.role === "editor";
 
   return (
@@ -65,21 +67,30 @@ export default function ProcessingSection() {
       <div>
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
-          {status && <MasterSwitch status={status} parts={pausedParts(status)} admin={admin} />}
+          {status && <Switch name="All processing" target="all" state={status.state} admin={admin} />}
         </div>
-        {status && !status.paused && pausedParts(status).length > 0 && (
-          <p className="mt-1 text-sm text-amber-300">
-            Paused on their own: {pausedParts(status).join(", ")}.
-            {admin && " Pause all stops everything; Resume all then turns everything back on, these included."}
-          </p>
-        )}
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
           they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
         </p>
       </div>
 
-      {status && <NowPanel status={status} />}
+      {status && (
+        <ul className="space-y-2">
+          {status.switches.filter((sw) => sw.target === "scans" || sw.target === "upkeep").map((sw) => (
+            <li key={sw.target}
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-2">
+              <span className="text-sm text-gray-100">
+                {sw.title}
+                <span className="ml-2 text-xs text-gray-500">{SWITCH_ABOUT[sw.target]}</span>
+              </span>
+              <Switch name={sw.title} target={sw.target} state={sw.paused ? "paused" : "running"} admin={admin} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {status && <NowBox status={status} />}
 
       <label className="block text-sm text-gray-300">
         <span className="mb-1 block">Counts for</span>
@@ -124,8 +135,8 @@ export default function ProcessingSection() {
               producer={p}
               admin={admin}
               canRetry={canRetry}
-              allPaused={!!status?.paused}
-              scansPaused={!!status?.scans_paused}
+              paused={held.get(p.artifact) ?? p.paused}
+              scansPaused={!!held.get("scans")}
               libraryId={kind === "library" ? id : undefined}
               timeLeft={kind === "all" && status?.live ? status.eta?.producers[p.artifact] : undefined}
               timeNotKnown={kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
@@ -156,7 +167,7 @@ function ProducerRow({
   producer,
   admin,
   canRetry,
-  allPaused,
+  paused,
   scansPaused,
   libraryId,
   timeLeft,
@@ -165,7 +176,7 @@ function ProducerRow({
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
-  allPaused: boolean;
+  paused: boolean;
   scansPaused: boolean;
   libraryId?: string;
   // Seconds until it's caught up: the whole account's, so only with its counts.
@@ -188,22 +199,13 @@ function ProducerRow({
             {mediaLabel(producer.media)}
             {producer.uniform && " · one model for all"}
           </span>
-          {admin && producer.scheduled && !allPaused && (
-            <PauseButton paused={producer.paused} title={producer.title} artifact={producer.artifact} />
+          {producer.scheduled && (
+            <Switch name={producer.title} target={producer.artifact} state={paused ? "paused" : "running"} admin={admin} />
           )}
         </span>
       </div>
       <CountsBar producer={producer} />
-      {producer.paused && !allPaused && (
-        <p role="status" className="text-sm text-amber-300">
-          Paused: nothing more of it starts until it's resumed.
-        </p>
-      )}
-      {!producer.scheduled && scansPaused && !allPaused && (
-        <p role="status" className="text-sm text-amber-300">
-          Paused with scans: none are made until they're resumed.
-        </p>
-      )}
+      {!producer.scheduled && scansPaused && <p className="text-sm text-amber-300">Paused with scans</p>}
       {producer.waiting && <WaitingLine why={producer.waiting} />}
       {c && (
         <p className="text-sm text-gray-400">
@@ -238,7 +240,7 @@ function ProducerRow({
         </button>
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
-      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} allPaused={allPaused} />}
+      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} paused={paused} />}
       <Settings producer={producer} admin={admin} />
     </li>
   );
@@ -341,57 +343,51 @@ function listKinds(counts: Record<string, number>): string {
     .join(", ");
 }
 
-/** What's paused on its own (scans, producers), named, while the kill switch is off. */
-function pausedParts(status: SchedulerStatus): string[] {
-  // From the status, not the producers list: that one is for the "Counts for" scope and refetches less often.
-  return [...(status.scans_paused ? ["scans"] : []), ...(status.paused_producers ?? []).map((p) => p.title)];
-}
+const SWITCH_ABOUT: Record<string, string> = {
+  scans: "Finding files, thumbnails, video previews",
+  upkeep: "Trash purge, file cleanup, face names",
+};
+const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", paused: "bg-red-500" };
+const STATE_WORDS = { running: "Running", partly: "Partly paused", paused: "Paused" };
 
-const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", all: "bg-red-500" };
-const STATE_WORDS = { running: "Running", partly: "Partly paused", all: "All paused" };
-
-/** The kill switch (Robert, Oct 9) and its state: green running, yellow
- * partly paused (scans or producers paused on their own: Pause all affects
- * them all), red all paused. Pause scans beside it while it's off (admins). */
-function MasterSwitch({ status, parts, admin }: { status: SchedulerStatus; parts: string[]; admin: boolean }) {
-  const state = status.paused ? "all" : parts.length ? "partly" : "running";
-  return (
-    <span className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-      <span data-state={state} className="inline-flex items-center gap-1.5 text-sm text-gray-300">
-        <span aria-hidden="true" className={`inline-block h-2 w-2 rounded-full ${STATE_DOT[state]}`} />
-        <span>{STATE_WORDS[state]}</span>
-      </span>
-      {admin && !status.paused && (
-        <PauseButton paused={status.scans_paused} title="scans" artifact="scans" label="scans" />
-      )}
-      {admin && <PauseButton paused={status.paused} title="all processing" label="all" />}
-    </span>
-  );
-}
-
-/** Pause or resume all processing, scans, or one producer's (admins); a refusal says why beside it. */
-function PauseButton({ paused, title, artifact, label }: { paused: boolean; title: string; artifact?: string;
-                                                          label?: string }) {
+/** A pause switch (Robert, Oct 9): one row's (green running, yellow paused)
+ * or "all" (green, yellow when some are paused, red when all are). The global one pauses every row from green or yellow and
+ * resumes every row from red. Admins flip it; everyone sees it. */
+function Switch({ name, target, state, admin }: { name: string; target: string;
+                                                   state: "running" | "partly" | "paused"; admin: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
-    mutationFn: () => (paused ? resumeProcessing(artifact) : pauseProcessing(artifact)),
+    mutationFn: () => (state === "paused" ? resumeProcessing(target) : pauseProcessing(target)),
     onSuccess: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
       ]),
   });
+  const dot = target !== "all" && state === "paused" ? STATE_DOT.partly : STATE_DOT[state];
+  const face = (
+    <>
+      <span aria-hidden="true" className={`inline-block h-2.5 w-2.5 rounded-full ${dot}`} />
+      {STATE_WORDS[state]}
+    </>
+  );
+  const look = "inline-flex items-center gap-1.5 text-sm text-gray-200";
+  if (!admin) {
+    return <span aria-label={name} data-state={state} className={look}>{face}</span>;
+  }
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-2">
       <button
         type="button"
-        className={linkClass}
+        role="switch"
+        aria-checked={state !== "paused"}
+        aria-label={name}
+        data-state={state}
         disabled={toggle.isPending}
-        aria-label={`${paused ? "Resume" : "Pause"} ${title}`}
         onClick={() => toggle.mutate()}
+        className={`${look} rounded-full border border-gray-700 px-2.5 py-0.5 hover:border-gray-500 disabled:opacity-50`}
       >
-        {paused ? "Resume" : "Pause"}
-        {label && ` ${label}`}
+        {face}
       </button>
       {toggle.error && (
         <span role="alert" className="text-sm text-red-300">
@@ -399,28 +395,6 @@ function PauseButton({ paused, title, artifact, label }: { paused: boolean; titl
         </span>
       )}
     </span>
-  );
-}
-
-/** What the scheduler is doing right now (it says every few seconds), and whether all of it is paused. */
-function NowPanel({ status }: { status: SchedulerStatus }) {
-  return (
-    <div className="space-y-2">
-      {status.paused && (
-        <p role="status" className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-          All processing is paused{status.paused_at ? ` since ${when(status.paused_at)}` : ""}: nothing starts, scans
-          included, and upkeep changes nothing, until it's resumed. What's running finishes; the website stays up.
-          Resume all turns everything back on.
-        </p>
-      )}
-      {status.scans_paused && !status.paused && (
-        <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-          Scans are paused{status.scans_paused_at ? ` since ${when(status.scans_paused_at)}` : ""}: no new or changed
-          files are found, and no thumbnails or video previews made, until they're resumed. The rest goes on.
-        </p>
-      )}
-      <NowBox status={status} />
-    </div>
   );
 }
 
@@ -442,7 +416,7 @@ function NowBox({ status }: { status: SchedulerStatus }) {
       {eta && <p className="font-medium text-gray-100">{caughtUp(eta)}</p>}
       <p className="text-gray-200">
         <span className="text-gray-400">Now: </span>
-        {running || (status.paused ? "nothing more starts while paused" : "nothing to make")}
+        {running || (status.state === "paused" ? "paused" : "nothing to make")}
       </p>
       {eta && eta.jobs.length > 0 && (
         <ul className="space-y-0.5 pl-3 text-gray-400">
@@ -562,8 +536,8 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
 }
 
 /** What happens to a producer's stale clips: redone after anything missing, stopped, or not yet possible. */
-function RedoLine({ producer, stale, admin, allPaused }: { producer: Producer; stale: number; admin: boolean;
-                                                          allPaused: boolean }) {
+function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stale: number; admin: boolean;
+                                                       paused: boolean }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: () => (producer.redo_stopped ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
@@ -581,10 +555,8 @@ function RedoLine({ producer, stale, admin, allPaused }: { producer: Producer; s
         <span>
           {producer.redo_stopped
             ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
-            : producer.paused && !allPaused
+            : paused
               ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
-              : allPaused
-                ? `Redoes ${clips(stale)} once processing is resumed, after anything missing.`
               : `Redoing ${clips(stale)}, after anything missing.`}
         </span>
         {admin && (

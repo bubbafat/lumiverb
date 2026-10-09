@@ -1,5 +1,5 @@
-"""The kill switch on the paths the 5-minute upkeep timer takes (the admin
-key: every account). One account's Pause all skips only that account, and an
+"""The Upkeep switch on the paths the 5-minute upkeep timer takes (the admin
+key: every account). One account's paused Upkeep switch skips only that account, and an
 account whose pause can't be read is skipped without stopping the others.
 A skipped account is named (`paused_tenants`) and logged, so a run skipped
 for a pause reads differently from one with nothing to do (Robert, Oct 9).
@@ -26,7 +26,7 @@ def _accounts():
     def tenant_session(tenant_id):
         yield SimpleNamespace(tenant_id=tenant_id)
 
-    def all_paused(session):
+    def upkeep_paused(session):
         if session.tenant_id == BROKEN:
             raise RuntimeError("no processing_paused table")
         return session.tenant_id == PAUSED
@@ -39,7 +39,7 @@ def _accounts():
     with patch("src.server.database.get_control_session", control_session), \
             patch("src.server.database.get_tenant_session", tenant_session), \
             patch("src.server.repository.control_plane.TenantRepository.list_all", return_value=tenants), \
-            patch("src.server.repository.lineage.all_paused", all_paused):
+            patch("src.server.repository.lineage.upkeep_paused", upkeep_paused):
         yield
 
 
@@ -103,7 +103,7 @@ def test_files_are_cleaned_up_only_in_the_accounts_not_paused(tmp_path):
 def test_nothing_paused_says_so():
     from src.server.api.routers.upkeep import _purge_expired_trash_all_tenants
 
-    with _accounts(), patch("src.server.repository.lineage.all_paused", return_value=False), \
+    with _accounts(), patch("src.server.repository.lineage.upkeep_paused", return_value=False), \
             patch("src.server.api.routers.trash.purge_expired_trash", return_value={"clips": 0}):
         assert _purge_expired_trash_all_tenants() == {"clips": 0, "libraries": 0, "projects": 0, "paused": False,
                                                       "paused_tenants": []}

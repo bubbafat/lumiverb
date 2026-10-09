@@ -34,7 +34,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
-from src.shared.producers import PAUSE_ALL, PAUSE_SCANS
+from src.shared.producers import PAUSE_SCANS, pause_targets
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +198,9 @@ class Scheduler:
             self._holding[tenant_id] = self._hold_pool.submit(self._read_hold, tenant_id)
 
     def _read_hold(self, tenant_id: str) -> set[str]:
-        """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts. The
-        dispatcher hands out none of it from now on; what's running
-        finishes. Until it can be read, as if all of it is paused."""
+        """The pause switches an admin paused: PAUSE_SCANS, PAUSE_UPKEEP or producers'
+        artifacts. The dispatcher hands out none of it from now on; what's
+        running finishes. Until it can be read, as if every switch is paused."""
         seq = next(self._hold_reads)
         try:
             held = set(self._on_hold(tenant_id))
@@ -211,9 +211,9 @@ class Scheduler:
             if tenant_id not in self._hold_unread:  # once, not every second
                 self._hold_unread.add(tenant_id)
                 logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
-            held = {PAUSE_ALL}
+            held = set(pause_targets())
         self.dispatcher.hold(tenant_id, {k.name for k in KINDS.values()
-                                         if PAUSE_ALL in held or (k.flag and k.artifact in held)
+                                         if (k.flag and k.artifact in held)
                                          or (k.name == "scan" and PAUSE_SCANS in held)}, seq=seq)
         return held
 
@@ -275,8 +275,6 @@ class Scheduler:
         for kind in QUEUED:
             if kind.redo and kind.artifact in stopped:
                 self.dispatcher.clear(tenant_id, kind.name)
-        if PAUSE_ALL in held:
-            return
         if PAUSE_SCANS not in held and self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
@@ -399,7 +397,7 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
     from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        if {PAUSE_ALL, kind.artifact} & set(lineage.processing_paused(session)):
+        if kind.artifact in lineage.processing_paused(session):
             return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
@@ -443,7 +441,7 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
 
 
 def _on_hold_in_database(tenant_id: str) -> set[str]:
-    """What an admin paused: PAUSE_ALL, PAUSE_SCANS, or producers' artifacts (lineage.processing_paused)."""
+    """The pause switches an admin paused (lineage.processing_paused)."""
     from sqlmodel import Session
 
     from src.server.database import get_engine_for_url

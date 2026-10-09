@@ -398,7 +398,7 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     job off redoes nothing."""
     from src.server.repository import lineage
     from src.server.repository.ai_machines import job_models
-    from src.shared.producers import PAUSE_ALL, PRODUCERS
+    from src.shared.producers import PRODUCERS
 
     if not model or redo:
         return
@@ -419,9 +419,8 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
         "redo_on_change",
         f"{model} makes {clips:,} clip{'' if clips == 1 else 's'} again: {what}. That runs after anything "
         "missing; until it's done, results mix the old model and the new."
-        + (" All processing is paused: none of it is made until it's resumed." if PAUSE_ALL in held
-           else f" Paused, so not made until it's resumed: {', '.join(paused)}." if paused else ""),
-        {"job": job, "model": model, "clips": clips, "artifacts": kinds, "all_paused": PAUSE_ALL in held},
+        + (f" Paused, so not made until it's resumed: {', '.join(paused)}." if paused else ""),
+        {"job": job, "model": model, "clips": clips, "artifacts": kinds},
     )
 
 
