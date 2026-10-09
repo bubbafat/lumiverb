@@ -1367,6 +1367,25 @@ class AssetRepository:
             stmt = stmt.limit(limit)
         return list(self._session.exec(stmt).all())
 
+    def list_missing(self, library_id: str | None = None, folder: str | None = None,
+                     limit: int | None = None) -> list[Asset]:
+        """Clips archived because their file went missing, matching the
+        filters, longest missing first: what an admin can delete for good
+        (Robert, Oct 9). Not those of a library in the trash: they go with it."""
+        stmt = (
+            select(Asset)
+            .join(Library, Library.library_id == Asset.library_id)  # type: ignore[arg-type]
+            .where(Asset.deleted_at.isnot(None), Asset.deleted_reason == "missing", Library.status != "trashed")
+        )
+        if library_id is not None:
+            stmt = stmt.where(Asset.library_id == library_id)
+        if _under(folder) is not None:
+            stmt = stmt.where(Asset.rel_path.like(_under(folder), escape="\\"))  # type: ignore[union-attr]
+        stmt = stmt.order_by(Asset.deleted_at, Asset.asset_id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self._session.exec(stmt).all())
+
     def permanently_delete(self, asset_ids: list[str]) -> int:
         """
         Hard delete trashed assets and all related rows in FK-safe order.
