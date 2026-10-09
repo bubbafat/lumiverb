@@ -30,7 +30,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any
 
-from src.server.scheduler.dispatch import Dispatcher, Job
+from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
 
@@ -71,7 +71,7 @@ class Scheduler:
         *,
         capacity: Mapping[str, int],
         candidates: Callable[..., list[dict]] | None = None,
-        runners: Mapping[str, Callable[..., str | None]] | None = None,
+        runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
@@ -162,7 +162,7 @@ class Scheduler:
                 items = []
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
 
-    def _run(self, acct: Any, job: Job) -> str | None:
+    def _run(self, acct: Any, job: Job) -> Outcome:
         try:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
@@ -170,7 +170,7 @@ class Scheduler:
             return self._runners[job.kind](acct, job)
         except Exception:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
             logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
-            return None
+            return list(job.asset_ids)  # none saved or reported: each waits the long while
 
     def collect(self, timeout: float | None = 0) -> None:
         """Free the slots of finished jobs (waiting up to timeout for one)."""
@@ -182,10 +182,13 @@ class Scheduler:
         for future in done:
             job = self._running.pop(future)
             try:
-                tried = future.result() != NOT_TRIED
+                outcome = future.result()
             except Exception:  # noqa: BLE001 — _run catches its own
-                tried = True
-            self.dispatcher.done(job, tried=tried)
+                outcome = list(job.asset_ids)
+            if outcome == NOT_TRIED:
+                self.dispatcher.done(job, tried=False)
+            else:
+                self.dispatcher.done(job, waiting=outcome or ())
 
     @property
     def running(self) -> int:
@@ -384,6 +387,16 @@ def _hold_the_lock() -> Any:
     return None
 
 
+def configure_logging() -> None:
+    """INFO unless LOG_LEVEL says otherwise; never a line per HTTP request
+    (httpx says each at INFO: several per clip)."""
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger().setLevel(level)  # basicConfig leaves a configured root as it is
+    for noisy in ("httpx", "httpcore", "pyvips"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def main() -> int:
     """lumiverb-scheduler: run every account's processing on this machine."""
     from src.client.cache_dir import cache_dir
@@ -391,8 +404,7 @@ def main() -> int:
     from src.client.proxy.analysis_cache import clear_leftovers
     from src.server.scheduler.scans import STATE_FILE, ServiceLock, load_state, save_state, saved_form
 
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    configure_logging()
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")

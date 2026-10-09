@@ -350,6 +350,34 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
     assert tries == ["p", "p"]  # not tried: again at once; tried: held for the hour
 
 
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.fast
+def test_what_a_job_says_of_each_clip_decides_how_long_its_held() -> None:
+    # Saved or reported: held until the database has it. Waiting without
+    # saying why, or a job's surprise: held the long while.
+    def boom(acct, job):
+        raise RuntimeError("a surprise")
+
+    clock = Clock()
+    runners = {**Recorder().all(), "vision": lambda acct, job: ["b"], "ocr": boom}
+    due = {"vision": [_item("a"), _item("b", "2026-10-02")], "ocr": [_item("c")]}
+    s = Scheduler(lambda: {"t1": FakeAccount(vision=3)}, capacity={"scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [i for i in due.get(k.name, []) if i["asset_id"] not in skip],
+                  runners=runners, scan=MagicMock(), inline_refill=True, clock=clock)
+    s.tick()
+    _settle(s)
+    clock.now += s.dispatcher.settle_after + 1
+    assert s.dispatcher.held("t1", "vision") == ["b"]
+    assert s.dispatcher.held("t1", "ocr") == ["c"]
+
+
 @pytest.mark.fast
 def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> None:
     rec = Recorder()
@@ -448,3 +476,21 @@ def test_an_account_whose_key_was_revoked_gets_a_new_one(monkeypatch: pytest.Mon
     first.client.unauthorized = True
     second = accounts()["t1"]
     assert second is not first and first.closed and made == ["t1", "t1"]
+
+
+@pytest.mark.fast
+def test_the_log_has_no_line_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: httpx says every request at INFO, several per clip.
+    import logging
+
+    from src.server.scheduler.service import configure_logging
+
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    levels = {name: logging.getLogger(name).level for name in ("", "httpx", "httpcore", "pyvips")}
+    try:
+        configure_logging()
+        assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+        assert logging.getLogger("src.server.scheduler.service").isEnabledFor(logging.INFO)
+    finally:
+        for name, level in levels.items():
+            logging.getLogger(name).setLevel(level)

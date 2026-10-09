@@ -210,8 +210,7 @@ class Account:
             _free_gpu_memory()
             logger.info("scheduler: let go of %s's CLIP model (unused)", self.tenant_id)
         faces = self._faces
-        if faces is not None and now - self._used.get("faces", now) >= IDLE_SEC and faces.idle:
-            faces.close()
+        if faces is not None and now - self._used.get("faces", now) >= IDLE_SEC and faces.idle and faces.close():
             logger.info("scheduler: let go of %s's face detection process (unused)", self.tenant_id)
 
     def close(self) -> None:
@@ -226,6 +225,9 @@ class Account:
 
 
 def _free_gpu_memory() -> None:
+    import gc
+
+    gc.collect()  # the model's tensors, held by reference cycles, before the cache is emptied
     try:
         import torch
 

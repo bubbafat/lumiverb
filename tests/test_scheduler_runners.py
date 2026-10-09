@@ -265,12 +265,18 @@ def test_a_face_process_that_dies_charges_no_clip_and_is_replaced(acct: FakeAcco
     dead.apply_async.return_value.get.side_effect = mp.TimeoutError()
     fresh.apply_async.return_value.get.return_value = {"errors": []}
     pools = iter([dead, fresh])
-    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: next(pools))
-    face_runner.run(acct, _job("faces", "ast_1"))
-    face_runner.run(acct, _job("faces", "ast_2"))
+    now = [0.0]
+
+    def clock() -> float:
+        now[0] += 100.0  # each look at the clock, 100 s on
+        return now[0]
+
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: next(pools), clock=clock)
+    assert face_runner.run(acct, _job("faces", "ast_1")) == ["ast_1"]  # waits the long while, uncharged
+    assert face_runner.run(acct, _job("faces", "ast_2")) is None
     dead.terminate.assert_called_once()
     assert fresh.apply_async.called
-    assert dead.apply_async.return_value.get.call_args.kwargs["timeout"] == runners.FACE_BATCH_TIMEOUT_SEC
+    assert 8 <= dead.apply_async.return_value.get.call_count <= 10  # gave up after FACE_BATCH_TIMEOUT_SEC
     acct.failures.add.assert_not_called()
 
 
@@ -318,3 +324,123 @@ def test_a_transcript_whose_analysis_copy_cant_be_read_is_a_failure(acct: FakeAc
     acct.analysis_cache.get.return_value = None
     runners.transcript(acct, _job("transcript", "ast_1"))
     assert acct.failures.add.call_args.args[:2] == ("transcript", "ast_1")
+
+
+# ---------------------------------------------------------------------------
+# What a job says of each clip (review round 2): saved or reported, the
+# database has it soon; one that waits without either is held the long while.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.fast
+def test_a_clip_the_gpu_had_no_memory_for_waits_uncharged(acct: FakeAccount,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    def embed(**kw):
+        if kw["asset_id"] == "ast_2":
+            raise RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB")
+        return {"asset_id": kw["asset_id"], "model_id": "clip", "model_version": "v", "vector": [0.1]}
+
+    monkeypatch.setattr("src.client.cli.repair._repair_embed_one", embed)
+    assert runners.clip(acct, _job("clip", "ast_1", "ast_2")) == ["ast_2"]
+    acct.failures.add.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_description_the_guard_didnt_charge_waits(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.client.cli.ingest._backfill_one", MagicMock(side_effect=RuntimeError("503")))
+    acct.vision_fail.return_value = False  # the machines' trouble
+    assert runners.vision(acct, _job("vision", "ast_1")) == ["ast_1"]
+    acct.vision_fail.return_value = True  # the clip's: reported
+    assert runners.vision(acct, _job("vision", "ast_2")) is None
+    monkeypatch.setattr("src.client.cli.repair._ocr_one", lambda **kw: None)
+    acct.vision_fail.return_value = False
+    assert runners.ocr(acct, _job("ocr", "ast_3")) == ["ast_3"]
+
+
+@pytest.mark.fast
+def test_a_transcript_the_guard_didnt_charge_waits(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
+                                                   tmp_path: Path) -> None:
+    from src.client.workers.transcripts.base import TranscriptError
+
+    acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
+    monkeypatch.setattr("src.client.cli.repair._transcribe_one",
+                        MagicMock(side_effect=TranscriptError("speaches broke off", endpoint_fault=True)))
+    acct.transcript_fail.return_value = False
+    assert runners.transcript(acct, _job("transcript", "ast_1")) == ["ast_1"]
+
+
+@pytest.mark.fast
+def test_a_file_gone_from_reachable_storage_waits_for_its_scan(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
+                                                               tmp_path: Path) -> None:
+    (tmp_path / "other.mov").write_bytes(b"x")  # the storage is there; this file isn't
+    monkeypatch.setattr("src.client.cli.repair._probe_one", MagicMock(return_value="missing"))
+    assert runners.probe(acct, _job("probe", "ast_1")) == ["ast_1"]
+    monkeypatch.setattr("src.client.cli.repair._render_one", MagicMock(return_value="missing"))
+    assert runners.render(acct, _job("render", "ast_2")) == ["ast_2"]
+    assert acct.gone == []
+
+
+@pytest.mark.fast
+def test_storage_that_went_away_since_the_last_look_isnt_tried(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
+                                                               tmp_path: Path) -> None:
+    # Review round 2: an unmounted share is an empty folder; every file in it
+    # read as missing, held an hour each.
+    monkeypatch.setattr("src.client.cli.repair._probe_one", MagicMock(return_value="missing"))
+    assert runners.probe(acct, _job("probe", "ast_1")) == runners.NOT_TRIED
+    assert acct.gone == ["lib_1"]
+    acct.roots = {"lib_1": tmp_path / "gone"}
+    monkeypatch.setattr("src.client.cli.repair._render_one", MagicMock(return_value="missing"))
+    assert runners.render(acct, _job("render", "ast_2")) == runners.NOT_TRIED
+
+
+@pytest.mark.fast
+def test_scenes_reported_as_failing_dont_wait(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    def index(**kw):
+        kw["on_fail"]("ast_2", "no scenes found")
+        return (1, 1)
+
+    monkeypatch.setattr("src.client.cli.video_index.run_video_index", index)
+    acct.failures.for_artifact.return_value = MagicMock(return_value=None)
+    # Made scenes aren't seen here: those the server stops listing.
+    assert runners.scenes(acct, _job("scenes", "ast_1", "ast_2", duration_sec=30.0)) == ["ast_1"]
+
+
+@pytest.mark.fast
+def test_faces_say_which_clips_wait(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A clip whose file changed since it was hashed waits for its scan; the
+    # GPU running out of memory charges no clip.
+    monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item",
+                        lambda item, root, cache: None if item["asset_id"] == "ast_1" else item)
+    pool = MagicMock()
+    pool.apply_async.return_value.get.return_value = {"errors": [
+        {"asset_id": "ast_2", "error": "[ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION : CUDA failure 2: out of memory"},
+        {"asset_id": "ast_3", "error": "Failed to allocate memory for requested buffer of size 1048576"},
+        {"asset_id": "ast_4", "error": "bad image"}]}
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: pool)
+    assert face_runner.run(acct, _job("faces", "ast_1", "ast_2", "ast_3", "ast_4", "ast_5")) == [
+        "ast_1", "ast_2", "ast_3"]
+    acct.failures.add.assert_called_once_with("faces", "ast_4", "bad image")
+
+
+@pytest.mark.fast
+def test_a_face_batch_ends_as_soon_as_its_process_is_let_go_of(acct: FakeAccount,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: a stop, or the account let go of, left the GPU slot
+    # (CLIP and faces, every account) waiting up to 15 minutes.
+    import multiprocessing as mp
+    import threading
+
+    monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", lambda item, root, cache: item)
+    pool = MagicMock()
+    pool.apply_async.return_value.get.side_effect = mp.TimeoutError()
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: pool, poll_sec=0.01)
+    out: list = []
+    t = threading.Thread(target=lambda: out.append(face_runner.run(acct, _job("faces", "ast_1"))))
+    t.start()
+    while not pool.apply_async.called:
+        pass
+    assert not face_runner.idle
+    assert face_runner.close() is True
+    t.join(2)
+    assert out == [runners.NOT_TRIED] and face_runner.idle
+    assert face_runner.close() is False  # nothing left to let go of
