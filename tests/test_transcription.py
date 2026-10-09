@@ -308,3 +308,24 @@ class TestTranscriptDocumentId:
         segments = parse_srt_segments(SAMPLE_SRT)
         ids = {f"ast_1_{s.start_ms}_{s.end_ms}" for s in segments}
         assert len(ids) == len(segments)
+
+
+def test_audio_that_couldnt_be_read_is_tried_again_not_saved_as_silence(tmp_path, monkeypatch):
+    """ffmpeg killed by a stop, or the analysis proxy evicted mid-read: not
+    known to be silence, so not saved as "no speech" for good (review, Oct 9)."""
+    import subprocess
+    from unittest.mock import MagicMock
+
+    from src.client.cli import repair
+    from src.client.video.audio import AudioTrack
+
+    source = tmp_path / "a.mp4"
+    source.write_bytes(b"x")
+    monkeypatch.setattr(repair, "audio_tracks", lambda p: [AudioTrack(0, 2, "aac")])
+    killed = subprocess.CompletedProcess(args=[], returncode=-15, stdout=b"", stderr=b"Exiting normally, received signal 15.")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: killed)
+    assert repair._transcribe_one(source, MagicMock()) is None
+    no_audio = subprocess.CompletedProcess(args=[], returncode=1, stdout=b"",
+                                           stderr=b"Output file #0 does not contain any stream")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: no_audio)
+    assert repair._transcribe_one(source, MagicMock()) == ("", "")

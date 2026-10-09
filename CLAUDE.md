@@ -26,8 +26,8 @@ Postgres fallback. Auth: JWT (web) + API keys (CLI), both
 
 ```
 src/
-  server/                  Python API server, DB, search, upgrade runner
-  client/                  Python CLI + worker processes
+  server/                  Python API server, DB, search, upgrade runner, scheduler (all processing)
+  client/                  Python CLI + the processing steps the scheduler runs
   shared/                  Code used by both server and client
   ui/web/                  React web app (Vite)
 
@@ -60,7 +60,7 @@ quickwit/     Quickwit index schemas
 | Online data backfills | `src/server/upgrade/` (`steps/`, `registry.py`, `runner.py`). For long-running migrations that can't run in one Alembic txn |
 | Video transcription | Client: `src/client/cli/repair.py` `_transcribe_one` (ffmpeg from the analysis proxy → the speech found here, `workers/transcripts/speech.py` → a machine doing the transcripts job hears it: the built-in faster-whisper `local.py` or a server `openai_compatible.py`, pooled by `cli/transcript_guard.py`). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
 | AI machines and jobs | Server: `api/routers/ai.py`, `repository/ai_machines.py`; jobs `src/shared/ai_jobs.py`, Whisper names `src/shared/whisper_models.py`. Worker: `cli/ai_pool.py`, `cli/job_guard.py` (+ `vision_guard.py`, `transcript_guard.py`). Web: `pages/settings/AiSection.tsx` |
-| The brain (scan + enrich service) | `src/client/cli/worker.py` (`lumiverb worker`), `roots.py` (library roots mapped to this machine), `routers/changes.py` (change reports from the Mac). Setup and ports: `docs/brain-setup.md` |
+| The brain: all processing (the scheduler) | `src/server/scheduler/` (`lumiverb-scheduler.service`: `kinds.py` tiers and pools, `queue.py` what's due from the database, `dispatch.py` which job runs next, `runners.py` one job of each kind, `scans.py` reported changes and daily full scans), `src/client/cli/roots.py` (library roots mapped to this machine), `routers/changes.py` (change reports from the Mac). Setup and ports: `docs/brain-setup.md` |
 | Analysis proxies | Render: `src/client/video/analysis_proxy.py`. Cache: `src/client/proxy/analysis_cache.py`. Stored as the `analysis_proxy` artifact (`routers/artifacts.py`) |
 | Filter algebra | `src/server/models/query_filter.py` (23 leaf types), `filter_registry.py` (parsing + capabilities). Web: `src/ui/web/src/lib/queryFilter.ts`. Swift: `LumiverbKit/Models/QueryFilter.swift` |
 | Unified query endpoint | `src/server/api/routers/query.py` — single `GET /v1/query?f=prefix:value` replaces old `/v1/browse` + `/v1/search`. Candidate-set pattern for text search (Quickwit → Postgres filters) |

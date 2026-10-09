@@ -223,7 +223,7 @@ The brain reads storage, schedules all rendering and enrichment, and is where Lu
 - Install the production stack on the brain (`scripts/deploy-api.sh`, `scripts/deploy-web.sh`), reachable over the LAN and Tailscale
 - Mount storage read-only; map each library's root to that mount in the brain's own config, not the database
 - Render full-length analysis proxies at the Rendered milestone; transcription, scenes and vision read these instead of originals
-- Run scan and enrich as a service on the brain (the `lumiverb-worker.service` stub calls a command that no longer exists); the macOS app reports file changes it sees on storage
+- Run scan and enrich as a service on the brain (since phase 4, the scheduler); the storage machine reports file changes it sees
 - Retire the macOS app's built-in AI steps
 - Ingest the whole library fresh
 
@@ -258,6 +258,10 @@ Today's workers become producers that declare what they need.
 - Producers live in versioned folders
 
 **Done when:** a new producer, such as audio waveform thumbnails, ships as one folder with no pipeline edits, its settings page renders from the class, and a producer whose prerequisites can never exist shows as disabled with the reason.
+
+**Orchestration (decided Oct 9):** the server runs all processing. A scheduler service on the brain (`src/server/scheduler/`, `lumiverb-scheduler.service`), beside the API and sharing its database, keeps one ranked queue of every job in every library and account: tiers first (1 see it: scans, previews, probes; 2 prepare: analysis copies; 3 find it: the AI and the rest that makes clips findable; 4 redo stale work), then oldest first. Each resource is a pool with so many slots (probes, renders, CLIP, the face process, scenes, and each account's AI machines); a free slot takes the best job that can use it, so a lower tier fills what a higher one leaves idle. It replaces the worker: distribution comes from storage and AI machines, not from workers on other machines. Producers become plug-ins it runs, with a public interface so outside producers can be added.
+
+**Where it stands:** the scheduler is built (piece 1): the queue straight from each account's database (the reconciler's due clips), the dispatcher, scans from reported changes and a daily full scan (moved from the worker), and a runner per kind that reuses the worker's per-clip code and saves through the API's routes, with a key the scheduler makes itself. The update script replaces `lumiverb-worker` with it. Next: redo on change (stale work as tier 4, a settings change being the approval), failures you can see, sharing the brain's GPU, then the producer plug-ins.
 
 ## Alternatives Considered
 

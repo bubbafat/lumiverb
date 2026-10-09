@@ -181,10 +181,10 @@ def test_a_failed_api_update_stops_before_the_web_and_says_so(install):
 
 
 def test_a_service_not_running_afterwards_fails_the_update(install):
-    out = _run(install, INACTIVE="lumiverb-worker")
+    out = _run(install, INACTIVE="lumiverb-scheduler")
     assert out.returncode != 0
     log = _log(install)
-    assert "lumiverb-worker: inactive" in log
+    assert "lumiverb-scheduler: inactive" in log
     assert "Result: FAILED" in log
 
 

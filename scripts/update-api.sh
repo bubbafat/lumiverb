@@ -14,7 +14,7 @@
 #   4. Sync data directory
 #   5. Fix Quickwit sandbox
 #   6. Install upkeep timers
-#   7. Restart API + Quickwit + worker
+#   7. Restart API + Quickwit + scheduler
 #   8. Health check
 #
 # Does NOT: rebuild web UI, touch nginx, install Node.js.
@@ -85,12 +85,17 @@ fi
 # ---------------------------------------------------------------------------
 step "Updating Python dependencies"
 EXTRAS=(--extra cli --extra embeddings --extra face_recognition)
-# uv sync removes what the extras don't list, so keep the worker's.
-if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+# uv sync removes what the extras don't list, so keep processing's (the
+# scheduler's, or the worker's it replaces).
+PROCESSING=false
+if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 || systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
+  PROCESSING=true
   EXTRAS+=(--extra workers)
+  # Before anything changes: the scheduler's caches need the data disk.
+  grep -q '^DATA_DIR=.' "$ENV_FILE" || fail "No DATA_DIR in ${ENV_FILE}: the scheduler's caches need the data disk"
 fi
 # A new Python makes uv sync delete the venv and download it all again. So
-# download first, into a side venv, while the API and worker run; then stop
+# download first, into a side venv, while the API and scheduler run; then stop
 # them only for the swap, which the warm cache makes quick.
 HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
 WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
@@ -101,9 +106,16 @@ if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
   rm -rf "$APP_DIR/.venv-next"  # uv won't build into what an interrupted run left
   sudo -u "$SVC_USER" env UV_PROJECT_ENVIRONMENT="$APP_DIR/.venv-next" "$UV_BIN" sync "${EXTRAS[@]}"
-  if systemctl is-enabled lumiverb-worker >/dev/null 2>&1; then
-    systemctl stop lumiverb-worker
+  # The old worker's stop reaches only its main process (as when the scheduler
+  # replaces it below): killed with its ffmpeg, it would save an empty transcript.
+  if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    mkdir -p /etc/systemd/system/lumiverb-worker.service.d
+    printf '[Service]\nKillMode=mixed\n' > /etc/systemd/system/lumiverb-worker.service.d/stop.conf
+    systemctl daemon-reload
   fi
+  for unit in lumiverb-scheduler lumiverb-worker; do
+    systemctl is-enabled "$unit" >/dev/null 2>&1 && systemctl stop "$unit"
+  done
   systemctl stop lumiverb-api
 fi
 sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
@@ -133,7 +145,7 @@ DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
   mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
-  # Caches, and the worker's lock and state, on the data disk for manual
+  # Caches, and the scheduler's lock and state, on the data disk for manual
   # runs as the service user too, so one never runs beside the service.
   grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || env_append "XDG_CACHE_HOME=${DATA_DIR}/cache"
   sudo -u "$SVC_USER" -H "$APP_DIR/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
@@ -178,29 +190,67 @@ if [[ -f "$API_UNIT" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-step "Updating the worker unit"
-WORKER_UNIT="/etc/systemd/system/lumiverb-worker.service"
-if [[ -f "$WORKER_UNIT" ]]; then
-  # The old unit ran 'lumiverb pipeline', which no longer exists.
-  sed -i "s|^ExecStart=.*/lumiverb pipeline$|ExecStart=${APP_DIR}/.venv/bin/lumiverb worker|" "$WORKER_UNIT"
-  grep -q "^Environment=HOME=" "$WORKER_UNIT" || sed -i "/^Environment=PYTHONUNBUFFERED=1$/a Environment=HOME=${SVC_HOME}" "$WORKER_UNIT"
-  sed -i "s|^ReadWritePaths=\([^ ]*\)$|ReadWritePaths=\1 ${SVC_HOME}|" "$WORKER_UNIT"
-  # Proxy caches on the data disk, not the root disk with Postgres.
+step "Installing the scheduler (all processing; it replaces the worker)"
+if [[ "$PROCESSING" == "true" ]]; then
   DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
-  if [[ -z "$DATA_DIR" ]]; then
-    warn "No DATA_DIR in ${ENV_FILE}; the worker's caches stay in its home"
-  else
-    grep -q "^Environment=XDG_CACHE_HOME=" "$WORKER_UNIT" \
-      || sed -i "/^Environment=HOME=/a Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" "$WORKER_UNIT"
-    # Temp files (Whisper's WAVs) too: PrivateTmp's /tmp can be RAM. Not the
-    # API's tmp, which each API start empties; this one each worker start.
-    grep -q "^Environment=TMPDIR=" "$WORKER_UNIT" \
-      || sed -i "/^ExecStart=/i Environment=TMPDIR=${DATA_DIR}/worker-tmp" "$WORKER_UNIT"
-    grep -q "^ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp " "$WORKER_UNIT" \
-      || sed -i "/^Environment=TMPDIR=/a ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete" "$WORKER_UNIT"
+  [[ -n "$DATA_DIR" ]] || fail "No DATA_DIR in ${ENV_FILE}: the scheduler's caches need the data disk"
+  mkdir -p "$DATA_DIR"/worker-tmp "$DATA_DIR"/cache
+  chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/worker-tmp "$DATA_DIR"/cache
+  # Rewritten each update: everything it needs is known here.
+  cat > /etc/systemd/system/lumiverb-scheduler.service <<UNIT
+[Unit]
+Description=Lumiverb scheduler (all processing)
+After=network-online.target remote-fs.target lumiverb-api.service
+Wants=network-online.target lumiverb-api.service
+
+[Service]
+Type=simple
+User=${SVC_USER}
+Group=${SVC_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=${SVC_HOME}
+# Proxy caches go on the data disk, not the root disk with Postgres.
+Environment=XDG_CACHE_HOME=${DATA_DIR}/cache
+# Temp files too (Whisper's WAVs): PrivateTmp's /tmp can be RAM. Not the
+# API's tmp, which each API start empties; this one each scheduler start.
+Environment=TMPDIR=${DATA_DIR}/worker-tmp
+ExecStartPre=-/usr/bin/find ${DATA_DIR}/worker-tmp -mindepth 1 -delete
+ExecStart=${APP_DIR}/.venv/bin/python -m src.server.scheduler
+Restart=on-failure
+RestartSec=30s
+# It lets jobs in hand finish for up to 25 s, saving nothing more; only the
+# scheduler hears the stop, so ffmpeg under a job isn't killed mid-clip
+# (its output read as "no audio"). What's left is killed at the end.
+KillMode=mixed
+TimeoutStopSec=40s
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=${DATA_DIR} ${SVC_HOME}
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  # The worker goes: the scheduler takes its lock, state and caches. Its stop
+  # reaches only its main process (the rest dies with it at the end): its old
+  # code, killed together with the ffmpeg under a transcription, would save
+  # an empty transcript.
+  if [[ -f /etc/systemd/system/lumiverb-worker.service ]]; then
+    mkdir -p /etc/systemd/system/lumiverb-worker.service.d
+    printf '[Service]\nKillMode=mixed\n' > /etc/systemd/system/lumiverb-worker.service.d/stop.conf
+    systemctl daemon-reload
+    systemctl disable --now lumiverb-worker 2>/dev/null || true
+    rm -rf /etc/systemd/system/lumiverb-worker.service /etc/systemd/system/lumiverb-worker.service.d
+    ok "lumiverb-worker stopped and removed"
   fi
   systemctl daemon-reload
-  ok "$(grep '^ExecStart=' "$WORKER_UNIT")"
+  systemctl enable lumiverb-scheduler >/dev/null 2>&1
+  ok "lumiverb-scheduler installed"
+else
+  ok "No processing on this machine (install with deploy-api.sh --worker)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -275,12 +325,12 @@ for i in {1..10}; do
   fi
   sleep 1
 done
-# The worker last, once the API answers: its first cycle asks the API for work.
-systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl restart lumiverb-worker
+# The scheduler last, once the API answers: its jobs save through the API.
+systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl restart lumiverb-scheduler
 
 systemctl status --no-pager lumiverb-api || true
 systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true
-systemctl is-enabled lumiverb-worker >/dev/null 2>&1 && systemctl status --no-pager lumiverb-worker || true
+systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl status --no-pager lumiverb-scheduler || true
 
 if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
   ok "API server healthy"

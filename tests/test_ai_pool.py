@@ -407,3 +407,125 @@ def test_a_clip_one_server_refuses_goes_to_the_others_first():
     with pytest.raises(TranscriptError) as e:
         transcriber.transcribe("bad.wav")
     assert e.value.endpoint_fault is False and sorted(calls[2:]) == ["Built in", "Speaches"]
+
+
+# ---------------------------------------------------------------------------
+# Checked again while requests are in flight (the scheduler checks every minute)
+# ---------------------------------------------------------------------------
+
+
+def test_checking_again_keeps_what_requests_in_flight_hold():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        held = [pool.acquire() for _ in range(6)]  # every slot: 2 on the brain, 4 on the studio
+        assert all(held)
+        pool.check()
+    # Still full: a new request waits rather than overloading a machine.
+    assert {m.name: m.busy for m in pool.machines} == {"Brain": 2, "Studio": 4}
+    for m in held:
+        pool.release(m)
+    assert {m.name: m.busy for m in pool.machines} == {"Brain": 0, "Studio": 0}
+
+
+def test_a_machine_whose_address_changed_is_checked_again_and_gets_a_new_provider():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,), "http://brain2/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        made = []
+
+        def make(machine):
+            made.append(machine.api_url)
+            p = MagicMock()
+            p.describe.return_value = {"description": "", "tags": []}
+            return p
+
+        provider = PooledCaptionProvider(pool, make)
+        provider.describe("a.jpg")
+        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [
+            {**BRAIN, "api_url": "http://brain2/v1"}]}
+        pool.check()
+        assert [m.api_url for m in pool.machines] == ["http://brain2/v1"] and pool.machines[0].online
+        provider.describe("b.jpg")
+    assert made[-1] == "http://brain2/v1"
+
+
+def test_a_machine_no_longer_listed_is_dropped():
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [BRAIN]}
+        pool.check()
+    assert [m.name for m in pool.machines] == ["Brain"] and pool.capacity() == 2
+
+
+def test_a_new_model_sends_nothing_to_a_machine_until_its_checked_with_it():
+    """Review round 2: work started right after a model change was recorded as
+    the new model's while the machine still served the old one."""
+    llava = "llava:13b"
+    client = _client()
+    with _offering({"http://brain/v1": (QWEN, llava), "http://studio/v1": (QWEN,)}) as listed:
+        pool = MachinePool(client, "vision")
+        pool.check()
+        assert all(m.online and m.serves == QWEN for m in pool.machines)
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN, STUDIO]}
+        pool.load()  # the recheck hasn't run yet
+        assert pool.model == llava
+        assert not any(m.online or m.serves for m in pool.machines)
+        listed.reset_mock()
+        machine = pool.acquire()  # checks them with the new model first
+        assert listed.call_count == 2
+        assert machine is not None and machine.name == "Brain" and machine.serves == llava
+        pool.release(machine)
+    studio = next(m for m in pool.machines if m.name == "Studio")
+    assert not studio.online and llava in studio.error
+
+
+def test_work_started_with_one_model_isnt_served_by_the_next():
+    """Review round 3: a job that took its model before a change, reaching a
+    machine checked with the new one, was answered by the new model and
+    saved as the old one's. It waits instead, uncharged."""
+    llava = "llava:13b"
+    client = _client(machines=(BRAIN,))
+    with _offering({"http://brain/v1": (QWEN, llava)}):
+        pool = MachinePool(client, "vision")
+        pool.check()
+        made = []
+
+        def make(machine):
+            made.append(machine.serves)
+            p = MagicMock()
+            p.describe.return_value = {"description": "", "tags": []}
+            return p
+
+        provider = PooledCaptionProvider(pool, make)  # made for qwen
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        pool.check()
+        with pytest.raises(CaptionError) as raised:
+            provider.describe("a.jpg")
+    assert raised.value.model_changed is True and raised.value.endpoint_fault is False
+    assert made == []  # nothing asked of the new model for it
+    assert all(m.busy == 0 for m in pool.machines)
+
+
+def test_a_check_for_a_model_no_longer_chosen_is_left_out():
+    """Review round 3: a check that started before a model change mustn't
+    mark the machine as serving the new model with the old one's answer."""
+    llava = "llava:13b"
+    client = _client(machines=(BRAIN,))
+    pool = MachinePool(client, "vision")
+
+    def list_models(url, key=None, **_):
+        # The model changes while the machine is being asked.
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        pool.load()
+        return [QWEN]
+
+    with patch("src.client.cli.ai_pool.list_models", side_effect=list_models):
+        pool.load()
+        pool._check(pool.machines[0])
+    brain = pool.machines[0]
+    assert not brain.online and brain.serves == "" and brain.checked_at is None  # checked again, with llava

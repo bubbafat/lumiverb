@@ -62,7 +62,7 @@ def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
     api_key: Annotated[str | None, typer.Option("--api-key")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
-    cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the worker's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
+    cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the scheduler's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json.
 
@@ -70,7 +70,7 @@ def config_set(
     gets made, are the account's: Settings → AI in the web app."""
     cfg = load_config()
     if cache_home:
-        # Relative to wherever this ran, the worker would look somewhere else.
+        # Relative to wherever this ran, the scheduler would look somewhere else.
         expanded = os.path.expanduser(cache_home)
         if not os.path.isabs(expanded):
             console.print(f"[red]--cache-home must be an absolute path (or '' to undo), not {escape(cache_home)}[/red]")
@@ -203,7 +203,7 @@ def library_report_changes(
     paths: Annotated[list[str] | None, typer.Argument(help="Files or folders that changed.")] = None,
     stdin: Annotated[bool, typer.Option("--stdin", help="Also read paths from standard input, one per line.")] = False,
 ) -> None:
-    """Tell the brain these paths changed on storage, so its worker scans them.
+    """Tell the brain these paths changed on storage, so its scheduler scans them.
 
     The machine holding the storage reports what it sees change; the brain
     mounts it over the network and can't watch it. Paths under a root
@@ -1068,49 +1068,6 @@ def scan(
 
 
 ENRICH_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
-
-
-@app.command("worker")
-def worker(
-    poll: Annotated[float, typer.Option("--poll", help="Seconds between cycles.")] = 60.0,
-    full_scan_hours: Annotated[float, typer.Option("--full-scan-hours", help="Scan each library in full this often, in case a change report was missed.")] = 24.0,
-    library: Annotated[list[str] | None, typer.Option("--library", "-l", help="Only these libraries (repeatable).")] = None,
-    once: Annotated[bool, typer.Option("--once", help="Run one cycle and exit.")] = False,
-) -> None:
-    """Scan what changed and enrich what's missing, forever (the brain's service).
-
-    \b
-    Each cycle, for each library:
-      - if its storage is reachable here and changes were reported (or a
-        full scan is due), scan the folder that covers them
-      - if anything is missing, enrich; videos are enriched from analysis
-        proxies, so this continues while the storage sleeps
-    """
-    import signal
-
-    from src.client.cli import worker as worker_mod
-
-    lock = worker_mod.WorkerLock()
-    if not lock.acquire():
-        console.print("[red]A worker is already running on this machine.[/red]")
-        raise typer.Exit(1)
-
-    def _stop(signum: int, frame: object) -> None:
-        raise SystemExit(0)
-
-    import contextlib
-
-    with contextlib.suppress(ValueError):  # not the main thread (tests)
-        signal.signal(signal.SIGTERM, _stop)
-    try:
-        worker_mod.run_forever(
-            poll=poll,
-            full_scan_every=full_scan_hours * 3600,
-            only=library or None,
-            once=once,
-        )
-    finally:
-        lock.release()
 
 
 @app.command("enrich")

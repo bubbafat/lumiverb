@@ -1,14 +1,14 @@
 # The brain: setup and operation
 
-The brain is the Linux box `media` (LAN 192.168.86.166, Tailscale 100.94.35.123). It runs Lumiverb, reads the DAS, and does all scanning and enrichment (ADR-016 phase 2). The Mac Studio keeps the DAS and editing; it reports file changes and browses.
+The brain is the Linux box `media` (LAN 192.168.86.166, Tailscale 100.94.35.123). It runs Lumiverb, reads the DAS, and does all processing: one scheduler ranks every job and runs it here (ADR-016 phases 2 and 4). The Mac Studio keeps the DAS and editing; it reports file changes and browses.
 
 ```
 Mac Studio ── DAS (media-01, media-02)
     │  SMB over 10GbE (10.10.10.1)          reports changes: POST /v1/changes
     ▼
-media: /mnt/media-01, /mnt/media-02  ──►  lumiverb-worker  ──►  API :8100  ◄── nginx :80 ◄── web, Mac, iOS
-                                           (scan, render,        Postgres 18 :5434
-                                            enrich)              Quickwit :7290
+media: /mnt/media-01, /mnt/media-02  ──►  lumiverb-scheduler ──►  API :8100  ◄── nginx :80 ◄── web, Mac, iOS
+                                           (every job, ranked;   Postgres 18 :5434
+                                            AI on Settings → AI) Quickwit :7290
 ```
 
 ## Ports on this box
@@ -36,7 +36,7 @@ Libraries keep the root the Mac sees, because exports point Resolve, Premiere an
 
 The first library is `/Volumes/media-01/Media`: about 14,400 photos and videos, 4,400 of them videos. Paths match case-sensitively, so use the folder names as the Mac shows them (`Media`, not `media`). To add `media-02` later, rerun the install with another `--root-map`, or run `lumiverb config map-root` as the `lumiverb` user.
 
-### 2. Install the API and the worker
+### 2. Install the API and the scheduler
 
 From this checkout (`~/src/lumiverb`), on `feat/brain` until the stack is merged:
 
@@ -46,9 +46,9 @@ sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 
 
 Add `--dry-run` to see the settings it will use without changing anything. Once installed, it needs sudo too: the remembered settings are in `/etc/lumiverb/env`, which only root can read.
 
-- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage, plus about 20 MB per hour for each extra stereo audio track. The worker's caches go there too (`cache/`), not on the root disk, and its temp files, such as the audio Whisper reads (`worker-tmp/`), not in RAM.
+- **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage, plus about 20 MB per hour for each extra stereo audio track. The scheduler's caches go there too (`cache/`), not on the root disk, and its temp files, such as the audio Whisper reads (`worker-tmp/`), not in RAM.
 - **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched.
-- **The worker** runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
+- **The scheduler** (`--worker` installs it) runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
 - **Reruns are safe.** They keep the ports, the data dir, the branch, the Postgres version, `--no-firewall` (until a run with `--firewall`), the tenant, the keys and any settings added to `/etc/lumiverb/env` by hand, so `sudo bash scripts/deploy-api.sh` alone is enough. `deploy-web.sh` follows the same branch and firewall setting.
 
 ### 3. Install the web UI
@@ -79,7 +79,7 @@ sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library create --name "Medi
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library list
 ```
 
-`library list` shows a **Here** column with the mapped path. Within a minute the worker starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
+`library list` shows a **Here** column with the mapped path. Within a minute the scheduler starts the first full scan. That is the fresh ingest of the DAS: probe, poster and preview, then analysis proxies, transcripts and scenes.
 
 ### 6. AI machines
 
@@ -98,13 +98,13 @@ On Oct 8 there are two:
 
 To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
 
-Before each round of vision work the worker checks every machine, and sends work only to those online and offering the model, spread by how many each takes. Descriptions, OCR and scene descriptions each keep as many requests going as the online machines take together; scenes from several videos go out together, so short clips don't leave a machine idle. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
+Every minute the scheduler checks every machine (and each one again before any work once the model changes), and sends work only to those online and offering the model, spread by how many each takes. Descriptions, OCR and scene descriptions each keep as many requests going as the online machines take together; scenes from several videos go out together, so short clips don't leave a machine idle. One that stops answering (asleep, out of memory, the model gone) is skipped and its work goes to the others; it's checked again a minute later. Settings → AI shows each machine's state, offline ones in red, with a red dot on AI in the Settings menu. Only when no machine is left does vision work wait, and no clip is charged a failure.
 
-**Transcripts** are a job too, with one model (`small` until changed in Settings → AI → Models). Every account has a **Built in** machine: the worker's own Whisper (faster-whisper, on the 3080 here), doing transcripts one clip at a time, with nothing to set up. It has no URL; it can be renamed, given more at once (each one loads the model on the GPU beside Ollama: `small` takes about 1 GB, `large-v3` about 4 GB) or turned off, not removed. The worker checks it before transcribing (faster-whisper installed, the model one it knows), and a model that won't load moves its clips to another machine.
+**Transcripts** are a job too, with one model (`small` until changed in Settings → AI → Models). Every account has a **Built in** machine: the scheduler's own Whisper (faster-whisper, on the 3080 here), doing transcripts one clip at a time, with nothing to set up. It has no URL; it can be renamed, given more at once (each one loads the model on the GPU beside Ollama: `small` takes about 1 GB, `large-v3` about 4 GB) or turned off, not removed. The worker checks it before transcribing (faster-whisper installed, the model one it knows), and a model that won't load moves its clips to another machine.
 
 To transcribe on another GPU as well, run an OpenAI-compatible Whisper server there and add it like any machine, ticking **Transcripts**. [speaches](https://speaches.ai) is the one that fits: it serves faster-whisper with `GET /v1/models` and `POST /v1/audio/transcriptions`, and lists the same models by their Hugging Face names (`Systran/faster-whisper-small` is `small`). Download the job's model into it first (speaches: `POST /v1/models/Systran/faster-whisper-small`), or Connect won't list it. On a Mac, speaches runs on the CPU only. LocalAI's whisper backend (whisper.cpp, on Metal) works too: it lists each model by the name its config gives it, so give the job's name only to a build of the same model (`ggml-small.bin` for `small`). A bare whisper.cpp server lists no models, so Lumiverb can't check it has the right one: not supported. Nor is OpenAI's own API (25 MB a request).
 
-Whichever machine hears a clip, the worker finds its speech first (faster-whisper's VAD, skipping silences of 500 ms or more, the transcript producer's setting) and sends only the speech, then puts the times back onto the clip. So the model and silences a transcript records are the ones it was made with, on any machine. How a server decodes isn't tracked, like which GPU it ran on: current speaches also skips silences over 160 ms within what it's sent and decodes pieces of at most 30 s at temperature 0, so its cues and an occasional word differ from the built-in's (on the Spanish test clip it heard "eras" where the built-in heard "eres").
+Whichever machine hears a clip, the scheduler finds its speech first (faster-whisper's VAD, skipping silences of 500 ms or more, the transcript producer's setting) and sends only the speech, then puts the times back onto the clip. So the model and silences a transcript records are the ones it was made with, on any machine. How a server decodes isn't tracked, like which GPU it ran on: current speaches also skips silences over 160 ms within what it's sent and decodes pieces of at most 30 s at temperature 0, so its cues and an occasional word differ from the built-in's (on the Spanish test clip it heard "eras" where the built-in heard "eres").
 
 A machine that doesn't answer, breaks off or can't load the model is skipped and its clips go to the others. A clip a machine refuses (too big for a proxy in front of it, say) goes to the others first. One that a machine is still working on after ten minutes and four times its speech, or that makes Whisper die, is marked failing and tried again later, 5 minutes, then 10, doubling to a day.
 
@@ -114,7 +114,7 @@ Not pointed at the brain yet (your call, Oct 8): its Swift changes wait. Until t
 
 ### 8. The DAS mounts
 
-`/mnt/media-01` and `/mnt/media-02` stay read-write in `/etc/fstab` (your call, Oct 8): Lumiverb can't write there anyway, because the worker's sandbox makes everything outside its data folder and home read-only.
+`/mnt/media-01` and `/mnt/media-02` stay read-write in `/etc/fstab` (your call, Oct 8): Lumiverb can't write there anyway, because the scheduler's sandbox makes everything outside its data folder and home read-only.
 
 The fstab lines don't say `soft` or `hard`, so the mounts are `soft`, the CIFS default: when the Mac Studio sleeps, reads fail instead of hanging forever. Never add `hard`: a sleeping Mac would then hang the worker's scans and renders indefinitely.
 
@@ -122,36 +122,30 @@ Keep the DAS mounts in `/etc/fstab`, not in hand-written systemd mount units or 
 
 ## How it runs
 
-- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Each cycle (every 60 s), the worker scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next cycle (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
-- **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day. A folder that can't be listed (no permission, or the share timing out mid-scan) keeps its changes for the same retry, and that scan removes nothing.
-- **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full, and which files and folders wait for a retry, are kept in `worker-state.json` beside the worker lock (in `/mnt/ssd2/lumiverb/cache/lumiverb`), even when the worker is stopped mid-cycle, so a restart or deploy doesn't rescan everything; delete it to force full scans.
-- **The Mac Studio asleep.** The worker doesn't scan its libraries. A folder `/etc/fstab` lists as a mount counts only while it's mounted, and an empty folder never counts, so an unmounted share is never scanned. It keeps enriching from analysis proxies. Only probing and rendering wait, and they start as soon as the storage is back.
+- **One queue.** The scheduler ranks every job, in every library: first what you see (scans, which make thumbnails and previews, and probes), then analysis copies, then the AI and the rest that makes clips findable (CLIP, descriptions and tags, text in images, transcripts, faces, scenes, scene descriptions). Within a tier, oldest first (in the order clips were added). Each resource has its own slots: scans one at a time, probes 2, analysis copies as below, CLIP and faces taking turns on the GPU (25 clips a batch), scenes 1, and the AI machines as many at once as Settings → AI says. A free slot takes the best job that uses it, so AI keeps going while renders wait on the storage, and a long backlog of one kind never holds up another.
+- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Every 30 s the scheduler scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next look (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait).
+- **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day. A folder that can't be listed (no permission, or the share timing out mid-scan) keeps its changes for the same retry, and that scan removes nothing. A clip whose processing fails is tried again after 5 minutes, doubling up to a day. One that waits without failing (the GPU out of memory, the AI machines down, its file gone since the last look) isn't charged, and waits an hour before the scheduler takes it again.
+- **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full, and which files and folders wait for a retry, are kept in `worker-state.json` beside the scheduler's lock (in `/mnt/ssd2/lumiverb/cache/lumiverb`; the names are the old worker's, so it carried them over), so a restart or deploy doesn't rescan everything; delete it to force full scans.
+- **The Mac Studio asleep.** The scheduler doesn't scan its libraries. A folder `/etc/fstab` lists as a mount counts only while it's mounted, and an empty folder never counts, so an unmounted share is never scanned. Work from analysis proxies goes on; only probing and rendering wait, and they start as soon as the storage is back.
 - **Missing files are archived.** On a healthy mount, a file the scan no longer finds is archived (marked missing) at once: its asset keeps ratings, projects, faces and transcripts. When the file comes back, at the same path or anywhere else in the library (matched by content), the asset is restored. Archiving is reversible, so nothing is held back, however many go at once. Archived clips (missing, or archived by a person) aren't deleted on their own: only by moving them to the trash, or with their library. The trash deletes what's been in it longer than the trash days (30 unless changed in Settings → Files) on the 5-minute upkeep timer.
-- **Scanning first.** Each cycle scans every library before enriching any. Enrichment then gets 15 minutes and stops between items, so change reports never wait on a first ingest's days of renders and transcription; it goes on next cycle, least recently enriched library first. Probing and rendering stop as soon as the storage stops answering, rather than waiting out a timeout per file.
-- **Pacing.** Enrichment runs again when a library's counts change, when its storage comes back, or hourly, so a clip that fails every time isn't retried every minute. Within a run, a clip enrichment tried in the last hour waits, so one that fails slowly (a 15-minute render, say) doesn't hold up the clips behind it. After a restart each is tried once more.
-- **Analysis proxies** render alongside the rest of enrichment, up to three at once on the brain's 20 cores. The RTX 3080 decodes the originals through Vulkan, about four times faster than the CPU (a 24-minute 4K HEVC clip in about 6 minutes instead of 22); the worker says "Decoding on the GPU (vulkan)" when it does. One render at a time decodes there (`gpu_decodes` in the worker's config), and only while the card has 1.5 GB free: one decode already keeps the 3080's video decoder near full, and three at once (about 300 MB of video memory each) ran the vision model out of memory beside it. The other renders decode on the CPU meanwhile. ffmpeg decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose GPU decoding fails runs again on the CPU. `nvidia-smi dmon -s u` shows the decoder busy (the `dec` column). Until a video's is ready, it plays its 10-second preview. They are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
+- **How it saves.** Jobs save their results through the API's own routes on this machine, with the same checks and lineage as before; at start the scheduler makes itself an API key per account (labelled `scheduler`) and revokes its previous one.
+- **Analysis proxies** render up to three at once on the brain's 20 cores. The RTX 3080 decodes the originals through Vulkan, about four times faster than the CPU (a 24-minute 4K HEVC clip in about 6 minutes instead of 22); One render at a time decodes there (`gpu_decodes` in the `lumiverb` user's CLI config), and only while the card has 1.5 GB free: one decode already keeps the 3080's video decoder near full, and three at once (about 300 MB of video memory each) ran the vision model out of memory beside it. The other renders decode on the CPU meanwhile. ffmpeg decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose GPU decoding fails runs again on the CPU. `nvidia-smi dmon -s u` shows the decoder busy (the `dec` column). Until a video's is ready, it plays its 10-second preview. They are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
 - **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
 - **Playback.** Signed in, the web plays each video in full from its analysis proxy, framed in green; until the proxy exists, the 10-second preview plays, framed in amber, and switches to the whole video when it's ready. Public pages play 10 seconds unless raised. Both are in Settings → Playback, or `lumiverb settings video-preview` / `public-preview` (`full` or seconds). The server enforces them; public transcripts stop where public playback does.
 
 Useful:
 
 ```bash
-journalctl -u lumiverb-worker -f
+journalctl -u lumiverb-scheduler -f
 ```
 
-Ctrl-C there only stops watching the log; the worker keeps going. To pause it:
+Ctrl-C there only stops watching the log; the scheduler keeps going. To pause all processing:
 
 ```bash
-sudo systemctl stop lumiverb-worker
+sudo systemctl stop lumiverb-scheduler
 ```
 
-and `sudo systemctl start lumiverb-worker` to carry on. Restarts don't rescan from scratch: files already in are skipped.
-
-To run one cycle by hand, stop the service first; otherwise the run says a worker is already running. A manual run uses the same caches, lock and state as the service: the install sets `cache_home` in the `lumiverb` user's CLI config (`lumiverb config show`).
-
-```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb worker --once
-```
+and `sudo systemctl start lumiverb-scheduler` to carry on. A stop gives jobs in hand up to 25 seconds; once it begins, no more descriptions, OCR, CLIP or transcripts are saved (a face batch, a render or a probe in hand may still finish); restarts don't rescan from scratch, and what wasn't finished is simply due again. If the database restarts, the scheduler stops and systemd starts it again (it holds a lock there, so only one runs).
 
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot
@@ -167,7 +161,7 @@ One command:
 sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
-It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps the worker's packages) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's). It ends with a summary: the commits that came in, each service's state and the API's health.
+It pulls the install's branch, then runs `update-api.sh` (packages, migrations, units, restarts; it keeps processing's packages, and the first time replaces lumiverb-worker with lumiverb-scheduler) and `update-web.sh` (the web build and the nginx site: playback streams go straight through, unbuffered, and their links, good for hours, stay out of the access logs, nginx's and the API's). It ends with a summary: the commits that came in, each service's state and the API's health.
 
 - **Another branch:** `--branch NAME` moves the install there and remembers it (in `/etc/lumiverb/env`, for the next update and for `deploy-api.sh`).
 - **The log:** everything also goes to `/var/log/lumiverb/update-<date>-<time>-<pid>.log`, which belongs to whoever ran sudo, so it reads without sudo; `update-latest.log` is the newest. It ends with a line `Result: OK` or `Result: FAILED`. The last 20 are kept.

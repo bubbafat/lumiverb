@@ -71,18 +71,21 @@ class JobGuard:
         """Requests the online machines take at once, together (at least one)."""
         return max(1, self.pool.capacity())
 
-    def on_fail(self, artifact: str) -> Callable[[str, object], None]:
+    def on_fail(self, artifact: str) -> Callable[[str, object], bool]:
         """on_fail for one of the job's steps. A machine's fault reaches here
         only when no machine is left: the job's work stops, and no clip is
         charged. Otherwise the machines are checked again; the clip is charged
-        only when a check started after its failure finds one offering the model."""
-        def fail(asset_id: str, error: object) -> None:
+        only when a check started after its failure finds one offering the model.
+        It returns whether the clip was charged (else it waits, uncharged)."""
+        def fail(asset_id: str, error: object) -> bool:
+            if getattr(error, "model_changed", False):  # caught in a model change: it waits
+                return False
             if getattr(error, "endpoint_fault", False):
                 with self._lock:
                     if not self.down:
                         self.error = str(error)
                         logger.warning("%s: %s %s waits until it's fixed.", self.job, self.error, self.label)
-                return
+                return False
             failed_at = self._clock()
             with self._lock:
                 if not self.down and (self._checked_at is None or self._checked_at <= failed_at):
@@ -90,11 +93,12 @@ class JobGuard:
                     self.pool.recheck()
                     self.error = self.pool.error
             if self.down:
-                return
+                return False
             # The machine that served it, found down since: its doing, not the clip's.
             served_by = getattr(error, "machine", None)
             if served_by is not None and not served_by.online:
-                return
+                return False
             if self._failures is not None:
                 self._failures.add(artifact, asset_id, error)
+            return True
         return fail
