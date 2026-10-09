@@ -18,8 +18,6 @@ import { Lightbox } from "../components/Lightbox";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import type { AssetPageItem } from "../api/types";
-import { savedQueryLabels } from "../lib/queryFilter";
-import type { SavedQueryV2 } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
@@ -300,27 +298,10 @@ export default function ProjectDetailPage() {
           <h1 className="truncate text-lg font-semibold text-gray-100">
             {project.name}
           </h1>
-          {project.type === "smart" && (
-            <span className="shrink-0 rounded bg-indigo-900/60 px-1.5 py-0.5 text-[10px] text-indigo-300">
-              Smart
-            </span>
-          )}
           <span className="shrink-0 text-sm text-gray-500">
             {project.asset_count} {project.asset_count === 1 ? "item" : "items"}
           </span>
         </div>
-        {project.type === "smart" && project.saved_query && (
-          <div className="flex flex-wrap gap-1.5">
-            {savedQueryLabels(project.saved_query as SavedQueryV2).map((label: string) => (
-              <span
-                key={label}
-                className="rounded-full bg-indigo-900/40 px-2.5 py-0.5 text-xs text-indigo-300"
-              >
-                {label}
-              </span>
-            ))}
-          </div>
-        )}
         <div className="flex items-center gap-2">
           <ZoomControl value={zoomLevel} onChange={setZoomLevel} />
           <ExportButton projectId={project.project_id} />
@@ -509,16 +490,14 @@ export default function ProjectDetailPage() {
         >
           Add to project
         </button>
-        {project?.type !== "smart" && (
-          <button
-            type="button"
-            onClick={() => removeMutation.mutate()}
-            disabled={removeMutation.isPending}
-            className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
-          >
-            {removeMutation.isPending ? "Removing..." : "Remove from project"}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => removeMutation.mutate()}
+          disabled={removeMutation.isPending}
+          className="rounded-lg border border-red-700/50 px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/30 disabled:opacity-50"
+        >
+          {removeMutation.isPending ? "Removing..." : "Remove from project"}
+        </button>
       </SelectionToolbar>
 
       {/* Project picker */}

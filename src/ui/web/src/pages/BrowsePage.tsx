@@ -19,7 +19,7 @@ import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
 import { Lightbox } from "../components/Lightbox";
 import { FilterBar } from "../components/FilterBar";
-import { SaveSmartProjectModal } from "../components/SaveSmartProjectModal";
+import { SaveSearchAsProjectModal } from "../components/SaveSearchAsProjectModal";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { ZoomControl } from "../components/ZoomControl";
 import { DrawerOverlay } from "../components/DrawerOverlay";
@@ -433,7 +433,7 @@ export default function BrowsePage() {
   }, [orderedAssets, selection]);
 
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
-  const [showSmartColModal, setShowSmartColModal] = useState(false);
+  const [showSaveAsProject, setShowSaveAsProject] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Ratings
@@ -739,14 +739,14 @@ export default function BrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facets}
-        onSaveSmartProject={() => setShowSmartColModal(true)}
+        onSaveAsProject={() => setShowSaveAsProject(true)}
         isPublic={isPublicMode}
       />
 
-      {showSmartColModal && (
-        <SaveSmartProjectModal
+      {showSaveAsProject && (
+        <SaveSearchAsProjectModal
           savedQuery={buildSavedQuery(filtersWithPath, browseSort, browseDir)}
-          onClose={() => setShowSmartColModal(false)}
+          onClose={() => setShowSaveAsProject(false)}
         />
       )}
 

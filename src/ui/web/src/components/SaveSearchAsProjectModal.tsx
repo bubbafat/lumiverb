@@ -10,17 +10,16 @@ interface Props {
   onClose: () => void;
 }
 
-export function SaveSmartProjectModal({ savedQuery, onClose }: Props) {
+/** Save the search as a project: the clips it finds now, in an explicit list
+ * (Robert, Oct 9: projects are explicit; the search is saved with Save search). */
+export function SaveSearchAsProjectModal({ savedQuery, onClose }: Props) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: () =>
-      createProject(name, {
-        type: "smart",
-        saved_query: savedQuery as unknown as Record<string, unknown>,
-      }),
+      createProject(name, { from_search: savedQuery as unknown as Record<string, unknown> }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       onClose();
@@ -31,10 +30,11 @@ export function SaveSmartProjectModal({ savedQuery, onClose }: Props) {
   const labels = savedQueryLabels(savedQuery);
 
   return (
-    <Modal isOpen={true} title="Save as Smart Project" onClose={onClose}>
+    <Modal isOpen={true} title="Save as project" onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-gray-400">
-          This project will automatically update as matching photos change.
+          A project of the clips this search finds now. It won&apos;t change as clips are added or edited; to
+          keep the search itself, use Save search.
         </p>
         {labels.length > 0 && (
           <div className="flex flex-wrap gap-1.5">

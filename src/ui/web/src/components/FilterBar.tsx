@@ -96,8 +96,8 @@ interface FilterBarProps {
   onClearAll: () => void;
   /** Facets for populating dropdowns. */
   facets: FacetsResponse | null;
-  /** Called when user clicks "Save as Smart Project". */
-  onSaveSmartProject?: () => void;
+  /** Called when user clicks "Save as project" (the clips the search finds now). */
+  onSaveAsProject?: () => void;
   /** A public page's visitor: no rating or people filters (those are signed-in people's). */
   isPublic?: boolean;
 }
@@ -194,7 +194,7 @@ export function FilterBar({
   onSetSort,
   onClearAll,
   facets,
-  onSaveSmartProject,
+  onSaveAsProject,
   isPublic = false,
 }: FilterBarProps) {
   // --- Read individual values from filter array ---
@@ -568,13 +568,13 @@ export function FilterBar({
               >
                 Clear filters
               </button>
-              {onSaveSmartProject && !isPublic && (
+              {onSaveAsProject && !isPublic && (
                 <button
                   type="button"
-                  onClick={onSaveSmartProject}
+                  onClick={onSaveAsProject}
                   className="text-xs text-indigo-400 hover:text-indigo-300 whitespace-nowrap"
                 >
-                  Save project
+                  Save as project
                 </button>
               )}
             </>
@@ -870,7 +870,7 @@ export function FilterBar({
           {hasActiveFilters && (
             <FilterMenu
               onClearAll={onClearAll}
-              onSaveSmartProject={isPublic ? undefined : onSaveSmartProject}
+              onSaveAsProject={isPublic ? undefined : onSaveAsProject}
             />
           )}
         </div>
@@ -881,10 +881,10 @@ export function FilterBar({
 
 function FilterMenu({
   onClearAll,
-  onSaveSmartProject,
+  onSaveAsProject,
 }: {
   onClearAll: () => void;
-  onSaveSmartProject?: () => void;
+  onSaveAsProject?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -920,16 +920,16 @@ function FilterMenu({
             </svg>
             Clear all filters
           </button>
-          {onSaveSmartProject && (
+          {onSaveAsProject && (
             <button
               type="button"
-              onClick={() => { onSaveSmartProject(); setOpen(false); }}
+              onClick={() => { onSaveAsProject(); setOpen(false); }}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700"
             >
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              Save as Smart Project
+              Save as project
             </button>
           )}
         </div>

@@ -41,7 +41,7 @@ function renderBar(isPublic: boolean) {
           onSetSort={() => {}}
           onClearAll={() => {}}
           facets={facets}
-          onSaveSmartProject={() => {}}
+          onSaveAsProject={() => {}}
           isPublic={isPublic}
         />
       </MemoryRouter>

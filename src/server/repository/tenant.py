@@ -2313,8 +2313,6 @@ class ProjectRepository:
         description: str | None = None,
         sort_order: str = "manual",
         visibility: str = "private",
-        type: str = "static",
-        saved_query: dict | None = None,
     ) -> Project:
         project_id = "prj_" + str(ULID())  # pre-rename ids start with "col_"
         project = Project(
@@ -2324,8 +2322,6 @@ class ProjectRepository:
             description=description,
             sort_order=sort_order,
             visibility=visibility,
-            type=type,
-            saved_query=saved_query,
         )
         self._session.add(project)
         self._session.commit()
@@ -2423,7 +2419,6 @@ class ProjectRepository:
         visibility: str | None = None,
         sort_order: str | None = None,
         cover_asset_id: str | None = _SENTINEL,
-        saved_query: dict | None = _SENTINEL,
         status: str | None = None,
     ) -> Project | None:
         col = self.get_by_id(project_id)
@@ -2442,8 +2437,6 @@ class ProjectRepository:
             col.sort_order = sort_order
         if cover_asset_id is not _SENTINEL:
             col.cover_asset_id = cover_asset_id
-        if saved_query is not _SENTINEL:
-            col.saved_query = saved_query
         col.updated_at = utcnow()
         self._session.add(col)
         self._session.commit()

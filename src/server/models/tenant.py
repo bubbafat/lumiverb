@@ -350,8 +350,6 @@ class Project(SQLModel, table=True):
     owner_user_id: str | None = Field(default=None, nullable=True)
     visibility: str = Field(default="private", nullable=False)  # private | shared | public
     sort_order: str = Field(default="manual", nullable=False)
-    type: str = Field(default="static", nullable=False)  # static | smart
-    saved_query: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     status: str = Field(default="active", nullable=False)  # active | archived
     archived_at: datetime | None = Field(
         default=None,

@@ -110,12 +110,12 @@ class LeafFilter(ABC):
         ...
 
     def to_json(self) -> dict:
-        """Serialize for smart project saved_query."""
+        """Serialize for a saved search."""
         return {"type": self.type_name(), "value": self.to_url_value()}
 
     @classmethod
     def from_json(cls, data: dict) -> LeafFilter:
-        """Deserialize from saved_query JSON."""
+        """Deserialize from a saved search's JSON."""
         return cls.from_url_value(data["value"])
 
     @property
@@ -181,7 +181,7 @@ class QuerySpec:
         return any(f.needs_metadata_join for f in self.leaves)
 
     def to_json(self) -> dict:
-        """Serialize for smart project saved_query."""
+        """Serialize for a saved search."""
         children_json = [c.to_json() for c in self.root.children]
         result: dict = {"filters": children_json}
         if self.sort != "taken_at":

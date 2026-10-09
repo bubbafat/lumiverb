@@ -213,7 +213,7 @@ A project becomes a bin in Resolve, Premiere or Final Cut, with media online.
 
 **Done when:** one project mixing two cameras and frame rates imports into Resolve, Premiere and Final Cut with every clip online at the right duration; a smart project over 1,000 clips exports whole; an archived project can still be exported.
 
-**Where it stands:** built, and the full suite passes with every marker. Tests show a smart project over 1,000 clips exporting whole and an archived project exporting. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed yet (they can't be built here); the API keeps `/v1/collections` and a legacy `collection_id` for them until they are. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
+**Where it stands:** built, and the full suite passes with every marker. Tests show a project over 1,000 clips exporting whole and an archived project exporting. Smart projects are gone since (Robert, Oct 9: projects are explicit): a search is kept as a saved search, or saved as a project of the clips it finds then. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed yet (they can't be built here); the API keeps `/v1/collections` and a legacy `collection_id` for them until they are. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
 
 ### Phase 2 — The brain
 
@@ -285,7 +285,7 @@ Proposed answers; each needs a decision before its phase.
 |---|---|---|
 | When does the old DAM (ResourceSpace) switch off? | After phase 2, once find, projects and send work on the brain against the whole library | 2 |
 | Storage unreachable? | Keep enriching from analysis proxies; only discovery, probing and rendering wait | 2 |
-| Re-sending a smart project? | A new bin each time, since the export is a file | 1 |
+| Re-sending a project? | A new bin each time, since the export is a file | 1 |
 | Can a project span libraries? | Yes; the code already allows it | 1 |
 | How do corrections survive output that changes shape? | Anchored in media terms and re-applied by overlap (see Upgrades and corrections) | 3 |
 | Can an upgrade be narrowed to one library or project? | Yes | 3 |

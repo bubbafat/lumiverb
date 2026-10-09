@@ -243,8 +243,6 @@ export interface ProjectItem {
   visibility: string;  // "private" | "shared" | "public"
   ownership: string;   // "own" | "shared"
   sort_order: string;
-  type: string;        // "static" | "smart"
-  saved_query: SavedQuery | null;
   asset_count: number;
   created_at: string;
   updated_at: string;
