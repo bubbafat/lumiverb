@@ -132,6 +132,20 @@ def test_the_redo_column_says_a_paused_producers_redo_waits():
     assert mod._redo(_producer(redo_stopped=True), all_paused=True) == "stopped"
 
 
+def test_while_all_is_paused_the_listing_names_no_paused_part(client):
+    # Resume all turns everything on, so a part paused alone isn't worth naming meanwhile.
+    def get(path, params=None):
+        r = MagicMock()
+        r.json.return_value = ({"paused": True, "scans_paused": True} if path == "/v1/producers/queue"
+                               else {"producers": [_producer("faces", "Faces", paused=True)]})
+        return r
+
+    client.get.side_effect = get
+    out = " ".join(_run().output.split())
+    assert "All processing is paused" in out
+    assert "Scans are paused" not in out and "Faces: paused" not in out
+
+
 def test_the_listing_says_when_scans_are_paused(client):
     def get(path, params=None):
         r = MagicMock()
@@ -152,7 +166,7 @@ def test_pause_and_resume_all_processing_or_one_producer(client):
     for args, path, says in [
         (["pause"], "/v1/producers/pause", "Paused all processing"),
         (["pause", "vision"], "/v1/producers/vision/pause", "Paused vision"),
-        (["resume"], "/v1/producers/resume", "Resumed all processing"),
+        (["resume"], "/v1/producers/resume", "Resumed all processing: scans and every producer are on again"),
         (["resume", "vision"], "/v1/producers/vision/resume", "Resumed vision"),
         (["pause", "scans"], "/v1/producers/scans/pause", "Paused scans: no new or changed files are found"),
         (["resume", "scans"], "/v1/producers/scans/resume", "Resumed scans"),

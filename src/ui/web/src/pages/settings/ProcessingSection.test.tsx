@@ -76,6 +76,10 @@ beforeEach(() => {
       if (next) return next;
       const paused = all[1] === "pause";
       queue = { ...queue, paused, paused_at: paused ? "2026-10-09T10:00:00Z" : null };
+      if (!paused) {  // Resume all turns everything on: no paused part is kept
+        queue = { ...queue, scans_paused: false, scans_paused_at: null };
+        producers = producers.map((p) => ({ ...p, paused: false, paused_at: null }));
+      }
       return new Response(null, { status: 204 });
     }
     const scans = path.match(/^\/producers\/scans\/(pause|resume)$/);
@@ -217,10 +221,16 @@ describe("ProcessingSection", () => {
     queue = { ...queue, live: true, at: new Date().toISOString() };
     producers = [producer({})];
     renderSection();
+    expect(await screen.findByText("Running")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Pause all processing" }));
     await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/pause"))).toBe(true));
     expect((await screen.findByText(/All processing is paused/)).textContent).toContain(
-      "nothing more starts until it's resumed. What's running finishes.");
+      "nothing starts, scans included, and upkeep changes nothing, until it's resumed. What's running finishes; " +
+      "the website stays up.");
+    expect(await screen.findByText("All paused")).toBeTruthy();
+    // The kill switch is on: its parts aren't switched alone meanwhile.
+    expect(screen.queryByRole("button", { name: "Pause scans" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause Descriptions and tags" })).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Resume all processing" }));
     await waitFor(() => expect(sent.some((s) => s.method === "POST" && s.url.endsWith("/producers/resume"))).toBe(true));
     await waitFor(() => expect(screen.queryByText(/All processing is paused/)).toBeNull());
@@ -290,12 +300,30 @@ describe("ProcessingSection", () => {
     expect((await within(await row("Descriptions and tags")).findByRole("alert")).textContent).toContain("Admins only.");
   });
 
+  it("shows a yellow Partly paused naming the parts; Pause all then Resume all turns them all on", async () => {
+    queue = { ...queue, live: true, at: new Date().toISOString(), scans_paused: true };
+    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)", paused: true })];
+    renderSection();
+    const partly = await screen.findByText("Partly paused");
+    expect(partly.closest("[data-state]")?.getAttribute("data-state")).toBe("partly");
+    expect((await screen.findByText(/^Paused on their own:/)).textContent).toBe(
+      "Paused on their own: scans, Text in images (OCR). Pause all stops everything; Resume all then turns " +
+      "everything back on, these included.");
+    fireEvent.click(screen.getByRole("button", { name: "Pause all processing" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Resume all processing" }));
+    expect(await screen.findByText("Running")).toBeTruthy();
+    expect(screen.queryByText(/Scans are paused/)).toBeNull();
+    await waitFor(async () => expect((await row("Text in images (OCR)")).textContent).not.toContain("Paused"));
+  });
+
   it("shows everyone what's paused; only admins pause or resume", async () => {
     role = "viewer";
-    queue = { ...queue, live: true, at: new Date().toISOString(), paused: true, paused_at: "2026-10-09T10:00:00Z" };
+    queue = { ...queue, live: true, at: new Date().toISOString(), scans_paused: true,
+              scans_paused_at: "2026-10-09T10:00:00Z" };
     producers = [producer({ paused: true, paused_at: "2026-10-09T10:00:00Z" })];
     renderSection();
-    expect(await screen.findByText(/All processing is paused/)).toBeTruthy();
+    expect(await screen.findByText(/Scans are paused/)).toBeTruthy();
+    expect(await screen.findByText("Partly paused")).toBeTruthy();
     expect((await row("Descriptions and tags")).textContent).toContain("Paused: nothing more of it starts");
     expect(screen.queryByRole("button", { name: /Pause|Resume/ })).toBeNull();
     expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();

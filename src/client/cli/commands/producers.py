@@ -84,7 +84,7 @@ def producers_list(
     if all_paused:
         console.print(f"[yellow]All processing is paused{_since(queue.get('paused_at'))}: nothing more "
                       "starts. lumiverb producers resume carries on.[/yellow]")
-    if queue.get("scans_paused"):
+    if queue.get("scans_paused") and not all_paused:
         console.print(f"[yellow]Scans are paused{_since(queue.get('scans_paused_at'))}: no new or changed files "
                       "are found. lumiverb producers resume scans carries on.[/yellow]")
     table = Table(show_header=True, header_style="bold")
@@ -93,10 +93,10 @@ def producers_list(
     notes = []
     for p in producers:
         c = p.get("counts") or {}
-        paused = " [yellow]paused[/yellow]" if p.get("paused") else ""
+        paused = " [yellow]paused[/yellow]" if p.get("paused") and not all_paused else ""
         table.add_row(f"{escape(p['title'])} [dim]({p['artifact']})[/dim]{paused}", _n(c.get("current", 0)),
                       _n(c.get("missing", 0)), _n(c.get("stale", 0)), _n(c.get("failing", 0)), _redo(p, all_paused))
-        if p.get("paused"):
+        if p.get("paused") and not all_paused:
             notes.append(f"{p['title']}: paused; lumiverb producers resume {p['artifact']} carries on.")
         if c.get("stale") and not p.get("redoable", True):
             notes.append(f"{p['title']} isn't made again yet: {p.get('why_not') or ''}")
@@ -140,8 +140,8 @@ def producers_pause(
         console.print(f"Paused {escape(artifact)}: nothing more of it starts until lumiverb producers resume "
                       f"{escape(artifact)}. What's running finishes.")
     else:
-        console.print("Paused all processing: nothing more starts, scans included, until lumiverb producers "
-                      "resume. What's running finishes.")
+        console.print("Paused all processing: nothing more starts, scans included, and upkeep changes nothing, "
+                      "until lumiverb producers resume. What's running finishes; the website stays up.")
 
 
 @producers_app.command("resume")
@@ -157,7 +157,7 @@ def producers_resume(
     if artifact:
         console.print(f"Resumed {escape(artifact)}.")
     else:
-        console.print("Resumed all processing. Scans or producers paused on their own stay paused.")
+        console.print("Resumed all processing: scans and every producer are on again.")
 
 
 @redo_app.command("stop")

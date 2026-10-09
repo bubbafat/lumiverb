@@ -991,11 +991,16 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
-  /** An admin paused all of the account's processing: nothing more starts until it's resumed. */
+  /** The kill switch: an admin paused everything but the website until it's resumed. */
   paused: boolean;
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
+  /** An admin paused scans alone; the rest goes on. */
+  scans_paused: boolean;
+  /** Admins only. */
+  scans_paused_by: string | null;
+  scans_paused_at: string | null;
 }
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {
@@ -1047,14 +1052,15 @@ export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
 }
 
-/** Pause all of the account's processing, or one producer's (admins): nothing
- * more of it starts until it's resumed; what's running finishes. 409
- * not_scheduled for what scans make. */
+/** Pause everything but the website (no artifact: the kill switch), scans
+ * ("scans") or one producer (admins): nothing more of it starts until it's
+ * resumed; what's running finishes. 409 not_scheduled for what scans make,
+ * all_paused for a part while everything is paused. */
 export async function pauseProcessing(artifact?: string): Promise<void> {
   await apiFetch<void>(artifact ? `/producers/${artifact}/pause` : "/producers/pause", { method: "POST" });
 }
 
-/** Carry on with all of the account's processing, or one paused producer (admins). */
+/** Turn everything back on (no artifact: every pause goes), or scans or one producer (admins). */
 export async function resumeProcessing(artifact?: string): Promise<void> {
   await apiFetch<void>(artifact ? `/producers/${artifact}/resume` : "/producers/resume", { method: "POST" });
 }

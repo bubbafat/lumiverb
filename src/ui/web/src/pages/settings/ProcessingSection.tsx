@@ -65,8 +65,14 @@ export default function ProcessingSection() {
       <div>
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <h2 className="text-lg font-semibold text-gray-100">Processing</h2>
-          {admin && status && <PauseButton paused={status.paused} title="all processing" />}
+          {status && <MasterSwitch status={status} parts={pausedParts(status, producers)} admin={admin} />}
         </div>
+        {status && !status.paused && pausedParts(status, producers).length > 0 && (
+          <p className="mt-1 text-sm text-amber-300">
+            Paused on their own: {pausedParts(status, producers).join(", ")}. Pause all stops everything; Resume all
+            then turns everything back on, these included.
+          </p>
+        )}
         <p className="mt-1 text-sm text-gray-400">
           What each producer has made for your clips. Stale ones were made with another model or settings than now:
           they're made again after anything missing. Changing a model in Settings → AI is what starts that.
@@ -119,6 +125,7 @@ export default function ProcessingSection() {
               admin={admin}
               canRetry={canRetry}
               allPaused={!!status?.paused}
+              scansPaused={!!status?.scans_paused}
               libraryId={kind === "library" ? id : undefined}
             />
           ))}
@@ -147,12 +154,14 @@ function ProducerRow({
   admin,
   canRetry,
   allPaused,
+  scansPaused,
   libraryId,
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
   allPaused: boolean;
+  scansPaused: boolean;
   libraryId?: string;
 }) {
   const [showFailures, setShowFailures] = useState(false);
@@ -169,14 +178,20 @@ function ProducerRow({
             {mediaLabel(producer.media)}
             {producer.uniform && " · one model for all"}
           </span>
-          {admin && producer.scheduled && <PauseButton paused={producer.paused} title={producer.title}
-                                                       artifact={producer.artifact} />}
+          {admin && producer.scheduled && !allPaused && (
+            <PauseButton paused={producer.paused} title={producer.title} artifact={producer.artifact} />
+          )}
         </span>
       </div>
       <CountsBar producer={producer} />
-      {producer.paused && (
+      {producer.paused && !allPaused && (
         <p role="status" className="text-sm text-amber-300">
           Paused: nothing more of it starts until it's resumed.
+        </p>
+      )}
+      {!producer.scheduled && scansPaused && !allPaused && (
+        <p role="status" className="text-sm text-amber-300">
+          Paused with scans: none are made until they're resumed.
         </p>
       )}
       {producer.waiting && <WaitingLine why={producer.waiting} />}
@@ -266,8 +281,36 @@ function listKinds(counts: Record<string, number>): string {
     .join(", ");
 }
 
-/** Pause or resume all processing, or one producer's (admins); a refusal says why beside it. */
-function PauseButton({ paused, title, artifact }: { paused: boolean; title: string; artifact?: string }) {
+/** What's paused on its own (scans, producers), named, while the kill switch is off. */
+function pausedParts(status: SchedulerStatus, producers: Producer[] | undefined): string[] {
+  return [...(status.scans_paused ? ["scans"] : []), ...(producers ?? []).filter((p) => p.paused).map((p) => p.title)];
+}
+
+const STATE_DOT = { running: "bg-emerald-500", partly: "bg-amber-400", all: "bg-red-500" };
+const STATE_WORDS = { running: "Running", partly: "Partly paused", all: "All paused" };
+
+/** The kill switch (Robert, Oct 9) and its state: green running, yellow
+ * partly paused (scans or producers paused on their own: Pause all affects
+ * them all), red all paused. Pause scans beside it while it's off (admins). */
+function MasterSwitch({ status, parts, admin }: { status: SchedulerStatus; parts: string[]; admin: boolean }) {
+  const state = status.paused ? "all" : parts.length ? "partly" : "running";
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+      <span data-state={state} className="inline-flex items-center gap-1.5 text-sm text-gray-300">
+        <span aria-hidden="true" className={`inline-block h-2 w-2 rounded-full ${STATE_DOT[state]}`} />
+        <span>{STATE_WORDS[state]}</span>
+      </span>
+      {admin && !status.paused && (
+        <PauseButton paused={status.scans_paused} title="scans" artifact="scans" label="scans" />
+      )}
+      {admin && <PauseButton paused={status.paused} title="all processing" label="all" />}
+    </span>
+  );
+}
+
+/** Pause or resume all processing, scans, or one producer's (admins); a refusal says why beside it. */
+function PauseButton({ paused, title, artifact, label }: { paused: boolean; title: string; artifact?: string;
+                                                          label?: string }) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: () => (paused ? resumeProcessing(artifact) : pauseProcessing(artifact)),
@@ -286,7 +329,8 @@ function PauseButton({ paused, title, artifact }: { paused: boolean; title: stri
         aria-label={`${paused ? "Resume" : "Pause"} ${title}`}
         onClick={() => toggle.mutate()}
       >
-        {paused ? (artifact ? "Resume" : "Resume all") : artifact ? "Pause" : "Pause all"}
+        {paused ? "Resume" : "Pause"}
+        {label && ` ${label}`}
       </button>
       {toggle.error && (
         <span role="alert" className="text-sm text-red-300">
@@ -302,9 +346,16 @@ function NowPanel({ status }: { status: SchedulerStatus }) {
   return (
     <div className="space-y-2">
       {status.paused && (
+        <p role="status" className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+          All processing is paused{status.paused_at ? ` since ${when(status.paused_at)}` : ""}: nothing starts, scans
+          included, and upkeep changes nothing, until it's resumed. What's running finishes; the website stays up.
+          Resume all turns everything back on.
+        </p>
+      )}
+      {status.scans_paused && !status.paused && (
         <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-          All processing is paused{status.paused_at ? ` since ${when(status.paused_at)}` : ""}: nothing more starts
-          until it's resumed. What's running finishes.
+          Scans are paused{status.scans_paused_at ? ` since ${when(status.scans_paused_at)}` : ""}: no new or changed
+          files are found, and no thumbnails or video previews made, until they're resumed. The rest goes on.
         </p>
       )}
       <NowBox status={status} />
@@ -452,7 +503,7 @@ function RedoLine({ producer, stale, admin, allPaused }: { producer: Producer; s
         <span>
           {producer.redo_stopped
             ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
-            : producer.paused
+            : producer.paused && !allPaused
               ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
               : allPaused
                 ? `Redoes ${clips(stale)} once processing is resumed, after anything missing.`
