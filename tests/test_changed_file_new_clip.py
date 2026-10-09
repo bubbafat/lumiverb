@@ -173,7 +173,7 @@ def test_a_file_on_disk_at_an_ignored_path_is_never_missing(env, tmp_path):
 
     path = "ncr-ignored/a.jpg"
     clip = _ingest(env, path, media_type="image", sha=_sha())
-    with patch("src.client.cli.scan._fetch_ignored_paths", return_value={path}):
+    with patch("src.client.cli.scan._fetch_ignored_paths", return_value={path: None}):
         _scan(env, tmp_path, [path], "ncr-ignored")
     assert _row(env, clip)[0] is None
 
@@ -273,3 +273,22 @@ def test_the_other_ingest_refuses_a_different_file(env):
     r = client.post(f"/v1/assets/{clip}/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
                     data={"exif": json.dumps({"sha256": other}), "lineage": ingest_made(other)})
     assert r.status_code == 409 and r.json()["error"]["code"] == "different_file", r.text
+
+
+def test_a_path_remembers_each_file_deleted_there_for_good(env):
+    client, headers, library_id, *_ = env
+    path = "ncr-versions/a.jpg"
+    first_sha, second_sha = _sha(), _sha()
+    first = _ingest(env, path, media_type="image", sha=first_sha)
+    second = _ingest(env, path, media_type="image", sha=second_sha)  # first goes missing
+    for clip in (first, second):
+        client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "user"}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [first, second]}, headers=headers)
+    assert r.status_code == 200 and r.json()["deleted"] == 2, r.text
+    items = client.get(f"/v1/libraries/{library_id}/ignored-paths", headers=headers).json()["items"]
+    assert {"rel_path": path, "reason": "emptied", "contents": sorted([first_sha, second_sha])} in items
+    for sha in (first_sha, second_sha):
+        with pytest.raises(AssertionError, match="409"):
+            _ingest(env, path, media_type="image", sha=sha)
+    third = _ingest(env, path, media_type="image", sha=_sha())  # another file: a new clip
+    assert _row(env, third)[0] is None

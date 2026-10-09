@@ -73,9 +73,13 @@ class EmptyLibraryTrashRequest(BaseModel):
 
 class IgnoredPathItem(BaseModel):
     rel_path: str
-    # "trashed": in the trash by the user's choice. "emptied": the user
-    # emptied its trash; the file may still be on disk.
+    # "trashed": in the trash by the user's choice. "archived": a person
+    # archived it. "emptied": the user emptied its trash; the file may still
+    # be on disk.
     reason: str
+    # The files skipped at this path, by SHA-256; None when one isn't known
+    # (then whatever is there). Another file at the path is a new clip.
+    contents: list[str] | None = None
 
 
 class IgnoredPathPage(BaseModel):
@@ -421,17 +425,18 @@ def page_ignored_paths(
     after: str | None = None,
     limit: int = 500,
 ) -> IgnoredPathPage:
-    """Paths a scan must skip because the user trashed them, by rel_path.
+    """Files a scan must skip because a person trashed, archived or deleted
+    them, by rel_path, with their contents.
 
     Lumiverb never deletes originals, so these files may still be on disk.
-    Ingest refuses them with 409.
+    Ingest refuses them with 409; another file at the path is a new clip.
     """
     if LibraryRepository(session).get_by_id(library_id) is None:
         raise HTTPException(status_code=404, detail="Library not found")
     limit = max(1, min(limit, 1000))
     rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
     return IgnoredPathPage(
-        items=[IgnoredPathItem(rel_path=p, reason=k) for p, k in rows],
+        items=[IgnoredPathItem(rel_path=p, reason=k, contents=c) for p, k, c in rows],
         next_cursor=rows[-1][0] if len(rows) == limit else None,
     )
 

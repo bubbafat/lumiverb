@@ -569,12 +569,15 @@ class ArtifactLineage(SQLModel, table=True):
 
 class IgnoredFile(SQLModel, table=True):
     """A file whose trash the user emptied. Its asset row is gone, but scans
-    and ingest keep skipping the path while the file is still on disk."""
+    and ingest keep skipping that file at that path while it's still on disk.
+    A path can have several (versions deleted over time); one without a
+    SHA-256 names whatever is at the path. Unique by (library, path, content)."""
 
     __tablename__ = "ignored_files"
 
-    library_id: str = Field(foreign_key="libraries.library_id", primary_key=True)
-    rel_path: str = Field(primary_key=True)
+    ignored_id: int | None = Field(default=None, primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id")
+    rel_path: str
     sha256: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,

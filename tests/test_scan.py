@@ -351,7 +351,7 @@ class TestUnchangedFileStat:
             patch("src.client.cli.scan._load_library_filters", return_value=[]),
             patch("src.client.cli.scan._walk_library", return_value=local),
             patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-            patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+            patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
             patch("src.client.cli.scan.compute_sha256", return_value=local_sha),
             patch("src.client.cli.scan._scan_one") as scan_one,
             patch("src.client.cli.scan.ProxyCache"),

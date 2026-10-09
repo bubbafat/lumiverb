@@ -126,20 +126,36 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
-def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
-    """rel_paths the user trashed (or emptied from the trash). Scans skip them:
-    Lumiverb never deletes originals, so they may still be on disk."""
-    paths: set[str] = set()
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, frozenset[str] | None]:
+    """Files a person trashed, archived or deleted for good, by rel_path: the
+    SHA-256s skipped there, or None for whatever is at the path. Scans skip
+    them: Lumiverb never deletes originals, so they may still be on disk.
+    Another file at the path is a new clip."""
+    ignored: dict[str, frozenset[str] | None] = {}
     cursor: str | None = None
     while True:
         params: dict[str, str] = {"limit": "1000"}
         if cursor:
             params["after"] = cursor
         data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
-        paths.update(item["rel_path"] for item in data.get("items", []))
+        for item in data.get("items", []):
+            contents = item.get("contents")
+            ignored[item["rel_path"]] = frozenset(contents) if contents is not None else None
         cursor = data.get("next_cursor")
         if not cursor:
-            return paths
+            return ignored
+
+
+def _skipped(f: dict, ignored: dict[str, frozenset[str] | None], root_path: Path) -> bool:
+    """Whether this file is one a person removed. Only files at those paths
+    are hashed here."""
+    if f["rel_path"] not in ignored:
+        return False
+    contents = ignored[f["rel_path"]]
+    if contents is None:
+        return True
+    sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
+    return sha is None or sha in contents
 
 
 # A scan that would archive more than 50 clips AND more than half of the
@@ -775,9 +791,9 @@ def run_scan(
     ignored = _fetch_ignored_paths(client, library_id)
     if ignored:
         before = len(local_files)
-        local_files = [f for f in local_files if f["rel_path"] not in ignored]
+        local_files = [f for f in local_files if not _skipped(f, ignored, root_path)]
         if before > len(local_files):
-            console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
+            console.print(f"Skipping {before - len(local_files):,} file(s) you removed")
 
     # Files written in the last SETTLE_SEC may still be copying, so they wait
     # for a later scan, as on the Mac. They still count as on disk, so they
