@@ -35,7 +35,7 @@ def _path_to_tokens(rel_path: str) -> str:
 def build_asset_document(asset: Asset, meta: AssetMetadata | None, ocr_text: str = "",
                          corrections: dict | None = None) -> dict:
     """Build a Quickwit document for an asset as a person sees it: its latest
-    AI description and the text read in its image, with their corrections."""
+    AI description and the text read in its image, or what a person wrote."""
     from src.server.repository.corrections import apply, machine_tags
 
     data = (meta.data if meta else None) or {}
@@ -236,7 +236,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     rows = session.execute(text(f"""
         SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
                c.description AS c_description, c.ocr_text AS c_ocr_text,
-               c.tags_added AS c_tags_added, c.tags_removed AS c_tags_removed
+               c.asset_id AS c_asset_id, c.tags AS c_tags
         FROM active_assets a
         LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
         LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
@@ -274,7 +274,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             rows = session.execute(text(f"""
                 SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
                        c.description AS c_description, c.ocr_text AS c_ocr_text,
-                       c.tags_added AS c_tags_added, c.tags_removed AS c_tags_removed
+                       c.asset_id AS c_asset_id, c.tags AS c_tags
                 FROM active_assets a
                 LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
                 LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
@@ -295,9 +295,8 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             continue
         meta = meta_repo.get_latest(asset_id=r.asset_id)
         corrections = None
-        if r.c_tags_added is not None:  # the clip has a corrections row
-            corrections = {"description": r.c_description, "ocr_text": r.c_ocr_text,
-                           "tags_added": r.c_tags_added, "tags_removed": r.c_tags_removed}
+        if r.c_asset_id is not None:  # a person wrote something for the clip
+            corrections = {"description": r.c_description, "ocr_text": r.c_ocr_text, "tags": r.c_tags}
         all_docs.append(build_asset_document(asset, meta, r.ocr_text, corrections))
         all_asset_ids.append(r.asset_id)
 

@@ -1743,6 +1743,12 @@ class AssetOcrRepository:
         self._session = session
 
     def upsert(self, asset_id: str, text: str, model_id: str = "", *, commit: bool = True) -> None:
+        """The machine's reading. Text a person wrote for the clip stays the
+        one copy: the machine's isn't kept under it (Robert, Oct 9)."""
+        from src.server.repository.corrections import persons_fields
+
+        if "ocr_text" in persons_fields(self._session, asset_id):
+            text = ""
         self._session.execute(sa_text(
             "INSERT INTO asset_ocr (asset_id, text, has_text, model_id, generated_at)"
             " VALUES (:a, :t, :h, :m, :now)"
@@ -1771,8 +1777,13 @@ class AssetMetadataRepository:
     ) -> None:
         """
         Insert or update metadata row for (asset_id, model_id, model_version).
-        On conflict: update data and generated_at only.
+        On conflict: update data and generated_at only. A description or tags
+        a person wrote for the clip stay the one copy: the machine's aren't
+        kept under them (Robert, Oct 9).
         """
+        from src.server.repository.corrections import without_persons
+
+        data = without_persons(self._session, asset_id, data)
         now = utcnow()
         stmt = pg_insert(AssetMetadata).values(
             metadata_id="meta_" + str(ULID()),
