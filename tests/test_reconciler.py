@@ -148,7 +148,9 @@ def test_a_settings_change_makes_it_stale_and_it_waits_for_approval(env):
 
 
 @pytest.mark.slow
-def test_a_changed_file_is_described_again_without_asking(env):
+def test_a_changed_file_is_a_new_clip_made_from_scratch(env):
+    # Robert, Oct 9: a binary different file with the same name is a
+    # completely new file, and the old one goes missing.
     client, headers, *_ = env
     lib = _library(env, "RecChanged")
     old, new = _sha(), _sha()
@@ -160,18 +162,17 @@ def test_a_changed_file_is_described_again_without_asking(env):
     assert r.status_code == 201, r.text
     assert _due(lib, "missing_vision") == [] and _due(lib, "missing_embeddings") == []
 
-    assert _ingest_with(lib, "a.jpg", new, None) == clip  # the file was replaced
-    assert _due(lib, "missing_vision") == [clip] and _due(lib, "missing_embeddings") == [clip]
+    replaced = _ingest_with(lib, "a.jpg", new, None)
+    assert replaced != clip
+    assert _due(lib, "missing_vision") == [replaced] and _due(lib, "missing_embeddings") == [replaced]
     assert _summary(lib)["missing_vision"] == 1
-    assert _counts(lib, "vision")["stale"] == 1  # it still has its old description meanwhile
-
-    _describe(lib, clip, new)
-    assert _due(lib, "missing_vision") == []
-    assert _counts(lib, "vision")["current"] == 1
+    with _db(env) as s:  # the old clip, archived as missing, keeps its description
+        assert s.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"), {"a": clip}).scalar() == "missing"
+        assert s.execute(text("SELECT count(*) FROM asset_metadata WHERE asset_id = :a"), {"a": clip}).scalar() == 1
 
 
 @pytest.mark.slow
-def test_a_changed_video_loses_its_scenes(env):
+def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
     client, headers, *_ = env
     lib = _library(env, "RecScenes")
     old = _sha()
@@ -184,12 +185,14 @@ def test_a_changed_video_loses_its_scenes(env):
         s.commit()
     assert _due(lib, "missing_video_scenes") == [] and _due(lib, "missing_scene_vision") == []
 
-    _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    assert _due(lib, "missing_video_scenes") == [vid]
+    new = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
+    assert new != vid
     with _db(env) as s:
-        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 0
-        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a"
-                              " AND artifact IN ('scenes', 'scene_vision')"), {"a": vid}).scalar() == 0
+        s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": new})
+        s.commit()
+        # The old clip keeps its scenes, archived with it.
+        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 1
+    assert _due(lib, "missing_video_scenes") == [new]
 
 
 @pytest.mark.slow

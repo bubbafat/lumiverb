@@ -494,10 +494,14 @@ class AssetRepository:
         self._session = session
 
     def get_by_library_and_rel_path(self, library_id: str, rel_path: str) -> Asset | None:
-        """Return asset by (library_id, rel_path) or None."""
-        stmt = select(Asset).where(
-            Asset.library_id == library_id,
-            Asset.rel_path == rel_path,
+        """The clip at (library_id, rel_path): the one in sight, else the most
+        recently archived or trashed there (a changed file is a new clip, so
+        a path can have archived clips besides), or None."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id, Asset.rel_path == rel_path)
+            .order_by(Asset.deleted_at.is_(None).desc(), Asset.deleted_at.desc())  # type: ignore[union-attr]
+            .limit(1)
         )
         return self._session.exec(stmt).first()
     def create_asset(
@@ -1072,6 +1076,9 @@ class AssetRepository:
                 "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
                 " search_synced_at = NULL"
                 f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
+                # Not onto a path another clip in sight holds now (a different file there is its own clip).
+                "   AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = a.library_id"
+                "                   AND o.rel_path = a.rel_path AND o.deleted_at IS NULL AND o.asset_id <> a.asset_id)"
                 " RETURNING a.asset_id"
             ),
             {"ids": asset_ids},

@@ -215,16 +215,20 @@ def test_archiving_and_unarchiving_refresh_open_grids(env):
 
 @pytest.mark.slow
 def test_a_scan_never_undoes_an_archive(env):
-    """The file is still on disk: scanners skip it, and ingest refuses it."""
+    """The file is still on disk: scanners skip it, and ingest refuses it. A
+    different file put at its path is a new clip (Robert, Oct 9)."""
     client, headers, library_id, *_ = env
-    clip = _ingest(env, "scan/kept.mov", sha=_sha())
+    sha = _sha()
+    clip = _ingest(env, "scan/kept.mov", sha=sha)
     _archive(env, asset_ids=[clip])
 
     items = client.get(f"/v1/libraries/{library_id}/ignored-paths", params={"limit": 1000}, headers=headers).json()
     assert {"rel_path": "scan/kept.mov", "reason": "archived"} in items["items"]
     with pytest.raises(AssertionError, match="409"):
-        _ingest(env, "scan/kept.mov", sha=_sha())
+        _ingest(env, "scan/kept.mov", sha=sha)
     assert _row(env, clip)[1] == "archived"
+    other = _ingest(env, "scan/kept.mov", sha=_sha())
+    assert other != clip and _row(env, clip)[1] == "archived"
 
 
 @pytest.mark.slow

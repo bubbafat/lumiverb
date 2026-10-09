@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
@@ -371,6 +371,7 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
 @router.post("/v1/ingest", response_model=IngestResponse)
 async def create_and_ingest(
     request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     proxy: UploadFile = File(...),
     library_id: str = Form(...),
@@ -467,6 +468,18 @@ async def create_and_ingest(
     existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     reappeared = None  # set when a file the scanner marked missing is back
     created = False
+
+    # A different file at the same path is a new clip, and the old one goes
+    # missing (Robert, Oct 9): archived where it was, with everything it had,
+    # back if its content is. Only when both contents are known.
+    sha = (exif_data or {}).get("sha256")
+    if existing is not None and sha and existing.sha256 and existing.sha256 != sha:
+        if existing.deleted_at is None:
+            from src.server.api.routers.assets import _out_of_search
+
+            asset_repo.trash_many([existing.asset_id], reason="missing")
+            _out_of_search(background, request, [existing.asset_id])
+        existing = None
 
     # An archived asset back at its own path: lock it before restoring. A copy
     # of the file ingested at the same time may have claimed it by content;
