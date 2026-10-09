@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Any, Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -260,7 +260,7 @@ class VisionSubmitRequest(BaseModel):
     description: str
     tags: list[str] = []
     client_proxy_sha256: str | None = None
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class VisionSubmitResponse(BaseModel):
@@ -1078,7 +1078,7 @@ def get_asset(
 class VideoFacetSubmit(VideoFacetModel):
     """A probe result, with how it was made."""
 
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
@@ -1293,7 +1293,7 @@ class OcrSubmitRequest(BaseModel):
     ocr_text: str
     # The vision model that read it.
     model_id: str = Field(default="", max_length=200)
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/{asset_id}/ocr", status_code=200)
@@ -1336,7 +1336,7 @@ class BatchOcrRequest(BaseModel):
     items: list[BatchOcrItem]
     # The vision model that read them.
     model_id: str = Field(default="", max_length=200)
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-ocr", status_code=200)
@@ -1395,7 +1395,7 @@ class BatchVisionItem(BaseModel):
 
 class BatchVisionRequest(BaseModel):
     items: list[BatchVisionItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-vision", status_code=200)
@@ -1493,7 +1493,7 @@ class TranscriptSubmitRequest(BaseModel):
     # id (e.g. "whisper") for machine output, which never replaces a person's.
     source: str = Field(min_length=1, max_length=64)
     # How a machine transcript was made (a person's needs none).
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class TranscriptSubmitResponse(BaseModel):
@@ -1760,7 +1760,7 @@ class EmbeddingSubmitRequest(BaseModel):
     model_id: str
     model_version: str
     vector: list[float]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/{asset_id}/embeddings", status_code=201)
@@ -1798,7 +1798,7 @@ class BatchEmbeddingItem(BaseModel):
 
 class BatchEmbeddingRequest(BaseModel):
     items: list[BatchEmbeddingItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-embeddings", status_code=200)
@@ -1940,6 +1940,7 @@ def stream_or_enqueue_preview(
 
 class ThumbnailKeyUpdateRequest(BaseModel):
     thumbnail_key: str
+    lineage: Any = None  # the proxy producer's: it makes thumbnails
 
 
 @router.post("/{asset_id}/thumbnail-key")
@@ -1948,7 +1949,9 @@ def set_thumbnail_key(
     body: ThumbnailKeyUpdateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
-    """Record a thumbnail_key for a video asset after the index worker extracts the first frame."""
+    """Record a thumbnail_key for a video asset after the index worker extracts
+    the first frame; it says how it was made (the proxy producer's lineage)."""
+    require_lineage(body.lineage, "proxy")
     asset_repo = AssetRepository(session)
     asset_repo.update_thumbnail_key(asset_id, body.thumbnail_key)
     return {"asset_id": asset_id, "thumbnail_key": body.thumbnail_key}
@@ -2047,7 +2050,7 @@ class FaceSubmitRequest(BaseModel):
     # The model that embedded the faces (the faces producer's `model`).
     embedding_model: str = Field(default="buffalo_l", max_length=100)
     faces: list[FaceDetectionItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class FaceSubmitResponse(BaseModel):
@@ -2154,7 +2157,7 @@ class BatchFaceItem(BaseModel):
 
 class BatchFaceRequest(BaseModel):
     items: list[BatchFaceItem]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 @router.post("/batch-faces", status_code=200)

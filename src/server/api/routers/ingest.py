@@ -111,9 +111,12 @@ def _parse_optional_json(field: str | None, field_name: str) -> dict | None:
     if field is None:
         return None
     try:
-        return json.loads(field)
+        data = json.loads(field)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail=f"{field_name} must be valid JSON")
+    if data is not None and not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a JSON object")
+    return data
 
 
 def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] | None:

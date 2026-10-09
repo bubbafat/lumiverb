@@ -4,7 +4,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -133,7 +133,7 @@ class ChunkCompleteRequest(BaseModel):
     next_anchor_phash: str | None
     next_scene_start_ms: int | None
     # How the scenes were found; recorded when the clip's last chunk completes.
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class ChunkCompleteResponse(BaseModel):
@@ -273,7 +273,7 @@ class SceneVisionUpdateRequest(BaseModel):
     model_version: str
     description: str
     tags: list[str]
-    lineage: LineageIn | None = None
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class SceneVisionUpdateResponse(BaseModel):
