@@ -36,6 +36,7 @@ from src.shared.producers import (
     UNKNOWN,
     effective_settings,
     settings_hash,
+    use_settings,
 )
 from src.shared.utils import utcnow
 
@@ -85,6 +86,11 @@ def set_overrides(session: Session, artifact: str, values: Mapping[str, Any]) ->
             {"k": key, "v": json.dumps(dict(values), sort_keys=True)})
     else:
         session.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": key})
+
+
+def uses(session: Session, artifact: str) -> dict[str, Any]:
+    """The producer's settings that don't remake, as the account has them now."""
+    return use_settings(artifact, overrides(session, artifact))
 
 
 def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:

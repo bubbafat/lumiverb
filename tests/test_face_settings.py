@@ -181,9 +181,12 @@ def test_the_scheduler_hands_the_worker_the_settings_its_lineage_names(tmp_path,
 def test_faces_settings_that_can_change_and_those_that_cant():
     from src.client.cli.repair import PROXY_CACHE_EDGE
 
-    editable = {s.key for s in FACES.settings if not s.fixed}
+    editable = {s.key for s in FACES.settings if not s.fixed and s.remakes}
     assert editable == {"max_detect_edge", "min_confidence", "min_area_fraction", "min_face_pixels",
                         "min_relative_size", "min_sharpness"}
+    # How faces are grouped, not found: outside lineage.
+    assert {s.key for s in FACES.settings if not s.remakes} == {"merge_close_clusters", "merge_distance"}
+    assert "merge_close_clusters" not in FACES.defaults
     assert FACES.setting("model").fixed and FACES.setting("det_size").fixed
     assert FACES.setting("max_detect_edge").maximum <= PROXY_CACHE_EDGE  # faces are found in the proxies
 

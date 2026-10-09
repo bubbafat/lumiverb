@@ -448,3 +448,34 @@ def test_a_paused_producers_left_says_paused(client):
     assert result.exit_code == 0, result.output
     assert "Paused" in result.output and "promis" not in result.output  # the Left cell (the title's mark is lowercase)
     assert "not counting descriptions and tags (paused)" in " ".join(result.output.split())
+
+
+_FACE_FIELDS = [
+    {"key": "merge_close_clusters", "label": "Merge close groups", "kind": "bool", "value": True, "default": True,
+     "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None, "remakes": False},
+]
+
+
+@pytest.fixture
+def faces_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    mod = importlib.import_module("src.client.cli.commands.producers")
+    c = MagicMock()
+    c.get.return_value.json.return_value = {"producers": [
+        _producer("faces", "Faces", fields=_FACE_FIELDS, settings={})]}
+    monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
+    return c
+
+
+@pytest.mark.parametrize("raw, value", [("off", False), ("false", False), ("on", True), ("yes", True)])
+def test_a_yes_or_no_setting_takes_on_off_true_false(faces_client, raw, value):
+    faces_client.raw.return_value = _response(200, {"settings": {}, "fields": [{**_FACE_FIELDS[0], "value": value}]})
+    result = _settings("faces", f"merge_close_clusters={raw}")
+    assert result.exit_code == 0, result.output
+    assert faces_client.raw.call_args.kwargs["json"] == {"settings": {"merge_close_clusters": value}, "redo": False}
+    assert f"merge_close_clusters = {value}" in result.output
+
+
+def test_a_yes_or_no_setting_refuses_anything_else(faces_client):
+    result = _settings("faces", "merge_close_clusters=maybe")
+    assert result.exit_code == 2 and "true or false" in result.output
+    faces_client.raw.assert_not_called()

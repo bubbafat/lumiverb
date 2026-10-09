@@ -3380,10 +3380,72 @@ def _mark_clusters_dirty(session: Session) -> None:
 LARGE_INPUT_THRESHOLD = 50
 
 
+def face_merge_epsilon(session: Session) -> float:
+    """How close (cosine distance) face clusters must be to merge, from the
+    account's face settings (Settings → Processing → Faces): 0.0 when
+    merging close groups is off."""
+    from src.server.repository import lineage
+
+    uses = lineage.uses(session, "faces")
+    return float(uses["merge_distance"]) if uses["merge_close_clusters"] else 0.0
+
+
+def _merge_close_clusters(
+    dist: "np.ndarray", labels: "np.ndarray", epsilon: float, min_samples: int,
+) -> "np.ndarray":
+    """Leaf clusters closer than ``epsilon`` as one: what HDBSCAN's
+    ``cluster_selection_epsilon`` does, done here because scikit-learn's
+    epsilon search (1.8 and 1.9, ``_tree.pyx`` traverse_upwards) converts a
+    one-element array to a scalar, which NumPy 2.4 refuses: it raises on
+    every merge it would make.
+
+    Two clusters merge when a chain of faces joins them with every step
+    shorter than ``epsilon`` in HDBSCAN's own distance (mutual
+    reachability: the larger of the two faces' distance and each one's
+    distance to its ``min_samples``-th nearest face, itself counted, as
+    scikit-learn reckons it). So a lone face between two people can't join
+    them: it needs close neighbours of its own. Unlike scikit-learn's,
+    faces left out of every cluster stay out: merging adds none.
+    """
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    if epsilon <= 0 or labels.max(initial=-1) < 1:
+        return labels
+    core = np.partition(dist, min_samples - 1, axis=1)[:, min_samples - 1]
+    dense = np.flatnonzero(core < epsilon)  # faces with close neighbours of their own
+    if len(dense) == 0:
+        return labels
+    _, component = connected_components(csr_matrix(dist[np.ix_(dense, dense)] < epsilon), directed=False)
+
+    parent = list(range(int(labels.max()) + 1))
+
+    def root(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    first: dict[int, int] = {}  # component → a cluster in it
+    for face, comp in zip(dense, component):
+        label = int(labels[face])
+        if label < 0:
+            continue
+        if comp in first:
+            a, b = root(first[comp]), root(label)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+        else:
+            first[comp] = label
+    return np.array([root(int(l)) if l >= 0 else -1 for l in labels])
+
+
 def _cluster_face_embeddings(
     vectors: "np.ndarray",
     *,
     min_cluster_size: int = 3,
+    merge_epsilon: float = 0.0,
 ) -> list[list[int]]:
     """Cluster L2-normalized face embeddings using HDBSCAN.
 
@@ -3420,10 +3482,18 @@ def _cluster_face_embeddings(
       diagnosed and fixed the "501-face mega-cluster" residue from a
       production library after most clusters had already been named.
 
+      Leaf picks the finest clusters, so one person's sub-modes (years,
+      glasses, light, angle) come back as separate groups of 5-15. With
+      ``merge_epsilon`` > 0, leaf clusters closer than it merge
+      (``_merge_close_clusters``); 0 is leaf alone. The small-input path
+      and the fallback below don't merge.
+
     Args:
         vectors: (N, D) numpy array of L2-normalized face embeddings.
         min_cluster_size: HDBSCAN's core parameter. A cluster must contain
             at least this many faces or its members are labeled noise.
+        merge_epsilon: cosine distance under which leaf clusters merge
+            (large input only); 0.0 doesn't merge.
 
     Returns:
         Clusters as lists of row indices into ``vectors``, sorted by size
@@ -3463,6 +3533,8 @@ def _cluster_face_embeddings(
             allow_single_cluster=False,
             cluster_selection_method="leaf",
         ).fit_predict(dist)
+        # HDBSCAN's default min_samples is min_cluster_size.
+        labels = _merge_close_clusters(dist, labels, merge_epsilon, min_samples=min_cluster_size)
 
         if not any(lbl >= 0 for lbl in labels):
             labels = HDBSCAN(
@@ -4182,7 +4254,7 @@ class FaceRepository:
         vectors = vectors / norms
 
         clusters_idx = _cluster_face_embeddings(
-            vectors, min_cluster_size=min_cluster_size
+            vectors, min_cluster_size=min_cluster_size, merge_epsilon=face_merge_epsilon(self._session),
         )[:max_clusters]
 
         if not clusters_idx:

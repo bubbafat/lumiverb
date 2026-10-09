@@ -131,7 +131,7 @@ class SettingField(BaseModel):
 
     key: str
     label: str
-    kind: str  # "int" | "float" | "text"
+    kind: str  # "int" | "float" | "text" | "bool"
     value: Any
     default: Any
     minimum: float | None = None
@@ -139,6 +139,9 @@ class SettingField(BaseModel):
     unit: str = ""
     advanced: bool = False
     fixed: str | None = None
+    # Changing it makes the artifact again. False: it changes only what's
+    # done with what's made (how faces are grouped); it isn't in settings.
+    remakes: bool = True
 
 
 class ProducerItem(BaseModel):
@@ -216,7 +219,7 @@ def list_producers(
     items = []
     for artifact in PRODUCERS:
         want = lineage.desired(session, artifact, models)
-        item = _with_state(_item(artifact, want, waits), stopped, held, admin)
+        item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), stopped, held, admin)
         if counts:
             item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
         items.append(item)
@@ -238,14 +241,15 @@ def _with_state(item: ProducerItem, stopped: dict, held: dict, admin: bool) -> P
     return item
 
 
-def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None]) -> ProducerItem:
+def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None], uses: dict[str, Any]) -> ProducerItem:
     p = PRODUCERS[artifact]
+    values = {**want["settings"], **uses}
     return ProducerItem(
         artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
-        fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=want["settings"].get(s.key, s.default),
+        fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=values.get(s.key, s.default),
                              default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
-                             advanced=s.advanced, fixed=s.fixed or None)
+                             advanced=s.advanced, fixed=s.fixed or None, remakes=s.remakes)
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
         waiting=waits.get(p.job) if p.job else None, unit=p.unit,
@@ -273,7 +277,9 @@ def set_settings(
     anything missing (Robert, Oct 9: the change is the approval): 409
     redo_on_change with the count until redo says yes, as a model change in
     Settings → AI asks. Saving resumes its redo if an admin had stopped it;
-    a pause stays."""
+    a pause stays. A setting that doesn't remake (how faces are grouped)
+    asks nothing and makes nothing again: when one changes, the producer's
+    regroup runs (the face groups are worked out again)."""
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
     p = producer_or_404(artifact)
@@ -295,9 +301,9 @@ def set_settings(
         else:
             values[key] = checked
     models, waits = tenant_ai(request)
-    before = lineage.desired(session, artifact, models)
+    before, used = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
     lineage.set_overrides(session, artifact, values)
-    after = lineage.desired(session, artifact, models)
+    after, uses = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
     if after["settings_hash"] != before["settings_hash"]:
         clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
@@ -317,10 +323,14 @@ def set_settings(
                  "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
         lineage.resume(session, [artifact])
+    if uses != used and p.regroup:
+        from src.producers import load
+
+        load(p.regroup)(session)
     session.commit()
     # Settings unchanged leave a stopped redo stopped.
-    return _with_state(_item(artifact, after, waits), lineage.paused(session), lineage.processing_paused(session),
-                       admin=True)
+    return _with_state(_item(artifact, after, waits, uses), lineage.paused(session),
+                       lineage.processing_paused(session), admin=True)
 
 
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
