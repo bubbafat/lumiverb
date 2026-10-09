@@ -941,6 +941,14 @@ class AssetRepository:
             {"now": utcnow(), "reason": reason, "ids": asset_ids},
         )
         changed = {row[0] for row in result.fetchall()}
+        if reason == "user" and changed:
+            # A person deleting a project's or library's chosen cover clip
+            # clears the choice: the first active clip shows until a new one
+            # is chosen (Robert, Oct 9), and restoring it doesn't bring it back.
+            self._session.execute(text("UPDATE projects SET cover_asset_id = NULL WHERE cover_asset_id = ANY(:ids)"),
+                                  {"ids": list(changed)})
+            self._session.execute(text("UPDATE libraries SET cover_asset_id = NULL WHERE cover_asset_id = ANY(:ids)"),
+                                  {"ids": list(changed)})
         self._session.commit()
         return _split(asset_ids, changed)
 
