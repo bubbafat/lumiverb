@@ -8,9 +8,12 @@ it, so a lower tier fills what a higher one leaves idle.
 
 The jobs come from the database (queue.py): each kind's due clips, a
 buffer's worth at a time, offered here. A job in hand isn't offered again,
-and one just run isn't taken again for a while (retake_after): made, the
+and one just tried isn't taken again for a while (retake_after): made, the
 database stops listing it; not made (it failed and nothing said so), it
-would otherwise be first again at once.
+would otherwise be first again at once. The database is asked to leave
+those out (held()), so they can't fill its answer and keep the clips
+behind them waiting. A job that couldn't try at all (the storage went
+away) holds nothing back.
 """
 
 from __future__ import annotations
@@ -23,8 +26,10 @@ from dataclasses import dataclass
 # A kind's buffer is topped up once fewer than this are waiting.
 LOW = 10
 # A kind whose every due clip is known (the database listed fewer than it
-# was asked for) isn't asked again for this long.
+# was asked for) isn't asked again for this long, doubling while it keeps
+# having nothing new, up to EMPTY_WAIT_MAX.
 EMPTY_WAIT = 15.0
+EMPTY_WAIT_MAX = 120.0
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ class Dispatcher:
         self._lock = threading.Lock()
         self._buffers: dict[tuple[str, str], list[dict]] = {}
         self._all_known_at: dict[tuple[str, str], float] = {}
+        self._empty_wait: dict[tuple[str, str], float] = {}
         self._in_hand: set[tuple[str, str, str]] = set()
         self._taken_until: dict[tuple[str, str, str], float] = {}
         self._busy: dict[str, int] = {}
@@ -116,7 +122,7 @@ class Dispatcher:
         key = (tenant_id, kind)
         with self._lock:
             known_at = self._all_known_at.get(key)
-            if known_at is not None and self._clock() - known_at < EMPTY_WAIT:
+            if known_at is not None and self._clock() - known_at < self._empty_wait.get(key, EMPTY_WAIT):
                 return False
             return len(self._buffers.get(key, ())) < LOW
 
@@ -137,8 +143,15 @@ class Dispatcher:
             self._buffers[key] = fresh
             if complete or not fresh:
                 self._all_known_at[key] = now
+                # Nothing new again: ask less often, up to EMPTY_WAIT_MAX.
+                last = None if fresh else self._empty_wait.get(key)
+                if fresh:
+                    self._empty_wait.pop(key, None)
+                else:
+                    self._empty_wait[key] = EMPTY_WAIT if last is None else min(EMPTY_WAIT_MAX, last * 2)
             else:
                 self._all_known_at.pop(key, None)
+                self._empty_wait.pop(key, None)
 
     def clear(self, tenant_id: str, kind: str) -> None:
         """Hand out none of this kind for now (its machines can't do it)."""
@@ -175,8 +188,18 @@ class Dispatcher:
             self._busy[pool] = self._busy.get(pool, 0) + 1
             return Job(tenant_id, kind, spec.tier, tuple(items))
 
-    def done(self, job: Job) -> None:
-        """The job's slot is free; its clips aren't taken again for a while."""
+    def held(self, tenant_id: str, kind: str) -> list[str]:
+        """The account's clips of this kind in hand or just tried: what the
+        database is asked to leave out."""
+        same = _same(kind, self._kinds[kind])
+        now = self._clock()
+        with self._lock:
+            return [k[2] for k in self._in_hand | {k for k, t in self._taken_until.items() if t > now}
+                    if k[0] == tenant_id and k[1] == same]
+
+    def done(self, job: Job, *, tried: bool = True) -> None:
+        """The job's slot is free; its clips aren't taken again for a while
+        (unless it couldn't try at all)."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
         pool = pool_key(spec, job.tenant_id)
@@ -186,4 +209,5 @@ class Dispatcher:
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)
-                self._taken_until[key] = until
+                if tried:
+                    self._taken_until[key] = until

@@ -169,6 +169,7 @@ def test_scheduler_caches_live_in_the_data_dir():
     unit = text.split("Description=Lumiverb scheduler", 1)[1].split("UNIT", 1)[0]
     assert "Environment=XDG_CACHE_HOME=${DATA_DIR}/cache" in unit
     assert "ExecStart=${APP_DIR}/.venv/bin/python -m src.server.scheduler" in unit
+    assert "KillMode=mixed" in unit
     assert "lumiverb-worker.service <<UNIT" not in text
 
 
@@ -263,6 +264,8 @@ def test_update_replaces_the_worker_with_the_scheduler(tmp_path):
     assert f"ExecStartPre=-/usr/bin/find {data}/worker-tmp -mindepth 1 -delete" in unit
     assert f"ReadWritePaths={data} /var/lib/lumiverb" in unit
     assert "After=network-online.target remote-fs.target lumiverb-api.service" in unit
+    # Only the scheduler hears a stop: ffmpeg under a job isn't killed mid-clip.
+    assert "KillMode=mixed" in unit
     # The worker goes: the two never run together.
     assert "disable --now lumiverb-worker" in calls
     assert not (units / "lumiverb-worker.service").exists()
@@ -299,6 +302,8 @@ def test_processing_keeps_its_packages_whichever_service_it_has():
     deps = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
     assert "is-enabled lumiverb-scheduler" in deps and "is-enabled lumiverb-worker" in deps
     assert "--extra workers" in deps
+    # A missing data dir stops the update before anything changes (not after migrating).
+    assert deps.index("No DATA_DIR") < text.index('step "Running migrations"') - text.index('step "Updating Python dependencies"')
 
 
 def test_scheduler_temp_files_go_on_the_data_disk():
@@ -405,6 +410,8 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
         (app / ".venv" / "pyvenv.cfg").write_text(venv_cfg)
     calls = tmp_path / "calls"
     calls.write_text("")
+    env_file = tmp_path / "env"
+    env_file.write_text("DATA_DIR=/mnt/ssd2/lumiverb\n")
     text = UPDATE_API.read_text()
     block = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
     script = (
@@ -415,7 +422,7 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
         f'if [[ "$1" == stop ]]; then touch "{tmp_path}/stopped"; fi; '
         f'if [[ "$1" == is-active ]]; then [[ ! -e "{tmp_path}/stopped" ]]; fi; }}\n'
         f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]]; }}\n'
-        f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv\n'
+        f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv; ENV_FILE="{env_file}"\n'
         + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
@@ -727,3 +734,22 @@ def test_update_restarts_the_scheduler_only_once_the_api_answers():
     api, health, scheduler = (step.index("systemctl restart lumiverb-api"), step.index("/health"),
                               step.index("systemctl restart lumiverb-scheduler"))
     assert api < health < scheduler
+
+
+
+def test_an_update_without_a_data_dir_stops_before_changing_anything(tmp_path):
+    env_file = tmp_path / "env"
+    env_file.write_text("API_PORT=8100\n")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Updating Python dependencies"', 1)[1].split("# ----", 1)[0]
+    script = (
+        "RED=''; NC=''\n"
+        'step() { :; }; ok() { :; }; warn() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
+        'systemctl() { [[ "$1 $2" == "is-enabled lumiverb-scheduler" ]]; }\n'
+        f'sudo() {{ echo "sudo $*"; }}\n'
+        f'APP_DIR="{tmp_path}"; SVC_USER=lumiverb; UV_BIN=uv; ENV_FILE="{env_file}"\n'
+        + block
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode != 0 and "fail: No DATA_DIR" in out.stdout
+    assert "sync" not in out.stdout  # nothing installed first

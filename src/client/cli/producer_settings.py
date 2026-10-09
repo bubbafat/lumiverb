@@ -17,23 +17,34 @@ logger = logging.getLogger(__name__)
 
 
 class ProducerSettings:
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(self, client: Any | None = None, *, fetch: bool = True) -> None:
+        """fetch=False: the registry's defaults until refresh() reads the server."""
         self._client = client
-        self._settings: dict[str, dict[str, Any]] = {}
-        self.refresh()
+        self._settings: dict[str, dict[str, Any]] = {a: effective_settings(a) for a in PRODUCERS}
+        if fetch:
+            self.refresh()
 
-    def refresh(self) -> None:
-        self._settings = {a: effective_settings(a) for a in PRODUCERS}
+    def refresh(self) -> bool:
+        """Read the server's settings again. Built aside and swapped in at once,
+        so a job running meanwhile never sees a mix; when the server can't say,
+        what was read before stays (the registry's defaults the first time).
+        True when the server said."""
+        fresh = {a: effective_settings(a) for a in PRODUCERS}
         if self._client is None:
-            return
+            self._settings = fresh
+            return False
         try:
             data = self._client.get("/v1/producers", params={"counts": "false"}).json()
-        except Exception as e:  # noqa: BLE001 — an older server: the registry's defaults
-            logger.info("producers: the server didn't say (%s); using the registry's settings", e)
-            return
+        except Exception as e:  # noqa: BLE001 — an older server, or not answering yet
+            logger.info("producers: the server didn't say (%s); keeping the settings read before", e)
+            if not self._settings:
+                self._settings = fresh
+            return False
         for p in data.get("producers", []):
-            if p.get("artifact") in self._settings and isinstance(p.get("settings"), dict):
-                self._settings[p["artifact"]] = dict(p["settings"])
+            if p.get("artifact") in fresh and isinstance(p.get("settings"), dict):
+                fresh[p["artifact"]] = dict(p["settings"])
+        self._settings = fresh
+        return True
 
     def settings(self, artifact: str) -> dict[str, Any]:
         return dict(self._settings[artifact])

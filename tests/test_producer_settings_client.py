@@ -277,3 +277,26 @@ def test_descriptions_ask_for_whats_missing_only(tmp_path, monkeypatch):
     pages = [c for c in client.get.call_args_list if c.args and c.args[0] == "/v1/assets/page"]
     assert pages and all("upgrades" not in c.kwargs["params"] for c in pages)
     assert order == ["ast_a", "ast_b"]
+
+
+def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():
+    """The scheduler refreshes while jobs run: none may see the registry's
+    defaults in between, nor after the server fails to answer."""
+    import threading
+
+    from src.client.cli.producer_settings import ProducerSettings
+
+    client = _client({"vision": {"model": "custom", "max_edge": 999}})
+    producers = ProducerSettings(client)
+    assert producers.settings("vision")["max_edge"] == 999
+    seen: list[int] = []
+    answered = threading.Event()
+
+    def slow_get(*args, **kwargs):
+        seen.append(producers.settings("vision")["max_edge"])  # what a job reads meanwhile
+        answered.set()
+        raise ConnectionError("the API is restarting")
+
+    client.get.side_effect = slow_get
+    assert producers.refresh() is False
+    assert seen == [999] and producers.settings("vision")["max_edge"] == 999

@@ -14,7 +14,7 @@ from testcontainers.postgres import PostgresContainer
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 from tests.test_migration_lineage import _alembic
 
-BEFORE, AFTER = "fbd7f3be1cb0", "be66e81c7e5d"
+BEFORE, AFTER = "5a0272639723", "be66e81c7e5d"
 GONE = {"producer_upgrades", "producer_upgrade_items", "correction_history"}
 
 

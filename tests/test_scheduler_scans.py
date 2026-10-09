@@ -137,9 +137,9 @@ CHANGE = {"change_id": "chg_1", "rel_path": "Day 1/A001.mov", "reported_at": "20
 def _pass(server: FakeServer, state: ScanState | None = None, *, now: float = 100 * HOUR, **kw):
     scan = kw.pop("scan", MagicMock(return_value=ScanStats()))
     state = state or ScanState(last_full_scan={"lib_1": now - 1})
-    reachable = scan_pass(server.client(), server.libraries, state, now=now, scan_fn=scan,
-                          console=Console(quiet=True), **kw)
-    return scan, state, reachable
+    roots = scan_pass(server.client(), server.libraries, state, now=now, scan_fn=scan,
+                      console=Console(quiet=True), **kw)
+    return scan, state, {k: v is not None for k, v in roots.items()}
 
 
 @pytest.mark.fast

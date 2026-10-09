@@ -71,17 +71,33 @@ class MachinePool:
         self._cond = threading.Condition()
 
     def load(self) -> None:
-        """The job's model and machines, from the server (raises when it can't say)."""
+        """The job's model and machines, from the server (raises when it can't say).
+        Machines already known are updated in place, so requests in flight keep
+        counting against them (and a machine whose address or key changed is
+        checked again); ones no longer listed are dropped."""
         data = self._client.get(f"/v1/ai/jobs/{self.job}").json()
-        self.model = data.get("model") or ""
-        self.machines = [Machine(machine_id=m["machine_id"], name=m["name"], api_url=m["api_url"],
-                                 api_key=m.get("api_key") or None, at_once=max(1, int(m.get("at_once") or 1)),
-                                 built_in=bool(m.get("built_in")))
-                         for m in data.get("machines") or []]
+        with self._cond:
+            known = {m.machine_id: m for m in self.machines}
+            machines = []
+            for m in data.get("machines") or []:
+                api_key = m.get("api_key") or None
+                machine = known.get(m["machine_id"])
+                if machine is None:
+                    machine = Machine(machine_id=m["machine_id"], name=m["name"], api_url=m["api_url"],
+                                      api_key=api_key, at_once=1)
+                elif (machine.api_url, machine.api_key) != (m["api_url"], api_key):
+                    machine.online, machine.serves, machine.checked_at = False, "", None
+                machine.name, machine.api_url, machine.api_key = m["name"], m["api_url"], api_key
+                machine.at_once = max(1, int(m.get("at_once") or 1))
+                machine.built_in = bool(m.get("built_in"))
+                machines.append(machine)
+            self.machines = machines
+            self.model = data.get("model") or ""
+            self._cond.notify_all()
 
     def check(self) -> bool:
         """Read the job's machines and check each. True when one is online.
-        Between runs only: it replaces the machines requests hold."""
+        Safe while requests are in flight (load() keeps what they hold)."""
         self.load()
         return self.recheck()
 
@@ -221,14 +237,17 @@ class _OnAMachine:
     def __init__(self, pool: MachinePool, make: Callable[[Machine], Any]) -> None:
         self._pool = pool
         self._make = make
-        self._providers: dict[str, Any] = {}
+        self._providers: dict[tuple, Any] = {}
         self._lock = threading.Lock()
 
     def _provider(self, machine: Machine) -> Any:
+        # A machine whose address, key or model name changed gets a new one.
+        key = (machine.machine_id, machine.api_url, machine.api_key, machine.serves)
         with self._lock:
-            if machine.machine_id not in self._providers:
-                self._providers[machine.machine_id] = self._make(machine)
-            return self._providers[machine.machine_id]
+            if key not in self._providers:
+                self._providers = {k: v for k, v in self._providers.items() if k[0] != machine.machine_id}
+                self._providers[key] = self._make(machine)
+            return self._providers[key]
 
     def _on_a_machine(self, call: Callable[[Any], Any]) -> Any:
         """Each machine at most once per item: machines that list the model but
