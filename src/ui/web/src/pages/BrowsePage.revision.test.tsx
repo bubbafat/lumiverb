@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { NavigateFunction } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import BrowsePage from "./BrowsePage";
+import { clipsWith, firstOnScreen, gridHeight, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   getApiKey: vi.fn(),
@@ -124,6 +125,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
 // The library's settings page, with the sidebar's revision poll: it keeps
@@ -143,12 +145,13 @@ function NavigateProbe() {
   return null;
 }
 
-function renderPage() {
+function renderPage(prepareScroller?: (scroller: HTMLElement) => void) {
   // The app's own defaults (main.tsx), so stale times behave as they do there.
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
   const scroller = document.createElement("div");
+  prepareScroller?.(scroller);
   const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
@@ -318,6 +321,101 @@ describe("BrowsePage revision polling", () => {
     expect(gridFetches[gridFetches.length - 1]).toBe(serverRevision);
     await advance(60_000);
     expect(gridFetches.length - 1).toBeLessThanOrEqual(polls / 3 + 1);
+  });
+});
+
+describe("BrowsePage scrolled grid during a refresh", () => {
+  /** 7 new clips per revision on top of 60 older ones; sorted another way, reversed. */
+  function serveClips() {
+    api.queryAssets.mockImplementation(async (_filters: unknown, opts?: { sort?: string }) => {
+      gridFetches.push(serverRevision);
+      const items = clipsWith(clip, (serverRevision - 1) * 7);
+      if (opts?.sort && opts.sort !== "taken_at") items.reverse();
+      return { items, next_cursor: null, total_estimate: items.length };
+    });
+  }
+
+  it("keeps the first clip on screen in place when new clips arrive above it", async () => {
+    serveClips();
+    const { scroller } = renderPage(stubLayout);
+    await advance(100);
+    scrollTo(scroller, 1500);
+    await advance(100);
+    const before = firstOnScreen(scroller);
+
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+    reportScroll(scroller);
+
+    expect(scroller.scrollTop).toBeGreaterThan(1500);
+    expect(placeOf(scroller, before.name)).toEqual(before);
+  });
+
+  it("keeps the first clip on screen in place when clips above it go away", async () => {
+    serverRevision = 3;
+    serveClips();
+    const { scroller } = renderPage(stubLayout);
+    await advance(100);
+    scrollTo(scroller, 3000);
+    await advance(100);
+    const before = firstOnScreen(scroller);
+
+    serverRevision = 1;
+    await advance(POLL_MS);
+    await advance(100);
+    reportScroll(scroller);
+
+    expect(scroller.scrollTop).toBeLessThan(3000);
+    expect(placeOf(scroller, before.name)).toEqual(before);
+  });
+
+  it("shows new clips at the top when the grid is scrolled to the top", async () => {
+    serveClips();
+    const { scroller } = renderPage(stubLayout);
+    await advance(100);
+    await advance(100);
+    expect(firstOnScreen(scroller).name).toBe("clip60.mov");
+
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+
+    expect(scroller.scrollTop).toBe(0);
+    expect(firstOnScreen(scroller).name).toBe("clip67.mov");
+  });
+
+  it("lays out new row heights when a refresh keeps the number of rows", async () => {
+    // 8 clips make a header and 3 rows either way; 16:10 rows are taller.
+    api.queryAssets.mockImplementation(async () => {
+      const height = serverRevision === 1 ? 1080 : 1200;
+      const items = Array.from({ length: 8 }, (_, i) => ({ ...clip, asset_id: `ast_${i}`, rel_path: `c${i}.mov`, height }));
+      return { items, next_cursor: null, total_estimate: 8 };
+    });
+    renderPage(stubLayout);
+    await advance(100);
+    await advance(100);
+    const before = gridHeight();
+
+    serverRevision = 2;
+    await advance(POLL_MS);
+    await advance(100);
+
+    expect(gridHeight()).toBeGreaterThan(before + 40);
+  });
+
+  it("doesn't hold on to a clip across a change of sort", async () => {
+    serveClips();
+    const { scroller } = renderPage(stubLayout);
+    await advance(100);
+    scrollTo(scroller, 1500);
+    await advance(100);
+
+    act(() => navigate("/libraries/lib_1/browse?sort=file_size"));
+    await advance(100);
+    await advance(100);
+
+    expect(scroller.scrollTop).toBe(1500);
   });
 });
 

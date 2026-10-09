@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ScrollContainerContext } from "../context/ScrollContainerContext";
 import UnifiedBrowsePage from "./UnifiedBrowsePage";
+import { clipsWith, firstOnScreen, placeOf, reportScroll, scrollTo, stubLayout } from "./scrolledGrid.testutil";
 
 const api = vi.hoisted(() => ({
   listLibraries: vi.fn(),
@@ -124,14 +125,16 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
-function renderPage(at = "/browse") {
+function renderPage(at = "/browse", prepareScroller?: (scroller: HTMLElement) => void) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   });
   const scroller = document.createElement("div");
   scrollerEl = scroller;
+  prepareScroller?.(scroller);
   const view = render(
     <QueryClientProvider client={client}>
       <ScrollContainerContext.Provider value={scroller}>
@@ -282,5 +285,29 @@ describe("the grid's width", () => {
     expect(tiles.length).toBeGreaterThan(0);
     const rightmost = Math.max(...tiles.map((el) => parseFloat(el.style.left) + parseFloat(el.style.width)));
     expect(rightmost).toBeLessThanOrEqual(360);
+  });
+});
+
+describe("UnifiedBrowsePage scrolled grid during a refresh", () => {
+  it("keeps the first clip on screen in place when new clips arrive above it", async () => {
+    api.queryAssets.mockImplementation(async () => {
+      gridFetches += 1;
+      const items = clipsWith(clip, (libraries[0].revision - 1) * 7);
+      return { items, next_cursor: null, total_estimate: items.length };
+    });
+    const { scroller } = renderPage("/browse", stubLayout);
+    await advance(100);
+    scrollTo(scroller, 1500);
+    await advance(100);
+    const before = firstOnScreen(scroller);
+
+    bump("lib_1");
+    await advance(POLL_MS);
+    await advance(100);
+    reportScroll(scroller);
+
+    expect(gridFetches).toBe(2);
+    expect(scroller.scrollTop).toBeGreaterThan(1500);
+    expect(placeOf(scroller, before.name)).toEqual(before);
   });
 });
