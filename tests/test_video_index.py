@@ -525,11 +525,90 @@ def test_run_video_enrich_missing_source(mock_enrich):
     assert last_update.kwargs["fail"] == 1
 
 
+NOW = {"producer": "scene-vision", "version": "1", "settings_hash": "new", "source_sha256": "s"}
+OLD = {"producer": "scene-vision", "version": "1", "settings_hash": "old"}
+
+
 @patch("src.client.cli.video_index.enrich_scene")
-def test_a_video_with_every_scene_described_is_done(mock_enrich):
+def test_scenes_described_another_way_are_described_again(mock_enrich):
+    """An upgrade hands out a video described with older settings: each
+    scene whose description wasn't made the way this run makes it is
+    described again; ones already made this way are left (ADR-016 phase 3)."""
     client = MagicMock()
     client.get.return_value = _FakeResponse(data={"scenes": [
-        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat"}]})
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat", "lineage": OLD},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": "a dog",
+         "lineage": {k: NOW[k] for k in ("producer", "version", "settings_hash")}},
+        {"scene_id": "scn_3", "rep_frame_ms": 2000, "description": "a fox", "lineage": None},  # nobody said how
+        {"scene_id": "scn_4", "rep_frame_ms": 3000, "description": "", "lineage": OLD},  # empty, old
+    ]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ok, failed, _, fails = _enrich_videos(client, tmpdir, ["a1"], MagicMock(), lineage_for=lambda v: NOW)
+
+    assert (ok, failed, fails) == (1, 0, [])
+    assert sorted(c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list) == ["scn_1", "scn_3", "scn_4"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_part_described_picks_up_where_it_left_off(mock_enrich):
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": [
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "",
+         "lineage": {k: NOW[k] for k in ("producer", "version", "settings_hash")}},  # nothing to say, but made
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": None, "lineage": None}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ok, failed, _, _ = _enrich_videos(client, tmpdir, ["a1"], MagicMock(), lineage_for=lambda v: NOW)
+
+    assert (ok, failed) == (1, 0)
+    assert [c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list] == ["scn_2"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_handed_out_with_every_scene_made_this_way_is_described_again(mock_enrich):
+    """Every scene matches but the video was handed out: its own record is
+    what's stale (made before its file had a hash, say). Describing all its
+    scenes again records it; skipping them would hand it out forever."""
+    current = {k: NOW[k] for k in ("producer", "version", "settings_hash")}
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": [
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat", "lineage": current},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": "a dog", "lineage": current}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "a1.mp4").write_bytes(b"\x00" * 100)
+        (root / "a2.mp4").write_bytes(b"\x00" * 100)
+        progress = MagicMock()
+        progress.console = MagicMock()
+        run_video_enrich(client=client, source_for=lambda v: root / f"{v['asset_id']}.mp4",
+                         videos=[{"asset_id": "a1", "rel_path": "a1.mp4", "upgrade": True},
+                                 {"asset_id": "a2", "rel_path": "a2.mp4"}],  # missing work: a race, nothing to do
+                         vision_provider=MagicMock(), vision_model_id="m", console=MagicMock(), progress=progress,
+                         task_id=0, lineage_for=lambda v: NOW, concurrency=1)
+
+    assert sorted(c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list) == ["scn_1", "scn_2"]
+    assert {c.kwargs["asset_id"] for c in mock_enrich.call_args_list} == {"a1"}
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_server_that_doesnt_say_how_scenes_were_made_gets_the_old_rule(mock_enrich):
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": [
+        {"scene_id": "scn_1", "rep_frame_ms": 0, "description": "a cat"},
+        {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": None}]})
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _enrich_videos(client, tmpdir, ["a1"], MagicMock(), lineage_for=lambda v: NOW)
+
+    assert [c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list] == ["scn_2"]
+
+
+@patch("src.client.cli.video_index.enrich_scene")
+def test_a_video_without_scenes_is_done(mock_enrich):
+    client = MagicMock()
+    client.get.return_value = _FakeResponse(data={"scenes": []})
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ok, failed, _, fails = _enrich_videos(client, tmpdir, ["a1"], MagicMock())

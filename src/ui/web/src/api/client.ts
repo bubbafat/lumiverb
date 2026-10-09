@@ -863,9 +863,107 @@ export async function removeMachine(machineId: string, leaveJobs = false): Promi
 }
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
- * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it. */
-export async function setJobModel(job: string, model: string): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/jobs/${job}`, { method: "PUT", body: { model } });
+ * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it.
+ * 409 upgrades_stop (details.upgrades: artifact, title, remaining) when upgrades to the
+ * current model are under way, unless stopUpgrades. */
+export async function setJobModel(job: string, model: string, stopUpgrades = false): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/jobs/${job}`, {
+    method: "PUT",
+    body: stopUpgrades ? { model, stop_upgrades: true } : { model },
+  });
+}
+
+/** A producer's artifacts over the clips in sight (in one library or project when asked). */
+export interface ProducerCounts {
+  applicable: number;
+  current: number;
+  /** Made with an older producer or settings. */
+  stale: number;
+  /** Not made yet. */
+  missing: number;
+  /** The last try failed. */
+  failing: number;
+}
+
+export interface UpgradeScope {
+  kind: "all" | "library" | "project";
+  id: string | null;
+  name: string | null;
+}
+
+export type EditsChoice = "keep" | "replace" | "skip";
+
+/** Stale artifacts an admin approved making again: the clips stale in its scope then. */
+export interface ProducerUpgrade {
+  upgrade_id: string;
+  scope: UpgradeScope;
+  edits: EditsChoice;
+  approved_by: string | null;
+  approved_at: string;
+  total: number;
+  remaining: number;
+  /** Made again since, but still not what it upgrades to: stale, not handed out again. */
+  still_stale?: number;
+}
+
+/** What makes one kind of artifact (Settings → Processing). */
+export interface Producer {
+  artifact: string;
+  producer: string;
+  version: string;
+  title: string;
+  media: string[];
+  /** Its output must come from one model across the library: upgraded all at once. */
+  uniform: boolean;
+  settings: Record<string, unknown>;
+  settings_hash: string;
+  counts: ProducerCounts | null;
+  upgradable: boolean;
+  why_not: string | null;
+  /** Stale clips (in the counts' scope) with a person's edits on top. */
+  edited: number;
+  upgrades: ProducerUpgrade[];
+}
+
+export async function getProducers(scope: { libraryId?: string; projectId?: string } = {}): Promise<Producer[]> {
+  const qs = new URLSearchParams();
+  if (scope.libraryId) qs.set("library_id", scope.libraryId);
+  if (scope.projectId) qs.set("project_id", scope.projectId);
+  const q = qs.toString();
+  return (await apiFetch<{ producers: Producer[] }>(`/producers${q ? `?${q}` : ""}`)).producers;
+}
+
+export interface UpgradeRequest {
+  library_id?: string;
+  project_id?: string;
+  edits?: EditsChoice;
+  confirm?: boolean;
+}
+
+export interface UpgradeResult {
+  upgrade_id: string | null;
+  artifact: string;
+  scope: UpgradeScope;
+  edits: EditsChoice;
+  upgrading: number;
+  skipped_edited: number;
+  /** edits=replace: clips whose edits move to history as each is made again. */
+  edits_to_replace: number;
+}
+
+/** Approve making a producer's stale artifacts again (admins). 409
+ * edited_clips (details: stale, edited, choices) until `edits` says what to do
+ * with clips a person edited; 409 redo_everything (details: stale) until
+ * `confirm`, for producers upgraded all at once; 409 nothing_stale /
+ * cant_upgrade; 422 all_or_nothing when such a producer is narrowed. */
+export async function upgradeProducer(artifact: string, body: UpgradeRequest): Promise<UpgradeResult> {
+  return apiFetch<UpgradeResult>(`/producers/${artifact}/upgrade`, { method: "POST", body });
+}
+
+/** Stop an upgrade, or all of a producer's (admins): what isn't made again stays stale. */
+export async function cancelUpgrade(artifact: string, upgradeId?: string): Promise<void> {
+  const q = upgradeId ? `?upgrade_id=${encodeURIComponent(upgradeId)}` : "";
+  await apiFetch<void>(`/producers/${artifact}/upgrade${q}`, { method: "DELETE" });
 }
 
 export async function findSimilar(params: {

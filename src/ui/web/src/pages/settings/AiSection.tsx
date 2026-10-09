@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -68,6 +69,8 @@ export default function AiSection() {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: ai, isLoading } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings, refetchInterval: 30_000 });
   const [adding, setAdding] = useState(false);
+  // The model a job had before an admin changed it here: what it made is now stale.
+  const [replaced, setReplaced] = useState<{ label: string; model: string } | null>(null);
   if (isLoading || !ai) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
@@ -113,8 +116,23 @@ export default function AiSection() {
         </h3>
         <p className="text-sm text-gray-500">One per job. Every machine doing a job must offer its model.</p>
         {ai.jobs.map((job) => (
-          <JobModel key={`${job.job}|${job.model}`} job={job} admin={admin} />
+          <JobModel
+            key={`${job.job}|${job.model}`}
+            job={job}
+            admin={admin}
+            onChanged={(old) => setReplaced(old ? { label: job.label, model: old } : null)}
+          />
         ))}
+        {replaced && (
+          <p role="status" className="text-sm text-amber-200">
+            What {replaced.label.toLowerCase()} made with {replaced.model} is now stale: it's made again only when you
+            upgrade it in{" "}
+            <Link to="/settings/processing" className="text-indigo-300 underline hover:text-indigo-200">
+              Processing
+            </Link>
+            .
+          </p>
+        )}
       </section>
       {!admin && <p className="text-sm text-gray-500">Only admins can change these.</p>}
     </div>
@@ -491,22 +509,39 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
   );
 }
 
-function JobModel({ job, admin }: { job: AiJob; admin: boolean }) {
+function JobModel({
+  job,
+  admin,
+  onChanged,
+}: {
+  job: AiJob;
+  admin: boolean;
+  /** The model it had, when an admin changed it to another one here. */
+  onChanged: (old: string | null) => void;
+}) {
   const queryClient = useQueryClient();
   const [changing, setChanging] = useState(false);
   const [model, setModel] = useState(job.model);
   const [problem, setProblem] = useState<string | null>(null);
+  // 409 upgrades_stop: the model change would stop upgrades under way; ask first.
+  const [stopping, setStopping] = useState<{ message: string; next: string } | null>(null);
   // What the machines doing it offer (the server says).
   const offered = job.choices;
   const save = useMutation({
-    mutationFn: (next: string) => setJobModel(job.job, next),
-    onMutate: () => setProblem(null),
-    onSuccess: (next) => {
+    mutationFn: ({ next, stop }: { next: string; stop?: boolean }) => setJobModel(job.job, next, stop),
+    onMutate: () => {
+      setProblem(null);
+      setStopping(null);
+    },
+    onSuccess: (next, { next: chosen }) => {
+      onChanged(job.model && chosen && chosen !== job.model ? job.model : null);
       queryClient.setQueryData(AI_QUERY_KEY, next);
       setChanging(false);
     },
-    onError: (e) => {
-      if (e instanceof ApiError && e.code === "model_not_offered") {
+    onError: (e, { next }) => {
+      if (e instanceof ApiError && e.code === "upgrades_stop") {
+        setStopping({ message: e.message, next });
+      } else if (e instanceof ApiError && e.code === "model_not_offered") {
         const machines = (e.details?.machines as { name: string; models: string[]; error: string }[] | undefined) ?? [];
         setProblem(
           `${e.message} ` +
@@ -537,10 +572,13 @@ function JobModel({ job, admin }: { job: AiJob; admin: boolean }) {
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (model && model !== job.model) save.mutate(model);
+            if (model && model !== job.model) save.mutate({ next: model });
           }}
         >
-          <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => setModel(e.target.value)}>
+          <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => {
+              setModel(e.target.value);
+              setStopping(null);  // the question was about another choice
+            }}>
             <option value="" disabled>
               {offered.length ? "Pick a model…" : "No machine doing it has been checked yet"}
             </option>
@@ -552,13 +590,26 @@ function JobModel({ job, admin }: { job: AiJob; admin: boolean }) {
           </select>
           {job.model && model && model !== job.model && (
             <p className="text-sm text-amber-300">
-              Changing the model marks what was made with {job.model} as made with an old model.
+              What was made with {job.model} becomes stale: it's made again only when you upgrade it in Processing.
             </p>
           )}
           {problem && (
             <p role="alert" className="text-sm text-red-300">
               {problem}
             </p>
+          )}
+          {stopping && (
+            <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <p className="text-sm text-amber-100">{stopping.message}</p>
+              <button
+                type="button"
+                disabled={save.isPending}
+                className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
+                onClick={() => save.mutate({ next: stopping.next, stop: true })}
+              >
+                {stopping.next ? "Change it and stop them" : "Turn it off and stop them"}
+              </button>
+            </div>
           )}
           <div className="flex flex-wrap gap-3">
             <button
@@ -569,7 +620,7 @@ function JobModel({ job, admin }: { job: AiJob; admin: boolean }) {
               {save.isPending ? "Saving…" : "Save"}
             </button>
             {job.model && (
-              <button type="button" disabled={save.isPending} className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => save.mutate("")}>
+              <button type="button" disabled={save.isPending} className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => save.mutate({ next: "" })}>
                 Turn off {job.label.toLowerCase()}
               </button>
             )}
@@ -580,6 +631,7 @@ function JobModel({ job, admin }: { job: AiJob; admin: boolean }) {
                 setChanging(false);
                 setModel(job.model);
                 setProblem(null);
+                setStopping(null);
               }}
             >
               Cancel

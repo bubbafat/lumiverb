@@ -242,3 +242,38 @@ def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
     [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
     assert call.kwargs["json"]["lineage"]["settings_hash"] == P.settings_hash(
         P.effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
+
+
+def test_descriptions_take_upgrades_after_what_is_missing(tmp_path, monkeypatch):
+    """The worker asks for an approved upgrade's clips too, and describes
+    what's missing first (ADR-016 phase 3, piece 5)."""
+    from unittest.mock import patch
+
+    from rich.console import Console
+
+    from src.client.cli import ingest
+    from src.client.cli.producer_settings import ProducerSettings
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    model = "qwen3-vl:8b"
+    client = _client({a: {"model": model} for a in ("vision", "ocr", "scene_vision")})
+    producers = ProducerSettings(client)
+    client.get.return_value.json.return_value = {"items": [
+        {"asset_id": "ast_old", "rel_path": "old.jpg", "sha256": SHA, "upgrade": True},
+        {"asset_id": "ast_new", "rel_path": "new.jpg", "sha256": SHA, "upgrade": False}]}
+    order = []
+
+    def one(**kwargs):
+        order.append(kwargs["asset_id"])
+        return {"asset_id": kwargs["asset_id"], "model_id": model, "description": "a dog", "tags": []}
+
+    with (
+        patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
+        patch("src.client.workers.captions.factory.get_caption_provider"),
+        patch.object(ingest, "_backfill_one", side_effect=one),
+    ):
+        ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
+                                   console=Console(quiet=True), producers=producers, concurrency=1)
+    pages = [c for c in client.get.call_args_list if c.args and c.args[0] == "/v1/assets/page"]
+    assert pages and all(c.kwargs["params"]["upgrades"] == "true" for c in pages)
+    assert order == ["ast_new", "ast_old"]

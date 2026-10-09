@@ -313,7 +313,8 @@ def _page_missing(
     missing_probe: bool = False,
     missing_analysis_proxy: bool = False,
 ) -> list[dict]:
-    """Page through assets matching the given missing filter."""
+    """Page through assets matching the given missing filter, with an
+    approved upgrade's clips after what's missing (ADR-016 phase 3)."""
     results: list[dict] = []
     cursor: str | None = None
     while True:
@@ -322,6 +323,7 @@ def _page_missing(
             "limit": "500",
             "sort": "asset_id",
             "dir": "asc",
+            "upgrades": "true",
         }
         if missing_vision:
             params["missing_vision"] = "true"
@@ -352,7 +354,12 @@ def _page_missing(
         cursor = data.get("next_cursor")
         if not cursor:
             break
-    return results
+    return missing_first(results)
+
+
+def missing_first(assets: list[dict]) -> list[dict]:
+    """What's missing before an upgrade's clips (the server marks those), otherwise in the order given."""
+    return sorted(assets, key=lambda a: bool(a.get("upgrade")))
 
 
 def _page_all_images(
@@ -819,8 +826,8 @@ def _here(library: dict) -> str:
 
 
 def get_repair_summary(client: LumiverbClient, library_id: str) -> dict:
-    """Fetch repair summary counts from the API."""
-    resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id})
+    """Fetch repair summary counts from the API (with approved upgrades' clips)."""
+    resp = client.get("/v1/assets/repair-summary", params={"library_id": library_id, "upgrades": "true"})
     return resp.json()
 
 
@@ -1618,8 +1625,8 @@ def run_repair(
             if not assets:
                 continue
 
-            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256")}
-                      for a in assets]
+            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256"),
+                       "upgrade": bool(a.get("upgrade"))} for a in assets]
 
             from src.client.cli.video_index import run_video_enrich
             progress = _make_progress(console)

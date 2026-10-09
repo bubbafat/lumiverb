@@ -221,6 +221,8 @@ class VideoScene(SQLModel, table=True):
     sharpness_score: float | None = Field(default=None, nullable=True)
     keep_reason: str | None = Field(default=None, nullable=True)
     phash: str | None = Field(default=None, nullable=True)
+    # How its description was made: {producer, version, settings_hash}.
+    lineage: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

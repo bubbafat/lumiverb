@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import AiSection, { aiHasProblem, ago } from "./AiSection";
 import type { AiMachine, AiSettings } from "../../api/client";
 
@@ -18,6 +19,8 @@ let whisper = "";
 let machines: AiMachine[] = [];
 // What each URL offers when asked; missing: unreachable.
 let offers: Record<string, string[]> = {};
+// An upgrade to the current model is under way (PUT answers 409 upgrades_stop).
+let upgrading = false;
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function machine(over: Partial<AiMachine>): AiMachine {
@@ -96,6 +99,10 @@ beforeEach(() => {
       return json(settings());
     }
     if (path === "/ai/jobs/vision" && method === "PUT") {
+      if (upgrading && body.model !== model && !body.stop_upgrades) {
+        return err(409, "upgrades_stop", "Upgrades under way stop with a new model: descriptions and tags (12 clips left).",
+                   { upgrades: [{ artifact: "vision", title: "Descriptions and tags", remaining: 12 }] });
+      }
       if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
         return err(409, "model_not_offered", `No machine doing descriptions & text offers ${body.model}.`,
                    { job: "vision", model: body.model, machines: machines.map((x) => ({ name: x.name, models: offers[x.api_url] ?? [], error: offers[x.api_url] ? "" : "Couldn't reach it." })) });
@@ -116,6 +123,7 @@ afterEach(() => {
   whisper = "";
   machines = [];
   offers = {};
+  upgrading = false;
   sent.length = 0;
 });
 
@@ -123,7 +131,9 @@ function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AiSection />
+      <MemoryRouter>
+        <AiSection />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -373,7 +383,7 @@ describe("AiSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     const select = screen.getByLabelText("Model for Descriptions & text");
     fireEvent.change(select, { target: { value: "llava:13b" } });
-    expect(screen.getByText(/marks what was made with qwen3-vl:8b as made with an old model/)).toBeTruthy();
+    expect(screen.getByText(/What was made with qwen3-vl:8b becomes stale/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Brain: qwen3-vl:8b");
 
@@ -381,6 +391,42 @@ describe("AiSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/llava:13b/, { selector: "p" });
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
+    // What the old model made is stale now: Processing upgrades it.
+    const note = await screen.findByText(/What descriptions & text made with qwen3-vl:8b is now stale/);
+    expect(within(note).getByRole("link", { name: "Processing" }).getAttribute("href")).toBe("/settings/processing");
+  });
+});
+
+describe("AiSection model change during an upgrade", () => {
+  it("asks before a new model stops upgrades under way", async () => {
+    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
+    offers = { [BRAIN]: [QWEN, "llava:13b"] };
+    upgrading = true;
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Upgrades under way stop with a new model");
+    expect(model).toBe(QWEN);  // nothing changed yet
+    fireEvent.click(within(alert).getByRole("button", { name: "Change it and stop them" }));
+    await screen.findByText(/What descriptions & text made with qwen3-vl:8b is now stale/);
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b", stop_upgrades: true });
+  });
+});
+
+describe("AiSection turning a job off during an upgrade", () => {
+  it("asks, then turns it off (not whatever the picker shows)", async () => {
+    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN], checked_at: null } })];
+    offers = { [BRAIN]: [QWEN] };
+    upgrading = true;
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn off descriptions & text" }));
+    const alert = await screen.findByRole("alert");
+    fireEvent.click(within(alert).getByRole("button", { name: "Turn it off and stop them" }));
+    await waitFor(() => expect(model).toBe(""));
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "", stop_upgrades: true });
   });
 });
 

@@ -22,16 +22,24 @@ name, whatever a server lists it as (src/shared/whisper_models.py).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, StrictBool, field_validator
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from src.server.api.dependencies import require_editor, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import (
+    get_tenant_session,
+    require_editor,
+    require_signed_in,
+    require_tenant_admin,
+)
 from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, job_model, machines, set_job_model as _store_model
+from src.server.repository.ai_machines import first_vision_machine, job_model, machines
+from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, list_models
@@ -139,6 +147,8 @@ class Models(BaseModel):
 class JobModelIn(BaseModel):
     # "": the job is off.
     model: str = Field(default="", max_length=200)
+    # Answers 409 upgrades_stop: a new model stops upgrades to the old one.
+    stop_upgrades: bool = False
 
 
 class StatusIn(BaseModel):
@@ -403,13 +413,40 @@ def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) 
         return _settings(ctrl, request.state.tenant_id)
 
 
+def _upgrades_to_stop(session: Session, tenant: Tenant | None, job: str, model: str, stop: bool) -> list[str]:
+    """The upgrades a new model leaves behind (those whose settings it
+    changes): 409 upgrades_stop, with each producer's clips left, until the
+    request says to stop them. Returns their ids, to drop once the model is saved."""
+    from src.server.repository import lineage
+    from src.server.repository.ai_machines import job_models
+    from src.shared.producers import PRODUCERS
+
+    stopping = lineage.upgrades_a_change_stops(session, job, job_models(tenant), model)
+    if not stopping or stop:
+        return [u["upgrade_id"] for u in stopping]
+    left: dict[str, int] = {}
+    for u in stopping:
+        left[u["artifact"]] = left.get(u["artifact"], 0) + u["remaining"]
+    running = [{"artifact": a, "title": PRODUCERS[a].title, "remaining": n} for a, n in left.items()]
+    what = " and ".join(f"{r['title'].lower()} ({r['remaining']:,} clip{'' if r['remaining'] == 1 else 's'} left)"
+                        for r in running)
+    raise DecisionRequiredError(
+        "upgrades_stop",
+        f"Upgrades under way stop with a new model: {what}. What they haven't made yet stays stale.",
+        {"upgrades": running},
+    )
+
+
 @router.put("/jobs/{job}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
+def set_job_model(job: str, body: JobModelIn, request: Request,
+                  session: Annotated[Session, Depends(get_tenant_session)]) -> AiSettings:
     """Set a job's model; "" turns the job off. Every enabled machine doing
     the job is asked (what it says is its status): 409 model_not_offered,
     with each machine's models or why it couldn't say, when none offers it.
     The built-in machine isn't asked: it offers what faster-whisper knows.
-    A faster-whisper model is kept by its one name ("small", not its repo)."""
+    A faster-whisper model is kept by its one name ("small", not its repo).
+    409 upgrades_stop when upgrades to the current model are under way,
+    unless stop_upgrades says to stop them."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
@@ -433,9 +470,14 @@ def set_job_model(job: str, body: JobModelIn, request: Request) -> AiSettings:
                 raise ConflictError("model_not_offered",
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
+        stopping = (_upgrades_to_stop(session, tenant, job, model, body.stop_upgrades)
+                    if model != _job_model(tenant, job) else [])
         _store_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()
+        if stopping:  # only once the model is saved
+            session.execute(text("DELETE FROM producer_upgrades WHERE upgrade_id = ANY(:ids)"), {"ids": stopping})
+            session.commit()
         return _settings(ctrl, tenant_id)
 
 

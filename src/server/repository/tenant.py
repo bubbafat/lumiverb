@@ -609,6 +609,7 @@ class AssetRepository:
         person_id: str | None = None,
         *,
         missing_analysis_proxy: bool = False,
+        work: dict[str, str] | None = None,
         sort: str = "taken_at",
         direction: str = "desc",
         media_types: list[str] | None = None,
@@ -709,26 +710,28 @@ class AssetRepository:
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
+        # What each step is handed: what's missing, and for the brain's worker an approved upgrade's clips (work).
+        cond = {**MISSING_CONDITIONS, **(work or {})}
         if missing_vision:
-            conditions.append(MISSING_CONDITIONS["missing_vision"])
+            conditions.append(cond["missing_vision"])
         if missing_embeddings:
-            conditions.append(MISSING_CONDITIONS["missing_embeddings"])
+            conditions.append(cond["missing_embeddings"])
         if missing_faces:
-            conditions.append(MISSING_CONDITIONS["missing_faces"])
+            conditions.append(cond["missing_faces"])
         if missing_face_embeddings:
-            conditions.append(MISSING_CONDITIONS["missing_face_embeddings"])
+            conditions.append(cond["missing_face_embeddings"])
         if missing_video_scenes:
-            conditions.append(MISSING_CONDITIONS["missing_video_scenes"])
+            conditions.append(cond["missing_video_scenes"])
         if missing_ocr:
-            conditions.append(MISSING_CONDITIONS["missing_ocr"])
+            conditions.append(cond["missing_ocr"])
         if missing_scene_vision:
-            conditions.append(MISSING_CONDITIONS["missing_scene_vision"])
+            conditions.append(cond["missing_scene_vision"])
         if missing_transcription:
-            conditions.append(MISSING_CONDITIONS["missing_transcription"])
+            conditions.append(cond["missing_transcription"])
         if missing_probe:
-            conditions.append(MISSING_CONDITIONS["missing_probe"])
+            conditions.append(cond["missing_probe"])
         if missing_analysis_proxy:
-            conditions.append(MISSING_CONDITIONS["missing_analysis_proxy"])
+            conditions.append(cond["missing_analysis_proxy"])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -2000,13 +2003,15 @@ class VideoSceneRepository:
         model_version: str,
         description: str,
         tags: list[str],
+        lineage: dict | None = None,
     ) -> None:
-        """Write vision results back to a scene row."""
+        """Write vision results back to a scene row, with how they were made."""
         scene = self._session.get(VideoScene, scene_id)
         if scene is None:
             raise ValueError(f"Scene not found: {scene_id}")
         scene.description = description
         scene.tags = tags
+        scene.lineage = lineage
         self._session.add(scene)
         self._session.commit()
 
