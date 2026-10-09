@@ -17,6 +17,17 @@ import pytest
 from src.server.scheduler.service import Scheduler, run
 
 
+@pytest.fixture(autouse=True)
+def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Scheduler made here without them reads nothing from a database."""
+    from src.server.scheduler import service
+
+    for name, stub in (("_paused_in_database", lambda tenant_id: set()),
+                       ("_retry_requested_in_database", lambda tenant_id: None),
+                       ("_status_to_database", lambda tenant_id, status: None)):
+        monkeypatch.setattr(service, name, stub, raising=False)
+
+
 class FakeAccount:
     def __init__(self, tenant_id: str = "t1", *, vision: int = 2, transcripts: int = 1,
                  libraries: tuple[str, ...] = ("lib_1",), reachable: tuple[str, ...] = ("lib_1",)) -> None:
