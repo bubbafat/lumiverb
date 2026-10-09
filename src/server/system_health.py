@@ -123,14 +123,15 @@ def processing_row(*, at: datetime | None, now: datetime, paused_all: bool = Fal
 
 
 def ai_row(*, machines: Sequence[Mapping[str, Any]], job_models: Mapping[str, str], starved: set[str],
-           now: datetime) -> Row:
+           now: datetime, scheduler_live: bool = True) -> Row:
     """Over the jobs that are on (a model chosen) and the enabled machines doing them.
 
     machines: {name, jobs, enabled, online (None: never checked), error, checked_at}.
     starved: jobs with work that no machine can do now (the scheduler's
     eta, "no_machine"). Red for those; yellow when a machine is offline,
     hasn't been checked in MACHINE_STALE or ever, or a job has no machine;
-    green when every one is online."""
+    green when every one is online. With the scheduler down nothing checks
+    them: one line says so rather than one per machine."""
     row = Row("ai", "AI machines", GREEN, "", link="/settings/ai")
     on = [job for job in JOBS if job_models.get(job)]
     if not on:
@@ -146,6 +147,7 @@ def ai_row(*, machines: Sequence[Mapping[str, Any]], job_models: Mapping[str, st
     row.checked_at = min(checked) if checked else None
     notes = [f"No machine does {JOBS[job].lower()}." for job in on
              if not any(job in (m.get("jobs") or []) for m in doing)]
+    stale = []
     for m in doing:
         name = m.get("name") or "A machine"
         if m.get("online") is None:
@@ -153,7 +155,12 @@ def ai_row(*, machines: Sequence[Mapping[str, Any]], job_models: Mapping[str, st
         elif not m["online"]:
             notes.append(f"{name} is offline.")
         elif m.get("checked_at") and now - m["checked_at"] >= MACHINE_STALE:
-            notes.append(f"{name} hasn't been checked for {ago(now - m['checked_at'])}.")
+            stale.append(m)
+            if scheduler_live:
+                notes.append(f"{name} hasn't been checked for {ago(now - m['checked_at'])}.")
+    if not scheduler_live and (stale or (row.checked_at and now - row.checked_at >= MACHINE_STALE)):
+        notes.append(f"Not checked for {ago(now - row.checked_at)}: the scheduler isn't running."
+                     if row.checked_at else "Not checked: the scheduler isn't running.")
     if notes:
         row.state, row.reason = YELLOW, " ".join(notes)
     else:
@@ -188,8 +195,8 @@ def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickw
             row.reason = (f"{why}: search uses Postgres (simpler matching) until upkeep remakes it, "
                           "within 5 minutes, and indexes every clip again.")
         else:
-            row.reason = f"{why}: search uses Postgres (simpler matching)." + (
-                f" {quickwit_error}" if quickwit_error and enabled else "")
+            detail = f" ({quickwit_error})" if quickwit_error and enabled and quickwit == "down" else ""
+            row.reason = f"{why}{detail}: search uses Postgres (simpler matching)."
         return row
     notes = []
     if last_fallback and now - last_fallback[0] < SEARCH_RECENT:

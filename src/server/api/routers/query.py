@@ -102,6 +102,12 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
+def _why(exc: Exception) -> str:
+    """An error in a few words: Quickwit's answer's status, or what kind of failure."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return f"it answered {status}" if status else type(exc).__name__
+
+
 def _run_quickwit_search(
     tenant_id: str,
     search_terms: list[SearchTerm],
@@ -199,7 +205,7 @@ def _run_quickwit_search(
         logger.warning("Quickwit client init failed: %r", exc, exc_info=True)
         qw = None
         if problems is not None:
-            problems.append(f"Quickwit couldn't be set up: {exc}")
+            problems.append(f"Quickwit couldn't be set up ({type(exc).__name__})")
 
     if qw is not None and qw.enabled:
         # Each per-index search is wrapped in its own try/except so a
@@ -250,7 +256,7 @@ def _run_quickwit_search(
         except Exception as exc:
             logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
             if problems is not None:
-                problems.append(f"Quickwit's search failed: {exc}")
+                problems.append(f"Quickwit's search failed ({_why(exc)})")
 
         # Asset prefix expansion — separate call so prefix-only
         # matches get their own position-based scoring and aren't

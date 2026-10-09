@@ -188,7 +188,8 @@ def _ai(tenant_id: str, status: Any, now: datetime) -> h.Row:
         p = PRODUCERS.get(n.artifact)
         if n.why == "no_machine" and p is not None and p.job:
             starved.add(p.job)
-    return h.ai_row(machines=every, job_models=models, starved=starved, now=now)
+    live = bool(status and status.at and now - status.at < h.SCHEDULER_SILENT)
+    return h.ai_row(machines=every, job_models=models, starved=starved, now=now, scheduler_live=live)
 
 
 def _search(session: Session, tenant_id: str, now: datetime) -> h.Row:

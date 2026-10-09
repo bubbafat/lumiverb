@@ -56,16 +56,16 @@ class QuickwitClient:
 
     def tenant_index_state(self, tenant_id: str, timeout: float = 2.0) -> tuple[str, str]:
         """Whether the account's asset index answers: ("ok", ""), ("missing", "")
-        or ("down", why). For the Admin page's Search row; nothing is changed."""
+        or ("down", why in a few words). For the Admin page's Search row; nothing is changed."""
         try:
             resp = requests.get(f"{self._base_url}/api/v1/indexes/{self.tenant_index_id(tenant_id)}", timeout=timeout)
         except requests.RequestException as exc:
-            return "down", f"Quickwit at {self._base_url} isn't answering ({type(exc).__name__})."
+            return "down", type(exc).__name__
         if resp.status_code == 200:
             return "ok", ""
         if resp.status_code in (400, 404):
             return "missing", ""
-        return "down", f"Quickwit answered {resp.status_code}."
+        return "down", f"it answered {resp.status_code}"
 
     # ------------------------------------------------------------------
     # Index lifecycle

@@ -88,11 +88,11 @@ describe("AdminPage", () => {
     renderPage();
     const ai = (await screen.findByText("No machine can do transcripts: work waits.")).closest("li")!;
     expect(within(ai).getByRole("img", { name: "Not working" })).toBeTruthy();
-    expect(within(ai).getByRole("link").getAttribute("href")).toBe("/settings/ai");
+    expect(within(ai).getAllByRole("link").map((a) => a.getAttribute("href"))).toContain("/settings/ai");
     const processing = screen.getByText("Partly paused: scans.").closest("li")!;
     expect(within(processing).getByRole("img", { name: "Needs a look" })).toBeTruthy();
     const storage = screen.getByText("Can't reach Footage.").closest("li")!;
-    expect(within(storage).getByRole("link").getAttribute("href")).toBe("/libraries/lib_2/settings");
+    expect(within(storage).getAllByRole("link")[0].getAttribute("href")).toBe("/libraries/lib_2/settings");
   });
 
   it("says the website is down when the API doesn't answer", async () => {

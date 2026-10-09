@@ -144,6 +144,15 @@ def test_ai_is_yellow_when_a_machine_hasnt_been_checked_for_long():
     assert row.state == h.YELLOW and "hasn't been checked for 2 hours" in row.reason
 
 
+def test_with_the_scheduler_down_the_machines_arent_called_stale_one_by_one():
+    """Nothing checks them while it's down: one line says so (Processing is red for it)."""
+    row = h.ai_row(machines=[machine(checked=ago(hours=12)), machine("Other", checked=ago(hours=12)),
+                             machine("Laptop", online=False, checked=ago(hours=12))],
+                   job_models=VISION_ON, starved=set(), now=NOW, scheduler_live=False)
+    assert row.state == h.YELLOW
+    assert row.reason == "Laptop is offline. Not checked for 12 hours: the scheduler isn't running."
+
+
 def test_ai_is_yellow_when_a_machine_was_never_checked():
     m = {**machine(), "online": None, "checked_at": None}
     row = h.ai_row(machines=[m], job_models=VISION_ON, starved=set(), now=NOW)
@@ -165,8 +174,9 @@ def test_search_is_green_when_quickwit_answers():
 
 
 def test_search_is_yellow_when_quickwit_is_down_and_postgres_stands_in():
-    row = search(quickwit="down", quickwit_error="connection refused")
-    assert row.state == h.YELLOW and "Postgres" in row.reason
+    row = search(quickwit="down", quickwit_error="ConnectionError")
+    assert row.state == h.YELLOW
+    assert row.reason == "Quickwit isn't answering (ConnectionError): search uses Postgres (simpler matching)."
 
 
 def test_search_is_yellow_when_the_index_is_missing():
@@ -317,7 +327,7 @@ def test_index_state_reads_quickwit(tmp_path):
     with patch(get, return_value=MagicMock(status_code=404)):
         assert qw.tenant_index_state("t") == ("missing", "")
     with patch(get, return_value=MagicMock(status_code=503)):
-        assert qw.tenant_index_state("t")[0] == "down"
+        assert qw.tenant_index_state("t") == ("down", "it answered 503")
     with patch(get, side_effect=requests.ConnectionError("refused")):
         state, why = qw.tenant_index_state("t")
-    assert state == "down" and "isn't answering" in why
+    assert (state, why) == ("down", "ConnectionError")

@@ -45,9 +45,14 @@ function HealthRowItem({ row }: { row: HealthRow }) {
       <div className="min-w-0 flex-1">
         <h3 className="font-medium text-gray-100">{row.title}</h3>
         <p className="mt-0.5 text-sm text-gray-400 break-words">{row.reason}</p>
+        {row.link && (
+          <Link to={row.link} className="mt-1 inline-block text-sm text-indigo-400 hover:text-indigo-300 sm:hidden">
+            {linkLabel(row.link)} →
+          </Link>
+        )}
       </div>
       {row.link && (
-        <Link to={row.link} className="shrink-0 pt-0.5 text-sm text-indigo-400 hover:text-indigo-300">
+        <Link to={row.link} className="hidden shrink-0 pt-0.5 text-sm text-indigo-400 hover:text-indigo-300 sm:block">
           {linkLabel(row.link)} →
         </Link>
       )}
