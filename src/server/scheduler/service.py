@@ -183,7 +183,7 @@ class Scheduler:
                 return None
             return self._runners[job.kind](acct, job)
         except Exception as e:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
-            if getattr(e, "status_code", None) in _REFUSED:
+            if getattr(e, "status_code", None) in _REFUSED and job.kind != "scan":  # a clip's (not a scan's)
                 # The API can't take what was made: the clip's failure, reported
                 # (the server says when to try again), not made again every hour.
                 logger.warning("scheduler: the server refused %s for %s: %s", job.kind, ", ".join(job.asset_ids[:3]), e)
