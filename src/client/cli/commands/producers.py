@@ -1,12 +1,11 @@
-"""`lumiverb producers`: what each producer has made, pausing and resuming, and stopping or resuming a redo.
+"""`lumiverb producers`: what each producer has made, what's paused, and stopping or resuming a redo.
 
 Mirrors the web's Settings → Processing (ADR-016 phase 4). An artifact is
 current, missing, stale (made with another producer, model or settings
 than now) or failing. Stale ones are made again after anything missing:
 changing a setting was the approval (Robert, Oct 9). An admin can stop a
-producer's redo and resume it; a new model for it resumes it. An admin can
-also pause all processing, or one producer's, and resume it: nothing more
-of it starts, and what's running finishes.
+producer's redo and resume it; a new model for it resumes it. Pausing is
+`lumiverb pause|resume` (commands/pausing.py); the listing says the state.
 """
 
 from __future__ import annotations

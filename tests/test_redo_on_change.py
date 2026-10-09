@@ -345,12 +345,13 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             kinds = {k["artifact"] for k in err["details"]["artifacts"]}
             assert "vision" in kinds
             assert "m2 makes" in err["message"] and "after anything missing" in err["message"]
-            assert "paused" not in err["message"] and err["details"]["all_paused"] is False
+            assert "paused" not in err["message"] and "all_paused" not in err["details"]
             # Paused, the question says nothing is made until it's resumed.
             assert client.post("/v1/producers/pause", headers=headers).status_code == 204
             err = _error(client.put("/v1/ai/jobs/vision", json={"model": "m2"}, headers=headers))
             client.post("/v1/producers/resume", headers=headers)
-            assert "All processing is paused" in err["message"] and err["details"]["all_paused"] is True
+            assert "Paused, so not made until it's resumed" in err["message"]
+            assert {k["artifact"]: k["paused"] for k in err["details"]["artifacts"]}["vision"] is True
             assert client.get("/v1/ai", headers=headers).json()["jobs"][0]["model"] == "m1"  # nothing changed
 
             # The same model again asks nothing.

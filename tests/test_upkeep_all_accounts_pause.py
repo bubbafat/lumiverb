@@ -1,4 +1,4 @@
-"""The kill switch on the paths the 5-minute upkeep timer takes (the admin
+"""The Upkeep switch on the paths the 5-minute upkeep timer takes (the admin
 key: every account). One account's paused Upkeep switch skips only that account, and an
 account whose pause can't be read is skipped without stopping the others.
 A skipped account is named (`paused_tenants`) and logged, so a run skipped
