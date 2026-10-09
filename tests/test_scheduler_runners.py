@@ -53,6 +53,11 @@ class FakeAccount:
         self.gone.append(library_id)
         self.roots[library_id] = None
 
+    def storage_gone(self, library_id: str) -> bool:
+        """As the account looks (an empty or missing folder is gone)."""
+        root = self.roots.get(library_id)
+        return root is None or not root.is_dir() or not any(root.iterdir())
+
     def proxy_cache(self, library_id: str):
         return self.cache
 
@@ -437,14 +442,58 @@ def test_a_face_batch_ends_as_soon_as_its_process_is_let_go_of(acct: FakeAccount
     monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", lambda item, root, cache: item)
     pool = MagicMock()
     pool.apply_async.return_value.get.side_effect = mp.TimeoutError()
-    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: pool, poll_sec=0.01)
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: pool, poll_sec=0.01,
+                                     clock=lambda: 0.0)  # never times out by itself
     out: list = []
-    t = threading.Thread(target=lambda: out.append(face_runner.run(acct, _job("faces", "ast_1"))))
+    t = threading.Thread(target=lambda: out.append(face_runner.run(acct, _job("faces", "ast_1"))), daemon=True)
     t.start()
-    while not pool.apply_async.called:
-        pass
+    for _ in range(500):
+        if pool.apply_async.called:
+            break
+        threading.Event().wait(0.01)
     assert not face_runner.idle
     assert face_runner.close() is True
     t.join(2)
     assert out == [runners.NOT_TRIED] and face_runner.idle
     assert face_runner.close() is False  # nothing left to let go of
+
+
+@pytest.mark.fast
+def test_a_face_pool_let_go_of_before_its_batch_starts_holds_nothing(acct: FakeAccount,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 3: "Pool not running" read as a dead process, held an hour.
+    monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", lambda item, root, cache: item)
+    pool = MagicMock()
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: pool)
+
+    def let_go(*a, **kw):
+        face_runner.close()
+        raise ValueError("Pool not running")
+
+    pool.apply_async.side_effect = let_go
+    assert face_runner.run(acct, _job("faces", "ast_1")) == runners.NOT_TRIED
+
+
+@pytest.mark.fast
+def test_no_new_face_process_for_an_account_let_go_of(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    def proxy(item, root, cache):
+        acct.stopping.set()  # the account is let go of while the proxies are made
+        return item
+
+    monkeypatch.setattr("src.client.cli.repair._generate_proxy_for_item", proxy)
+    made: list[int] = []
+    face_runner = runners.FaceRunner(acct.client, acct.cfg, pool_factory=lambda: made.append(1) or MagicMock())
+    assert face_runner.run(acct, _job("faces", "ast_1")) == runners.NOT_TRIED and made == []
+
+
+@pytest.mark.fast
+def test_scene_descriptions_say_which_videos_wait(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
+    def enrich(**kw):
+        kw["on_fail"]("ast_2", "no description")
+        return (1, 1)
+
+    monkeypatch.setattr("src.client.cli.video_index.run_video_enrich", enrich)
+    acct.vision_fail.return_value = True
+    assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_1"]
+    acct.vision_fail.return_value = False  # the machines' trouble: it waits too
+    assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_1", "ast_2"]

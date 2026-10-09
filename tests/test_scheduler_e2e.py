@@ -56,12 +56,25 @@ def test_the_scheduler_makes_its_own_key_and_revokes_the_last(env) -> None:
     assert probe.get("/v1/libraries", headers={"Authorization": f"Bearer {second}"}).status_code == 200
 
 
+class FakePool:
+    """A job's machines, as far as sharing the GPU goes."""
+
+    def __init__(self) -> None:
+        self.gpu_hold = 0
+
+    def set_gpu_hold(self, hold: int) -> None:
+        self.gpu_hold = hold
+
+
 class FakeVision:
     """The account's vision machines: one, offering the model."""
 
     model = "qwen3-vl:8b-instruct"
     down = False
     error = None
+
+    def __init__(self) -> None:
+        self.pool = FakePool()
 
     def check(self) -> bool:
         return True
@@ -82,6 +95,9 @@ class NoMachines:
     model = ""
     down = True
     error = "no machine"
+
+    def __init__(self) -> None:
+        self.pool = FakePool()
 
     def check(self) -> bool:
         return False
