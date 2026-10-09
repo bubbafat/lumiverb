@@ -338,11 +338,25 @@ def _run(d: Dispatcher, clock: Clock, pool: str, took: float) -> None:
 def test_a_finished_job_teaches_its_kinds_pace_per_second_of_video() -> None:
     clock = Clock()
     d = Dispatcher(PACED, {"render": 1}, clock=clock)
-    d.offer("t1", "render", [_video("a", 120), _video("b", 120)], complete=True)
+    d.offer("t1", "render", [_video("a", 120), _video("b", 600)], complete=True)
     _run(d, clock, "render", 60)
     assert d.status("t1")["pace"] == {"render": 0.5}
-    _run(d, clock, "render", 120)  # smoothed, not replaced
-    assert d.status("t1")["pace"]["render"] == pytest.approx(0.6)
+    _run(d, clock, "render", 600)  # weighed by size: the long clip counts five times the short
+    assert d.status("t1")["pace"]["render"] == pytest.approx((60 + 600) / (120 + 600))
+
+
+@pytest.mark.fast
+def test_a_clip_that_failed_teaches_nothing_however_fast() -> None:
+    """A failure in 0.2 s on a 10-minute video isn't 3,000 times realtime."""
+    clock = Clock()
+    d = Dispatcher(PACED, {"render": 1}, clock=clock)
+    d.offer("t1", "render", [_video("a", 600), _video("b", 120)], complete=True)
+    job = d.take("render")
+    clock.now += 0.2
+    d.done(job, waiting=(), failed={"a"})
+    assert d.status("t1")["pace"] == {}
+    _run(d, clock, "render", 60)
+    assert d.status("t1")["pace"] == {"render": 0.5}
 
 
 @pytest.mark.fast
@@ -393,4 +407,5 @@ def test_a_pace_known_before_a_restart_is_where_it_starts() -> None:
     assert d.status("t1")["pace"] == {"render": 0.4}
     d.offer("t1", "render", [_video("a", 100)], complete=True)
     _run(d, clock, "render", 100)
-    assert d.status("t1")["pace"]["render"] == pytest.approx(0.8 * 0.4 + 0.2 * 1.0)
+    # The pace from before counts as one second of video: the first real job outweighs it.
+    assert d.status("t1")["pace"]["render"] == pytest.approx((0.4 + 100) / (1 + 100))

@@ -497,3 +497,24 @@ def test_scene_descriptions_say_which_videos_wait(acct: FakeAccount, monkeypatch
     assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_1"]
     acct.vision_fail.return_value = False  # the machines' trouble: it waits too
     assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_1", "ast_2"]
+
+
+
+@pytest.mark.fast
+def test_scenes_say_which_clips_they_made_so_only_the_rest_wait(acct: FakeAccount, monkeypatch) -> None:
+    def index(**kw):
+        kw["on_done"]("ast_1")
+        kw["on_fail"]("ast_2", RuntimeError("bad"))
+        return 1, 1
+    monkeypatch.setattr("src.client.cli.video_index.run_video_index", index)
+    job = _job("scenes", "ast_1", "ast_2", "ast_3", duration_sec=30.0)
+    assert runners.scenes(acct, job) == ["ast_3"]  # made, reported, and one neither
+
+
+@pytest.mark.fast
+def test_scene_descriptions_say_which_clips_they_made(acct: FakeAccount, monkeypatch) -> None:
+    def enrich(**kw):
+        kw["on_done"]("ast_1")
+        return 1, 0
+    monkeypatch.setattr("src.client.cli.video_index.run_video_enrich", enrich)
+    assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_2"]

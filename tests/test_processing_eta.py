@@ -42,7 +42,7 @@ def test_nothing_left_is_caught_up_now():
 
 def test_a_kind_with_no_pace_yet_or_no_slots_has_no_time_and_neither_has_caught_up():
     out = eta(_status(pace={}), {"vision": 10.0}, now=AT)
-    assert out["producers"]["vision"] is None and out["pools"]["vision"] is None and out["caught_up"] is None
+    assert out["producers"]["vision"] is None and "vision" not in out["pools"] and out["caught_up"] is None
     out = eta(_status(pools={"vision": [0, 0]}), {"vision": 10.0}, now=AT)  # no machine does it
     assert out["producers"]["vision"] is None and out["caught_up"] is None
 
@@ -54,6 +54,27 @@ def test_a_running_jobs_time_left_counts_from_when_the_status_was_written():
     out = eta(status, {}, now="2026-10-09T12:00:10+00:00")
     render, redo, probe = out["jobs"]
     assert render == {"kind": "render", "artifact": "analysis_proxy", "unit": "second", "units": 600.0,
-                      "elapsed": 110.0, "left": pytest.approx(600 * 0.5 - 110)}
+                      "elapsed": 110.0, "left": pytest.approx(600 * 0.5 - 110), "late": False}
     assert redo["artifact"] == "vision" and redo["left"] == 0  # past its pace: about to finish
     assert probe["left"] is None  # no pace yet
+
+
+def test_a_producer_waiting_for_a_machine_or_a_pace_is_left_out_of_caught_up_and_named():
+    status = _status(pools={"render": [1, 2], "vision": [0, 0], "transcripts": [0, 1]}, pace={"render": 0.5})
+    out = eta(status, {"analysis_proxy": 600.0, "vision": 10.0, "transcript": 120.0}, now=AT)
+    assert out["caught_up"] == pytest.approx(150.0)
+    assert out["not_counted"] == [{"artifact": "vision", "title": "Descriptions and tags", "why": "no_machine"},
+                                  {"artifact": "transcript", "title": "Transcripts", "why": "not_known_yet"}]
+
+
+def test_producers_sharing_a_pool_each_finish_about_when_the_pool_does():
+    out = eta(_status(), {"vision": 30.0, "ocr": 30.0}, now=AT)
+    assert out["producers"]["vision"] == out["producers"]["ocr"] == pytest.approx((30 * 6 + 30 * 2) / 3)
+
+
+def test_a_job_far_past_its_pace_is_late_and_scans_arent_timed():
+    status = _status(jobs=[{"kind": "render", "units": 60.0, "elapsed": 100.0},
+                           {"kind": "scan", "units": 1.0, "elapsed": 30.0}])
+    out = eta(status, {}, now=AT)
+    assert [j["kind"] for j in out["jobs"]] == ["render"]
+    assert out["jobs"][0]["late"] is True  # 100 s for what takes 30

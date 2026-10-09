@@ -29,39 +29,64 @@ def _at(value: Any) -> datetime | None:
         return None
 
 
+# A job this many times past its pace is late: it says so rather than "about to finish".
+LATE_AFTER = 2.0
+
+
 def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any) -> dict[str, Any]:
     """status: the scheduler's last (pace, pools, jobs, at); left: each
     producer's work left in its unit (artifact → seconds of video or clips).
-    Returns {"producers": {artifact: seconds | None}, "pools": {pool: seconds
-    | None}, "caught_up": seconds | None, "jobs": [{kind, artifact, units,
-    elapsed, left}]}."""
+    Returns {"producers": {artifact: seconds | None}, "pools": {pool: seconds},
+    "caught_up": seconds | None, "not_counted": [{artifact, title, why}],
+    "jobs": [{kind, artifact, unit, units, elapsed, left, late}]}. A producer
+    with work but no machine doing it ("no_machine") or no pace yet
+    ("not_known_yet") has no time, and caught up leaves it out, naming it;
+    caught up is None only when nothing with work is counted."""
     pace: Mapping[str, float] = status.get("pace") or {}
     slots = {pool: (counts[1] if len(counts) > 1 else 0) for pool, counts in (status.get("pools") or {}).items()}
 
-    producers: dict[str, float | None] = {}
-    pools: dict[str, float | None] = {}
+    pools: dict[str, float] = {}
+    members: dict[str, list[str]] = {}
+    not_counted: list[dict[str, str]] = []
     for artifact, work in left.items():
         p = PRODUCERS[artifact]
         if not p.scheduled:
             continue
+        members.setdefault(p.pool, [])
         per, n = pace.get(p.kind), slots.get(p.pool, 0)
-        took = 0.0 if work <= 0 else (work * per / n if per and n else None)
-        producers[artifact] = took
-        pools.setdefault(p.pool, 0.0)
-        if work > 0:
-            before = pools[p.pool]
-            pools[p.pool] = None if took is None or before is None else before + took
-    caught_up = None if any(v is None for v in pools.values()) else max(pools.values(), default=0.0)
+        if work <= 0:
+            continue
+        if not n or not per:
+            not_counted.append({"artifact": artifact, "title": p.title, "why": "no_machine" if not n else "not_known_yet"})
+            continue
+        members[p.pool].append(artifact)
+        pools[p.pool] = pools.get(p.pool, 0.0) + work * per / n
+    # Producers sharing a pool take turns at its slots, oldest clip first: each
+    # finishes about when the pool does.
+    producers: dict[str, float | None] = {}
+    for artifact, work in left.items():
+        p = PRODUCERS[artifact]
+        if p.scheduled:
+            producers[artifact] = 0.0 if work <= 0 else pools.get(p.pool) if artifact in members.get(p.pool, ()) else None
+    if pools:
+        caught_up: float | None = max(pools.values())
+    else:
+        caught_up = None if not_counted else 0.0
 
     written, now_at = _at(status.get("at")), _at(now)
     since = max(0.0, (now_at - written).total_seconds()) if written and now_at else 0.0
     jobs = []
     for job in status.get("jobs") or []:
         kind = KINDS.get(job.get("kind", ""))
+        if kind is None or not kind.flag:  # a scan: how long one takes varies too much to say
+            continue
+        artifact = kind.artifact
         units, elapsed = float(job.get("units") or 0), float(job.get("elapsed") or 0) + since
-        per = pace.get(kind.base) if kind else None
-        artifact = kind.artifact if kind and kind.flag else None
-        jobs.append({"kind": job.get("kind"), "artifact": artifact,
-                     "unit": PRODUCERS[artifact].unit if artifact in PRODUCERS else "clip",
-                     "units": units, "elapsed": elapsed, "left": max(0.0, units * per - elapsed) if per else None})
-    return {"producers": producers, "pools": pools, "caught_up": caught_up, "jobs": jobs}
+        per = pace.get(kind.base)
+        expected = units * per if per else None
+        jobs.append({"kind": job.get("kind"), "artifact": artifact, "unit": PRODUCERS[artifact].unit,
+                     "units": units, "elapsed": elapsed,
+                     "left": None if expected is None else max(0.0, expected - elapsed),
+                     "late": expected is not None and elapsed > LATE_AFTER * expected})
+    return {"producers": producers, "pools": pools, "caught_up": caught_up, "not_counted": not_counted,
+            "jobs": jobs}

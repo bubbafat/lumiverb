@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -89,9 +90,10 @@ def units(spec: KindSpec, items: Iterable[dict]) -> float:
     return float(len(items))
 
 
-# How much a finished job moves its kind's pace (seconds a slot spends per
-# unit): recent jobs count most, and one odd clip doesn't swing it.
-PACE_WEIGHT = 0.2
+# A kind's pace (seconds a slot spends per unit of work) is its last jobs'
+# time over their size, so a long clip counts for more than a short one's
+# fixed start-up, and one odd job doesn't swing it.
+PACE_JOBS = 30
 
 
 class Dispatcher:
@@ -111,9 +113,10 @@ class Dispatcher:
         self._taken_until: dict[tuple[str, str, str], float] = {}
         self._busy: dict[str, int] = {}
         self._running_kinds: dict[tuple[str, str], int] = {}
-        # Jobs in hand (by id) and when each was taken; each kind's pace.
+        # Jobs in hand (by id) and when each was taken; each kind's last
+        # jobs as (seconds, units made), its pace.
         self._started: dict[int, tuple[Job, float]] = {}
-        self._pace: dict[tuple[str, str], float] = {}
+        self._paces: dict[tuple[str, str], deque[tuple[float, float]]] = {}
 
     # -- capacity -----------------------------------------------------------
 
@@ -235,17 +238,19 @@ class Dispatcher:
             now = self._clock()
             jobs = [{"kind": job.kind, "units": units(self._kinds[job.kind], job.items), "elapsed": now - at}
                     for job, at in self._started.values() if job.tenant_id == tenant_id]
-            pace = {k: v for (t, k), v in self._pace.items() if t == tenant_id}
+            pace = {k: sum(e for e, _ in v) / sum(u for _, u in v)
+                    for (t, k), v in self._paces.items() if t == tenant_id and v}
             return {"running": running, "waiting": waiting, "pools": pools, "jobs": jobs, "pace": pace}
 
     def seed_pace(self, tenant_id: str, pace: Mapping[str, object]) -> None:
         """Paces known before a restart (the last status): where each kind
-        starts until its jobs say otherwise. Unknown kinds and nonsense are left out."""
+        starts, counting as one unit of work, so its first real job outweighs
+        it. Unknown kinds and nonsense are left out."""
         with self._lock:
             for kind, value in pace.items():
                 if kind in self._kinds and isinstance(value, (int, float)) and value > 0 \
-                        and (tenant_id, kind) not in self._pace:
-                    self._pace[(tenant_id, kind)] = float(value)
+                        and (tenant_id, kind) not in self._paces:
+                    self._paces[(tenant_id, kind)] = deque([(float(value), 1.0)], maxlen=PACE_JOBS)
 
     def held(self, tenant_id: str, kind: str) -> list[str]:
         """The account's clips of this kind in hand or just tried: what the
@@ -264,10 +269,12 @@ class Dispatcher:
             for key in [k for k in self._all_known_at if k[0] == tenant_id]:
                 del self._all_known_at[key]
 
-    def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None) -> None:
+    def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None,
+             failed: Collection[str] = ()) -> None:
         """The job's slot is free; its clips aren't taken again for a while
         (unless it couldn't try at all). waiting: the clips neither saved nor
-        reported (None: it can't say, so all of them)."""
+        reported (None: it can't say, so all of them); failed: those reported
+        as failing. Its kind learns its pace from the rest: the clips it made."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
         pool = pool_key(spec, job.tenant_id)
@@ -278,15 +285,15 @@ class Dispatcher:
             self._running_kinds[key] = max(0, self._running_kinds.get(key, 0) - 1)
             now = self._clock()
             _, started = self._started.pop(id(job), (job, None))
-            # Its pace: what it saved or reported, over the time it held the
-            # slot. A job that couldn't try, or can't say, teaches nothing.
+            # Its pace: what it made, over the time it held the slot. A job
+            # that couldn't try, can't say, or made nothing teaches nothing,
+            # and a failure, however fast, isn't work done.
             if tried and waiting is not None and started is not None:
-                made = units(spec, (i for i in job.items if i["asset_id"] not in waits))
-                if made > 0 and now > started:
-                    pace_key, sample = (job.tenant_id, _same(job.kind, spec)), (now - started) / made
-                    before = self._pace.get(pace_key)
-                    self._pace[pace_key] = sample if before is None else \
-                        (1 - PACE_WEIGHT) * before + PACE_WEIGHT * sample
+                gone = waits | set(failed)
+                made = units(spec, (i for i in job.items if i["asset_id"] not in gone))
+                if made > 0 and now > started and not gone & set(job.asset_ids):
+                    key = (job.tenant_id, _same(job.kind, spec))
+                    self._paces.setdefault(key, deque(maxlen=PACE_JOBS)).append((now - started, made))
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)

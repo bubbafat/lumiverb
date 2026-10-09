@@ -990,14 +990,17 @@ export interface SchedulerStatus {
   eta?: Eta | null;
 }
 
-/** Seconds until each producer, pool and everything is caught up (null: not known yet). */
+/** Seconds until each producer, pool and everything is caught up. A producer
+ * with work and no time is in not_counted, saying why, and caught_up leaves it
+ * out (null: nothing with work is counted). */
 export interface Eta {
   producers: Record<string, number | null>;
-  pools: Record<string, number | null>;
+  pools: Record<string, number>;
   caught_up: number | null;
-  /** Jobs running now: their size in their producer's unit, and seconds run and left. */
+  not_counted?: { artifact: string; title: string; why: "no_machine" | "not_known_yet" }[];
+  /** Jobs running now: their size in their producer's unit, seconds run and left, and whether well past its pace. */
   jobs: { kind: string; artifact: string | null; unit: "second" | "clip"; units: number; elapsed: number;
-          left: number | null }[];
+          left: number | null; late?: boolean }[];
 }
 
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {

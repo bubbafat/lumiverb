@@ -178,9 +178,11 @@ def run_video_index(
     lineage_for: "Callable[[dict], dict] | None" = None,
     on_fail: "Callable[[str, object], None] | None" = None,
     settings: Mapping[str, Any] | None = None,
+    on_done: Callable[[str], None] | None = None,
 ) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
-    on_fail(asset_id, error) hears of each video it couldn't do. settings:
+    on_fail(asset_id, error) hears of each video it couldn't do, on_done(asset_id)
+    of each it made. settings:
     how scenes are found (index_video_scenes); a video with "redo" is started over.
 
     Each video dict must have: asset_id, rel_path, duration_sec.
@@ -215,6 +217,8 @@ def run_video_index(
                 redo=bool(video.get("redo")),
             )
             ok += 1
+            if on_done:
+                on_done(asset_id)
             logger.info(
                 "video-index: %s — %d scenes in %d chunks (%.1fs)",
                 rel_path, result["scenes"], result["chunks"], result["elapsed"],
@@ -370,10 +374,12 @@ def run_video_enrich(
     lineage_for: "Callable[[dict], dict] | None" = None,
     on_fail: "Callable[[str, object], None] | None" = None,
     concurrency: int = 1,
+    on_done: Callable[[str], None] | None = None,
 ) -> tuple[int, int]:
     """Run scene enrichment on a batch of videos, updating progress per video.
     on_fail(asset_id, error) hears of each video it couldn't do; a scene's
     failure is reported for its video once all its scenes are back.
+    on_done(asset_id) hears of each video whose scenes are all described.
 
     Scenes go out `concurrency` at once, across videos, so short videos
     don't leave the vision machines idle; results are gathered here. The
@@ -411,6 +417,8 @@ def run_video_enrich(
             fail += 1
         else:
             ok += 1
+            if on_done:
+                on_done(asset_id)
         progress.advance(task_id, 1)
         progress.update(task_id, ok=ok, fail=fail)
 

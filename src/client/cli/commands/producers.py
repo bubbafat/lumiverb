@@ -74,7 +74,27 @@ def _duration(seconds: float) -> str:
     if hours < 48:
         return f"{round(minutes / 60)} h"
     days, rest = divmod(hours, 24)
+    if days > 30:
+        return "over a month"
     return f"{days} days {rest} h" if rest else f"{days} days"
+
+
+def _caught_up(eta: dict) -> str:
+    """The headline, as Settings → Processing says it: when everything is
+    made, leaving out (and naming) what has no time."""
+    left = [f"{n['title'][:1].lower()}{n['title'][1:]} "
+            f"({'no machine doing them now' if n.get('why') == 'no_machine' else 'not known yet'})"
+            for n in eta.get("not_counted") or []]
+    caught_up = eta.get("caught_up")
+    if caught_up is None:
+        return "How long until everything is made isn't known yet: it's learned from the jobs as they finish."
+    if caught_up == 0 and not left:
+        return "Caught up: everything is made."
+    except_ = f", not counting {', '.join(left[:-1])}{' and ' if len(left) > 1 else ''}{left[-1]}" if left else ""
+    if caught_up == 0:
+        return f"Caught up{except_}."
+    span = "under a minute" if caught_up < 60 else _duration(caught_up)
+    return f"Caught up in {span if span in ('under a minute', 'over a month') else 'about ' + span}{except_}."
 
 
 @producers_app.callback()
@@ -110,10 +130,7 @@ def producers_list(
             notes.append(f"{p['title']}: redo stopped; lumiverb producers resume {p['artifact']} carries on.")
     console.print(table)
     if eta:
-        caught_up = eta.get("caught_up")
-        console.print("How long until everything is made isn't known yet: it's learned from the jobs as they finish."
-                      if caught_up is None else "Caught up: everything is made." if caught_up == 0
-                      else f"Caught up in {'under a minute' if caught_up < 60 else 'about ' + _duration(caught_up)}.")
+        console.print(escape(_caught_up(eta)))
     for note in notes:
         console.print(escape(note))
     console.print("[dim]Stale ones were made with another model or settings than now; they're made again "

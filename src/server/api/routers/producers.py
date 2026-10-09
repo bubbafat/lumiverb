@@ -9,6 +9,7 @@ An admin can stop that for a producer and resume it."""
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -27,6 +28,8 @@ from src.server.api.dependencies import (
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
+
+logger = logging.getLogger(__name__)
 
 PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
@@ -364,6 +367,8 @@ class SchedulerStatus(BaseModel):
     pace: dict[str, float] = Field(default_factory=dict)
     # Jobs running now: {kind, units, elapsed}.
     jobs: list[dict[str, Any]] = Field(default_factory=list)
+    # Libraries whose storage it can't reach now: what reads their originals waits.
+    unreachable: list[str] = Field(default_factory=list)
     # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
     eta: Eta | None = None
 
@@ -375,14 +380,23 @@ class JobLeft(BaseModel):
     units: float  # its work, in that unit
     elapsed: float  # seconds it has run
     left: float | None  # seconds left at its pace; None: no pace yet
+    late: bool = False  # well past its pace
+
+
+class NotCounted(BaseModel):
+    artifact: str
+    title: str
+    why: str  # "no_machine" (none doing its work now) | "not_known_yet" (no pace yet)
 
 
 class Eta(BaseModel):
-    # Seconds until each producer, each pool and everything is caught up
-    # (None: not known yet: no pace, or no machine doing its work).
+    # Seconds until each producer, each pool and everything is caught up.
+    # A producer with work and no time is in not_counted, saying why, and
+    # caught_up leaves it out (None: nothing with work is counted).
     producers: dict[str, float | None]
-    pools: dict[str, float | None]
+    pools: dict[str, float]
     caught_up: float | None
+    not_counted: list[NotCounted] = []
     jobs: list[JobLeft]
 
 
@@ -410,23 +424,50 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     now = utcnow()
     status.live = status.at is not None and now - status.at < timedelta(seconds=30)
     if status.live:
-        status.eta = Eta(**eta(status.model_dump(), _work_left(request, session), now=now))
+        try:
+            status.eta = Eta(**eta(status.model_dump(), _work_left(request, session, status.unreachable), now=now))
+        except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
+            logger.exception("producers: working out how long is left failed")
     return status
 
 
-def _work_left(request: Request, session: Session) -> dict[str, float]:
-    """Each scheduled producer's work left in its unit: what's missing, and
-    what's stale when its redo runs (not stopped)."""
-    models, _ = tenant_ai(request)
+# Work left is counted over every clip: once in a while per account, not every poll.
+WORK_LEFT_EVERY_SEC = 30.0
+_work_left_cache: dict[str, tuple[float, dict[str, float]]] = {}
+
+
+def _work_left(request: Request, session: Session, away: list[str]) -> dict[str, float]:
+    """Each scheduled producer's work left in its unit: what the scheduler
+    will make (lineage.work_left), counted at most every WORK_LEFT_EVERY_SEC."""
+    import time
+
+    tenant_id = getattr(request.state, "tenant_id", None) or ""
+    cached = _work_left_cache.get(tenant_id)
+    if cached and time.monotonic() - cached[0] < WORK_LEFT_EVERY_SEC:
+        return cached[1]
+    models = _job_models(tenant_id)
     stopped = lineage.paused(session)
     out = {}
     for artifact, p in PRODUCERS.items():
         if not p.scheduled:
             continue
         left = lineage.work_left(session, artifact, lineage.desired(session, artifact, models),
-                                 redo=lineage.redoable(artifact) and artifact not in stopped)
+                                 redo=lineage.redoable(artifact) and artifact not in stopped, away=away)
         out[artifact] = left["seconds"] if p.unit == "second" else left["clips"]
+    _work_left_cache[tenant_id] = (time.monotonic(), out)
     return out
+
+
+def _job_models(tenant_id: str) -> dict[str, str]:
+    """The account's model per AI job (Settings → AI)."""
+    from src.server.database import get_control_session
+    from src.server.repository.ai_machines import job_models
+    from src.server.repository.control_plane import TenantRepository
+
+    if not tenant_id:
+        return {}
+    with get_control_session() as ctrl:
+        return job_models(TenantRepository(ctrl).get_by_id(tenant_id))
 
 
 class FailingClip(BaseModel):

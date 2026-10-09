@@ -188,23 +188,32 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
             "missing": n_missing, "failing": failing, "given_up": given_up}
 
 
-def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool) -> dict[str, float]:
-    """What's left to make of an artifact kind, over clips in sight: those
-    missing it, and when redo, those it's stale on. Given-up clips aren't
-    counted (they aren't tried until someone asks). {"clips", "seconds"}:
-    how many, and their seconds of video."""
+def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool,
+              away: list[str] | tuple[str, ...] = ()) -> dict[str, float]:
+    """What the scheduler has left to make of an artifact kind, over clips in
+    sight: those missing it, and when redo, those it's stale on. Not those
+    waiting out a failure (or given up), nor those an earlier step it's made
+    from was given up on (they can't be made), nor, for a producer that reads
+    the originals, those in libraries whose storage is away. {"clips",
+    "seconds"}: how many, and their seconds of video."""
     if artifact not in MADE:
         raise KeyError(artifact)
+    p = PRODUCERS[artifact]
     made = f"({MADE[artifact]})"
     stale = f" OR ({made} AND (l.asset_id IS NULL OR {_stale_sql()}))" if redo else ""
+    blocked = "".join(
+        f" AND (({MADE[need]}) OR NOT EXISTS (SELECT 1 FROM artifact_lineage n WHERE n.asset_id = a.asset_id"
+        f"   AND n.artifact = '{need}' AND n.retry_at = 'infinity'))" for need in p.needs)
+    params = {**_stale_params(artifact, want, None, None), "away": list(away) if p.storage else []}
     row = session.execute(text(
         "SELECT count(*), COALESCE(sum(a.duration_sec), 0)"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
-        "   AND l.retry_at IS DISTINCT FROM 'infinity'"
-        f"   AND (NOT {made}{stale})"
-    ), _stale_params(artifact, want, None, None)).one()
+        "   AND (l.retry_at IS NULL OR l.retry_at <= now())"
+        "   AND a.library_id <> ALL(CAST(:away AS text[]))"
+        f"   AND (NOT {made}{stale}){blocked}"
+    ), params).one()
     return {"clips": float(row[0]), "seconds": float(row[1])}
 
 

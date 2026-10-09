@@ -279,6 +279,34 @@ describe("ProcessingSection", () => {
       "How long until everything is made isn't known yet: it's learned from the jobs as they finish.");
   });
 
+  it("names what the headline leaves out, and says a job is late or how short its video is", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: { render: 9 }, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { analysis_proxy: 600 }, pools: { render: 600 }, caught_up: 600,
+                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" },
+                                   { artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }],
+                     jobs: [{ kind: "render", artifact: "analysis_proxy", unit: "second", units: 45, elapsed: 400,
+                              left: 0, late: true },
+                            ...Array.from({ length: 9 }, () => ({ kind: "render", artifact: "analysis_proxy",
+                              unit: "second", units: 600, elapsed: 10, left: 290, late: false }))] } };
+    renderSection();
+    const now = await screen.findByLabelText("Now");
+    expect(now.textContent).toContain(
+      "Caught up in about 10 min, not counting transcripts (no machine doing them now) and text in images (OCR) (not known yet).");
+    expect(now.textContent).toContain("analysis copy of 45 s of video · taking longer than usual");
+    expect(now.textContent).toContain("and 2 more");
+  });
+
+  it("asks the scheduler what it's doing once for the whole page, not once a row", async () => {
+    queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: {}, pools: {}, caught_up: 0, not_counted: [], jobs: [] } };
+    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)" }),
+                 producer({ artifact: "clip", title: "Visual search (CLIP)" })];
+    renderSection();
+    await row("Visual search (CLIP)");
+    await screen.findByLabelText("Now");
+    expect(sent.filter((r) => r.url.includes("/producers/queue"))).toHaveLength(1);
+  });
+
   it("says when the scheduler isn't running", async () => {
     queue = { live: false, at: "2026-10-09T01:00:00Z", running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
     renderSection();
@@ -442,5 +470,6 @@ describe("duration", () => {
   it("says a span of time roughly, as people would", () => {
     expect([30, 90, 3600, 7500, 36000, 3 * 86400, 200000].map(duration)).toEqual(
       ["under a minute", "2 min", "1 h", "2 h 5 min", "10 h", "3 days", "2 days 7 h"]);
+    expect(duration(40 * 86400)).toBe("over a month");
   });
 });
