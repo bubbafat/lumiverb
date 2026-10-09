@@ -4123,7 +4123,7 @@ class FaceRepository:
         *,
         max_faces: int = 5000,
         min_cluster_size: int = 3,
-        max_clusters: int = 20,
+        max_clusters: int | None = 20,
         faces_per_cluster: int = 6,
     ) -> tuple[list[list[dict]], list[list[str]], bool]:
         """Cluster unassigned face embeddings via HDBSCAN.
@@ -4183,7 +4183,7 @@ class FaceRepository:
 
         clusters_idx = _cluster_face_embeddings(
             vectors, min_cluster_size=min_cluster_size
-        )[:max_clusters]
+        )[:max_clusters]  # None: every cluster
 
         if not clusters_idx:
             return [], [], truncated
@@ -4222,6 +4222,32 @@ class FaceRepository:
             result.append(cluster_data)
 
         return result, all_ids_per_cluster, truncated
+
+    def cluster_cache(self, *, faces_per_cluster: int = 20) -> dict:
+        """Every cluster of unassigned faces, as the cluster cache keeps them
+        (``face_clusters_cache``): largest first, each with its position
+        (``cluster_index``, what the cluster routes take), size, a sample of
+        faces, every face id, and ``newest``, its latest photo (taken, else
+        the file's time; ISO 8601, None when no photo says)."""
+        from datetime import datetime, timezone
+
+        clusters, all_ids, truncated = self.compute_clusters(max_clusters=None, faces_per_cluster=faces_per_cluster)
+        flat = [fid for ids in all_ids for fid in ids]
+        when: dict[str, datetime] = {}
+        if flat:
+            when = {r[0]: r[1] for r in self._session.execute(text(
+                "SELECT f.face_id, COALESCE(a.taken_at, a.file_mtime) FROM faces f"
+                " JOIN assets a ON a.asset_id = f.asset_id WHERE f.face_id = ANY(:ids)"), {"ids": flat}).all()
+                if r[1] is not None}
+        entries = []
+        for i, (sample, ids) in enumerate(zip(clusters, all_ids)):
+            dates = [when[fid] for fid in ids if fid in when]
+            newest = max(dates) if dates else None
+            if newest is not None and newest.tzinfo is None:
+                newest = newest.replace(tzinfo=timezone.utc)
+            entries.append({"cluster_index": i, "size": len(ids), "faces": sample, "face_ids": ids,
+                            "newest": newest.isoformat() if newest else None})
+        return {"clusters": entries, "truncated": truncated, "computed_at": datetime.now(timezone.utc).isoformat()}
 
 
 class PersonRepository:

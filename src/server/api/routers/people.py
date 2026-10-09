@@ -5,7 +5,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -71,6 +72,8 @@ class ClusterItem(BaseModel):
     cluster_index: int
     size: int
     faces: list[dict]
+    # Its latest photo: taken, else the file's time (None: no photo says).
+    newest: datetime | None = None
 
 
 class ClustersResponse(BaseModel):
@@ -567,8 +570,7 @@ def name_cluster(
 
     Uses the cached cluster data — if cache is stale, recomputes first.
     """
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import PersonRepository, FaceRepository
+    from src.server.repository.tenant import PersonRepository
 
     has_name = body.display_name is not None and body.display_name.strip() != ""
     if not has_name and not body.person_id:
@@ -576,31 +578,7 @@ def name_cluster(
 
     # Get cluster face IDs from cache — use existing cache even if dirty
     # to preserve stable indices during rapid name/dismiss operations.
-    meta = SystemMetadataRepository(session)
-    cached = meta.get_value("face_clusters_cache")
-
-    if not cached:
-        repo = FaceRepository(session)
-        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
-            max_clusters=50, faces_per_cluster=20,
-        )
-        cache_clusters = [
-            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
-        ]
-        from datetime import datetime, timezone
-        cache_data = json.dumps({
-            "clusters": cache_clusters,
-            "truncated": truncated,
-            "computed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        meta.set_value("face_clusters_cache", cache_data)
-        meta.set_value("face_clusters_dirty", "false")
-    else:
-        try:
-            cache_clusters = json.loads(cached).get("clusters", [])
-        except (json.JSONDecodeError, KeyError):
-            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+    cache_clusters = cached_clusters(session)
 
     # Find the cluster
     if cluster_index < 0 or cluster_index >= len(cache_clusters):
@@ -670,34 +648,9 @@ def dismiss_cluster(
     will be auto-absorbed by the upkeep propagation job, preventing the
     cluster from reforming. Returns the person_id for undo support.
     """
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import PersonRepository, FaceRepository, _mark_clusters_dirty
+    from src.server.repository.tenant import PersonRepository, _mark_clusters_dirty
 
-    meta = SystemMetadataRepository(session)
-    cached = meta.get_value("face_clusters_cache")
-
-    if not cached:
-        repo = FaceRepository(session)
-        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
-            max_clusters=50, faces_per_cluster=20,
-        )
-        cache_clusters = [
-            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
-        ]
-        from datetime import datetime, timezone
-        cache_data = json.dumps({
-            "clusters": cache_clusters,
-            "truncated": truncated,
-            "computed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        meta.set_value("face_clusters_cache", cache_data)
-        meta.set_value("face_clusters_dirty", "false")
-    else:
-        try:
-            cache_clusters = json.loads(cached).get("clusters", [])
-        except (json.JSONDecodeError, KeyError):
-            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+    cache_clusters = cached_clusters(session)
 
     if cluster_index < 0 or cluster_index >= len(cache_clusters):
         raise HTTPException(status_code=404, detail="Cluster not found")
@@ -726,38 +679,11 @@ def nearest_people_for_cluster(
     """
     import numpy as np
     from sqlalchemy import text as sa_text
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository
 
     if limit > 20:
         limit = 20
 
-    # --- Get cluster face IDs from cache ---
-    meta = SystemMetadataRepository(session)
-    cached = meta.get_value("face_clusters_cache")
-
-    if not cached:
-        repo = FaceRepository(session)
-        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
-            max_clusters=50, faces_per_cluster=20,
-        )
-        cache_clusters = [
-            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
-        ]
-        from datetime import datetime, timezone
-        cache_data = json.dumps({
-            "clusters": cache_clusters,
-            "truncated": truncated,
-            "computed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        meta.set_value("face_clusters_cache", cache_data)
-        meta.set_value("face_clusters_dirty", "false")
-    else:
-        try:
-            cache_clusters = json.loads(cached).get("clusters", [])
-        except (json.JSONDecodeError, KeyError):
-            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+    cache_clusters = cached_clusters(session)
 
     if cluster_index < 0 or cluster_index >= len(cache_clusters):
         raise HTTPException(status_code=404, detail="Cluster not found")
@@ -919,8 +845,6 @@ def list_cluster_faces(
     limit: int = 50,
 ) -> ClusterFacesResponse:
     """List all faces in a cluster, cursor-paginated."""
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository
     from src.server.models.tenant import Face, Asset
     from sqlmodel import select
 
@@ -928,31 +852,7 @@ def list_cluster_faces(
         limit = 100
 
     # Get cluster face IDs from cache
-    meta = SystemMetadataRepository(session)
-    cached = meta.get_value("face_clusters_cache")
-
-    if not cached:
-        repo = FaceRepository(session)
-        clusters_raw, all_face_ids, truncated = repo.compute_clusters(
-            max_clusters=50, faces_per_cluster=20,
-        )
-        cache_clusters = [
-            {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-            for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
-        ]
-        from datetime import datetime, timezone
-        cache_data = json.dumps({
-            "clusters": cache_clusters,
-            "truncated": truncated,
-            "computed_at": datetime.now(timezone.utc).isoformat(),
-        })
-        meta.set_value("face_clusters_cache", cache_data)
-        meta.set_value("face_clusters_dirty", "false")
-    else:
-        try:
-            cache_clusters = json.loads(cached).get("clusters", [])
-        except (json.JSONDecodeError, KeyError):
-            raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+    cache_clusters = cached_clusters(session)
 
     if cluster_index < 0 or cluster_index >= len(cache_clusters):
         raise HTTPException(status_code=404, detail="Cluster not found")
@@ -1113,16 +1013,66 @@ def unassign_face(
         raise HTTPException(status_code=404, detail="Face assignment not found")
 
 
+# The orders unnamed clusters come in (GET /v1/faces/clusters?sort=), the first the default.
+CLUSTER_SORTS = ("size_desc", "size_asc", "newest")
+ClusterSort = Literal["size_desc", "size_asc", "newest"]
+
+
+def order_clusters(clusters: list[dict], sort: str) -> list[dict]:
+    """Cached clusters in the order asked: size_desc, largest first (naming
+    them makes the most progress); size_asc, smallest first; newest, the one
+    with the latest photo first (undated last). Ties go by the cluster's
+    first face id, which stays while its faces do, so the order doesn't
+    shuffle between loads as cluster_index (a position) can."""
+    def first_face(c: dict) -> str:
+        return min(c.get("face_ids") or [""])
+
+    by_face = sorted(clusters, key=first_face)
+    if sort == "size_asc":
+        return sorted(by_face, key=lambda c: c["size"])
+    if sort == "newest":
+        dated = sorted((c for c in by_face if c.get("newest")), key=lambda c: c["newest"], reverse=True)
+        return dated + [c for c in by_face if not c.get("newest")]
+    return sorted(by_face, key=lambda c: -c["size"])
+
+
+def store_clusters(session: Session) -> dict:
+    """Compute every cluster and keep them as the cluster cache (marked clean)."""
+    from src.server.repository.system_metadata import SystemMetadataRepository
+    from src.server.repository.tenant import FaceRepository
+
+    data = FaceRepository(session).cluster_cache()
+    meta = SystemMetadataRepository(session)
+    meta.set_value("face_clusters_cache", json.dumps(data))
+    meta.set_value("face_clusters_dirty", "false")
+    return data
+
+
+def cached_clusters(session: Session) -> list[dict]:
+    """The cached clusters, dirty or not, so the cluster_index a page was
+    shown stays the cluster it named; computed when there's no cache."""
+    from src.server.repository.system_metadata import SystemMetadataRepository
+
+    cached = SystemMetadataRepository(session).get_value("face_clusters_cache")
+    if not cached:
+        return store_clusters(session)["clusters"]
+    try:
+        return json.loads(cached).get("clusters", [])
+    except (json.JSONDecodeError, AttributeError):
+        raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+
+
 @faces_router.get("/clusters", response_model=ClustersResponse)
 def get_clusters(
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = 20,
     faces_per_cluster: int = 6,
     min_cluster_size: int = 2,
+    sort: ClusterSort = "size_desc",
 ) -> ClustersResponse:
-    """Return clusters of unassigned faces. Uses cache; recomputes if dirty."""
+    """Return clusters of unassigned faces in the order asked (largest first
+    unless asked otherwise; see order_clusters). Uses cache; recomputes if dirty."""
     from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository
 
     if limit > 50:
         limit = 50
@@ -1134,47 +1084,24 @@ def get_clusters(
     meta = SystemMetadataRepository(session)
     dirty = meta.get_value("face_clusters_dirty")
     cached = meta.get_value("face_clusters_cache")
-
-    def _build_response(all_clusters: list[dict], truncated: bool) -> ClustersResponse:
-        """Filter by min_cluster_size, apply limit, return response with max_cluster_size."""
-        max_size = max((c["size"] for c in all_clusters), default=0)
-        filtered = [c for c in all_clusters if c["size"] >= min_cluster_size][:limit]
-        return ClustersResponse(
-            clusters=[
-                ClusterItem(cluster_index=c["cluster_index"], size=c["size"], faces=c.get("faces", [])[:faces_per_cluster])
-                for c in filtered
-            ],
-            truncated=truncated,
-            max_cluster_size=max_size,
-        )
-
-    # Return cache if clean and exists
+    data = None
     if not dirty and cached:
         try:
             data = json.loads(cached)
-            return _build_response(data.get("clusters", []), data.get("truncated", False))
-        except (json.JSONDecodeError, KeyError):
-            pass  # corrupted cache, recompute
+        except json.JSONDecodeError:
+            data = None  # corrupted cache, recompute
+    if data is None:
+        data = store_clusters(session)
 
-    # Compute fresh clusters
-    repo = FaceRepository(session)
-    clusters_raw, all_face_ids, truncated = repo.compute_clusters(
-        max_clusters=50,  # cache max, apply limit on read
-        faces_per_cluster=20,  # cache max
+    all_clusters = data.get("clusters", [])
+    max_size = max((c["size"] for c in all_clusters), default=0)
+    shown = order_clusters([c for c in all_clusters if c["size"] >= min_cluster_size], sort)[:limit]
+    return ClustersResponse(
+        clusters=[
+            ClusterItem(cluster_index=c["cluster_index"], size=c["size"], faces=c.get("faces", [])[:faces_per_cluster],
+                        newest=c.get("newest"))
+            for c in shown
+        ],
+        truncated=data.get("truncated", False),
+        max_cluster_size=max_size,
     )
-
-    # Build cache payload — includes all face IDs per cluster for server-side naming
-    cache_clusters = [
-        {"cluster_index": i, "size": len(ids), "faces": c, "face_ids": ids}
-        for i, (c, ids) in enumerate(zip(clusters_raw, all_face_ids))
-    ]
-    from datetime import datetime, timezone
-    cache_data = json.dumps({
-        "clusters": cache_clusters,
-        "truncated": truncated,
-        "computed_at": datetime.now(timezone.utc).isoformat(),
-    })
-    meta.set_value("face_clusters_cache", cache_data)
-    meta.set_value("face_clusters_dirty", "false")
-
-    return _build_response(cache_clusters, truncated)

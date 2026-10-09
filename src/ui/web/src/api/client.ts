@@ -573,7 +573,13 @@ export interface ClusterItem {
   cluster_index: number;
   size: number;
   faces: PersonFaceItem[];
+  /** Its latest photo (taken, else the file's time); null when none says. */
+  newest?: string | null;
 }
+
+/** The orders unnamed clusters come in; ties go by the cluster's first face, so they hold between loads. */
+export const CLUSTER_SORTS = ["size_desc", "size_asc", "newest"] as const;
+export type ClusterSort = (typeof CLUSTER_SORTS)[number];
 
 export interface ClustersResponse {
   clusters: ClusterItem[];
@@ -649,11 +655,17 @@ export async function listPersonFaces(personId: string, cursor?: string, limit =
 }
 
 /** Get face clusters (unassigned faces grouped by similarity). */
-export async function getClusters(limit = 20, facesPerCluster = 6, minClusterSize = 2): Promise<ClustersResponse> {
+export async function getClusters(
+  sort: ClusterSort,
+  limit = 20,
+  facesPerCluster = 6,
+  minClusterSize = 2,
+): Promise<ClustersResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
     faces_per_cluster: String(facesPerCluster),
     min_cluster_size: String(minClusterSize),
+    sort,
   });
   return apiFetch<ClustersResponse>(`/faces/clusters?${params}`);
 }
