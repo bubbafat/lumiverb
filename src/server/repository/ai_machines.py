@@ -33,6 +33,29 @@ def job_models(tenant: Tenant | None) -> dict[str, str]:
     return {job: job_model(tenant, job) for job in JOB_MODEL_FIELDS}
 
 
+def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
+    """Why each AI job's work waits now, for Settings → Processing (None:
+    it doesn't). Leaving a job without a machine never asks (Robert, Oct 9):
+    this is where it says so."""
+    from src.shared.ai_jobs import JOBS
+
+    tenant = ctrl.get(Tenant, tenant_id)
+    every = machines(ctrl, tenant_id)
+    out: dict[str, str | None] = {}
+    for job in JOB_MODEL_FIELDS:
+        label = JOBS[job]
+        doing = [m for m in every if m.enabled and job in m.jobs]
+        if not job_model(tenant, job):
+            out[job] = f"{label} are off: no model is chosen in Settings → AI."
+        elif not doing:
+            out[job] = f"No machine does {label.lower()}: its work waits until an admin adds one in Settings → AI."
+        elif all(m.online is False for m in doing):
+            out[job] = f"No machine doing {label.lower()} is online: its work waits. Settings → AI shows why."
+        else:
+            out[job] = None
+    return out
+
+
 def new_built_in_machine(tenant_id: str) -> AiMachine:
     """The tenant's built-in machine: the worker's own Whisper, transcripts one at a time."""
     return AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=BUILT_IN_NAME, api_url="",

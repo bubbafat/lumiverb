@@ -267,33 +267,6 @@ def _check_jobs(tenant: Tenant, jobs: list[str], models: list[str]) -> None:
                                 {"job": job, "model": model, "models": models})
 
 
-def _ask_before_leaving_jobs(ctrl: Session, tenant_id: str, machine: AiMachine, leave_jobs: bool,
-                             did: set[str], remove: bool = False) -> None:
-    """409 job_left_without_machine when this change leaves a job that has a
-    model with no machine doing it (it would wait), unless leave_jobs says so.
-    did: the jobs the machine was doing (enabled) before the change; only
-    those can be left by it (a job already without a machine isn't asked about)."""
-    if leave_jobs:
-        return
-    tenant = ctrl.get(Tenant, tenant_id)
-    left = []
-    for job, label in JOBS.items():
-        if job not in did:
-            continue
-        model = _job_model(tenant, job)
-        others = [m for m in _machines(ctrl, tenant_id)
-                  if m.machine_id != machine.machine_id and m.enabled and job in m.jobs]
-        still = not remove and machine.enabled and job in machine.jobs
-        if model and not others and not still:
-            left.append({"job": job, "label": label, "model": model})
-    if left:
-        what = " and ".join(j["label"].lower() for j in left)
-        raise DecisionRequiredError(
-            "job_left_without_machine",
-            f"No other machine does {what}: without this one it waits. Send leave_jobs=true to go ahead.",
-            {"jobs": left})
-
-
 def _name_free(ctrl: Session, tenant_id: str, name: str, machine_id: str | None = None) -> None:
     if any(m.name == name and m.machine_id != machine_id for m in _machines(ctrl, tenant_id)):
         raise ConflictError("name_taken", f"There's already a machine called {name}.", {"name": name})
@@ -358,11 +331,12 @@ def _commit_named(ctrl: Session, name: str | None) -> None:
 
 
 @router.patch("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_jobs: bool = False) -> AiSettings:
+def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiSettings:
     """Change a machine: only the fields sent. When where it is, its key or
     jobs change, or it's turned back on, it's asked again (502, 409 as when
     added). Turning off the last machine doing a job, or taking the job from
-    it, asks first (409 job_left_without_machine) unless leave_jobs."""
+    it, just does it (Robert, Oct 9: never ask): the job's work waits, and
+    Settings → Processing says why."""
     tenant_id = request.state.tenant_id
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
@@ -373,7 +347,6 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
                 can = " and ".join(JOBS[j].lower() for j in JOBS if j in BUILT_IN_JOBS)
                 raise _built_in_error(f"The built-in machine only does {can}: the rest need a server.")
         was = (machine.api_url, machine.api_key, set(machine.jobs), machine.enabled)
-        did = set(machine.jobs) if machine.enabled else set()
         if body.name is not None:
             _name_free(ctrl, tenant_id, body.name, machine_id)
             machine.name = body.name
@@ -390,7 +363,6 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
             machine.enabled = body.enabled
         if body.shares_gpu is not None and not machine.built_in:
             machine.shares_gpu = body.shares_gpu
-        _ask_before_leaving_jobs(ctrl, tenant_id, machine, leave_jobs, did)
         # Asked again only for what needs it: where it is or its key changed,
         # a job it hadn't, or turned back on. A rename or a new limit doesn't.
         moved = (machine.api_url, machine.api_key) != was[:2]
@@ -407,16 +379,13 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request, leave_
 
 
 @router.delete("/machines/{machine_id}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
-def remove_machine(machine_id: str, request: Request, leave_jobs: bool = False) -> AiSettings:
-    """Remove a machine. The last machine doing a job asks first (409
-    job_left_without_machine) unless leave_jobs. The built-in one can't be
-    removed (409 built_in_machine): it can be turned off."""
+def remove_machine(machine_id: str, request: Request) -> AiSettings:
+    """Remove a machine (the last doing a job too: its work waits). The
+    built-in one can't be removed (409 built_in_machine): it can be turned off."""
     with _control() as ctrl:
         machine = _machine(ctrl, request, machine_id)
         if machine.built_in:
             raise _built_in_error("The built-in machine can't be removed: turn it off instead.")
-        did = set(machine.jobs) if machine.enabled else set()
-        _ask_before_leaving_jobs(ctrl, request.state.tenant_id, machine, leave_jobs, did, remove=True)
         ctrl.delete(machine)
         ctrl.commit()
         return _settings(ctrl, request.state.tenant_id)

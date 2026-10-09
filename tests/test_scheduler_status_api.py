@@ -64,4 +64,4 @@ def test_a_machine_can_share_the_gpu_and_the_built_in_one_always_does(env):
     finally:
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
-                client.delete(f"/v1/ai/machines/{m['machine_id']}?leave_jobs=true", headers=headers)
+                client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)

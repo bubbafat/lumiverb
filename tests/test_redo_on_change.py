@@ -338,7 +338,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
         client.post("/v1/producers/vision/redo/resume", headers=headers)
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
-                client.delete(f"/v1/ai/machines/{m['machine_id']}?leave_jobs=true", headers=headers)
+                client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
         _set_model(env, "vision", VISION)
 
 
