@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ProcessingSection from "./ProcessingSection";
 import type { Producer } from "../../api/client";
+import { MemoryRouter } from "react-router-dom";
 
 const fetchMock = vi.fn();
 let role = "admin";
@@ -18,7 +19,7 @@ function producer(over: Partial<Producer>): Producer {
     artifact: "vision", producer: "vision", version: "1", title: "Descriptions and tags", media: ["image"],
     uniform: false, settings: { model: "qwen3-vl:8b-instruct", temperature: 0.2 }, settings_hash: "h",
     counts: { applicable: 10, current: 6, stale: 3, missing: 1, failing: 0 }, redoable: true, why_not: null,
-    paused: false, paused_by: null, paused_at: null, ...over,
+    paused: false, paused_by: null, paused_at: null, waiting: null, ...over,
   };
 }
 
@@ -73,9 +74,11 @@ afterEach(() => {
 function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
-      <ProcessingSection />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <ProcessingSection />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -99,6 +102,20 @@ describe("ProcessingSection", () => {
     const scenes = await row("Scenes");
     expect(scenes.textContent).toContain("Not made again yet. Finding a video's scenes again isn't built yet.");
     expect(within(scenes).queryByRole("button", { name: /Stop|Resume/ })).toBeNull();
+  });
+
+  it("says why a producer's work waits (its AI job has no machine), linking to Settings → AI", async () => {
+    // Robert, Oct 9: removing the last machine for a job never asks; this is where it shows.
+    producers = [
+      producer({ waiting: "No machine does descriptions & text: its work waits until an admin adds one in Settings → AI." }),
+      producer({ artifact: "clip", title: "Visual search (CLIP)" }),
+    ];
+    renderSection();
+    const vision = await row("Descriptions and tags");
+    const why = within(vision).getByRole("status");
+    expect(why.textContent).toContain("No machine does descriptions & text");
+    expect(within(why).getByRole("link", { name: "Settings → AI" }).getAttribute("href")).toBe("/settings/ai");
+    expect(within(await row("Visual search (CLIP)")).queryByRole("status")).toBeNull();
   });
 
   it("says the stale ones are being redone, with no Upgrade step", async () => {

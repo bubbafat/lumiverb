@@ -852,18 +852,18 @@ export async function addMachine(body: MachineFields): Promise<AiSettings> {
   return apiFetch<AiSettings>("/ai/machines", { method: "POST", body });
 }
 
-/** Change a machine (admins): only the fields sent. 409
- * job_left_without_machine (details.jobs) unless leaveJobs, when it's the last
- * machine doing a job; otherwise as addMachine. The built-in machine takes no
+/** Change a machine (admins): only the fields sent, as addMachine. Turning
+ * off the last machine doing a job, or taking the job from it, never asks:
+ * the job's work waits (Processing says why). The built-in machine takes no
  * api_url or api_key, and only the jobs it can do (409 built_in_machine). */
-export async function updateMachine(machineId: string, body: Partial<MachineFields>, leaveJobs = false): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "PATCH", body });
+export async function updateMachine(machineId: string, body: Partial<MachineFields>): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "PATCH", body });
 }
 
-/** Remove a machine (admins). 409 job_left_without_machine unless leaveJobs;
+/** Remove a machine (admins); the last doing a job too (its work waits).
  * 409 built_in_machine for the built-in one (turn it off instead). */
-export async function removeMachine(machineId: string, leaveJobs = false): Promise<AiSettings> {
-  return apiFetch<AiSettings>(`/ai/machines/${machineId}${leaveJobs ? "?leave_jobs=true" : ""}`, { method: "DELETE" });
+export async function removeMachine(machineId: string): Promise<AiSettings> {
+  return apiFetch<AiSettings>(`/ai/machines/${machineId}`, { method: "DELETE" });
 }
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
@@ -912,6 +912,8 @@ export interface Producer {
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
+  /** Why its work waits now: its AI job is off, or has no machine (or none online). */
+  waiting: string | null;
 }
 
 export async function getProducers(scope: { libraryId?: string; projectId?: string } = {}): Promise<Producer[]> {

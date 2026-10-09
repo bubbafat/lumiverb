@@ -67,7 +67,6 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     sent.push({ method, url, body });
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
-    const leave = url.includes("leave_jobs=true");
     if (path === "/me") return json({ email: "a@b.c", role });
     if (path === "/ai" && method === "GET") return json(settings());
     if (path === "/ai/connect") {
@@ -85,14 +84,6 @@ beforeEach(() => {
       const after = method === "DELETE" ? null : { ...target, ...body };
       if (target.built_in && (body?.api_url !== undefined || body?.api_key !== undefined)) {
         return err(409, "built_in_machine", "The built-in machine is the worker's own computer: it has no URL or key.");
-      }
-      for (const [j, label, chosen] of [["vision", "Descriptions & text", model], ["transcripts", "Transcripts", whisper]]) {
-        const others = machines.filter((x) => x !== target && x.enabled && x.jobs.includes(j));
-        const stillDoes = after && after.enabled && after.jobs.includes(j);
-        if (chosen && !others.length && !stillDoes && !leave) {
-          return err(409, "job_left_without_machine", `No other machine does ${label.toLowerCase()}.`,
-                     { jobs: [{ job: j, label, model: chosen }] });
-        }
       }
       machines = after ? machines.map((x) => (x === target ? { ...after, has_key: body.api_key === undefined ? x.has_key : !!body.api_key } : x))
                        : machines.filter((x) => x !== target);
@@ -332,7 +323,7 @@ describe("AiSection", () => {
     expect(await screen.findByText("Does: Transcripts · 2 at once")).toBeTruthy();
   });
 
-  it("turning off the built-in Whisper when nothing else transcribes asks first", async () => {
+  it("turning off the built-in Whisper when nothing else transcribes just does it (never asks)", async () => {
     whisper = "small";
     machines = [builtIn(), machine({ name: "Brain" })];
     renderSection();
@@ -340,10 +331,9 @@ describe("AiSection", () => {
     const form = screen.getByRole("form", { name: "Edit Built in" });
     fireEvent.click(within(form).getByRole("checkbox", { name: "Use this machine" }));
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
-    expect((await within(form).findByText(/No other machine does transcripts/)).textContent).toContain("it waits");
-    fireEvent.click(within(form).getByRole("button", { name: "Save anyway" }));
     expect(await screen.findByText("Transcripts: paused")).toBeTruthy();
-    expect(lastSent("PATCH", "/ai/machines/aim_self")!.url).toContain("leave_jobs=true");
+    expect(screen.queryByText(/No other machine does/)).toBeNull();
+    expect(lastSent("PATCH", "/ai/machines/aim_self")!.url).not.toContain("leave_jobs");
   });
 
   it("picks the transcripts model from what the machines doing them offer", async () => {
@@ -371,30 +361,24 @@ describe("AiSection", () => {
     expect("api_key" in body).toBe(false);
   });
 
-  it("removing the last machine doing a job asks first", async () => {
+  it("removing the last machine doing a job just removes it (never asks)", async () => {
     machines = [machine({ name: "Brain" })];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Remove Brain" }));
-    const ask = await screen.findByText(/No other machine does descriptions & text/);
-    expect(ask.textContent).toContain("without Brain");
-    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
-    expect(screen.getByText("Brain")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Remove Brain" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Remove anyway" }));
     await waitFor(() => expect(screen.queryByText("Brain")).toBeNull());
-    expect(lastSent("DELETE", "/ai/machines/aim_Brain")!.url).toContain("leave_jobs=true");
+    expect(screen.queryByRole("button", { name: "Remove anyway" })).toBeNull();
+    expect(lastSent("DELETE", "/ai/machines/aim_Brain")!.url).not.toContain("leave_jobs");
   });
 
-  it("turning off the last machine doing a job asks first", async () => {
+  it("turning off the last machine doing a job just saves (never asks)", async () => {
     machines = [machine({ name: "Brain" })];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Brain" }));
     const form = screen.getByRole("form", { name: "Edit Brain" });
     fireEvent.click(within(form).getByRole("checkbox", { name: "Use this machine" }));
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
-    fireEvent.click(await within(form).findByRole("button", { name: "Save anyway" }));
     expect(await screen.findByText("Turned off: gets no work.")).toBeTruthy();
-    expect(lastSent("PATCH", "/ai/machines/aim_Brain")!.url).toContain("leave_jobs=true");
+    expect(screen.queryByRole("button", { name: "Save anyway" })).toBeNull();
   });
 
   it("changes a job's model to one its machines offer, and says why not when none does", async () => {
