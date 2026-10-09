@@ -148,7 +148,9 @@ def test_a_settings_change_makes_it_stale_and_it_waits_for_approval(env):
 
 
 @pytest.mark.slow
-def test_a_changed_file_is_described_again_without_asking(env):
+def test_a_changed_file_is_a_new_clip_made_from_scratch(env):
+    # Robert, Oct 9: a binary different file with the same name is a
+    # completely new file, and the old one goes missing.
     client, headers, *_ = env
     lib = _library(env, "RecChanged")
     old, new = _sha(), _sha()
@@ -160,18 +162,17 @@ def test_a_changed_file_is_described_again_without_asking(env):
     assert r.status_code == 201, r.text
     assert _due(lib, "missing_vision") == [] and _due(lib, "missing_embeddings") == []
 
-    assert _ingest_with(lib, "a.jpg", new, None) == clip  # the file was replaced
-    assert _due(lib, "missing_vision") == [clip] and _due(lib, "missing_embeddings") == [clip]
+    replaced = _ingest_with(lib, "a.jpg", new, None)
+    assert replaced != clip
+    assert _due(lib, "missing_vision") == [replaced] and _due(lib, "missing_embeddings") == [replaced]
     assert _summary(lib)["missing_vision"] == 1
-    assert _counts(lib, "vision")["stale"] == 1  # it still has its old description meanwhile
-
-    _describe(lib, clip, new)
-    assert _due(lib, "missing_vision") == []
-    assert _counts(lib, "vision")["current"] == 1
+    with _db(env) as s:  # the old clip, archived as missing, keeps its description
+        assert s.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"), {"a": clip}).scalar() == "missing"
+        assert s.execute(text("SELECT count(*) FROM asset_metadata WHERE asset_id = :a"), {"a": clip}).scalar() == 1
 
 
 @pytest.mark.slow
-def test_a_changed_video_loses_its_scenes(env):
+def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
     client, headers, *_ = env
     lib = _library(env, "RecScenes")
     old = _sha()
@@ -184,12 +185,14 @@ def test_a_changed_video_loses_its_scenes(env):
         s.commit()
     assert _due(lib, "missing_video_scenes") == [] and _due(lib, "missing_scene_vision") == []
 
-    _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    assert _due(lib, "missing_video_scenes") == [vid]
+    new = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
+    assert new != vid
     with _db(env) as s:
-        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 0
-        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a"
-                              " AND artifact IN ('scenes', 'scene_vision')"), {"a": vid}).scalar() == 0
+        s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": new})
+        s.commit()
+        # The old clip keeps its scenes, archived with it.
+        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 1
+    assert _due(lib, "missing_video_scenes") == [new]
 
 
 @pytest.mark.slow
@@ -288,9 +291,8 @@ def test_every_producer_sorts_a_new_clip_the_same_everywhere(env):
 
 
 # ---------------------------------------------------------------------------
-# Review fixes: unknown isn't changed; a replaced file resets its scenes on
-# either ingest; scenes are never handed out in place; waiting failures are
-# what the counts leave out.
+# Review fixes: unknown isn't changed; scenes are never handed out in
+# place; waiting failures are what the counts leave out.
 # ---------------------------------------------------------------------------
 
 
@@ -312,38 +314,9 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
 
 
 @pytest.mark.slow
-def test_a_file_replaced_through_the_other_ingest_loses_its_scenes_too(env):
-    import io
-    import json
-
-    from PIL import Image
-
-    client, headers, *_ = env
-    lib = _library(env, "RecOtherIngest")
-    vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
-        s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
-                       " description, created_at) VALUES (:i, :a, 0, 0, 999, 0, 'a beach', now())"),
-                  {"i": f"scn_{vid}_0", "a": vid})
-        s.commit()
-    buf = io.BytesIO()
-    Image.new("RGB", (64, 36)).save(buf, format="JPEG")
-    buf.seek(0)
-    new = _sha()
-    r = client.post(f"/v1/assets/{vid}/ingest", data={"exif": json.dumps({"sha256": new}),
-                                                      "lineage": json.dumps({"proxy": _want(env, "proxy", new)})},
-                    files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert _due(lib, "missing_video_scenes") == [vid]
-    with _db(env) as s:
-        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 0
-
-
-@pytest.mark.slow
 def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
-    """Ingest resets them when a file is replaced; a hash changed any other
-    way mustn't hand out a video whose scenes the worker can't redo."""
+    """A different file is a new clip, so a hash changes only some other
+    way: that mustn't hand out a video whose scenes the worker can't redo."""
     lib = _library(env, "RecScenesInPlace")
     vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
     with _db(env) as s:

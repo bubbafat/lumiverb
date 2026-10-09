@@ -126,20 +126,43 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
-def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> set[str]:
-    """rel_paths the user trashed (or emptied from the trash). Scans skip them:
-    Lumiverb never deletes originals, so they may still be on disk."""
-    paths: set[str] = set()
+def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, list[_ServerAsset] | None]:
+    """Files a person trashed, archived or deleted for good, by rel_path: each
+    one's content, size and time, or None for whatever is at the path. Scans
+    skip them: Lumiverb never deletes originals, so they may still be on
+    disk. Another file at the path is a new clip."""
+    ignored: dict[str, list[_ServerAsset] | None] = {}
     cursor: str | None = None
     while True:
         params: dict[str, str] = {"limit": "1000"}
         if cursor:
             params["after"] = cursor
         data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
-        paths.update(item["rel_path"] for item in data.get("items", []))
+        for item in data.get("items", []):
+            files = item.get("files")
+            ignored[item["rel_path"]] = None if files is None else [
+                _ServerAsset(asset_id="", sha256=f["sha256"], file_size=f.get("file_size"),
+                             file_mtime=f.get("file_mtime"))
+                for f in files
+            ]
         cursor = data.get("next_cursor")
         if not cursor:
-            return paths
+            return ignored
+
+
+def _skipped(f: dict, ignored: dict[str, list[_ServerAsset] | None], root_path: Path) -> bool:
+    """Whether this file is one a person removed. Hashed only when it isn't
+    one of them untouched (same size and time), so archives kept on disk
+    aren't read on every scan."""
+    if f["rel_path"] not in ignored:
+        return False
+    removed = ignored[f["rel_path"]]
+    if removed is None:
+        return True
+    if any(_mtime_size_match(f, r) for r in removed):
+        return True
+    sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
+    return sha is None or any(sha == r.sha256 for r in removed)
 
 
 # A scan that would archive more than 50 clips AND more than half of the
@@ -770,12 +793,14 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
+    # Every file on disk, ingested or not: none of them is missing.
+    on_disk = local_files
     ignored = _fetch_ignored_paths(client, library_id)
     if ignored:
         before = len(local_files)
-        local_files = [f for f in local_files if f["rel_path"] not in ignored]
+        local_files = [f for f in local_files if not _skipped(f, ignored, root_path)]
         if before > len(local_files):
-            console.print(f"Skipping {before - len(local_files):,} file(s) you trashed")
+            console.print(f"Skipping {before - len(local_files):,} file(s) you removed")
 
     # Files written in the last SETTLE_SEC may still be copying, so they wait
     # for a later scan, as on the Mac. They still count as on disk, so they
@@ -798,7 +823,7 @@ def run_scan(
     new_files, needs_hash, fast_unchanged = _split_files(
         settled, existing, thorough=thorough or force,
     )
-    local_rel_paths = {f["rel_path"] for f in local_files}
+    local_rel_paths = {f["rel_path"] for f in on_disk}
 
     # Deletions, and the mass-deletion guard, only consider what this scan
     # covers: a `--media-type image` scan doesn't see videos on disk, so it
@@ -813,7 +838,7 @@ def run_scan(
         scope_size = len(scope)
 
     # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(local_files, scope, root_path, path_prefix)
+    deleted_ids = _detect_deletions(on_disk, scope, root_path, path_prefix)
     if stats.unlisted:
         # Files in a folder that couldn't be listed may well be there, so
         # they're neither deleted nor the old half of a move.

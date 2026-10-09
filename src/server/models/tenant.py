@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, JSON, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, JSON, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -94,7 +94,10 @@ class TenantPathFilterDefault(SQLModel, table=True):
 class Asset(SQLModel, table=True):
     __tablename__ = "assets"
     __table_args__ = (
-        UniqueConstraint("library_id", "rel_path", name="uq_assets_library_rel_path"),
+        # One clip in sight per path; archived ones keep theirs (a changed file is a new clip).
+        Index("uq_assets_library_rel_path_in_sight", "library_id", "rel_path", unique=True,
+              postgresql_where=text("deleted_at IS NULL")),
+        Index("ix_assets_library_rel_path", "library_id", "rel_path"),
         CheckConstraint("media_type IN ('image', 'video')", name="ck_assets_media_type"),
     )
 
@@ -566,13 +569,23 @@ class ArtifactLineage(SQLModel, table=True):
 
 class IgnoredFile(SQLModel, table=True):
     """A file whose trash the user emptied. Its asset row is gone, but scans
-    and ingest keep skipping the path while the file is still on disk."""
+    and ingest keep skipping that file at that path while it's still on disk.
+    A path can have several (versions deleted over time); one without a
+    SHA-256 names whatever is at the path. Unique by (library, path, content)."""
 
     __tablename__ = "ignored_files"
 
-    library_id: str = Field(foreign_key="libraries.library_id", primary_key=True)
-    rel_path: str = Field(primary_key=True)
+    __table_args__ = (
+        Index("uq_ignored_files_file", "library_id", "rel_path", text("COALESCE(sha256, '')"), unique=True),
+    )
+
+    ignored_id: int | None = Field(default=None, primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id")
+    rel_path: str
     sha256: str | None = Field(default=None, nullable=True)
+    # When it was deleted: a scan hashes the file at the path only when these differ.
+    file_size: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    file_mtime: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

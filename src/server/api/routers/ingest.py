@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
@@ -159,18 +159,6 @@ def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data
     return {kind: require_lineage(by_kind.get(kind), kind) for kind in kinds}
 
 
-def _forget_scenes(session: Session, asset_id: str) -> None:
-    """A clip's scenes, their chunks and descriptions are gone: found again
-    from the new content. (Their search documents go once this commits;
-    rep-frame files are left for the orphan cleanup.)"""
-    from sqlalchemy import text as sa_text
-
-    session.execute(sa_text("DELETE FROM video_scenes WHERE asset_id = :a"), {"a": asset_id})
-    session.execute(sa_text("DELETE FROM video_index_chunks WHERE asset_id = :a"), {"a": asset_id})
-    session.execute(sa_text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact IN ('scenes', 'scene_vision')"),
-                    {"a": asset_id})
-
-
 def _do_ingest(
     *,
     asset_id: str,
@@ -227,23 +215,6 @@ def _do_ingest(
     asset_repo.set_thumbnail_artifact(asset_id, thumb_key, thumb_sha256)
 
     final_status = asset_status.PROXY_READY
-
-    # The file was replaced: its analysis proxy and scenes show the old
-    # content, so they're made again. Everything else made from it is handed
-    # out again by the reconciler (its lineage names the old file). Both
-    # ingest endpoints come through here, before the new SHA-256 is stored.
-    scenes_forgotten = False
-    new_sha = (exif_data or {}).get("sha256")
-    current = asset_repo.get_by_id(asset_id) if new_sha else None
-    if current is not None and current.sha256 and new_sha != current.sha256:
-        current.analysis_proxy_key = None
-        current.analysis_proxy_sha256 = None
-        current.analysis_proxy_generated_at = None
-        if current.video_indexed or current.media_type == "video":
-            _forget_scenes(session, asset_id)
-            current.video_indexed = False
-            scenes_forgotten = True
-        session.add(current)
 
     # --- Store EXIF if provided ---
     if exif_data is not None:
@@ -329,10 +300,6 @@ def _do_ingest(
     # already commits; this covers the new-asset branch and the standalone
     # /v1/assets/{id}/ingest endpoint.
     session.commit()
-    if scenes_forgotten:
-        from src.server.search.quickwit_client import QuickwitClient
-
-        QuickwitClient().delete_scene_index_documents_by_asset_ids(tenant_id, [asset_id])
 
     return IngestResponse(
         asset_id=asset_id,
@@ -374,6 +341,7 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
 @router.post("/v1/ingest", response_model=IngestResponse)
 async def create_and_ingest(
     request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     proxy: UploadFile = File(...),
     library_id: str = Form(...),
@@ -471,13 +439,41 @@ async def create_and_ingest(
     reappeared = None  # set when a file the scanner marked missing is back
     created = False
 
+    # A different file at the same path is a new clip, and the old one goes
+    # missing (Robert, Oct 9): archived where it was, with everything it had,
+    # back if its content is. Only when both contents are known. It goes
+    # whatever becomes of this file: the file at its path isn't its any more.
+    from src.server.tenant_settings import get_follow_moves
+
+    sha = (exif_data or {}).get("sha256")
+    if existing is not None and sha and existing.sha256 and existing.sha256 != sha:
+        if existing.deleted_at is None:
+            try:  # a proxy that can't be read is a bad request, which changes nothing
+                _normalize_proxy(raw_proxy)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Failed to process proxy image") from None
+            from src.server.api.routers.assets import _out_of_search
+
+            asset_repo.trash_many([existing.asset_id], reason="missing")  # commits
+            moved: list[str] = []
+            if get_follow_moves(session):
+                # Its content may already be at another path (copied, then
+                # overwritten here): it moves there, with everything it had.
+                from src.server.api.routers.trash import hand_over_to_copies
+
+                moved = hand_over_to_copies(session, request, [existing.asset_id])
+            # Not one that moved: it's back in search, transcript and all.
+            _out_of_search(background, request, [a for a in [existing.asset_id] if a not in moved])
+        # This content's own clip at this path, if it had one: back where it was.
+        existing = asset_repo.find_at(library_id, rel_path, sha)
+
     # An archived asset back at its own path: lock it before restoring. A copy
     # of the file ingested at the same time may have claimed it by content;
     # then this path is new to the library.
     if existing is not None and existing.deleted_at is not None and not asset_repo.lock_for_restore(existing, rel_path):
         existing = None
     if existing is None:
-        if asset_repo.is_ignored(library_id, rel_path):
+        if asset_repo.is_ignored(library_id, rel_path, sha):
             raise HTTPException(
                 status_code=409,
                 detail=f"File was removed from the library (trash emptied): {rel_path}",
@@ -486,30 +482,34 @@ async def create_and_ingest(
         # (moved, or renamed while the scan wasn't looking). Restore that asset
         # at its new path, with everything it had, instead of starting over;
         # unless the account doesn't follow moves (the path is the identity).
-        from src.server.tenant_settings import get_follow_moves
-
-        archived = (asset_repo.find_missing_by_sha(library_id, (exif_data or {}).get("sha256"))
-                    if get_follow_moves(session) else None)
+        archived = asset_repo.find_missing_by_sha(library_id, sha) if get_follow_moves(session) else None
         if archived is not None:
             archived.rel_path = rel_path
             existing = archived
+    # A person's trash or archive is human data: a rescan of a file still
+    # on disk never undoes it. Scanners skip these via
+    # GET /v1/libraries/{id}/ignored-paths.
+    if existing is not None and existing.deleted_at is not None and existing.deleted_reason in ("user", "archived"):
+        where = "in the trash" if existing.deleted_reason == "user" else "archived"
+        raise HTTPException(status_code=409, detail=f"Asset is {where}: {rel_path}")
+
     if existing is None:
-        asset = asset_repo.create_asset(
-            library_id=library_id,
-            rel_path=rel_path,
-            file_size=file_size,
-            file_mtime=file_mtime_dt,
-            media_type=media_type,
-        )
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            asset = asset_repo.create_asset(
+                library_id=library_id,
+                rel_path=rel_path,
+                file_size=file_size,
+                file_mtime=file_mtime_dt,
+                media_type=media_type,
+            )
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(status_code=409, detail=f"Another file was just ingested at {rel_path}; scan again")
         asset_id = asset.asset_id
         created = True
     else:
-        # A person's trash or archive is human data: a rescan of a file still
-        # on disk never undoes it. Scanners skip these via
-        # GET /v1/libraries/{id}/ignored-paths.
-        if existing.deleted_at is not None and existing.deleted_reason in ("user", "archived"):
-            where = "in the trash" if existing.deleted_reason == "user" else "archived"
-            raise HTTPException(status_code=409, detail=f"Asset is {where}: {rel_path}")
         asset_id = existing.asset_id
         # Update file metadata if changed
         existing.file_size = file_size
@@ -525,29 +525,70 @@ async def create_and_ingest(
             reappeared = existing
         session.add(existing)
 
-    result = _do_ingest(
-        asset_id=asset_id,
-        library_id=library_id,
-        rel_path=rel_path,
-        tenant_id=tenant_id,
-        raw_proxy=raw_proxy,
-        width=width,
-        height=height,
-        exif_data=exif_data,
-        vision_data=vision_data,
-        embeddings_data=embeddings_data,
-        session=session,
-        lineage_by_kind=made,
-    )
-    if facet_data is not None:
-        asset_repo.upsert_video_facet(asset_id, facet_data)
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        result = _do_ingest(
+            asset_id=asset_id,
+            library_id=library_id,
+            rel_path=rel_path,
+            tenant_id=tenant_id,
+            raw_proxy=raw_proxy,
+            width=width,
+            height=height,
+            exif_data=exif_data,
+            vision_data=vision_data,
+            embeddings_data=embeddings_data,
+            session=session,
+            lineage_by_kind=made,
+        )
+    except IntegrityError:
+        # A clip brought back to this path (moved, or back where it was) while
+        # another ingest put a clip here: one clip in sight holds a path.
+        session.rollback()
+        raise HTTPException(status_code=409, detail=f"Another file was just ingested at {rel_path}; scan again") from None
+    def took_its_place() -> str | None:
+        """The clip in sight at this path now, if it isn't the one just made:
+        a clip that went missing with this content moved onto it (copy, then
+        delete), so that's the clip here."""
+        here = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
+        return here.asset_id if here is not None and here.deleted_at is None and here.asset_id != asset_id else None
+
+    # Another ingest's handover may already have moved a missing clip onto
+    # this new one (a copy and the overwritten original in one scan).
+    handed_to = took_its_place() if created and asset_repo.get_by_id(asset_id) is None else None
+    if facet_data is not None and handed_to is None:
         from src.server.repository.lineage import record as record_lineage
 
-        record_lineage(session, asset_id, "probe", made["probe"])
+        try:
+            asset_repo.upsert_video_facet(asset_id, facet_data)
+            record_lineage(session, asset_id, "probe", made["probe"])
+        except IntegrityError:
+            # Handed over to just now: the clip that moved here has its own.
+            session.rollback()
+            handed_to = took_its_place()
+            if handed_to is None:
+                raise
     if reappeared is not None and reappeared.transcript_srt:
         from src.server.search.sync import index_transcript_segments
 
         index_transcript_segments(tenant_id, reappeared)
+    if created and handed_to is None and sha and get_follow_moves(session):
+        # A clip with this content may have gone missing while this one was
+        # made (a copy and the overwritten original in one scan, ingested at
+        # once): then this is its copy, and it moves here, as copy-then-delete.
+        # Whichever ingest commits second sees the other. One clip at most:
+        # the one that went last.
+        from src.server.api.routers.trash import hand_over_to_copies
+
+        went = asset_repo.missing_ids_with_sha(library_id, sha)[:1]
+        if went and hand_over_to_copies(session, request, went):
+            handed_to = took_its_place()
+    if created and handed_to is None and asset_repo.get_by_id(asset_id) is None:
+        handed_to = took_its_place()  # the other ingest's handover took it meanwhile
+    if handed_to is not None:
+        result.asset_id = handed_to
+        created = False
     result.created = created
     return result
 
@@ -588,6 +629,14 @@ async def ingest_asset(
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
     made = _required_lineage(lineage, vision_data, embeddings_data)
+    # A different file is a new clip (POST /v1/ingest makes it and archives
+    # this one); this clip keeps the content its analysis was made from.
+    sha = (exif_data or {}).get("sha256")
+    if sha and asset.sha256 and sha != asset.sha256:
+        from src.server.api.errors import ConflictError
+
+        raise ConflictError("different_file", "A different file is a new clip: ingest it with POST /v1/ingest",
+                            {"asset_sha256": asset.sha256, "sha256": sha})
 
     return _do_ingest(
         asset_id=asset_id,

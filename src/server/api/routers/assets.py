@@ -981,12 +981,33 @@ def _ask_about_projects(session: Session, request: Request, asset_ids: list[str]
 
 def _out_of_search(background: BackgroundTasks, request: Request, asset_ids: list[str]) -> None:
     """Drop these clips' search documents after the response (best effort):
-    search already leaves out clips out of sight; this keeps pages full."""
+    search already leaves out clips out of sight; this keeps pages full.
+    Only those still out of sight then: one back meanwhile (handed over to
+    its copy by another request, say) keeps its documents, transcript
+    segments too, which no sweep puts back."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id and asset_ids:
-        from src.server.search.quickwit_client import QuickwitClient
+        background.add_task(_drop_from_search, tenant_id, list(asset_ids))
 
-        background.add_task(QuickwitClient().delete_tenant_documents_by_asset_ids, tenant_id, list(asset_ids))
+
+def _drop_from_search(tenant_id: str, asset_ids: list[str]) -> None:
+    from sqlalchemy import text as sa_text
+
+    from src.server.database import get_tenant_session
+    from src.server.search.quickwit_client import QuickwitClient
+
+    try:
+        with get_tenant_session(tenant_id) as session:
+            in_sight = set(session.execute(
+                sa_text("SELECT asset_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL"),
+                {"ids": asset_ids},
+            ).scalars())
+    except Exception as exc:  # noqa: BLE001 — best effort, as the delete itself
+        logger.warning("Couldn't check which clips came back before dropping them from search: %s", exc)
+        return
+    gone = [a for a in asset_ids if a not in in_sight]
+    if gone:
+        QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, gone)
 
 
 def _back_in_search(background: BackgroundTasks, request: Request, session: Session, asset_ids: list[str]) -> None:
@@ -1041,7 +1062,6 @@ def batch_trash_assets(
             # Only about clips this would trash: one already in the trash needs no answer.
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
-    _out_of_search(background, request, trashed_ids)
     handed_over: list[str] = []
     if trashed_ids and reason == "missing":
         # Copy, then delete the original: the asset moves to its empty copy.
@@ -1050,6 +1070,8 @@ def batch_trash_assets(
 
         if get_follow_moves(session):
             handed_over = hand_over_to_copies(session, request, trashed_ids)
+    # Not those that moved: they're back in search, transcripts and all.
+    _out_of_search(background, request, [a for a in trashed_ids if a not in handed_over])
     if trashed_ids and reason == "user":
         _refresh_grids(session, trashed_ids)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids, handed_over=handed_over)
@@ -1141,6 +1163,8 @@ _NOT_THE_TRASH = {
     "archived": ("archived", "This clip is archived, not in the trash: unarchive it (POST /v1/assets/unarchive)."),
     "missing": ("file_missing", "This clip's file is missing; it comes back when the file does."),
     "library_trashed": ("library_trashed", "This clip went to the trash with its library; restore the library."),
+    "path_taken": ("path_taken", "Another clip is at this clip's path now (a different file there is its own clip);"
+                                 " this one stays in the trash."),
 }
 
 

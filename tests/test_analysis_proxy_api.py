@@ -261,8 +261,9 @@ def test_changed_file_needs_a_new_proxy(env) -> None:
     _ingest(env, "changed/a.mov", sha="a" * 64)  # rescan, same content
     assert next(i for i in _page(env) if i["asset_id"] == video)["has_analysis_proxy"] is True
 
-    _ingest(env, "changed/a.mov", sha="b" * 64)  # the file was replaced
-    assert next(i for i in _page(env) if i["asset_id"] == video)["has_analysis_proxy"] is False
+    replaced = _ingest(env, "changed/a.mov", sha="b" * 64)  # another file there: a new clip (Robert, Oct 9)
+    assert replaced != video
+    assert next(i for i in _page(env) if i["asset_id"] == replaced)["has_analysis_proxy"] is False
 
 
 @pytest.mark.slow

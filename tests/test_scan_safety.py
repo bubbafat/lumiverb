@@ -125,7 +125,7 @@ def _scan_with(
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._walk_library", side_effect=walk or (lambda *a, **k: local)),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or {}),
         patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
@@ -322,7 +322,7 @@ def _scan_counting(tmp_path: Path, client: MagicMock):
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._walk_library", return_value=local),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], local))),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
@@ -395,10 +395,44 @@ def test_guard_measures_the_scanned_prefix(tmp_path: Path) -> None:
 def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
     split = MagicMock(return_value=([], [], []))
 
-    _scan_with(tmp_path, on_disk=5, on_server=5, ignored={"f0.jpg", "f3.jpg"}, split=split)
+    _scan_with(tmp_path, on_disk=5, on_server=5, ignored={"f0.jpg": None, "f3.jpg": None}, split=split)
 
     scanned = {f["rel_path"] for f in split.call_args[0][0]}
     assert scanned == {"f1.jpg", "f2.jpg", "f4.jpg"}
+
+
+@pytest.mark.fast
+def test_another_file_at_a_trashed_path_is_scanned(tmp_path: Path) -> None:
+    # A changed file is a new clip: only the file a person removed is skipped.
+    from src.client.cli.scan import _ServerAsset
+
+    split = MagicMock(return_value=([], [], []))
+    removed = [_ServerAsset(asset_id="", sha256="a" * 64)]
+    with patch("src.client.cli.scan.compute_sha256",
+               side_effect=lambda p: "a" * 64 if p.name == "f1.jpg" else "b" * 64) as hashed:
+        _scan_with(tmp_path, on_disk=4, on_server=4, ignored={"f1.jpg": removed, "f2.jpg": removed}, split=split)
+
+    scanned = {f["rel_path"] for f in split.call_args[0][0]}
+    assert scanned == {"f0.jpg", "f2.jpg", "f3.jpg"}
+    assert {c.args[0].name for c in hashed.call_args_list} == {"f1.jpg", "f2.jpg"}  # only those are hashed
+
+
+@pytest.mark.fast
+def test_a_removed_file_left_as_it_was_isnt_read_again(tmp_path: Path) -> None:
+    # Review round 2: archives kept on disk were hashed on every scan.
+    from datetime import datetime, timezone
+
+    from src.client.cli.scan import _ServerAsset
+
+    when = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    local = [{"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": when, "media_type": "image", "ext": ".jpg"}
+             for i in range(3)]
+    removed = [_ServerAsset(asset_id="", sha256="a" * 64, file_size=4, file_mtime="2026-10-01T08:00:00-04:00")]
+    split = MagicMock(return_value=([], [], []))
+    with patch("src.client.cli.scan.compute_sha256", return_value="b" * 64) as hashed:
+        _scan_with(tmp_path, on_disk=3, on_server=3, local=local, ignored={"f1.jpg": removed}, split=split)
+    assert hashed.call_count == 0
+    assert {f["rel_path"] for f in split.call_args[0][0]} == {"f0.jpg", "f2.jpg"}
 
 
 @pytest.mark.fast
@@ -450,7 +484,7 @@ def test_scan_counts_files_still_being_written(tmp_path: Path) -> None:
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._walk_library", return_value=local),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], []))),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
     ):
@@ -481,7 +515,7 @@ def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._walk_library", return_value=new),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._generate_proxy_bytes", side_effect=RuntimeError("not a JPEG")),
         patch("src.client.cli.scan.ProxyCache"),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
@@ -509,7 +543,7 @@ def _scan_disk(root: Path, existing: dict[str, _ServerAsset], *, library_filters
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=library_filters or []),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
         patch("src.client.cli.scan.ProxyCache"),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
@@ -611,7 +645,7 @@ def test_a_scan_says_which_folders_it_could_not_list(locked: Path) -> None:
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=_assets("open/a.jpg")),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
         patch("src.client.cli.scan.ProxyCache"),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),
@@ -638,7 +672,7 @@ def test_moves_outside_a_folder_that_cannot_be_listed_still_apply(locked: Path) 
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=[]),
         patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=set()),
+        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
         patch("src.client.cli.scan._scan_one"),
         patch("src.client.cli.scan.ProxyCache"),
         patch("src.client.cli.scan._populate_cache_for_unchanged"),

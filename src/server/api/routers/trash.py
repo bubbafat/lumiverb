@@ -182,7 +182,7 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
         session.rollback()
         return None
     path, copy_id, library_id = copy.rel_path, copy.asset_id, archived.library_id
-    # Out of the way first: (library, rel_path) is unique.
+    # Out of the way first: one clip in sight holds a path.
     copy.rel_path = f".lumiverb-handed-over/{copy_id}"
     copy.deleted_at = utcnow()
     copy.deleted_reason = "handed_over"

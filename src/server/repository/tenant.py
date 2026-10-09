@@ -27,7 +27,6 @@ from src.server.models.tenant import (
     ProjectAsset,
     Face,
     FacePersonMatch,
-    IgnoredFile,
     Library,
     Person,
     LibraryPathFilter,
@@ -238,13 +237,34 @@ class LibraryRepository:
         if library is None:
             raise ValueError(f"Library not in the trash: {library_id}")
         self._session.refresh(library)
-        self._session.execute(
-            text(
-                "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
-                " search_synced_at = NULL WHERE library_id = :lib AND deleted_reason = 'library'"
-            ),
-            {"lib": library_id},
-        )
+        # A clip whose path another clip holds now (a file ingested there as
+        # the library went) stays out of sight, archived as missing where it
+        # was: a different file at a path is a new clip. Once more if an
+        # ingest takes a path between the two.
+        from sqlalchemy.exc import IntegrityError
+
+        for attempt in range(3):
+            try:
+                with self._session.begin_nested():
+                    self._session.execute(
+                        text(
+                            "UPDATE assets a SET deleted_reason = 'missing' WHERE a.library_id = :lib"
+                            "   AND a.deleted_reason = 'library' AND EXISTS (SELECT 1 FROM assets o WHERE"
+                            "       o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL)"
+                        ),
+                        {"lib": library_id},
+                    )
+                    self._session.execute(
+                        text(
+                            "UPDATE assets SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
+                            " search_synced_at = NULL WHERE library_id = :lib AND deleted_reason = 'library'"
+                        ),
+                        {"lib": library_id},
+                    )
+                break
+            except IntegrityError:
+                if attempt == 2:
+                    raise
         # Clips a person trashed before the library went were out of the trash's
         # sight with it: back in the trash, they get their full trash days again.
         self._session.execute(
@@ -491,12 +511,17 @@ class AssetRepository:
         self._session = session
 
     def get_by_library_and_rel_path(self, library_id: str, rel_path: str) -> Asset | None:
-        """Return asset by (library_id, rel_path) or None."""
-        stmt = select(Asset).where(
-            Asset.library_id == library_id,
-            Asset.rel_path == rel_path,
+        """The clip at (library_id, rel_path): the one in sight, else the most
+        recently archived or trashed there (a changed file is a new clip, so
+        a path can have archived clips besides), or None."""
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id, Asset.rel_path == rel_path)
+            .order_by(Asset.deleted_at.is_(None).desc(), Asset.deleted_at.desc())  # type: ignore[union-attr]
+            .limit(1)
         )
         return self._session.exec(stmt).first()
+
     def create_asset(
         self,
         library_id: str,
@@ -961,9 +986,10 @@ class AssetRepository:
 
     def restore(self, asset_id: str) -> str:
         """Take one clip out of the trash. Returns "restored", "not_found",
-        "not_trashed", "library_trashed" (it comes back with its library), or
-        the clip's archive reason ("archived" or "missing"): an archive isn't
-        the trash. See restore_many."""
+        "not_trashed", "library_trashed" (it comes back with its library),
+        "path_taken" (another clip in sight is at its path now), or the clip's
+        archive reason ("archived" or "missing"): an archive isn't the trash.
+        See restore_many."""
         asset = self._session.get(Asset, asset_id)
         if asset is None:
             return "not_found"
@@ -976,7 +1002,12 @@ class AssetRepository:
         if asset.deleted_reason != "user":
             return "not_trashed"
         restored, _, _ = self.restore_many([asset_id])
-        return "restored" if restored else "library_trashed"
+        if restored:
+            return "restored"
+        held = self._session.execute(text(
+            "SELECT 1 FROM assets o WHERE o.library_id = :lib AND o.rel_path = :p AND o.deleted_at IS NULL"
+            " AND o.asset_id <> :a"), {"lib": asset.library_id, "p": asset.rel_path, "a": asset_id}).first()
+        return "path_taken" if held else "library_trashed"
 
     _IN_A_LIVE_LIBRARY = (
         " AND NOT EXISTS (SELECT 1 FROM libraries l WHERE l.library_id = a.library_id AND l.status = 'trashed')"
@@ -1064,16 +1095,29 @@ class AssetRepository:
         for search, with their scenes. Returns (back, skipped), in the order given."""
         if not asset_ids:
             return [], []
-        result = self._session.execute(
-            text(
-                "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
-                " search_synced_at = NULL"
-                f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
-                " RETURNING a.asset_id"
-            ),
-            {"ids": asset_ids},
+        sql = text(
+            "UPDATE assets a SET deleted_at = NULL, deleted_reason = NULL, trashed_from = NULL,"
+            " search_synced_at = NULL"
+            f" WHERE a.asset_id = ANY(:ids) AND a.deleted_at IS NOT NULL AND {condition}"
+            # Not onto a path another clip in sight holds now (a different file there is its own clip).
+            "   AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = a.library_id"
+            "                   AND o.rel_path = a.rel_path AND o.deleted_at IS NULL AND o.asset_id <> a.asset_id)"
+            " RETURNING a.asset_id"
         )
-        back = [row[0] for row in result.fetchall()]
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            with self._session.begin_nested():
+                back = [row[0] for row in self._session.execute(sql, {"ids": asset_ids}).fetchall()]
+        except IntegrityError:
+            # Two of them at one path: one at a time, so the first holds it and the rest are skipped.
+            back = []
+            for asset_id in asset_ids:
+                try:
+                    with self._session.begin_nested():
+                        back += [row[0] for row in self._session.execute(sql, {"ids": [asset_id]}).fetchall()]
+                except IntegrityError:
+                    pass
         if back:
             self._session.execute(
                 text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"), {"ids": back}
@@ -1122,6 +1166,31 @@ class AssetRepository:
         return list(self._session.execute(
             text("SELECT DISTINCT library_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}
         ).scalars().all())
+
+    def find_at(self, library_id: str, rel_path: str, sha256: str | None) -> Asset | None:
+        """The clip archived or trashed at this path with this content: the old
+        content back where it was. A person's trash or archive comes first (it
+        stands); else the most recently missing."""
+        if not sha256:
+            return None
+        stmt = (
+            select(Asset)
+            .where(Asset.library_id == library_id, Asset.rel_path == rel_path, Asset.sha256 == sha256,
+                   Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
+                   Asset.deleted_reason.in_(("missing", "user", "archived")))  # type: ignore[union-attr]
+            .order_by((Asset.deleted_reason == "missing").asc(), Asset.deleted_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+        return self._session.exec(stmt).first()
+
+    def missing_ids_with_sha(self, library_id: str, sha256: str) -> list[str]:
+        """The library's clips archived as missing with this content (no lock)."""
+        return list(self._session.execute(
+            text("SELECT asset_id FROM assets WHERE library_id = :lib AND sha256 = :sha"
+                 "   AND deleted_at IS NOT NULL AND deleted_reason = 'missing'"
+                 " ORDER BY deleted_at DESC, created_at DESC, asset_id"),
+            {"lib": library_id, "sha": sha256},
+        ).scalars())
 
     def find_missing_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
         """The library's most recently missing asset with this content,
@@ -1263,32 +1332,47 @@ class AssetRepository:
 
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
-    ) -> list[tuple[str, str]]:
-        """Paths scanners must skip, by rel_path: (rel_path, "trashed" | "archived" | "emptied").
+    ) -> list[tuple[str, str, list[dict] | None]]:
+        """Files scanners must skip, by rel_path: (rel_path, reason, files).
 
-        "trashed" = in the trash by a person's choice; "archived" = a person
-        archived it; "emptied" = a person deleted it for good (ignored_files).
+        reason: "trashed" = in the trash by a person's choice; "archived" = a
+        person archived it; "emptied" = a person deleted it for good
+        (ignored_files); the first of these when a path has several.
+        files: each one skipped there, {sha256, file_size, file_mtime}, or
+        None when one's content isn't known (then whatever is at the path).
+        Another file at the path is a new clip. Not a path a clip in sight
+        holds now: that file is the clip's (a changed file is a new clip, and
+        the old one may be trashed).
         """
         rows = self._session.execute(
             text(
                 """
-                SELECT rel_path, kind FROM (
-                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind
+                SELECT rel_path,
+                       (array_agg(kind ORDER BY CASE kind WHEN 'trashed' THEN 0 WHEN 'archived' THEN 1 ELSE 2 END))[1],
+                       CASE WHEN bool_or(sha256 IS NULL) THEN NULL
+                            ELSE jsonb_agg(DISTINCT jsonb_build_object('sha256', sha256, 'file_size', file_size,
+                                                                       'file_mtime', file_mtime)) END
+                FROM (
+                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind,
+                           sha256, file_size, file_mtime
                     FROM assets
                     WHERE library_id = :lib AND deleted_at IS NOT NULL
                       AND deleted_reason IN ('user', 'archived')
                     UNION ALL
-                    SELECT rel_path, 'emptied' AS kind FROM ignored_files
+                    SELECT rel_path, 'emptied' AS kind, sha256, file_size, file_mtime FROM ignored_files
                     WHERE library_id = :lib
                 ) p
                 WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
+                  AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = :lib AND o.rel_path = p.rel_path
+                                  AND o.deleted_at IS NULL)
+                GROUP BY rel_path
                 ORDER BY rel_path
                 LIMIT :limit
                 """
             ),
             {"lib": library_id, "after": after, "limit": limit},
         ).all()
-        return [(r[0], r[1]) for r in rows]
+        return [(r[0], r[1], sorted(r[2], key=lambda f: f["sha256"]) if r[2] is not None else None) for r in rows]
 
     VIDEO_FACET_FIELDS = (
         "duration_sec", "container", "video_codec", "width", "height", "rotation",
@@ -1324,9 +1408,15 @@ class AssetRepository:
             return None
         return {k: getattr(row, k) for k in self.VIDEO_FACET_FIELDS}
 
-    def is_ignored(self, library_id: str, rel_path: str) -> bool:
-        """True if the user emptied this file's trash (see ignored_files)."""
-        return self._session.get(IgnoredFile, (library_id, normalize_rel_path(rel_path))) is not None
+    def is_ignored(self, library_id: str, rel_path: str, sha256: str | None = None) -> bool:
+        """True if the user emptied this file's trash (see ignored_files). A
+        different file at that path (both contents known) isn't: it's a new
+        file (Robert, Oct 9)."""
+        return self._session.execute(
+            text("SELECT 1 FROM ignored_files WHERE library_id = :lib AND rel_path = :path"
+                 "   AND (sha256 IS NULL OR CAST(:sha AS text) IS NULL OR sha256 = :sha) LIMIT 1"),
+            {"lib": library_id, "path": normalize_rel_path(rel_path), "sha": sha256},
+        ).first() is not None
 
     def unignore(self, library_id: str, rel_paths: list[str]) -> int:
         """Forget emptied-trash records so the next scan picks the files up again."""
@@ -1429,11 +1519,15 @@ class AssetRepository:
         # still be on disk. Remember it, or the next scan would bring it back.
         self._session.execute(
             text(
-                "INSERT INTO ignored_files (library_id, rel_path, sha256, created_at)"
-                " SELECT library_id, rel_path, sha256, :now FROM assets"
-                " WHERE asset_id = ANY(:asset_ids)"
-                "   AND deleted_at IS NOT NULL AND deleted_reason = 'user'"
-                " ON CONFLICT (library_id, rel_path) DO NOTHING"
+                "INSERT INTO ignored_files (library_id, rel_path, sha256, file_size, file_mtime, created_at)"
+                " SELECT a.library_id, a.rel_path, a.sha256, a.file_size, a.file_mtime, :now FROM assets a"
+                " WHERE a.asset_id = ANY(:asset_ids)"
+                "   AND a.deleted_at IS NOT NULL AND a.deleted_reason = 'user'"
+                # A file whose content isn't known names the whole path: not
+                # one a clip in sight holds now (a changed file is a new clip).
+                "   AND (a.sha256 IS NOT NULL OR NOT EXISTS (SELECT 1 FROM assets o"
+                "        WHERE o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL))"
+                " ON CONFLICT (library_id, rel_path, (COALESCE(sha256, ''))) DO NOTHING"
             ),
             {**params, "now": utcnow()},
         )
