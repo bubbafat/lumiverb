@@ -34,6 +34,8 @@ function message(error: unknown): string {
 
 const n = (value: number) => value.toLocaleString();
 const clips = (value: number) => `${n(value)} clip${value === 1 ? "" : "s"}`;
+/** "3 clips'" or "1 clip's", for "N clips' descriptions". */
+const clipsOf = (value: number) => (value === 1 ? "1 clip's" : `${n(value)} clips'`);
 
 function mediaLabel(media: string[]): string {
   if (media.includes("image") && media.includes("video")) return "Images and videos";
@@ -334,7 +336,7 @@ function UpgradePanel({
         <p className="text-sm text-gray-200">
           {producer.uniform
             ? `${producer.title} must come from one model across the library, so it's upgraded everywhere at once.`
-            : `Make ${clips(stale)}' ${thing} again${where}? The worker does them after anything missing.`}
+            : `Make ${clipsOf(stale)} ${thing} again${where}? The worker does them after anything missing.`}
         </p>
       )}
       {step.kind === "edits" && (

@@ -54,6 +54,11 @@ def _where(scope: dict) -> str:
     return f" in {scope['name']}" if scope.get("name") else ""
 
 
+def _clips_of(n: int) -> str:
+    """'3 clips'' or '1 clip's', for "N clips' descriptions"."""
+    return f"{n:,} clip's" if n == 1 else f"{n:,} clips'"
+
+
 def _n(value: int) -> str:
     return f"{value:,}" if value else "-"
 
@@ -160,7 +165,7 @@ def producers_upgrade(
         raise typer.Exit(1)
     data = r.json()
     if data.get("upgrading"):
-        console.print(f"Upgrading {clips(data['upgrading'])}' {escape(artifact)}{escape(_where(data['scope']))}: "
+        console.print(f"Upgrading {_clips_of(data['upgrading'])} {escape(artifact)}{escape(_where(data['scope']))}: "
                       "the worker makes them again after anything missing.")
     else:
         console.print("Nothing to upgrade: every stale clip has your edits.")

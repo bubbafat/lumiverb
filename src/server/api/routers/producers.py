@@ -258,10 +258,10 @@ def approve_upgrade(
     if not stale:
         raise ConflictError("nothing_stale", f"Nothing{where} was made with older {p.title.lower()} settings.")
     if p.uniform and not body.confirm:
+        whose = "The 1 clip's" if len(stale) == 1 else f"All {len(stale):,} clips'"
         raise DecisionRequiredError(
             "redo_everything",
-            f"All {len(stale):,} clips' {p.title.lower()} will be made again. Until it finishes, results mix "
-            "the old and the new.",
+            f"{whose} {p.title.lower()} will be made again. Until it finishes, results mix the old and the new.",
             {"artifact": artifact, "title": p.title, "stale": len(stale)},
         )
     if edited and body.edits is None:

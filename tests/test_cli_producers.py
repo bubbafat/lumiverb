@@ -138,6 +138,12 @@ def test_upgrade_everything(client):
     assert "Upgrading 3 clips' vision" in result.output or "Upgrading 3 clips" in result.output
 
 
+def test_one_clip_reads_right(client):
+    client.raw.return_value = _ok(upgrading=1)
+    result = _run("upgrade", "vision")
+    assert "Upgrading 1 clip's vision" in result.output
+
+
 def test_upgrade_narrowed(client):
     client.raw.return_value = _ok(scope={"kind": "library", "id": "lib_1", "name": "Footage"})
     result = _run("upgrade", "vision", "--library", "Footage")
