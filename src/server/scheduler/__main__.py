@@ -2,6 +2,6 @@
 
 # Guarded like any entry point: importing it (a tool, a test) starts nothing.
 if __name__ == "__main__":
-    from src.server.scheduler.service import main
+    from src.server.scheduler.service import entry
 
-    raise SystemExit(main())
+    entry()

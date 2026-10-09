@@ -8,10 +8,13 @@ it, so a lower tier fills what a higher one leaves idle.
 
 The jobs come from the database (queue.py): each kind's due clips, a
 buffer's worth at a time, offered here. A job in hand isn't offered again,
-and one just tried isn't taken again for a while (retake_after): made, the
-database stops listing it; not made (it failed and nothing said so), it
-would otherwise be first again at once. The database is asked to leave
-those out (held()), so they can't fill its answer and keep the clips
+and one just tried isn't taken again for a while. A clip saved, or
+reported as failing (the server then says when to try it again), only
+until the database has it (settle_after: a listing read before the save
+still names it). A clip that waits without saying why (the GPU ran out of
+memory, its file changed since it was hashed) would otherwise be first
+again at once: it's held for retake_after. The database is asked to leave
+held clips out (held()), so they can't fill its answer and keep the clips
 behind them waiting. A job that couldn't try at all (the storage went
 away) holds nothing back.
 """
@@ -20,7 +23,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 
 # A kind's buffer is topped up once fewer than this are waiting.
@@ -61,6 +64,12 @@ def _same(kind: str, spec: KindSpec) -> str:
     return spec.same_as or kind
 
 
+# What a job says when it's done: "not_tried" (runners.NOT_TRIED: it couldn't
+# try at all), None (each clip saved or reported as failing), or the clips
+# that wait without either (held the long while).
+Outcome = str | list[str] | None
+
+
 def pool_key(spec: KindSpec, tenant_id: str) -> str:
     return f"{spec.pool}@{tenant_id}" if spec.per_account else spec.pool
 
@@ -71,10 +80,12 @@ def _order(tier: int, item: dict) -> tuple:
 
 class Dispatcher:
     def __init__(self, kinds: Mapping[str, KindSpec], capacity: Mapping[str, int], *,
-                 retake_after: float = 3600.0, clock: Callable[[], float] = time.monotonic) -> None:
+                 retake_after: float = 3600.0, settle_after: float = 60.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._kinds = dict(kinds)
         self._capacity = dict(capacity)
         self._retake_after = retake_after
+        self.settle_after = settle_after
         self._clock = clock
         self._lock = threading.Lock()
         self._buffers: dict[tuple[str, str], list[dict]] = {}
@@ -205,17 +216,19 @@ class Dispatcher:
             for key in [k for k in self._all_known_at if k[0] == tenant_id]:
                 del self._all_known_at[key]
 
-    def done(self, job: Job, *, tried: bool = True) -> None:
+    def done(self, job: Job, *, tried: bool = True, waiting: Collection[str] | None = None) -> None:
         """The job's slot is free; its clips aren't taken again for a while
-        (unless it couldn't try at all)."""
+        (unless it couldn't try at all). waiting: the clips neither saved nor
+        reported (None: it can't say, so all of them)."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
         pool = pool_key(spec, job.tenant_id)
+        waits = set(job.asset_ids if waiting is None else waiting)
         with self._lock:
             self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
-            until = self._clock() + wait
+            now = self._clock()
             for asset_id in job.asset_ids:
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)
                 if tried:
-                    self._taken_until[key] = until
+                    self._taken_until[key] = now + (wait if asset_id in waits else min(wait, self.settle_after))

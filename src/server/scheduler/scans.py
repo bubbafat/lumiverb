@@ -116,10 +116,12 @@ def load_state(path: Path) -> ScanState:
 
 
 def saved_form(state: ScanState) -> dict:
+    # Copied first (one step under the GIL): a scan job changes them meanwhile.
+    retries = dict(state.retries)
     return {
         "last_full_scan": dict(state.last_full_scan),
         "retries": {lib: {"paths": sorted(r.paths), "delay": r.delay, "due": r.due, "held": dict(r.held)}
-                    for lib, r in state.retries.items()},
+                    for lib, r in retries.items()},
     }
 
 
@@ -268,18 +270,23 @@ def scan_pass(
     full_scan_every: float = DEFAULT_FULL_SCAN_EVERY_SEC,
     scan_fn: Callable | None = None,
     console: Console | None = None,
+    on_roots: Callable[[dict[str, Path | None]], None] | None = None,
 ) -> dict[str, Path | None]:
     """Scan what's due in each library whose storage is reachable; each
-    library's storage on this machine (None: not reachable)."""
+    library's storage on this machine (None: not reachable). on_roots hears
+    where each one's storage is before any scan, so work on the originals
+    needn't wait for a long one."""
     if scan_fn is None:
         from src.client.cli.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
-    roots: dict[str, Path | None] = {}
+    # require_entries: an unmounted mount point is an empty folder, and
+    # scanning it would mark every file missing.
+    roots: dict[str, Path | None] = {
+        library["library_id"]: reachable_root(library, require_entries=True) for library in libraries}
+    if on_roots is not None:
+        on_roots(dict(roots))
     for library in libraries:
-        # require_entries: an unmounted mount point is an empty folder, and
-        # scanning it would mark every file missing.
-        root = reachable_root(library, require_entries=True)
-        roots[library["library_id"]] = root
+        root = roots[library["library_id"]]
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             continue

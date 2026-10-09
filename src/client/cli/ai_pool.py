@@ -73,9 +73,12 @@ class MachinePool:
     def load(self) -> None:
         """The job's model and machines, from the server (raises when it can't say).
         Machines already known are updated in place, so requests in flight keep
-        counting against them (and a machine whose address or key changed is
-        checked again); ones no longer listed are dropped."""
+        counting against them; ones no longer listed are dropped. A machine
+        whose address or key changed, or every machine when the model did, is
+        checked again before it's sent anything (the next request checks it),
+        so nothing the old model makes is saved as the new one's."""
         data = self._client.get(f"/v1/ai/jobs/{self.job}").json()
+        model = data.get("model") or ""
         with self._cond:
             known = {m.machine_id: m for m in self.machines}
             machines = []
@@ -85,14 +88,14 @@ class MachinePool:
                 if machine is None:
                     machine = Machine(machine_id=m["machine_id"], name=m["name"], api_url=m["api_url"],
                                       api_key=api_key, at_once=1)
-                elif (machine.api_url, machine.api_key) != (m["api_url"], api_key):
+                elif model != self.model or (machine.api_url, machine.api_key) != (m["api_url"], api_key):
                     machine.online, machine.serves, machine.checked_at = False, "", None
                 machine.name, machine.api_url, machine.api_key = m["name"], m["api_url"], api_key
                 machine.at_once = max(1, int(m.get("at_once") or 1))
                 machine.built_in = bool(m.get("built_in"))
                 machines.append(machine)
             self.machines = machines
-            self.model = data.get("model") or ""
+            self.model = model
             self._cond.notify_all()
 
     def check(self) -> bool:

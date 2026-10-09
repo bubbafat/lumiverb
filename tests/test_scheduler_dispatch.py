@@ -106,6 +106,35 @@ def test_a_job_just_run_waits_before_it_is_taken_again() -> None:
 
 
 @pytest.mark.fast
+def test_a_clip_saved_or_reported_is_held_only_until_the_database_says_so() -> None:
+    # Review round 2: an hour for every clip tried made the server's back-off
+    # (5, 10, 20 minutes) an hour, and kept a clip just made from being redone.
+    clock = Clock()
+    d = _d(clock=clock)
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    d.done(d.take("vision"), waiting=())
+    clock.now += d.settle_after - 1  # a listing read before the save still names it
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is None
+    clock.now += 2
+    d.offer("t1", "vision", [_item("a", "2026-10-01")])
+    assert d.take("vision") is not None
+
+
+@pytest.mark.fast
+def test_only_clips_that_wait_without_saying_why_are_held_the_long_while() -> None:
+    clock = Clock()
+    d = _d(clock=clock)
+    items = [_item("a", "2026-10-01"), _item("b", "2026-10-02"), _item("c", "2026-10-03")]
+    d.offer("t1", "faces", items)
+    d.done(d.take("faces"), waiting=["b"])  # a saved, c reported, b neither
+    clock.now += d.settle_after + 1
+    assert d.held("t1", "faces") == ["b"]
+    d.offer("t1", "faces", items)
+    assert d.take("faces").asset_ids == ["a", "c"]
+
+
+@pytest.mark.fast
 def test_a_kind_can_wait_less_before_its_job_is_taken_again() -> None:
     clock = Clock()
     kinds = {**KINDS, "scan": KindSpec(tier=1, pool="scan", retake_after=30)}

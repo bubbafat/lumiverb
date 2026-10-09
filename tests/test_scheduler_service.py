@@ -169,9 +169,15 @@ def test_storage_work_only_in_libraries_reachable_at_the_last_look() -> None:
 def test_nothing_is_asked_where_no_library_can_be_used() -> None:
     rec = Recorder()
     asked: list = []
-    s = _scheduler({"t1": FakeAccount(reachable=())}, {}, rec, asked=asked)
+    acct = FakeAccount(reachable=())
+    s = _scheduler({"t1": acct}, {}, rec, asked=asked)
     s.tick()
     assert not any(kind in ("probe", "render") for _, kind, _ in asked)
+    # Review round 2: that wasn't an empty answer to wait on; once the
+    # storage is there, it's asked at once.
+    acct.reachable = ("lib_1",)
+    s.tick()
+    assert ("t1", "probe", ("lib_1",)) in asked
 
 
 @pytest.mark.fast
@@ -286,9 +292,9 @@ def test_importing_the_entry_point_starts_nothing() -> None:
     import runpy
     from unittest.mock import patch
 
-    with patch("src.server.scheduler.service.main") as main:
+    with patch("src.server.scheduler.service.entry") as entry:
         runpy.run_module("src.server.scheduler.__main__", run_name="__mp_main__")
-    main.assert_not_called()
+    entry.assert_not_called()
 
 
 @pytest.mark.fast
@@ -352,6 +358,34 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
         _settle(s)
         s.dispatcher._all_known_at.clear()  # ask the database every tick here
     assert tries == ["p", "p"]  # not tried: again at once; tried: held for the hour
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.fast
+def test_what_a_job_says_of_each_clip_decides_how_long_its_held() -> None:
+    # Saved or reported: held until the database has it. Waiting without
+    # saying why, or a job's surprise: held the long while.
+    def boom(acct, job):
+        raise RuntimeError("a surprise")
+
+    clock = Clock()
+    runners = {**Recorder().all(), "vision": lambda acct, job: ["b"], "ocr": boom}
+    due = {"vision": [_item("a"), _item("b", "2026-10-02")], "ocr": [_item("c")]}
+    s = Scheduler(lambda: {"t1": FakeAccount(vision=3)}, capacity={"scan": 0},
+                  candidates=lambda t, k, libs, skip=(): [i for i in due.get(k.name, []) if i["asset_id"] not in skip],
+                  runners=runners, scan=MagicMock(), inline_refill=True, clock=clock)
+    s.tick()
+    _settle(s)
+    clock.now += s.dispatcher.settle_after + 1
+    assert s.dispatcher.held("t1", "vision") == ["b"]
+    assert s.dispatcher.held("t1", "ocr") == ["c"]
 
 
 @pytest.mark.fast
@@ -518,11 +552,13 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
 
 @pytest.mark.fast
 def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
-    # The scheduler keeps a clip it just tried for an hour (in case it failed
-    # without saying so); someone asking to try again shouldn't wait that out.
+    # The scheduler keeps a clip that waited without saying why for an hour;
+    # someone asking to try again shouldn't wait that out.
     rec = Recorder()
     asked: list[str | None] = [None]
     s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    clip = s._runners["clip"]
+    s._runners["clip"] = lambda acct, job: clip(acct, job) or list(job.asset_ids)  # it waits
     s._retry_requested = lambda tenant_id: asked[0]
     for _ in range(2):
         s.tick()
@@ -534,3 +570,92 @@ def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
         s.tick()
         _settle(s)
     assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]
+
+
+@pytest.mark.fast
+def test_the_log_has_no_line_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: httpx says every request at INFO, several per clip.
+    import logging
+
+    from src.server.scheduler.service import configure_logging
+
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    levels = {name: logging.getLogger(name).level for name in ("", "httpx", "httpcore", "pyvips")}
+    try:
+        configure_logging()
+        assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+        assert logging.getLogger("src.server.scheduler.service").isEnabledFor(logging.INFO)
+    finally:
+        for name, level in levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
+@pytest.mark.fast
+def test_a_listing_that_failed_is_tried_again_soon(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: it waited the full five minutes.
+    from src.server.scheduler import service
+
+    clock = Clock()
+    tries: list[float] = []
+
+    def failing_list(self) -> None:
+        tries.append(clock.now)
+        raise ConnectionError("the control plane isn't answering")
+
+    monkeypatch.setattr(service.Accounts, "_list", failing_list)
+    accounts = service.Accounts(MagicMock(), url="http://api", clock=clock)
+    assert accounts() == {}
+    clock.now += service.Accounts.LIST_RETRY_SEC + 1
+    accounts()
+    assert len(tries) == 2
+
+
+@pytest.mark.fast
+def test_failures_are_sent_off_the_dispatching_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: a slow server held up every tick (up to 120 s).
+    from src.server.scheduler import service
+
+    monkeypatch.setattr(service, "FLUSH_EVERY_SEC", 0)
+    gate = threading.Event()
+    acct = FakeAccount()
+    acct.failures.flush.side_effect = lambda: gate.wait(5)
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
+                  runners=Recorder().all(), scan=MagicMock())
+    started = time.monotonic()
+    s.tick()
+    assert time.monotonic() - started < 1
+    gate.set()
+    s.stop()
+
+
+@pytest.mark.fast
+def test_losing_the_database_lock_stops_the_scheduler() -> None:
+    # Review round 2: after a Postgres restart the lock is gone; a second
+    # scheduler could take it. This one stops (systemd starts it again).
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount()}, {}, rec)
+    stop = threading.Event()
+    checks: list[int] = []
+
+    def holds() -> bool:
+        checks.append(1)
+        return len(checks) < 2
+
+    t = threading.Thread(target=run, kwargs={"stop": stop, "scheduler": s, "tick_sec": 0.01, "holds_lock": holds,
+                                             "lock_check_sec": 0})
+    t.start()
+    t.join(5)
+    assert not t.is_alive() and stop.is_set() and len(checks) == 2
+
+
+@pytest.mark.fast
+def test_the_program_exits_without_waiting_on_jobs_past_their_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Review round 2: job threads still running (a render past the 25 s
+    # grace) were joined at exit, until systemd's SIGKILL at 40 s.
+    from src.server.scheduler import service
+
+    exited: list[int] = []
+    monkeypatch.setattr(service, "main", lambda: 3)
+    monkeypatch.setattr(service.os, "_exit", exited.append)
+    service.entry()
+    assert exited == [3]
