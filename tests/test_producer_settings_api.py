@@ -129,6 +129,7 @@ def test_saving_the_same_settings_leaves_a_stopped_redo_stopped(env):
     assert client.post("/v1/producers/analysis_proxy/redo/stop", headers=headers).status_code == 204
     r = _put(env, "analysis_proxy", settings={"crf": 28})  # its default: nothing changes
     assert r.status_code == 200 and r.json()["paused"] is True, r.text
+    assert r.json()["paused_at"] and r.json()["paused_by"], r.text  # as GET says it, to an admin
     client.post("/v1/producers/analysis_proxy/redo/resume", headers=headers)
 
 

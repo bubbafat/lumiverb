@@ -276,7 +276,9 @@ def set_settings(
         lineage.resume(session, [artifact])
     session.commit()
     item = _item(artifact, after, waits)
-    item.paused = artifact in lineage.paused(session)  # settings unchanged leave a stopped redo stopped
+    stopped = lineage.paused(session).get(artifact)  # settings unchanged leave a stopped redo stopped
+    if stopped:
+        item.paused, item.paused_at, item.paused_by = True, stopped["paused_at"], stopped["paused_by"]
     return item
 
 

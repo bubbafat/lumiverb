@@ -47,5 +47,8 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"
         " ORDER BY a.created_at, a.asset_id LIMIT :n"
     ), params).mappings().all()
-    return [{**r, "created_at": r["created_at"].isoformat() if r["created_at"] else "", "redo": kind.redo}
-            for r in rows]
+    # A redo says what it's to be made with: the scheduler reads the settings
+    # again when they're newer than those it has.
+    made_with = {"settings_hash": want["settings_hash"]} if kind.redo else {}
+    return [{**r, "created_at": r["created_at"].isoformat() if r["created_at"] else "", "redo": kind.redo,
+             **made_with} for r in rows]

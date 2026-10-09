@@ -10,8 +10,9 @@ writes an artifact records those four inputs beside it (its lineage); when
 any of them differs from what's registered now, the artifact is stale.
 
 Bump a producer's ``version`` when its code changes what it makes. Change a
-default in ``defaults`` when a setting changes; the hash follows. Settings an
-account changes are stored on the server and laid over these defaults. An AI
+setting's default in its folder (its ``Setting``) when the default changes;
+the hash follows. Settings an account changes (Settings → Processing) are
+stored on the server and laid over these defaults. An AI
 producer's model is its job's (Settings → AI, src/shared/ai_jobs.py), and
 only the job's: one model per job.
 

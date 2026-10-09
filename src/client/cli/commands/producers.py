@@ -9,6 +9,7 @@ producer's redo and resume it; a new model for it resumes it.
 
 from __future__ import annotations
 
+import math
 from typing import Annotated
 
 import typer
@@ -196,6 +197,20 @@ def _shown(value: object) -> str:
     return text if len(text) <= 60 else text[:57] + "…"
 
 
+def _number(f: dict, raw: str) -> int | float:
+    """A number setting as typed, or exit 2 saying what it must be. Its
+    bounds are the server's to judge; NaN and infinity can't be sent at all."""
+    kind = "whole number" if f["kind"] == "int" else "number"
+    try:
+        number = float(raw)
+    except ValueError:
+        number = math.nan
+    if not math.isfinite(number) or (f["kind"] == "int" and not number.is_integer()):
+        console.print(f"[red]{escape(f['label'])} is a finite {kind}.[/red]")
+        raise typer.Exit(2)
+    return int(number) if f["kind"] == "int" else number
+
+
 @producers_app.command("settings")
 def producers_settings(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. transcript).")],
@@ -225,6 +240,9 @@ def producers_settings(
         for f in fields.values():
             if f.get("fixed") and f["key"] != "model":
                 console.print(f"[dim]{escape(f['key'])}: {escape(f['fixed'])}[/dim]")
+        for f in fields.values():  # text the table cut short, whole
+            if f["kind"] == "text" and _shown(f["value"]) != str(f["value"]) and f["value"]:
+                console.print(f"\n[bold]{escape(f['key'])}[/bold]\n{escape(str(f['value']))}")
         return
     body: dict = {}
     for change in changes:
@@ -238,11 +256,7 @@ def producers_settings(
         elif f["kind"] == "text":
             body[key] = raw
         else:
-            try:
-                body[key] = int(raw) if f["kind"] == "int" else float(raw)
-            except ValueError:
-                console.print(f"[red]{escape(f['label'])} is a {'whole ' if f['kind'] == 'int' else ''}number.[/red]")
-                raise typer.Exit(2) from None
+            body[key] = _number(f, raw)
     r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": yes})
     if r.status_code == 409 and ((r.json() or {}).get("error") or {}).get("code") == "redo_on_change":
         console.print(f"[yellow]{escape(_error(r))}[/yellow]")

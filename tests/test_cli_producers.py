@@ -257,3 +257,59 @@ def test_settings_says_why_the_server_refused(settings_client):
         422, {"error": {"code": "bad_setting", "message": "Shortest silence skipped is from 100 to 2000 ms"}})
     result = _settings("transcript", "vad_min_silence_ms=50")
     assert result.exit_code == 1 and "is from 100 to 2000 ms" in result.output
+
+
+_AI_FIELDS = [
+    {"key": "prompt", "label": "Prompt", "kind": "text", "value": "Describe it. " * 10 + "Answer as key=value.",
+     "default": "Describe it.", "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None},
+    {"key": "temperature", "label": "Temperature", "kind": "float", "value": 0.2, "default": 0.2, "minimum": 0,
+     "maximum": 2, "unit": "", "advanced": True, "fixed": None},
+]
+
+
+@pytest.fixture
+def vision_client(settings_client: MagicMock) -> MagicMock:
+    settings_client.get.return_value.json.return_value = {"producers": [
+        _producer("vision", "Descriptions and tags", fields=_AI_FIELDS, settings={})]}
+    return settings_client
+
+
+def test_settings_shows_a_long_prompt_whole_below_the_table(vision_client):
+    result = _settings("vision")
+    assert result.exit_code == 0, result.output
+    assert "Answer as key=value." in " ".join(result.output.split())
+
+
+def test_a_value_keeps_its_own_equals_signs(vision_client):
+    vision_client.raw.return_value = _response(200, {"settings": {"prompt": "a=b, c=d"}})
+    assert _settings("vision", "prompt=a=b, c=d").exit_code == 0
+    assert vision_client.raw.call_args.kwargs["json"]["settings"] == {"prompt": "a=b, c=d"}
+
+
+def test_yes_doesnt_ask(vision_client):
+    vision_client.raw.return_value = _response(200, {"settings": {"temperature": 0.5}})
+    result = _settings("vision", "temperature=0.5", "--yes")
+    assert result.exit_code == 0, result.output
+    vision_client.raw.assert_called_once_with("PUT", "/v1/producers/vision/settings",
+                                              json={"settings": {"temperature": 0.5}, "redo": True})
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "1e400"])
+def test_a_number_that_isnt_finite_is_refused_here(vision_client, raw):
+    result = _settings("vision", f"temperature={raw}")
+    assert result.exit_code == 2 and "finite number" in result.output, result.output
+    vision_client.raw.assert_not_called()
+
+
+def test_a_whole_number_may_be_written_800_point_0(settings_client):
+    settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
+    assert _settings("transcript", "vad_min_silence_ms=800.0").exit_code == 0
+    assert settings_client.raw.call_args.kwargs["json"]["settings"] == {"vad_min_silence_ms": 800}
+    assert _settings("transcript", "vad_min_silence_ms=800.5").exit_code == 2
+
+
+def test_a_fixed_setting_is_refused_saying_why(settings_client):
+    settings_client.raw.return_value = _response(
+        422, {"error": {"code": "setting_fixed", "message": "Model: Chosen in Settings → AI"}})
+    result = _settings("transcript", "model=large-v3")
+    assert result.exit_code == 1 and "Settings → AI" in result.output
