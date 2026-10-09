@@ -32,7 +32,14 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError
 from src.server.repository import lineage
-from src.shared.producers import PAUSE_SCANS, PAUSE_UPKEEP, PRODUCERS, pause_state, pause_targets
+from src.shared.producers import (
+    PAUSE_ALL,
+    PAUSE_SCANS,
+    PAUSE_UPKEEP,
+    PRODUCERS,
+    pause_state,
+    pause_targets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -350,33 +357,14 @@ def resume_redo(artifact: str, session: Annotated[Session, Depends(get_tenant_se
     session.commit()
 
 
-@router.post("/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
-def pause_all(
-    session: Annotated[Session, Depends(get_tenant_session)],
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> None:
-    """Pause all (admins, Robert Oct 9): every pause switch paused (Scans,
-    Upkeep, each producer), so the account's state is paused (red). Nothing
-    stores "all": each switch can be resumed on its own after. What's running
-    finishes. Again is fine: each switch keeps who paused it first, and when."""
-    lineage.pause_everything(session, by=user_id)
-    session.commit()
-
-
-@router.post("/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
-def resume_all(session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Resume all (admins): every pause switch running again (green)."""
-    lineage.resume_everything(session)
-    session.commit()
-
-
 SWITCH_TITLES = {PAUSE_SCANS: "Scans", PAUSE_UPKEEP: "Upkeep"}
 
 
 def _switch_or_error(target: str) -> str:
-    """A pause switch: Scans, Upkeep or a producer the scheduler makes. 404 for
-    no such producer; 409 not_scheduled for what scans make (Scans pauses it)."""
-    if target in SWITCH_TITLES:
+    """A pause switch: Scans, Upkeep or a producer the scheduler makes, or all
+    of them (named, never a missing target). 404 for no such producer; 409
+    not_scheduled for what scans make (Scans pauses it)."""
+    if target in SWITCH_TITLES or target == PAUSE_ALL:
         return target
     p = producer_or_404(target)
     if not p.scheduled:
@@ -394,16 +382,23 @@ def pause_switch(
     """Pause one switch (admins), whatever the others are: scans (no new or
     changed files found, no thumbnails or video previews made), upkeep (no
     trash purge, file cleanup or face names spread; search sync goes on) or
-    a producer (nothing more of it starts, missing or stale). What's running
-    finishes."""
-    lineage.pause_processing(session, _switch_or_error(target), by=user_id)
+    a producer (nothing more of it starts, missing or stale); or "all", every
+    switch (state paused; each can be resumed alone after; nothing stores
+    "all"). What's running finishes. Again is fine: who paused first stays."""
+    if _switch_or_error(target) == PAUSE_ALL:
+        lineage.pause_everything(session, by=user_id)
+    else:
+        lineage.pause_processing(session, target, by=user_id)
     session.commit()
 
 
 @router.post("/{target}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def resume_switch(target: str, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Resume one switch (admins), whatever the others are."""
-    lineage.resume_processing(session, _switch_or_error(target))
+    """Resume one switch (admins), whatever the others are; "all", every one."""
+    if _switch_or_error(target) == PAUSE_ALL:
+        lineage.resume_everything(session)
+    else:
+        lineage.resume_processing(session, target)
     session.commit()
 
 

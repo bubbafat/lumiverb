@@ -3,7 +3,7 @@
 
 Scans, Upkeep and each producer the scheduler makes each have a switch an
 admin pauses and resumes (POST /v1/producers/{target}/pause, /resume). Pause
-all (POST /v1/producers/pause) pauses every switch and Resume all resumes
+all (POST /v1/producers/all/pause) pauses every switch and Resume all resumes
 every one; nothing stores "all". GET /v1/producers/queue says each switch's
 state and the account's, derived: running (green), partly (yellow) or
 paused (red). Stopping a producer's redo is something else: what's missing
@@ -48,18 +48,30 @@ def test_pause_all_pauses_every_switch_and_resume_all_resumes_every_one(env):
     client, headers, *_ = env
     assert _queue(env)["state"] == "running"
     try:
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         q = _queue(env)
         assert q["state"] == "paused"
         assert [s["target"] for s in q["switches"]] == list(pause_targets())
         assert all(s["paused"] and s["paused_at"] and s["paused_by"] for s in q["switches"])
         assert _on_hold_in_database(env[4]) == set(pause_targets())
         assert _producers(env)["vision"]["paused"] is True
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204  # again: fine
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204  # again: fine
     finally:
-        assert client.post("/v1/producers/resume", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/resume", headers=headers).status_code == 204
     q = _queue(env)
     assert q["state"] == "running" and not any(s["paused"] for s in q["switches"])
+    assert _on_hold_in_database(env[4]) == set()
+
+
+def test_all_is_named_never_inferred_from_a_missing_target(env):
+    # Robert, Oct 9: an impactful action never takes its scope from a missing argument.
+    from src.server.scheduler.service import _on_hold_in_database
+    from src.shared.producers import PAUSE_ALL, PRODUCERS
+
+    client, headers, *_ = env
+    assert PAUSE_ALL == "all" and "all" not in PRODUCERS
+    for path in ("/v1/producers/pause", "/v1/producers/resume", "/v1/producers//pause"):
+        assert client.post(path, headers=headers).status_code in (404, 405), path
     assert _on_hold_in_database(env[4]) == set()
 
 
@@ -81,7 +93,7 @@ def test_one_switch_paused_is_partly_and_the_rest_go_on(env):
             assert _queue(env)["state"] == "running" and _on_hold_in_database(env[4]) == set()
         assert _switches(env)["scans"]["title"] == "Scans" and _switches(env)["upkeep"]["title"] == "Upkeep"
     finally:
-        client.post("/v1/producers/resume", headers=headers)
+        client.post("/v1/producers/all/resume", headers=headers)
 
 
 def test_every_switch_works_while_all_are_paused_and_the_state_follows(env):
@@ -90,16 +102,16 @@ def test_every_switch_works_while_all_are_paused_and_the_state_follows(env):
 
     client, headers, *_ = env
     try:
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         assert client.post("/v1/producers/scans/resume", headers=headers).status_code == 204
         assert _queue(env)["state"] == "partly" and _switches(env)["scans"]["paused"] is False
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         assert _queue(env)["state"] == "paused"
         for target in pause_targets():
             assert client.post(f"/v1/producers/{target}/resume", headers=headers).status_code == 204, target
         assert _queue(env)["state"] == "running"
     finally:
-        client.post("/v1/producers/resume", headers=headers)
+        client.post("/v1/producers/all/resume", headers=headers)
 
 
 def test_pausing_a_producer_and_stopping_its_redo_are_apart(env):
@@ -120,18 +132,18 @@ def test_only_admins_pause_or_resume_and_only_they_see_who(env):
     client, headers, *_ = env
     editor = _key_with_role(env, "editor")
     viewer = _key_with_role(env, "viewer")
-    for path in ("/v1/producers/pause", "/v1/producers/resume", "/v1/producers/ocr/pause",
+    for path in ("/v1/producers/all/pause", "/v1/producers/all/resume", "/v1/producers/ocr/pause",
                  "/v1/producers/ocr/resume", "/v1/producers/scans/pause", "/v1/producers/upkeep/resume"):
         assert client.post(path, headers=editor).status_code == 403, path
         assert client.post(path, headers=viewer).status_code == 403, path
     try:
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         q = _queue(env, viewer)
         assert q["state"] == "paused" and all(s["paused_at"] and s["paused_by"] is None for s in q["switches"])
         p = _producers(env, viewer)["ocr"]
         assert p["paused"] is True and p["paused_by"] is None
     finally:
-        client.post("/v1/producers/resume", headers=headers)
+        client.post("/v1/producers/all/resume", headers=headers)
 
 
 def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_scans(env):
@@ -175,7 +187,7 @@ def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
         with fake:
             assert _add(env).status_code == 201
             assert _model(env, "vision", QWEN, redo=True).status_code == 200
-            assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+            assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
             held = set(pause_targets())
             assert _on_hold_in_database(env[4]) == held
             r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": 30}, "redo": True},
@@ -184,7 +196,7 @@ def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
             assert _model(env, "vision", LLAVA, redo=True).status_code == 200
             assert _on_hold_in_database(env[4]) == held and _queue(env)["state"] == "paused"
     finally:
-        assert client.post("/v1/producers/resume", headers=headers).status_code == 204  # the toggle
+        assert client.post("/v1/producers/all/resume", headers=headers).status_code == 204  # the toggle
         client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": None}, "redo": True},
                    headers=headers)
         with fake:
@@ -258,7 +270,7 @@ def test_pausing_everything_else_leaves_upkeep_running(env):
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200 and propagate.called and r.json()["trash_purge"]["paused"] is False
     finally:
-        client.post("/v1/producers/resume", headers=headers)
+        client.post("/v1/producers/all/resume", headers=headers)
 
 
 def test_while_upkeep_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_reports(env, tmp_path):
@@ -329,9 +341,9 @@ def test_the_queue_gives_paused_work_no_time_but_running_jobs_say_theirs(env):
         eta = _queue(env)["eta"]
         assert eta["producers"]["vision"] is None and eta["producers"]["ocr"] is not None
         assert {"artifact": "vision", "title": _producers(env)["vision"]["title"], "why": "paused"} in eta["not_counted"]
-        assert client.post("/v1/producers/pause", headers=headers).status_code == 204
+        assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
         eta = _queue(env)["eta"]
         assert all(t is None or t == 0 for t in eta["producers"].values()) and eta["caught_up"] is None
         assert eta["jobs"][0]["left"] is not None  # what's running finishes
     finally:
-        client.post("/v1/producers/resume", headers=headers)
+        client.post("/v1/producers/all/resume", headers=headers)
