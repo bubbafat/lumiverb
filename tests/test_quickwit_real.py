@@ -81,13 +81,11 @@ def quickwit_url():
 def qw(quickwit_url: str):
     """Quickwit on, at the throwaway one, with no Postgres fallback to hide a miss.
     Run from the repo root, where QuickwitClient looks for its schemas. No
-    database: Settings wants the URLs, nothing here opens them."""
+    database: the URLs Settings wants come from conftest, nothing here opens them."""
     env = {
         "QUICKWIT_ENABLED": "true",
         "QUICKWIT_URL": quickwit_url,
         "QUICKWIT_FALLBACK_TO_POSTGRES": "false",
-        "CONTROL_PLANE_DATABASE_URL": os.environ.get("CONTROL_PLANE_DATABASE_URL", "postgresql://unused/none"),
-        "TENANT_DATABASE_URL_TEMPLATE": os.environ.get("TENANT_DATABASE_URL_TEMPLATE", "postgresql://unused/{tenant_id}"),
     }
     saved = {k: os.environ.get(k) for k in env}
     cwd = os.getcwd()
@@ -109,22 +107,12 @@ def qw(quickwit_url: str):
 
 
 def _make_indexes(qw: QuickwitClient, tenant_id: str) -> None:
-    """The tenant's three indexes, made as the server makes them, and ready.
-    Quickwit can answer an ingest with 404 for a moment after it makes an
-    index; wait that out here so the tests don't fail on it (the server's
-    first sync into a new index can hit it too, and the sweep retries)."""
-    made = [
-        (qw.ensure_tenant_index, qw.tenant_index_id),
-        (qw.ensure_tenant_scene_index, qw.tenant_scene_index_id),
-        (qw.ensure_tenant_transcript_index, qw.tenant_transcript_index_id),
-    ]
-    for ensure, index_id in made:
-        ensure(tenant_id)
-        url = f"{qw._base_url}/api/v1/{index_id(tenant_id)}/ingest"
-        deadline = time.monotonic() + 30
-        while requests.post(url, data="", timeout=5).status_code == 404:  # an empty ingest adds nothing
-            assert time.monotonic() < deadline, f"{index_id(tenant_id)} never took an ingest"
-            time.sleep(0.2)
+    """The tenant's three indexes, made as the server makes them. The client
+    waits until each new index takes an ingest (QuickwitClient._wait_until_ready),
+    so nothing here needs to."""
+    qw.ensure_tenant_index(tenant_id)
+    qw.ensure_tenant_scene_index(tenant_id)
+    qw.ensure_tenant_transcript_index(tenant_id)
 
 
 def _ids() -> tuple[str, str]:

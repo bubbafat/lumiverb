@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -12,6 +13,17 @@ from src.server.config import get_settings
 logger = logging.getLogger(__name__)
 
 INGEST_BATCH_SIZE = 500
+
+# Quickwit can answer an ingest into an index it has just made with 404 for a
+# moment, and the sync callers swallow that, so the first sync into a new
+# index would be lost until the sweep. After making an index the client asks
+# it to take an empty ingest, backing off from _INDEX_READY_FIRST_DELAY_S up to
+# _INDEX_READY_MAX_DELAY_S between tries, for at most INDEX_READY_TIMEOUT_S in
+# all; then it logs a warning and goes on (the sweep catches up).
+INDEX_READY_TIMEOUT_S = 5.0
+_INDEX_READY_FIRST_DELAY_S = 0.1
+_INDEX_READY_MAX_DELAY_S = 1.0
+_INDEX_READY_PROBE_TIMEOUT_S = 2.0
 
 
 class QuickwitClient:
@@ -120,7 +132,43 @@ class QuickwitClient:
         )
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Quickwit index create failed for {index_id}: {resp.status_code} {resp.text}")
+        self._wait_until_ready(index_id)
         return recreated
+
+    def _wait_until_ready(self, index_id: str) -> bool:
+        """Wait, at most INDEX_READY_TIMEOUT_S, until a new index takes an ingest.
+
+        The probe is an empty ingest without a commit: it adds nothing. 404 or
+        no connection means not ready yet; any other answer means the index is
+        there (a real ingest reports its own errors). Returns False, after a
+        warning, if the bound runs out.
+        """
+        deadline = time.monotonic() + INDEX_READY_TIMEOUT_S
+        delay = _INDEX_READY_FIRST_DELAY_S
+        while True:
+            remaining = deadline - time.monotonic()
+            try:
+                resp = requests.post(
+                    f"{self._base_url}/api/v1/{index_id}/ingest",
+                    headers={"Content-Type": "application/json"},
+                    data="",
+                    timeout=max(0.1, min(_INDEX_READY_PROBE_TIMEOUT_S, remaining)),
+                )
+                if resp.status_code != 404:
+                    return True
+                last = f"ingest answered {resp.status_code}"
+            except requests.RequestException as exc:
+                last = f"ingest failed: {exc}"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Quickwit index %s not ready %.1fs after it was made (%s); "
+                    "going on, the search sweep will index what this sync misses",
+                    index_id, INDEX_READY_TIMEOUT_S, last,
+                )
+                return False
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, _INDEX_READY_MAX_DELAY_S)
 
     @staticmethod
     def _schema_fields_changed(index_metadata: dict, schema_path: Path) -> bool:
