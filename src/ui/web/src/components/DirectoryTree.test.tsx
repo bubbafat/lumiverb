@@ -81,8 +81,9 @@ describe("DirectoryTree counts", () => {
     expect(api.listDirectories.mock.calls.filter(([, p]) => p === "Trips").length).toBe(1);
     expect(api.listDirectories.mock.calls.length).toBe(calls + 1);
 
-    // ...but opening it shows what it held, then the new count.
+    // ...but opening it shows what it held right away, then the new count.
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    expect(screen.getByText("3")).toBeTruthy();
     expect(await screen.findByText("5")).toBeTruthy();
   });
 
@@ -103,5 +104,34 @@ describe("DirectoryTree counts", () => {
     await waitFor(() => expect(api.listDirectories).toHaveBeenCalledWith("lib_2"));
     expect(screen.queryByText("Paris")).toBeNull();
     expect(api.listDirectories).not.toHaveBeenCalledWith("lib_2", "Trips");
+  });
+});
+
+describe("DirectoryTree nested folders", () => {
+  it("doesn't fetch or refresh an open folder while its parent is closed", async () => {
+    api.listDirectories.mockImplementation(async (_lib: string, parent?: string) => {
+      if (!parent) return [{ name: "Trips", path: "Trips", asset_count: 10 }];
+      if (parent === "Trips") return [{ name: "Paris", path: "Trips/Paris", asset_count: 4 }];
+      if (parent === "Trips/Paris") return [{ name: "Day 1", path: "Trips/Paris/Day 1", asset_count: 2 }];
+      return [];
+    });
+    const { client } = renderTree(<DirectoryTree libraryId="lib_1" activePath={null} onNavigate={() => {}} />);
+    await screen.findByText("Trips");
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    await screen.findByText("Paris");
+    fireEvent.click(screen.getAllByRole("button", { name: "Expand" })[0]);
+    await screen.findByText("Day 1");
+
+    // Close Trips: Paris stays open inside it, off screen.
+    fireEvent.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+    const parisFetches = () => api.listDirectories.mock.calls.filter(([, p]) => p === "Trips/Paris").length;
+    expect(parisFetches()).toBe(1);
+    await act(() => client.invalidateQueries({ queryKey: ["directories", "lib_1"] }));
+    expect(parisFetches()).toBe(1);
+
+    // Open Trips again: Paris is still open, and refreshes.
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    expect(await screen.findByText("Day 1")).toBeTruthy();
+    await waitFor(() => expect(parisFetches()).toBe(2));
   });
 });

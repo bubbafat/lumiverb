@@ -22,7 +22,7 @@ export function DirectoryTree({
 }: DirectoryTreeProps) {
   const hasMenu = Boolean(onExcludeFolder || onArchiveFolder);
   const queryClient = useQueryClient();
-  // Open folders belong to one library: another starts with all closed.
+  // Open folders belong to one library.
   const [expanded, setExpanded] = useState<{ libraryId: string; paths: Set<string> }>({
     libraryId,
     paths: new Set(),
@@ -53,7 +53,12 @@ export function DirectoryTree({
     };
   }, [dropdownPath]);
 
-  useEffect(() => setDropdownPath(null), [libraryId]);
+  // Another library starts with every folder closed (the guard above covers
+  // the render before this runs).
+  useEffect(() => {
+    setExpanded({ libraryId, paths: new Set() });
+    setDropdownPath(null);
+  }, [libraryId]);
 
   // Each listing is a query, ["directories", libraryId, parent]: the page
   // invalidates ["directories", libraryId] when the library changes (at most
@@ -66,8 +71,20 @@ export function DirectoryTree({
   });
   const rootNodes = rootQuery.data ?? (rootQuery.isError ? [] : null);
 
-  // The open folders' listings, in the same order as expandedPaths.
-  const openPaths = useMemo(() => [...expandedPaths], [expandedPaths]);
+  // The listings of open folders that are on screen: open, under open
+  // parents. One under a closed parent stays open for when the parent opens
+  // again, but isn't fetched (or refreshed) until then.
+  const openPaths = useMemo(
+    () =>
+      [...expandedPaths].filter((path) => {
+        const parts = path.split("/");
+        for (let i = 1; i < parts.length; i++) {
+          if (!expandedPaths.has(parts.slice(0, i).join("/"))) return false;
+        }
+        return true;
+      }),
+    [expandedPaths],
+  );
   const childQueries = useQueries({
     queries: openPaths.map((path) => ({
       queryKey: directoriesKey(libraryId, path),
