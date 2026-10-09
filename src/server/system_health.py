@@ -94,11 +94,15 @@ def website_row(*, db_error: str | None, now: datetime, maintenance: str | None 
 
 
 def processing_row(*, at: datetime | None, now: datetime, paused_all: bool = False,
-                   scans_paused: bool = False, paused_producers: Sequence[str] = (), failing: int = 0) -> Row:
+                   scans_paused: bool = False, paused_producers: Sequence[str] = (), failing: int = 0,
+                   unreadable: bool = False) -> Row:
     """Red when the scheduler is silent past 30 seconds or all processing is
     paused; yellow when it's partly paused (scans, or producers on their own)
     or clips failed in the last day; green while it runs."""
     row = Row("processing", "Processing", GREEN, "Running.", link="/settings/processing", checked_at=at)
+    if unreadable:
+        row.state, row.reason = YELLOW, "Couldn't read the scheduler's status."
+        return row
     if at is None:
         row.state, row.reason = RED, "The scheduler has never run: nothing is processed."
         return row
@@ -164,7 +168,7 @@ def ai_row(*, machines: Sequence[Mapping[str, Any]], job_models: Mapping[str, st
     if notes:
         row.state, row.reason = YELLOW, " ".join(notes)
     else:
-        row.reason = f"{len(doing)} of {len(doing)} machines online."
+        row.reason = "The machine is online." if len(doing) == 1 else f"All {len(doing)} machines online."
     return row
 
 
@@ -193,7 +197,7 @@ def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickw
         row.state = YELLOW
         if quickwit == "missing" and enabled:
             row.reason = (f"{why}: search uses Postgres (simpler matching) until upkeep remakes it, "
-                          "within 5 minutes, and indexes every clip again.")
+                          "within 5 minutes, and indexes clips and scenes again.")
         else:
             detail = f" ({quickwit_error})" if quickwit_error and enabled and quickwit == "down" else ""
             row.reason = f"{why}{detail}: search uses Postgres (simpler matching)."

@@ -565,7 +565,7 @@ def unified_query(
                     include_notes=not getattr(request.state, "is_public_request", False),
                 )
             except Exception as exc:
-                search_health.note(session, search_health.FAILURE, f"The Postgres search failed: {exc}")
+                search_health.note(session, search_health.FAILURE, f"The Postgres search failed ({type(exc).__name__})")
                 raise
 
         if not scores:

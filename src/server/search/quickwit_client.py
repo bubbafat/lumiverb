@@ -120,10 +120,13 @@ class QuickwitClient:
                 # Fall through to create below
             else:
                 return False
-        else:
+        elif exists_resp.status_code in (404, 400):
             # Missing (deleted, or Quickwit's data lost): what it held is
             # gone, so the caller indexes everything again.
             recreated = True
+        else:
+            # Can't tell: not taken for missing, so a flaky check never sets off a full reindex.
+            raise RuntimeError(f"Quickwit index check failed for {index_id}: {exists_resp.status_code}")
         if exists_resp.status_code not in (200, 404, 400):
             logger.warning("Quickwit index check failed for %s: %s %s", index_id, exists_resp.status_code, exists_resp.text)
         if not schema_path.exists():

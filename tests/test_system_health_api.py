@@ -251,3 +251,23 @@ def test_noting_is_throttled_per_kind(env):
     assert why == "first" and utcnow() - when < timedelta(minutes=1)
     _forget(env, "search.fallback")
 
+
+
+def test_a_failed_query_in_one_row_doesnt_spoil_the_next(env):
+    """Postgres aborts the transaction on an error: without a rollback the
+    rows after it failed too, and Storage read no libraries as green."""
+    def broken(session, *a, **kw):
+        session.execute(text("SELECT * FROM no_such_table"))
+
+    _status(env)
+    with patch("src.server.api.routers.system._processing", side_effect=broken):
+        rows = _rows(env)
+    assert rows["processing"]["state"] == "yellow" and "Couldn't be checked" in rows["processing"]["reason"]
+    assert "Couldn't be checked" not in rows["search"]["reason"]
+    assert rows["storage"]["reason"] != "No libraries." and "Couldn't be checked" not in rows["storage"]["reason"]
+
+
+def test_a_scheduler_status_that_cant_be_read_isnt_called_never_run(env):
+    with patch("src.server.api.routers.producers.scheduler_status", side_effect=RuntimeError("bad json")):
+        row = _rows(env)["processing"]
+    assert row["state"] == "yellow" and "Couldn't read" in row["reason"]

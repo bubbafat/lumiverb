@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
@@ -35,12 +35,11 @@ router = APIRouter(prefix="/v1/system", tags=["system"])
 QUICKWIT_EVERY_SEC = 30.0
 COUNTS_EVERY_SEC = 60.0
 
-T = TypeVar("T")
 _cache: dict[tuple[str, str], tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
 
 
-def _kept(tenant_id: str, name: str, every: float, find: Callable[[], T]) -> T:
+def _kept[T](tenant_id: str, name: str, every: float, find: Callable[[], T]) -> T:
     """find(), or what it gave less than `every` seconds ago for the account."""
     now = time.monotonic()
     with _cache_lock:
@@ -88,7 +87,7 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         session.rollback()
         db_error = _short(exc)
 
-    status = None
+    status, unreadable = None, False
     if db_error is None:
         try:
             from src.server.api.routers.producers import scheduler_status
@@ -97,26 +96,25 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         except Exception:  # noqa: BLE001
             logger.exception("system health: reading the scheduler's status failed")
             session.rollback()
+            unreadable = True
 
     rows = [
-        _row("website", "Website", lambda: _website(session, db_error, now)),
-        _row("processing", "Processing", lambda: _processing(session, tenant_id, status, now), db_error),
+        _row("website", "Website", lambda: _website(session, db_error, now), session=session),
+        _row("processing", "Processing", lambda: _processing(session, tenant_id, status, now, unreadable), db_error, session),
         _row("ai", "AI machines", lambda: _ai(tenant_id, status, now), db_error),
-        _row("search", "Search", lambda: _search(session, tenant_id, now), db_error),
+        _row("search", "Search", lambda: _search(session, tenant_id, now), db_error, session),
     ]
     libraries: list[tuple[str, str]] = []
-    if db_error is None:
-        try:
-            from src.server.repository.tenant import LibraryRepository
-
-            libraries = [(lib.library_id, lib.name) for lib in LibraryRepository(session).list_all()]
-        except Exception:  # noqa: BLE001
-            logger.exception("system health: listing libraries failed")
-            session.rollback()
     at = status.at if status else None
     unreachable = list(status.unreachable) if status else []
-    rows.append(_row("storage", "Storage",
-                     lambda: h.storage_row(libraries=libraries, unreachable=unreachable, at=at, now=now), db_error))
+
+    def storage() -> h.Row:
+        from src.server.repository.tenant import LibraryRepository
+
+        libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all())
+        return h.storage_row(libraries=libraries, unreachable=unreachable, at=at, now=now)
+
+    rows.append(_row("storage", "Storage", storage, db_error, session))
     rows.append(_row("disk", "Disk", lambda: _disk(now)))
 
     looked = at is not None and now - at < h.SCHEDULER_SILENT
@@ -132,7 +130,8 @@ def _short(exc: BaseException) -> str:
     return (str(exc).strip().splitlines() or [type(exc).__name__])[0][:200]
 
 
-def _row(key: str, title: str, make: Callable[[], h.Row], db_error: str | None = None) -> h.Row:
+def _row(key: str, title: str, make: Callable[[], h.Row], db_error: str | None = None,
+         session: Session | None = None) -> h.Row:
     """make(), or a yellow row saying it couldn't be checked (the database
     being down is the website row's red; the others just can't tell)."""
     if db_error is not None:
@@ -141,6 +140,8 @@ def _row(key: str, title: str, make: Callable[[], h.Row], db_error: str | None =
         return make()
     except Exception as exc:  # noqa: BLE001 — one row never takes the page down
         logger.exception("system health: checking %s failed", key)
+        if session is not None:  # a failed query aborts the transaction: the next rows' queries need it back
+            session.rollback()
         return h.Row(key, title, h.YELLOW, f"Couldn't be checked: {_short(exc)}")
 
 
@@ -155,7 +156,7 @@ def _website(session: Session, db_error: str | None, now: datetime) -> h.Row:
     return h.website_row(db_error=db_error, now=now, maintenance=maintenance)
 
 
-def _processing(session: Session, tenant_id: str, status: Any, now: datetime) -> h.Row:
+def _processing(session: Session, tenant_id: str, status: Any, now: datetime, unreadable: bool = False) -> h.Row:
     def failing() -> int:
         return session.execute(text(
             "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
@@ -169,6 +170,7 @@ def _processing(session: Session, tenant_id: str, status: Any, now: datetime) ->
         scans_paused=bool(getattr(status, "scans_paused", False)),
         paused_producers=paused_producers,
         failing=_kept(tenant_id, "failing", COUNTS_EVERY_SEC, failing),
+        unreadable=unreadable,
     )
 
 

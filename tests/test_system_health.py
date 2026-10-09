@@ -7,8 +7,7 @@ drives the endpoint that gathers them.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,7 +16,7 @@ from src.server import system_health as h
 
 pytestmark = pytest.mark.fast
 
-NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 
 
 def ago(**kw) -> datetime:
@@ -50,6 +49,11 @@ def test_processing_is_green_while_the_scheduler_runs():
     row = h.processing_row(at=ago(seconds=5), now=NOW)
     assert row.state == h.GREEN and row.reason == "Running."
     assert row.link == "/settings/processing" and row.checked_at == ago(seconds=5)
+
+
+def test_processing_is_yellow_when_the_status_cant_be_read():
+    row = h.processing_row(at=None, now=NOW, unreadable=True)
+    assert row.state == h.YELLOW and "Couldn't read" in row.reason
 
 
 def test_processing_is_red_when_the_scheduler_never_ran():
@@ -98,7 +102,7 @@ VISION_ON = {"vision": "qwen3-vl", "transcripts": ""}
 
 def test_ai_is_green_when_every_enabled_machine_is_online():
     row = h.ai_row(machines=[machine(), machine("Other")], job_models=VISION_ON, starved=set(), now=NOW)
-    assert row.state == h.GREEN and "2 of 2" in row.reason and row.link == "/settings/ai"
+    assert row.state == h.GREEN and row.reason == "All 2 machines online." and row.link == "/settings/ai"
 
 
 def test_ai_is_green_with_no_ai_jobs_on():
@@ -117,7 +121,7 @@ def test_an_off_machine_or_one_for_a_job_thats_off_isnt_counted():
     row = h.ai_row(machines=[machine(), machine("Off", enabled=False, online=False),
                              machine("Whisper", jobs=("transcripts",), online=False)],
                    job_models=VISION_ON, starved=set(), now=NOW)
-    assert row.state == h.GREEN and "1 of 1" in row.reason
+    assert row.state == h.GREEN and row.reason == "The machine is online."
 
 
 def test_ai_is_yellow_when_a_job_has_no_machine():
@@ -310,6 +314,12 @@ def test_ensure_index_says_it_made_a_missing_one(tmp_path):
                return_value=MagicMock(status_code=200, json=lambda: {})), \
          patch("src.server.search.quickwit_client.requests.post") as post:
         assert qw.ensure_tenant_index("tnt_1") is False
+        post.assert_not_called()
+    # Quickwit can't say (a 5xx): not taken for missing, so nothing is reindexed.
+    with patch("src.server.search.quickwit_client.requests.get", return_value=MagicMock(status_code=503)), \
+         patch("src.server.search.quickwit_client.requests.post") as post:
+        with pytest.raises(RuntimeError):
+            qw.ensure_tenant_index("tnt_1")
         post.assert_not_called()
 
 
