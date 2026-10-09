@@ -21,8 +21,9 @@ from src.server.scheduler.scans import ScanState
 
 logger = logging.getLogger(__name__)
 
-# Settings and machines are read again this often...
-REFRESH_SEC = 300.0
+# Settings and machines are read again this often (a new model reaches the
+# scheduler within a minute, so redoing doesn't make the old one again)...
+REFRESH_SEC = 60.0
 # ...and a job whose machines can't be used is looked at again this soon.
 DOWN_RECHECK_SEC = 60.0
 
