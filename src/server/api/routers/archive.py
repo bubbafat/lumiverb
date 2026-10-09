@@ -158,5 +158,5 @@ def delete_missing(
     deleted = 0
     for i in range(0, n, _DELETE_BATCH):
         deleted += purge_assets(session, tenant_id, missing[i:i + _DELETE_BATCH], user_id,
-                                remove_from_projects=True, reason="missing")
+                                remove_from_projects=True, reason="missing", before=body.missing_before)
     return DeleteMissingResponse(deleted=deleted)
