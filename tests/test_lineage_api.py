@@ -4,8 +4,9 @@
 A write records how its artifact was made: producer, version, settings
 hash, source SHA-256. GET /v1/producers says, per producer, how many clips'
 artifacts are current, stale, missing or failing: stale when any of the four
-differs from what's registered now. A write that doesn't say is an unknown
-producer's: never current. A person's transcript is a person's: current.
+differs from what's registered now. A machine write that doesn't say is
+refused, before anything is saved (Robert, Oct 9: the API doesn't allow
+it). A person's transcript is a person's: current.
 """
 
 from __future__ import annotations
@@ -75,7 +76,14 @@ def _state(env, asset_id: str, artifact: str) -> str:
     return row
 
 
-def _ingest_with(env, rel_path: str, sha: str, lineage: dict | None, media_type: str = "image") -> str:
+# Send no lineage at all: the write doesn't say how it was made.
+SAYS_NOTHING = object()
+
+
+def _ingest_post(env, rel_path: str, sha: str, lineage: dict | None | object = None, media_type: str = "image",
+                 **fields: str):
+    """POST /v1/ingest. lineage is by kind; None: a current worker's proxy,
+    SAYS_NOTHING: none. fields: more form fields (vision, embeddings, video_facet)."""
     from PIL import Image
 
     client, headers, library_id, *_ = env
@@ -83,12 +91,48 @@ def _ingest_with(env, rel_path: str, sha: str, lineage: dict | None, media_type:
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": sha})}
-    if lineage is not None:
+            "width": "64", "height": "36", "exif": json.dumps({"sha256": sha}), **fields}
+    if lineage is None:
+        lineage = {"proxy": _want(env, "proxy", sha)}
+    if lineage is not SAYS_NOTHING:
         data["lineage"] = json.dumps(lineage)
-    r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+    return client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
+
+
+def _ingest_with(env, rel_path: str, sha: str, lineage: dict | None = None, media_type: str = "image") -> str:
+    """Ingest a clip whose proxy is a current worker's (None), or made as lineage (by kind) says."""
+    r = _ingest_post(env, rel_path, sha, lineage, media_type)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
+
+
+def _refused(r, code: str = "lineage_required") -> None:
+    """A machine write that doesn't say how it was made (or says another kind's producer made it)."""
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == code, r.text
+
+
+def _clips_at(env, rel_path: str) -> int:
+    client, headers, library_id, *_ = env
+    with _db(env) as s:
+        return s.execute(text("SELECT count(*) FROM assets WHERE library_id = :l AND rel_path = :p"),
+                         {"l": library_id, "p": rel_path}).scalar()
+
+
+# Everything kept about a clip, besides its row.
+_CLIP_TABLES = ("artifact_lineage", "asset_metadata", "asset_ocr", "asset_embeddings", "faces", "video_facets",
+                "video_scenes", "video_index_chunks")
+
+
+def _everything(env, asset_id: str) -> dict:
+    """All that's kept about a clip: its row and its rows in every table of what's made for it."""
+    with _db(env) as s:
+        out = {"assets": [dict(s.execute(text("SELECT * FROM assets WHERE asset_id = :a"),
+                                         {"a": asset_id}).mappings().one())]}
+        for table in _CLIP_TABLES:
+            rows = s.execute(text(f"SELECT * FROM {table} WHERE asset_id = :a"), {"a": asset_id}).mappings()
+            out[table] = sorted((dict(r) for r in rows), key=repr)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -121,17 +165,29 @@ def test_an_ingest_that_says_how_its_proxy_was_made_is_current(env):
 
 
 @pytest.mark.slow
-def test_a_write_that_doesnt_say_is_an_unknown_producers_and_stale(env):
-    clip = _ingest(env, "lin/unknown.jpg", sha=_sha())
-    assert _row(env, clip, "proxy")[0] == P.UNKNOWN
-    assert _state(env, clip, "proxy") == "stale"
+def test_an_ingest_that_doesnt_say_how_its_proxy_was_made_is_refused(env):
+    sha = _sha()
+    _refused(_ingest_post(env, "lin/unknown.jpg", sha, SAYS_NOTHING))
+    # Saying how something else was made isn't saying how the proxy was.
+    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"vision": _want(env, "vision", sha)}))
+    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"proxy": None}))
+    assert _clips_at(env, "lin/unknown.jpg") == 0  # nothing was saved
 
 
 @pytest.mark.slow
 def test_another_kinds_producer_cant_make_this_one(env):
     sha = _sha()
-    clip = _ingest_with(env, "lin/wrongkind.jpg", sha, {"proxy": _want(env, "faces", sha)})
-    assert _row(env, clip, "proxy")[0] == P.UNKNOWN
+    _refused(_ingest_post(env, "lin/wrongkind.jpg", sha, {"proxy": _want(env, "faces", sha)}),
+             "lineage_wrong_producer")
+    assert _clips_at(env, "lin/wrongkind.jpg") == 0
+
+    clip = _ingest_with(env, "lin/wrongkind.jpg", sha)
+    before = _everything(env, clip)
+    client, headers, *_ = env
+    _refused(client.post(f"/v1/assets/{clip}/vision", json={
+        "model_id": "m", "description": "d", "lineage": _want(env, "ocr", sha)}, headers=headers),
+        "lineage_wrong_producer")
+    assert _everything(env, clip) == before
 
 
 @pytest.mark.slow
@@ -245,8 +301,10 @@ def test_each_kind_of_write_records_its_artifact(env):
         assert r.status_code in (200, 201), (artifact, r.text)
         assert _state(env, clip, artifact) == "current", artifact
     # The probe's response is the facet itself, never the lineage.
-    assert "lineage" not in client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0},
-                                       headers=headers).json()
+    r = client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0, "lineage": _want(env, "probe", sha)},
+                   headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["duration_sec"] == 12.0 and "lineage" not in r.json()
 
 
 @pytest.mark.slow
@@ -321,17 +379,20 @@ def test_a_client_cant_claim_a_person_made_it(env):
     client, headers, *_ = env
     sha = _sha()
     img = _ingest_with(env, "lin/claims-person.jpg", sha, None)
+    before = _everything(env, img)
     r = client.post(f"/v1/assets/{img}/vision", json={
         "model_id": "m", "description": "d",
         "lineage": {"producer": P.PERSON, "version": "", "settings_hash": "", "source_sha256": sha}}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert _row(env, img, "vision")[0] == P.UNKNOWN
+    _refused(r, "lineage_wrong_producer")
+    assert _everything(env, img) == before and _row(env, img, "vision") is None
 
     vid = _ingest_with(env, "lin/claims-person.mov", sha, None, media_type="video")
-    client.post(f"/v1/assets/{vid}/transcript", json={
+    before = _everything(env, vid)
+    _refused(client.post(f"/v1/assets/{vid}/transcript", json={
         "srt": "1\n00:00:00,000 --> 00:00:01,000\nhi\n", "source": "whisper",
-        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": ""}}, headers=headers)
-    assert _row(env, vid, "transcript")[0] == P.UNKNOWN
+        "lineage": {"producer": P.PERSON, "version": "", "settings_hash": ""}}, headers=headers),
+        "lineage_wrong_producer")
+    assert _everything(env, vid) == before and _row(env, vid, "transcript") is None
     # A transcript a person typed is theirs.
     client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
@@ -371,13 +432,19 @@ def test_a_form_fields_lineage_is_checked(env):
     client, headers, *_ = env
     sha = _sha()
     vid = _ingest_with(env, "lin/badform.mov", sha, None, media_type="video")
+    before = _everything(env, vid)
     for bad in ({"producer": "analysis-proxy", "version": "1", "settings_hash": "x", "source_sha256": 12},
                 {"producer": "analysis-proxy", "version": "1" * 500, "settings_hash": "x"}, ["not", "a", "dict"]):
         r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
                         files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
                         data={"lineage": json.dumps(bad)}, headers=headers)
-        assert r.status_code in (200, 201), r.text
-        assert _row(env, vid, "analysis_proxy")[0] == P.UNKNOWN
+        _refused(r)  # unreadable is the same as not saying
+        assert _everything(env, vid) == before and _row(env, vid, "analysis_proxy") is None
+    r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+                    files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+                    data={"lineage": "not json"}, headers=headers)
+    _refused(r)
+    assert _everything(env, vid) == before
 
 
 @pytest.mark.slow
@@ -393,8 +460,119 @@ def test_an_ingest_records_only_what_it_stored(env):
         "library_id": library_id, "rel_path": "lin/nothing-stored.jpg", "file_size": "1000", "media_type": "image",
         "width": "64", "height": "36", "exif": json.dumps({"sha256": sha}),
         "vision": json.dumps({"model_id": "", "description": "dropped"}), "embeddings": json.dumps([]),
-        "lineage": json.dumps({"vision": _want(env, "vision", sha), "clip": _want(env, "clip", sha)}),
+        "lineage": json.dumps({"proxy": _want(env, "proxy", sha), "vision": _want(env, "vision", sha),
+                               "clip": _want(env, "clip", sha)}),
     }, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     clip = r.json()["asset_id"]
     assert _row(env, clip, "vision") is None and _row(env, clip, "clip") is None
+
+
+# ---------------------------------------------------------------------------
+# Every machine write says how it was made (Robert, Oct 9: the API doesn't
+# allow one that doesn't): refused, and nothing is saved.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
+    from PIL import Image
+
+    client, headers, *_ = env
+    sha = _sha()
+    img = _ingest_with(env, "lin/refused.jpg", sha)
+    vid = _ingest_with(env, "lin/refused.mov", sha, media_type="video")
+    # The video has a scene to describe and a chunk of scene finding claimed, as a worker finds them.
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
+        s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
+                       " created_at) VALUES (:i, :a, 0, 0, 999, 0, now())"), {"i": f"scn_{vid}_0", "a": vid})
+        s.commit()
+    assert client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30}, headers=headers).status_code == 200
+    chunk = client.get(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+
+    def mp4() -> tuple:
+        return ("v.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")
+
+    def jpeg() -> tuple:
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+        return ("p.jpg", io.BytesIO(buf.getvalue()), "image/jpeg")
+
+    vec = [0.0] * 512
+    face = {"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9, "embedding": vec}
+    scene = {"scene_index": 0, "start_ms": 0, "end_ms": 999, "rep_frame_ms": 0}
+    writes = [
+        ("probe", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0},
+                                          headers=headers)),
+        ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
+            "model_id": "m", "description": "d"}, headers=headers)),
+        ("vision", img, lambda: client.post("/v1/assets/batch-vision", json={
+            "items": [{"asset_id": img, "model_id": "m", "description": "d"}]}, headers=headers)),
+        ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={"ocr_text": "EXIT"}, headers=headers)),
+        ("ocr", img, lambda: client.post("/v1/assets/batch-ocr", json={
+            "items": [{"asset_id": img, "ocr_text": "EXIT"}]}, headers=headers)),
+        ("clip", img, lambda: client.post(f"/v1/assets/{img}/embeddings", json={
+            "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}, headers=headers)),
+        ("clip", img, lambda: client.post("/v1/assets/batch-embeddings", json={"items": [{
+            "asset_id": img, "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}]},
+            headers=headers)),
+        ("faces", img, lambda: client.post(f"/v1/assets/{img}/faces", json={"faces": [face]}, headers=headers)),
+        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+            "items": [{"asset_id": img, "faces": [face]}]}, headers=headers)),
+        ("transcript", vid, lambda: client.post(f"/v1/assets/{vid}/transcript", json={
+            "srt": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "source": "whisper"}, headers=headers)),
+        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/artifacts/proxy", files={"file": jpeg()},
+                                           headers=headers)),
+        ("video_preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/video_preview",
+                                                   files={"file": mp4()}, headers=headers)),
+        ("analysis_proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+                                                    files={"file": mp4()}, headers=headers)),
+        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
+            "proxy": jpeg(), "video_preview": mp4()}, headers=headers)),
+        # Saying how the preview was made isn't saying how the proxy was.
+        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
+            "proxy": jpeg(), "video_preview": mp4()},
+            data={"lineage": json.dumps({"video_preview": _want(env, "video_preview", sha)})}, headers=headers)),
+        # Scanned again with new content, and ingested again.
+        ("proxy", img, lambda: _ingest_post(env, "lin/refused.jpg", _sha(), SAYS_NOTHING)),
+        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, headers=headers)),
+        # An ingest says how it made each thing it stores, not just the proxy.
+        ("vision", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, data={
+            "vision": json.dumps({"model_id": "m", "description": "d"}),
+            "lineage": json.dumps({"proxy": _want(env, "proxy", sha)})}, headers=headers)),
+        ("clip", img, lambda: _ingest_post(env, "lin/refused.jpg", sha, {"proxy": _want(env, "proxy", sha)},
+                                           embeddings=json.dumps([{"model_id": P.CLIP_MODEL_ID,
+                                                                   "model_version": "ViT-B-32-openai",
+                                                                   "vector": vec}]))),
+        ("probe", vid, lambda: _ingest_post(env, "lin/refused.mov", sha, {"proxy": _want(env, "proxy", sha)},
+                                            media_type="video", video_facet=json.dumps({"duration_sec": 12.0}))),
+        ("scenes", vid, lambda: client.post(f"/v1/video/chunks/{chunk['chunk_id']}/complete", json={
+            "worker_id": chunk["worker_id"], "scenes": [scene], "next_anchor_phash": None,
+            "next_scene_start_ms": None}, headers=headers)),
+        ("scene_vision", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
+            "model_id": "m", "model_version": "1", "description": "a beach", "tags": []}, headers=headers)),
+    ]
+    for artifact, clip, write in writes:
+        before = _everything(env, clip)
+        r = write()
+        assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", (artifact, r.text)
+        assert r.json()["error"]["details"]["artifact"] == artifact, r.text
+        assert _everything(env, clip) == before, artifact
+
+    # A new clip that doesn't say how its proxy was made isn't kept at all.
+    _refused(_ingest_post(env, "lin/refused-new.jpg", sha, SAYS_NOTHING))
+    assert _clips_at(env, "lin/refused-new.jpg") == 0
+
+    # A person's writes need none.
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
+                    headers=headers)
+    assert r.status_code == 200, r.text
+    assert _row(env, vid, "transcript")[0] == P.PERSON
+    r = client.patch(f"/v1/assets/{img}/corrections", json={"description": "my dog", "tags": ["dog"]},
+                     headers=headers)
+    assert r.status_code == 200, r.text
+    # Another model's vectors aren't the CLIP producer's artifact: nothing to say.
+    r = client.post(f"/v1/assets/{img}/embeddings", json={
+        "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}, headers=headers)
+    assert r.status_code == 201, r.text

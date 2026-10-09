@@ -28,6 +28,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made, made_json
 
 _STORAGE_USERS = ("artifacts", "assets", "trash", "ingest")
 
@@ -96,7 +97,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
-            "width": "64", "height": "36"}
+            "width": "64", "height": "36", "lineage": ingest_made(sha)}
     if sha:
         data["exif"] = json.dumps({"sha256": sha})
     if facet is not None:
@@ -111,6 +112,7 @@ def _upload(env, asset_id: str, body: bytes = b"\x00\x00\x00\x18ftypmp42 analysi
     return client.post(
         f"/v1/assets/{asset_id}/artifacts/analysis_proxy",
         files={"file": ("analysis.mp4", io.BytesIO(body), content_type)},
+        data={"lineage": made_json("analysis_proxy")},
         headers=headers,
     )
 
@@ -204,6 +206,7 @@ def test_analysis_proxies_have_their_own_size_ceiling(env) -> None:
         r = client.post(
             f"/v1/assets/{asset_id}/artifacts/video_preview",
             files={"file": ("p.mp4", io.BytesIO(b"y" * 50), "video/mp4")},
+            data={"lineage": made_json("video_preview")},
             headers=headers,
         )
         assert r.status_code == 413
