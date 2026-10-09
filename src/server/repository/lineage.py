@@ -15,9 +15,9 @@ change waits for approval. A failure waits its turn: 5 minutes, doubling
 up to a day.
 
 An approval is an upgrade (piece 5): the clips stale in its scope when an
-admin said yes, each handed out (`upgrade_due`) until its producer makes it
-again after the approval (a write that doesn't say how it was made doesn't
-count). Only the brain's worker asks for upgrade work (`work`, upgrades=true);
+admin said yes, each handed out (`upgrade_due`) until its producer, or a
+person, makes it again after the approval (a write that doesn't say how it
+was made doesn't count). Only the brain's worker asks for upgrade work (`work`, upgrades=true);
 it does what's missing first. A change to the producer's settings before it
 finishes drops the rest (`retire_outdated`): the new change is asked about on
 its own. "Replace my edits" happens as each clip is made again
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -250,7 +250,7 @@ def stale_ids(session: Session, artifact: str, want: dict[str, Any], library_id:
 
 
 def upgrading(artifact: str) -> str:
-    """In an upgrade, and not made again by its producer since it was approved."""
+    """In an upgrade, and not made again by its producer (or a person) since it was approved."""
     assert artifact in MISSING_FLAGS.values(), artifact  # LINEAGE_JOIN has made_<artifact> for these only
     return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND EXISTS (SELECT 1 FROM producer_upgrade_items ui"
             " JOIN producer_upgrades u ON u.upgrade_id = ui.upgrade_id"
@@ -510,11 +510,12 @@ def approve(session: Session, artifact: str, want: dict[str, Any], *, scope: str
 
 def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, Any] | None,
            *, outcome: str = "ok", source_sha256: str | None = None, person: bool = False,
-           commit: bool = True) -> None:
+           produced_at: datetime | None = None, commit: bool = True) -> None:
     """Record how an artifact was just made. A write that doesn't say (an
     old client, the macOS app today) is an unknown producer's: stale, so
     the brain makes it again. person: a person made it (only the server
-    says so; a client can't). The source defaults to the clip's file now."""
+    says so; a client can't). The source defaults to the clip's file now.
+    produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}
     producer = PERSON if person else str(lineage.get("producer") or UNKNOWN)
     if not person and producer != PRODUCERS[artifact].producer:
@@ -534,7 +535,7 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
     ), {"a": asset_id, "artifact": artifact, "producer": producer,
         "version": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("version") or ""),
         "hash": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("settings_hash") or ""),
-        "source": source, "now": utcnow(), "outcome": outcome})
+        "source": source, "now": produced_at or utcnow(), "outcome": outcome})
     if commit:
         session.commit()
 

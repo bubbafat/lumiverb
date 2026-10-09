@@ -1709,8 +1709,9 @@ def _show_machine_transcript(session: Session, request: Request, asset: Asset, m
     asset.updated_at = utcnow()
     session.add(asset)
     session.commit()
+    # Kept, not made now: an upgrade it was made before still has it to do.
     lineage.record(session, asset.asset_id, "transcript", machine.lineage,
-                   outcome="ok" if asset.has_transcript else "empty")
+                   outcome="ok" if asset.has_transcript else "empty", produced_at=machine.transcribed_at)
 
     from src.server.search.sync import index_transcript_segments, try_sync_asset
 

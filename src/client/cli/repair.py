@@ -1625,8 +1625,8 @@ def run_repair(
             if not assets:
                 continue
 
-            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256")}
-                      for a in assets]
+            videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256"),
+                       "upgrade": bool(a.get("upgrade"))} for a in assets]
 
             from src.client.cli.video_index import run_video_enrich
             progress = _make_progress(console)

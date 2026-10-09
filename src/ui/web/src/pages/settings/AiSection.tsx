@@ -575,7 +575,10 @@ function JobModel({
             if (model && model !== job.model) save.mutate({ next: model });
           }}
         >
-          <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => setModel(e.target.value)}>
+          <select aria-label={`Model for ${job.label}`} value={model} className={inputClass} onChange={(e) => {
+              setModel(e.target.value);
+              setStopping(null);  // the question was about another choice
+            }}>
             <option value="" disabled>
               {offered.length ? "Pick a model…" : "No machine doing it has been checked yet"}
             </option>

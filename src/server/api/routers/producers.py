@@ -228,6 +228,11 @@ def approve_upgrade(
         raise InvalidChoiceError("one_scope", "Narrow an upgrade to a library or a project, not both.")
     if artifact in lineage.CANT_UPGRADE:
         raise ConflictError("cant_upgrade", f"{p.title} can't be made again yet. {lineage.CANT_UPGRADE[artifact]}")
+    if p.job and not tenant_job_models(request).get(p.job):
+        from src.shared.ai_jobs import JOBS
+
+        raise ConflictError("job_off", f"{JOBS[p.job]} {'are' if p.job == 'vision' else 'is'} off: pick a model in "
+                            "Settings → AI first, then upgrade.")
     narrowed = body.library_id or body.project_id
     if p.uniform and narrowed:
         raise InvalidChoiceError(

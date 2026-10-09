@@ -577,9 +577,19 @@ def test_a_video_handed_out_with_every_scene_made_this_way_is_described_again(mo
         {"scene_id": "scn_2", "rep_frame_ms": 1000, "description": "a dog", "lineage": current}]})
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        _enrich_videos(client, tmpdir, ["a1"], MagicMock(), lineage_for=lambda v: NOW)
+        root = Path(tmpdir)
+        (root / "a1.mp4").write_bytes(b"\x00" * 100)
+        (root / "a2.mp4").write_bytes(b"\x00" * 100)
+        progress = MagicMock()
+        progress.console = MagicMock()
+        run_video_enrich(client=client, source_for=lambda v: root / f"{v['asset_id']}.mp4",
+                         videos=[{"asset_id": "a1", "rel_path": "a1.mp4", "upgrade": True},
+                                 {"asset_id": "a2", "rel_path": "a2.mp4"}],  # missing work: a race, nothing to do
+                         vision_provider=MagicMock(), vision_model_id="m", console=MagicMock(), progress=progress,
+                         task_id=0, lineage_for=lambda v: NOW, concurrency=1)
 
     assert sorted(c.kwargs["scene"]["scene_id"] for c in mock_enrich.call_args_list) == ["scn_1", "scn_2"]
+    assert {c.kwargs["asset_id"] for c in mock_enrich.call_args_list} == {"a1"}
 
 
 @patch("src.client.cli.video_index.enrich_scene")

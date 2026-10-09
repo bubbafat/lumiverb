@@ -23,6 +23,27 @@ from tests.test_reconciler import _counts, _library
 from tests.test_reconciler import _due as _due_for_others
 
 OLD = "0ld5e771n65"  # a settings hash nothing makes now
+VISION = "qwen3-vl:8b-instruct"
+
+
+def _set_model(env, job: str, model: str) -> None:
+    """The tenant's model for a job, straight in the control plane (no machine asked)."""
+    from src.server.database import get_control_session
+    from src.server.models.control_plane import Tenant
+    from src.server.repository.ai_machines import set_job_model
+
+    with get_control_session() as ctrl:
+        tenant = ctrl.get(Tenant, env[4])
+        set_job_model(tenant, "vision" if job == "vision" else job, model)
+        ctrl.add(tenant)
+        ctrl.commit()
+
+
+@pytest.fixture(autouse=True)
+def _vision_on(env):
+    """Descriptions are on (an upgrade of a job that's off is refused)."""
+    _set_model(env, "vision", VISION)
+    yield
 
 
 def _made_old(env, clip: str, sha: str, artifact: str = "vision") -> None:
@@ -667,7 +688,7 @@ def test_changing_the_model_asks_before_it_stops_upgrades(env):
     client, headers, *_ = lib
     for artifact in ("vision", "ocr", "scene_vision"):  # other tests' upgrades in this tenant
         client.delete(f"/v1/producers/{artifact}/upgrade", headers=headers)
-    fake, _ = _machines({BRAIN: ("m1", "m2")})
+    fake, _ = _machines({BRAIN: (VISION, "m1", "m2")})
     try:
         with fake:
             r = client.post("/v1/ai/machines", json={"name": "Brain", "api_url": BRAIN, "jobs": ["vision"],
@@ -691,9 +712,11 @@ def test_changing_the_model_asks_before_it_stops_upgrades(env):
             assert r.status_code == 200, r.text
             assert _mine(lib) == []
     finally:
-        assert client.put("/v1/ai/jobs/vision", json={"model": ""}, headers=headers).status_code == 200
+        for artifact in ("vision", "ocr", "scene_vision"):
+            client.delete(f"/v1/producers/{artifact}/upgrade", headers=headers)
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
-            client.delete(f"/v1/ai/machines/{m['machine_id']}?leave_jobs=true", headers=headers)
+            if not m.get("built_in"):
+                client.delete(f"/v1/ai/machines/{m['machine_id']}?leave_jobs=true", headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -822,3 +845,30 @@ def test_a_scene_described_without_saying_how_keeps_the_video_stale(env):
     assert scenes[1]["lineage"] == {"producer": "unknown", "version": "", "settings_hash": ""}
     _describe_scene(lib, second, sha)
     assert _counts(lib, "scene_vision")["current"] == 1
+
+
+@pytest.mark.slow
+def test_a_job_thats_off_cant_be_upgraded(env):
+    lib = _library(env, "UpgJobOff")
+    _stale_clip(lib, "a.jpg")
+    _set_model(env, "vision", "")
+    r = _upgrade(lib, library_id=lib[2])
+    assert r.status_code == 409 and _error(r)["code"] == "job_off"
+    assert "Settings → AI" in _error(r)["message"]
+
+
+@pytest.mark.slow
+def test_a_kept_machine_transcript_shown_again_isnt_made_again(env):
+    """A person's transcript removed: the machine's kept underneath comes
+    back with when it was made, so an upgrade still has it to do."""
+    lib = _library(env, "UpgKeptTranscript")
+    client, headers, *_ = lib
+    vid, _ = _transcribed_old(lib)
+    assert _upgrade(lib, "transcript", library_id=lib[2]).status_code == 200
+    r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": SRT, "source": "manual"}, headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.request("DELETE", f"/v1/assets/{vid}/transcript", params={"which": "manual"}, headers=headers)
+    assert r.status_code in (200, 204), r.text
+    assert _due(lib, "missing_transcription") == [vid]
+    u = _mine(lib, "transcript")[0]
+    assert (u["remaining"], u["still_stale"]) == (1, 0)
