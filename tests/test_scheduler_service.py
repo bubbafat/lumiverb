@@ -182,7 +182,9 @@ def test_a_pool_runs_no_more_than_its_slots() -> None:
     _settle(s)
     s.tick()
     _settle(s)
-    assert [ids[0] for _, kind, ids in rec.ran if kind == "vision"] == ["v1", "v2", "v3", "v4"]
+    ran = [ids[0] for _, kind, ids in rec.ran if kind == "vision"]
+    # The first two ran side by side (either may finish first); then the next two.
+    assert sorted(ran[:2]) == ["v1", "v2"] and sorted(ran[2:]) == ["v3", "v4"]
 
 
 @pytest.mark.fast
