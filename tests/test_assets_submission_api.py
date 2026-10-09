@@ -27,6 +27,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made
 
 
 # ---- fixture --------------------------------------------------------------
@@ -152,6 +153,7 @@ def test_submit_vision_happy_path(submission_client) -> None:
             "model_version": "2024-08-26",
             "description": "A red barn at sunset",
             "tags": ["barn", "rural", "sunset"],
+            "lineage": made("vision"),
         },
         headers=auth,
     )
@@ -164,7 +166,7 @@ def test_submit_vision_404(submission_client) -> None:
     client, auth, _, _, _ = submission_client
     r = client.post(
         "/v1/assets/ast_doesnotexist0000000000000/vision",
-        json={"model_id": "moondream2", "description": "x"},
+        json={"model_id": "moondream2", "description": "x", "lineage": made("vision")},
         headers=auth,
     )
     assert r.status_code == 404
@@ -182,7 +184,7 @@ def test_submit_ocr_needs_no_description_first(submission_client) -> None:
 
     r = client.post(
         f"/v1/assets/{asset_id}/ocr",
-        json={"ocr_text": "hello"},
+        json={"ocr_text": "hello", "lineage": made("ocr")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -196,7 +198,7 @@ def test_submit_ocr_after_vision(submission_client) -> None:
 
     r = client.post(
         f"/v1/assets/{asset_id}/ocr",
-        json={"ocr_text": "STOP SIGN"},
+        json={"ocr_text": "STOP SIGN", "lineage": made("ocr")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -208,7 +210,7 @@ def test_submit_ocr_404(submission_client) -> None:
     client, auth, _, _, _ = submission_client
     r = client.post(
         "/v1/assets/ast_doesnotexist0000000000000/ocr",
-        json={"ocr_text": "x"},
+        json={"ocr_text": "x", "lineage": made("ocr")},
         headers=auth,
     )
     assert r.status_code == 404
@@ -225,7 +227,7 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
     # Make sure sub_c has vision metadata so we can update it
     r = client.post(
         f"/v1/assets/{image_asset_ids[2]}/vision",
-        json={"model_id": "moondream2", "description": "a stop sign"},
+        json={"model_id": "moondream2", "description": "a stop sign", "lineage": made("vision")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -240,7 +242,7 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
             {"asset_id": "ast_nonex0000000000000000000", "ocr_text": "skip"},
         ]
     }
-    r = client.post("/v1/assets/batch-ocr", json=payload, headers=auth)
+    r = client.post("/v1/assets/batch-ocr", json={**payload, "lineage": made("ocr")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 3
@@ -272,7 +274,7 @@ def test_batch_vision_updates_and_skips(submission_client) -> None:
             },
         ]
     }
-    r = client.post("/v1/assets/batch-vision", json=payload, headers=auth)
+    r = client.post("/v1/assets/batch-vision", json={**payload, "lineage": made("vision")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 1
@@ -302,7 +304,7 @@ def test_batch_embeddings_updates_and_skips(submission_client) -> None:
             },
         ]
     }
-    r = client.post("/v1/assets/batch-embeddings", json=payload, headers=auth)
+    r = client.post("/v1/assets/batch-embeddings", json={**payload, "lineage": made("clip")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 1
@@ -314,7 +316,7 @@ def test_submit_embedding_single_404(submission_client) -> None:
     client, auth, _, _, _ = submission_client
     r = client.post(
         "/v1/assets/ast_doesnotexist0000000000000/embeddings",
-        json={"model_id": "clip", "model_version": "1", "vector": [0.1] * 512},
+        json={"model_id": "clip", "model_version": "1", "vector": [0.1] * 512, "lineage": made("clip")},
         headers=auth,
     )
     assert r.status_code == 404
@@ -396,7 +398,7 @@ def test_batch_faces_processes_and_normalizes_corners(submission_client) -> None
             },
         ]
     }
-    r = client.post("/v1/assets/batch-faces", json=payload, headers=auth)
+    r = client.post("/v1/assets/batch-faces", json={**payload, "lineage": made("faces")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["processed"] == 2

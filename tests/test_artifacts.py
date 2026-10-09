@@ -26,6 +26,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import made_json
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +161,7 @@ def test_upload_proxy_returns_key_and_sha256(artifact_env) -> None:
     r = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
-        data={"width": "2048", "height": "1365"},
+        data={"width": "2048", "height": "1365", "lineage": made_json("proxy")},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -177,6 +178,7 @@ def test_upload_proxy_writes_file_to_storage(artifact_env) -> None:
     r = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     assert r.status_code == 200
     key = r.json()["key"]
@@ -193,6 +195,7 @@ def test_upload_proxy_persists_sha256_in_db(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
 
     engine = create_engine(tenant_url)
@@ -217,6 +220,7 @@ def test_upload_proxy_does_not_advance_status(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
 
     engine = create_engine(tenant_url)
@@ -332,6 +336,7 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
     r = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        data={"lineage": made_json("video_preview")},
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -420,6 +425,7 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
     r_prev = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        data={"lineage": made_json("video_preview")},
     )
     assert r_prev.status_code == 200, r_prev.text
     preview_key = r_prev.json()["key"]
@@ -487,10 +493,12 @@ def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content_v1, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     r2 = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content_v2, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     assert r2.status_code == 200
     assert r2.json()["sha256"] == _sha256(content_v2)
@@ -523,6 +531,7 @@ def test_upload_unknown_asset_returns_404(artifact_env) -> None:
     r = auth.post(
         "/v1/assets/ast_nonexistent_000000000000/artifacts/proxy",
         files={"file": ("proxy.jpg", b"data", "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     assert r.status_code == 404
 
@@ -534,6 +543,7 @@ def test_upload_missing_auth_returns_401(artifact_env) -> None:
     r = raw_client.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", b"data", "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     assert r.status_code == 401
 
@@ -571,6 +581,7 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
     r = auth.post(
         f"/v1/assets/{trash_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     assert r.status_code == 404
 
@@ -589,6 +600,7 @@ def test_download_proxy_returns_bytes(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
 
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/proxy")
@@ -635,6 +647,7 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
     auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        data={"lineage": made_json("video_preview")},
     )
 
     r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
@@ -727,6 +740,7 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
     r_up = auth.post(
         f"/v1/assets/{isolated_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
+        data={"lineage": made_json("proxy")},
     )
     key = r_up.json()["key"]
     storage.abs_path(key).unlink()  # remove file, leave key in DB
@@ -794,6 +808,7 @@ def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     r_up = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        data={"lineage": made_json("video_preview")},
     )
     assert r_up.status_code == 200, r_up.text
 
@@ -819,6 +834,7 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     r_up = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        data={"lineage": made_json("video_preview")},
     )
     assert r_up.status_code == 200, r_up.text
 
