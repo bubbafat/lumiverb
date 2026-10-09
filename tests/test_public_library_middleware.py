@@ -374,7 +374,7 @@ def test_public_facet_search_cant_reach_words_past_the_cap(public_lib_client, sp
 
 @pytest.mark.slow
 @pytest.mark.parametrize("path", ["/v1/assets/{asset}/faces", "/v1/libraries/{library}/ignored-paths",
-                                  "/v1/assets/repair-summary?library_id={library}"])
+                                  "/v1/assets/repair-summary?library_id={library}", "/v1/system/health"])
 def test_signed_in_only_routes_refuse_visitors(public_lib_client, spoken, path):
     client, api_key, library_id, _ = public_lib_client
     url = path.format(asset=spoken, library=library_id)
