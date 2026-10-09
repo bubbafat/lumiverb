@@ -372,6 +372,35 @@ def test_a_bin_of_only_photos_still_has_a_timeline() -> None:
     assert root.find("bin/children/sequence/duration").text == "150"
 
 
+def test_a_timeline_of_only_photos_has_a_frame_rate_in_fcpxml() -> None:
+    # Review: the sequence took the photo's rate-less format, and a sequence needs one.
+    from src.server.export import still
+    from src.server.export.fcpxml import FcpxmlProvider
+
+    root = ET.fromstring(FcpxmlProvider().render(ExportBin(name="Photos", clips=[
+        still("a", "a.jpg", "/a.jpg", 4032, 3024), still("b", "b.jpg", "/b.jpg", 3024, 4032)])))
+    sequence = root.find("library/event/project/sequence")
+    fmt = root.find(f"resources/format[@id='{sequence.get('format')}']")
+    assert fmt.get("frameDuration") == "1/30s" and fmt.get("name") is None
+    assert (fmt.get("width"), fmt.get("height")) == ("1920", "1080")
+    assert [v.get("duration") for v in sequence.findall("spine/video")] == ["150/30s", "150/30s"]
+    assert sequence.get("duration") == "300/30s"
+
+
+@pytest.mark.parametrize("num, den, frames", [(30000, 1001, 150), (24000, 1001, 120), (25, 1, 125)])
+def test_a_still_is_five_seconds_to_the_nearest_frame(num: int, den: int, frames: int) -> None:
+    # A still has no end of media to stay inside: 5 s on a 29.97 timeline is
+    # 150 frames, not 149 (4.97 s).
+    from src.server.export import still
+
+    lead = ExportClip(**{**PAL.__dict__, "frame_rate_num": num, "frame_rate_den": den, "start_timecode": None})
+    bin_ = ExportBin(name="x", clips=[lead, still("p", "p.jpg", "/p.jpg", 100, 100)])
+    item = _render("fcp7", bin_).findall("bin/children/sequence/media/video/track/clipitem")[1]
+    assert int(item.findtext("end")) - int(item.findtext("start")) == frames
+    video = _render("fcpxml", bin_).find("library/event/project/sequence/spine/video")
+    assert video.get("duration") == f"{frames * den}/{num}s"
+
+
 def test_timeline_never_runs_past_a_clips_media() -> None:
     """A 30 fps clip of 7.2 s on a 23.976 timeline: 172 frames (7.17 s),
     never 173 (7.22 s, past the end of the file)."""

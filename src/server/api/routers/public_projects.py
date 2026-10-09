@@ -11,8 +11,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_tenant_session
 from src.server.repository.tenant import ProjectRepository
 
-# Mounted at /v1/public/projects, and at /v1/public/collections (deprecated)
-# for existing share links and app builds. See main.py.
+# Mounted at /v1/public/projects. See main.py.
 router = APIRouter()
 
 
