@@ -166,9 +166,13 @@ class Dispatcher:
                 self._empty_wait.pop(key, None)
 
     def clear(self, tenant_id: str, kind: str) -> None:
-        """Hand out none of this kind for now (its machines can't do it)."""
+        """Hand out none of this kind for now (its machines can't do it, or
+        it's paused). When it can be again, the database is asked at once."""
+        key = (tenant_id, kind)
         with self._lock:
-            self._buffers.pop((tenant_id, kind), None)
+            self._buffers.pop(key, None)
+            self._all_known_at.pop(key, None)
+            self._empty_wait.pop(key, None)
 
     def take(self, pool: str) -> Job | None:
         """The best job a free slot of this pool can run, now in hand; None

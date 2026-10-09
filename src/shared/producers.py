@@ -41,6 +41,10 @@ Producer = ProducerSpec
 PRODUCERS: dict[str, Producer] = registry()
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
+# What an admin pauses (Settings → Processing): all of the account's
+# processing, or one producer's (its artifact).
+PAUSE_ALL = "all"
+
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.
 MISSING_FLAGS: dict[str, str] = {p.flag: p.artifact for p in PRODUCERS.values() if p.flag}

@@ -33,6 +33,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
+from src.shared.producers import PAUSE_ALL
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class Scheduler:
         capacity: Mapping[str, int],
         candidates: Callable[..., list[dict]] | None = None,
         paused: Callable[[str], set[str]] | None = None,
+        on_hold: Callable[[str], set[str]] | None = None,
         retry_requested: Callable[[str], str | None] | None = None,
         runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
@@ -100,6 +102,7 @@ class Scheduler:
         self._accounts = accounts
         self._candidates = candidates or _from_database
         self._paused = paused or _paused_in_database
+        self._on_hold = on_hold or _on_hold_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         self._retry_seen: dict[str, str | None] = {}
         self._runners = dict(runners or runner_mod.runners())
@@ -182,7 +185,16 @@ class Scheduler:
     def _refill(self, tenant_id: str, acct: Any) -> None:
         """Read the account's settings and machines when due, size its AI
         pools, list what's due for each kind that wants more, and say what's
-        running (every few seconds)."""
+        running (every few seconds). What an admin paused hands out nothing
+        more, at once; what's running finishes."""
+        try:
+            held = self._on_hold(tenant_id)
+        except Exception:  # noqa: BLE001 — as if all of it is paused, until it can be read
+            logger.exception("scheduler: reading what %s paused failed", tenant_id)
+            held = {PAUSE_ALL}
+        for kind in KINDS.values():
+            if PAUSE_ALL in held or (kind.flag and kind.artifact in held):
+                self.dispatcher.clear(tenant_id, kind.name)
         try:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
@@ -220,6 +232,8 @@ class Scheduler:
         for kind in QUEUED:
             if kind.redo and kind.artifact in stopped:
                 self.dispatcher.clear(tenant_id, kind.name)
+        if PAUSE_ALL in held:
+            return
         if self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
@@ -229,7 +243,7 @@ class Scheduler:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
                 continue
-            if kind.redo and kind.artifact in stopped:
+            if kind.artifact in held or (kind.redo and kind.artifact in stopped):
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
@@ -320,11 +334,13 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
     from src.server.database import get_engine_for_url
     from src.server.scheduler.queue import candidates
 
+    from src.server.repository import lineage
+
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        if {PAUSE_ALL, kind.artifact} & set(lineage.processing_paused(session)):
+            return []  # paused since the scheduler last looked
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
-        from src.server.repository import lineage
-
         if kind.artifact in lineage.paused(session):
             return []
         return candidates(session, kind, libraries, skip=skip,
@@ -365,6 +381,17 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
             "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.status', :v, now())"
             " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"v": json.dumps(status)})
         session.commit()
+
+
+def _on_hold_in_database(tenant_id: str) -> set[str]:
+    """What an admin paused: PAUSE_ALL, or producers' artifacts (lineage.processing_paused)."""
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return set(lineage.processing_paused(session))
 
 
 def _paused_in_database(tenant_id: str) -> set[str]:

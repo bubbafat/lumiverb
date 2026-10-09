@@ -244,6 +244,27 @@ def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
         session.execute(text("DELETE FROM producer_redo_paused WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
 
 
+def processing_paused(session: Session) -> dict[str, dict[str, Any]]:
+    """What an admin paused (Robert, Oct 9): all of the account's processing
+    (PAUSE_ALL) or a producer's, {target: {paused_by, paused_at}}. The
+    scheduler starts nothing more of it; what's running finishes."""
+    return {r[0]: {"paused_by": r[1], "paused_at": r[2]} for r in session.execute(text(
+        "SELECT target, paused_by, paused_at FROM processing_paused"))}
+
+
+def pause_processing(session: Session, target: str, *, by: str | None) -> None:
+    """Pause all of the account's processing (PAUSE_ALL) or a producer's.
+    Pausing it again keeps who paused it first, and when. Doesn't commit."""
+    session.execute(text(
+        "INSERT INTO processing_paused (target, paused_by, paused_at) VALUES (:t, :by, :now)"
+        " ON CONFLICT (target) DO NOTHING"), {"t": target, "by": by, "now": utcnow()})
+
+
+def resume_processing(session: Session, target: str) -> None:
+    """Carry on with what was paused. Doesn't commit."""
+    session.execute(text("DELETE FROM processing_paused WHERE target = :t"), {"t": target})
+
+
 def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:
     """Clips in sight whose artifact would be made again if it were made as
     want says (desired): those a producer made another way. What the 409
