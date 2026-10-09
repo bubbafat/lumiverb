@@ -10,7 +10,8 @@
 # What it does:
 #   1. git pull
 #   2. npm ci + npm run build
-#   3. Add nginx locations deploy-web.sh has gained since (playback streams)
+#   3. Add nginx locations deploy-web.sh has gained since (playback streams,
+#      cache headers for the page and the built files)
 #   4. nginx -s reload
 #
 # Sub-10-second updates. Does NOT touch Python, migrations, or API services.
@@ -103,6 +104,41 @@ NGINX
     ' "$SITE" > "${SITE}.new"
     mv "${SITE}.new" "$SITE"
     ok "Playback streams unbuffered and out of nginx's access log"
+  fi
+fi
+
+# Sites from before the page and the built files had cache headers get them
+# here, once, ahead of the SPA's location /.
+if [[ -f "$SITE" ]] && ! grep -q "location = /index.html {" "$SITE"; then
+  if ! grep -qE '^[[:space:]]*location / \{' "$SITE"; then
+    warn "No location / in ${SITE}; the page keeps no cache headers (see deploy-web.sh)"
+  else
+    CACHE_LOCATIONS="$(cat <<'NGINX'
+    # Built files carry a content hash in their name: cache them for good.
+    # A location's add_header drops the server's, so they are repeated.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer-when-downgrade always;
+    }
+
+    # The page names the build's files, so the browser checks it every time
+    # (the SPA fallback below ends here too).
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer-when-downgrade always;
+    }
+NGINX
+)"
+    CACHE_LOCATIONS="$CACHE_LOCATIONS" awk '
+      $1 == "location" && $2 == "/" && $3 == "{" && !done { print ENVIRON["CACHE_LOCATIONS"]; print ""; done = 1 }
+      { print }
+    ' "$SITE" > "${SITE}.new"
+    mv "${SITE}.new" "$SITE"
+    ok "The page is checked on every load; built files are cached for good"
   fi
 fi
 

@@ -239,6 +239,24 @@ server {
         proxy_read_timeout 300s;
     }
 
+    # Built files carry a content hash in their name: cache them for good.
+    # A location's add_header drops the server's, so they are repeated.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer-when-downgrade always;
+    }
+
+    # The page names the build's files, so the browser checks it every time
+    # (the SPA fallback below ends here too).
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer-when-downgrade always;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
