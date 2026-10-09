@@ -252,6 +252,15 @@ def create_project(
     asset_ids = body.asset_ids
     if body.from_search is not None:
         asset_ids = _search_matches(body.from_search, request, session, user_id)
+    if asset_ids:  # before the project exists, so a refusal leaves none behind
+        from sqlalchemy import text as sa_text
+
+        found = set(session.execute(
+            sa_text("SELECT asset_id FROM active_assets WHERE asset_id = ANY(:ids)"), {"ids": list(asset_ids)},
+        ).scalars())
+        gone = next((a for a in asset_ids if a not in found), None)
+        if gone is not None:
+            raise HTTPException(status_code=404, detail=f"Asset {gone} not found or trashed")
 
     repo = ProjectRepository(session)
     col = repo.create(
@@ -265,11 +274,6 @@ def create_project(
         _sync_public_index(request, col.project_id, public=True)
 
     if asset_ids:
-        asset_repo = AssetRepository(session)
-        for aid in asset_ids:
-            asset = asset_repo.get_by_id(aid)
-            if asset is None:
-                raise HTTPException(status_code=404, detail=f"Asset {aid} not found or trashed")
         repo.add_assets(col.project_id, asset_ids)
 
     return _project_to_item(col, repo, user_id, session=session)
@@ -547,13 +551,13 @@ def remove_assets_from_project(
     return BatchRemoveResponse(removed=removed)
 
 
-def _search_page(
-    saved: dict, request: Request, session: Session, user_id: str, *, after: str | None, limit: int
-) -> tuple[list, str | None]:
-    """One page of a saved search's results (the caller's ratings), and the
-    cursor for the next. With a text filter, results come from a capped
-    candidate set ordered by relevance and aren't paginated; otherwise they
-    page by (sort column, asset_id) like GET /v1/query."""
+def _search_matches(saved: dict, request: Request, session: Session, user_id: str) -> list[str]:
+    """The clips a search matches now, in its order and as the caller sees
+    them (their ratings): what saving it as a project puts in. 422
+    bad_search for a search it can't read; 422 search_too_big past
+    _MAX_NEW_CLIPS, or for a text search whose matches were capped (some
+    would be left out without anyone knowing)."""
+    from src.server.api.errors import InvalidChoiceError
     from src.server.api.routers.query import (
         MAX_CANDIDATE_IDS,
         SORT_COLUMNS,
@@ -565,73 +569,60 @@ def _search_page(
     from src.server.models.query_filter import LibraryScope
     from src.server.repository.tenant import UnifiedBrowseRepository
 
-    spec = from_json(saved)
+    try:
+        spec = from_json(saved)
+    except ValueError as exc:
+        raise InvalidChoiceError("bad_search", str(exc)) from None
+    if spec.sort not in SORT_COLUMNS:
+        raise InvalidChoiceError("bad_search", f"Unknown sort {spec.sort!r}")
+    repo = UnifiedBrowseRepository(session)
+    rating_user_id = user_id if spec.needs_rating_join else None
 
-    candidate_ids: list[str] | None = None
-    candidate_scores: dict[str, float] | None = None
+    def too_big(limit: int, text_search: bool = False) -> InvalidChoiceError:
+        what = "a text search's matches" if text_search else "clips match"
+        return InvalidChoiceError(
+            "search_too_big",
+            f"More than {limit:,} {what}: narrow the search to save it as a project.",
+            {"max": limit},
+        )
+
     if spec.search_terms:
-        tenant_id = getattr(request.state, "tenant_id", None)
+        # A text search's matches are a capped set ordered by relevance, all
+        # at once: as GET /v1/query shows them, without a cursor.
         library_ids: list[str] | None = None
         for leaf in spec.leaves:
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
-        if tenant_id:
-            scores, _contexts, source = _run_quickwit_search(
-                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
-            )
-            if source == "postgres_fallback":
-                pg_query = " ".join(st.q for st in spec.search_terms if st.q)
-                scores, _contexts = _run_postgres_fallback(
-                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                )
-            if not scores:
-                return [], None
-            candidate_ids = list(scores.keys())
-            candidate_scores = scores
+        scores, _contexts, source = _run_quickwit_search(
+            request.state.tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS,
+        )
+        if source == "postgres_fallback":
+            pg_query = " ".join(st.q for st in spec.search_terms if st.q)
+            scores, _contexts = _run_postgres_fallback(session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS)
+        if not scores:
+            return []
+        if len(scores) >= MAX_CANDIDATE_IDS:
+            raise too_big(MAX_CANDIDATE_IDS, text_search=True)
+        assets = repo.query_page(spec=spec, candidate_ids=list(scores), candidate_scores=scores,
+                                 rating_user_id=rating_user_id, after=None, limit=len(scores))
+        return list(dict.fromkeys(a.asset_id for a in assets))
 
-    assets = UnifiedBrowseRepository(session).query_page(
-        spec=spec,
-        candidate_ids=candidate_ids,
-        candidate_scores=candidate_scores,
-        rating_user_id=user_id if spec.needs_rating_join else None,
-        after=after if candidate_ids is None else None,
-        limit=limit,
-    )
-
-    next_cursor: str | None = None
-    if candidate_ids is None and len(assets) == limit:
-        sort_col = spec.sort if spec.sort in SORT_COLUMNS else "taken_at"
+    ids: dict[str, None] = {}
+    cursor: str | None = None
+    page_size = 1000
+    while True:
+        assets = repo.query_page(spec=spec, rating_user_id=rating_user_id, after=cursor, limit=page_size)
+        ids.update((a.asset_id, None) for a in assets)
+        if len(ids) > _MAX_NEW_CLIPS:
+            raise too_big(_MAX_NEW_CLIPS)
+        if len(assets) < page_size:
+            return list(ids)
         last = assets[-1]
-        sort_value = getattr(last, sort_col, None)
+        sort_value = getattr(last, spec.sort, None)
         if sort_value is not None and hasattr(sort_value, "isoformat"):
             sort_value = sort_value.isoformat()
-        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
-    return assets, next_cursor
-
-
-def _search_matches(saved: dict, request: Request, session: Session, user_id: str) -> list[str]:
-    """The clips a saved search matches now, in its order: what saving it as
-    a project puts in. 422 search_too_big past _MAX_NEW_CLIPS."""
-    from src.server.api.errors import InvalidChoiceError
-
-    ids: list[str] = []
-    seen: set[str] = set()
-    cursor: str | None = None
-    while True:
-        page, cursor = _search_page(saved, request, session, user_id, after=cursor, limit=1000)
-        for a in page:
-            if a.asset_id not in seen:
-                seen.add(a.asset_id)
-                ids.append(a.asset_id)
-        if len(ids) > _MAX_NEW_CLIPS:
-            raise InvalidChoiceError(
-                "search_too_big",
-                f"More than {_MAX_NEW_CLIPS:,} clips match: narrow the search to save it as a project.",
-                {"max": _MAX_NEW_CLIPS},
-            )
-        if not cursor:
-            return ids
+        cursor = _encode_cursor(spec.sort, sort_value, last.asset_id)
 
 
 @router.get("/{project_id}/assets", response_model=ProjectAssetsResponse)

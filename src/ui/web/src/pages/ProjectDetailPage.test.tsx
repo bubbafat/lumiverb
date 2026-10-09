@@ -30,8 +30,6 @@ const baseProject = {
   visibility: "private",
   ownership: "own",
   sort_order: "manual",
-  type: "static",
-  saved_query: null,
   asset_count: 2,
   created_at: "2026-10-07T00:00:00Z",
   updated_at: "2026-10-07T00:00:00Z",

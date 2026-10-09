@@ -3,7 +3,7 @@
 All concrete LeafFilter subclasses from query_filter.py are registered automatically.
 The registry provides:
   - parse_f_params(): URL ?f= params → QuerySpec
-  - from_json(): saved_query JSON → QuerySpec
+  - from_json(): a search as JSON (a project's from_search) → QuerySpec
   - capabilities(): list of filter type descriptors for GET /v1/filters/capabilities
 """
 
@@ -118,11 +118,11 @@ def parse_f_params(
 
 
 # ---------------------------------------------------------------------------
-# Deserialization: saved_query JSON → QuerySpec
+# Deserialization: a search as JSON → QuerySpec
 # ---------------------------------------------------------------------------
 
-def from_json(data: dict) -> QuerySpec:
-    """Deserialize a saved search (or a project's from_search) into a QuerySpec.
+def from_json(data: object) -> QuerySpec:
+    """A search as JSON (a project's from_search) → QuerySpec.
 
     Expected format:
     {
@@ -135,44 +135,40 @@ def from_json(data: dict) -> QuerySpec:
         "direction": "desc"       # optional
     }
 
-    Defensive against bad data: anything that isn't a dict-shaped filter
-    is logged and skipped instead of crashing the request. We've seen
-    pre-V2 saved queries in the wild with strings or other shapes in
-    `filters` — the search still loads, just with the bad leaves dropped.
+    Strict: a filter it can't read raises ValueError, saying which. Dropping
+    it instead would widen the search, and a project made from it would hold
+    clips nobody asked for (a typo'd "camera" for "camera_make": the whole
+    library).
     """
     if not isinstance(data, dict):
-        logger.warning("Saved query is not a dict: %r", type(data).__name__)
-        return QuerySpec(
-            root=GroupFilter(combinator=Combinator.AND, children=()),
-            sort="taken_at",
-            direction="desc",
-        )
-
+        raise ValueError("A search is an object with a filters list")
     raw_filters = data.get("filters", [])
     if not isinstance(raw_filters, list):
-        logger.warning("Saved query 'filters' is not a list: %r", type(raw_filters).__name__)
-        raw_filters = []
+        raise ValueError("filters must be a list")
 
     leaves: list[LeafFilter] = []
     for item in raw_filters:
         if not isinstance(item, dict):
-            logger.warning("Saved query filter entry is not a dict, skipping: %r", item)
-            continue
+            raise ValueError(f"A filter is an object with a type and a value, not {item!r}")
         type_name = item.get("type", "")
-        cls = TYPE_MAP.get(type_name)
+        cls = TYPE_MAP.get(type_name) if isinstance(type_name, str) else None
         if cls is None:
-            logger.warning("Unknown filter type %r in saved_query, ignoring", type_name)
-            continue
+            raise ValueError(f"Unknown filter type {type_name!r}")
         try:
             leaves.append(cls.from_json(item))
-        except (ValueError, KeyError) as exc:
-            logger.warning("Failed to deserialize filter %r: %s", item, exc)
-            continue
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise ValueError(f"Can't read the {type_name} filter {item!r}: {exc}") from None
 
+    sort = data.get("sort", "taken_at")
+    direction = data.get("direction", "desc")
+    if not isinstance(sort, str):
+        raise ValueError("sort must be a column name")
+    if direction not in ("asc", "desc"):
+        raise ValueError('direction must be "asc" or "desc"')
     return QuerySpec(
         root=GroupFilter(combinator=Combinator.AND, children=tuple(leaves)),
-        sort=data.get("sort", "taken_at"),
-        direction=data.get("direction", "desc"),
+        sort=sort,
+        direction=direction,
     )
 
 

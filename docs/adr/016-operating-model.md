@@ -82,7 +82,7 @@ Where inference runs is configuration, not architecture.
 
 These are two different things, and the names are reserved:
 
-- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. Static projects hold hand-picked clips; smart projects are saved searches. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
+- A **project** is transient and many-to-many: a named, unordered set of whole assets for one job, such as "Customer Video 123". Create it, find media, send it to the editor, relink if needed, then archive or delete it. Archive means done but kept: it leaves the lists and pickers and still opens and exports. Delete moves it to the trash; restoring it can bring back its trashed clips too, and deleting it for good never touches its clips. A clip can be in many projects. A project holds the clips put in it (Robert, Oct 9: projects are explicit); a search is kept as a saved search, and can be saved as a project of the clips it finds then. **What the code calls "collections" today are projects**, and phase 1 renames them everywhere (tables, API routes, CLI, web, macOS and iOS).
 - A **collection** is a long-lived container where each piece of media lives once. It doesn't exist yet; the name is kept free for it.
 
 ### v1: find, collect, send

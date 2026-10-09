@@ -739,7 +739,7 @@ export default function BrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facets}
-        onSaveAsProject={() => setShowSaveAsProject(true)}
+        onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
         isPublic={isPublicMode}
       />
 

@@ -540,7 +540,7 @@ export default function UnifiedBrowsePage() {
         onSetSort={handleSetSort}
         onClearAll={handleClearAll}
         facets={facetsQuery.data ?? null}
-        onSaveAsProject={() => setShowSaveAsProject(true)}
+        onSaveAsProject={canEdit ? () => setShowSaveAsProject(true) : undefined}
       />
 
       {showSaveAsProject && (
