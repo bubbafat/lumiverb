@@ -162,6 +162,9 @@ class ProducerSpec:
     title: str  # for people: "Transcripts"
     applies: str  # which clips it applies to (SQL)
     made: str  # whether a clip has the artifact (SQL); one made in parts once every part is
+    # Made, but due to be checked again (SQL; "" = never): handed out with
+    # what's missing, yet counted apart ("rechecking"), not as missing.
+    recheck: str = ""
     settings: tuple[Setting, ...] = ()  # output-affecting
     # The artifacts it's made from: the queue waits until a clip has them.
     needs: tuple[str, ...] = ()

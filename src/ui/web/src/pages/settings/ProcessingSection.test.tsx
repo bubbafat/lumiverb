@@ -704,6 +704,13 @@ describe("ProcessingSection settings", () => {
       expect(screen.queryByText(/Face groups/)).toBeNull();
     });
 
+    it("counts guesses being checked again apart from missing", async () => {
+      producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
+                              counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];
+      renderSection();
+      expect((await row("Location guesses")).textContent).toContain("6 current · 1 missing · 0 stale · 3 rechecking");
+    });
+
     it("says a new inference window checks guesses again, not that they're made again", async () => {
       producers = [producer({ artifact: "location", title: "Location guesses", fields: [
         { key: "inference_minutes", label: "Inference window", kind: "int", value: 360, default: 360, minimum: 5,

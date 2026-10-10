@@ -23,12 +23,13 @@ PRODUCER = ProducerSpec(
     applies=(f"{INFER_ON} AND a.taken_at IS NOT NULL AND (a.gps_lat IS NULL OR a.gps_lon IS NULL)"
              " AND NOT EXISTS (SELECT 1 FROM asset_location pl WHERE pl.asset_id = a.asset_id"
              " AND pl.source = 'person')"),
-    # Tried: a guess, or nothing within the window (outcome empty); and a
-    # guess not due to be checked again (a fix near it changed, came or went).
+    # Tried: a guess, or nothing within the window (outcome empty).
     made=("EXISTS (SELECT 1 FROM artifact_lineage ll WHERE ll.asset_id = a.asset_id"
-          " AND ll.artifact = 'location' AND ll.producer = 'location')"
-          " AND NOT EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id"
-          " AND rl.recheck IS NOT NULL)"),
+          " AND ll.artifact = 'location' AND ll.producer = 'location')"),
+    # A guess due to be checked again (a fix near it changed, came or went;
+    # the window changed): kept meanwhile, and not missing.
+    recheck=("EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id"
+             " AND rl.recheck IS NOT NULL)"),
     settings=(
         Setting("infer_location", INFER_DEFAULT, "Infer location", kind="bool"),
         # Not in lineage: a new window checks guesses again (regroup), keeping

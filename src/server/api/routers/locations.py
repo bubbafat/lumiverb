@@ -20,6 +20,7 @@ otherwise take "locations" for a clip id.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -233,9 +234,19 @@ class GuessIn(BaseModel):
     basis: dict = Field(default_factory=dict)
 
 
+class FixSeen(BaseModel):
+    asset_id: str
+    lat: float = Field(allow_inf_nan=False)
+    lon: float = Field(allow_inf_nan=False)
+    taken_at: datetime
+
+
 class GuessRequest(BaseModel):
     guess: GuessIn | None = None  # None: nothing within the window
     minutes: int = Field(ge=1, le=1440)  # the Inference window it was made in
+    # What the producer saw of each fix the guess names: one that went,
+    # moved or was retimed since makes the save "stale".
+    fixes: list[FixSeen] = Field(default_factory=list, max_length=10)
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
@@ -244,7 +255,8 @@ class GuessResponse(BaseModel):
     # location or the file's GPS: nothing written) | gone (not in sight) |
     # unchanged (rechecked: the guess it had is as sure or surer) | marked
     # (rechecked: its fixes went and nothing else was found; kept, "source
-    # removed") | stale (made in a window that's no longer the setting: nothing written)
+    # removed", or "outside window") | stale (made in a window that's no longer
+    # the setting, or from a fix that went, moved or was retimed since: nothing written)
     result: str
 
 
@@ -269,6 +281,11 @@ def save_location_guess(
             raise ApiError(422, "invalid_location", "lat and lon must be a real place: not 0, 0")
         if len(json.dumps(guess["basis"])) > 16_000:
             raise ApiError(422, "basis_too_big", "basis is at most 16,000 characters of JSON")
-    result = locations.save_guess(session, asset_id, guess, made, minutes=body.minutes)
+        named = guess["basis"].get("fixes") if isinstance(guess["basis"].get("fixes"), list) else []
+        seen = {f.asset_id for f in body.fixes}
+        if any(not isinstance(f, dict) or f.get("asset_id") not in seen for f in named):
+            raise ApiError(422, "fixes_required", "Send fixes: what was seen of each fix the guess names")
+    result = locations.save_guess(session, asset_id, guess, made, minutes=body.minutes,
+                                  fixes=[f.model_dump() for f in body.fixes])
     session.commit()
     return GuessResponse(result=result)

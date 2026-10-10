@@ -128,6 +128,7 @@ class ProducerCounts(BaseModel):
     current: int
     stale: int  # made with another producer, version, settings or source
     missing: int  # not made yet (or only failed so far)
+    rechecking: int = 0  # made, and due to be checked again (location guesses)
     failing: int  # the last try failed (whether or not an older artifact exists)
     given_up: int = 0  # failing, and no longer tried (after 10 tries) until someone asks
 

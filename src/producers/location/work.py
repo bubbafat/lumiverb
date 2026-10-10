@@ -73,17 +73,25 @@ class Locate(Work):
             "minutes": self.minutes, "clock_offset_min": clock.offset_min}).json()
         if not ctx["clip"].get("taken_at"):
             return {"guess": None, "why": "No time taken"}
-        return locate(stamp(ctx["clip"]), [fix(f) for f in ctx["fixes"]], self.minutes, clock)
+        result = locate(stamp(ctx["clip"]), [fix(f) for f in ctx["fixes"]], self.minutes, clock)
+        # What it saw of the fixes the guess is made from: the server refuses
+        # the save if one has gone, moved or been retimed since.
+        named = {f["asset_id"] for f in ((result["guess"] or {}).get("basis") or {}).get("fixes", [])}
+        result["fixes"] = [{k: f[k] for k in ("asset_id", "lat", "lon", "taken_at")}
+                           for f in ctx["fixes"] if f["asset_id"] in named]
+        return result
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
         """Each guess with the window it was made in: the server keeps the
         old guess or takes this one (the recheck rules, save_guess), and
-        refuses one made in a window that's no longer the setting ("stale":
-        the settings are read again, and the clip is tried again later)."""
+        refuses one made in a window that's no longer the setting, or from a
+        fix that's gone, moved or been retimed since ("stale": the settings
+        are read again, and the clip is tried again later)."""
         stale = False
         for clip, result in made:
             r = client.put(f"/v1/assets/locations/guess/{clip['asset_id']}",
-                           json={"guess": result["guess"], "minutes": self.minutes, "lineage": self.lineage(clip)})
+                           json={"guess": result["guess"], "minutes": self.minutes,
+                                 "fixes": result.get("fixes", []), "lineage": self.lineage(clip)})
             stale = stale or (r.json() or {}).get("result") == "stale"
         if stale:
             self.acct.producers.refresh()

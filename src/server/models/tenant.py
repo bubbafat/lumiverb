@@ -588,8 +588,8 @@ class AssetLocation(SQLModel, table=True):
     __table_args__ = (
         CheckConstraint("source IN ('person', 'time', 'suggestion')", name="ck_asset_location_source"),
         CheckConstraint("status IN ('applied', 'suggested')", name="ck_asset_location_status"),
-        CheckConstraint("recheck IS NULL OR recheck IN ('new_fix', 'window_changed', 'basis_gone', 'basis_changed')",
-                        name="ck_asset_location_recheck"),
+        CheckConstraint("recheck IS NULL OR recheck IN ('new_fix', 'window_changed', 'outside_window',"
+                        " 'basis_gone', 'basis_changed')", name="ck_asset_location_recheck"),
     )
 
     asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)  # ON DELETE CASCADE

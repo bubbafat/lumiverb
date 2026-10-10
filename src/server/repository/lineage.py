@@ -55,6 +55,8 @@ from src.shared.utils import utcnow
 # Each producer declares both (src/producers/<artifact>/).
 APPLIES: dict[str, str] = {a: p.applies for a, p in PRODUCERS.items()}
 MADE: dict[str, str] = {a: p.made for a, p in PRODUCERS.items()}
+# Made, but due to be checked again (location guesses): "false" for the rest.
+RECHECK: dict[str, str] = {a: p.recheck or "false" for a, p in PRODUCERS.items()}
 
 _OVERRIDES = "producer.{}"
 
@@ -170,8 +172,21 @@ def outstanding(artifact: str) -> str:
 
 
 def due(artifact: str) -> str:
-    """What the worker is handed now: outstanding, less failures waiting their turn."""
+    """Missing work now (the missing_* filters and counts): outstanding, less
+    failures waiting their turn."""
     return f"({outstanding(artifact)} AND NOT {waiting(artifact)})"
+
+
+def rechecking(artifact: str) -> str:
+    """Made, and due to be checked again (not missing): the scheduler hands
+    these out with what's missing, less failures waiting their turn."""
+    return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND ({RECHECK[artifact]})"
+            f" AND NOT {waiting(artifact)})")
+
+
+def handed_out(artifact: str) -> str:
+    """What the scheduler's queue hands out for a producer's kind: due, or rechecking."""
+    return f"({due(artifact)} OR {rechecking(artifact)})"
 
 
 def _scope_sql() -> str:
@@ -188,25 +203,29 @@ def _stale_params(artifact: str, want: dict[str, Any], library_id: str | None,
 
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
            asset_ids: list[str] | None = None) -> dict[str, int]:
-    """{applicable, current, stale, missing, failing, given_up} for one
-    artifact kind, over clips in sight (in one library, or among asset_ids,
-    when given). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
+    """{applicable, current, stale, missing, rechecking, failing, given_up}
+    for one artifact kind, over clips in sight (in one library, or among
+    asset_ids, when given). rechecking: made, and due to be checked again
+    (not stale). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
     if artifact not in MADE:
         raise KeyError(artifact)
     made = f"({MADE[artifact]})"
+    stale = f"(l.asset_id IS NULL OR {_stale_sql()})"
     row = session.execute(text(
         "SELECT count(*),"
         f" count(*) FILTER (WHERE NOT {made}),"
-        f" count(*) FILTER (WHERE {made} AND (l.asset_id IS NULL OR {_stale_sql()})),"
+        f" count(*) FILTER (WHERE {made} AND {stale}),"
+        f" count(*) FILTER (WHERE {made} AND NOT {stale} AND ({RECHECK[artifact]})),"
         " count(*) FILTER (WHERE l.error IS NOT NULL),"
         " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at = 'infinity')"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
     ), _stale_params(artifact, want, library_id, asset_ids)).one()
-    applicable, n_missing, stale, failing, given_up = (int(v) for v in row)
-    return {"applicable": applicable, "current": applicable - n_missing - stale, "stale": stale,
-            "missing": n_missing, "failing": failing, "given_up": given_up}
+    applicable, n_missing, n_stale, n_rechecking, failing, given_up = (int(v) for v in row)
+    return {"applicable": applicable, "current": applicable - n_missing - n_stale - n_rechecking,
+            "stale": n_stale, "missing": n_missing, "rechecking": n_rechecking, "failing": failing,
+            "given_up": given_up}
 
 
 def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool,
@@ -222,6 +241,7 @@ def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bo
     p = PRODUCERS[artifact]
     made = f"({MADE[artifact]})"
     stale = f" OR ({made} AND (l.asset_id IS NULL OR {_stale_sql()}))" if redo else ""
+    stale += f" OR ({made} AND ({RECHECK[artifact]}))"  # rechecks are handed out with what's missing
     blocked = "".join(
         f" AND (({MADE[need]}) OR NOT EXISTS (SELECT 1 FROM artifact_lineage n WHERE n.asset_id = a.asset_id"
         f"   AND n.artifact = '{need}' AND n.retry_at = 'infinity'))" for need in p.needs)
@@ -263,7 +283,7 @@ def redo_due(artifact: str) -> str:
     active_assets a, after LINEAGE_JOIN."""
     assert redoable(artifact), artifact
     return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND NOT {source_changed(artifact)}"
-            f" AND NOT {waiting(artifact)}"
+            f" AND NOT {waiting(artifact)} AND NOT ({RECHECK[artifact]})"
             f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id"
             f"   AND l.artifact = '{artifact}' AND (l.producer = :person"
             f"     OR (l.producer = :p_{artifact} AND l.producer_version = :v_{artifact}"

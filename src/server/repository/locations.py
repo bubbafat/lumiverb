@@ -158,8 +158,10 @@ def for_asset(session: Session, asset_id: str) -> dict[str, Any] | None:
         "lat": row["lat"], "lon": row["lon"], "radius_m": row["radius_m"],
         "source": row["source"], "status": row["status"],
         "basis_summary": summary(session, row),
-        # A guess whose fixes went, with nothing else to go by: "source removed".
+        # A guess kept with nothing else to go by: its fixes went ("source
+        # removed"), or are outside the window now ("outside window").
         "basis_gone": bool((row["basis"] or {}).get("basis_gone")) if row["source"] == TIME else False,
+        "outside_window": bool((row["basis"] or {}).get("outside_window")) if row["source"] == TIME else False,
         "set_by": display_name(row["set_by"]) if row["source"] == PERSON else None,
         "set_at": row["set_at"].isoformat() if row["set_at"] else None,
     }
@@ -329,11 +331,15 @@ def context(session: Session, asset_id: str, *, minutes: int, clock_offset_min: 
 
 # Why a guess is checked again. Before the producer gets to it, a stronger
 # reason replaces a weaker one (a fix changed beats one gone beats a new fix).
-NEW_FIX, WINDOW, BASIS_GONE, BASIS_CHANGED = "new_fix", "window_changed", "basis_gone", "basis_changed"
+NEW_FIX, WINDOW, OUTSIDE, BASIS_GONE, BASIS_CHANGED = (
+    "new_fix", "window_changed", "outside_window", "basis_gone", "basis_changed")
+# A guess kept with nothing else to go by, and the flag its basis gets
+# ("source removed", "outside window" in the Lightbox).
+KEEP_MARKED = {BASIS_GONE: "basis_gone", OUTSIDE: "outside_window"}
 
 
 def _rank(sql: str) -> str:
-    return (f"(CASE {sql} WHEN '{BASIS_CHANGED}' THEN 3 WHEN '{BASIS_GONE}' THEN 2"
+    return (f"(CASE {sql} WHEN '{BASIS_CHANGED}' THEN 4 WHEN '{BASIS_GONE}' THEN 3 WHEN '{OUTSIDE}' THEN 2"
             f" WHEN '{NEW_FIX}' THEN 1 WHEN '{WINDOW}' THEN 1 ELSE 0 END)")
 
 
@@ -444,14 +450,14 @@ def fixes_back(session: Session, asset_ids: list[str]) -> None:
 
 def window_changed(session: Session, before: dict[str, Any], after: dict[str, Any]) -> None:
     """The location producer's regroup: the Inference window changed. Every
-    guess is checked again: one made from a fix now outside the window is no
-    longer right, the rest are kept unless the new one is surer. A wider
-    window: clips where nothing was found are due again. Nothing is removed
-    here. Doesn't commit."""
+    guess is checked again: one made from a fix now outside the window takes
+    any new guess, or is kept marked outside_window; the rest are kept unless
+    the new one is surer. A wider window: clips where nothing was found are
+    due again. Nothing is removed, here or by the recheck. Doesn't commit."""
     old, new = before.get("inference_minutes"), after.get("inference_minutes")
     if old == new or not inferring(session):
         return
-    _mark(session, BASIS_CHANGED,
+    _mark(session, OUTSIDE,
           "jsonb_typeof(loc.basis -> 'fixes') = 'array' AND EXISTS (SELECT 1 FROM jsonb_array_elements(loc.basis"
           " -> 'fixes') fx WHERE abs(CAST(fx ->> 'gap_min' AS double precision)) > :minutes)",
           {"minutes": float(new)})
@@ -463,8 +469,26 @@ def window_changed(session: Session, before: dict[str, Any], after: dict[str, An
         ), {"artifact": ARTIFACT, "person": PERSON})
 
 
+def _fixes_as_seen(session: Session, fixes: list[dict[str, Any]]) -> bool:
+    """Each fix still in sight, at the point and time the producer saw (a
+    person's location over the file's GPS)."""
+    if not fixes:
+        return True
+    now = {r["asset_id"]: r for r in session.execute(text(
+        f"SELECT f.asset_id, f.taken_at, {_fix_cols('f', 'pl')} FROM active_assets f"
+        " LEFT JOIN asset_location pl ON pl.asset_id = f.asset_id AND pl.source = :person"
+        f" WHERE f.asset_id = ANY(:ids) AND {_is_fix('f', 'pl')}"
+    ), {"ids": [f["asset_id"] for f in fixes], "person": PERSON}).mappings().all()}
+    for f in fixes:
+        r = now.get(f["asset_id"])
+        if r is None or float(r["lat"]) != float(f["lat"]) or float(r["lon"]) != float(f["lon"]) \
+                or r["taken_at"] != f["taken_at"]:
+            return False
+    return True
+
+
 def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, made: dict[str, Any], *,
-               minutes: int) -> str:
+               minutes: int, fixes: list[dict[str, Any]] | None = None) -> str:
     """The producer's guess for a clip, made in a window of `minutes`, or
     that it found none. Never over a person's location or the file's GPS
     ("kept": nothing written), nor over a suggestion (its lineage is
@@ -475,12 +499,17 @@ def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, ma
     - a new fix, or a new window its fixes are still inside: the new guess
       replaces it only when as sure or surer (radius_m no larger);
       otherwise it stays as it was ("unchanged");
-    - a fix it was made from changed, or is outside a new window: it's
-      replaced, or goes when nothing's found ("empty");
-    - a fix it was made from went: the new guess, however sure; with none,
-      it stays, marked basis_gone ("source removed": "marked").
+    - a fix it was made from changed: it's replaced, or goes when nothing's
+      found ("empty");
+    - a fix it was made from went, or is outside a new window: the new
+      guess, however sure; with none, it stays, marked basis_gone ("source
+      removed") or outside_window ("marked").
     Otherwise (a first guess, or a new producer version's redo) the guess is
-    stored ("stored"), or with none, the clip's guess goes ("empty"). Doesn't commit."""
+    stored ("stored"), or with none, the clip's guess goes ("empty").
+
+    `fixes`: what the producer saw of each fix the guess names ({asset_id,
+    lat, lon, taken_at}). One no longer in sight, or since moved or retimed,
+    is "stale" too: nothing written, it's worked out again. Doesn't commit."""
     lock(session, [asset_id])
     row = session.execute(text(
         "SELECT (a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) AS has_file, loc.source, loc.radius_m,"
@@ -493,6 +522,8 @@ def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, ma
         return "kept"
     if int(minutes) != window(session):
         return "stale"
+    if guess is not None and not _fixes_as_seen(session, fixes or []):
+        return "stale"
     reason = row["recheck"] if row["source"] == TIME else None
     params = {"a": asset_id, "time": TIME}
     if reason in (NEW_FIX, WINDOW) and (guess is None or int(guess["radius_m"]) > int(row["radius_m"])):
@@ -500,10 +531,10 @@ def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, ma
                         params)
         lineage.record(session, asset_id, ARTIFACT, made, commit=False)
         return "unchanged"
-    if reason == BASIS_GONE and guess is None:
+    if reason in KEEP_MARKED and guess is None:
         session.execute(text(
-            "UPDATE asset_location SET recheck = NULL, basis = basis || CAST(:gone AS jsonb)"
-            " WHERE asset_id = :a AND source = :time"), {**params, "gone": json.dumps({"basis_gone": True})})
+            "UPDATE asset_location SET recheck = NULL, basis = basis || CAST(:mark AS jsonb)"
+            " WHERE asset_id = :a AND source = :time"), {**params, "mark": json.dumps({KEEP_MARKED[reason]: True})})
         lineage.record(session, asset_id, ARTIFACT, made, commit=False)
         return "marked"
     if guess is None:

@@ -885,6 +885,8 @@ export interface ProducerCounts {
   stale: number;
   /** Not made yet. */
   missing: number;
+  /** Made, and due to be checked again (location guesses): not missing. */
+  rechecking?: number;
   /** The last try failed. */
   failing: number;
   /** Failing, and no longer tried (after 10 tries) until someone asks. */
