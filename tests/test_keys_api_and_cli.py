@@ -183,11 +183,48 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
     assert len(admin_keys) == 1, f"Expected 1 admin key, got {len(admin_keys)}: {admin_keys}"
     admin_id = admin_keys[0]["key_id"]
 
-    # Editor key tries to revoke the only admin key → last_admin_key.
+    # An editor can't revoke an admin key at all (above its own role).
     r = client.delete(f"/v1/keys/{admin_id}", headers=auth_editor)
+    assert r.status_code == 403
+    assert r.json().get("error", {}).get("code") == "role_escalation"
+
+    # An admin signed in (no key of its own) meets the last-admin-key rule.
+    from src.server.api.routers.auth import _issue_jwt
+    from src.server.repository.control_plane import UserRepository
+
+    tenant_id = client.get("/v1/tenant/context", headers=auth_admin).json()["tenant_id"]
+    with get_control_session() as session:
+        user = UserRepository(session).create(tenant_id, "keys-admin@test.com", "x", role="admin")
+    token = _issue_jwt(user, get_settings().jwt_secret)
+    r = client.delete(f"/v1/keys/{admin_id}", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 409
     body = r.json()
     assert body.get("error", {}).get("code") == "last_admin_key"
+
+
+@pytest.mark.slow
+def test_editor_cannot_revoke_an_admin_key_even_with_admins_to_spare(keys_client: tuple[TestClient, str]) -> None:
+    """Revoking is held to the caller's role, as creating is: never a key above it."""
+    from src.server.database import get_control_session
+    from sqlmodel import text as sql_text
+
+    client, admin_plaintext = keys_client
+    auth_admin = {"Authorization": f"Bearer {admin_plaintext}"}
+    spare = client.post("/v1/keys", json={"label": "spare-admin", "role": "admin"}, headers=auth_admin).json()
+    editor = client.post("/v1/keys", json={"label": "an-editor", "role": "editor"}, headers=auth_admin).json()
+    viewer = client.post("/v1/keys", json={"label": "a-viewer", "role": "viewer"}, headers=auth_admin).json()
+    auth_editor = {"Authorization": f"Bearer {editor['plaintext']}"}
+
+    r = client.delete(f"/v1/keys/{spare['key_id']}", headers=auth_editor)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "role_escalation"
+    with get_control_session() as session:
+        still = session.exec(sql_text("SELECT revoked_at FROM api_keys WHERE key_id = :k"),
+                             params={"k": spare["key_id"]}).first()
+    assert still is not None and still[0] is None
+
+    # At or below its own role is fine.
+    assert client.delete(f"/v1/keys/{viewer['key_id']}", headers=auth_editor).status_code == 204
+    assert client.delete(f"/v1/keys/{spare['key_id']}", headers=auth_admin).status_code == 204
 
 
 @pytest.mark.slow

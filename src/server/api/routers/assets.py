@@ -1037,7 +1037,7 @@ def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
         library_repo.bump_revision(library_id)
 
 
-@router.delete("", response_model=BatchTrashResponse)
+@router.delete("", response_model=BatchTrashResponse, dependencies=[Depends(require_editor)])
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
@@ -1055,7 +1055,6 @@ def batch_trash_assets(
     reason = body.reason or "missing"
     asset_repo = AssetRepository(session)
     if reason == "user":
-        require_editor(request)
         if not body.remove_from_projects:
             # Only about clips this would trash: one already in the trash needs no answer.
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
@@ -1101,7 +1100,7 @@ class VideoFacetSubmit(VideoFacetModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
+@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel, dependencies=[Depends(require_editor)])
 def put_video_facet(
     asset_id: str,
     body: VideoFacetSubmit,
@@ -1258,7 +1257,7 @@ def unarchive_assets(
     return UnarchiveResponse(unarchived=back, skipped=skipped)
 
 
-@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
+@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse, dependencies=[Depends(require_editor)])
 def submit_vision(
     asset_id: str,
     body: VisionSubmitRequest,
@@ -1316,7 +1315,7 @@ class OcrSubmitRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/{asset_id}/ocr", status_code=200)
+@router.post("/{asset_id}/ocr", status_code=200, dependencies=[Depends(require_editor)])
 def submit_ocr(
     asset_id: str,
     body: OcrSubmitRequest,
@@ -1359,7 +1358,7 @@ class BatchOcrRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-ocr", status_code=200)
+@router.post("/batch-ocr", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_ocr(
     body: BatchOcrRequest,
     request: Request,
@@ -1418,7 +1417,7 @@ class BatchVisionRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-vision", status_code=200)
+@router.post("/batch-vision", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_vision(
     body: BatchVisionRequest,
     request: Request,
@@ -1562,7 +1561,7 @@ def _shown_transcript(asset: Asset) -> str | None:
     return None
 
 
-@router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse)
+@router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse, dependencies=[Depends(require_editor)])
 def submit_transcript(
     asset_id: str,
     body: TranscriptSubmitRequest,
@@ -1575,8 +1574,6 @@ def submit_transcript(
     nothing of it is kept)."""
     from src.server.srt import parse_srt_to_text, validate_srt
 
-    if body.source == "manual":
-        require_editor(request)
     made = _transcript_lineage(body)  # a machine's says how it was made, before anything is saved
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
@@ -1705,7 +1702,7 @@ class NoteUpdateResponse(BaseModel):
     note_updated_at: str | None
 
 
-@router.put("/{asset_id}/note", response_model=NoteUpdateResponse)
+@router.put("/{asset_id}/note", response_model=NoteUpdateResponse, dependencies=[Depends(require_editor)])
 def update_note(
     asset_id: str,
     body: NoteUpdateRequest,
@@ -1750,7 +1747,7 @@ def update_note(
     )
 
 
-@router.delete("/{asset_id}/note", status_code=204)
+@router.delete("/{asset_id}/note", status_code=204, dependencies=[Depends(require_editor)])
 def delete_note(
     asset_id: str,
     request: Request,
@@ -1783,7 +1780,7 @@ class EmbeddingSubmitRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/{asset_id}/embeddings", status_code=201)
+@router.post("/{asset_id}/embeddings", status_code=201, dependencies=[Depends(require_editor)])
 def submit_embedding(
     asset_id: str,
     body: EmbeddingSubmitRequest,
@@ -1821,7 +1818,7 @@ class BatchEmbeddingRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-embeddings", status_code=200)
+@router.post("/batch-embeddings", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_embeddings(
     body: BatchEmbeddingRequest,
     request: Request,
@@ -1871,7 +1868,7 @@ class BatchMoveRequest(BaseModel):
     items: list[BatchMoveItem]
 
 
-@router.post("/batch-moves", status_code=200)
+@router.post("/batch-moves", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_moves(
     body: BatchMoveRequest,
     request: Request,
@@ -1958,7 +1955,7 @@ def stream_or_enqueue_preview(
     raise HTTPException(status_code=404, detail="No video preview available for this asset")
 
 
-@router.post("/upsert", response_model=UpsertAssetResponse)
+@router.post("/upsert", response_model=UpsertAssetResponse, dependencies=[Depends(require_editor)])
 def upsert_asset(
     body: UpsertAssetRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -2161,7 +2158,7 @@ class BatchFaceRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-faces", status_code=200)
+@router.post("/batch-faces", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_faces(
     body: BatchFaceRequest,
     request: Request,
@@ -2216,7 +2213,7 @@ def submit_batch_faces(
     return {"processed": processed, "skipped": skipped}
 
 
-@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)
+@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201, dependencies=[Depends(require_editor)])
 def submit_faces(
     asset_id: str,
     body: FaceSubmitRequest,

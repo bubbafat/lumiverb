@@ -1508,14 +1508,17 @@ def test_viewers_cannot_trash_or_restore_clips(projects_env):
 
 
 @pytest.mark.slow
-def test_anyone_who_can_scan_can_mark_files_missing(projects_env):
-    # The scanner marks files it no longer finds; that stays open to every
-    # role that can ingest, or a viewer's scan would fail halfway.
+def test_marking_files_missing_needs_an_editor(projects_env):
+    # The scanner marks files it no longer finds. Scanning (ingest too) is an
+    # editor's: a viewer can't take clips out of sight either way.
     client, api_key, library_id = projects_env
     viewer = _viewer_key(client, api_key)
     clip = _ingest_asset(client, api_key, library_id, "roles/gone-from-disk.jpg")
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "missing"},
                        headers=_headers(viewer))
+    assert r.status_code == 403, r.text
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "missing"},
+                       headers=_headers(api_key))
     assert r.status_code == 200, r.text
     assert r.json()["trashed"] == [clip]
 

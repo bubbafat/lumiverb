@@ -1354,7 +1354,7 @@ export function Lightbox({
               {/* Section: Notes (a visitor sees one only if there's one to show) */}
               {(!isPublic || !!detail?.note) && (
               <NoteSection
-                readOnly={isPublic}
+                readOnly={!canCorrect}
                 asset={asset}
                 note={detail?.note ?? null}
                 noteAuthor={detail?.note_author ?? null}

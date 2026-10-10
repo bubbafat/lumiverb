@@ -22,7 +22,7 @@ from PIL import Image
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_tenant_session
+from src.server.api.dependencies import get_tenant_session, require_editor
 from src.shared import asset_status
 from src.shared.path_filter import PathFilter, is_path_included_merged
 from src.server.repository.tenant import (
@@ -338,7 +338,7 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
         return None
 
 
-@router.post("/v1/ingest", response_model=IngestResponse)
+@router.post("/v1/ingest", response_model=IngestResponse, dependencies=[Depends(require_editor)])
 async def create_and_ingest(
     request: Request,
     background: BackgroundTasks,
@@ -598,7 +598,7 @@ async def create_and_ingest(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/v1/assets/{asset_id}/ingest", response_model=IngestResponse)
+@router.post("/v1/assets/{asset_id}/ingest", response_model=IngestResponse, dependencies=[Depends(require_editor)])
 async def ingest_asset(
     asset_id: str,
     request: Request,

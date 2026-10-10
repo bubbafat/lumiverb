@@ -48,7 +48,7 @@ class InitChunksResponse(BaseModel):
     already_initialized: bool
 
 
-@router.post("/{asset_id}/chunks", response_model=InitChunksResponse)
+@router.post("/{asset_id}/chunks", response_model=InitChunksResponse, dependencies=[Depends(require_editor)])
 def init_chunks(
     asset_id: str,
     body: InitChunksRequest,
@@ -60,7 +60,6 @@ def init_chunks(
     lineage_required when it doesn't say); a redo sent again, once they're
     being found or were found that way, changes nothing."""
     if body.redo:
-        require_editor(request)  # it drops what was found and described
         made = require_lineage(body.lineage, "scenes")
         _now_current(session, made)
         _start_over(request, session, asset_id, made)
@@ -141,7 +140,7 @@ class ChunkWorkOrder(BaseModel):
     is_last: bool
 
 
-@router.get("/{asset_id}/chunks/next", response_model=None)
+@router.get("/{asset_id}/chunks/next", response_model=None, dependencies=[Depends(require_editor)])
 def claim_next_chunk(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -206,7 +205,7 @@ class ChunkCompleteResponse(BaseModel):
     all_complete: bool
 
 
-@router.post("/chunks/{chunk_id}/complete", response_model=ChunkCompleteResponse)
+@router.post("/chunks/{chunk_id}/complete", response_model=ChunkCompleteResponse, dependencies=[Depends(require_editor)])
 def complete_chunk(
     chunk_id: str,
     body: ChunkCompleteRequest,
@@ -263,7 +262,7 @@ class ChunkFailRequest(BaseModel):
     error_message: str
 
 
-@router.post("/chunks/{chunk_id}/fail")
+@router.post("/chunks/{chunk_id}/fail", dependencies=[Depends(require_editor)])
 def fail_chunk(
     chunk_id: str,
     body: ChunkFailRequest,
@@ -346,7 +345,7 @@ class SceneVisionUpdateResponse(BaseModel):
     status: str
 
 
-@router.patch("/scenes/{scene_id}", response_model=SceneVisionUpdateResponse)
+@router.patch("/scenes/{scene_id}", response_model=SceneVisionUpdateResponse, dependencies=[Depends(require_editor)])
 def update_scene_vision(
     scene_id: str,
     body: SceneVisionUpdateRequest,
@@ -412,7 +411,7 @@ class SceneSyncRequest(BaseModel):
     asset_id: str
 
 
-@router.post("/scenes/{scene_id}/sync")
+@router.post("/scenes/{scene_id}/sync", dependencies=[Depends(require_editor)])
 def sync_scene(
     scene_id: str,
     body: SceneSyncRequest,

@@ -238,7 +238,7 @@ def test_a_start_over_deletes_only_images_at_keys_the_server_makes(env, tmp_path
         s.commit()
     outside = tmp_path / "not-a-scene.txt"  # named by an absolute key
     outside.write_text("keep me")
-    beside = Path(storage.abs_path("")).parent / f"beside-{vid}.txt"  # named by a ../ key
+    beside = storage.abs_path("x").parent.parent / f"beside-{vid}.txt"  # named by a ../ key
     beside.write_text("keep me too")
     assert _start(lib, vid).status_code == 200
     w = client.get(f"/v1/video/{vid}/chunks/next", headers=headers).json()

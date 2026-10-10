@@ -13,7 +13,7 @@ from sqlmodel import Session
 
 from src.server.repository.lineage import record as record_lineage
 
-from src.server.api.dependencies import get_tenant_session
+from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.storage.local import LocalStorage, get_storage
 
@@ -48,7 +48,7 @@ class ArtifactUploadResponse(BaseModel):
     sha256: str
 
 
-@router.post("/{asset_id}/artifacts/{artifact_type}", response_model=ArtifactUploadResponse)
+@router.post("/{asset_id}/artifacts/{artifact_type}", response_model=ArtifactUploadResponse, dependencies=[Depends(require_editor)])
 async def upload_artifact(
     asset_id: str,
     artifact_type: str,
@@ -171,7 +171,7 @@ class BatchArtifactUploadResponse(BaseModel):
     items: list[BatchArtifactItem]
 
 
-@router.post("/{asset_id}/artifacts", response_model=BatchArtifactUploadResponse)
+@router.post("/{asset_id}/artifacts", response_model=BatchArtifactUploadResponse, dependencies=[Depends(require_editor)])
 async def upload_artifacts_batch(
     asset_id: str,
     request: Request,
