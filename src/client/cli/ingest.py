@@ -77,7 +77,7 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
 
 def _build_exif_payload(source_path: Path, media_type: str) -> dict:
     """Extract EXIF and build the JSON payload for the ingest endpoint."""
-    from src.client.workers.exif_extract import parse_duration
+    from src.client.workers.exif_extract import parse_duration, parse_gps_accuracy_m, parse_taken_at_offset_min
 
     exif_data = extract_exif(source_path)
     sha256 = compute_sha256(source_path)
@@ -93,6 +93,8 @@ def _build_exif_payload(source_path: Path, media_type: str) -> dict:
         "taken_at": taken_at.isoformat() if taken_at else None,
         "gps_lat": gps_lat,
         "gps_lon": gps_lon,
+        "gps_accuracy_m": parse_gps_accuracy_m(exif_data) if gps_lat is not None else None,
+        "taken_at_offset_min": parse_taken_at_offset_min(exif_data),
         "duration_sec": duration_sec,
         "iso": parse_iso(exif_data),
         "exposure_time_us": parse_exposure_time_us(exif_data),

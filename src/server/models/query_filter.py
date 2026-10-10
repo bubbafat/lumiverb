@@ -126,6 +126,11 @@ class LeafFilter(ABC):
     def needs_metadata_join(self) -> bool:
         return False
 
+    @property
+    def needs_location_join(self) -> bool:
+        """Reads the effective location: the query joins LOCATION_JOIN (as loc)."""
+        return False
+
     def to_quickwit(self) -> str | None:
         """Return Quickwit query clause, or None if not a text search filter."""
         return None
@@ -180,6 +185,10 @@ class QuerySpec:
     def needs_metadata_join(self) -> bool:
         return any(f.needs_metadata_join for f in self.leaves)
 
+    @property
+    def needs_location_join(self) -> bool:
+        return any(f.needs_location_join for f in self.leaves)
+
     def to_json(self) -> dict:
         """Serialize for a saved search."""
         children_json = [c.to_json() for c in self.root.children]
@@ -189,6 +198,41 @@ class QuerySpec:
         if self.direction != "desc":
             result["direction"] = self.direction
         return result
+
+
+# ---------------------------------------------------------------------------
+# The effective location (ADR-017)
+# ---------------------------------------------------------------------------
+#
+# Which location a clip has: a person's, then the file's GPS, then an
+# applied guess, only when guesses are included. A suggestion never counts.
+# Computed here, never copied onto assets. A query reading it joins
+# LOCATION_JOIN; whether guesses count is the bind parameter
+# INCLUDE_GUESSES_PARAM (an include_guesses filter sets it; false otherwise).
+
+LOCATION_JOIN = "LEFT JOIN asset_location loc ON loc.asset_id = a.asset_id"
+INCLUDE_GUESSES_PARAM = "include_guesses"
+_GUESSES = f"CAST(:{INCLUDE_GUESSES_PARAM} AS boolean)"
+_PERSON = "loc.source = 'person'"
+_FILE = "(a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL)"
+_GUESS = f"({_GUESSES} AND loc.status = 'applied' AND loc.source <> 'person')"
+
+
+def location_params(params: dict) -> None:
+    """Guesses don't count unless an include_guesses filter said so."""
+    params.setdefault(INCLUDE_GUESSES_PARAM, False)
+
+
+def has_location_sql() -> str:
+    """SQL: the clip has an effective location (needs LOCATION_JOIN)."""
+    return f"COALESCE({_PERSON} OR {_FILE} OR {_GUESS}, FALSE)"
+
+
+def location_sql(axis: str) -> str:
+    """SQL: the effective latitude ("lat") or longitude ("lon"), NULL when none."""
+    col = {"lat": "lat", "lon": "lon"}[axis]
+    return (f"(CASE WHEN {_PERSON} THEN loc.{col} WHEN {_FILE} THEN a.gps_{col}"
+            f" WHEN {_GUESS} THEN loc.{col} END)")
 
 
 def _collect_leaves(node: LeafFilter | GroupFilter, out: list[LeafFilter]) -> None:
@@ -779,13 +823,18 @@ class HasGps(LeafFilter):
     def value_kind(cls) -> ValueKind:
         return ValueKind.BOOLEAN
 
+    @classmethod
+    def display_label(cls) -> str:
+        return "Has location"
+
     def label(self) -> str:
         return "Has location" if self.value else "No location"
 
     def to_sql(self, params: dict, counter: list[int]) -> str:
-        if self.value:
-            return "a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL"
-        return "(a.gps_lat IS NULL OR a.gps_lon IS NULL)"
+        # The effective location: the file's or a person's (and applied
+        # guesses with include_guesses).
+        location_params(params)
+        return has_location_sql() if self.value else f"NOT {has_location_sql()}"
 
     def to_url_value(self) -> str:
         return "yes" if self.value else "no"
@@ -793,6 +842,10 @@ class HasGps(LeafFilter):
     @classmethod
     def from_url_value(cls, raw: str) -> HasGps:
         return cls(value=raw.lower() in ("yes", "true", "1"))
+
+    @property
+    def needs_location_join(self) -> bool:
+        return True
 
 
 @dataclass(frozen=True)
@@ -832,10 +885,15 @@ class NearLocation(LeafFilter):
         params[p_min_lon] = self.lon - lon_delta
         params[p_max_lon] = self.lon + lon_delta
 
+        location_params(params)
         return (
-            f"a.gps_lat BETWEEN :{p_min_lat} AND :{p_max_lat}"
-            f" AND a.gps_lon BETWEEN :{p_min_lon} AND :{p_max_lon}"
+            f"{location_sql('lat')} BETWEEN :{p_min_lat} AND :{p_max_lat}"
+            f" AND {location_sql('lon')} BETWEEN :{p_min_lon} AND :{p_max_lon}"
         )
+
+    @property
+    def needs_location_join(self) -> bool:
+        return True
 
     def to_url_value(self) -> str:
         return f"{self.lat},{self.lon},{self.radius_km}"
@@ -849,6 +907,49 @@ class NearLocation(LeafFilter):
         lon = float(parts[1])
         radius = float(parts[2]) if len(parts) > 2 else 1.0
         return cls(lat=lat, lon=lon, radius_km=radius)
+
+
+@dataclass(frozen=True)
+class IncludeGuesses(LeafFilter):
+    """has_gps and near count applied guesses too (ADR-017). Matches every
+    clip by itself; refused on public requests, as all location filters are."""
+    value: bool = True
+
+    @classmethod
+    def prefix(cls) -> str:
+        return "include_guesses"
+
+    @classmethod
+    def type_name(cls) -> str:
+        return "include_guesses"
+
+    @classmethod
+    def value_kind(cls) -> ValueKind:
+        return ValueKind.BOOLEAN
+
+    @classmethod
+    def display_label(cls) -> str:
+        return "Includes guesses"
+
+    def label(self) -> str:
+        return "Includes guesses" if self.value else "No guesses"
+
+    def to_sql(self, params: dict, counter: list[int]) -> str:
+        # A modifier, not a predicate: it matches every clip, but names the
+        # parameter so the query binds it even without has_gps or near.
+        params[INCLUDE_GUESSES_PARAM] = bool(self.value) or params.get(INCLUDE_GUESSES_PARAM, False)
+        return f"{_GUESSES} IS NOT NULL"
+
+    def to_url_value(self) -> str:
+        return "yes" if self.value else "no"
+
+    @classmethod
+    def from_url_value(cls, raw: str) -> IncludeGuesses:
+        return cls(value=raw.lower() in ("yes", "true", "1"))
+
+
+# Filters about where a clip was shot: refused on public requests.
+LOCATION_FILTERS: tuple[type[LeafFilter], ...] = (HasGps, NearLocation, IncludeGuesses)
 
 
 @dataclass(frozen=True)

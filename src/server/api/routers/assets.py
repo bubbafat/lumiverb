@@ -120,6 +120,10 @@ class AssetResponse(BaseModel):
     note_author: str | None = None
     note_updated_at: str | None = None
     video_facet: VideoFacetModel | None = None
+    # ADR-017: what the file doesn't say (a person's location, a guess or a
+    # suggestion), beside the file's GPS above. Signed-in only.
+    location: dict | None = None
+    gps_accuracy_m: float | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -671,6 +675,10 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     _trim_public_transcript(request, session, response)
+    if not getattr(request.state, "is_public_request", False):
+        from src.server.repository.locations import for_asset
+
+        response.location = for_asset(session, asset.asset_id)
     return response
 
 
@@ -760,6 +768,7 @@ def _to_asset_response(asset) -> AssetResponse:
         taken_at=asset.taken_at.isoformat() if asset.taken_at else None,
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
+        gps_accuracy_m=asset.gps_accuracy_m,
         iso=asset.iso,
         exposure_time_us=asset.exposure_time_us,
         aperture=asset.aperture,

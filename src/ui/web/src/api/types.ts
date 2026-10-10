@@ -67,8 +67,11 @@ export interface FacetsResponse {
   iso_range: (number | null)[];
   aperture_range: (number | null)[];
   focal_length_range: (number | null)[];
+  /** Clips with a location: the file's or a person's (guesses too with include_guesses). */
   has_gps_count: number;
   has_face_count: number;
+  /** Clips with an applied guess: the "Includes guesses" toggle shows only when there are some. */
+  guess_count?: number;
 }
 
 export interface FaceItem {
@@ -161,6 +164,24 @@ export interface AssetDetail {
   note?: string | null;
   note_author?: string | null;
   note_updated_at?: string | null;
+  gps_accuracy_m?: number | null;
+  /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
+  location?: AssetLocation | null;
+}
+
+/** A clip's location beyond the file's: a person's, a guess, or a suggestion. */
+export interface AssetLocation {
+  lat: number;
+  lon: number;
+  /** 0 for a person's exact point. */
+  radius_m: number;
+  source: "person" | "time" | "suggestion";
+  status: "applied" | "suggested";
+  /** Why, in a few words ("Same place as IMG_1.jpg", "from phone photos 14:02–14:40"). */
+  basis_summary?: string | null;
+  /** Who set it, for a person's: looked up when a signed-in person reads it (null for an API key). */
+  set_by?: string | null;
+  set_at?: string | null;
 }
 
 export interface SimilarHit {

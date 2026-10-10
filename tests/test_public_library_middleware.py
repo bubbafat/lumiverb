@@ -583,12 +583,31 @@ def test_public_library_page_and_query_are_trimmed(public_lib_client, located):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("location_filter", ["near:48.8584,2.2945,1", "has_gps:yes"])
+@pytest.mark.parametrize("location_filter", ["near:48.8584,2.2945,1", "has_gps:yes", "include_guesses:yes"])
 def test_public_queries_cant_search_by_location(public_lib_client, located, location_filter):
     client, _, library_id, _ = public_lib_client
     params = [("f", f"library:{library_id}"), ("f", location_filter)]
     assert client.get("/v1/query", params=params).status_code == 403
     assert client.get("/v1/assets/facets", params=params).status_code == 403
+
+
+@pytest.mark.slow
+def test_public_detail_shows_no_location_of_any_kind(public_lib_client, located):
+    """A person's location (ADR-017) is no more public than the file's GPS."""
+    client, api_key, library_id, _ = public_lib_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.put("/v1/assets/locations", json={"asset_ids": [located], "lat": 1.5, "lon": 2.5, "replace": "all"},
+                   headers=auth)
+    assert r.status_code == 200, r.text
+    public = client.get(f"/v1/assets/{located}", params={"public_library_id": library_id}).json()
+    for field in ("location", "gps_lat", "gps_lon", "gps_accuracy_m"):
+        assert public.get(field) is None, (field, public)
+    facets = client.get("/v1/assets/facets", params=[("f", f"library:{library_id}")]).json()
+    assert facets["has_gps_count"] == 0 and facets["guess_count"] == 0
+    signed_in = client.get(f"/v1/assets/{located}", headers=auth).json()
+    assert signed_in["location"]["lat"] == 1.5 and signed_in["gps_lat"] == 48.8584
+    assert client.request("DELETE", "/v1/assets/locations", json={"asset_ids": [located]},
+                          headers=auth).status_code == 200
 
 
 @pytest.mark.slow

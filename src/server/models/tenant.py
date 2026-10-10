@@ -129,8 +129,12 @@ class Asset(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    # What the file says (only the scan writes them). (0, 0) is no fix.
     gps_lat: float | None = Field(default=None, nullable=True)
     gps_lon: float | None = Field(default=None, nullable=True)
+    gps_accuracy_m: float | None = Field(default=None, nullable=True)  # GPSHPositioningError
+    # OffsetTimeOriginal (or OffsetTime) in minutes; None when the file doesn't say.
+    taken_at_offset_min: int | None = Field(default=None, nullable=True)
     iso: int | None = Field(default=None, nullable=True)
     exposure_time_us: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     aperture: float | None = Field(default=None, nullable=True)
@@ -569,6 +573,35 @@ class ArtifactLineage(SQLModel, table=True):
     retry_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
+class AssetLocation(SQLModel, table=True):
+    """A clip's location that the file doesn't say (ADR-017): a person's
+    (source "person", radius 0 for an exact point), a guess ("time") or a
+    suggestion ("suggestion", status "suggested" until a person takes it).
+    The file's GPS stays on assets. Which one shows: a person's, then the
+    file's, then an applied guess when guesses are included; a suggestion
+    never counts as a location. None of it is shown on a public request."""
+
+    __tablename__ = "asset_location"
+    __table_args__ = (
+        CheckConstraint("source IN ('person', 'time', 'suggestion')", name="ck_asset_location_source"),
+        CheckConstraint("status IN ('applied', 'suggested')", name="ck_asset_location_status"),
+    )
+
+    asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)  # ON DELETE CASCADE
+    lat: float = Field(nullable=False)
+    lon: float = Field(nullable=False)
+    radius_m: int = Field(nullable=False)
+    source: str = Field(nullable=False)  # person | time | suggestion
+    status: str = Field(nullable=False)  # applied | suggested
+    # Why: fix clips and times, clock offset, OCR snippet, gazetteer id; for a person, same_as and who.
+    basis: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    set_by: str | None = Field(default=None, nullable=True)  # user id, for source = person
+    set_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
 

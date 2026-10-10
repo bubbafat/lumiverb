@@ -1459,6 +1459,31 @@ export async function deleteNote(assetId: string): Promise<void> {
   await apiFetch<void>(`/assets/${assetId}/note`, { method: "DELETE" });
 }
 
+// ---------------------------------------------------------------------------
+// Locations (ADR-017): always for named clips
+// ---------------------------------------------------------------------------
+
+export type LocationReplace = "none" | "person" | "all";
+
+/** A person's location for these clips: a point, or the same place as another clip.
+ * Replacing a location the file or a person gave answers 409 location_exists
+ * (details: count, person, file) until `replace` says so. */
+export async function setLocations(
+  body: { asset_ids: string[]; replace?: LocationReplace } & ({ lat: number; lon: number } | { same_as: string }),
+): Promise<{ updated: string[]; skipped: string[] }> {
+  return apiFetch("/assets/locations", { method: "PUT", body });
+}
+
+/** Clear a person's location from these clips (the file's GPS stays). */
+export async function clearLocations(assetIds: string[]): Promise<{ cleared: string[]; skipped: string[] }> {
+  return apiFetch("/assets/locations", { method: "DELETE", body: { asset_ids: assetIds } });
+}
+
+/** These clips' suggestions become a person's location. */
+export async function acceptLocations(assetIds: string[]): Promise<{ accepted: string[]; skipped: string[] }> {
+  return apiFetch("/assets/locations/accept", { method: "POST", body: { asset_ids: assetIds } });
+}
+
 
 // ---------------------------------------------------------------------------
 // Send to editor
