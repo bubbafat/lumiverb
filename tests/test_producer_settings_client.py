@@ -39,11 +39,11 @@ def test_the_workers_constants_are_the_registrys_settings():
     assert {k: v for k, v in faces.items() if k != "model"} == face.FaceSettings().__dict__
     clip = P.PRODUCERS["clip"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
-    from src.client.cli import repair
     from src.processing.proxy import proxy_cache
+    from src.producers.clip import PROXY_CACHE_EDGE
 
-    assert repair.PROXY_CACHE_EDGE == proxy_cache._DEFAULT_MAX_EDGE == clip["input_edge"]
-    # What changes the output lives only on the server: the worker's config has none of it.
+    assert PROXY_CACHE_EDGE == proxy_cache._DEFAULT_MAX_EDGE == clip["input_edge"]
+    # What changes the output lives only on the server: the CLI's config has none of it.
     assert not {"whisper_model", "proxy_max_edge", "analysis_proxy_max_edge", "vision_api_url",
                 "vision_api_key", "vision_model_id"} & set(cli_config.CLIConfig.model_fields)
 
@@ -181,97 +181,6 @@ def test_a_failed_probe_isnt_claimed(tmp_path):
         scan._scan_one_video(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
     assert set(json.loads(call.kwargs["data"]["lineage"])) == {"proxy"}
-
-
-def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
-    from unittest.mock import patch
-
-    from rich.console import Console
-
-    from src.processing import ingest
-    from src.processing.producer_settings import ProducerSettings
-
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    model = "qwen3-vl:8b"
-    client = _client({a: {"model": model} for a in ("vision", "ocr", "scene_vision")})
-    producers = ProducerSettings(client)
-    client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
-    with (
-        patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
-        patch("src.processing.workers.captions.factory.get_caption_provider") as provider,
-        patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": model,
-                                                            "description": "a dog", "tags": []}),
-    ):
-        ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
-                                   console=Console(quiet=True), producers=producers)
-    assert provider.call_args.args[0] == model
-    [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
-    body = call.kwargs["json"]
-    assert body["items"][0]["source_sha256"] == SHA and "lineage" not in body["items"][0]
-    assert body["lineage"] == P.lineage("vision", P.effective_settings("vision", account={"vision": model}), None)
-
-
-def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
-    """The account's model was read for this step; the run's settings may be older."""
-    from unittest.mock import patch
-
-    from rich.console import Console
-
-    from src.processing import ingest
-    from src.processing.producer_settings import ProducerSettings
-
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    client = _client({a: {"model": "llava:13b"} for a in ("vision", "ocr", "scene_vision")})
-    producers = ProducerSettings(client)  # read when the run started
-    client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
-    with (
-        patch.object(ingest, "_resolve_vision_config",
-                     return_value=("http://vision", None, "qwen3-vl:8b", "account settings")),
-        patch("src.processing.workers.captions.factory.get_caption_provider") as provider,
-        patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": "qwen3-vl:8b",
-                                                            "description": "a dog", "tags": []}),
-    ):
-        ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
-                                   console=Console(quiet=True), producers=producers)
-    assert provider.call_args.args[0] == "qwen3-vl:8b"
-    [call] = [c for c in client.post.call_args_list if c.args[0] == "/v1/assets/batch-vision"]
-    assert call.kwargs["json"]["lineage"]["settings_hash"] == P.settings_hash(
-        P.effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
-
-
-def test_descriptions_ask_for_whats_missing_only(tmp_path, monkeypatch):
-    """Redoing stale work is the scheduler's (ADR-016 phase 4): a manual run
-    describes what's missing, in the server's order."""
-    from unittest.mock import patch
-
-    from rich.console import Console
-
-    from src.processing import ingest
-    from src.processing.producer_settings import ProducerSettings
-
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    model = "qwen3-vl:8b"
-    client = _client({a: {"model": model} for a in ("vision", "ocr", "scene_vision")})
-    producers = ProducerSettings(client)
-    client.get.return_value.json.return_value = {"items": [
-        {"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA},
-        {"asset_id": "ast_b", "rel_path": "b.jpg", "sha256": SHA}]}
-    order = []
-
-    def one(**kwargs):
-        order.append(kwargs["asset_id"])
-        return {"asset_id": kwargs["asset_id"], "model_id": model, "description": "a dog", "tags": []}
-
-    with (
-        patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
-        patch("src.processing.workers.captions.factory.get_caption_provider"),
-        patch.object(ingest, "_backfill_one", side_effect=one),
-    ):
-        ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
-                                   console=Console(quiet=True), producers=producers, concurrency=1)
-    pages = [c for c in client.get.call_args_list if c.args and c.args[0] == "/v1/assets/page"]
-    assert pages and all("upgrades" not in c.kwargs["params"] for c in pages)
-    assert order == ["ast_a", "ast_b"]
 
 
 def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():

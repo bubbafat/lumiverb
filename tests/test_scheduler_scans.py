@@ -18,7 +18,8 @@ import pytest
 from rich.console import Console
 
 from src.processing import roots
-from src.client.cli.config import CLIConfig, save_config
+from src.processing import machine
+from src.processing.machine import Machine
 from src.processing.scan import ScanStats
 from src.server.scheduler.scans import (
     Retry,
@@ -126,7 +127,7 @@ def das(home: Path, tmp_path: Path) -> Path:
     mount = tmp_path / "mnt"
     (mount / "Footage" / "Day 1").mkdir(parents=True)
     (mount / "Footage" / "Day 1" / "A001.mov").write_bytes(b"x")
-    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    machine.use(Machine(root_map={MAC: str(mount)}))
     return mount
 
 
@@ -259,7 +260,7 @@ def test_a_truncated_backlog_scans_everything(das: Path) -> None:
 
 @pytest.mark.fast
 def test_sleeping_storage_is_not_scanned_and_says_so(home: Path) -> None:
-    save_config(CLIConfig(root_map={MAC: str(home / "not-mounted")}))
+    machine.use(Machine(root_map={MAC: str(home / "not-mounted")}))
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
     scan, _, reachable = _pass(server, ScanState())
     scan.assert_not_called()
@@ -273,7 +274,7 @@ def test_an_empty_mount_point_is_never_scanned(home: Path, tmp_path: Path) -> No
     # file missing.
     mount = tmp_path / "empty-mount"
     (mount / "Footage").mkdir(parents=True)
-    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    machine.use(Machine(root_map={MAC: str(mount)}))
     scan, _, reachable = _pass(FakeServer([LIB]), ScanState())
     scan.assert_not_called()
     assert reachable == {"lib_1": False}
@@ -507,8 +508,10 @@ def test_report_changes_sends_paths_as_libraries_store_them(home: Path, tmp_path
 
     from typer.testing import CliRunner
 
+    from src.client.cli.config import CLIConfig, save_config
+
     main = importlib.import_module("src.client.cli.main")
-    save_config(CLIConfig(root_map={MAC: "/mnt/media-01"}))
+    save_config(CLIConfig(root_map={MAC: "/mnt/media-01"}))  # the CLI's own map
     client = MagicMock()
     client.post.return_value.json.return_value = {
         "accepted": 1, "libraries": {"lib_1": 1}, "unmatched": 1, "unmatched_sample": ["/elsewhere/x.mov"],

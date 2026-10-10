@@ -128,7 +128,7 @@ class ProxyCache:
         # 3. Try server download
         if self._client is not None:
             try:
-                resp = self._client._client.get(self._client._url(f"/v1/assets/{asset_id}/proxy"))
+                resp = self._client._client.get(self._client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code == 200:
                     image_bytes = self._ensure_size(resp.content)
                     (self._dir / asset_id).write_bytes(image_bytes)

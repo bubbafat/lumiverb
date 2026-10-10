@@ -4,6 +4,7 @@ The silences skipped (VAD) are found by the scheduler, whichever machine
 transcribes the speech (src/processing/workers/transcripts/speech.py)."""
 
 from src.producers.contract import ITS_JOBS, VIDEO, ProducerSpec, Setting
+from src.producers.pools import TRANSCRIPTS
 
 PRODUCER = ProducerSpec(
     artifact="transcript", producer="whisper", version="1", media=VIDEO, unit="second", title="Transcripts", order=110,
@@ -14,7 +15,7 @@ PRODUCER = ProducerSpec(
         Setting("model", "small", "Model", kind="text", fixed=ITS_JOBS),
         Setting("vad_min_silence_ms", 500, "Shortest silence skipped", minimum=100, maximum=2000, unit="ms"),
     ),
-    job="transcripts", needs=("analysis_proxy",),
-    kind="transcript", flag="missing_transcription", run="src.server.scheduler.runners:transcript", pool="transcripts",
-    per_account=True,
+    needs=("analysis_proxy",),
+    kind="transcript", flag="missing_transcription", run="src.producers.transcript.work:Transcript",
+    pool=TRANSCRIPTS,
 )

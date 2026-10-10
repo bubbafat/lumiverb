@@ -1,12 +1,13 @@
 """Transcription only while a machine doing transcripts can (Settings → AI).
 
-The transcripts job's machines are the built-in Whisper (the worker's own
-computer) and transcription servers. Before transcribing, the worker checks
-each and tells the server what it found. Clips go to the online machines,
-as many at once as they take together. When none can be used, transcription
-doesn't start, or stops, and no clip is charged a failure: it's the
-machines' problem. A clip is charged only when a machine heard it and
-couldn't make sense of it, and a check afterwards finds that machine fine.
+The transcripts job's machines are the built-in Whisper (the scheduler's
+own computer) and transcription servers. Before transcribing, the scheduler
+checks each and tells the server what it found. Clips go to the online
+machines, as many at once as they take together. When none can be used,
+transcription doesn't start, or stops, and no clip is charged a failure:
+it's the machines' problem. A clip is charged only when a machine heard it
+and couldn't make sense of it, and a check afterwards finds that machine
+fine. (Each clip a job of the transcript producer's, through the runner.)
 """
 
 from __future__ import annotations
@@ -17,10 +18,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from rich.console import Console
-
-from src.client.cli.config import CLIConfig, save_config
-from src.client.cli.repair import run_repair
+from src.processing.failure_report import FailureReport
+from src.processing.machine import Machine
+from src.processing.producer_settings import ProducerSettings
 from src.processing.transcript_guard import TranscriptGuard
 from src.processing.video.audio import AudioTrack
 from src.processing.workers.transcripts.base import TranscriptError
@@ -40,15 +40,9 @@ def _speaches(url: str = "http://speaches/v1", at_once: int = 2) -> dict:
 
 
 @pytest.fixture
-def library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    save_config(CLIConfig(api_url="http://test", api_key="k"))
-    for asset_id in ("ast_a", "ast_b", "ast_c", "ast_d"):
-        proxy = home / ".cache" / "lumiverb" / "analysis" / f"{asset_id}.mp4"
-        proxy.parent.mkdir(parents=True, exist_ok=True)
-        proxy.write_bytes(b"proxy")
-    return {"library_id": "lib_1", "name": "Footage", "root_path": str(tmp_path / "nowhere")}
+def library(tmp_path: Path) -> Path:
+    """Where the clips' analysis proxies are."""
+    return tmp_path
 
 
 def _client(machines: list[dict], model: str = "small") -> MagicMock:
@@ -70,13 +64,53 @@ def _clips(*ids: str) -> list[dict]:
             for x in ids]
 
 
-def _run(client: MagicMock, library: dict, clips: list[dict]) -> None:
-    with (
-        patch("src.client.cli.repair.get_repair_summary",
-              return_value={"total_assets": len(clips), "missing_transcription": len(clips)}),
-        patch("src.client.cli.repair._page_missing", return_value=clips),
-    ):
-        run_repair(client, library, job_type="transcribe", console=Console(quiet=True))
+class _Account:
+    """What the scheduler's jobs for an account run with, as far as transcripts go."""
+
+    def __init__(self, client: MagicMock, proxies: Path) -> None:
+        self.client = client
+        self.producers = ProducerSettings(client)
+        self.failures = FailureReport(client)
+        self.guards = {"transcripts": TranscriptGuard(client)}
+        self.analysis_cache = MagicMock()
+        self.analysis_cache.get.side_effect = lambda asset_id: (proxies / f"{asset_id}.mp4")
+        self.machine = Machine()
+        self.stopping = threading.Event()
+
+    def guard(self, job: str):
+        return self.guards[job]
+
+    def transcriber(self):
+        return self.guards["transcripts"].transcriber()
+
+
+def _run(client: MagicMock, library: Path, clips: list[dict], at_once: int = 1) -> None:
+    """As the scheduler runs them: the machines checked, then a job per clip,
+    as many at once as the pool has slots, none handed out once no machine
+    can be used."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.producers.runner import Crashed, run
+    from src.producers.transcript.work import Transcript
+    from src.server.scheduler.dispatch import Job
+
+    acct = _Account(client, library)
+    guard = acct.guard("transcripts")
+    if not guard.check():
+        return
+
+    def one(clip: dict) -> None:
+        if guard.down:  # the scheduler hands out nothing more of a job without a machine
+            return
+        (library / f"{clip['asset_id']}.mp4").write_bytes(b"proxy")
+        try:
+            run(Transcript, acct, Job("t1", "transcript", 3, (clip,)))
+        except Crashed:
+            pass  # counted by the service
+
+    with ThreadPoolExecutor(at_once) as pool:
+        list(pool.map(one, clips))
+    acct.failures.flush()
 
 
 def _charged(client: MagicMock) -> list[dict]:
@@ -96,7 +130,7 @@ def _statuses(client: MagicMock, machine_id: str) -> list[dict]:
 def test_no_usable_machine_means_no_transcription_and_no_clip_charged(library):
     client = _client([_speaches()])
     with patch("src.processing.ai_pool.list_models", side_effect=VisionEndpointError("Couldn't reach it.")), \
-            patch("src.client.cli.repair._transcribe_one") as one:
+            patch("src.producers.transcript.work.transcribe") as one:
         _run(client, library, _clips("ast_a"))
     one.assert_not_called()
     assert _charged(client) == [] and _transcripts(client) == {}
@@ -112,7 +146,7 @@ def test_without_faster_whisper_here_the_speech_cant_be_found_so_nothing_starts(
     client = _client([_speaches()])
     with patch("src.processing.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."), \
             patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
-            patch("src.client.cli.repair._transcribe_one") as one:
+            patch("src.producers.transcript.work.transcribe") as one:
         _run(client, library, _clips("ast_a"))
         guard = TranscriptGuard(client)
         assert guard.check() is False and "can't find the speech" in guard.error
@@ -150,8 +184,9 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
     clips = [f"ast_{c}" for c in "abcdefgh"]
     with patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
             patch.object(BuiltInWhisper, "transcribe", hear), patch.object(OpenAITranscriber, "transcribe", hear), \
-            patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
-        _run(client, library, _clips(*clips))
+            patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
+        # The pool's slots: the machines' requests at once (3), times two (per_request).
+        _run(client, library, _clips(*clips), at_once=6)
     assert most["all"] == 3  # the built-in's one and the server's two
     assert most[BuiltInWhisper] == 1 and most[OpenAITranscriber] == 2
     assert set(_transcripts(client)) == set(clips) and preparing[0] == len(clips)
@@ -166,7 +201,7 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
         raise TranscriptError("No machine doing transcripts is online (Built in: Couldn't load small).",
                               endpoint_fault=True)
 
-    with patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
+    with patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
         _run(client, library, _clips("ast_a", "ast_b", "ast_c", "ast_d", "ast_e"))
     # Those already under way end too; the rest wait.
     assert 1 <= len(calls) <= 2 and "ast_e.mp4" not in calls
@@ -178,13 +213,15 @@ def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
 
     def transcribe_one(source, transcriber, vad_ms):
         if source.name == "ast_a.mp4":
-            raise OSError(28, "No space left on device")
+            raise ValueError("unexpected")
+        if source.name == "ast_b.mp4":
+            raise OSError(28, "No space left on device")  # this machine's: a crash, counted, not charged
         return ("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "en")
 
-    with patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
-        _run(client, library, _clips("ast_a", "ast_b"))
+    with patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
+        _run(client, library, _clips("ast_a", "ast_b", "ast_c"))
     assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "transcript")]
-    assert set(_transcripts(client)) == {"ast_b"}
+    assert set(_transcripts(client)) == {"ast_c"}
 
 
 def test_without_faster_whisper_here_settings_says_so(library):
@@ -203,7 +240,7 @@ def test_a_clip_the_machine_couldnt_make_sense_of_is_charged_once_the_machine_ch
             raise TranscriptError("Invalid data found when processing input", endpoint_fault=False)
         return ("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "en")
 
-    with patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
+    with patch("src.producers.transcript.work.transcribe", side_effect=transcribe_one):
         _run(client, library, _clips("ast_a", "ast_b"))
     assert [(c["asset_id"], c["artifact"]) for c in _charged(client)] == [("ast_a", "transcript")]
     assert set(_transcripts(client)) == {"ast_b"}
@@ -230,7 +267,7 @@ def test_the_built_in_failing_to_load_moves_the_clip_to_a_server_timed_onto_the_
             return [{"start": 2 * 16_000, "end": 3 * 16_000}]  # one second of speech at 2 s
 
         with patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small", "kokoro"]), \
-                patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
+                patch("src.processing.video.audio.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
                 patch("subprocess.run", side_effect=ffmpeg), \
                 patch("src.processing.workers.transcripts.speech.find_speech", side_effect=find_speech), \
                 patch("src.processing.workers.transcripts.local.BuiltInWhisper.transcribe",

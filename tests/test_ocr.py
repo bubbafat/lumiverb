@@ -316,10 +316,10 @@ def test_extract_text_missing_file(mock_chat, provider):
 
 
 # ---------------------------------------------------------------------------
-# _ocr_one tests
+# One photo's text (the ocr producer's read_text)
 # ---------------------------------------------------------------------------
 
-from src.client.cli.repair import _ocr_one
+from src.producers.ocr.work import read_text as _ocr_one  # noqa: E402
 
 
 def test_ocr_one_success():

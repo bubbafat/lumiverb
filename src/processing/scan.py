@@ -607,7 +607,7 @@ def _populate_cache_for_unchanged(
             asset_id = f["asset_id"]
             try:
                 resp = client._client.get(
-                    client._url(f"/v1/assets/{asset_id}/proxy"),
+                    client._url(f"/v1/assets/{asset_id}/artifacts/proxy"),
                 )
                 if resp.status_code == 200:
                     sha = f.get("source_sha256") or ""

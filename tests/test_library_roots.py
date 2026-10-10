@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from src.processing import roots
 from src.client.cli.config import CLIConfig, load_config, save_config
+from src.processing import machine
 from src.processing.roots import local_library_root, map_root, reachable_root
 
 MAC = "/Volumes/media-01"
@@ -302,23 +303,16 @@ def test_scan_of_an_unreachable_root_touches_nothing(home: Path, tmp_path: Path)
 
 
 @pytest.mark.fast
-def test_enrich_probes_files_under_the_mapped_root(home: Path, tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
+def test_the_schedulers_map_is_its_own_settings_not_the_clis(home: Path, tmp_path: Path, monkeypatch) -> None:
+    import json
 
-    from rich.console import Console
+    from src.server.scheduler.settings import SchedulerSettings
 
-    from src.client.cli.repair import run_repair
-
-    library, here = _mapped_library(home, tmp_path)
-    client = MagicMock()
-    asset = {"asset_id": "ast_1", "rel_path": "a.mov"}
-    with (
-        patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_probe": 1}),
-        patch("src.client.cli.repair._page_missing", return_value=[asset]),
-        patch("src.client.cli.repair._probe_one", return_value="ok") as probe,
-    ):
-        run_repair(client, library, job_type="probe", console=Console(quiet=True))
-    assert probe.call_args.args[1] == here
+    save_config(CLIConfig(root_map={MAC: "/cli/only"}))
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", json.dumps({MAC: str(tmp_path)}))
+    machine.use(SchedulerSettings().machine())
+    lib = {"library_id": "lib_1", "root_path": f"{MAC}/Footage"}
+    assert local_library_root(lib) == tmp_path / "Footage"
 
 
 @pytest.mark.fast

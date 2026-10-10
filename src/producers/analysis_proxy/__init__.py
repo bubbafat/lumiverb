@@ -2,6 +2,7 @@
 are made from (src/processing/video/analysis_proxy.py)."""
 
 from src.producers.contract import PREPARE, VIDEO, ProducerSpec, Setting
+from src.producers.pools import RENDERS
 
 PRODUCER = ProducerSpec(
     artifact="analysis_proxy", producer="analysis-proxy", version="1", media=VIDEO, unit="second", title="Analysis proxies",
@@ -16,5 +17,6 @@ PRODUCER = ProducerSpec(
                 advanced=True),
     ),
     redo_on_source_change=False,
-    kind="render", flag="missing_analysis_proxy", run="src.server.scheduler.runners:render", tier=PREPARE, pool="render", storage=True,
+    kind="render", flag="missing_analysis_proxy", run="src.producers.analysis_proxy.work:Render", tier=PREPARE,
+    pool=RENDERS, storage=True,
 )

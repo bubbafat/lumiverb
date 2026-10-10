@@ -4,19 +4,21 @@ A producer makes one kind of artifact for the clips it applies to. It says,
 in one place, everything the rest of Lumiverb needs to know about it: what
 it makes and at which version, what it's made from, which clips it applies
 to and how a clip shows it's made, the settings that change its output,
-the resource its work waits on, its tier, whether it can be made again in
-place, and the function the scheduler runs. The scheduler (its queue, kinds, pools
-and runners), the reconciler, the lineage and GET /v1/producers (which
-Settings → Processing shows as it comes) read it from the registry
-(src/producers/__init__.py). Still named by hand: the repair summary's
-counts and the asset page's missing_* filters (the older enrich flow), and
-a new AI job's machines (src/shared/ai_jobs.py and its guard).
+the pool its work waits on (and so the AI job whose machines do it), its
+tier, whether it can be made again in place and what goes with it then,
+and its work (a src/producers/runner.py Work: make and save). Everything
+else reads it from the registry (src/producers/__init__.py): the scheduler
+(queue, kinds, pools and their slots, GPU sharing, runners), the reconciler
+and lineage, the repair summary and the asset page's missing_* filters, the
+AI jobs and where each one's model is kept (Settings → AI), and
+GET /v1/producers (which Settings → Processing shows as it comes). Adding a
+producer is one folder: docs/architecture.md, "Adding a producer".
 
 A producer's ``__init__`` only declares: it imports this module (and
-src/producers/prompts.py), never what imports the registry
-(src/shared/producers.py, the server, the workers), or it would be found
-half-loaded. Its ``run`` function lives in a module of its own, imported
-when the scheduler first needs it, and may import anything.
+src/producers/prompts.py, src/producers/pools.py), never what imports the
+registry (src/shared/producers.py, the server, processing), or it would be
+found half-loaded. Its work lives in a module of its own (work.py),
+imported when the scheduler first needs it, and may import anything.
 
 SQL fragments are conditions on ``active_assets a``.
 """
@@ -105,6 +107,53 @@ class Setting:
 
 
 @dataclass(frozen=True)
+class AiJob:
+    """Work the account's AI machines do (Settings → AI): one model for the
+    account, kept by the job's name (the tenant's ai_job_models); a machine
+    does the job only while it offers that model. Producers sharing the
+    machines name the same job (through their pool)."""
+
+    name: str  # "vision"
+    label: str  # what Settings calls it: "Descriptions & text"
+    # "module:Class", made with (client): checks the machines and calls them
+    # (src/processing/job_guard.py). It's how the job's machines are asked.
+    guard: str
+    # The model a new account starts with ("" = the job is off until one is chosen).
+    default_model: str = ""
+    # The scheduler's own machine can do it (transcripts: its Whisper).
+    built_in: bool = False
+    # Jobs handed out for each request the machines take at once: transcripts
+    # 2, so each clip's audio is got ready while the machines hear others
+    # (the machines hold their own limits).
+    per_request: int = 1
+
+
+# GPU sharing: while a pool's jobs run, AI machines sharing this machine's
+# GPU take fewer requests (video work comes first, Robert, Oct 9).
+DECODES = "decodes"  # one per job decoding on the GPU, up to the machine's GPU decodes
+WHILE_RUNNING = "while_running"  # one while any of its jobs runs
+
+
+@dataclass(frozen=True)
+class Pool:
+    """The resource a producer's work waits on: so many jobs at once. Pools
+    are shared by name; producers naming one declare it alike."""
+
+    name: str
+    slots: int = 1  # jobs at once
+    # This machine's setting (src/processing/machine.py) that sizes it instead
+    # ("renders": analysis proxies rendered at once here).
+    sized_by: str = ""
+    # Each account's own: its AI job's machines size it (Settings → AI).
+    job: AiJob | None = None
+    gpu_hold: str = ""  # DECODES | WHILE_RUNNING (see above)
+
+    @property
+    def per_account(self) -> bool:
+        return self.job is not None
+
+
+@dataclass(frozen=True)
 class ProducerSpec:
     artifact: str  # the one artifact kind it makes
     producer: str  # its id, recorded in lineage
@@ -119,12 +168,11 @@ class ProducerSpec:
     # Its output must come from one model across the library (an embedding
     # space): an upgrade can't be partial.
     uniform: bool = False
-    # The AI job whose model is its "model" (Settings → AI, src/shared/ai_jobs.py).
-    job: str = ""
     # Why it can't be made again in place yet; its stale artifacts wait.
     cant_redo: str = ""
     # What's made from it and goes when it's made again (made anew after it):
-    # the 409 before new settings names them.
+    # their lineage goes with its own (lineage.start_over), and the 409
+    # before new settings names them.
     redo_also: tuple[str, ...] = ()
     # What making it again keeps, in plain words: the question before new settings says it.
     redo_note: str = ""
@@ -140,16 +188,12 @@ class ProducerSpec:
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)
-    flag: str = ""  # the repair summary's missing_* filter for it
-    run: str = ""  # "module:function", called with (account, job)
+    # Its missing_* filter (the asset page) and repair summary count.
+    flag: str = ""
+    run: str = ""  # its work: "module:Class", a src/producers/runner.py Work
     tier: int = FIND
-    pool: str = ""  # the resource its work waits on
+    pool: Pool | None = None  # the resource its work waits on
     batch: int = 1  # clips a job
-    # The pool is each account's own: its AI job's machines (the pool is the job's name).
-    per_account: bool = False
-    # Jobs at once in its pool, when the scheduler doesn't size the pool
-    # itself (scan, probe, render, gpu, scenes) and machines don't (an AI job's).
-    slots: int = 1
     storage: bool = False  # reads the originals: only libraries reachable now
     # What its work grows with, for how long is left: "second" (of video:
     # a render, a transcript) or "clip" (a photo described).
@@ -158,6 +202,11 @@ class ProducerSpec:
     @property
     def scheduled(self) -> bool:
         return bool(self.kind)
+
+    @property
+    def job(self) -> str:
+        """The AI job whose model is its "model" (Settings → AI): its pool's, if any."""
+        return self.pool.job.name if self.pool is not None and self.pool.job is not None else ""
 
     @property
     def defaults(self) -> Mapping[str, Any]:

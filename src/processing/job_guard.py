@@ -17,20 +17,15 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.processing.ai_pool import MachinePool
-
-if TYPE_CHECKING:
-    from src.processing.failure_report import FailureReport
 
 logger = logging.getLogger(__name__)
 
 
 class JobGuard:
-    def __init__(self, client: Any, job: str, failures: FailureReport | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
-        self._failures = failures
+    def __init__(self, client: Any, job: str, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self.pool = MachinePool(client, job, clock=clock)
         self.job = job
@@ -71,34 +66,28 @@ class JobGuard:
         """Requests the online machines take at once, together (at least one)."""
         return max(1, self.pool.capacity())
 
-    def on_fail(self, artifact: str) -> Callable[[str, object], bool]:
-        """on_fail for one of the job's steps. A machine's fault reaches here
-        only when no machine is left: the job's work stops, and no clip is
-        charged. Otherwise the machines are checked again; the clip is charged
-        only when a check started after its failure finds one offering the model.
-        It returns whether the clip was charged (else it waits, uncharged)."""
-        def fail(asset_id: str, error: object) -> bool:
-            if getattr(error, "model_changed", False):  # caught in a model change: it waits
-                return False
-            if getattr(error, "endpoint_fault", False):
-                with self._lock:
-                    if not self.down:
-                        self.error = str(error)
-                        logger.warning("%s: %s %s waits until it's fixed.", self.job, self.error, self.label)
-                return False
-            failed_at = self._clock()
+    def charges(self, error: object) -> bool:
+        """Whether a clip's failure is the clip's (charge it) or the machines'
+        (it waits, uncharged). A machine's fault reaches here only when no
+        machine is left: the job's work stops. Otherwise the machines are
+        checked again; it's the clip's only when a check started after its
+        failure finds one offering the model."""
+        if getattr(error, "model_changed", False):  # caught in a model change: it waits
+            return False
+        if getattr(error, "endpoint_fault", False):
             with self._lock:
-                if not self.down and (self._checked_at is None or self._checked_at <= failed_at):
-                    self._checked_at = self._clock()
-                    self.pool.recheck()
-                    self.error = self.pool.error
-            if self.down:
-                return False
-            # The machine that served it, found down since: its doing, not the clip's.
-            served_by = getattr(error, "machine", None)
-            if served_by is not None and not served_by.online:
-                return False
-            if self._failures is not None:
-                self._failures.add(artifact, asset_id, error)
-            return True
-        return fail
+                if not self.down:
+                    self.error = str(error)
+                    logger.warning("%s: %s %s waits until it's fixed.", self.job, self.error, self.label)
+            return False
+        failed_at = self._clock()
+        with self._lock:
+            if not self.down and (self._checked_at is None or self._checked_at <= failed_at):
+                self._checked_at = self._clock()
+                self.pool.recheck()
+                self.error = self.pool.error
+        if self.down:
+            return False
+        # The machine that served it, found down since: its doing, not the clip's.
+        served_by = getattr(error, "machine", None)
+        return served_by is None or served_by.online

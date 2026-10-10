@@ -14,8 +14,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.server.repository.lineage import Pauses
 from src.server.scheduler.service import Scheduler, run
 from src.shared.producers import pause_targets
+
+
+def _pauses(work=(), redo=()) -> Pauses:
+    """What an admin paused (lineage.pauses): switches' work, and producers' redo."""
+    seen = {"paused_by": None, "paused_at": None}
+    return Pauses(work={t: seen for t in work}, redo={a: seen for a in redo})
 
 
 @pytest.fixture(autouse=True)
@@ -23,8 +30,7 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
     """A Scheduler made here without them reads nothing from a database."""
     from src.server.scheduler import service
 
-    for name, stub in (("_paused_in_database", lambda tenant_id: set()),
-                       ("_on_hold_in_database", lambda tenant_id: set()),
+    for name, stub in (("_on_hold_in_database", lambda tenant_id: _pauses()),
                        ("_retry_requested_in_database", lambda tenant_id: None),
                        ("_status_to_database", lambda tenant_id, status: None),
                        ("_status_from_database", lambda tenant_id: None),
@@ -108,7 +114,7 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
                                                             "scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
-                     paused=lambda tenant_id: set(paused or ()), on_hold=lambda tenant_id: set(held or ()),
+                     on_hold=lambda tenant_id: _pauses(held or (), paused or ()),
                      retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
 
 
@@ -255,8 +261,7 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     runners["clip"] = boom
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
                   candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
-                  runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  runners=runners, scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
     assert s.dispatcher.free("gpu") == 1
@@ -371,7 +376,7 @@ def test_nothing_is_handed_out_until_the_accounts_settings_were_read() -> None:
 
 @pytest.mark.fast
 def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> None:
-    from src.server.scheduler.runners import NOT_TRIED
+    from src.producers.runner import NOT_TRIED
 
     rec = Recorder()
     outcomes = iter([NOT_TRIED, None, None])
@@ -385,8 +390,7 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
     runners["probe"] = probe
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
-                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     for _ in range(4):
         s.tick()
         _settle(s)
@@ -434,8 +438,7 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
             if kind.name == "vision" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
-                  runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  runners=rec.all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     s.dispatcher._all_known_at.clear()
     s.dispatcher._buffers.clear()
@@ -455,8 +458,7 @@ def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
         return [_item("c")] if kind.name == "clip" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
-                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
     assert [kind for _, kind, _ in rec.ran] == ["clip"]
@@ -471,8 +473,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     acct.refresh = lambda: gate.wait(5)
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
-                  runners=rec.all(), scan=MagicMock(), paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  runners=rec.all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     start = time.monotonic()
     s.tick()
     assert time.monotonic() - start < 1
@@ -574,7 +575,7 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
     stopped: set = set()
     s = _scheduler({"t1": FakeAccount(vision=1)},
                    {"redo_vision": [_item("a"), _item("b", "2026-10-02")]}, rec, paused=stopped)
-    s._paused = lambda tenant_id: stopped
+    s._on_hold = lambda tenant_id: _pauses((), stopped)
     s.tick()  # a in hand, b waiting
     stopped.add("vision")
     rec.hold.set()
@@ -630,7 +631,7 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
     rec.hold.clear()
     held: set = set()
     s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
-    s._on_hold = lambda tenant_id: held
+    s._on_hold = lambda tenant_id: _pauses(held)
     s.tick()  # a in hand, b waiting
     held.update(pause_targets())
     s.tick()
@@ -646,7 +647,7 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
 def test_other_accounts_go_on_while_one_is_paused() -> None:
     rec = Recorder()
     s = _scheduler({"t1": FakeAccount("t1"), "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
-    s._on_hold = lambda tenant_id: set(pause_targets()) if tenant_id == "t1" else set()
+    s._on_hold = lambda tenant_id: _pauses(pause_targets() if tenant_id == "t1" else ())
     s.tick()
     _settle(s)
     assert [(t, kind) for t, kind, _ in rec.ran] == [("t2", "clip")]
@@ -673,7 +674,7 @@ def test_resuming_hands_out_what_was_waiting_at_once() -> None:
     rec.hold.clear()
     held: set = set()
     s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
-    s._on_hold = lambda tenant_id: held
+    s._on_hold = lambda tenant_id: _pauses(held)
     s.tick()  # a in hand, b waiting (all of them known)
     held.add("vision")
     s.tick()
@@ -735,7 +736,7 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
                   candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
                   if kind.name == "vision" else [],
                   runners={**rec.all(), "vision": lambda acct, job: (release.wait(30), vision(acct, job))[1]},
-                  scan=MagicMock(), paused=lambda t: set(), on_hold=lambda t: set(held),
+                  scan=MagicMock(), on_hold=lambda t: _pauses(held),
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     deadline = time.monotonic() + 5
     while s.running == 0 and time.monotonic() < deadline:  # a in hand, b waiting
@@ -802,7 +803,7 @@ def test_ai_machines_sharing_the_gpu_give_way_while_a_render_decodes() -> None:
     s = Scheduler(lambda: {"t1": acct}, capacity={"render": 2, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=1,
-                  paused=lambda t: set(), retry_requested=lambda t: None, write_status=lambda t, st: None)
+                  retry_requested=lambda t: None, write_status=lambda t, st: None)
     s.tick()
     assert acct.gpu_holds == [1]
     rec.hold.set()
@@ -818,7 +819,7 @@ def test_without_gpu_decoding_nothing_gives_way() -> None:
     s = Scheduler(lambda: {"t1": acct}, capacity={"render": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=0,
-                  paused=lambda t: set(), retry_requested=lambda t: None, write_status=lambda t, st: None)
+                  retry_requested=lambda t: None, write_status=lambda t, st: None)
     s.tick()
     _settle(s)
     assert acct.gpu_holds == [0]
@@ -832,7 +833,7 @@ def test_what_the_scheduler_is_doing_is_written_for_processing() -> None:
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("a"), _item("b", "2026-10-02")] if k.name == "vision" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True,
-                  paused=lambda t: set(), retry_requested=lambda t: None,
+                  retry_requested=lambda t: None,
                   write_status=lambda t, st: written.append((t, st)))
     s.tick()
     s.tick()  # written every few seconds, not every tick
@@ -1033,8 +1034,7 @@ def test_a_redo_is_listed_with_its_settings_and_the_account_follows_them() -> No
 @pytest.mark.fast
 def test_each_accounts_pace_starts_from_its_last_status_after_a_restart() -> None:
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
-                  runners=Recorder().all(), scan=MagicMock(), inline_refill=True, paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None,
+                  runners=Recorder().all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None,
                   last_status=lambda tenant_id: {"pace": {"render": 0.4, "vision": 9.0}})
     s.tick()
     assert s.status("t1")["pace"] == {"render": 0.4, "vision": 9.0}
@@ -1051,8 +1051,7 @@ def test_a_kind_learns_its_pace_only_from_the_clips_its_jobs_made() -> None:
         account.failures.add("vision", "bad", "the model said no")
         return None
 
-    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, inline_refill=True, paused=lambda tenant_id: set(),
-                  candidates=lambda t, k, libs, skip=(): [i for i in [_item("bad")] if i["asset_id"] not in skip]
+    s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, inline_refill=True, candidates=lambda t, k, libs, skip=(): [i for i in [_item("bad")] if i["asset_id"] not in skip]
                   if k.name == "vision" else [],
                   runners={**Recorder().all(), "vision": vision}, scan=MagicMock(),
                   retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
@@ -1067,8 +1066,7 @@ def test_the_status_names_libraries_whose_storage_work_waits() -> None:
     written: list[dict] = []
     acct = FakeAccount(libraries=("lib_1", "lib_2"), reachable=("lib_1",))
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
-                  runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status))
+                  runners=Recorder().all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status))
     s.tick()
     assert written and written[-1]["storage_waits"] == ["lib_2"] and "unreachable" not in written[-1]
 
@@ -1079,8 +1077,7 @@ def test_the_status_keeps_each_librarys_looks_and_a_restart_starts_from_them() -
     written: list[dict] = []
     acct = FakeAccount()
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
-                  runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
+                  runners=Recorder().all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
                   last_status=lambda tenant_id: {"storage": record})
     s.tick()
     s.tick()
@@ -1094,8 +1091,7 @@ def test_a_restart_without_a_record_starts_with_none() -> None:
     acct = FakeAccount()
     written: list[dict] = []
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
-                  runners=Recorder().all(), scan=MagicMock(), paused=lambda tenant_id: set(),
-                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
+                  runners=Recorder().all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: written.append(status),
                   last_status=lambda tenant_id: None)
     s.tick()
     assert acct.seeded == [None] and written[0]["storage"] == {}
@@ -1193,7 +1189,7 @@ def test_a_server_error_counts_as_a_crash() -> None:
 
 @pytest.mark.fast
 def test_only_the_clips_that_crashed_are_counted() -> None:
-    from src.server.scheduler.runners import Crashed
+    from src.producers.runner import Crashed
 
     def faces(acct, job):
         raise Crashed(["bad"], "face detection's process died or hung", waiting=["changed"])
@@ -1232,7 +1228,7 @@ def test_counting_crashes_failing_charges_nothing() -> None:
 
 @pytest.mark.fast
 def test_a_job_stopped_mid_save_counts_as_not_tried() -> None:
-    from src.server.scheduler.runners import NOT_TRIED, Stopped
+    from src.producers.runner import NOT_TRIED, Stopped
 
     def stopped(acct, job):
         raise Stopped("/v1/assets/x/video-facet")
@@ -1244,17 +1240,17 @@ def test_a_job_stopped_mid_save_counts_as_not_tried() -> None:
 
 
 @pytest.mark.fast
-def test_the_scheduler_sends_no_nul_in_what_it_saves(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_scheduler_sends_no_nul_in_what_it_saves() -> None:
     # Postgres takes no NUL in text: a description with one was refused with
-    # a 500, every hour, forever.
-    from src.client.cli.client import LumiverbClient
-    from src.server.scheduler.service import scheduler_client
+    # a 500, every hour, forever. Every save goes through the runner's client
+    # (src/producers/runner.py), the scan pass's too.
+    from src.producers.runner import Saving
 
     sent: list = []
+    inner = MagicMock()
     for method in ("post", "put", "patch"):
-        monkeypatch.setattr(LumiverbClient, method,
-                            lambda self, path, _m=method, **kw: sent.append((_m, kw.get("json"))))
-    client = scheduler_client("http://api", "key")
+        setattr(inner, method, lambda path, _m=method, **kw: sent.append((_m, kw.get("json"))))
+    client = Saving(inner)
     body = {"items": [{"description": "a\x00dog", "tags": ["be\x00ach"], "k\x00": 1}], "n": 2}
     client.post("/v1/assets/batch-vision", json=body)
     client.put("/x", json="a\x00")

@@ -17,14 +17,14 @@ class TestVisionProxyCache:
 
     def test_backfill_one_uses_proxy_cache(self):
         """_backfill_one reads from proxy cache, not server."""
-        from src.processing.ingest import _backfill_one
+        from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg-bytes"
 
         mock_provider = MagicMock()
 
-        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
+        with patch("src.producers.vision.work.describe") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -35,8 +35,8 @@ class TestVisionProxyCache:
             result = _backfill_one(
                 asset_id="ast_1",
                 rel_path="photo.jpg",
-                vision_model_id="test",
-                vision_provider=mock_provider,
+                model="test",
+                provider=mock_provider,
                 proxy_cache=mock_cache,
             )
 
@@ -47,7 +47,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_falls_back_to_server(self):
         """Falls back to server download when proxy cache misses."""
-        from src.processing.ingest import _backfill_one
+        from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -55,7 +55,7 @@ class TestVisionProxyCache:
         mock_client = MagicMock()
         mock_client.get.return_value.content = b"server-proxy"
 
-        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
+        with patch("src.producers.vision.work.describe") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -66,8 +66,8 @@ class TestVisionProxyCache:
             result = _backfill_one(
                 asset_id="ast_1",
                 rel_path="photo.jpg",
-                vision_model_id="test",
-                vision_provider=MagicMock(),
+                model="test",
+                provider=MagicMock(),
                 proxy_cache=mock_cache,
                 client=mock_client,
             )
@@ -77,7 +77,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_no_proxy(self):
         """Returns None when proxy cache misses and no client fallback."""
-        from src.processing.ingest import _backfill_one
+        from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -85,8 +85,8 @@ class TestVisionProxyCache:
         result = _backfill_one(
             asset_id="ast_1",
             rel_path="photo.jpg",
-            vision_model_id="test",
-            vision_provider=MagicMock(),
+            model="test",
+            provider=MagicMock(),
             proxy_cache=mock_cache,
         )
 
@@ -94,19 +94,19 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_vision_failure(self):
         """Returns None when vision AI returns no result."""
-        from src.processing.ingest import _backfill_one
+        from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg"
 
-        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
+        with patch("src.producers.vision.work.describe") as mock_vision:
             mock_vision.return_value = None
 
             result = _backfill_one(
                 asset_id="ast_1",
                 rel_path="photo.jpg",
-                vision_model_id="test",
-                vision_provider=MagicMock(),
+                model="test",
+                provider=MagicMock(),
                 proxy_cache=mock_cache,
             )
 
@@ -119,7 +119,7 @@ class TestEmbedReturnResult:
 
     def test_returns_embedding_dict(self):
         """_repair_embed_one returns dict with vector on success."""
-        from src.client.cli.repair import _repair_embed_one
+        from src.producers.clip.work import embed as _repair_embed_one
         from PIL import Image as PILImage
         import io as _io
 
@@ -150,7 +150,7 @@ class TestEmbedReturnResult:
 
     def test_returns_none_on_no_proxy(self):
         """Returns None when no proxy available."""
-        from src.client.cli.repair import _repair_embed_one
+        from src.producers.clip.work import embed as _repair_embed_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None

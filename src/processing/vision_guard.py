@@ -15,14 +15,12 @@ from src.processing.ai_pool import PooledCaptionProvider
 from src.processing.job_guard import JobGuard
 
 if TYPE_CHECKING:
-    from src.processing.failure_report import FailureReport
     from src.processing.workers.captions.base import CaptionProvider
 
 
 class VisionGuard(JobGuard):
-    def __init__(self, client: Any, failures: FailureReport | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
-        super().__init__(client, "vision", failures, clock)
+    def __init__(self, client: Any, clock: Callable[[], float] = time.monotonic) -> None:
+        super().__init__(client, "vision", clock)
 
     def provider(self, settings: dict | None = None, ocr_settings: dict | None = None) -> CaptionProvider:
         """Describes and reads images on whichever online machine is free."""
