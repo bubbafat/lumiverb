@@ -79,14 +79,24 @@ def test_a_logged_value_cant_forge_a_line(plain_records) -> None:
     assert _written("test.one_line", "tab\tkept %d", 3) == "WARNING tab\tkept 3\n"
 
 
-def test_the_scheduler_escapes_its_log_lines(plain_records) -> None:
-    import runpy
-    from unittest.mock import patch
+def test_the_scheduler_escapes_its_log_lines(plain_records, monkeypatch) -> None:
+    # entry() is what both python -m src.server.scheduler and the
+    # lumiverb-scheduler console script run.
+    from src.server.scheduler import service
 
-    with patch("src.server.scheduler.service.entry") as entry:
-        runpy.run_module("src.server.scheduler", run_name="__main__")
-    entry.assert_called_once()
+    monkeypatch.setattr(service, "main", lambda: 0)
+    monkeypatch.setattr(service.os, "_exit", lambda code: None)
+    monkeypatch.setattr(service.logging, "shutdown", lambda: None)
+    service.entry()
     assert _written("src.server.scheduler.service", "%s", "x\ny") == "WARNING x\\ny\n"
+
+
+def test_the_scheduler_script_runs_entry() -> None:
+    import tomllib
+    from pathlib import Path
+
+    scripts = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())["project"]["scripts"]
+    assert scripts["lumiverb-scheduler"] == "src.server.scheduler.service:entry"
 
 
 def test_the_api_escapes_its_log_lines() -> None:
