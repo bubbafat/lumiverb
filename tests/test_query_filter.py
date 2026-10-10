@@ -334,8 +334,14 @@ class TestHasGps:
         assert "gps_lon IS NOT NULL" in frag
 
     def test_false(self):
-        frag, _ = _sql(HasGps(value=False))
-        assert "gps_lat IS NULL" in frag
+        frag, params = _sql(HasGps(value=False))
+        assert frag.startswith("NOT ") and "gps_lat IS NOT NULL" in frag
+        assert params == {"include_guesses": False}  # guesses only when asked for
+
+    def test_reads_a_persons_location_through_the_join(self):
+        frag, _ = _sql(HasGps(value=True))
+        assert "loc.source = 'person'" in frag
+        assert HasGps(value=True).needs_location_join
 
 
 class TestHasFaces:
@@ -357,9 +363,8 @@ class TestNearLocation:
     def test_sql_produces_bounding_box(self):
         f = NearLocation(lat=48.8566, lon=2.3522, radius_km=5.0)
         frag, params = _sql(f)
-        assert "gps_lat BETWEEN" in frag
-        assert "gps_lon BETWEEN" in frag
-        assert len(params) == 4
+        assert "loc.lat" in frag and "a.gps_lat" in frag and "BETWEEN" in frag
+        assert len(params) == 5  # the box and include_guesses
 
     def test_url_roundtrip(self):
         f = NearLocation(lat=48.8566, lon=2.3522, radius_km=5.0)
@@ -395,7 +400,7 @@ class TestNearLocation:
         f = NearLocation(lat=90.0, lon=0.0, radius_km=1.0)
         frag, params = _sql(f)
         # Should not crash — clamped to 89.9
-        assert len(params) == 4
+        assert len(params) == 5
 
     def test_label(self):
         assert "5" in NearLocation(lat=0, lon=0, radius_km=5).label()

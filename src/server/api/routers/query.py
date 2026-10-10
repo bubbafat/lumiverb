@@ -28,8 +28,7 @@ from src.server.models.query_filter import (
     HasExposure,
     IsoRange,
     LensModel,
-    HasGps,
-    NearLocation,
+    LOCATION_FILTERS,
     GroupFilter,
     LibraryScope,
     PersonFilter,
@@ -488,8 +487,9 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
         raise HTTPException(status_code=403, detail="Grouped filters aren't available on public pages")
     if spec.needs_rating_join or any(isinstance(leaf, PersonFilter) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
-    # Nor where a clip was shot: repeated near searches would find it.
-    if any(isinstance(leaf, (HasGps, NearLocation)) for leaf in spec.leaves):
+    # Nor where a clip was shot: repeated near searches would find it (any
+    # location: the file's, a person's, a guess; ADR-017).
+    if any(isinstance(leaf, LOCATION_FILTERS) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
     # Nor camera or exposure: the visitor view hides them, so filters mustn't reveal them.
     if any(isinstance(leaf, _CAMERA_FILTERS) for leaf in spec.leaves):

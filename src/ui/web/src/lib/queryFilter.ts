@@ -134,7 +134,9 @@ export function filterLabel(
     case "favorite":
       return filter.value === "yes" ? "Favorites" : "Not favorites";
     case "has_gps":
-      return filter.value === "yes" ? "Has GPS" : "No GPS";
+      return filter.value === "yes" ? "Has location" : "No location";
+    case "include_guesses":
+      return "Includes guesses";
     case "has_faces":
       return filter.value === "yes" ? "Has faces" : "No faces";
     case "has_exposure":
@@ -189,7 +191,8 @@ const FALLBACK_LABELS: Record<string, string> = {
   focal_length: "Focal Length",
   exposure: "Exposure",
   has_exposure: "Has Exposure",
-  has_gps: "Has GPS",
+  has_gps: "Has location",
+  include_guesses: "Includes guesses",
   near: "Near",
   date: "Date",
   favorite: "Favorite",

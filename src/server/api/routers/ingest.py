@@ -226,6 +226,8 @@ def _do_ingest(
             taken_at=exif_data.get("taken_at"),
             gps_lat=exif_data.get("gps_lat"),
             gps_lon=exif_data.get("gps_lon"),
+            gps_accuracy_m=exif_data.get("gps_accuracy_m"),
+            taken_at_offset_min=exif_data.get("taken_at_offset_min"),
             duration_sec=exif_data.get("duration_sec"),
             iso=exif_data.get("iso"),
             exposure_time_us=exif_data.get("exposure_time_us"),

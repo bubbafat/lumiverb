@@ -152,7 +152,7 @@ public func filterLabel(_ filter: LeafFilter) -> String {
     case "favorite":
         return filter.value == "yes" ? "Favorites" : "Not favorites"
     case "has_gps":
-        return filter.value == "yes" ? "Has GPS" : "No GPS"
+        return filter.value == "yes" ? "Has location" : "No location"
     case "has_faces":
         return filter.value == "yes" ? "Has faces" : "No faces"
     case "has_exposure":

@@ -215,6 +215,7 @@ export function FilterBar({
   const _hasExposureVal = getFilterValue(filters, "has_exposure");
   void _exposureRange; void _hasExposureVal; // available for future exposure filter UI
   const hasGps = getFilterValue(filters, "has_gps") === "yes";
+  const includeGuesses = getFilterValue(filters, "include_guesses") === "yes";
   const hasFaces = getFilterValue(filters, "has_faces") === "yes";
   const personId = getFilterValue(filters, "person") ?? null;
   const nearVal = parseNear(getFilterValue(filters, "near"));
@@ -751,6 +752,19 @@ export function FilterBar({
                 className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Has location ({facets.has_gps_count})
+            </label>
+          )}
+
+          {/* Guessed locations count too: shown only once there are guesses (ADR-017) */}
+          {!isPublic && facets && ((facets.guess_count ?? 0) > 0 || includeGuesses) && (
+            <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeGuesses}
+                onChange={(e) => onSetFilter("include_guesses", e.target.checked ? "yes" : null)}
+                className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
+              />
+              Includes guesses
             </label>
           )}
 
