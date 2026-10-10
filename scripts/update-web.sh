@@ -11,7 +11,7 @@
 #   1. git pull
 #   2. npm ci + npm run build
 #   3. Add nginx locations deploy-web.sh has gained since (playback streams,
-#      cache headers for the page and the built files)
+#      cache headers for the page and the built files, CSP, HSTS on HTTPS)
 #   4. nginx -s reload
 #
 # Sub-10-second updates. Does NOT touch Python, migrations, or API services.
@@ -140,6 +140,44 @@ NGINX
     mv "${SITE}.new" "$SITE"
     ok "The page is checked on every load; built files are cached for good"
   fi
+fi
+
+# Sites from before the CSP get it, once, beside each nosniff header (the
+# server's and each location's). Same policy as deploy-web.sh.
+CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+if [[ -f "$SITE" ]] && ! grep -q "Content-Security-Policy" "$SITE"; then
+  CSP="$CSP" awk '
+    { print }
+    /add_header X-Content-Type-Options/ {
+      pad = $0; sub(/add_header.*/, "", pad)
+      print pad "add_header Content-Security-Policy \"" ENVIRON["CSP"] "\" always;"
+    }
+  ' "$SITE" > "${SITE}.new"
+  mv "${SITE}.new" "$SITE"
+  ok "CSP on"
+fi
+
+# HTTPS sites without HSTS get it, once, in the blocks that listen on 443.
+if [[ -f "$SITE" ]] && ! grep -q "Strict-Transport-Security" "$SITE" \
+    && grep -qE '^[[:space:]]*listen[[:space:]]+(\[::\]:)?443' "$SITE"; then
+  awk '
+    function flush(   i, pad) {
+      for (i = 1; i <= n; i++) {
+        print buf[i]
+        if (tls && buf[i] ~ /add_header X-Content-Type-Options/) {
+          pad = buf[i]; sub(/add_header.*/, "", pad)
+          print pad "add_header Strict-Transport-Security \"max-age=31536000\" always;"
+        }
+      }
+      n = 0; tls = 0
+    }
+    /^server[[:space:]]*\{/ { flush(); inblock = 1 }
+    { if (inblock) { buf[++n] = $0; if ($1 == "listen" && $2 ~ /(^|:)443;?$/) tls = 1 } else print }
+    /^\}/ && inblock { flush(); inblock = 0 }
+    END { flush() }
+  ' "$SITE" > "${SITE}.new"
+  mv "${SITE}.new" "$SITE"
+  ok "HSTS on"
 fi
 
 # ---------------------------------------------------------------------------

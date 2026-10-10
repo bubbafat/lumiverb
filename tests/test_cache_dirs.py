@@ -125,3 +125,35 @@ def test_config_set_clears_the_cache_home(tmp_path: Path, monkeypatch: pytest.Mo
     result = _config_set(tmp_path, monkeypatch, "--cache-home", "")
     assert result.exit_code == 0, result.output
     assert load_config().cache_home == ""
+
+
+_BAD_IDS = ["../evil", "a/b", "..", ".", "", "a.b", "/etc/passwd", "a\\b", "a\nb", "a b"]
+
+
+@pytest.mark.parametrize("asset_id", _BAD_IDS)
+def test_cache_paths_refuse_ids_that_are_not_plain_names(tmp_path: Path, asset_id: str) -> None:
+    proxies = ProxyCache()
+    proxies._dir = tmp_path
+    analysis = AnalysisProxyCache(object(), cache_dir=tmp_path, max_bytes=1)
+
+    for build in (
+        lambda: proxies.put(asset_id, b"x"),
+        lambda: proxies.put_scan(asset_id, b"x", "sha"),
+        lambda: proxies.get(asset_id),
+        lambda: proxies.has(asset_id),
+        lambda: proxies.get_sha(asset_id),
+        lambda: proxies.remove(asset_id),
+        lambda: analysis.path_for(asset_id),
+    ):
+        with pytest.raises(ValueError):
+            build()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cache_paths_take_real_ids(tmp_path: Path) -> None:
+    proxies = ProxyCache()
+    proxies._dir = tmp_path
+    proxies.put_scan("ast_01H-x9", b"x", "sha")
+    assert proxies.get("ast_01H-x9") == b"x"
+    assert proxies.sha_path("ast_01H-x9") == tmp_path / "ast_01H-x9.sha"
+    assert AnalysisProxyCache(object(), cache_dir=tmp_path, max_bytes=1).path_for("ast_1") == tmp_path / "ast_1.mp4"

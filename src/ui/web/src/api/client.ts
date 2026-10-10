@@ -136,17 +136,25 @@ type AuthFetchInit = Omit<RequestInit, "headers"> & { headers?: Record<string, s
  * fetch `/v1${path}` with the stored token. On a 401 it refreshes the token
  * once and retries, and hands back the retry's response whatever it is, so a
  * 409 decision or a 404 after a refresh reaches the caller like any other.
- * It signs out only when the refresh fails or the retry is 401 again.
+ * It signs out only when the refresh fails or the retry is 401 again. A
+ * refresh that fails after another tab stored a new token retries with that
+ * token instead of signing every tab out.
  */
 export async function authFetch(path: string, init: AuthFetchInit = {}): Promise<Response> {
-  const send = () =>
-    fetch(`/v1${path}`, { ...init, headers: { ...authHeaders(), ...init.headers } });
-  let res = await send();
+  const send = (token: string) =>
+    fetch(`/v1${path}`, {
+      ...init,
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
+    });
+  const used = getApiKey();
+  let res = await send(used);
   if (res.status !== 401) return res;
   // No stored token: nothing to refresh, and nobody to sign out.
   if (!getApiKey()) return res;
-  if (await tryRefresh()) {
-    res = await send();
+  const refreshed = await tryRefresh();
+  const stored = getApiKey();
+  if (refreshed || (stored && stored !== used)) {
+    res = await send(stored);
     if (res.status !== 401) return res;
   }
   handleUnauthorized();

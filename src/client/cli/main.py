@@ -71,14 +71,26 @@ def _main() -> None:
 @config_app.command("set")
 def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
-    api_key: Annotated[str | None, typer.Option("--api-key")] = None,
-    admin_key: Annotated[str | None, typer.Option("--admin-key")] = None,
+    api_key: Annotated[str | None, typer.Option("--api-key", help="The key, or - to read it from stdin.")] = None,
+    admin_key: Annotated[str | None, typer.Option("--admin-key", help="The key, or - to read it from stdin.")] = None,
     cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the scheduler's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json.
 
     The vision AI endpoint and model, and everything else that changes what
     gets made, are the account's: Settings → AI in the web app."""
+    if api_key == "-" and admin_key == "-":
+        console.print("[red]Only one key can come from stdin.[/red]")
+        raise typer.Exit(1)
+    if "-" in (api_key, admin_key):
+        key = sys.stdin.read().strip()
+        if not key:
+            console.print("[red]No key on stdin.[/red]")
+            raise typer.Exit(1)
+        if api_key == "-":
+            api_key = key
+        else:
+            admin_key = key
     cfg = load_config()
     if cache_home:
         # Relative to wherever this ran, the scheduler would look somewhere else.

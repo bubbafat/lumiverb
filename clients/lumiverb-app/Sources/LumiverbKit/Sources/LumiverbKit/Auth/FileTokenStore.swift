@@ -122,9 +122,8 @@ public struct FileTokenStore: TokenStore, Sendable {
     }
 
     private func writeDict(_ dict: [String: String]) throws {
-        // Ensure the parent directory exists with mode 0700 — set
-        // BEFORE writing the file so an interrupted save doesn't leave
-        // a world-readable directory containing a 0600 file.
+        // The folder is 0700 on every save, made that way or not, before
+        // the file is written.
         let dir = fileURL.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.createDirectory(
@@ -133,21 +132,33 @@ public struct FileTokenStore: TokenStore, Sendable {
                 attributes: [.posixPermissions: 0o700]
             )
         }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: dir.path
+        )
 
         let data = try JSONSerialization.data(
             withJSONObject: dict, options: [.sortedKeys]
         )
-        // `.atomic` writes to a temp file and renames into place, so a
-        // crashed save can't truncate or partially overwrite the live
-        // credentials file.
-        try data.write(to: fileURL, options: .atomic)
-
-        // chmod 0600 every save — `.atomic` write recreates the file
-        // with whatever umask is set, so we can't assume a previous
-        // chmod sticks across writes. Owner read/write only.
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
+        // A temp file created 0600 (never readable by anyone else, not
+        // even for a moment), then renamed into place, so a crashed save
+        // can't truncate or partially overwrite the live credentials file.
+        let tmp = dir.appendingPathComponent(".credentials.\(UUID().uuidString).tmp")
+        let fd = open(tmp.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+            guard rename(tmp.path, fileURL.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            unlink(tmp.path)
+            throw error
+        }
     }
 }

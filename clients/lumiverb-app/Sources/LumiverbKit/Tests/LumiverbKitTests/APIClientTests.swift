@@ -25,6 +25,17 @@ final class APIClientTests: XCTestCase {
         let after = await client.currentToken()
         XCTAssertEqual(after, "test-token")
     }
+
+    func testRequestURLEncodesPlus() {
+        let url = APIClient.requestURL(
+            baseURL: URL(string: "https://example.com")!,
+            path: "/v1/query",
+            queryItems: [URLQueryItem(name: "f", value: "iso:400+")]
+        )
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery ?? ""
+        XCTAssertTrue(query.hasSuffix("400%2B"), query)
+        XCTAssertFalse(query.contains("+"), query)
+    }
 }
 
 // Phase 1 model decoding tests moved to ModelDecodingTests.swift

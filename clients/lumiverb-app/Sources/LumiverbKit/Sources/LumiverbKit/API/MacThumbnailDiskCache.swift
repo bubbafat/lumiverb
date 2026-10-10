@@ -51,25 +51,27 @@ public final class MacThumbnailDiskCache: @unchecked Sendable {
 
     /// Get cached thumbnail bytes. Returns nil if not cached.
     public func get(assetId: String) -> Data? {
-        let url = thumbnailURL(assetId)
+        guard let url = thumbnailURL(assetId) else { return nil }
         return try? Data(contentsOf: url)
     }
 
     /// Cache thumbnail bytes downloaded from the server.
     public func put(assetId: String, data: Data) {
-        atomicWrite(data: data, to: thumbnailURL(assetId))
+        guard let url = thumbnailURL(assetId) else { return }
+        atomicWrite(data: data, to: url)
     }
 
     /// Check if a thumbnail exists in the cache.
     public func has(assetId: String) -> Bool {
-        FileManager.default.fileExists(atPath: thumbnailURL(assetId).path)
+        thumbnailURL(assetId).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     // MARK: - Maintenance
 
     /// Remove a single entry.
     public func remove(assetId: String) {
-        try? FileManager.default.removeItem(at: thumbnailURL(assetId))
+        guard let url = thumbnailURL(assetId) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Remove every cached thumbnail. Useful after a server-side change
@@ -85,8 +87,8 @@ public final class MacThumbnailDiskCache: @unchecked Sendable {
 
     // MARK: - Paths
 
-    private func thumbnailURL(_ assetId: String) -> URL {
-        cacheDir.appendingPathComponent(assetId)
+    private func thumbnailURL(_ assetId: String) -> URL? {
+        cacheEntryURL(cacheDir, assetId)
     }
 
     // MARK: - Atomic write

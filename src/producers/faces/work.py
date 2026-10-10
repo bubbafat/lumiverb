@@ -23,7 +23,7 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
 
     asset_id, expected = item["asset_id"], item.get("sha256")
     if proxy_cache.has(asset_id):
-        sha_file = proxy_cache.path / f"{asset_id}.sha"
+        sha_file = proxy_cache.sha_path(asset_id)
         if not expected:
             return True  # no hash to check: the cache is trusted
         if sha_file.exists() and sha_file.read_text().strip() == expected:
@@ -41,7 +41,7 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
     try:
         proxy_cache.put(asset_id, generate_face_proxy(source))
         if expected:
-            (proxy_cache.path / f"{asset_id}.sha").write_text(expected)
+            proxy_cache.sha_path(asset_id).write_text(expected)
     except Exception:  # noqa: BLE001 — the server's proxy instead
         logger.warning("Couldn't make a face proxy of %s; the server's is used", item.get("rel_path"), exc_info=True)
     return True

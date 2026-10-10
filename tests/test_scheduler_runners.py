@@ -868,6 +868,7 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     cache = MagicMock()
     cache.path = tmp_path / "proxies"
     cache.path.mkdir()
+    cache.sha_path.side_effect = lambda asset_id: cache.path / f"{asset_id}.sha"
     cache.has.return_value = False
     (tmp_path / "a.jpg").write_bytes(b"photo")
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: b"proxy")

@@ -47,6 +47,10 @@ class AppState: ObservableObject {
     private(set) var client: APIClient?
     private(set) var authManager: AuthManager?
 
+    /// Where the access token and the vision API key are kept (owner-only
+    /// file, `FileTokenStore`), never UserDefaults.
+    private let tokenStore: any TokenStore = FileTokenStore()
+
     /// Pair of platform-specific caches handed to browse views via the
     /// SwiftUI environment. macOS uses the disk-backed implementations
     /// (`MacProxyDiskCache.shared` shares the proxy cache with the Python
@@ -98,7 +102,7 @@ class AppState: ObservableObject {
         }
         // Restore saved vision config
         visionApiUrl = UserDefaults.standard.string(forKey: "visionApiUrl") ?? ""
-        visionApiKey = UserDefaults.standard.string(forKey: "visionApiKey") ?? ""
+        visionApiKey = (try? tokenStore.read(key: "visionApiKey")) ?? ""
         visionModelId = UserDefaults.standard.string(forKey: "visionModelId") ?? ""
         // Restore whisper config
         whisperEnabled = UserDefaults.standard.bool(forKey: "whisperEnabled")
@@ -137,7 +141,11 @@ class AppState: ObservableObject {
 
     func saveVisionConfig() {
         UserDefaults.standard.set(visionApiUrl, forKey: "visionApiUrl")
-        UserDefaults.standard.set(visionApiKey, forKey: "visionApiKey")
+        if visionApiKey.isEmpty {
+            try? tokenStore.delete(key: "visionApiKey")
+        } else {
+            try? tokenStore.save(key: "visionApiKey", value: visionApiKey)
+        }
         UserDefaults.standard.set(visionModelId, forKey: "visionModelId")
     }
 
@@ -155,7 +163,7 @@ class AppState: ObservableObject {
 
         let newClient = APIClient(baseURL: url)
         self.client = newClient
-        self.authManager = AuthManager(client: newClient)
+        self.authManager = AuthManager(client: newClient, tokenStore: tokenStore)
     }
 
     func tryRestoreSession() async {

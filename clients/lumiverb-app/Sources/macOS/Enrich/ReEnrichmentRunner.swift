@@ -397,10 +397,8 @@ actor ReEnrichmentRunner {
         for asset in assets {
             if cancelled { break }
 
-            let fullPath = (rootPath as NSString).appendingPathComponent(asset.relPath)
-            let sourceURL = URL(fileURLWithPath: fullPath)
-
-            guard FileManager.default.fileExists(atPath: fullPath) else {
+            guard let sourceURL = LibraryPath.fileURL(root: rootPath, relPath: asset.relPath),
+                  FileManager.default.fileExists(atPath: sourceURL.path) else {
                 processedItems += 1
                 continue
             }
@@ -431,10 +429,8 @@ actor ReEnrichmentRunner {
         for asset in assets {
             if cancelled { break }
 
-            let fullPath = (rootPath as NSString).appendingPathComponent(asset.relPath)
-            let sourceURL = URL(fileURLWithPath: fullPath)
-
-            guard FileManager.default.fileExists(atPath: fullPath) else {
+            guard let sourceURL = LibraryPath.fileURL(root: rootPath, relPath: asset.relPath),
+                  FileManager.default.fileExists(atPath: sourceURL.path) else {
                 processedItems += 1
                 continue
             }

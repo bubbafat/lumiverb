@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 
-from src.processing.cache_dir import cache_dir
+from src.processing.cache_dir import cache_dir, cache_entry
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class AnalysisProxyCache:
         self._max_bytes = max_bytes
 
     def path_for(self, asset_id: str) -> Path:
-        return self._dir / f"{asset_id}.mp4"
+        return cache_entry(self._dir, asset_id, ".mp4")
 
     def get(self, asset_id: str) -> Path | None:
         """The proxy as a local file, downloading it if needed. None if the server has none."""

@@ -45,6 +45,11 @@ def load_config() -> CLIConfig:
     path = _config_path()
     if not path.exists():
         return CLIConfig()
+    try:  # it holds keys: its owner's only
+        if path.stat().st_mode & 0o077:
+            path.chmod(0o600)
+    except OSError:
+        pass  # not ours to change; reading it still works
     try:
         return CLIConfig.model_validate_json(path.read_text())
     except (OSError, ValueError) as exc:
@@ -55,7 +60,7 @@ def save_config(config: CLIConfig) -> None:
     """Write config to file, readable only by its owner (it holds keys), all at
     once: a temporary file beside it, renamed over it."""
     path = _config_path().resolve()  # a symlinked config stays a symlink
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:  # mkstemp makes it 0600

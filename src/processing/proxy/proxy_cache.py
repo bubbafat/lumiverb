@@ -22,7 +22,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from src.processing.cache_dir import cache_dir
+from src.processing.cache_dir import cache_dir, cache_entry
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +63,17 @@ class ProxyCache:
     def path(self) -> Path:
         return self._dir
 
+    def _entry(self, asset_id: str) -> Path:
+        return cache_entry(self._dir, asset_id)
+
+    def sha_path(self, asset_id: str) -> Path:
+        """The asset's .sha sidecar: the source's SHA-256 the proxy was made from."""
+        return cache_entry(self._dir, asset_id, ".sha")
+
     def put(self, asset_id: str, image_bytes: bytes) -> None:
         """Store proxy bytes, downscaling if needed. Never scales up."""
         image_bytes = self._ensure_size(image_bytes)
-        self._atomic_write(self._dir / asset_id, image_bytes)
+        self._atomic_write(self._entry(asset_id), image_bytes)
 
     def put_scan(self, asset_id: str, jpeg_bytes: bytes, source_sha256: str) -> None:
         """Store a full-resolution 2048px proxy from scan with SHA sidecar.
@@ -75,12 +82,12 @@ class ProxyCache:
         partial files. The .sha sidecar is written after the proxy — a
         reader that sees a .sha file can trust the proxy is complete.
         """
-        self._atomic_write(self._dir / asset_id, jpeg_bytes)
-        self._atomic_write(self._dir / f"{asset_id}.sha", source_sha256.encode())
+        self._atomic_write(self._entry(asset_id), jpeg_bytes)
+        self._atomic_write(self.sha_path(asset_id), source_sha256.encode())
 
     def get_sha(self, asset_id: str) -> str | None:
         """Read the SHA-256 sidecar for an asset. Returns None if missing."""
-        sha_path = self._dir / f"{asset_id}.sha"
+        sha_path = self.sha_path(asset_id)
         if sha_path.exists():
             return sha_path.read_text().strip()
         return None
@@ -89,12 +96,12 @@ class ProxyCache:
         """Generate proxy from a source file and cache it. Returns the bytes."""
         from src.processing.proxy.proxy_gen import generate_proxy_bytes
         image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
-        self._atomic_write(self._dir / asset_id, image_bytes)
+        self._atomic_write(self._entry(asset_id), image_bytes)
         return image_bytes
 
     def has(self, asset_id: str) -> bool:
         """Check if a proxy exists in the cache without reading it."""
-        return (self._dir / asset_id).exists()
+        return self._entry(asset_id).exists()
 
     def get(self, asset_id: str, rel_path: str | None = None) -> bytes | None:
         """Get proxy bytes for an asset.
@@ -107,7 +114,7 @@ class ProxyCache:
         Returns None only if all sources fail.
         """
         # 1. Check cache
-        p = self._dir / asset_id
+        p = self._entry(asset_id)
         if p.exists():
             return p.read_bytes()
 
@@ -131,7 +138,7 @@ class ProxyCache:
                 resp = self._client._client.get(self._client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code == 200:
                     image_bytes = self._ensure_size(resp.content)
-                    (self._dir / asset_id).write_bytes(image_bytes)
+                    self._entry(asset_id).write_bytes(image_bytes)
                     resp.close()
                     return image_bytes
                 resp.close()
@@ -142,8 +149,8 @@ class ProxyCache:
 
     def remove(self, asset_id: str) -> None:
         """Remove a single entry and its SHA sidecar from the cache."""
-        (self._dir / asset_id).unlink(missing_ok=True)
-        (self._dir / f"{asset_id}.sha").unlink(missing_ok=True)
+        self._entry(asset_id).unlink(missing_ok=True)
+        self.sha_path(asset_id).unlink(missing_ok=True)
 
     def cleanup(self) -> None:
         """Delete the entire cache directory."""

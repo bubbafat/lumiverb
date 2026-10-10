@@ -130,6 +130,35 @@ def test_export_uses_the_real_name_and_reports_what_was_left_out(tmp_path) -> No
     assert "3 videos haven't been probed" in result.output
 
 
+@pytest.mark.parametrize(
+    ("disposition", "written"),
+    [
+        ("attachment; filename*=UTF-8''..%2F..%2Fevil.xml", "evil.xml"),
+        ('attachment; filename="/etc/evil.xml"', "evil.xml"),
+        ("attachment; filename*=UTF-8''%2E%2E", "prj_1.xml"),
+        ('attachment; filename="."', "prj_1.xml"),
+        ("attachment; filename*=UTF-8''sub%2F", "sub"),
+    ],
+)
+def test_export_keeps_the_server_name_in_the_current_directory(tmp_path, disposition, written) -> None:
+    import os
+
+    work = tmp_path / "work"
+    work.mkdir()
+    client = _export_client()
+    client.get.return_value.headers = {"content-disposition": disposition}
+    cwd = os.getcwd()
+    os.chdir(work)
+    try:
+        result = _run(client, "export", "--id", "prj_1", "--format", "fcp7")
+    finally:
+        os.chdir(cwd)
+
+    assert result.exit_code == 0, result.output
+    assert [p.name for p in work.iterdir()] == [written]
+    assert [p.name for p in tmp_path.iterdir()] == ["work"]
+
+
 # ---------------------------------------------------------------------------
 # Trash: delete -> trash -> restore | delete forever
 # ---------------------------------------------------------------------------
