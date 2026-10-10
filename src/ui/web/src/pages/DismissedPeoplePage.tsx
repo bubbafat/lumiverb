@@ -7,6 +7,7 @@ import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { useFaceCrop } from "../api/useFaceCrop";
 import { Lightbox } from "../components/Lightbox";
+import { useCanEdit } from "../lib/useCanEdit";
 
 function DismissedPersonCard({
   person,
@@ -82,6 +83,9 @@ function DismissedPersonCard({
     }, 250);
     return () => clearTimeout(timer);
   }, [assignSearch, mode]);
+
+  // Restoring (and merging) people needs an editor, as on the server.
+  const canEdit = useCanEdit();
 
   // Restore as new name (no existing person to merge into)
   const restoreMutation = useMutation({
@@ -214,7 +218,7 @@ function DismissedPersonCard({
             <p className="text-xs text-red-400">{(restoreMutation.error || mergeIntoMutation.error)?.message ?? "Failed"}</p>
           )}
         </div>
-      ) : (
+      ) : canEdit ? (
         <button
           type="button"
           onClick={() => setMode("naming")}
@@ -222,7 +226,7 @@ function DismissedPersonCard({
         >
           Restore &amp; Name
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,9 +1,7 @@
 """Video chunk API: init chunks, claim next, complete, fail. All require tenant auth."""
 
 import json
-import shutil
 import uuid
-from pathlib import Path
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -51,7 +49,7 @@ class InitChunksResponse(BaseModel):
     already_initialized: bool
 
 
-@router.post("/{asset_id}/chunks", response_model=InitChunksResponse)
+@router.post("/{asset_id}/chunks", response_model=InitChunksResponse, dependencies=[Depends(require_editor)])
 def init_chunks(
     asset_id: str,
     body: InitChunksRequest,
@@ -63,7 +61,6 @@ def init_chunks(
     lineage_required when it doesn't say); a redo sent again, once they're
     being found or were found that way, changes nothing."""
     if body.redo:
-        require_editor(request)  # it drops what was found and described
         made = require_lineage(body.lineage, "scenes")
         _now_current(session, made)
         _start_over(request, session, asset_id, made)
@@ -120,8 +117,7 @@ def _start_over(request: Request, session: Session, asset_id: str, made: dict) -
     from src.server.search.quickwit_client import QuickwitClient
 
     storage = get_storage()
-    # Only the images at the keys the server derives: a scene's proxy_key and
-    # thumbnail_key are what a client sent (nothing sends them), never paths to delete.
+    # Only the images at the keys the server derives (a scene's rep frame).
     for ms in frames:  # best effort: an image left behind is only space
         try:
             storage.abs_path(storage.scene_rep_key(tenant_id, row.library_id, asset_id, ms)).unlink(missing_ok=True)
@@ -148,7 +144,7 @@ class ChunkWorkOrder(BaseModel):
     is_last: bool
 
 
-@router.post("/{asset_id}/chunks/next", response_model=None)
+@router.post("/{asset_id}/chunks/next", response_model=None, dependencies=[Depends(require_editor)])
 def claim_next_chunk(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -194,8 +190,6 @@ class SceneResult(BaseModel):
     end_ms: int
     rep_frame_ms: int
     rep_frame_sha256: str | None = None
-    proxy_key: str | None = None
-    thumbnail_key: str | None = None
     description: str | None = None
     tags: list[str] | None = None
     sharpness_score: float | None = None
@@ -218,7 +212,7 @@ class ChunkCompleteResponse(BaseModel):
     all_complete: bool
 
 
-@router.post("/chunks/{chunk_id}/complete", response_model=ChunkCompleteResponse)
+@router.post("/chunks/{chunk_id}/complete", response_model=ChunkCompleteResponse, dependencies=[Depends(require_editor)])
 def complete_chunk(
     chunk_id: str,
     body: ChunkCompleteRequest,
@@ -275,7 +269,7 @@ class ChunkFailRequest(BaseModel):
     error_message: str
 
 
-@router.post("/chunks/{chunk_id}/fail")
+@router.post("/chunks/{chunk_id}/fail", dependencies=[Depends(require_editor)])
 def fail_chunk(
     chunk_id: str,
     body: ChunkFailRequest,
@@ -358,7 +352,7 @@ class SceneVisionUpdateResponse(BaseModel):
     status: str
 
 
-@router.patch("/scenes/{scene_id}", response_model=SceneVisionUpdateResponse)
+@router.patch("/scenes/{scene_id}", response_model=SceneVisionUpdateResponse, dependencies=[Depends(require_editor)])
 def update_scene_vision(
     scene_id: str,
     body: SceneVisionUpdateRequest,
@@ -424,7 +418,7 @@ class SceneSyncRequest(BaseModel):
     asset_id: str
 
 
-@router.post("/scenes/{scene_id}/sync")
+@router.post("/scenes/{scene_id}/sync", dependencies=[Depends(require_editor)])
 def sync_scene(
     scene_id: str,
     body: SceneSyncRequest,
@@ -441,79 +435,3 @@ def sync_scene(
         raise HTTPException(status_code=404, detail="Asset not found")
     ok = try_sync_scene(session, scene, asset, tenant_id=getattr(request.state, "tenant_id", None))
     return {"scene_id": scene_id, "status": "synced" if ok else "deferred"}
-
-
-# ---------------------------------------------------------------------------
-# Reset video pipeline for a library
-# ---------------------------------------------------------------------------
-
-
-class VideoResetResponse(BaseModel):
-    library_id: str
-    scenes_deleted: int
-    chunks_deleted: int
-    assets_reset: int
-    quickwit_index_deleted: bool
-    scene_files_deleted: int
-
-
-@router.post("/reset", response_model=VideoResetResponse)
-def reset_video_pipeline(
-    library_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> VideoResetResponse:
-    """
-    Reset the video indexing pipeline for a library.
-    Deletes all scenes, chunks, and rep-frame files; clears the Quickwit scene
-    index; clears video_indexed on all video assets.
-    After this, re-enqueue video-index to reprocess from scratch.
-    """
-    from src.server.config import get_settings
-    from src.server.search.quickwit_client import QuickwitClient
-
-    scene_repo = VideoSceneRepository(session)
-    chunk_repo = VideoIndexChunkRepository(session)
-    asset_repo = AssetRepository(session)
-
-    # Scenes and their descriptions are gone: missing again, for the whole library.
-    session.execute(text(
-        "DELETE FROM artifact_lineage WHERE artifact IN ('scenes', 'scene_vision')"
-        " AND asset_id IN (SELECT asset_id FROM assets WHERE library_id = :lib)"
-    ), {"lib": library_id})
-    scenes_deleted = scene_repo.delete_for_library(library_id)
-    chunks_deleted = chunk_repo.delete_for_library(library_id)
-    assets_reset = asset_repo.reset_video_indexed_for_library(library_id)
-
-    # Delete scene documents from Quickwit (for this library in the tenant index).
-    tenant_id = getattr(request.state, "tenant_id", None)
-    quickwit_index_deleted = False
-    if tenant_id:
-        qw = QuickwitClient()
-        qw.delete_tenant_documents_by_library_id(tenant_id, library_id)
-        quickwit_index_deleted = True
-
-    # Delete scene rep-frame files from the data dir.
-    scene_files_deleted = 0
-    if tenant_id:
-        settings = get_settings()
-        scenes_dir = Path(settings.data_dir) / tenant_id / library_id / "scenes"
-        if scenes_dir.exists():
-            files = list(scenes_dir.rglob("*.jpg"))
-            scene_files_deleted = len(files)
-            shutil.rmtree(scenes_dir, ignore_errors=True)
-
-    _log.info(
-        "Video pipeline reset for library_id=%s: scenes=%d chunks=%d assets=%d "
-        "quickwit=%s files=%d",
-        library_id, scenes_deleted, chunks_deleted, assets_reset,
-        quickwit_index_deleted, scene_files_deleted,
-    )
-    return VideoResetResponse(
-        library_id=library_id,
-        scenes_deleted=scenes_deleted,
-        chunks_deleted=chunks_deleted,
-        assets_reset=assets_reset,
-        quickwit_index_deleted=quickwit_index_deleted,
-        scene_files_deleted=scene_files_deleted,
-    )

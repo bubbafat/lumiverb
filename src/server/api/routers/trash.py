@@ -269,7 +269,7 @@ def purge_assets(
             path = storage.abs_path(key)
             if path.exists():
                 path.unlink()
-        except OSError as e:
+        except (OSError, ValueError) as e:  # ValueError: a key outside DATA_DIR, never deleted
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
     if tenant_id:
         # Playback cuts are copies of the start of each video.

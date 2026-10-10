@@ -119,13 +119,16 @@ def hybrid_env():
             get_settings.cache_clear()
 
 
-def _make_jwt(user_id: str, role: str, expired: bool = False, tampered: bool = False) -> str:
+def _make_jwt(user_id: str, role: str, expired: bool = False, tampered: bool = False, tv: int = 0) -> str:
     now = int(time.time())
     payload = {
         "sub": user_id,
         "tenant_id": TENANT_ID,
         "role": role,
+        "tv": tv,
+        "jti": uuid.uuid4().hex,
         "exp": now - 3600 if expired else now + 3600,
+        "refresh_exp": now + 7 * 24 * 3600,
     }
     secret = "wrong-secret" if tampered else JWT_SECRET
     return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
@@ -135,7 +138,7 @@ def _make_jwt(user_id: str, role: str, expired: bool = False, tampered: bool = F
 
 @pytest.mark.slow
 def test_logout_returns_204(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin")
+    token = _make_jwt(USR_ADMIN, "admin")
     r = hybrid_env.post("/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 204
 
@@ -198,7 +201,7 @@ def test_reset_password_too_short(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.slow
 def test_jwt_admin_resolves_tenant(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin")
+    token = _make_jwt(USR_ADMIN, "admin")
     r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {token}"})
     # Should get 200 (empty list) — not 401.
     assert r.status_code == 200
@@ -206,21 +209,21 @@ def test_jwt_admin_resolves_tenant(hybrid_env: TestClient) -> None:
 
 @pytest.mark.slow
 def test_jwt_viewer_resolves_tenant(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_viewer", "viewer")
+    token = _make_jwt(USR_VIEWER, "viewer")
     r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
 
 
 @pytest.mark.slow
 def test_expired_jwt_returns_401(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin", expired=True)
+    token = _make_jwt(USR_ADMIN, "admin", expired=True)
     r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401
 
 
 @pytest.mark.slow
 def test_tampered_jwt_returns_401(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin", tampered=True)
+    token = _make_jwt(USR_ADMIN, "admin", tampered=True)
     r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401
 
@@ -235,7 +238,7 @@ def test_api_key_still_works(hybrid_env: TestClient) -> None:
 
 @pytest.mark.slow
 def test_viewer_cannot_create_library(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_viewer", "viewer")
+    token = _make_jwt(USR_VIEWER, "viewer")
     r = hybrid_env.post(
         "/v1/libraries",
         json={"name": "test", "root_path": "/tmp/test"},
@@ -246,7 +249,7 @@ def test_viewer_cannot_create_library(hybrid_env: TestClient) -> None:
 
 @pytest.mark.slow
 def test_editor_can_create_library(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_editor", "editor")
+    token = _make_jwt(USR_EDITOR, "editor")
     r = hybrid_env.post(
         "/v1/libraries",
         json={"name": "editor-lib", "root_path": "/tmp/editor-test"},
@@ -257,21 +260,21 @@ def test_editor_can_create_library(hybrid_env: TestClient) -> None:
 
 @pytest.mark.slow
 def test_viewer_cannot_list_users(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_viewer", "viewer")
+    token = _make_jwt(USR_VIEWER, "viewer")
     r = hybrid_env.get("/v1/users", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 403
 
 
 @pytest.mark.slow
 def test_editor_cannot_list_users(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_editor", "editor")
+    token = _make_jwt(USR_EDITOR, "editor")
     r = hybrid_env.get("/v1/users", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 403
 
 
 @pytest.mark.slow
 def test_admin_can_list_users(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin")
+    token = _make_jwt(USR_ADMIN, "admin")
     r = hybrid_env.get("/v1/users", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     users = r.json()
@@ -282,7 +285,7 @@ def test_admin_can_list_users(hybrid_env: TestClient) -> None:
 
 @pytest.mark.slow
 def test_create_user_password_too_short(hybrid_env: TestClient) -> None:
-    token = _make_jwt("usr_admin", "admin")
+    token = _make_jwt(USR_ADMIN, "admin")
     r = hybrid_env.post(
         "/v1/users",
         json={"email": "short@test.com", "password": "short", "role": "viewer"},
@@ -290,3 +293,155 @@ def test_create_user_password_too_short(hybrid_env: TestClient) -> None:
     )
     assert r.status_code == 400
     assert "12" in r.json()["detail"]
+
+
+# --- Token refresh and revocation (users re-read from the database) ---
+
+_PASSWORD = "correct-horse-battery-staple"
+
+
+def _new_user(role: str) -> tuple[str, str]:
+    """A fresh user of this tenant: (user_id, email)."""
+    from src.server.database import get_control_session
+
+    uid = f"usr_{uuid.uuid4().hex[:10]}"
+    email = f"{uid}@test.com"
+    ph = bcrypt.hashpw(_PASSWORD.encode(), bcrypt.gensalt(rounds=4)).decode()
+    with get_control_session() as session:
+        session.execute(
+            text("INSERT INTO users (user_id, tenant_id, email, password_hash, role) VALUES (:u, :t, :e, :p, :r)"),
+            {"u": uid, "t": TENANT_ID, "e": email, "p": ph, "r": role},
+        )
+        session.commit()
+    return uid, email
+
+
+def _login(client: TestClient, email: str) -> str:
+    from src.server.api.rate_limit import login_limiter
+
+    login_limiter._hits.clear()  # these tests log in more often than a person may
+    r = client.post("/v1/auth/login", json={"email": email, "password": _PASSWORD})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+def _claims(token: str) -> dict:
+    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_exp": False})
+
+
+def _bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.slow
+def test_refresh_keeps_the_original_refresh_window(hybrid_env: TestClient) -> None:
+    _, email = _new_user("viewer")
+    token = _login(hybrid_env, email)
+    first = _claims(token)["refresh_exp"]
+    for _ in range(2):
+        r = hybrid_env.post("/v1/auth/refresh", headers=_bearer(token))
+        assert r.status_code == 200, r.text
+        token = r.json()["access_token"]
+        assert _claims(token)["refresh_exp"] == first  # no sliding
+
+
+@pytest.mark.slow
+def test_refresh_takes_the_role_from_the_database(hybrid_env: TestClient) -> None:
+    from src.server.database import get_control_session
+
+    uid, email = _new_user("editor")
+    token = _login(hybrid_env, email)
+    with get_control_session() as session:  # a role changed without a version bump
+        session.execute(text("UPDATE users SET role = 'viewer' WHERE user_id = :u"), {"u": uid})
+        session.commit()
+    r = hybrid_env.post("/v1/auth/refresh", headers=_bearer(token))
+    assert r.status_code == 200, r.text
+    assert _claims(r.json()["access_token"])["role"] == "viewer"
+
+
+@pytest.mark.slow
+def test_middleware_takes_the_role_from_the_database(hybrid_env: TestClient) -> None:
+    from src.server.database import get_control_session
+
+    uid, email = _new_user("editor")
+    token = _login(hybrid_env, email)
+    with get_control_session() as session:  # a role changed without a version bump
+        session.execute(text("UPDATE users SET role = 'viewer' WHERE user_id = :u"), {"u": uid})
+        session.commit()
+    r = hybrid_env.post("/v1/libraries", json={"name": f"nope-{uid}", "root_path": "/x"}, headers=_bearer(token))
+    assert r.status_code == 403
+
+
+@pytest.mark.slow
+def test_refresh_refused_for_a_deleted_user(hybrid_env: TestClient) -> None:
+    from src.server.database import get_control_session
+
+    uid, email = _new_user("viewer")
+    token = _login(hybrid_env, email)
+    with get_control_session() as session:
+        session.execute(text("DELETE FROM users WHERE user_id = :u"), {"u": uid})
+        session.commit()
+    assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 401
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 401
+
+
+@pytest.mark.slow
+def test_a_token_refreshes_once(hybrid_env: TestClient) -> None:
+    _, email = _new_user("viewer")
+    token = _login(hybrid_env, email)
+    assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 200
+    assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 401
+
+
+@pytest.mark.slow
+def test_role_change_revokes_tokens(hybrid_env: TestClient) -> None:
+    uid, email = _new_user("editor")
+    token = _login(hybrid_env, email)
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 200
+    admin = _login(hybrid_env, f"admin_{_RUN_ID}@test.com")
+    r = hybrid_env.patch(f"/v1/users/{uid}", json={"role": "viewer"}, headers=_bearer(admin))
+    assert r.status_code == 200, r.text
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 401
+    assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 401
+    # A new login carries the new role.
+    assert _claims(_login(hybrid_env, email))["role"] == "viewer"
+
+
+@pytest.mark.slow
+def test_deleting_a_user_revokes_tokens(hybrid_env: TestClient) -> None:
+    uid, email = _new_user("viewer")
+    token = _login(hybrid_env, email)
+    admin = _login(hybrid_env, f"admin_{_RUN_ID}@test.com")
+    assert hybrid_env.delete(f"/v1/users/{uid}", headers=_bearer(admin)).status_code == 204
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 401
+
+
+@pytest.mark.slow
+def test_password_reset_revokes_tokens(hybrid_env: TestClient) -> None:
+    from datetime import timedelta
+
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import PasswordResetTokenRepository
+    from src.shared.utils import utcnow
+
+    uid, email = _new_user("viewer")
+    token = _login(hybrid_env, email)
+    with get_control_session() as session:
+        PasswordResetTokenRepository(session).create(uid, "reset-me-please", utcnow() + timedelta(hours=1))
+    r = hybrid_env.post("/v1/auth/reset-password",
+                        json={"token": "reset-me-please", "password": "another-long-password"})
+    assert r.status_code == 204, r.text
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 401
+    assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 401
+
+
+@pytest.mark.slow
+def test_token_of_an_older_version_is_refused(hybrid_env: TestClient) -> None:
+    from src.server.database import get_control_session
+
+    uid, _ = _new_user("viewer")
+    with get_control_session() as session:
+        session.execute(text("UPDATE users SET token_version = 3 WHERE user_id = :u"), {"u": uid})
+        session.commit()
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(_make_jwt(uid, "viewer", tv=2))).status_code == 401
+    assert hybrid_env.get("/v1/libraries", headers=_bearer(_make_jwt(uid, "viewer", tv=3))).status_code == 200

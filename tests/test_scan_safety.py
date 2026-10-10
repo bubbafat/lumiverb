@@ -20,7 +20,7 @@ import pytest
 from rich.console import Console
 
 from src.client.cli.ingest import _walk_library
-from src.client.cli.scan import _ServerAsset, _deletion_guard_trips, run_scan
+from src.client.cli.scan import _ServerAsset, run_scan
 from src.shared.io_utils import resolve_source_path
 from src.shared.path_filter import PathFilter
 
@@ -72,22 +72,6 @@ def test_resolve_source_path_plain_hit_and_miss(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize(
-    ("deleting", "on_server", "trips"),
-    [
-        (50, 100, False),  # 50 or fewer files always proceed
-        (60, 10_000, False),  # 0.6% of the library
-        (600, 10_000, False),  # 6%: archived (reversible), not a mount problem
-        (60, 100, True),  # 60%
-        (5_001, 10_000, True),
-        (5_000, 10_000, False),  # exactly half proceeds
-        (0, 0, False),
-    ],
-)
-def test_deletion_guard_trips_past_half(deleting: int, on_server: int, trips: bool) -> None:
-    assert _deletion_guard_trips(deleting, on_server) is trips
-
-
 def _scan_with(
     tmp_path: Path,
     *,
@@ -99,6 +83,7 @@ def _scan_with(
     local: list[dict] | None = None,
     walk=None,
     settings: dict | str | None = None,
+    raw_answers: list | None = None,
     **kwargs,
 ) -> MagicMock:
     """run_scan with `on_server` images on the server, of which `on_disk` are on disk unchanged."""
@@ -116,6 +101,9 @@ def _scan_with(
     }
     existing.update(extra_server or {})
     client = MagicMock()
+    client.raw.return_value = _answer(200, {"trashed": [], "not_found": [], "handed_over": []})
+    if raw_answers is not None:  # the archive requests answer in turn
+        client.raw.side_effect = raw_answers
     if settings == "unreadable":
         client.get.side_effect = RuntimeError("the server didn't answer")
     elif settings is not None:
@@ -140,14 +128,27 @@ def _scan_with(
     return client
 
 
+def _answer(status: int, body: dict) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    r.json.return_value = body
+    r.text = str(body)
+    return r
+
+
+def _archive_calls(client: MagicMock) -> list:
+    return [c for c in client.raw.call_args_list if c.args == ("DELETE", "/v1/assets")]
+
+
 def _deleted_ids(client: MagicMock) -> list[str]:
-    ids: list[str] = []
-    for call in client.delete.call_args_list:
-        if call.args and call.args[0] == "/v1/assets":
-            # The scanner's deletions are "missing", never the user's trash.
-            assert call.kwargs["json"]["reason"] == "missing"
-            ids.extend(call.kwargs["json"]["asset_ids"])
-    return ids
+    """The clips the scan archived as missing: the last request's (a 409 asked first)."""
+    calls = _archive_calls(client)
+    if not calls:
+        return []
+    body = calls[-1].kwargs["json"]
+    # The scanner's deletions are "missing", never the user's trash.
+    assert body["reason"] == "missing"
+    return list(body["asset_ids"])
 
 
 @pytest.mark.fast
@@ -301,8 +302,8 @@ def test_settings_it_cant_read_still_let_skip_moves_hold_back_deletions(tmp_path
 def test_an_archive_that_moved_to_a_copy_counts_as_moved(tmp_path: Path) -> None:
     """The server moved one of the two to an empty copy of its file (copy, then delete)."""
     client = MagicMock()
-    client.delete.return_value.json.return_value = {"trashed": ["ast_1", "ast_2"], "not_found": [],
-                                                    "handed_over": ["ast_2"]}
+    client.raw.return_value = _answer(200, {"trashed": ["ast_1", "ast_2"], "not_found": [],
+                                            "handed_over": ["ast_2"]})
     stats = _scan_counting(tmp_path, client)
     assert (stats.deleted, stats.moved) == (1, 1)
 
@@ -337,13 +338,6 @@ def test_moves_on_moves_are_looked_for(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_scan_skips_mass_deletion(tmp_path: Path) -> None:
-    client = _scan_with(tmp_path, on_disk=10, on_server=100)
-
-    assert _deleted_ids(client) == []
-
-
-@pytest.mark.fast
 def test_scan_mass_deletion_can_be_allowed(tmp_path: Path) -> None:
     client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
 
@@ -367,26 +361,6 @@ def test_media_type_scan_never_deletes_other_types(tmp_path: Path) -> None:
     }
 
     client = _scan_with(tmp_path, on_disk=10, on_server=10, extra_server=videos, media_type_filter="image")
-
-    assert _deleted_ids(client) == []
-
-
-@pytest.mark.fast
-def test_guard_measures_the_scanned_prefix(tmp_path: Path) -> None:
-    """60 files under sub/, 59 of them gone: that's 98% of what this scan
-    covers, even though it's under 1% of a 10,000-asset library."""
-    inside = {
-        f"sub/g{i}.jpg": _ServerAsset(asset_id=f"sub_{i}", sha256="x", file_size=4, media_type="image")
-        for i in range(60)
-    }
-    still_there = [{"rel_path": "sub/g0.jpg", "file_size": 4, "file_mtime": None,
-                    "media_type": "image", "ext": ".jpg"}]
-    (tmp_path / "lib" / "sub").mkdir(parents=True)
-
-    client = _scan_with(
-        tmp_path, on_disk=0, on_server=10_000, extra_server=inside, path_prefix="sub",
-        local=still_there, split=MagicMock(return_value=([], [], still_there)),
-    )
 
     assert _deleted_ids(client) == []
 
@@ -539,6 +513,7 @@ def _scan_disk(root: Path, existing: dict[str, _ServerAsset], *, library_filters
                **kwargs) -> MagicMock:
     """run_scan over real files under root, with every file on disk unchanged."""
     client = MagicMock()
+    client.raw.return_value = _answer(200, {"trashed": [], "not_found": [], "handed_over": []})
     with (
         patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
         patch("src.client.cli.scan._load_library_filters", return_value=library_filters or []),
@@ -820,3 +795,41 @@ def test_a_junk_file_that_cannot_be_checked_doesnt_block_deletions(junk: Path) -
     client = _scan_disk(junk, _assets("Day/a.jpg", "Day/gone.jpg"), library_filters=EXPORTS)
     assert _deleted_ids(client) == ["ast_Day/gone.jpg"]
     assert client.stats.unlisted == []
+
+
+def _mass_missing() -> MagicMock:
+    return _answer(409, {"error": {"code": "mass_missing", "message": "90 clips would be archived as missing.",
+                                   "details": {"count": 90}}})
+
+
+@pytest.mark.fast
+def test_a_scan_sends_its_missing_clips_in_one_request(tmp_path: Path) -> None:
+    """The server's mass-missing rule judges a scan's missing clips together."""
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+        client = _scan_with(tmp_path, on_disk=10, on_server=1200)
+    calls = _archive_calls(client)
+    assert len(calls) == 1 and len(calls[0].kwargs["json"]["asset_ids"]) == 1190
+    assert "confirm_missing" not in calls[0].kwargs["json"]
+
+
+@pytest.mark.fast
+def test_the_server_asking_about_mass_missing_skips_them(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+        client = _scan_with(tmp_path, on_disk=10, on_server=100, raw_answers=[_mass_missing()])
+    assert len(_archive_calls(client)) == 1
+    assert client.scan_stats.deleted == 0
+
+
+@pytest.mark.fast
+def test_allow_mass_delete_answers_with_the_count(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    ok = _answer(200, {"trashed": [], "not_found": [], "handed_over": []})
+    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+        client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True,
+                            raw_answers=[_mass_missing(), ok])
+    calls = _archive_calls(client)
+    assert len(calls) == 2
+    assert calls[1].kwargs["json"]["confirm_missing"] == 90
+    assert client.scan_stats.deleted == 90

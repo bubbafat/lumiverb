@@ -109,7 +109,7 @@ def create_key(
     )
 
 
-@router.delete("/{key_id}", status_code=204)
+@router.delete("/{key_id}", status_code=204, dependencies=[Depends(require_editor)])
 def revoke_key(
     key_id: str,
     request: Request,
@@ -118,11 +118,11 @@ def revoke_key(
     Revoke a key for the current tenant.
 
     Rules:
-    1. A key cannot revoke itself (409).
-    2. The last admin key cannot be revoked (409, code=last_admin_key) — checked
-       before the role gate so that the constraint is visible regardless of
-       the caller's role.
-    3. Only admin or editor may revoke keys (403).
+    1. Editors and admins only (403).
+    2. Only keys at or below the caller's own role, as with creating one
+       (403 role_escalation): an editor can't revoke an admin key.
+    3. The last admin key cannot be revoked (409, code=last_admin_key).
+    4. A key cannot revoke itself (409).
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
@@ -130,6 +130,7 @@ def revoke_key(
 
     # key_id is only set for API key auth; None for JWT users.
     current_key_id: str | None = getattr(request.state, "key_id", None)
+    caller_role = getattr(request.state, "role", None)
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
@@ -142,9 +143,11 @@ def revoke_key(
         if target is None or target.revoked_at is not None:
             raise HTTPException(status_code=404, detail="Key not found")
 
-        # 1. Check "last admin key" before the role gate so that this hard
-        #    constraint surfaces as 409 regardless of the caller's role.
-        if getattr(target, "role", "viewer") == "admin":
+        target_role = getattr(target, "role", "viewer")
+        if _ROLE_RANK.get(target_role, _ROLE_RANK["admin"]) > _ROLE_RANK.get(caller_role or "", -1):
+            return _error_response(403, "role_escalation", "Cannot revoke a key with higher privileges than your own")
+
+        if target_role == "admin":
             admin_count = repo.count_admin_keys(tenant_id)
             if admin_count <= 1:
                 return _error_response(
@@ -153,12 +156,6 @@ def revoke_key(
                     "Cannot revoke the last remaining admin key for this tenant",
                 )
 
-        # 2. Enforce editor+ after the last_admin_key constraint check.
-        caller_role = getattr(request.state, "role", None)
-        if caller_role not in ("admin", "editor"):
-            raise HTTPException(status_code=403, detail="Editor access required")
-
-        # 3. A key cannot revoke itself (only relevant for API key auth).
         if current_key_id and key_id == current_key_id:
             raise HTTPException(status_code=409, detail="A key cannot revoke itself")
 
@@ -168,4 +165,3 @@ def revoke_key(
             raise HTTPException(status_code=404, detail="Key not found")
 
     return None
-

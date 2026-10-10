@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
@@ -172,12 +172,58 @@ class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
     # "user": a person trashed them; deleted for good after the trash days,
     # and scans leave them trashed. "missing": the scanner no longer finds the
-    # files (archived; restored when they reappear). Omitted = "missing": what
-    # scanners sent before reasons existed (the Mac app still does).
-    reason: Literal["user", "missing"] | None = None
+    # files (archived; restored when they reappear). Required: a scanner and
+    # a person mean different things.
+    reason: Literal["user", "missing"]
     # A person's trash: required when any of the clips are in projects. In the
     # trash they're hidden there, and deleted for good they leave them.
     remove_from_projects: bool = False
+    # "missing" for more than MASS_MISSING_MIN_FILES clips and more than half
+    # of a library's clips in sight: the count of clips the 409 mass_missing
+    # named, to say the files really are gone (not a half-mounted volume).
+    confirm_missing: int | None = None
+
+
+# Marking files missing in bulk looks exactly like a half-mounted volume:
+# more than 50 clips and more than half of a library's clips in sight asks
+# first (409 mass_missing). Half, not 5% (Robert, Oct 9): missing clips are
+# archived, not deleted, and come back by themselves when the files do.
+MASS_MISSING_MIN_FILES = 50
+MASS_MISSING_MIN_FRACTION = 0.5
+
+
+def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: int | None) -> None:
+    """409 mass_missing when marking these missing would take more than
+    MASS_MISSING_MIN_FILES clips and more than half of any library's clips in
+    sight, unless confirmed is the number of clips it would take. Clients
+    send a scan's missing clips in one request, so the rule sees them all."""
+    from sqlalchemy import text as sa_text
+
+    rows = session.execute(sa_text(
+        """
+        SELECT a.library_id,
+               COUNT(*) FILTER (WHERE a.asset_id = ANY(:ids))::int AS going,
+               COUNT(*)::int AS in_sight
+        FROM assets a
+        WHERE a.deleted_at IS NULL
+          AND a.library_id IN (SELECT library_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL)
+        GROUP BY a.library_id
+        """
+    ), {"ids": asset_ids}).all()
+    going = sum(r.going for r in rows)
+    tripped = [r for r in rows
+               if r.going > MASS_MISSING_MIN_FILES and r.going > MASS_MISSING_MIN_FRACTION * r.in_sight]
+    if not tripped or confirmed == going:
+        return
+    worst = max(tripped, key=lambda r: r.going / r.in_sight)
+    raise DecisionRequiredError(
+        "mass_missing",
+        f"{going} clips would be archived as missing, {round(100 * worst.going / worst.in_sight)}% of a "
+        "library's clips: that usually means its storage isn't fully mounted. If the files really are gone, "
+        f"send confirm_missing: {going}.",
+        {"count": going, "libraries": [{"library_id": r.library_id, "missing": r.going, "in_sight": r.in_sight}
+                                       for r in tripped]},
+    )
 
 
 class PickClipsRequest(BaseModel):
@@ -327,9 +373,16 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
-        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe.
+        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe,
+        # nor where it was shot (repeated near searches would find it).
         if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
             raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
+        if has_gps or near_lat is not None or near_lon is not None:
+            raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
+        camera = (camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us,
+                  aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure)
+        if any(v is not None for v in camera):
+            raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -436,6 +489,8 @@ def page_assets(
         )
         for a in assets
     ]
+    if getattr(request.state, "is_public_request", False):
+        items = [_page_item_visitor_view(i) for i in items]
     next_cursor: str | None = None
     if items and len(items) == limit:
         last = assets[-1]
@@ -764,7 +819,7 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
 
 
 def _project_visitor_view(response: AssetResponse) -> AssetResponse:
-    """What a public project's page may show of a clip: what its clip list gives
+    """What a public page (a project's or a library's) may show of a clip: what its clip list gives
     (shape, time, length) and what's seen or heard in it. Not where it lives,
     where it was shot, what shot it, or the team's notes."""
     return AssetResponse(
@@ -785,6 +840,26 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
         transcript_srt=response.transcript_srt,
         transcript_language=response.transcript_language,
         video_facet=response.video_facet,
+    )
+
+
+def _page_item_visitor_view(item: AssetPageItem) -> AssetPageItem:
+    """A page item as a visitor to a public library sees it: what
+    _project_visitor_view keeps (shape, time, length), not where it lives,
+    where it was shot or what shot it."""
+    return AssetPageItem(
+        asset_id=item.asset_id,
+        rel_path="",
+        file_size=0,
+        file_mtime=None,
+        sha256=None,
+        media_type=item.media_type,
+        width=item.width,
+        height=item.height,
+        taken_at=item.taken_at,
+        status=item.status,
+        duration_sec=item.duration_sec,
+        has_analysis_proxy=item.has_analysis_proxy,
     )
 
 
@@ -893,7 +968,7 @@ def get_asset_by_path(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
     response = _asset_detail(session, request, asset)
-    return response
+    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 
 
 @router.get("", response_model=list[AssetResponse])
@@ -1037,7 +1112,7 @@ def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
         library_repo.bump_revision(library_id)
 
 
-@router.delete("", response_model=BatchTrashResponse)
+@router.delete("", response_model=BatchTrashResponse, dependencies=[Depends(require_editor)])
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
@@ -1046,19 +1121,20 @@ def batch_trash_assets(
 ) -> BatchTrashResponse:
     """Take clips out of sight: a person's trash ("user"), or files a scan no longer finds ("missing").
 
-    A person's trash needs an editor, takes archived clips too (deleting an
+    Needs an editor. A person's trash takes archived clips too (deleting an
     archived clip moves it to the trash), and asks first about clips that
-    projects use (409 in_projects). Marking files missing stays open to
-    whoever can scan, and hands each over to an empty copy of its file when
-    there is one (follow moves).
+    projects use (409 in_projects). Marking files missing asks first when it
+    would take most of a library (409 mass_missing), and hands each over to
+    an empty copy of its file when there is one (follow moves).
     """
-    reason = body.reason or "missing"
+    reason = body.reason
     asset_repo = AssetRepository(session)
     if reason == "user":
-        require_editor(request)
         if not body.remove_from_projects:
             # Only about clips this would trash: one already in the trash needs no answer.
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
+    else:
+        _ask_about_mass_missing(session, body.asset_ids, body.confirm_missing)
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
     handed_over: list[str] = []
     if trashed_ids and reason == "missing":
@@ -1088,11 +1164,9 @@ def get_asset(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     _check_public_request(request, session, asset)
-    via_project = getattr(request.state, "is_public_request", False) and bool(
-        request.query_params.get("public_project_id")
-    )
     response = _asset_detail(session, request, asset)
-    return _project_visitor_view(response) if via_project else response
+    # A visitor, by a public project or a public library, sees the same trimmed clip.
+    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 
 
 class VideoFacetSubmit(VideoFacetModel):
@@ -1101,7 +1175,7 @@ class VideoFacetSubmit(VideoFacetModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel)
+@router.put("/{asset_id}/video-facet", response_model=VideoFacetModel, dependencies=[Depends(require_editor)])
 def put_video_facet(
     asset_id: str,
     body: VideoFacetSubmit,
@@ -1258,7 +1332,7 @@ def unarchive_assets(
     return UnarchiveResponse(unarchived=back, skipped=skipped)
 
 
-@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse)
+@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse, dependencies=[Depends(require_editor)])
 def submit_vision(
     asset_id: str,
     body: VisionSubmitRequest,
@@ -1316,7 +1390,7 @@ class OcrSubmitRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/{asset_id}/ocr", status_code=200)
+@router.post("/{asset_id}/ocr", status_code=200, dependencies=[Depends(require_editor)])
 def submit_ocr(
     asset_id: str,
     body: OcrSubmitRequest,
@@ -1359,7 +1433,7 @@ class BatchOcrRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-ocr", status_code=200)
+@router.post("/batch-ocr", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_ocr(
     body: BatchOcrRequest,
     request: Request,
@@ -1418,7 +1492,7 @@ class BatchVisionRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-vision", status_code=200)
+@router.post("/batch-vision", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_vision(
     body: BatchVisionRequest,
     request: Request,
@@ -1562,7 +1636,7 @@ def _shown_transcript(asset: Asset) -> str | None:
     return None
 
 
-@router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse)
+@router.post("/{asset_id}/transcript", response_model=TranscriptSubmitResponse, dependencies=[Depends(require_editor)])
 def submit_transcript(
     asset_id: str,
     body: TranscriptSubmitRequest,
@@ -1575,8 +1649,6 @@ def submit_transcript(
     nothing of it is kept)."""
     from src.server.srt import parse_srt_to_text, validate_srt
 
-    if body.source == "manual":
-        require_editor(request)
     made = _transcript_lineage(body)  # a machine's says how it was made, before anything is saved
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
@@ -1705,7 +1777,7 @@ class NoteUpdateResponse(BaseModel):
     note_updated_at: str | None
 
 
-@router.put("/{asset_id}/note", response_model=NoteUpdateResponse)
+@router.put("/{asset_id}/note", response_model=NoteUpdateResponse, dependencies=[Depends(require_editor)])
 def update_note(
     asset_id: str,
     body: NoteUpdateRequest,
@@ -1750,7 +1822,7 @@ def update_note(
     )
 
 
-@router.delete("/{asset_id}/note", status_code=204)
+@router.delete("/{asset_id}/note", status_code=204, dependencies=[Depends(require_editor)])
 def delete_note(
     asset_id: str,
     request: Request,
@@ -1783,7 +1855,7 @@ class EmbeddingSubmitRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/{asset_id}/embeddings", status_code=201)
+@router.post("/{asset_id}/embeddings", status_code=201, dependencies=[Depends(require_editor)])
 def submit_embedding(
     asset_id: str,
     body: EmbeddingSubmitRequest,
@@ -1821,7 +1893,7 @@ class BatchEmbeddingRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-embeddings", status_code=200)
+@router.post("/batch-embeddings", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_embeddings(
     body: BatchEmbeddingRequest,
     request: Request,
@@ -1871,7 +1943,7 @@ class BatchMoveRequest(BaseModel):
     items: list[BatchMoveItem]
 
 
-@router.post("/batch-moves", status_code=200)
+@router.post("/batch-moves", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_moves(
     body: BatchMoveRequest,
     request: Request,
@@ -1881,6 +1953,8 @@ def submit_batch_moves(
     409 moves_off when the account doesn't follow moves."""
     from src.server.tenant_settings import get_follow_moves
 
+    # Every path checked before any move is made.
+    moved_to = {item.asset_id: checked_rel_path(item.rel_path) for item in body.items}
     if not get_follow_moves(session):
         raise DecisionRequiredError(
             "moves_off",
@@ -1897,7 +1971,7 @@ def submit_batch_moves(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        asset.rel_path = normalize_rel_path(item.rel_path)
+        asset.rel_path = moved_to[item.asset_id]
         asset.search_synced_at = None
         asset.updated_at = utcnow()
         session.add(asset)
@@ -1958,26 +2032,7 @@ def stream_or_enqueue_preview(
     raise HTTPException(status_code=404, detail="No video preview available for this asset")
 
 
-class ThumbnailKeyUpdateRequest(BaseModel):
-    thumbnail_key: str
-    lineage: Any = None  # the proxy producer's: it makes thumbnails
-
-
-@router.post("/{asset_id}/thumbnail-key")
-def set_thumbnail_key(
-    asset_id: str,
-    body: ThumbnailKeyUpdateRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Record a thumbnail_key for a video asset after the index worker extracts
-    the first frame; it says how it was made (the proxy producer's lineage)."""
-    require_lineage(body.lineage, "proxy")
-    asset_repo = AssetRepository(session)
-    asset_repo.update_thumbnail_key(asset_id, body.thumbnail_key)
-    return {"asset_id": asset_id, "thumbnail_key": body.thumbnail_key}
-
-
-@router.post("/upsert", response_model=UpsertAssetResponse)
+@router.post("/upsert", response_model=UpsertAssetResponse, dependencies=[Depends(require_editor)])
 def upsert_asset(
     body: UpsertAssetRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -1998,7 +2053,7 @@ def upsert_asset(
             raise HTTPException(status_code=400, detail="Invalid file_mtime format")
 
     asset_repo = AssetRepository(session)
-    rel_path = normalize_rel_path(body.rel_path)
+    rel_path = checked_rel_path(body.rel_path)
     existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
 
     if existing is None:
@@ -2180,7 +2235,7 @@ class BatchFaceRequest(BaseModel):
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
-@router.post("/batch-faces", status_code=200)
+@router.post("/batch-faces", status_code=200, dependencies=[Depends(require_editor)])
 def submit_batch_faces(
     body: BatchFaceRequest,
     request: Request,
@@ -2235,7 +2290,7 @@ def submit_batch_faces(
     return {"processed": processed, "skipped": skipped}
 
 
-@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201)
+@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201, dependencies=[Depends(require_editor)])
 def submit_faces(
     asset_id: str,
     body: FaceSubmitRequest,

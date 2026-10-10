@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session
+from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.repository.tenant import current_face_model
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ def list_people(
     return PersonListResponse(items=items, next_cursor=next_cursor)
 
 
-@router.post("", response_model=PersonItem, status_code=201)
+@router.post("", response_model=PersonItem, status_code=201, dependencies=[Depends(require_editor)])
 def create_person(
     body: PersonCreateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -333,7 +333,7 @@ class UndismissRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=255)
 
 
-@router.post("/{person_id}/undismiss", response_model=PersonItem)
+@router.post("/{person_id}/undismiss", response_model=PersonItem, dependencies=[Depends(require_editor)])
 def undismiss_person(
     person_id: str,
     body: UndismissRequest,
@@ -419,7 +419,7 @@ def get_person(
     )
 
 
-@router.patch("/{person_id}", response_model=PersonItem)
+@router.patch("/{person_id}", response_model=PersonItem, dependencies=[Depends(require_editor)])
 def update_person(
     person_id: str,
     body: PersonUpdateRequest,
@@ -447,7 +447,7 @@ def update_person(
     )
 
 
-@router.delete("/{person_id}", status_code=204)
+@router.delete("/{person_id}", status_code=204, dependencies=[Depends(require_editor)])
 def delete_person(
     person_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -510,7 +510,7 @@ def list_person_faces(
     return PersonFacesResponse(items=items, next_cursor=next_cursor)
 
 
-@router.post("/{person_id}/merge", response_model=PersonItem)
+@router.post("/{person_id}/merge", response_model=PersonItem, dependencies=[Depends(require_editor)])
 def merge_person(
     person_id: str,
     body: MergeRequest,
@@ -560,7 +560,7 @@ class ClusterNameRequest(BaseModel):
     person_id: str | None = None  # assign to existing person instead of creating new
 
 
-@faces_router.post("/clusters/{cluster_index}/name", response_model=PersonItem, status_code=201)
+@faces_router.post("/clusters/{cluster_index}/name", response_model=PersonItem, status_code=201, dependencies=[Depends(require_editor)])
 def name_cluster(
     cluster_index: int,
     body: ClusterNameRequest,
@@ -637,7 +637,7 @@ class DismissResult(BaseModel):
     person_id: str
 
 
-@faces_router.post("/clusters/{cluster_index}/dismiss", response_model=DismissResult)
+@faces_router.post("/clusters/{cluster_index}/dismiss", response_model=DismissResult, dependencies=[Depends(require_editor)])
 def dismiss_cluster(
     cluster_index: int,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -951,7 +951,7 @@ def get_face_crop(
     )
 
 
-@faces_router.post("/{face_id}/assign", status_code=200)
+@faces_router.post("/{face_id}/assign", status_code=200, dependencies=[Depends(require_editor)])
 def assign_face(
     face_id: str,
     body: FaceAssignRequest,
@@ -1000,7 +1000,7 @@ def assign_face(
         return {"person_id": person.person_id, "display_name": person.display_name}
 
 
-@faces_router.delete("/{face_id}/assign", status_code=204)
+@faces_router.delete("/{face_id}/assign", status_code=204, dependencies=[Depends(require_editor)])
 def unassign_face(
     face_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],

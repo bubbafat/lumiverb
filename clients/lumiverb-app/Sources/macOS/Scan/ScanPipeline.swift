@@ -176,26 +176,18 @@ actor ScanPipeline {
 
         // Phase 5: Handle deletions
         //
-        // Safety gate: if the server has significantly more assets than we
-        // found locally, skip deletions entirely. This protects against
-        // external volumes that are slow to mount or temporarily offline —
-        // the root directory may exist (mount point) but enumeration returns
-        // a partial or empty file list, causing the classification to mark
-        // hundreds or thousands of assets as "deleted from disk" when they're
-        // actually still there.
-        //
-        // Threshold: skip if we'd delete more than 5% of the server's known
-        // assets AND more than 50 files. Small libraries or genuine bulk
-        // deletes (< 50 files) proceed normally.
+        // Files no longer found are archived as missing (back when they
+        // reappear). A volume slow to mount or half offline looks exactly
+        // like files gone, so the server asks first (409 mass_missing) when
+        // it would take more than 50 clips and more than half of the
+        // library: the scan skips them then, as there's no one to ask.
         var deleteCount = 0
-        let deletionRatio = serverAssets.isEmpty ? 0.0 : Double(deletedAssetIds.count) / Double(serverAssets.count)
         if !deletedAssetIds.isEmpty && !cancelled {
-            if deletedAssetIds.count > 50 && deletionRatio > 0.05 {
-                scanLogger.warning("Skipping \(deletedAssetIds.count, privacy: .public) deletions — \(String(format: "%.1f", deletionRatio * 100), privacy: .public)% of server assets would be removed. Possible volume mount issue.")
-                phase = "skipped deletions (safety)"
+            phase = "deleting"
+            if let deleted = await handleDeletions(assetIds: deletedAssetIds) {
+                deleteCount = deleted
             } else {
-                phase = "deleting"
-                deleteCount = await handleDeletions(assetIds: deletedAssetIds)
+                phase = "skipped deletions (safety)"
             }
         }
 
@@ -527,30 +519,25 @@ actor ScanPipeline {
 
     // MARK: - Deletions
 
-    private func handleDeletions(assetIds: [String]) async -> Int {
-        var totalDeleted = 0
-
-        // Batch in groups of 500
-        for start in stride(from: 0, to: assetIds.count, by: 500) {
-            let end = min(start + 500, assetIds.count)
-            let batch = Array(assetIds[start..<end])
-            let request = BatchDeleteRequest(assetIds: batch)
-
-            do {
-                // Use POST instead of DELETE — URLSession may strip the body
-                // from DELETE requests. The server's batch-trash endpoint accepts
-                // DELETE, but POST with the same body is more reliable.
-                let response: BatchDeleteResponse = try await client.deleteWithBody(
-                    "/v1/assets", body: request
-                )
-                totalDeleted += response.trashed.count
-            } catch {
-                lastError = "Deletion failed for \(batch.count) assets: \(error)"
-                errorCount += 1
-            }
+    /// Archive these clips as missing, all in one request so the server's
+    /// mass-missing rule judges the whole scan. Returns how many were
+    /// archived, or nil when the server asked first (409 mass_missing:
+    /// likely a volume not fully mounted) and nothing was archived.
+    private func handleDeletions(assetIds: [String]) async -> Int? {
+        let request = BatchDeleteRequest(assetIds: assetIds, reason: .missing)
+        do {
+            let response: BatchDeleteResponse = try await client.deleteWithBody(
+                "/v1/assets", body: request
+            )
+            return response.trashed.count
+        } catch APIError.serverError(statusCode: 409, let message) {
+            scanLogger.warning("Skipping \(assetIds.count, privacy: .public) deletions: \(message, privacy: .public)")
+            return nil
+        } catch {
+            lastError = "Deletion failed for \(assetIds.count) assets: \(error)"
+            errorCount += 1
+            return 0
         }
-
-        return totalDeleted
     }
 }
 

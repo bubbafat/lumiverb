@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 
 from src.server.config import get_settings
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository
+from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, UserRepository
 
 logger = logging.getLogger(__name__)
 
@@ -101,11 +101,19 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     logger.warning("JWT decode failed for %s %s — %s: %s — falling through to API key", request.method, request.url.path, type(exc).__name__, exc)
                 else:
                     # JWT decoded successfully — resolve tenant and dispatch
+                    from src.server.api.routers.auth import token_user_is_current
+
                     with get_control_session() as session:
                         # Check token revocation
                         jti = claims.get("jti")
-                        if jti and RevokedTokenRepository(session).is_revoked(jti):
+                        if not jti or RevokedTokenRepository(session).is_revoked(jti):
                             return _error_response(401, "token_revoked", "Token has been revoked")
+                        # The user as they are now: deleted, another role or a
+                        # reset password since (token_version moved on) revokes it.
+                        user = UserRepository(session).get_by_id(str(user_id))
+                        if not token_user_is_current(user, claims):
+                            return _error_response(401, "token_revoked", "Token has been revoked")
+                        role = user.role
                         routing_repo = TenantDbRoutingRepository(session)
                         routing = routing_repo.get_by_tenant_id(tenant_id)
                     if routing is None:

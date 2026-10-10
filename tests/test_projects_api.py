@@ -317,7 +317,7 @@ def test_add_trashed_asset_rejected(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
@@ -360,7 +360,7 @@ def test_remove_assets(projects_env):
     r2 = client.request(
         "DELETE",
         f"/v1/projects/{col_id}/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
     assert r2.status_code == 200
@@ -416,7 +416,7 @@ def test_trashed_asset_hidden_in_project(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
@@ -530,7 +530,7 @@ def test_cover_stale_self_heals(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
@@ -1508,14 +1508,17 @@ def test_viewers_cannot_trash_or_restore_clips(projects_env):
 
 
 @pytest.mark.slow
-def test_anyone_who_can_scan_can_mark_files_missing(projects_env):
-    # The scanner marks files it no longer finds; that stays open to every
-    # role that can ingest, or a viewer's scan would fail halfway.
+def test_marking_files_missing_needs_an_editor(projects_env):
+    # The scanner marks files it no longer finds. Scanning (ingest too) is an
+    # editor's: a viewer can't take clips out of sight either way.
     client, api_key, library_id = projects_env
     viewer = _viewer_key(client, api_key)
     clip = _ingest_asset(client, api_key, library_id, "roles/gone-from-disk.jpg")
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "missing"},
                        headers=_headers(viewer))
+    assert r.status_code == 403, r.text
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "missing"},
+                       headers=_headers(api_key))
     assert r.status_code == 200, r.text
     assert r.json()["trashed"] == [clip]
 
@@ -1610,3 +1613,20 @@ def test_trashing_a_project_updates_it(projects_env):
     trashed = _trashed(client, api_key)[project_id]
     assert trashed["updated_at"] > before
     assert trashed["deleted_at"] >= trashed["updated_at"][:19]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../outside.jpg", "a/../../outside.jpg"])
+def test_writes_refuse_rel_paths_outside_the_library(projects_env, bad):
+    """upsert, batch-moves and ingest share one rule: relative, no "..", no leading "/"."""
+    client, api_key, library_id = projects_env
+    h = _headers(api_key)
+    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": bad, "file_size": 1,
+                                               "file_mtime": None, "media_type": "image"}, headers=h)
+    assert r.status_code == 400, r.text
+    clip = _ingest_asset(client, api_key, library_id, f"relpath/{len(bad)}-{bad.count('/')}.jpg")
+    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": clip, "rel_path": bad}]}, headers=h)
+    assert r.status_code == 400, r.text
+    assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("relpath/")
+    with pytest.raises(AssertionError, match="400"):
+        _ingest_asset(client, api_key, library_id, bad)

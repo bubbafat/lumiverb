@@ -18,6 +18,7 @@ import type { PersonItem, ClusterItem, ClusterSort, PersonFaceItem } from "../ap
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { useFaceCrop } from "../api/useFaceCrop";
 import { useLocalStorage } from "../lib/useLocalStorage";
+import { useCanEdit } from "../lib/useCanEdit";
 
 const SORT_LABELS: Record<ClusterSort, string> = {
   size_desc: "Largest first",
@@ -234,6 +235,9 @@ function ClusterCard({
     [displayFaces],
   );
 
+  // Naming, assigning and dismissing clusters need an editor, as on the server.
+  const canEdit = useCanEdit();
+
   const nameMutation = useMutation({
     mutationFn: (name: string) =>
       nameCluster(cluster.cluster_index, { displayName: name }),
@@ -313,7 +317,7 @@ function ClusterCard({
       {/* Actions — these all operate on the *entire* cluster. The
           per-face path is the face-crop click handler above; these
           buttons are for clusters that really are one person. */}
-      {mode === "idle" && (
+      {mode === "idle" && canEdit && (
         <div className="flex gap-2">
           <button
             type="button"

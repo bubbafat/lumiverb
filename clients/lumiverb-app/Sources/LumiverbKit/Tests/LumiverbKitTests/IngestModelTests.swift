@@ -39,11 +39,24 @@ final class IngestModelTests: XCTestCase {
     // MARK: - BatchDeleteRequest encoding
 
     func testBatchDeleteRequestEncoding() throws {
-        let request = BatchDeleteRequest(assetIds: ["ast_a", "ast_b", "ast_c"])
+        let request = BatchDeleteRequest(assetIds: ["ast_a", "ast_b", "ast_c"], reason: .missing)
         let data = try encoder.encode(request)
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let ids = json["asset_ids"] as! [String]
         XCTAssertEqual(ids, ["ast_a", "ast_b", "ast_c"])
+        // The server requires a reason; no confirmation unless one was asked for.
+        XCTAssertEqual(json["reason"] as? String, "missing")
+        XCTAssertNil(json["confirm_missing"])
+    }
+
+    func testBatchDeleteRequestEncodesTheConfirmedCount() throws {
+        let request = BatchDeleteRequest(assetIds: ["ast_a"], reason: .missing, confirmMissing: 51)
+        let data = try encoder.encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(json["confirm_missing"] as? Int, 51)
+        let user = try JSONSerialization.jsonObject(
+            with: encoder.encode(BatchDeleteRequest(assetIds: ["ast_a"], reason: .user))) as! [String: Any]
+        XCTAssertEqual(user["reason"] as? String, "user")
     }
 
     // MARK: - IngestResponse with all fields populated

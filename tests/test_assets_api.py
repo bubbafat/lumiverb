@@ -17,7 +17,6 @@ from src.server.config import get_settings
 from src.server.database import _engines
 
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
-from tests.machine_lineage import made
 
 
 @pytest.fixture(scope="module")
@@ -201,7 +200,7 @@ def test_list_assets_requires_auth(assets_api_client: tuple[TestClient, str, str
 def test_stream_thumbnail_happy_path(
     assets_api_client: tuple[TestClient, str, str, list[str]], tmp_path: Path
 ) -> None:
-    """Write real thumbnail to tmp_path, set thumbnail_key via API, GET streams bytes."""
+    """Write real thumbnail to tmp_path, set thumbnail_key, GET streams bytes."""
     from src.server.storage.local import get_storage
 
     client, api_key, library_id, asset_ids = assets_api_client
@@ -213,12 +212,19 @@ def test_stream_thumbnail_happy_path(
 
     asset_id = asset_ids[0]
     thumbnail_key = f"{tenant_id}/{library_id}/thumbnails/00/{asset_id}.jpg"
-    r_key = client.post(
-        f"/v1/assets/{asset_id}/thumbnail-key",
-        json={"thumbnail_key": thumbnail_key, "lineage": made("proxy")},
-        headers=auth,
-    )
-    assert r_key.status_code == 200
+    # Nothing sets a key over the API (the server derives keys); set it in the database.
+    from sqlalchemy import text as sa_text
+    from sqlmodel import Session
+
+    from src.server.database import get_control_session, get_engine_for_url
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    with get_control_session() as control:
+        url = TenantDbRoutingRepository(control).get_by_tenant_id(tenant_id).connection_string
+    with Session(get_engine_for_url(url)) as session:
+        session.execute(sa_text("UPDATE assets SET thumbnail_key = :k WHERE asset_id = :a"),
+                        {"k": thumbnail_key, "a": asset_id})
+        session.commit()
 
     storage = get_storage()
     thumb_path = storage.abs_path(thumbnail_key)
@@ -230,22 +236,3 @@ def test_stream_thumbnail_happy_path(
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
     assert r.content == payload
-
-
-@pytest.mark.slow
-def test_set_thumbnail_key(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """POST /v1/assets/{id}/thumbnail-key returns {asset_id, thumbnail_key}."""
-    client, api_key, library_id, asset_ids = assets_api_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    asset_id = asset_ids[0]
-    thumbnail_key = "tenant/lib/thumb/test.jpg"
-    r = client.post(
-        f"/v1/assets/{asset_id}/thumbnail-key",
-        json={"thumbnail_key": thumbnail_key, "lineage": made("proxy")},
-        headers=auth,
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["asset_id"] == asset_id
-    assert body["thumbnail_key"] == thumbnail_key

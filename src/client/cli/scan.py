@@ -33,7 +33,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.client.cli.client import LumiverbClient
+from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.cli.roots import local_library_root, reachable_root
 from src.client.cli.ingest import (
     SUPPORTED_EXTENSIONS,
@@ -50,7 +50,7 @@ from src.client.cli.ingest import (
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
-from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
+from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 from src.shared.producers import effective_settings, lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
@@ -163,23 +163,6 @@ def _skipped(f: dict, ignored: dict[str, list[_ServerAsset] | None], root_path: 
         return True
     sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
     return sha is None or any(sha == r.sha256 for r in removed)
-
-
-# A scan that would archive more than 50 clips AND more than half of the
-# library's clips in what it scanned as missing skips that: a half-mounted volume looks exactly
-# like it. Half, not 5% (Robert, Oct 9): missing clips are archived, not
-# deleted, and come back by themselves when the files do.
-MASS_DELETE_MIN_FILES = 50
-MASS_DELETE_MIN_FRACTION = 0.50
-
-
-def _deletion_guard_trips(deleting: int, on_server: int) -> bool:
-    """True when deleting this many of the server's assets looks like a mount problem."""
-    return (
-        deleting > MASS_DELETE_MIN_FILES
-        and on_server > 0
-        and deleting / on_server > MASS_DELETE_MIN_FRACTION
-    )
 
 
 def _split_files(
@@ -696,6 +679,38 @@ def _prompt_move_decision(console: Console, moves: list[_MoveCandidate]) -> str:
         console.print("[red]Invalid choice. Enter 1, 2, or 3.[/red]")
 
 
+def _archive_missing(client, deleted_ids: list[str], stats, console, *, allow_mass_delete: bool) -> None:
+    """Archive clips whose files are gone ("missing", not the user's trash:
+    restored if the file reappears), all in one request so the server's
+    mass-missing rule sees the whole scan. When it would take most of a
+    library the server asks first (409 mass_missing, usually a volume not
+    fully mounted): skipped, unless --allow-mass-delete says yes with the count."""
+    console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
+    body: dict = {"asset_ids": deleted_ids, "reason": "missing"}
+    resp = client.raw("DELETE", "/v1/assets", json=body)
+    if resp.status_code == 409:
+        err = {}
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
+            err = (resp.json() or {}).get("error") or {}
+        if err.get("code") == "mass_missing":
+            count = (err.get("details") or {}).get("count")
+            if not allow_mass_delete:
+                console.print(
+                    f"[yellow]Skipping {len(deleted_ids):,} deletions: {err.get('message', '')} "
+                    "If the files really are gone, re-run with --allow-mass-delete.[/yellow]"
+                )
+                return
+            resp = client.raw("DELETE", "/v1/assets", json={**body, "confirm_missing": count})
+    if resp.status_code >= 400:
+        raise LumiverbAPIError("archive_missing_failed", resp.text, resp.status_code)
+    # Some may have moved to an empty copy of their file instead (copy, then delete).
+    handed_over = 0
+    with contextlib.suppress(AttributeError, TypeError, ValueError):
+        handed_over = len(resp.json().get("handed_over") or [])
+    stats.deleted = len(deleted_ids) - handed_over
+    stats.moved += handed_over
+
+
 def run_scan(
     client: LumiverbClient,
     library: dict,
@@ -753,6 +768,10 @@ def run_scan(
     if path_prefix:
         try:
             found = _existing_folder(root_path, path_prefix)
+        except UnsafeRelPathError:
+            console.print(f"[red]Invalid path prefix {path_prefix}: it must be a folder inside the library[/red]")
+            stats.unlisted.append(path_prefix)  # nothing is removed
+            return stats
         except OSError as exc:
             console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
             stats.unlisted.append(path_prefix)
@@ -825,17 +844,12 @@ def run_scan(
     )
     local_rel_paths = {f["rel_path"] for f in on_disk}
 
-    # Deletions, and the mass-deletion guard, only consider what this scan
-    # covers: a `--media-type image` scan doesn't see videos on disk, so it
-    # must not count them as gone.
+    # Deletions only consider what this scan covers: a `--media-type image`
+    # scan doesn't see videos on disk, so it must not count them as gone.
+    # (The mass-missing rule is the server's: DELETE /v1/assets.)
     scope = existing
     if media_type_filter != "all":
         scope = {rp: sa for rp, sa in existing.items() if sa.media_type == media_type_filter}
-    if path_prefix:
-        prefix_dir = path_prefix.rstrip("/") + "/"
-        scope_size = sum(1 for rp in scope if rp.startswith(prefix_dir))
-    else:
-        scope_size = len(scope)
 
     # Detect deletions first (needed to scope move detection)
     deleted_ids = _detect_deletions(on_disk, scope, root_path, path_prefix)
@@ -902,20 +916,6 @@ def run_scan(
         console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
         deleted_ids = []
 
-    if (
-        deleted_ids
-        and not allow_mass_delete
-        and _deletion_guard_trips(len(deleted_ids), scope_size)
-    ):
-        pct = 100 * len(deleted_ids) / scope_size
-        console.print(
-            f"[yellow]Skipping {len(deleted_ids):,} deletions: {pct:.0f}% of the "
-            f"{scope_size:,} assets this scan covers aren't on disk, which usually means "
-            "the volume isn't fully mounted. If the files really are gone, re-run "
-            "with --allow-mass-delete.[/yellow]"
-        )
-        deleted_ids = []
-
     # For skipped moves (via prompt choice): moved files don't participate.
     # New paths already removed from new_files by _detect_moves.
     # Old paths already removed from deleted_ids above.
@@ -970,17 +970,7 @@ def run_scan(
 
     # Soft-delete missing assets (after moves, so moved assets are not deleted)
     if deleted_ids:
-        console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
-        handed_over = 0
-        for batch_start in range(0, len(deleted_ids), 500):
-            batch = deleted_ids[batch_start : batch_start + 500]
-            # "missing", not the user's trash: restored if the file reappears.
-            resp = client.delete("/v1/assets", json={"asset_ids": batch, "reason": "missing"})
-            # Some may have moved to an empty copy of their file instead (copy, then delete).
-            with contextlib.suppress(AttributeError, TypeError, ValueError):
-                handed_over += len(resp.json().get("handed_over") or [])
-        stats.deleted = len(deleted_ids) - handed_over
-        stats.moved += handed_over
+        _archive_missing(client, deleted_ids, stats, console, allow_mass_delete=allow_mass_delete)
 
     # Pipeline: scan new files immediately while hashing existing files
     # in the background. Changed files feed into the same scan pool as

@@ -113,8 +113,13 @@ class ProxyCache:
 
         # 2. Try local source
         if self._root_path is not None and rel_path is not None:
-            source = (self._root_path / rel_path).resolve()
-            if source.is_file():
+            from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+
+            try:  # a rel_path from the server never reads outside the library
+                source = (self._root_path / check_rel_path(rel_path)).resolve()
+            except UnsafeRelPathError:
+                source = None
+            if source is not None and source.is_file():
                 try:
                     return self.put_from_path(asset_id, source)
                 except Exception:

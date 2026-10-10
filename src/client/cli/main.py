@@ -991,7 +991,7 @@ def scan(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
     allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
     skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Skip detected file moves (don't update paths, don't treat as new/deleted).")] = False,
-    allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and half of the library's clips in what was scanned are missing (normally skipped as a likely mount problem).")] = False,
+    allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and more than half of a library's clips are missing (the server asks first: normally skipped as a likely mount problem).")] = False,
     thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
@@ -1014,6 +1014,16 @@ def scan(
     if media_type not in ("image", "video", "all"):
         console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
         raise typer.Exit(1)
+
+    if path_prefix:
+        from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+
+        try:  # a folder inside the library: relative, no ".."
+            check_rel_path(path_prefix.rstrip("/"))
+        except UnsafeRelPathError:
+            console.print(f"[red]Invalid --path-prefix: {path_prefix}. Give a folder inside the library "
+                          "(relative, no '..').[/red]")
+            raise typer.Exit(1) from None
 
     client = LumiverbClient()
     libraries = client.get("/v1/libraries").json()

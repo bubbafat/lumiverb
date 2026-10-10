@@ -294,7 +294,7 @@ def test_rate_trashed_asset(ratings_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [asset_id]},
+        json={"asset_ids": [asset_id], "reason": "missing"},
         headers=_headers(api_key),
     )
 

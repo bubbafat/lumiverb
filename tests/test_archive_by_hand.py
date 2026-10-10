@@ -320,13 +320,13 @@ def test_a_person_trashing_never_takes_a_clip_from_its_trashed_library(env):
 
 
 @pytest.mark.slow
-def test_a_deletion_without_a_reason_is_recorded_as_missing(env):
-    """What scanners sent before reasons existed (the Mac app still does)."""
+def test_a_deletion_must_say_why(env):
+    """A scanner's "missing" and a person's "user" mean different things: no default."""
     client, headers, *_ = env
     clip = _ingest(env, "noreason/a.mov", sha=_sha())
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip]}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert _row(env, clip)[1] == "missing"
+    assert r.status_code == 422, r.text
+    assert _row(env, clip)[1] is None
 
 
 @pytest.mark.slow

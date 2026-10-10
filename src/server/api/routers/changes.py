@@ -39,13 +39,15 @@ class ChangeReport(BaseModel):
     @field_validator("paths")
     @classmethod
     def _absolute(cls, paths: list[str]) -> list[str]:
+        from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+
         for p in paths:
             if not p.startswith("/"):
                 raise ValueError(f"paths must be absolute: {p!r}")
-            if ".." in p.split("/"):
-                raise ValueError(f"paths may not contain '..': {p!r}")
-            if "\x00" in p:
-                raise ValueError(f"paths may not contain NUL: {p!r}")
+            try:  # below "/", the same rule as every rel_path: no "..", no NUL
+                check_rel_path(p.lstrip("/"), allow_root=True)
+            except UnsafeRelPathError:
+                raise ValueError(f"paths may not contain '..' or NUL: {p!r}") from None
         return paths
 
 

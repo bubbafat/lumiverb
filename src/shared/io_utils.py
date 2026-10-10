@@ -56,6 +56,26 @@ def normalize_rel_path(rel_path: str) -> str:
     return unicodedata.normalize("NFC", rel_path)
 
 
+class UnsafeRelPathError(ValueError):
+    """A library-relative path that would leave the library root."""
+
+
+def check_rel_path(rel_path: str, *, allow_root: bool = False) -> str:
+    """rel_path as stored (NFC), or UnsafeRelPathError unless it stays inside
+    the library: relative (no leading "/"), no ".." part, no NUL. "" is the
+    library root, allowed only with allow_root. Every write that takes a
+    rel_path checks it here, and resolve_source_path does too."""
+    if not isinstance(rel_path, str) or "\x00" in rel_path:
+        raise UnsafeRelPathError(f"Invalid rel_path: {rel_path!r}")
+    if rel_path == "":
+        if allow_root:
+            return rel_path
+        raise UnsafeRelPathError("rel_path is empty")
+    if rel_path.startswith("/") or ".." in rel_path.split("/"):
+        raise UnsafeRelPathError(f"rel_path must stay inside the library: {rel_path!r}")
+    return normalize_rel_path(rel_path)
+
+
 def is_within(rel_path: str, folder: str | None) -> bool:
     """rel_path is the library folder or inside it. None or "" is the whole library."""
     return not folder or rel_path == folder or rel_path.startswith(folder + "/")
@@ -69,8 +89,10 @@ def resolve_source_path(root: Path, rel_path: str) -> Path:
     which is how macOS often writes it, so fall back to the NFD form and
     then to matching each path component by its NFC form. Returns
     root / rel_path when nothing matches; raises OSError when a path can't
-    be checked (stat_if_present).
+    be checked (stat_if_present), UnsafeRelPathError for a rel_path that
+    would leave root (absolute, or with a ".." part).
     """
+    check_rel_path(rel_path, allow_root=True)  # never a path outside root
     direct = root / rel_path
     if stat_if_present(direct) is not None:
         return direct

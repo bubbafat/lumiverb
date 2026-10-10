@@ -202,7 +202,7 @@ def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str]]) -
     r = client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [existing, nonexistent, other]},
+        json={"asset_ids": [existing, nonexistent, other], "reason": "missing"},
         headers=auth,
     )
     assert r.status_code == 200
