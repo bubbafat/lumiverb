@@ -105,6 +105,8 @@ class User(SQLModel, table=True):
     email: str = Field(nullable=False, unique=True)
     password_hash: str = Field(nullable=False)
     role: str = Field(default="viewer", nullable=False)
+    # In every JWT as "tv"; bumped to revoke all of the user's tokens.
+    token_version: int = Field(default=0, nullable=False)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

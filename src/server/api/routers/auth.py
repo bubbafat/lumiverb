@@ -64,22 +64,37 @@ class ResetPasswordRequest(BaseModel):
     password: str
 
 
-def _issue_jwt(user_id: str, tenant_id: str, role: str, jwt_secret: str, email: str = "") -> str:
-    """Create a signed JWT with a unique jti for revocation support."""
+def _issue_jwt(user, jwt_secret: str, *, refresh_exp: int | None = None) -> str:
+    """A signed JWT for the user as the database has them now: their role and
+    token version ("tv"), with a unique jti for revocation. refresh_exp, the
+    outer bound after which even refresh is denied, is set at login and kept
+    by every refresh (no sliding)."""
     now = utcnow()
     jti = str(ULID())
     payload = {
-        "sub": user_id,
-        "tenant_id": tenant_id,
-        "role": role,
-        "email": email,
+        "sub": user.user_id,
+        "tenant_id": user.tenant_id,
+        "role": user.role,
+        "email": user.email,
+        "tv": user.token_version,
         "jti": jti,
         "iat": int(now.timestamp()),
         "exp": int(now.timestamp()) + JWT_EXPIRY_SECONDS,
-        # refresh_exp: the outer bound — after this, even refresh is denied.
-        "refresh_exp": int(now.timestamp()) + REFRESH_WINDOW_SECONDS,
+        "refresh_exp": refresh_exp if refresh_exp is not None else int(now.timestamp()) + REFRESH_WINDOW_SECONDS,
     }
     return jwt.encode(payload, jwt_secret, algorithm=JWT_ALGORITHM)
+
+
+def token_user_is_current(user, claims: dict) -> bool:
+    """The token was issued to this user as they are now: same tenant and
+    token version. A user deleted, given another role or with a reset
+    password fails this (their version moved on, or they're gone)."""
+    return (
+        user is not None
+        and user.tenant_id == claims.get("tenant_id")
+        and isinstance(claims.get("tv"), int)
+        and claims["tv"] == user.token_version
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -105,7 +120,7 @@ def login(
     if not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = _issue_jwt(user.user_id, user.tenant_id, user.role, settings.jwt_secret, email=user.email)
+    token = _issue_jwt(user, settings.jwt_secret)
     user_repo.update_last_login(user.user_id)
 
     return LoginResponse(access_token=token)
@@ -139,23 +154,30 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    # Check refresh window
+    # Check refresh window: the one set at login, never extended.
     import time
     now = int(time.time())
-    refresh_exp = claims.get("refresh_exp", 0)
-    if now > refresh_exp:
+    refresh_exp = claims.get("refresh_exp")
+    if not isinstance(refresh_exp, int) or now > refresh_exp:
         raise HTTPException(status_code=401, detail="Refresh window expired — please log in again")
 
     # Check revocation
     old_jti = claims.get("jti")
-    if old_jti:
-        revoked_repo = RevokedTokenRepository(session)
-        if revoked_repo.is_revoked(old_jti):
-            raise HTTPException(status_code=401, detail="Token has been revoked")
-        # Revoke the old token so it can't be refreshed again
-        revoked_repo.revoke(old_jti)
+    if not old_jti:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    revoked_repo = RevokedTokenRepository(session)
+    if revoked_repo.is_revoked(old_jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
 
-    new_token = _issue_jwt(claims["sub"], claims["tenant_id"], claims["role"], settings.jwt_secret, email=claims.get("email", ""))
+    # The user as they are now: gone, or with another role or password since, is no refresh.
+    user = UserRepository(session).get_by_id(str(claims.get("sub", "")))
+    if not token_user_is_current(user, claims):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    # Revoke the old token so it can't be refreshed again (only one refresh wins).
+    if not revoked_repo.revoke(old_jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+    new_token = _issue_jwt(user, settings.jwt_secret, refresh_exp=refresh_exp)
     return RefreshResponse(access_token=new_token)
 
 

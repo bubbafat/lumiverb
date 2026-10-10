@@ -293,7 +293,9 @@ class UserRepository:
         user = self.get_by_id(user_id)
         if user is None:
             raise ValueError(f"User not found: {user_id}")
-        user.role = role
+        if user.role != role:
+            user.role = role
+            user.token_version += 1  # tokens carry the role: revoke them
         self._session.add(user)
         self._session.commit()
         self._session.refresh(user)
@@ -314,6 +316,7 @@ class UserRepository:
         if user is None:
             raise ValueError(f"User not found: {user_id}")
         user.password_hash = password_hash
+        user.token_version += 1  # a new password signs out every session
         self._session.add(user)
         self._session.commit()
 
@@ -383,6 +386,7 @@ class PasswordResetTokenRepository:
             return False
 
         user.password_hash = password_hash
+        user.token_version += 1  # a reset signs out every session
         token.used_at = now
         self._session.add(user)
         self._session.add(token)
@@ -449,12 +453,17 @@ class RevokedTokenRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def revoke(self, jti: str) -> None:
-        """Mark a JWT as revoked."""
-        if self._session.get(RevokedToken, jti):
-            return  # already revoked
-        self._session.add(RevokedToken(jti=jti))
+    def revoke(self, jti: str) -> bool:
+        """Mark a JWT as revoked. True when this call revoked it, False when it
+        already was (so two refreshes of one token can't both succeed)."""
+        from sqlalchemy import text
+
+        result = self._session.execute(
+            text("INSERT INTO revoked_tokens (jti, revoked_at) VALUES (:jti, now()) ON CONFLICT (jti) DO NOTHING"),
+            {"jti": jti},
+        )
         self._session.commit()
+        return bool(result.rowcount)
 
     def is_revoked(self, jti: str) -> bool:
         return self._session.get(RevokedToken, jti) is not None
