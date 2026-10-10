@@ -214,6 +214,8 @@ class Asset(SQLModel, table=True):
 
 class VideoScene(SQLModel, table=True):
     __tablename__ = "video_scenes"
+    # The server numbers a clip's scenes as its chunks complete (complete_chunk).
+    __table_args__ = (UniqueConstraint("asset_id", "scene_index", name="uq_video_scenes_asset_scene_index"),)
 
     scene_id: str = Field(primary_key=True)
     asset_id: str = Field(foreign_key="assets.asset_id", nullable=False)

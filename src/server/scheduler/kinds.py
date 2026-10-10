@@ -5,7 +5,8 @@ thumbnails and previews, and probes); 2 prepare (analysis copies, which
 transcripts and scenes are made from); 3 find it (the AI and the rest
 that makes clips findable); 4 redo stale work: what was made with another
 model or settings than now (changing them was the approval), unless an
-admin stopped it. Within a tier, oldest first.
+admin stopped it; a new producer version stops it until an admin resumes
+it (lineage.hold_new_version). Within a tier, oldest first.
 
 Each kind uses one pool: the resource its work waits on. Descriptions,
 text in images and scene descriptions share the vision machines' requests

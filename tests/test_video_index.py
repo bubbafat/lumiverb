@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import pytest
 
 from src.client.cli.producer_settings import ProducerSettings
-from src.client.cli.video_index import index_video_scenes, run_video_index, run_video_enrich
+from src.client.cli.video_index import ChunkFailed, index_video_scenes, run_video_index, run_video_enrich
 
 
 class _FakeResponse:
@@ -47,6 +47,18 @@ class _FakeSegmenter:
         return self._scenes
 
 
+def _claims(client: MagicMock, responses: list) -> None:
+    """Claims (POST .../chunks/next) answer these in turn; other POSTs answer
+    client.post.return_value as it is now."""
+    answers = iter(responses)
+    default = client.post.return_value
+
+    def post(path, *args, **kwargs):
+        return next(answers) if path.endswith("/chunks/next") else default
+
+    client.post.side_effect = post
+
+
 @patch("src.client.cli.video_index.VideoScanner")
 @patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
@@ -68,7 +80,7 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
         "scene_start_ts": None,
     })
     done_resp = _FakeResponse(204)
-    client.raw.side_effect = [work_order, done_resp]
+    _claims(client, [work_order, done_resp])
 
     # Scanner returns empty iterator (segmenter controls scenes)
     mock_scanner_cls.return_value.scan.return_value = iter([])
@@ -117,7 +129,7 @@ def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
     client.post.return_value = _FakeResponse(data={"chunk_count": 1, "already_initialized": True})
 
     # Immediate 204 — all done
-    client.raw.return_value = _FakeResponse(204)
+    _claims(client, [_FakeResponse(204)])
 
     result = index_video_scenes(
         client=client,
@@ -134,7 +146,7 @@ def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
 @patch("src.client.cli.video_index.VideoScanner")
 @patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
-    """Failed chunks are reported to the server and the rest go on; then the
+    """A failed chunk is reported to the server and ends the run: the
     video's failure is raised, so the worker reports it (and waits its turn)."""
     from src.client.video.video_scanner import SyncError
 
@@ -150,12 +162,12 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
         "overlap_sec": 2.0,
     })
     done_resp = _FakeResponse(204)
-    client.raw.side_effect = [work_order, done_resp]
+    _claims(client, [work_order, done_resp])
 
     # Scanner raises SyncError
     mock_scanner_cls.return_value.scan.side_effect = SyncError("FFmpeg hung")
 
-    with pytest.raises(RuntimeError, match="1 of 1 chunks failed: FFmpeg hung"):
+    with pytest.raises(ChunkFailed, match="chunk 0 failed: FFmpeg hung"):
         index_video_scenes(
             client=client,
             source_path=Path("/fake/video.mp4"),
@@ -175,7 +187,7 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
 @patch("src.client.cli.video_index.VideoScanner")
 @patch("src.client.cli.video_index.SceneSegmenter")
 def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
-    """Two chunks: scene_index is cumulative across chunks."""
+    """Two chunks, each completed with its scenes (the server numbers them)."""
     client = MagicMock()
     client.post.return_value = _FakeResponse(data={"chunk_count": 2, "already_initialized": False})
 
@@ -190,7 +202,7 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
         "anchor_phash": "prev_hash", "scene_start_ts": None,
     })
     done_resp = _FakeResponse(204)
-    client.raw.side_effect = [chunk0, chunk1, done_resp]
+    _claims(client, [chunk0, chunk1, done_resp])
 
     mock_scanner_cls.return_value.scan.return_value = iter([])
 
@@ -217,10 +229,9 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
     # Verify both completes were called with correct chunk_ids
     complete_calls = [c for c in client.post.call_args_list if "complete" in str(c)]
     assert len(complete_calls) == 2
-    # First chunk's scene_index starts at 0
-    assert complete_calls[0].kwargs["json"]["scenes"][0]["scene_index"] == 0
-    # Second chunk's scene_index starts at 1 (cumulative)
-    assert complete_calls[1].kwargs["json"]["scenes"][0]["scene_index"] == 1
+    assert [c.args[0] for c in complete_calls] == ["/v1/video/chunks/chunk_0/complete",
+                                                   "/v1/video/chunks/chunk_1/complete"]
+    assert all("scene_index" not in c.kwargs["json"]["scenes"][0] for c in complete_calls)
 
 
 @patch("src.client.cli.video_index.VideoScanner")
@@ -235,7 +246,7 @@ def test_index_video_scenes_overlap_calculation(mock_segmenter_cls, mock_scanner
         "start_ts": 30.0, "end_ts": 60.0, "overlap_sec": 2.0,
         "anchor_phash": "abc", "scene_start_ts": None,
     })
-    client.raw.side_effect = [work, _FakeResponse(204)]
+    _claims(client, [work, _FakeResponse(204)])
     mock_scanner_cls.return_value.scan.return_value = iter([])
     mock_segmenter_cls.return_value = _FakeSegmenter([])
 
@@ -267,7 +278,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
         "chunk_id": "c1", "worker_id": "w1", "chunk_index": 0,
         "start_ts": 0.0, "end_ts": 30.0, "overlap_sec": 2.0,
     })
-    client.raw.side_effect = [work, _FakeResponse(204)]
+    _claims(client, [work, _FakeResponse(204)])
     mock_scanner_cls.return_value.scan.return_value = iter([])
 
     scene = _FakeScene(
@@ -292,7 +303,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
     assert result_scene["sharpness_score"] == 42.5
     assert result_scene["keep_reason"] == "phash"
     assert result_scene["phash"] == "deadbeef"
-    assert result_scene["scene_index"] == 0
+    assert "scene_index" not in result_scene  # the server numbers them
 
 
 @patch("src.client.cli.video_index.index_video_scenes")
@@ -675,3 +686,102 @@ def test_run_video_index_says_which_videos_it_made(mock_index):
                     console=MagicMock(), progress=MagicMock(), task_id=None,
                     on_fail=lambda a, e: failed.append(a), on_done=made.append)
     assert made == ["a"] and failed == ["b"]
+
+
+def _work(index: int) -> _FakeResponse:
+    return _FakeResponse(200, {"chunk_id": f"chunk_{index}", "worker_id": "vid_w", "chunk_index": index,
+                               "start_ts": 30.0 * index, "end_ts": 30.0 * (index + 1), "overlap_sec": 2.0})
+
+
+def _claimed(client: MagicMock) -> int:
+    return sum(1 for c in client.post.call_args_list if c.args and c.args[0].endswith("/chunks/next"))
+
+
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
+def test_a_failed_chunk_ends_the_run(mock_segmenter_cls, mock_scanner_cls):
+    """Review (Oct 9): the server handed a failed chunk straight back and the
+    loop only ended on a 204, so one bad chunk looped forever. Now the run
+    ends at the first failed chunk: nothing more is claimed."""
+    from src.client.video.video_scanner import SyncError
+
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(data={"chunk_count": 3, "already_initialized": False})
+    _claims(client, [_work(0), _work(1), _work(2), _FakeResponse(204)])
+    mock_scanner_cls.return_value.scan.side_effect = SyncError("FFmpeg hung")
+
+    with pytest.raises(ChunkFailed):
+        index_video_scenes(client=client, source_path=Path("/fake/video.mp4"), asset_id="asset_1",
+                           duration_sec=90.0, rel_path="video.mp4")
+    assert _claimed(client) == 1
+
+
+@patch("src.client.cli.video_index.VideoScanner")
+@patch("src.client.cli.video_index.SceneSegmenter")
+def test_a_chunk_that_cant_be_saved_is_let_go_of_and_the_error_goes_up_as_it_is(mock_segmenter_cls,
+                                                                                  mock_scanner_cls):
+    """Saving a chunk failing isn't the chunk's fault: the caller judges the
+    API's error; the chunk is failed so the next run starts from it."""
+    from src.client.cli.client import LumiverbAPIError
+
+    client = MagicMock()
+    init = _FakeResponse(data={"chunk_count": 1, "already_initialized": False})
+    answers = iter([_work(0), _FakeResponse(204)])
+
+    def post(path, *args, **kwargs):
+        if path.endswith("/chunks/next"):
+            return next(answers)
+        if path.endswith("/complete"):
+            raise LumiverbAPIError("unavailable", "database away", 503)
+        return init
+
+    client.post.side_effect = post
+    mock_scanner_cls.return_value.scan.return_value = iter([])
+    mock_segmenter_cls.return_value = _FakeSegmenter([_FakeScene(0, 30000, 1000)])
+
+    with pytest.raises(LumiverbAPIError) as raised:
+        index_video_scenes(client=client, source_path=Path("/fake/video.mp4"), asset_id="asset_1",
+                           duration_sec=30.0, rel_path="video.mp4")
+    assert raised.value.status_code == 503
+    assert any(c.args[0] == "/v1/video/chunks/chunk_0/fail" for c in client.post.call_args_list)
+
+
+@patch("src.client.cli.video_index.VideoScanner")
+def test_once_stopping_no_chunk_is_claimed(mock_scanner_cls):
+    import threading
+
+    from src.client.cli.video_index import Stopped
+
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(data={"chunk_count": 3, "already_initialized": False})
+    _claims(client, [_work(0)])
+    stopping = threading.Event()
+    stopping.set()
+    with pytest.raises(Stopped):
+        index_video_scenes(client=client, source_path=Path("/fake/video.mp4"), asset_id="asset_1",
+                           duration_sec=90.0, rel_path="video.mp4", stopping=stopping)
+    assert _claimed(client) == 0
+
+
+@patch("src.client.cli.video_index.index_video_scenes")
+def test_a_stopped_run_says_nothing_of_its_videos(mock_index):
+    import threading
+
+    from src.client.cli.video_index import Stopped
+
+    stopping = threading.Event()
+
+    def index(**kwargs):
+        stopping.set()
+        raise Stopped(kwargs["asset_id"])
+
+    mock_index.side_effect = index
+    failed, made = [], []
+    source = MagicMock()
+    source.is_file.return_value = True
+    run_video_index(client=MagicMock(), source_for=lambda v: source,
+                    videos=[{"asset_id": "a", "rel_path": "a.mp4", "duration_sec": 5.0},
+                            {"asset_id": "b", "rel_path": "b.mp4", "duration_sec": 5.0}],
+                    console=MagicMock(), progress=MagicMock(), task_id=None,
+                    on_fail=lambda a, e: failed.append(a), on_done=made.append, stopping=stopping)
+    assert failed == [] and made == [] and mock_index.call_count == 1

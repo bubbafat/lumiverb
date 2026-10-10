@@ -29,7 +29,7 @@ def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]]) -> None:
     """Find the clip's scenes as `made` says, through the chunk API the indexer uses."""
     client, headers, *_ = lib
     while True:
-        work = client.get(f"/v1/video/{vid}/chunks/next", headers=headers)
+        work = client.post(f"/v1/video/{vid}/chunks/next", headers=headers)
         if work.status_code == 204:
             return
         assert work.status_code == 200, work.text
@@ -121,7 +121,7 @@ def test_a_redo_sent_again_changes_nothing(env):
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     # Started over and under way: a second redo leaves the chunks to finish.
     client, headers, *_ = lib
-    assert client.get(f"/v1/video/{vid}/chunks/next", headers=headers).status_code == 200
+    assert client.post(f"/v1/video/{vid}/chunks/next", headers=headers).status_code == 200
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is True, r.text
     # Found this way already: nothing to start over.
@@ -201,7 +201,7 @@ def test_a_chunk_from_before_the_start_over_saves_nothing(env):
         s.execute(text("UPDATE video_index_chunks SET status = 'pending', worker_id = NULL WHERE asset_id = :a"),
                   {"a": vid})
         s.commit()
-    w = client.get(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+    w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     with _db(lib) as s:  # back to found, as the old run left it
         s.execute(text("UPDATE video_index_chunks SET status = 'completed' WHERE asset_id = :a"), {"a": vid})
         s.commit()
@@ -241,7 +241,7 @@ def test_a_start_over_deletes_only_images_at_keys_the_server_makes(env, tmp_path
     beside = Path(storage.abs_path("")).parent / f"beside-{vid}.txt"  # named by a ../ key
     beside.write_text("keep me too")
     assert _start(lib, vid).status_code == 200
-    w = client.get(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+    w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
         "worker_id": w["worker_id"], "next_anchor_phash": None, "next_scene_start_ms": None,
         "lineage": {**_want(lib, "scenes", sha), "settings_hash": OLD},

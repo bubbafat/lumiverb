@@ -27,7 +27,8 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
                        ("_on_hold_in_database", lambda tenant_id: set()),
                        ("_retry_requested_in_database", lambda tenant_id: None),
                        ("_status_to_database", lambda tenant_id, status: None),
-                       ("_status_from_database", lambda tenant_id: None)):
+                       ("_status_from_database", lambda tenant_id: None),
+                       ("_crashed_in_database", lambda tenant_id, artifact, asset_ids, error: [])):
         monkeypatch.setattr(service, name, stub, raising=False)
 
 
@@ -1098,3 +1099,165 @@ def test_a_restart_without_a_record_starts_with_none() -> None:
                   last_status=lambda tenant_id: None)
     s.tick()
     assert acct.seeded == [None] and written[0]["storage"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Crashes are charged after CRASHES_BEFORE_CHARGE in a row (review, Oct 9)
+# ---------------------------------------------------------------------------
+
+
+class CrashCounter:
+    """lineage.note_crashes, in memory: (tenant, artifact, asset) → crashes in a row."""
+
+    def __init__(self) -> None:
+        from src.server.repository.lineage import CRASHES_BEFORE_CHARGE
+
+        self.limit = CRASHES_BEFORE_CHARGE
+        self.counts: dict[tuple[str, str, str], int] = {}
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def __call__(self, tenant_id: str, artifact: str, asset_ids: list[str], error: str) -> list[str]:
+        self.calls.append((artifact, list(asset_ids)))
+        reached = []
+        for i in asset_ids:
+            key = (tenant_id, artifact, i)
+            self.counts[key] = self.counts.get(key, 0) + 1
+            if self.counts[key] >= self.limit:
+                reached.append(i)
+                del self.counts[key]
+        return reached
+
+
+def _crash_scheduler(runner, counter: CrashCounter, kind: str = "ocr") -> Scheduler:
+    return Scheduler(lambda: {}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
+                     runners={**Recorder().all(), kind: runner}, scan=MagicMock(), crashed=counter)
+
+
+def _job(kind: str, *ids: str):
+    from src.server.scheduler.dispatch import Job
+
+    return Job("t1", kind, 3, tuple(_item(i) for i in ids))
+
+
+@pytest.mark.fast
+def test_a_clip_that_keeps_crashing_is_charged_after_so_many_in_a_row() -> None:
+    # Review (Oct 9): any surprise returned every clip as waiting: held an
+    # hour, uncharged, tried forever and never shown as failing.
+    def boom(acct, job):
+        raise RuntimeError("segfault in the model")
+
+    counter = CrashCounter()
+    s = _crash_scheduler(boom, counter)
+    acct = FakeAccount()
+    for _ in range(counter.limit - 1):
+        assert s._run(acct, _job("ocr", "c")) == ["c"]  # waits, uncharged
+        acct.failures.add.assert_not_called()
+    assert s._run(acct, _job("ocr", "c")) is None  # charged: the server's back-off and giving up apply
+    acct.failures.add.assert_called_once()
+    artifact, asset_id, error = acct.failures.add.call_args.args
+    assert (artifact, asset_id) == ("ocr", "c") and "segfault in the model" in error
+
+
+@pytest.mark.fast
+def test_trouble_reaching_the_server_charges_nothing_and_isnt_counted() -> None:
+    import httpx
+
+    from src.client.cli.client import LumiverbAPIError
+
+    errors = iter([LumiverbAPIError("database_unavailable", "away", 503), httpx.ConnectError("refused"),
+                   LumiverbAPIError("bad_gateway", "proxy", 502)])
+
+    def away(acct, job):
+        raise next(errors)
+
+    counter = CrashCounter()
+    s = _crash_scheduler(away, counter)
+    acct = FakeAccount()
+    for _ in range(3):
+        assert s._run(acct, _job("ocr", "c")) == ["c"]
+    assert counter.calls == [] and not acct.failures.add.called
+
+
+@pytest.mark.fast
+def test_a_server_error_counts_as_a_crash() -> None:
+    from src.client.cli.client import LumiverbAPIError
+
+    def internal(acct, job):
+        raise LumiverbAPIError("internal", "Internal Server Error", 500)
+
+    counter = CrashCounter()
+    s = _crash_scheduler(internal, counter, kind="vision")
+    assert s._run(FakeAccount(), _job("vision", "v")) == ["v"]
+    assert counter.calls == [("vision", ["v"])]
+
+
+@pytest.mark.fast
+def test_only_the_clips_that_crashed_are_counted() -> None:
+    from src.server.scheduler.runners import Crashed
+
+    def faces(acct, job):
+        raise Crashed(["bad"], "face detection's process died or hung", waiting=["changed"])
+
+    counter = CrashCounter()
+    s = _crash_scheduler(faces, counter, kind="faces")
+    assert sorted(s._run(FakeAccount(), _job("faces", "ok", "bad", "changed"))) == ["bad", "changed"]
+    assert counter.calls == [("faces", ["bad"])]
+
+
+@pytest.mark.fast
+def test_a_redo_counts_crashes_against_its_artifact() -> None:
+    def boom(acct, job):
+        raise RuntimeError("boom")
+
+    counter = CrashCounter()
+    s = _crash_scheduler(boom, counter, kind="vision")
+    s._run(FakeAccount(), _job("redo_vision", "v"))
+    assert counter.calls == [("vision", ["v"])]
+
+
+@pytest.mark.fast
+def test_counting_crashes_failing_charges_nothing() -> None:
+    def boom(acct, job):
+        raise RuntimeError("boom")
+
+    def broken(*args):
+        raise RuntimeError("database away")
+
+    s = Scheduler(lambda: {}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
+                  runners={**Recorder().all(), "ocr": boom}, scan=MagicMock(), crashed=broken)
+    acct = FakeAccount()
+    assert s._run(acct, _job("ocr", "c")) == ["c"]
+    acct.failures.add.assert_not_called()
+
+
+@pytest.mark.fast
+def test_a_job_stopped_mid_save_counts_as_not_tried() -> None:
+    from src.server.scheduler.runners import NOT_TRIED, Stopped
+
+    def stopped(acct, job):
+        raise Stopped("/v1/assets/x/video-facet")
+
+    counter = CrashCounter()
+    s = _crash_scheduler(stopped, counter, kind="probe")
+    assert s._run(FakeAccount(), _job("probe", "p")) == NOT_TRIED
+    assert counter.calls == []
+
+
+@pytest.mark.fast
+def test_the_scheduler_sends_no_nul_in_what_it_saves(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Postgres takes no NUL in text: a description with one was refused with
+    # a 500, every hour, forever.
+    from src.client.cli.client import LumiverbClient
+    from src.server.scheduler.service import scheduler_client
+
+    sent: list = []
+    for method in ("post", "put", "patch"):
+        monkeypatch.setattr(LumiverbClient, method,
+                            lambda self, path, _m=method, **kw: sent.append((_m, kw.get("json"))))
+    client = scheduler_client("http://api", "key")
+    body = {"items": [{"description": "a\x00dog", "tags": ["be\x00ach"], "k\x00": 1}], "n": 2}
+    client.post("/v1/assets/batch-vision", json=body)
+    client.put("/x", json="a\x00")
+    client.patch("/y", json=["\x00"])
+    assert sent == [("post", {"items": [{"description": "adog", "tags": ["beach"], "k": 1}], "n": 2}),
+                    ("put", "a"), ("patch", [""])]
