@@ -273,7 +273,7 @@ def _warn_if_no_root_map() -> None:
     if _said_no_root_map or current().root_map:
         return
     _said_no_root_map = True
-    logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; library roots are used as stored")
+    logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; no library can be scanned")
 
 
 def scan_pass(
