@@ -815,7 +815,11 @@ def main() -> int:
 def entry() -> None:
     """The program: main(), then out at once. Jobs still running past the
     grace save nothing more (and their threads would otherwise be waited
-    on at exit, until systemd's kill)."""
+    on at exit, until systemd's kill). Both ways in (python -m
+    src.server.scheduler and the lumiverb-scheduler script) come here."""
+    from src.shared.logging_config import escape_log_lines
+
+    escape_log_lines()
     code = 1
     try:
         code = main()

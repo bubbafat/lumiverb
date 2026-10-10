@@ -28,26 +28,32 @@ hide_stream_links()
 escape_log_lines()
 
 
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    ),
+}
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to every response."""
+    """Add security headers to every response (an unhandled error's 500 is
+    made outside every middleware: _unhandled adds them to it)."""
 
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self'; "
-            "font-src 'self'; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'; "
-            "form-action 'self'"
-        )
+        response.headers.update(SECURITY_HEADERS)
         return response
 
 
@@ -55,6 +61,7 @@ from src.server.api.routers import admin, ai, archive, assets, producers, change
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
+from src.server.api.routers import playback
 from src.server.api.routers.playback import router as playback_router
 from src.server.api.routers.ingest import router as ingest_router
 from src.server.api.routers.maintenance import router as maintenance_router
@@ -76,7 +83,10 @@ from src.server.api.routers.locations import router as locations_router
 async def lifespan(app: FastAPI):
     if not os.environ.get("JWT_SECRET"):
         raise RuntimeError("JWT_SECRET environment variable is required but not set")
+    playback.start_cuts()
     yield
+    # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.
+    playback.stop_cuts()
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
@@ -86,7 +96,15 @@ app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
-app.add_exception_handler(Exception, unhandled_error_handler)
+
+
+async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+    response = await unhandled_error_handler(request, exc)
+    response.headers.update(SECURITY_HEADERS)
+    return response
+
+
+app.add_exception_handler(Exception, _unhandled)
 
 
 def _unavailable(exc: Exception) -> bool:

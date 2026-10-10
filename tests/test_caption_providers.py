@@ -228,3 +228,95 @@ def test_a_missing_proxy_is_the_images_problem(tmp_path):
         with pytest.raises(CaptionError) as e:
             call(tmp_path / "gone.jpg")
         assert e.value.endpoint_fault is False
+
+
+# ---------------------------------------------------------------------------
+# Reading the description out of the model's reply. Prod logged ~0.3% of
+# replies as "No JSON object found" (the log cut at 100 chars), so every
+# shape a reply can take is read here: whole, fenced, with text after, with
+# a stray quote, with a raw newline, and cut off (max_tokens, a tag loop).
+# ---------------------------------------------------------------------------
+
+
+def _parse(raw: str) -> dict:
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    return OpenAICompatibleCaptionProvider("http://x/v1", "m")._parse_description(raw)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("raw", [
+    '{"description": "A buffet.", "tags": ["food", "buffet"]}',
+    '```json\n{"description": "A buffet.", "tags": ["food", "buffet"]}\n```',
+    'Here you go:\n{"description": "A buffet.", "tags": ["food", "buffet"]}\nHope that helps!',
+    '{\n  "description": "A buffet.",\n  "tags": ["food", "buffet"]\n}',
+], ids=["plain", "fenced", "text around it", "pretty"])
+def test_a_whole_reply_is_read(raw):
+    assert _parse(raw) == {"description": "A buffet.", "tags": ["food", "buffet"]}
+
+
+@pytest.mark.fast
+def test_a_stray_quote_doesnt_lose_the_reply():
+    # One unescaped quote leaves the brace count inside a string to the end.
+    raw = '{"description": "A 12" pizza on a table.", "tags": ["pizza", "food"]}'
+    assert _parse(raw) == {"description": 'A 12" pizza on a table.', "tags": ["pizza", "food"]}
+
+
+@pytest.mark.fast
+def test_a_newline_inside_a_string_is_read():
+    assert _parse('{"description": "A buffet.\nWarm light.", "tags": ["food"]}')["description"] == (
+        "A buffet.\nWarm light.")
+
+
+@pytest.mark.fast
+def test_a_reply_cut_off_in_its_tags_keeps_the_description():
+    # The shape of prod's two failures: cut after the description.
+    raw = ('{"description": "A warmly lit buffet station with \\"Pot Roast\\" signage.", '
+           '"tags": ["buffet", "hot food", "red cabbage", "meat')
+    assert _parse(raw) == {"description": 'A warmly lit buffet station with "Pot Roast" signage.',
+                           "tags": ["buffet", "hot food", "red cabbage"]}
+
+
+@pytest.mark.fast
+def test_a_tag_loop_is_cut_to_ten_different_tags():
+    tags = ", ".join(f'"tag{i % 12}"' for i in range(200))
+    out = _parse('{"description": "A hallway.", "tags": [' + tags)
+    assert out["description"] == "A hallway."
+    assert out["tags"] == [f"tag{i}" for i in range(10)]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("raw", [
+    '{"description": "The image captures a blurry, first-person perspective of a dimly lit',
+    "I can't help with that.",
+], ids=["cut off in the description", "no JSON"])
+def test_a_reply_without_a_whole_description_is_an_error(raw):
+    with pytest.raises(ValueError, match="No JSON object found"):
+        _parse(raw)
+
+
+@pytest.mark.fast
+def test_the_reply_and_its_finish_reason_are_logged(caplog):
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+
+    p = OpenAICompatibleCaptionProvider("http://x/v1", "m")
+    resp = MagicMock(ok=True, status_code=200)
+    reply = '{"description": "' + "x" * 3000
+    resp.json.return_value = {"choices": [{"message": {"content": reply}, "finish_reason": "length"}]}
+    post = "src.processing.workers.captions.openai_caption.requests.post"
+    logger_name = "src.processing.workers.captions.openai_caption"
+    with patch(post, return_value=resp), caplog.at_level(logging.DEBUG, logger=logger_name):
+        assert p._chat("data:image/jpeg;base64,abc", "describe", p._vision) == reply
+    debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert debug and reply[:2000] in debug[0] and reply[:2001] not in debug[0]
+    warning = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning and "finish_reason=length" in warning[0]
+
+    caplog.clear()
+    resp.json.return_value = {"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}
+    with patch(post, return_value=resp), caplog.at_level(logging.DEBUG, logger=logger_name):
+        p._chat("data:image/jpeg;base64,abc", "describe", p._vision)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
