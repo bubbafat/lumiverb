@@ -2135,7 +2135,12 @@ class VideoSceneRepository:
 
 class ChunksBusy(Exception):
     """A clip's chunk is claimed (its lease not run out) or failed in this
-    run: no other is handed out, so scenes are found, and numbered, in order."""
+    run: no other is handed out, so scenes are found, and numbered, in order.
+    status: the busy chunk's, "claimed" or "failed"."""
+
+    def __init__(self, message: str, status: str) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class VideoIndexChunkRepository:
@@ -2242,7 +2247,7 @@ class VideoIndexChunkRepository:
         ).first()
         if busy is not None:
             self._session.commit()
-            raise ChunksBusy(f"chunk {busy.chunk_index} is {busy.status}")
+            raise ChunksBusy(f"chunk {busy.chunk_index} is {busy.status}", busy.status)
 
         chunk = self._session.exec(
             select(VideoIndexChunk)

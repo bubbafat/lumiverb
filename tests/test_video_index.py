@@ -432,3 +432,41 @@ def test_once_stopping_no_chunk_is_claimed(mock_scanner_cls):
     with pytest.raises(Stopped):
         _index(client, duration_sec=90.0, stopping=stopping)
     assert _claimed(client) == 0
+
+
+def _busy(code: str):
+    from src.processing.api import LumiverbAPIError
+
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(data={"chunk_count": 3, "already_initialized": True})
+    _claims(client, [LumiverbAPIError(code, "chunk 1 is busy", 409)])
+    answer = client.post.side_effect
+
+    def post(path, *args, **kwargs):
+        got = answer(path, *args, **kwargs)
+        if isinstance(got, Exception):
+            raise got
+        return got
+
+    client.post.side_effect = post
+    return client
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+def test_a_chunk_under_way_elsewhere_makes_the_video_wait(mock_scanner_cls):
+    """A scheduler stopped mid-chunk holds it until its lease runs out: the
+    video waits, uncharged, rather than crashing."""
+    from src.producers.runner import Waits
+
+    with pytest.raises(Waits):
+        _index(_busy("chunk_under_way"), duration_sec=90.0)
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+def test_a_failed_chunk_is_still_an_error(mock_scanner_cls):
+    from src.processing.api import LumiverbAPIError
+    from src.producers.runner import Waits
+
+    with pytest.raises(LumiverbAPIError) as raised:
+        _index(_busy("chunk_failed"), duration_sec=90.0)
+    assert not isinstance(raised.value, Waits) and raised.value.code == "chunk_failed"
