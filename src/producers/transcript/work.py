@@ -24,14 +24,15 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500) ->
     Returns (srt_text, language); srt_text is "" when nothing is said. None
     when it couldn't be tried this time (the audio tracks couldn't be read,
     finding the speech failed). Raises TranscriptError when the machines
-    couldn't hear it (it says whose fault)."""
+    couldn't hear it (it says whose fault), and OSError when this machine
+    can't (no ffmpeg, a disk error): a crash, not the clip's."""
     from src.processing.video.audio import audio_tracks, speech_wav_command
     from src.processing.workers.transcripts.speech import SpeechError, find_speech, restore, to_srt
     from src.shared.whisper_models import language_code
 
     try:
         tracks = audio_tracks(source_path)
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+    except (subprocess.SubprocessError, ValueError) as exc:
         logger.warning("Couldn't read the audio tracks of %s; trying again later: %s", source_path, exc)
         return None
     if not tracks:
@@ -43,7 +44,7 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500) ->
         wav, speech = Path(tmp) / "audio.wav", Path(tmp) / "speech.wav"
         try:
             result = subprocess.run(speech_wav_command(source_path, wav, tracks), capture_output=True, timeout=1800)
-        except (subprocess.TimeoutExpired, OSError) as e:
+        except subprocess.TimeoutExpired as e:
             logger.warning("Reading the audio of %s failed; trying again later: %s", source_path, e)
             return None
         if result.returncode != 0:

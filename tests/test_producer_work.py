@@ -79,6 +79,14 @@ def test_an_image_that_cant_be_read_is_nothing_made_but_the_machines_fault_says_
         read_text(asset_id="a", rel_path="x.jpg", ocr_provider=ocr, proxy_cache=_cache(_jpeg(4)))
 
 
+def test_this_machines_trouble_reading_text_goes_up() -> None:
+    """OSError (the disk) is a crash for the runner, not the guard's to judge."""
+    cache = _cache(_jpeg(4))
+    cache.get.side_effect = OSError(5, "Input/output error")
+    with pytest.raises(OSError):
+        read_text(asset_id="a", rel_path="x.jpg", ocr_provider=MagicMock(), proxy_cache=cache)
+
+
 def test_no_text_is_empty_text() -> None:
     ocr = MagicMock()
     ocr.extract_text.return_value = None
@@ -140,6 +148,16 @@ def test_audio_that_cant_be_read_is_tried_again_later(src: Path) -> None:
 
     with patch(TRACKS, side_effect=subprocess.CalledProcessError(1, "ffprobe")):
         assert transcribe(src, _hears(Heard())) is None
+
+
+def test_this_machines_trouble_reading_audio_goes_up(src: Path) -> None:
+    """No ffprobe or ffmpeg, or a disk error: OSError goes up (the runner's
+    crash, uncharged), never the clip's 'tried again later'."""
+    with patch(TRACKS, side_effect=FileNotFoundError(2, "ffprobe")), pytest.raises(FileNotFoundError):
+        transcribe(src, _hears(Heard()))
+    with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
+         patch("subprocess.run", side_effect=OSError(5, "Input/output error")), pytest.raises(OSError):
+        transcribe(src, _hears(Heard()))
 
 
 def test_ffmpeg_failing_isnt_silence(src: Path) -> None:

@@ -81,7 +81,7 @@ class SceneVision(Work):
                 if not attempt.ok or not frame.exists() or frame.stat().st_size == 0:
                     raise _NoFrame(f"no frame at {scene['rep_frame_ms']} ms")
                 result = self.provider.describe(frame)
-                if not result:
+                if not result or not (result.get("description") or "").strip():
                     raise _NoFrame("the model said nothing")
             except CaptionError as e:
                 frame.unlink(missing_ok=True)

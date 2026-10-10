@@ -405,7 +405,4 @@ def run(work_class: type[Work], acct: Any, job: Job) -> Any:
         work = work_class(acct, job)
     except (Stopped, NotTried):
         return NOT_TRIED
-    except Waits as e:  # it can't start now (nothing to make it with): every clip waits, uncharged
-        logger.info("scheduler: %s waits: %s", work_class.artifact, e)
-        return list(job.asset_ids)
     return _Job(work, acct, job).run()

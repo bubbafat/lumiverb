@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache) -> dict | None:
     """{"asset_id", "ocr_text"}, or None when there's no proxy or the image
     can't be prepared. The model's failure raises CaptionError (saying
-    whether the machine was at fault)."""
+    whether the machine was at fault); this machine's (OSError: a disk
+    error) goes up as it is, a crash."""
     from src.processing.workers.captions.base import CaptionError
 
     try:
@@ -38,7 +39,7 @@ def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache) -> dic
         logger.info("ocr timings: %s — proxy=%.1fms ocr=%.1fms", rel_path, t_proxy * 1000,
                     (time.perf_counter() - t1) * 1000)
         return {"asset_id": asset_id, "ocr_text": ocr_text or ""}
-    except CaptionError:
+    except (CaptionError, OSError):
         raise
     except Exception as e:  # noqa: BLE001 — an image that can't be read: nothing made
         logger.exception("Failed OCR for %s: %s", rel_path, e)
