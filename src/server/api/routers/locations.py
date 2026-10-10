@@ -72,10 +72,11 @@ def _ids(body: SetLocationRequest | LocationIdsRequest | None) -> list[str]:
     return ids
 
 
-def _who(request: Request) -> tuple[str | None, str | None]:
-    """(user id, name to show) of the person asking; an API key has no name."""
-    user_id = getattr(request.state, "user_id", None)
-    return (user_id or get_current_user_id(request)), (getattr(request.state, "email", None) or None)
+def _who(request: Request) -> str:
+    """Who's asking: their user id ("key:<id>" for an API key). Stored as
+    set_by; a name is looked up when a signed-in person reads it, never
+    stored (no email in basis: public viewers must never see one)."""
+    return get_current_user_id(request)
 
 
 def _refresh(session: Session, asset_ids: list[str]) -> None:
@@ -128,9 +129,7 @@ def set_locations(
         )
 
     updated = [i for i in targets if i in states]
-    user_id, name = _who(request)
-    basis["by"] = name
-    locations.set_person(session, updated, lat, lon, set_by=user_id, basis=basis)
+    locations.set_person(session, updated, lat, lon, set_by=_who(request), basis=basis)
     session.commit()
     _refresh(session, updated)
     return SetLocationResponse(updated=updated, skipped=[i for i in ids if i not in set(updated)])
@@ -171,8 +170,7 @@ def accept_locations(
             ' Send replace: "all" to replace it.',
             {"count": n, "person": 0, "file": n, "total": len(ids)},
         )
-    user_id, name = _who(request)
-    accepted = locations.accept(session, ids, set_by=user_id, by_name=name)
+    accepted = locations.accept(session, ids, set_by=_who(request))
     session.commit()
     _refresh(session, accepted)
     return AcceptLocationResponse(accepted=accepted, skipped=[i for i in ids if i not in set(accepted)])

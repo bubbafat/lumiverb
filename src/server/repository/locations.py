@@ -89,7 +89,7 @@ def clear_person(session: Session, asset_ids: list[str]) -> list[str]:
     return cleared
 
 
-def accept(session: Session, asset_ids: list[str], *, set_by: str | None, by_name: str | None) -> list[str]:
+def accept(session: Session, asset_ids: list[str], *, set_by: str | None) -> list[str]:
     """Suggestions on these clips in sight become a person's location (their
     point and radius kept). Returns those accepted. Doesn't commit."""
     now = utcnow()
@@ -100,7 +100,7 @@ def accept(session: Session, asset_ids: list[str], *, set_by: str | None, by_nam
         " WHERE a.asset_id = loc.asset_id AND loc.asset_id = ANY(:ids) AND loc.status = 'suggested'"
         " RETURNING loc.asset_id"
     ), {"ids": asset_ids, "by": set_by, "now": now,
-        "extra": json.dumps({"accepted": True, "by": by_name})}).all()]
+        "extra": json.dumps({"accepted": True})}).all()]
     for asset_id in accepted:
         lineage.record(session, asset_id, ARTIFACT, None, person=True, produced_at=now, commit=False)
     return accepted
@@ -116,19 +116,35 @@ def summary(session: Session, row: dict[str, Any]) -> str | None:
     return basis.get("summary") or None
 
 
+def display_name(user_id: str | None) -> str | None:
+    """Who set it, for a signed-in reader: the user's email (users have no
+    other name). None for an API key, a user gone, or the control plane away."""
+    if not user_id or user_id.startswith("key:"):
+        return None
+    try:
+        from src.server.database import get_control_session
+        from src.server.repository.control_plane import UserRepository
+
+        with get_control_session() as ctrl:
+            user = UserRepository(ctrl).get_by_id(user_id)
+            return user.email if user else None
+    except Exception:
+        return None
+
+
 def for_asset(session: Session, asset_id: str) -> dict[str, Any] | None:
-    """A clip's asset_location row as the detail shows it (signed-in only), or None."""
+    """A clip's asset_location row as the detail shows it, or None. Signed-in
+    requests only: set_by is resolved to a name here, at read time."""
     row = session.execute(text(
-        "SELECT lat, lon, radius_m, source, status, basis, set_at FROM asset_location WHERE asset_id = :a"
+        "SELECT lat, lon, radius_m, source, status, basis, set_by, set_at FROM asset_location WHERE asset_id = :a"
     ), {"a": asset_id}).mappings().first()
     if row is None:
         return None
     row = dict(row)
-    basis = row["basis"] or {}
     return {
         "lat": row["lat"], "lon": row["lon"], "radius_m": row["radius_m"],
         "source": row["source"], "status": row["status"],
         "basis_summary": summary(session, row),
-        "set_by": basis.get("by") if row["source"] == PERSON else None,
+        "set_by": display_name(row["set_by"]) if row["source"] == PERSON else None,
         "set_at": row["set_at"].isoformat() if row["set_at"] else None,
     }

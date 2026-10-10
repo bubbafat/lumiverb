@@ -179,7 +179,7 @@ export interface AssetLocation {
   status: "applied" | "suggested";
   /** Why, in a few words ("Same place as IMG_1.jpg", "from phone photos 14:02–14:40"). */
   basis_summary?: string | null;
-  /** Who set it, for a person's (their email; null for an API key). */
+  /** Who set it, for a person's: looked up when a signed-in person reads it (null for an API key). */
   set_by?: string | null;
   set_at?: string | null;
 }
