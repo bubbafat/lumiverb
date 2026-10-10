@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.dependencies import require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.shared import asset_status
@@ -1010,13 +1011,14 @@ class CaptureResponse(BaseModel):
     changed: bool  # taken_at or its zone differ from what was stored
 
 
-@router.put("/{asset_id}/capture", response_model=CaptureResponse, dependencies=[Depends(require_editor)])
+@router.put("/{asset_id}/capture", response_model=CaptureResponse, dependencies=[Depends(require_tenant_admin)])
 def put_capture(
     asset_id: str,
     body: CaptureSubmit,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> CaptureResponse:
-    """Store a clip's capture facts, read again from its file: when it was
+    """Store a clip's capture facts, read again from its file (the scheduler's
+    capture producer, so admins: its key is an admin's): when it was
     taken, its zone, and its GPS accuracy (only with the file's GPS). The
     file's GPS itself is the scan's and isn't touched."""
     made = require_lineage(body.lineage, "capture")  # before anything is saved

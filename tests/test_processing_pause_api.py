@@ -4,7 +4,7 @@
 Scans, Upkeep and each producer the scheduler makes each have a switch an
 admin pauses and resumes (POST /v1/producers/{target}/pause, /resume). Pause
 all (POST /v1/producers/all/pause) pauses every switch and Resume all resumes
-every one; nothing stores "all". GET /v1/producers/queue says each switch's
+every one; "all" is stored, so a producer added later is paused too. GET /v1/producers/queue says each switch's
 state and the account's, derived: running (green), partly (yellow) or
 paused (red). Stopping a producer's redo is something else: what's missing
 is still made.
@@ -61,6 +61,33 @@ def test_pause_all_pauses_every_switch_and_resume_all_resumes_every_one(env):
     q = _queue(env)
     assert q["state"] == "running" and not any(s["paused"] for s in q["switches"])
     assert set(_on_hold_in_database(env[4]).work) == set()
+
+
+def test_a_producer_added_after_pause_all_is_paused_too(env, monkeypatch):
+    """An account someone paused stays paused through an update that brings
+    a new producer: Pause all is stored, not a row per switch there was."""
+    import src.shared.producers as shared
+    from src.server.scheduler.service import _on_hold_in_database
+
+    client, headers, *_ = env
+    before = shared.pause_targets()
+    try:
+        assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        # A later version adds a producer: it never had a switch row.
+        monkeypatch.setattr(shared, "pause_targets", lambda: (*before, "newcomer"))
+        held = _on_hold_in_database(env[4]).work
+        assert "newcomer" in held and set(before) <= set(held)
+        assert _queue(env)["state"] == "paused"
+        # Resuming one switch leaves every other one paused, the newcomer too.
+        assert client.post("/v1/producers/vision/resume", json={"scope": "work"}, headers=headers).status_code == 204
+        held = _on_hold_in_database(env[4]).work
+        assert "vision" not in held and "newcomer" in held and "capture" in held
+        assert _queue(env)["state"] == "partly"
+    finally:
+        monkeypatch.undo()
+        assert client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers).status_code == 204
+    assert _on_hold_in_database(env[4]).work == {}
+    assert _queue(env)["state"] == "running"
 
 
 def test_all_is_named_never_inferred_from_a_missing_target(env):
