@@ -15,33 +15,10 @@ from rich.markup import escape
 
 from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import clips, day, hidden_table, library_id_for
+from src.client.cli.decisions import in_projects, send_until_decided
 
 trash_app = typer.Typer(help="Move clips to the trash, list it, restore from it, or delete for good.")
 console = Console()
-
-
-def projects_say_yes(details: dict, *, what: str, yes: bool) -> bool:
-    """The API asked about clips that projects use (409 in_projects): show which
-    projects, then ask. With --yes there's no one to ask: say how to go ahead."""
-    n = int(details.get("assets_in_projects", 0))
-    console.print(f"[yellow]{clips(n)} {'is' if n == 1 else 'are'} in projects; {what}:[/yellow]")
-    for p in details.get("projects", []):
-        notes = ", ".join(x for x in ("archived" if p.get("status") == "archived" else "",
-                                      "in the trash" if p.get("in_trash") else "") if x)
-        console.print(f"  {escape(p.get('name', ''))}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
-    if details.get("other_projects"):
-        console.print(f"  and {details['other_projects']} more you can't see")
-    if yes:
-        console.print("[red]Add --remove-from-projects to go ahead.[/red]")
-        return False
-    return typer.confirm("Go ahead?", default=False)
-
-
-def _error(r) -> dict:
-    try:
-        return (r.json() or {}).get("error") or {}
-    except ValueError:
-        return {}
 
 
 @trash_app.command("add")
@@ -53,21 +30,13 @@ def trash_add(
 ) -> None:
     """Move clips to the trash. Archived clips can go too. They're deleted for good
     after the trash days (lumiverb settings show), restorable until then."""
-    client = LumiverbClient()
-    while True:
-        r = client.raw("DELETE", "/v1/assets", json={"asset_ids": asset_ids, "reason": "user",
-                                                     "remove_from_projects": remove_from_projects})
-        if r.status_code < 400:
-            break
-        err = _error(r)
-        if r.status_code == 409 and err.get("code") == "in_projects" and not remove_from_projects:
-            if not projects_say_yes(err.get("details") or {}, yes=yes,
-                                    what="in the trash they're hidden there, and deleted for good they leave"):
-                raise typer.Exit(2 if yes else 0)
-            remove_from_projects = True
-            continue
-        console.print(f"[red]Couldn't move them to the trash: {escape(err.get('message') or r.text)}[/red]")
-        raise typer.Exit(1)
+    r = send_until_decided(
+        LumiverbClient(), "DELETE", "/v1/assets",
+        {"asset_ids": asset_ids, "reason": "user", "remove_from_projects": remove_from_projects},
+        answers={"in_projects": in_projects(
+            yes=yes, what="in the trash they're hidden there, and deleted for good they leave")},
+        failed="Couldn't move them to the trash",
+    )
     data = r.json()
     console.print(f"Moved {clips(len(data.get('trashed', [])))} to the trash.")
     others = data.get("not_found", [])
@@ -147,16 +116,9 @@ def trash_empty(
     if not yes and not typer.confirm(f"Delete {what} for good? This can't be undone.", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
-    while True:
-        r = client.raw("DELETE", "/v1/trash/empty", json={**body, "remove_from_projects": remove_from_projects})
-        if r.status_code < 400:
-            break
-        err = _error(r)
-        if r.status_code == 409 and err.get("code") == "in_projects" and not remove_from_projects:
-            if not projects_say_yes(err.get("details") or {}, yes=yes, what="deleted for good, they leave"):
-                raise typer.Exit(2 if yes else 0)
-            remove_from_projects = True
-            continue
-        console.print(f"[red]Couldn't empty the trash: {escape(err.get('message') or r.text)}[/red]")
-        raise typer.Exit(1)
+    r = send_until_decided(
+        client, "DELETE", "/v1/trash/empty", {**body, "remove_from_projects": remove_from_projects},
+        answers={"in_projects": in_projects(yes=yes, what="deleted for good, they leave")},
+        failed="Couldn't empty the trash",
+    )
     console.print(f"Deleted {clips(r.json().get('deleted', 0))} for good.")

@@ -1,25 +1,37 @@
-"""Upkeep API: periodic maintenance tasks run by timer or repair CLI.
+"""Upkeep API: periodic maintenance, run by the systemd timers and the CLI.
 
-Uses admin auth (ADMIN_KEY), iterates all tenants automatically.
+Who and what (upkeep_scope): an account admin's API key acts on that
+account. The operator's admin key (ADMIN_KEY) acts on every account, and
+must say so with ?tenants=all; without it the call is a 400, never
+"everything". No key or a dead one is a 401; another role's key a 403.
 
-POST /v1/upkeep                  — run all frequent tasks across all tenants
-POST /v1/upkeep/search-sync      — run search sync sweep only
-POST /v1/upkeep/cleanup          — run filesystem cleanup (dry_run=true by default)
-POST /v1/upkeep/cleanup-dismissed — delete dismissed people with zero face matches
+POST /v1/upkeep                    — search sync, face names, expired trash (and, all accounts, old revoked tokens)
+POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
+POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id for one library)
+POST /v1/upkeep/recluster          — recompute face clusters
+POST /v1/upkeep/recreate-search-indexes — wipe and remake the Quickwit indexes
+POST /v1/upkeep/cleanup-dismissed  — delete dismissed people with zero face matches
+
+Every-account sweeps run in the request, on purpose: their callers are the
+systemd timers (oneshot units: the unit's exit status and journal are the
+run's result) and the operator by hand, who needs the result (recreating
+the indexes must be followed by a search sync). FastAPI runs these plain
+handlers on its thread pool, so the API keeps answering meanwhile, and each
+call's work is bounded (1,000 clips and scenes per account per search sync,
+500 trashed clips per purge). The scheduler hands out per-clip jobs per
+account and has no every-account periodic task to give them to.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from dataclasses import dataclass
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlmodel import Session
-
 from sqlalchemy import text
 
-from src.server.api.dependencies import require_admin
 from src.server.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -83,17 +95,21 @@ class UpkeepResult(BaseModel):
     trash_purge: TrashPurgeResult = TrashPurgeResult()
 
 
-def _is_admin_key(authorization: str | None) -> bool:
-    """Check if the bearer token is the admin key."""
+def _bearer(authorization: str | None) -> str | None:
     if not authorization or not authorization.startswith("Bearer "):
-        return False
-    token = authorization[7:].strip()
-    settings = get_settings()
+        return None
+    return authorization[7:].strip() or None
+
+
+def _is_admin_key(token: str) -> bool:
+    """The operator's admin key (ADMIN_KEY), not an account's key."""
     import hmac
+
+    settings = get_settings()
     return bool(settings.admin_key and hmac.compare_digest(token, settings.admin_key))
 
 
-def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
+def _tenant_for_key(token: str) -> tuple[str, str, str] | None:
     """(tenant_id, connection_string, role) for a live tenant API key, or None.
 
     Upkeep routes skip the tenant middleware, so handlers resolve the
@@ -102,9 +118,6 @@ def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
     from src.server.database import get_control_session
     from src.server.repository.control_plane import ApiKeyRepository, TenantDbRoutingRepository
 
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    token = authorization[7:].strip()
     with get_control_session() as ctrl:
         api_key = ApiKeyRepository(ctrl).get_by_plaintext(token)
         if api_key is None:
@@ -113,6 +126,61 @@ def _tenant_for_key(authorization: str | None) -> tuple[str, str, str] | None:
         if routing is None:
             return None
         return api_key.tenant_id, routing.connection_string, api_key.role
+
+
+@dataclass(frozen=True)
+class UpkeepScope:
+    """Whom an upkeep call acts on: one account (its admin's key), or every
+    account (the operator's admin key, with tenants=all)."""
+
+    all_tenants: bool
+    tenant_id: str | None = None
+    connection_string: str | None = None
+
+
+def upkeep_scope(
+    authorization: Annotated[str | None, Header()] = None,
+    tenants: Annotated[
+        Literal["all"] | None,
+        Query(description="With the operator's admin key: 'all', every account. Required with that key."),
+    ] = None,
+) -> UpkeepScope:
+    """Who may run upkeep, and on what. Nothing acts on every account from a
+    missing argument (Robert): the admin key must say tenants=all.
+
+    401: no key, or one that isn't live. 403: an account key that isn't an
+    admin's, or one sending tenants=all. 400: the admin key without tenants=all.
+    """
+    token = _bearer(authorization)
+    if token is None:
+        raise HTTPException(status_code=401, detail="Admin key or tenant API key required")
+    if _is_admin_key(token):
+        if tenants != "all":
+            raise HTTPException(
+                status_code=400,
+                detail="The admin key acts on every account: say so with tenants=all",
+            )
+        return UpkeepScope(all_tenants=True)
+    tenant = _tenant_for_key(token)
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+    tenant_id, connection_string, role = tenant
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin API key required")
+    if tenants is not None:
+        raise HTTPException(status_code=403, detail="tenants=all needs the operator's admin key")
+    return UpkeepScope(all_tenants=False, tenant_id=tenant_id, connection_string=connection_string)
+
+
+Scope = Annotated[UpkeepScope, Depends(upkeep_scope)]
+
+
+def _tenant_session(scope: UpkeepScope):
+    from sqlmodel import Session as TenantSession
+
+    from src.server.database import get_engine_for_url
+
+    return TenantSession(get_engine_for_url(scope.connection_string))
 
 
 def _upkeep_paused(session) -> bool:
@@ -159,19 +227,13 @@ def _propagate_faces_all_tenants() -> dict:
     return {**totals, "paused": bool(paused), "paused_tenants": paused}
 
 
-def _propagate_faces_single_tenant(authorization: str | None) -> dict:
-    """Run face propagation for the tenant resolved from the API key."""
-    from src.server.database import get_engine_for_url
+def _propagate_faces_single_tenant(scope: UpkeepScope) -> dict:
+    """Run face propagation for one account."""
     from src.server.repository.tenant import FaceRepository
-    from sqlmodel import Session as TenantSession
 
-    tenant = _tenant_for_key(authorization)
-    if tenant is None:
-        return {"assigned": 0, "scanned": 0}
-    _, connection_string, _ = tenant
-    with TenantSession(get_engine_for_url(connection_string)) as session:
+    with _tenant_session(scope) as session:
         if _upkeep_paused(session):
-            return {"assigned": 0, "scanned": 0, **_skipped("Face names aren't spread", tenant[0])}
+            return {"assigned": 0, "scanned": 0, **_skipped("Face names aren't spread", scope.tenant_id)}
         return FaceRepository(session).propagate_assignments()
 
 
@@ -198,24 +260,17 @@ def _purge_expired_trash_all_tenants() -> dict:
     return {**totals, "paused": bool(paused), "paused_tenants": paused}
 
 
-def _purge_expired_trash_single_tenant(authorization: str | None) -> dict:
-    """Empty the expired trash of the tenant resolved from the API key."""
-    from sqlmodel import Session as TenantSession
-
+def _purge_expired_trash_single_tenant(scope: UpkeepScope) -> dict:
+    """Empty one account's expired trash."""
     from src.server.api.routers.trash import purge_expired_trash
-    from src.server.database import get_engine_for_url
 
-    tenant = _tenant_for_key(authorization)
-    if tenant is None:
-        return {}
-    tenant_id, connection_string, _ = tenant
     try:
-        with TenantSession(get_engine_for_url(connection_string)) as session:
+        with _tenant_session(scope) as session:
             if _upkeep_paused(session):
-                return _skipped("The expired trash isn't emptied", tenant_id)
-            return purge_expired_trash(session, tenant_id)
+                return _skipped("The expired trash isn't emptied", scope.tenant_id)
+            return purge_expired_trash(session, scope.tenant_id)
     except Exception as exc:
-        logger.warning("Trash purge failed for tenant %s: %s", tenant_id, exc)
+        logger.warning("Trash purge failed for tenant %s: %s", scope.tenant_id, exc)
         return {}
 
 
@@ -255,20 +310,14 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     return totals
 
 
-def _run_sweep_single_tenant(authorization: str | None, force: bool = False) -> dict:
-    """Run search sync sweep for the tenant resolved from the API key."""
+def _run_sweep_single_tenant(scope: UpkeepScope, force: bool = False) -> dict:
+    """Run search sync sweep for one account."""
     from src.server.search.sync import run_search_sync_sweep
-    from src.server.database import get_engine_for_url
-    from sqlmodel import Session as TenantSession
 
-    tenant = _tenant_for_key(authorization)
-    if tenant is None:
-        return {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0}
-    tenant_id, connection_string, _ = tenant
-    with TenantSession(get_engine_for_url(connection_string)) as session:
+    with _tenant_session(scope) as session:
         if force:
             _reset_search_synced_at(session)
-        return run_search_sync_sweep(session, tenant_id=tenant_id)
+        return run_search_sync_sweep(session, tenant_id=scope.tenant_id)
 
 
 def _cleanup_revoked_tokens() -> int:
@@ -287,24 +336,34 @@ def _cleanup_revoked_tokens() -> int:
         return 0
 
 
+def _tenant_ids(scope: UpkeepScope) -> list[str]:
+    """The accounts a call acts on."""
+    if not scope.all_tenants:
+        return [scope.tenant_id]
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository
+
+    with get_control_session() as ctrl:
+        return [t.tenant_id for t in TenantRepository(ctrl).list_all()]
+
+
 @router.post("", response_model=UpkeepResult)
-def run_upkeep(
-    authorization: Annotated[str | None, Header()] = None,
-) -> UpkeepResult:
+def run_upkeep(scope: Scope) -> UpkeepResult:
     """Run all periodic upkeep tasks: search sync, face propagation, and
     deleting for good what has been in the trash past the trash days.
 
-    With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
+    An account admin's key: that account. The admin key with tenants=all:
+    every account, and old revoked tokens are dropped.
     """
-    if _is_admin_key(authorization):
+    if scope.all_tenants:
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
         purge_result = _purge_expired_trash_all_tenants()
         _cleanup_revoked_tokens()
     else:
-        sync_result = _run_sweep_single_tenant(authorization)
-        prop_result = _propagate_faces_single_tenant(authorization)
-        purge_result = _purge_expired_trash_single_tenant(authorization)
+        sync_result = _run_sweep_single_tenant(scope)
+        prop_result = _propagate_faces_single_tenant(scope)
+        purge_result = _purge_expired_trash_single_tenant(scope)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -314,51 +373,48 @@ def run_upkeep(
 
 @router.post("/search-sync", response_model=SearchSyncResult)
 def run_search_sync(
-    authorization: Annotated[str | None, Header()] = None,
+    scope: Scope,
     force: bool = Query(default=False, description="Reset all search_synced_at timestamps and re-index everything"),
 ) -> SearchSyncResult:
-    """Run search sync sweep.
+    """Run search sync sweep, for one account or (tenants=all) every account.
 
-    With admin key: sweeps all tenants. With tenant API key: sweeps that tenant only.
     force=true: clears the sync times of all assets, scenes and transcripts so everything is re-indexed.
     """
-    if _is_admin_key(authorization):
+    if scope.all_tenants:
         result = _run_sweep_all_tenants(force=force)
     else:
-        result = _run_sweep_single_tenant(authorization, force=force)
+        result = _run_sweep_single_tenant(scope, force=force)
     return SearchSyncResult(**result)
 
 
 @router.post("/cleanup", response_model=CleanupResultModel)
 def run_cleanup(
-    request: Request,
-    authorization: Annotated[str | None, Header()] = None,
+    scope: Scope,
     dry_run: bool = True,
+    library_id: str | None = Query(default=None, description="One library of the account (account keys only)."),
 ) -> CleanupResultModel:
     """Run filesystem cleanup to remove orphaned files left after trash is emptied.
 
     dry_run=true (default): report what would be deleted without deleting.
     dry_run=false: actually delete orphaned files.
 
-    With admin key: cleans all tenants. With tenant API key: cleans that tenant only.
+    An account admin's key: that account, or one library of it (library_id;
+    404 when it isn't the account's). The admin key with tenants=all: every
+    account, and the directories of accounts that are gone.
     """
     from src.server.search.cleanup import run_cleanup_all_tenants, run_cleanup_single_tenant
 
-    if _is_admin_key(authorization):
+    if scope.all_tenants:
+        if library_id is not None:
+            raise HTTPException(status_code=400, detail="library_id needs an account's key, not tenants=all")
         result = run_cleanup_all_tenants(dry_run=dry_run)
     else:
-        from src.server.database import get_engine_for_url
-        from sqlmodel import Session as TenantSession
-
-        tenant = _tenant_for_key(authorization)
-        if tenant is None:
-            raise HTTPException(status_code=401, detail="Admin key or tenant API key required")
-        tenant_id, connection_string, role = tenant
-        # Cleanup deletes files (and lists them on a dry run): admins only.
-        if role != "admin":
-            raise HTTPException(status_code=403, detail="Admin API key required")
-        with TenantSession(get_engine_for_url(connection_string)) as session:
-            result = run_cleanup_single_tenant(tenant_id, session, dry_run=dry_run)
+        with _tenant_session(scope) as session:
+            if library_id is not None and session.execute(
+                text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},
+            ).first() is None:
+                raise HTTPException(status_code=404, detail="Library not found")
+            result = run_cleanup_single_tenant(scope.tenant_id, session, dry_run=dry_run, library_id=library_id)
 
     return CleanupResultModel(
         orphan_tenants=result.orphan_tenants,
@@ -374,29 +430,21 @@ def run_cleanup(
 
 
 @router.post("/recluster", response_model=ReclusterResult)
-def run_recluster(
-    request: Request,
-    _admin: Annotated[None, Depends(require_admin)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> ReclusterResult:
-    """Force recompute face clusters for all tenants."""
+def run_recluster(scope: Scope) -> ReclusterResult:
+    """Force recompute face clusters, for one account or (tenants=all) every account."""
     from src.server.api.routers.people import store_clusters
-    from src.server.database import get_control_session, get_tenant_session
-    from src.server.repository.control_plane import TenantRepository
+    from src.server.database import get_tenant_session
 
     totals = {"clusters": 0, "total_faces": 0}
 
-    with get_control_session() as ctrl:
-        tenants = TenantRepository(ctrl).list_all()
-
-    for tenant in tenants:
+    for tenant_id in _tenant_ids(scope):
         try:
-            with get_tenant_session(tenant.tenant_id) as tsession:
+            with get_tenant_session(tenant_id) as tsession:
                 clusters = store_clusters(tsession)["clusters"]
                 totals["clusters"] += len(clusters)
                 totals["total_faces"] += sum(c["size"] for c in clusters)
         except Exception as exc:
-            logger.warning("Recluster failed for tenant %s: %s", tenant.tenant_id, exc)
+            logger.warning("Recluster failed for tenant %s: %s", tenant_id, exc)
 
     return ReclusterResult(**totals)
 
@@ -407,9 +455,7 @@ class RecreateSearchIndexesResult(BaseModel):
 
 
 @router.post("/recreate-search-indexes", response_model=RecreateSearchIndexesResult)
-def recreate_search_indexes(
-    authorization: Annotated[str | None, Header()] = None,
-) -> RecreateSearchIndexesResult:
+def recreate_search_indexes(scope: Scope) -> RecreateSearchIndexesResult:
     """Wipe and recreate Quickwit indexes. Used to clean up duplicate
     documents accumulated by repeated force-resyncs (Quickwit doesn't
     upsert, so each force-resync used to leave another copy of every
@@ -417,16 +463,11 @@ def recreate_search_indexes(
     MUST also call POST /v1/upkeep/search-sync to repopulate the empty
     indexes.
 
-    Auth model mirrors POST /v1/upkeep/search-sync — admin key wipes
-    all tenants, tenant API key wipes only that tenant. Destructive,
-    no undo, but the data can be rebuilt from Postgres via the
-    search-sync sweep so it's safe.
+    An account admin's key wipes that account's indexes; the admin key
+    with tenants=all wipes every account's. Destructive, no undo, but
+    the data can be rebuilt from Postgres via the search-sync sweep.
     """
-    from src.server.database import get_control_session, get_tenant_session
-    from src.server.repository.control_plane import (
-        ApiKeyRepository,
-        TenantRepository,
-    )
+    from src.server.database import get_tenant_session
     from src.server.search.quickwit_client import QuickwitClient
 
     qw = QuickwitClient()
@@ -435,25 +476,7 @@ def recreate_search_indexes(
             tenants_processed=0, errors=["Quickwit disabled"],
         )
 
-    # Resolve which tenants to process based on auth.
-    if _is_admin_key(authorization):
-        with get_control_session() as ctrl:
-            tenants = TenantRepository(ctrl).list_all()
-        tenant_ids = [t.tenant_id for t in tenants]
-    else:
-        if not authorization or not authorization.startswith("Bearer "):
-            return RecreateSearchIndexesResult(
-                tenants_processed=0, errors=["Unauthorized"],
-            )
-        token = authorization[7:].strip()
-        with get_control_session() as ctrl:
-            api_key = ApiKeyRepository(ctrl).get_by_plaintext(token)
-            if api_key is None:
-                return RecreateSearchIndexesResult(
-                    tenants_processed=0, errors=["Unauthorized"],
-                )
-            tenant_ids = [api_key.tenant_id]
-
+    tenant_ids = _tenant_ids(scope)
     errors: list[str] = []
     processed = 0
     for tenant_id in tenant_ids:
@@ -478,30 +501,23 @@ def recreate_search_indexes(
 
 
 @router.post("/cleanup-dismissed", response_model=CleanupDismissedResult)
-def run_cleanup_dismissed(
-    request: Request,
-    _admin: Annotated[None, Depends(require_admin)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> CleanupDismissedResult:
-    """Delete dismissed people that have zero face matches."""
-    from src.server.database import get_control_session, get_tenant_session
-    from src.server.repository.control_plane import TenantRepository
+def run_cleanup_dismissed(scope: Scope) -> CleanupDismissedResult:
+    """Delete dismissed people that have zero face matches, for one account
+    or (tenants=all) every account."""
+    from src.server.database import get_tenant_session
     from src.server.repository.tenant import PersonRepository
 
     total_deleted = 0
 
-    with get_control_session() as ctrl:
-        tenants = TenantRepository(ctrl).list_all()
-
-    for tenant in tenants:
+    for tenant_id in _tenant_ids(scope):
         try:
-            with get_tenant_session(tenant.tenant_id) as tsession:
+            with get_tenant_session(tenant_id) as tsession:
                 deleted = PersonRepository(tsession).cleanup_empty_dismissed()
                 if deleted:
                     logger.info("Cleaned up %d empty dismissed people for tenant %s",
-                                deleted, tenant.tenant_id)
+                                deleted, tenant_id)
                 total_deleted += deleted
         except Exception as exc:
-            logger.warning("Cleanup dismissed failed for tenant %s: %s", tenant.tenant_id, exc)
+            logger.warning("Cleanup dismissed failed for tenant %s: %s", tenant_id, exc)
 
     return CleanupDismissedResult(deleted=total_deleted)

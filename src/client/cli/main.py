@@ -13,15 +13,16 @@ from rich.markup import escape
 from rich.table import Table
 
 from src.client.cli.client import LumiverbAPIError, LumiverbClient
-from src.client.cli.config import get_admin_key, load_config, save_config
+from src.client.cli.config import ConfigError, get_admin_key, load_config, save_config
 from src.client.cli.commands.archive import archive_app
 from src.client.cli.commands.producers import producers_app
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
 from src.client.cli.commands.settings import settings_app
-from src.client.cli.commands.trash import projects_say_yes, trash_app
+from src.client.cli.commands.trash import trash_app
 from src.client.cli.commands.users import user_app
+from src.client.cli.decisions import in_projects, send_until_decided
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.logging_config import configure_logging
 
@@ -312,23 +313,15 @@ def library_delete(
         raise typer.Exit(0)
 
     # The API asks about clips that projects use: answer from the flag, else ask here.
-    while True:
-        r = client.raw("DELETE", f"/v1/libraries/{library_id}", json={"remove_from_projects": remove_from_projects})
-        if r.status_code < 400:
-            break
-        error = (r.json() or {}).get("error", {}) if r.status_code == 409 else {}
-        if error.get("code") == "in_projects" and not remove_from_projects:
-            if not projects_say_yes(error.get("details") or {}, yes=yes,
-                                    what="in the trash they're hidden there, and deleted for good they leave"):
-                raise typer.Exit(2 if yes else 0)
-            remove_from_projects = True
-            continue
-        message = error.get("message") or r.text
-        console.print(f"[red]Couldn't delete '{escape(name)}': {escape(message)}[/red]")
-        raise typer.Exit(1)
+    send_until_decided(
+        client, "DELETE", f"/v1/libraries/{library_id}", {"remove_from_projects": remove_from_projects},
+        answers={"in_projects": in_projects(
+            yes=yes, what="in the trash they're hidden there, and deleted for good they leave")},
+        failed=f"Couldn't delete '{escape(name)}'",
+    )
     console.print(f"Library '{name}' moved to trash.")
     console.print("Restore it with 'lumiverb library restore', or delete it for good now with "
-                  "'lumiverb library empty-trash'.")
+                  "'lumiverb library empty-trash --name'.")
 
 
 @library_app.command("restore")
@@ -345,9 +338,15 @@ def library_restore(
 
 @library_app.command("empty-trash")
 def library_empty_trash(
-    name: Annotated[str | None, typer.Option("--name", "-n", help="Only this library (default: all in the trash).")] = None,
+    name: Annotated[str | None, typer.Option("--name", "-n", help="This library in the trash.")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every library in the trash.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
 ) -> None:
-    """Permanently delete libraries in the trash and their assets: one, or all of them (admins only)."""
+    """Permanently delete libraries in the trash and their assets: one (--name), or
+    all of them (--all) (admins only)."""
+    if (name is None) == (not all_):
+        console.print("[red]Give --name, or --all for every library in the trash.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     resp = client.get("/v1/libraries", params={"include_trashed": True})
     libraries = resp.json()
@@ -382,12 +381,11 @@ def library_empty_trash(
             console.print(f"  {p.get('name', '')}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
         if usage.get("other_projects"):
             console.print(f"  and {usage['other_projects']} more you can't see")
-    confirm = typer.confirm(
+    if not yes and not typer.confirm(
         f"Permanently delete {len(trashed)} "
         f"{'library and all its' if len(trashed) == 1 else 'libraries and all their'} assets?",
         default=False,
-    )
-    if not confirm:
+    ):
         console.print("Aborted.")
         raise typer.Exit(0)
     # The user has seen which projects lose clips and said yes.
@@ -572,11 +570,13 @@ def admin_maintenance(
 def _require_admin_key(
     admin_key: str | None,
 ) -> str:
-    """Return admin key or exit with error if missing."""
-    key = admin_key or _get_env_admin_key()
+    """The admin key: --admin-key, else LUMIVERB_ADMIN_KEY, else the config's
+    (lumiverb config set --admin-key); exits if none."""
+    key = admin_key or _get_env_admin_key() or get_admin_key()
     if not key:
         typer.echo(
-            "Admin key required. Use --admin-key or set LUMIVERB_ADMIN_KEY.",
+            "Admin key required. Use --admin-key, set LUMIVERB_ADMIN_KEY, "
+            "or save it with 'lumiverb config set --admin-key'.",
             err=True,
         )
         raise typer.Exit(1)
@@ -992,8 +992,8 @@ def scan(
 
     Scan is the first phase of the scan/enrich pipeline. It touches source
     files, generates 2048px proxies, and uploads them to the server. It does
-    NOT run enrichment (CLIP, vision, OCR, faces) — use `lumiverb enrich`
-    or `lumiverb repair` for that.
+    NOT run enrichment (CLIP, vision, OCR, faces): the scheduler does, or
+    `lumiverb enrich`.
 
     By default, files whose mtime and size match the server are skipped
     without hashing (fast mode). Use --thorough to SHA-verify all files.
@@ -1392,6 +1392,9 @@ def main() -> None:
         app()
     except LumiverbAPIError:
         # Error message already printed to stderr by the client; just exit non-zero.
+        sys.exit(1)
+    except ConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
