@@ -4,7 +4,8 @@
 .env and .env.local). Never the CLI's config.
 
     LUMIVERB_ROOT_MAP              library roots as the server stores them -> here, JSON:
-                                   '{"/Volumes/media-01": "/mnt/media-01"}'
+                                   '{"/Volumes/media-01": "/mnt/media-01"}'; a library
+                                   whose root isn't under it isn't read
     LUMIVERB_ANALYSIS_PROXY_ENCODER  libx264
     LUMIVERB_ANALYSIS_PROXY_DECODER  auto | cpu | an ffmpeg hwaccel (cuda)
     LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1)
@@ -38,7 +39,12 @@ class SchedulerSettings(BaseSettings):
                                       env_file_encoding="utf-8", extra="ignore")
 
     def machine(self) -> Machine:
-        return Machine(root_map=dict(self.root_map), analysis_proxy_encoder=self.analysis_proxy_encoder,
+        """Every account's libraries are read here: only through the root map,
+        never the server's data (DATA_DIR)."""
+        from src.server.config import get_settings
+
+        return Machine(root_map=dict(self.root_map), mapped_roots_only=True,
+                       refused_roots=(get_settings().data_dir,), analysis_proxy_encoder=self.analysis_proxy_encoder,
                        analysis_proxy_decoder=self.analysis_proxy_decoder, gpu_decodes=self.gpu_decodes,
                        render_concurrency=self.render_concurrency, analysis_cache_gb=self.analysis_cache_gb,
                        face_batches_per_process=self.face_batches_per_process)

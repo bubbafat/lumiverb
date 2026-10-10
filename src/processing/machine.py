@@ -27,6 +27,10 @@ class Machine:
     # Library roots as the server stores them -> where they are here, by
     # path prefix (src/processing/roots.py).
     root_map: Mapping[str, str] = field(default_factory=dict)
+    # Library roots read only through root_map (the scheduler: it reads every
+    # account's libraries), and never one under these (the server's data).
+    mapped_roots_only: bool = False
+    refused_roots: tuple[str, ...] = ()
     # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set.
     cache_home: str = ""
     # How analysis proxies are rendered here (src/processing/video/analysis_proxy.py):

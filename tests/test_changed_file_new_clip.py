@@ -316,7 +316,8 @@ def _post(client, env, rel_path: str, sha: str):
     buf.seek(0)
     return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
                        data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
-                             "media_type": "image", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha)})
+                             "media_type": "video" if rel_path.endswith(".mp4") else "image",
+                             "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha)})
 
 
 def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):

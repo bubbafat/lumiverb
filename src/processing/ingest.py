@@ -16,7 +16,7 @@ from stat import S_ISREG
 from src.processing.api import ApiClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
-from src.shared.io_utils import resolve_source_path, stat_if_present
+from src.shared.io_utils import UnsafeRelPathError, resolve_source_path, stat_if_present
 from src.processing.workers.exif_extract import (
     compute_sha256,
     extract_exif,
@@ -203,14 +203,20 @@ def _walk_library(
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
     Files that don't pass the merged tenant + library filters are silently skipped.
-    Hidden files are listed; linked folders aren't followed. Folders that
+    Hidden files are listed; symlinks aren't followed. Folders that
     can't be listed, or that hold a media file that can't be checked, go in
     `unlisted` as rel paths ("" is the library root), so the caller doesn't
     take their files for deleted.
     """
     walk_root = root_path
     if path_prefix:
-        walk_root = resolve_source_path(root_path, path_prefix)
+        try:
+            walk_root = resolve_source_path(root_path, path_prefix)
+        except UnsafeRelPathError:
+            logger.warning("Not scanning %s: it leaves the library", path_prefix)
+            if unlisted is not None:
+                unlisted.append(path_prefix)  # its files aren't taken for deleted
+            return []
 
     def _unreadable(exc: OSError, folder: str | None = None) -> None:
         folder = folder or exc.filename or str(walk_root)
@@ -245,7 +251,7 @@ def _walk_library(
             continue
 
         try:
-            stat = stat_if_present(p)
+            stat = stat_if_present(p, follow_symlinks=False)  # a symlink isn't S_ISREG
         except OSError as exc:
             _unreadable(exc, str(p.parent))
             continue

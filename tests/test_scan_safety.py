@@ -567,7 +567,8 @@ def test_an_emptied_folder_sees_its_deletions(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_walk_lists_hidden_files_and_linked_files_but_not_linked_folders(tmp_path: Path) -> None:
+def test_walk_lists_hidden_files_but_no_symlinks(tmp_path: Path) -> None:
+    # A symlink could reach any file on the machine: it isn't the library's.
     root = tmp_path / "lib"
     for rel in ("a/f.jpg", ".h.jpg", ".hid/g.jpg", "notes.txt"):
         _write(root, rel)
@@ -575,7 +576,18 @@ def test_walk_lists_hidden_files_and_linked_files_but_not_linked_folders(tmp_pat
     (root / "linked").symlink_to(tmp_path / "other")
     (root / "link.jpg").symlink_to(tmp_path / "other" / "o.jpg")
     (root / "broken.jpg").symlink_to(tmp_path / "nowhere.jpg")
-    assert [f["rel_path"] for f in _walk_library(root)] == [".h.jpg", ".hid/g.jpg", "a/f.jpg", "link.jpg"]
+    assert [f["rel_path"] for f in _walk_library(root)] == [".h.jpg", ".hid/g.jpg", "a/f.jpg"]
+
+
+@pytest.mark.fast
+def test_walk_of_a_symlinked_prefix_lists_nothing_and_deletes_nothing(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    _write(root, "a/f.jpg")
+    _write(tmp_path, "other/o.jpg")
+    (root / "linked").symlink_to(tmp_path / "other")
+    unlisted: list[str] = []
+    assert _walk_library(root, "linked", unlisted=unlisted) == []
+    assert unlisted == ["linked"]
 
 
 # ---------------------------------------------------------------------------

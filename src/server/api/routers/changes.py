@@ -44,10 +44,10 @@ class ChangeReport(BaseModel):
         for p in paths:
             if not p.startswith("/"):
                 raise ValueError(f"paths must be absolute: {p!r}")
-            try:  # below "/", the same rule as every rel_path: no "..", no NUL
-                check_rel_path(p.lstrip("/"), allow_root=True)
+            try:  # below "/", the same rule as every rel_path
+                check_rel_path(p.strip("/"), allow_root=True)
             except UnsafeRelPathError:
-                raise ValueError(f"paths may not contain '..' or NUL: {p!r}") from None
+                raise ValueError(f"Invalid path: {p!r}") from None
         return paths
 
 
