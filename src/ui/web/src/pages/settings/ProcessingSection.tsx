@@ -658,6 +658,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
   const [redoing, setRedoing] = useState<string | null>(null);
   const changed = fields.filter((f) => !f.fixed && !same(f, values[f.key]));
   const remade = changed.some((f) => f.remakes !== false);
+  const done = (producer.counts?.current ?? 0) + (producer.counts?.stale ?? 0);
   const edit = (key: string, value: string) => {
     setValues({ ...values, [key]: value });
     setRedoing(null); // its answer was for the values asked about
@@ -731,10 +732,12 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
           <div className="mt-2 space-y-3">{advanced.map(input)}</div>
         </details>
       )}
-      {remade && !redoing && (
-        <p className="text-amber-300">What these settings made is made again with the new ones, after anything missing.</p>
+      {remade && !redoing && done > 0 && (
+        <p className="text-amber-300">
+          Saving redoes the {done.toLocaleString()} {done === 1 ? "clip" : "clips"} already done, after the rest.
+        </p>
       )}
-      {changed.length > 0 && !remade && (
+      {changed.length > 0 && !remade && producer.artifact === "faces" && (
         <p className="text-gray-400">Face groups are worked out again; no face is found again.</p>
       )}
       {problem && (

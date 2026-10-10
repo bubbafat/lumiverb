@@ -554,7 +554,7 @@ describe("ProcessingSection settings", () => {
     expect(screen.getByText(/Chosen in Settings → AI/)).toBeTruthy();
     expect(screen.queryByLabelText(/^Model/)).toBeNull();  // no input for it
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
-    expect(screen.getByText(/made again with the new ones/)).toBeTruthy();
+    expect(screen.getByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
     await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
     const put = sent.find((r) => r.method === "PUT")!;
@@ -642,7 +642,7 @@ describe("ProcessingSection settings", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save the settings of Descriptions and tags" })
       .textContent).toBe("Save"));
     expect((screen.getByRole("button", { name: "Save the settings of Descriptions and tags" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByText(/made again with the new ones/)).toBeNull();
+    expect(screen.queryByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeNull();
   });
 
   it("says why settings can't change in words, not only on hover (phones can't hover)", async () => {
@@ -688,9 +688,20 @@ describe("ProcessingSection settings", () => {
       fireEvent.click(await screen.findByText("Settings · version 1"));
       fireEvent.click(screen.getByLabelText("Merge close groups"));
       expect(screen.getByText("Face groups are worked out again; no face is found again.")).toBeTruthy();
-      expect(screen.queryByText(/made again with the new ones/)).toBeNull();
+      expect(screen.queryByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeNull();
       fireEvent.change(screen.getByLabelText(/Least confidence/), { target: { value: "0.6" } });
-      expect(screen.getByText(/made again with the new ones/)).toBeTruthy();
+      expect(screen.getByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeTruthy();
+    });
+
+    it("says nothing is redone when nothing is done yet, and the face line is only for faces", async () => {
+      producers = [producer({ artifact: "location", title: "Location guesses", fields: grouping,
+                              counts: { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0 } })];
+      renderSection();
+      fireEvent.click(await screen.findByText("Settings · version 1"));
+      fireEvent.change(screen.getByLabelText(/Least confidence/), { target: { value: "0.6" } });
+      expect(screen.queryByText(/Saving redoes/)).toBeNull();
+      fireEvent.click(screen.getByLabelText("Merge close groups"));
+      expect(screen.queryByText(/Face groups/)).toBeNull();
     });
 
     it("shows editors yes or no as On or Off", async () => {
