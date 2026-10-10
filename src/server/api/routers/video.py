@@ -158,7 +158,9 @@ def claim_next_chunk(
     try:
         chunk = chunk_repo.claim_next_chunk(asset_id, worker_id)
     except ChunksBusy as e:
-        raise ConflictError("chunks_busy", f"Another chunk of this clip is under way or failed ({e}).") from e
+        if e.status == "claimed":  # another process has it (one stopped mid-chunk: until its lease runs out)
+            raise ConflictError("chunk_under_way", f"Another chunk of this clip is under way ({e}).") from e
+        raise ConflictError("chunk_failed", f"A chunk of this clip failed this run ({e}).") from e
     if chunk is None:
         return Response(status_code=204)
 

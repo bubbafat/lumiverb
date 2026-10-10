@@ -466,7 +466,7 @@ def test_a_failed_chunk_stays_failed_until_the_next_run(video_api_client) -> Non
     assert r.status_code == 200
     # Nothing more this run: chunks go in order.
     busy = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
-    assert busy.status_code == 409 and busy.json()["error"]["code"] == "chunks_busy"
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "chunk_failed"
 
     # The next run (the scheduler's back-off decides when) starts it again.
     client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0, "scene_sec": 30.0}, headers=auth)
@@ -531,3 +531,17 @@ def test_a_resumed_clip_goes_on_numbering_its_scenes(video_api_client) -> None:
             conn.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms,"
                               " rep_frame_ms, created_at) VALUES ('scn_dup', :a, 1, 0, 1, 0, now())"), {"a": aid})
     engine.dispose()
+
+
+@pytest.mark.slow
+def test_a_claimed_chunk_is_under_way_not_failed(video_api_client) -> None:
+    """A chunk another process holds (one stopped mid-chunk, until its lease
+    runs out) says so, apart from a failed one: the scheduler waits on it."""
+    client, api_key, library_id, _asset_id, _tenant_url = video_api_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    aid = _video(client, auth, library_id, "held.mp4", 60.0)  # two chunks
+
+    first = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
+    assert first.status_code == 200 and first.json()["chunk_index"] == 0
+    busy = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "chunk_under_way"

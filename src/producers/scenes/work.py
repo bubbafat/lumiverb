@@ -6,7 +6,8 @@ of whole windows (POST /v1/video/{id}/chunks with the window, then
 chunks/next and chunks/{id}/complete); each chunk's scenes are saved as it
 completes, through the job's client (src/producers/runner.py: it stops
 saving once the scheduler stops, and its errors are judged like any
-save's). When the last completes, the server merges scenes that look alike
+save's). A chunk under way elsewhere (a scheduler stopped mid-chunk holds
+it until its lease runs out) makes the video wait, uncharged. When the last completes, the server merges scenes that look alike
 and only then counts the video as found. A chunk that fails ends the
 video: it's charged, and its chunks are tried again on its next turn.
 """
@@ -19,6 +20,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from src.processing.api import LumiverbAPIError
 from src.processing.video.scene_segmenter import SceneSegmenter
 from src.processing.video.video_scanner import SyncError, VideoScanner
 from src.producers.runner import Failed, Stopped, Waits, Work
@@ -56,7 +58,12 @@ def index_video_scenes(*, client: Any, source_path: Path, asset_id: str, duratio
     while True:
         if stopping is not None and stopping.is_set():
             raise Stopped(asset_id)
-        claim = client.post(f"/v1/video/{asset_id}/chunks/next")
+        try:
+            claim = client.post(f"/v1/video/{asset_id}/chunks/next")
+        except LumiverbAPIError as e:
+            if e.code == "chunk_under_way":
+                raise Waits(e.message) from e
+            raise
         if claim.status_code == 204:
             break  # none left to claim
         work = claim.json()
