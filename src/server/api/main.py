@@ -61,6 +61,7 @@ from src.server.api.routers import admin, ai, archive, assets, producers, change
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.artifacts import router as artifacts_router
+from src.server.api.routers import playback
 from src.server.api.routers.playback import router as playback_router
 from src.server.api.routers.ingest import router as ingest_router
 from src.server.api.routers.maintenance import router as maintenance_router
@@ -82,7 +83,10 @@ from src.server.api.routers.locations import router as locations_router
 async def lifespan(app: FastAPI):
     if not os.environ.get("JWT_SECRET"):
         raise RuntimeError("JWT_SECRET environment variable is required but not set")
+    playback.start_cuts()
     yield
+    # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.
+    playback.stop_cuts()
 
 
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)

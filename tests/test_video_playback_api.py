@@ -574,8 +574,8 @@ def test_a_cut_that_cant_be_made_is_a_503(env, media, monkeypatch):
     url = _path(_playback(env, asset_id).json()["url"])
     from src.server.api.routers import playback
 
-    real = playback.subprocess.run
-    monkeypatch.setattr(playback.subprocess, "run",
+    real = playback.subprocess.Popen
+    monkeypatch.setattr(playback.subprocess, "Popen",
                         lambda cmd, *a, **k: real(["false"], *a, **k) if cmd[0] == "ffmpeg" else real(cmd, *a, **k))
     r = _fetch(client, url)
     assert r.status_code == 503
@@ -789,6 +789,48 @@ def test_clearing_cuts_for_deleted_assets_leaves_the_rest(tmp_path, monkeypatch)
     assert [p.name for p in folder.iterdir()] == [f"{b}_analysis_proxy_x_5s.mp4"]
 
 
+@pytest.mark.fast
+def test_stopping_the_api_kills_a_running_cut(tmp_path, monkeypatch):
+    # A cut's ffmpeg can run 300 s, and the executor's threads are joined at exit.
+    import threading
+
+    from src.server.api.routers import playback
+
+    real = playback.subprocess.Popen
+    monkeypatch.setattr(playback.subprocess, "Popen",
+                        lambda cmd, *a, **k: real(["sleep", "60"], *a, **k) if cmd[0] == "ffmpeg" else real(cmd, *a, **k))
+    ask = playback._Ask(tmp_path / "src.mp4", None, LocalStorage(str(tmp_path)), "ten_1",
+                        "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "preview", "v1", strip=True)
+    failed: list[Exception] = []
+
+    def cut() -> None:
+        try:
+            playback._make_cut(ask)
+        except playback._CutFailed as exc:
+            failed.append(exc)
+
+    playback.start_cuts()
+    t = threading.Thread(target=cut)
+    t.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not playback._procs and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert playback._procs
+        started = time.monotonic()
+        playback.stop_cuts()
+        t.join(10)
+        assert not t.is_alive() and time.monotonic() - started < 5
+        assert failed and not playback._procs
+        # One asked for while it stops doesn't start.
+        with pytest.raises(playback._CutFailed):
+            playback._make_cut(ask)
+    finally:
+        playback.start_cuts()
+        t.join(1)
+    assert not list((tmp_path / "ten_1" / "playback").glob("*.mp4"))
+
+
 @pytest.fixture(scope="module")
 def gps_preview(tmp_path_factory) -> bytes:
     out = tmp_path_factory.mktemp("gps") / "preview.mp4"
@@ -837,7 +879,7 @@ def test_a_cut_is_made_off_the_request(env, media, monkeypatch, tmp_path):
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
     from src.server.api.routers import playback
 
-    real = playback.subprocess.run
+    real = playback.subprocess.Popen
     release = threading.Event()
     in_request = []
 
@@ -847,7 +889,7 @@ def test_a_cut_is_made_off_the_request(env, media, monkeypatch, tmp_path):
             release.wait(30)
         return real(cmd, *a, **k)
 
-    monkeypatch.setattr(playback.subprocess, "run", held)
+    monkeypatch.setattr(playback.subprocess, "Popen", held)
     body = _playback(env, asset_id).json()
     assert body["ready"] is False
     started = time.monotonic()

@@ -258,14 +258,37 @@ _CUT_WORKERS = 2
 _MAX_WAITING = 16
 _FAILED_HOLD_SEC = 60.0
 RETRY_AFTER_SEC = 2
+_CUT_TIMEOUT_SEC = 300
 _executor = ThreadPoolExecutor(max_workers=_CUT_WORKERS, thread_name_prefix="playback-cut")
 _running: dict[Path, Future] = {}
 _failed: dict[Path, float] = {}
 _jobs_lock = threading.Lock()
+# The ffmpegs cutting now, killed when the API stops (stop_cuts): the
+# executor's threads are joined at exit, and a cut can run _CUT_TIMEOUT_SEC.
+_procs: set[subprocess.Popen] = set()
+_stopping = threading.Event()
 
 
 class _CutFailed(Exception):
     pass
+
+
+def start_cuts() -> None:
+    """The API's start: cuts may run (again)."""
+    _stopping.clear()
+
+
+def stop_cuts() -> None:
+    """The API's stop: queued cuts are dropped and running ffmpegs killed,
+    so the executor's threads finish at once."""
+    with _jobs_lock:
+        _stopping.set()
+        for future in _running.values():
+            future.cancel()  # only one not started yet
+        procs = list(_procs)
+    for proc in procs:
+        with contextlib.suppress(OSError):
+            proc.kill()
 
 
 def _make_cut(ask: _Ask) -> None:
@@ -286,15 +309,29 @@ def _make_cut(ask: _Ask) -> None:
     tmp = Path(tmp_name)
     length = ["-t", str(max_seconds)] if max_seconds is not None else []
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(ask.path),
-             "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
-             "-map_metadata", "-1", "-map_chapters", "-1",
-             "-movflags", "+faststart", "-f", "mp4", str(tmp)],
-            capture_output=True, timeout=300, check=False,
-        )
-        if result.returncode != 0 or tmp.stat().st_size == 0:
-            raise _CutFailed(result.stderr.decode(errors="replace")[-300:])
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(ask.path),
+               "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
+               "-map_metadata", "-1", "-map_chapters", "-1",
+               "-movflags", "+faststart", "-f", "mp4", str(tmp)]
+        if _stopping.is_set():
+            raise _CutFailed("the API is stopping")
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with _jobs_lock:
+            _procs.add(proc)
+            stopping = _stopping.is_set()  # stop_cuts came between: it didn't see this one
+        try:
+            if stopping:
+                proc.kill()
+            _, stderr = proc.communicate(timeout=_CUT_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            with _jobs_lock:
+                _procs.discard(proc)
+        if proc.returncode != 0 or tmp.stat().st_size == 0:
+            raise _CutFailed(stderr.decode(errors="replace")[-300:])
         tmp.replace(cut)
     except (subprocess.SubprocessError, OSError) as exc:
         raise _CutFailed(str(exc)) from exc
