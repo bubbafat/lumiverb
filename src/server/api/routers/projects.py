@@ -231,6 +231,28 @@ def _can_view(col, user_id: str) -> bool:
     return col.visibility in ("shared", "public")
 
 
+def guard_project_filters(request: Request, session: Session, spec) -> None:
+    """A search's project filters (in / not in a project) ask who put what in
+    a project, so they're for whoever may open it: an editor (like every
+    project route; 403 otherwise, and on a public page) who can see the
+    project, as GET /v1/projects/{id} (404 for one they can't, one in the
+    trash, or no id). Every route that runs a search calls this first."""
+    from src.server.models.query_filter import PROJECT_FILTERS
+
+    leaves = [leaf for leaf in spec.leaves if isinstance(leaf, PROJECT_FILTERS)]
+    if not leaves:
+        return
+    if getattr(request.state, "is_public_request", False):
+        raise HTTPException(status_code=403, detail="Project filters aren't available on public pages")
+    require_editor(request)
+    user_id = get_current_user_id(request)
+    repo = ProjectRepository(session)
+    for leaf in leaves:
+        project = repo.get_by_id(leaf.project_id) if leaf.project_id else None
+        if project is None or not _can_view(project, user_id):
+            raise HTTPException(status_code=404, detail="Project not found")
+
+
 # ---------------------------------------------------------------------------
 # Project CRUD
 # ---------------------------------------------------------------------------
@@ -573,6 +595,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         raise InvalidChoiceError("bad_search", str(exc)) from None
     if spec.sort not in SORT_COLUMNS:
         raise InvalidChoiceError("bad_search", f"Unknown sort {spec.sort!r}")
+    guard_project_filters(request, session, spec)
     repo = UnifiedBrowseRepository(session)
     rating_user_id = user_id if spec.needs_rating_join else None
 

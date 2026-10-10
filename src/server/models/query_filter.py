@@ -1329,3 +1329,76 @@ class TagFilter(LeafFilter):
     @property
     def needs_metadata_join(self) -> bool:
         return True
+
+
+@dataclass(frozen=True)
+class _ProjectMembership(LeafFilter):
+    """Whether a clip is in a project (ADR-016's projects; editors only, like
+    every project route). The filter can't tell who's asking, so every route
+    that runs a search checks the caller can see the project first
+    (projects.guard_project_filters): otherwise it would tell anyone which
+    clips are in someone's private project. An empty id isn't dropped, which
+    would widen the search: the guard answers 404 for it."""
+
+    project_id: str = ""
+
+    @classmethod
+    def value_kind(cls) -> ValueKind:
+        return ValueKind.STRING
+
+    def _member_sql(self, params: dict, counter: list[int]) -> str:
+        p = self._param_name("project_id", counter)
+        params[p] = self.project_id
+        return f"EXISTS (SELECT 1 FROM project_assets pa WHERE pa.project_id = :{p} AND pa.asset_id = a.asset_id)"
+
+    def to_url_value(self) -> str:
+        return self.project_id
+
+    @classmethod
+    def from_url_value(cls, raw: str) -> _ProjectMembership:
+        return cls(project_id=raw.strip())
+
+
+@dataclass(frozen=True)
+class InProject(_ProjectMembership):
+    @classmethod
+    def prefix(cls) -> str:
+        return "project"
+
+    @classmethod
+    def type_name(cls) -> str:
+        return "project"
+
+    @classmethod
+    def display_label(cls) -> str:
+        return "In project"
+
+    def label(self) -> str:
+        return "In project"
+
+    def to_sql(self, params: dict, counter: list[int]) -> str:
+        return self._member_sql(params, counter)
+
+
+@dataclass(frozen=True)
+class NotInProject(_ProjectMembership):
+    @classmethod
+    def prefix(cls) -> str:
+        return "not_project"
+
+    @classmethod
+    def type_name(cls) -> str:
+        return "not_project"
+
+    @classmethod
+    def display_label(cls) -> str:
+        return "Not in project"
+
+    def label(self) -> str:
+        return "Not in project"
+
+    def to_sql(self, params: dict, counter: list[int]) -> str:
+        return f"NOT {self._member_sql(params, counter)}"
+
+
+PROJECT_FILTERS = (InProject, NotInProject)

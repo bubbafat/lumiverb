@@ -35,12 +35,14 @@ from src.server.models.query_filter import (
     HasFaces,
     HasGps,
     HasRating,
+    InProject,
     IsoRange,
     LeafFilter,
     LensModel,
     LibraryScope,
     MediaType,
     NearLocation,
+    NotInProject,
     PathPrefix,
     PersonFilter,
     QuerySpec,
@@ -558,6 +560,40 @@ class TestTagFilter:
 
 
 # ---------------------------------------------------------------------------
+# InProject / NotInProject
+# ---------------------------------------------------------------------------
+
+class TestProjectFilters:
+    def test_in_project_sql(self):
+        frag, params = _sql(InProject(project_id="prj_1"))
+        assert frag.startswith("EXISTS (SELECT 1 FROM project_assets pa")
+        assert "pa.asset_id = a.asset_id" in frag
+        assert params == {"project_id_0": "prj_1"}
+
+    def test_not_in_project_is_the_negation(self):
+        frag, params = _sql(NotInProject(project_id="prj_1"))
+        assert frag == "NOT " + _sql(InProject(project_id="prj_1"))[0]
+        assert params == {"project_id_0": "prj_1"}
+
+    def test_url_and_json_roundtrip(self):
+        for leaf in (InProject(project_id="prj_1"), NotInProject(project_id="prj_1")):
+            assert _roundtrip_url(leaf) == leaf
+            assert from_json({"filters": [leaf.to_json()]}).leaves == [leaf]
+
+    def test_parsed_from_f_params(self):
+        spec = parse_f_params(["project:prj_1", "not_project: prj_2 "])
+        assert spec.leaves == [InProject(project_id="prj_1"), NotInProject(project_id="prj_2")]
+
+    def test_an_empty_id_is_kept_not_dropped(self):
+        """Dropping it would search everything; the routes' guard answers 404."""
+        assert parse_f_params(["not_project:"]).leaves == [NotInProject(project_id="")]
+
+    def test_labels(self):
+        assert InProject(project_id="p").label() == "In project"
+        assert NotInProject(project_id="p").label() == "Not in project"
+
+
+# ---------------------------------------------------------------------------
 # Param counter uniqueness
 # ---------------------------------------------------------------------------
 
@@ -794,6 +830,13 @@ class TestCapabilities:
         assert "tag" in prefixes
         assert "near" in prefixes
         assert "date" in prefixes
+        assert "project" in prefixes
+        assert "not_project" in prefixes
+
+    def test_project_filter_labels(self):
+        caps = {c["prefix"]: c for c in capabilities()}
+        assert caps["project"] == {"prefix": "project", "label": "In project", "value_kind": "string"}
+        assert caps["not_project"] == {"prefix": "not_project", "label": "Not in project", "value_kind": "string"}
 
     def test_each_has_required_fields(self):
         for cap in capabilities():

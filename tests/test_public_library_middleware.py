@@ -169,9 +169,12 @@ def test_unauthenticated_query_public_library(public_lib_client) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("private_filter", ["favorite:true", "stars:3+", "person:per_nope"])
+@pytest.mark.parametrize(
+    "private_filter", ["favorite:true", "stars:3+", "person:per_nope", "project:prj_nope", "not_project:prj_nope"],
+)
 def test_public_queries_cant_use_signed_in_filters(public_lib_client, private_filter) -> None:
-    """Ratings belong to signed-in people, and who's in a photo isn't for visitors to probe."""
+    """Ratings belong to signed-in people, who's in a photo isn't for visitors
+    to probe, and neither is what's in someone's project."""
     client, _, library_id, _ = public_lib_client
     r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", private_filter)])
     assert r.status_code == 403, (r.status_code, r.text)
