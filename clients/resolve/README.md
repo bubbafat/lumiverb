@@ -21,6 +21,9 @@ password.
 ## Use
 
 - Search, then page through the results 10 at a time.
+- **Type**: Video (the default), Images or All. It's part of the search
+  (`f=media:video` / `f=media:image`; nothing for All), so changing it
+  searches again from the first page.
 - **Hide clips already in the project** leaves out results whose original is
   already in the project's Media Pool, in any bin. It matches by file path
   (Unicode-normalized, since macOS may store an accented name either way), so a

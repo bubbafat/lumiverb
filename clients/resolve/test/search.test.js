@@ -6,7 +6,7 @@ const { MAX_REQUESTS, searchPage } = require('../plugin/search');
 const ROOT = '/Volumes/media-01/Media';
 
 // A fake Lumiverb with `count` results; its cursor is the index of the next
-// result. Records each request's cursor and limit.
+// result. Records each request's cursor, limit and type.
 function fakeClient(count, { relPath = (i) => `2026/clip${i}.mov` } = {}) {
     const results = Array.from({ length: count }, (_, i) => ({
         asset_id: `a${i}`,
@@ -21,8 +21,8 @@ function fakeClient(count, { relPath = (i) => `2026/clip${i}.mov` } = {}) {
     return {
         requests,
         libraryRoots: async () => new Map([['lib', ROOT]]),
-        search: async (text, after, limit) => {
-            requests.push({ text, after, limit });
+        search: async (text, { after, limit, media }) => {
+            requests.push({ text, after, limit, media });
             const start = after ? Number(after) : 0;
             const end = Math.min(start + limit, count);
             return { items: results.slice(start, end), nextCursor: end < count ? String(end) : null, totalEstimate: count };
@@ -35,9 +35,9 @@ const ids = (page) => page.items.map((clip) => clip.assetId);
 
 test('a page is 10 clips with their paths on this Mac', async () => {
     const client = fakeClient(25);
-    const page = await searchPage({ client, text: 'harbor', exists: (p) => p !== `${ROOT}/2026/clip1.mov` });
+    const page = await searchPage({ client, text: 'harbor', media: 'video', exists: (p) => p !== `${ROOT}/2026/clip1.mov` });
 
-    assert.deepEqual(client.requests, [{ text: 'harbor', after: null, limit: 10 }]);
+    assert.deepEqual(client.requests, [{ text: 'harbor', after: null, limit: 10, media: 'video' }]);
     assert.equal(page.items.length, 10);
     assert.equal(page.nextCursor, '10');
     assert.equal(page.totalEstimate, 25);
@@ -54,9 +54,9 @@ test('clips already in the project are hidden and the page is filled up to 10', 
     const client = fakeClient(25);
     const inProject = new Set([2, 5, 7, 11].map((i) => `${ROOT}/2026/clip${i}.mov`));
 
-    const page = await searchPage({ client, text: 'harbor', inProject, exists: everywhere });
+    const page = await searchPage({ client, text: 'harbor', media: 'image', inProject, exists: everywhere });
 
-    assert.deepEqual(client.requests.map((r) => [r.after, r.limit]), [[null, 10], ['10', 3], ['13', 1]]);
+    assert.deepEqual(client.requests.map((r) => [r.after, r.limit, r.media]), [[null, 10, 'image'], ['10', 3, 'image'], ['13', 1, 'image']]);
     assert.deepEqual(ids(page), ['a0', 'a1', 'a3', 'a4', 'a6', 'a8', 'a9', 'a10', 'a12', 'a13']);
     assert.equal(page.hidden, 4);
     assert.equal(page.nextCursor, '14', 'the next page starts right after the last clip looked at');

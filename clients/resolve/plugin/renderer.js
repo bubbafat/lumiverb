@@ -99,7 +99,12 @@ async function loadPage() {
     $('prev').disabled = true;
     $('next').disabled = true;
     try {
-        const page = await call('search', query, cursors[pageIndex], $('hide-in-project').checked);
+        const page = await call('search', {
+            text: query,
+            media: $('media').value,
+            after: cursors[pageIndex],
+            hideInProject: $('hide-in-project').checked,
+        });
         if (mine !== ticket) return;
         nextCursor = page.nextCursor;
         $('results').replaceChildren(...page.items.map(row));
@@ -146,13 +151,15 @@ $('search-form').addEventListener('submit', (event) => {
     loadPage();
 });
 
-// What's hidden changes the pages, so start again from the first.
-$('hide-in-project').addEventListener('change', () => {
+// The type and what's hidden change the pages: search again from the first.
+function searchAgain() {
     if (!query) return;
     cursors = [null];
     pageIndex = 0;
     loadPage();
-});
+}
+$('media').addEventListener('change', searchAgain);
+$('hide-in-project').addEventListener('change', searchAgain);
 
 $('next').addEventListener('click', () => {
     if (!nextCursor) return;

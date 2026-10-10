@@ -41,9 +41,9 @@ function shownClip(assetId) {
 
 // The project's files are read again for every page, so clips added in
 // Resolve meanwhile are hidden too.
-async function search(text, after, hideInProject) {
+async function search({ text, media, after, hideInProject }) {
     const inProject = hideInProject ? await projectFilePaths(await getResolve()) : null;
-    const page = await searchPage({ client, text, after, inProject });
+    const page = await searchPage({ client, text, media, after, inProject });
     shown = new Map(page.items.map((clip) => [clip.assetId, clip]));
     return page;
 }

@@ -86,15 +86,28 @@ test('search asks for 10 clips of a text search, after the given cursor', async 
     const fetch = fakeFetch(() => reply(200, { items: [{ asset_id: 'a1' }], next_cursor: 'c2', total_estimate: 31 }));
     const { client } = signedInClient(fetch, 'jwt');
 
-    const page = await client.search('beach sunset', 'c1');
+    const page = await client.search('beach sunset', { after: 'c1', media: 'video' });
 
     const url = new URL(fetch.calls[0].url);
     assert.equal(url.pathname, '/v1/query');
-    assert.equal(url.searchParams.get('f'), 'query:beach sunset');
+    assert.deepEqual(url.searchParams.getAll('f'), ['query:beach sunset', 'media:video']);
     assert.equal(url.searchParams.get('limit'), '10');
     assert.equal(url.searchParams.get('after'), 'c1');
     assert.equal(bearer(fetch.calls[0].init), 'Bearer jwt');
     assert.deepEqual(page, { items: [{ asset_id: 'a1' }], nextCursor: 'c2', totalEstimate: 31 });
+});
+
+test('search filters by type: images, or nothing for all', async () => {
+    const fetch = fakeFetch(() => reply(200, { items: [], next_cursor: null }));
+    const { client } = signedInClient(fetch, 'jwt');
+
+    await client.search('x', { media: 'image' });
+    await client.search('x', { media: 'all' });
+
+    assert.deepEqual(new URL(fetch.calls[0].url).searchParams.getAll('f'), ['query:x', 'media:image']);
+    assert.deepEqual(new URL(fetch.calls[1].url).searchParams.getAll('f'), ['query:x']);
+    await assert.rejects(client.search('x', { media: 'audio' }), /Unknown type: audio\./);
+    assert.equal(fetch.calls.length, 2, 'an unknown type never reaches the server');
 });
 
 test('a 401 refreshes the token once and retries with the new one', async () => {

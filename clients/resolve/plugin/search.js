@@ -32,15 +32,16 @@ function toClip(item, roots, exists) {
     };
 }
 
-// `inProject`: a Set of NFC paths to leave out, or null to show everything.
-async function searchPage({ client, text, after = null, inProject = null, exists = fs.existsSync }) {
+// `media`: 'video', 'image' or 'all'. `inProject`: a Set of NFC paths to
+// leave out, or null to show everything.
+async function searchPage({ client, text, media, after = null, inProject = null, exists = fs.existsSync }) {
     const roots = await client.libraryRoots();
     const items = [];
     let cursor = after;
     let hidden = 0;
     let totalEstimate = null;
     for (let request = 0; request < MAX_REQUESTS; request += 1) {
-        const page = await client.search(text, cursor, PAGE_SIZE - items.length);
+        const page = await client.search(text, { after: cursor, limit: PAGE_SIZE - items.length, media });
         cursor = page.nextCursor;
         if (totalEstimate === null) totalEstimate = page.totalEstimate;
         for (const item of page.items) {

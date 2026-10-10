@@ -9,6 +9,9 @@ const path = require('path');
 
 const PAGE_SIZE = 10;
 
+// The type choices and the `media:` filter each adds to a search.
+const MEDIA_FILTERS = { video: 'video', image: 'image', all: null };
+
 class LumiverbError extends Error {
     constructor(message, { status = null, code = null } = {}) {
         super(message);
@@ -180,10 +183,12 @@ class LumiverbClient {
     }
 
     // One page of a text search, most relevant first. `after` is the
-    // previous page's next_cursor.
-    async search(text, after = null, limit = PAGE_SIZE) {
+    // previous page's next_cursor; `media` one of MEDIA_FILTERS' keys.
+    async search(text, { after = null, limit = PAGE_SIZE, media = 'all' } = {}) {
+        if (!Object.hasOwn(MEDIA_FILTERS, media)) throw new LumiverbError(`Unknown type: ${media}.`);
         const params = new URLSearchParams();
         params.append('f', `query:${text}`);
+        if (MEDIA_FILTERS[media]) params.append('f', `media:${MEDIA_FILTERS[media]}`);
         params.append('limit', String(limit));
         if (after) params.append('after', after);
         const response = await this.request(`/v1/query?${params}`);
@@ -220,6 +225,7 @@ class LumiverbClient {
 }
 
 module.exports = {
+    MEDIA_FILTERS,
     PAGE_SIZE,
     LumiverbClient,
     LumiverbError,

@@ -27,7 +27,14 @@
             <input id="query" type="search" placeholder="Search" required>
             <button type="submit">Search</button>
         </form>
-        <label class="check"><input type="checkbox" id="hide-in-project"> Hide clips already in the project</label>
+        <div class="options">
+            <select id="media" aria-label="Type">
+                <option value="video" selected>Video</option>
+                <option value="image">Images</option>
+                <option value="all">All</option>
+            </select>
+            <label class="check"><input type="checkbox" id="hide-in-project"> Hide clips already in the project</label>
+        </div>
         <ol id="results"></ol>
         <nav id="pager" hidden>
             <button type="button" id="prev">Previous</button>
