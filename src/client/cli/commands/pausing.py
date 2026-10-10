@@ -26,7 +26,7 @@ def _error(r) -> str:
         body = r.json() or {}
     except ValueError:
         body = {}
-    return (body.get("error") or {}).get("message") or body.get("detail") or r.text
+    return (body.get("error") or {}).get("message") or r.text
 
 
 def _switches(client: LumiverbClient) -> dict:
@@ -47,7 +47,8 @@ def _act(command: str, name: str | None) -> None:
     client = LumiverbClient()
     if not name:
         _usage(client, command)
-    r = client.raw("POST", f"/v1/producers/{name}/{command}")  # "all" is a target like any other
+    # "all" is a target like any other; a switch's work, never only its redo.
+    r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't {command} {escape(name or '')}: {escape(_error(r))}[/red]")
         raise typer.Exit(1)

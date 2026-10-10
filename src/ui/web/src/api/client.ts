@@ -1051,31 +1051,33 @@ export async function getFailures(params: { artifact?: string; libraryId?: strin
   return apiFetch(`/producers/failures${q ? `?${q}` : ""}`);
 }
 
-/** Try failing clips again now, given up or not (editors and admins). */
-export async function retryFailures(body: { artifact?: string; library_id?: string; asset_ids?: string[] }):
+/** Try failing clips again now, given up or not (editors and admins): these clips (ids) or every failing
+ * one (all: true), a producer's or a library's alone when given. 400 scope_required otherwise. */
+export async function retryFailures(body: { artifact?: string; library_id?: string; ids?: string[]; all?: true }):
     Promise<{ retried: number }> {
   return apiFetch(`/producers/failures/retry`, { method: "POST", body });
 }
 
-/** Stop redoing a producer's stale clips (admins); what's missing is still made. 409 cant_redo. */
+/** Stop redoing a producer's stale clips (admins): its switch's redo scope; what's missing is still made.
+ * 409 cant_redo. */
 export async function stopRedo(artifact: string): Promise<void> {
-  await apiFetch<void>(`/producers/${artifact}/redo/stop`, { method: "POST" });
+  await apiFetch<void>(`/producers/${artifact}/pause`, { method: "POST", body: { scope: "redo" } });
 }
 
 /** Redo a producer's stale clips again (admins), after anything missing. */
 export async function resumeRedo(artifact: string): Promise<void> {
-  await apiFetch<void>(`/producers/${artifact}/redo/resume`, { method: "POST" });
+  await apiFetch<void>(`/producers/${artifact}/resume`, { method: "POST", body: { scope: "redo" } });
 }
 
-/** Pause one switch ("scans", "upkeep" or a producer's artifact), or "all" (admins). The target is always
- * named. What's running finishes. 409 not_scheduled for what scans make. */
+/** Pause one switch's work ("scans", "upkeep" or a producer's artifact), or "all" (admins). The target is
+ * always named. What's running finishes. 409 not_scheduled for what scans make. */
 export async function pauseProcessing(target: string): Promise<void> {
-  await apiFetch<void>(`/producers/${target}/pause`, { method: "POST" });
+  await apiFetch<void>(`/producers/${target}/pause`, { method: "POST", body: { scope: "work" } });
 }
 
-/** Resume one switch, or "all" (admins). */
+/** Resume one switch's work, or "all" (admins). */
 export async function resumeProcessing(target: string): Promise<void> {
-  await apiFetch<void>(`/producers/${target}/resume`, { method: "POST" });
+  await apiFetch<void>(`/producers/${target}/resume`, { method: "POST", body: { scope: "work" } });
 }
 
 export async function findSimilar(params: {
