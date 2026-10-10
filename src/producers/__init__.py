@@ -56,6 +56,12 @@ def _check(found: list[ProducerSpec]) -> None:
             raise ValueError(f"{p.artifact}: its flag is a missing_* filter, not {p.flag!r}")
         if p.unit not in ("second", "clip"):
             raise ValueError(f"{p.artifact}: its unit is a second (of video) or a clip, not {p.unit!r}")
+        levels = [s for s in p.settings if s.kind == "level"]
+        if len(levels) > 1 or any(s.remakes or s.default not in s.choices for s in levels):
+            raise ValueError(f"{p.artifact}: one level setting at most, kept out of the hash"
+                             " (remakes=False), its default among its choices")
+        if p.part_of and p.part_of not in {q.artifact for q in found}:
+            raise ValueError(f"{p.artifact}: it's part of {p.part_of!r}, which no producer makes")
         missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]
         if missing:
             raise ValueError(f"{p.artifact} names what no producer makes: {missing}")

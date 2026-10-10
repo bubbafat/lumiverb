@@ -95,8 +95,7 @@ video_scenes      — scene_id, asset_id, scene_index, start_ms, end_ms,
                     search_synced_at
 video_index_chunks — chunk_id, asset_id, chunk_index, start_ms, end_ms,
                     status, worker_id, claimed_at, lease_expires_at,
-                    completed_at, error_message, anchor_phash,
-                    scene_start_ms, created_at
+                    completed_at, error_message, created_at
 asset_metadata    — metadata_id, asset_id, model_id, model_version,
                     generated_at, data (JSONB)
 asset_embeddings  — embedding_id, asset_id, model_id, model_version,
@@ -180,7 +179,7 @@ All processing runs on the brain, in the scheduler (`src/server/scheduler/`, sys
 
 **Settings.** The scheduler reads this machine's way of processing from its environment (`src/server/scheduler/settings.py`: `LUMIVERB_ROOT_MAP`, `LUMIVERB_ANALYSIS_PROXY_*`, `LUMIVERB_GPU_DECODES`, `LUMIVERB_RENDER_CONCURRENCY`, `LUMIVERB_ANALYSIS_CACHE_GB`, `LUMIVERB_FACE_BATCHES_PER_PROCESS`, `LUMIVERB_API_URL`; `/etc/lumiverb/env` on the brain), never the CLI's config.
 
-**Video scene indexing** is saved as it's found: the scenes producer initializes a video's 30-second chunks (`POST /v1/video/{asset_id}/chunks`), claims each (`.../chunks/next`), segments it and completes it with its scenes, all through the runner's client; the server marks the video `video_indexed` once every chunk is done.
+**Video scene indexing** is saved as it's found: the scenes producer works out the video's scene window from its length and the account's Detail (`src/producers/scenes/detail.py`: `clamp(duration / target, min, max)`, evened to whole windows), initializes chunks of whole windows (`POST /v1/video/{asset_id}/chunks`), claims each (`.../chunks/next`), cuts it into scenes (one a window unless a real cut, whose picture holds, splits one; each scene's picture the sharpest of 5 keyframes spread across it) and completes it with its scenes, all through the runner's client. When the last chunk completes, the server merges neighbouring scenes alike (the discard pass) and only then marks the video `video_indexed`, so scene descriptions (one vision call a scene) only see the scenes kept. People see the two producers as one, Scene descriptions, with one setting, Detail (Low / Normal / High); raising it redoes nothing by itself: the videos below it are counted, with Redo.
 
 **Capture facts and location guesses** (ADR-017): the `capture` producer reads a clip's `taken_at` (the camera's wall clock, as if UTC), its zone (`taken_at_offset_min`) and its GPS accuracy again from the original, for clips scanned before the scan sent them (one exiftool a job, its own pool). The `location` producer (CPU pool, off until Infer location is on) places a clip without GPS from the nearest fixes before and after it in its library (the file's GPS or a person's location, never a guess), with each device's clock corrected per day from the scenes it shares with other devices (CLIP pairs); the math is `src/producers/location/infer.py`, the reads and the write `repository/locations.py`. A fix that appears, moves or goes (a scan, the capture facts read again, a person setting or clearing one) drops the guesses around it, so they're missing and made again. Turning it off removes every guess (its spec's `on_settings`).
 

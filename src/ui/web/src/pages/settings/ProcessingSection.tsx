@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +10,7 @@ import {
   listLibraries,
   listProjects,
   pauseProcessing,
+  redoBelow,
   resumeProcessing,
   resumeRedo,
   retryFailures,
@@ -137,20 +138,29 @@ export default function ProcessingSection() {
       )}
       {producers && (
         <ul className="space-y-3">
-          {producers.map((p) => (
-            <ProducerRow
-              key={`${p.artifact}|${scopeValue}`}
-              producer={p}
-              admin={admin}
-              canRetry={canRetry}
-              paused={held.get(p.artifact) ?? p.paused}
-              scansPaused={!!held.get("scans")}
-              libraryId={kind === "library" ? id : undefined}
-              timeLeft={kind === "all" && status?.live ? status.eta?.producers[p.artifact] : undefined}
-              timeNotKnown={kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
-                (n) => n.artifact === p.artifact && n.why === "not_known_yet")}
-            />
-          ))}
+          {producers.filter((p) => !p.part_of).map((p) => {
+            const rowProps = (q: Producer) => ({
+              producer: q,
+              admin,
+              canRetry,
+              paused: held.get(q.artifact) ?? q.paused,
+              scansPaused: !!held.get("scans"),
+              libraryId: kind === "library" ? id : undefined,
+              timeLeft: kind === "all" && status?.live ? status.eta?.producers[q.artifact] : undefined,
+              timeNotKnown: kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
+                (n) => n.artifact === q.artifact && n.why === "not_known_yet"),
+            });
+            // Its parts (scenes, of scene descriptions) show inside its row, not on their own.
+            const parts = producers.filter((q) => q.part_of === p.artifact);
+            return (
+              <ProducerRow key={`${p.artifact}|${scopeValue}`} {...rowProps(p)}
+                canRedoBelow={kind !== "project"}>
+                {parts.map((q) => <DetailControl key={`detail-${q.artifact}`} producer={q} admin={admin}
+                  libraryId={kind === "library" ? id : undefined} canRedo={kind !== "project"} />)}
+                {parts.map((q) => <ProducerRow key={`${q.artifact}|${scopeValue}`} {...rowProps(q)} nested />)}
+              </ProducerRow>
+            );
+          })}
         </ul>
       )}
       {user && !admin && <p className="text-sm text-gray-500">Only admins can pause processing or stop a redo.</p>}
@@ -166,6 +176,7 @@ function CountsBar({ producer }: { producer: Producer }) {
     <div aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-gray-800">
       <div className="bg-emerald-500/80" style={{ width: pct(c.current) }} />
       <div className="bg-amber-400/80" style={{ width: pct(c.stale) }} />
+      <div className="bg-amber-200/60" style={{ width: pct(c.below ?? 0) }} />
       <div className="bg-sky-500/70" style={{ width: pct(c.rechecking ?? 0) }} />
       <div className="bg-gray-600" style={{ width: pct(c.missing) }} />
     </div>
@@ -181,6 +192,9 @@ function ProducerRow({
   libraryId,
   timeLeft,
   timeNotKnown = false,
+  nested = false,
+  canRedoBelow = true,
+  children,
 }: {
   producer: Producer;
   admin: boolean;
@@ -192,22 +206,34 @@ function ProducerRow({
   timeLeft?: number | null;
   // It has work and no pace yet (one waiting for a machine says so already).
   timeNotKnown?: boolean;
+  // Shown inside another producer's row (a part of it).
+  nested?: boolean;
+  // Its own level control may offer Redo (not over one project's clips).
+  canRedoBelow?: boolean;
+  children?: ReactNode;
 }) {
   const [showFailures, setShowFailures] = useState(false);
   const c = producer.counts;
   const left = timeLeft;
   const headingId = `producer-${producer.artifact}`;
+  const Item = nested ? "div" : "li";
+  const Heading = nested ? "h4" : "h3";
+  const hasLevel = (producer.fields ?? []).some((f) => f.kind === "level");
   return (
-    <li className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2" aria-labelledby={headingId}>
+    <Item className={nested ? "space-y-2 border-t border-gray-800 pt-2"
+                            : "rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2"}
+          aria-labelledby={headingId}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 id={headingId} className="text-sm font-medium text-gray-100">
+        <Heading id={headingId} className={nested ? "text-sm text-gray-300" : "text-sm font-medium text-gray-100"}>
           {producer.title}
-        </h3>
+        </Heading>
         <span className="flex flex-wrap items-baseline gap-x-3 text-xs text-gray-500">
-          <span>
-            {mediaLabel(producer.media)}
-            {producer.uniform && " · one model for all"}
-          </span>
+          {!nested && (
+            <span>
+              {mediaLabel(producer.media)}
+              {producer.uniform && " · one model for all"}
+            </span>
+          )}
           {producer.scheduled && (
             <Switch name={producer.title} target={producer.artifact} state={paused ? "paused" : "running"} admin={admin} />
           )}
@@ -225,6 +251,7 @@ function ProducerRow({
               <span className="text-gray-200">{n(c.current)}</span> current · {n(c.missing)} missing ·{" "}
               <span className={c.stale ? "text-amber-300" : undefined}>{n(c.stale)} stale</span>
               {!!c.rechecking && <span> · {n(c.rechecking)} rechecking</span>}
+              {!!c.below && <span> · {n(c.below)} below</span>}
               {c.failing > 0 && (
                 <span className="text-red-300">
                   {" "}
@@ -251,8 +278,70 @@ function ProducerRow({
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
       {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} paused={paused} />}
+      {!nested && hasLevel && <DetailControl producer={producer} admin={admin} libraryId={libraryId}
+        canRedo={canRedoBelow} />}
       <Settings producer={producer} admin={admin} />
-    </li>
+      {children}
+    </Item>
+  );
+}
+
+/** A producer's level (scenes' Detail: Low / Normal / High), saved as it's picked (admins). Raising it
+ * redoes nothing: what was made lower is counted, with Redo (admins, named: all, or one library's). */
+function DetailControl({ producer, admin, libraryId, canRedo }: { producer: Producer; admin: boolean;
+                                                                  libraryId?: string; canRedo: boolean }) {
+  const queryClient = useQueryClient();
+  const field = (producer.fields ?? []).find((f) => f.kind === "level");
+  const save = useMutation({
+    mutationFn: (value: string) =>
+      setProducerSettings(producer.artifact, { [field!.key]: value === field!.default ? null : value }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
+  });
+  const redo = useMutation({
+    mutationFn: () => redoBelow(producer.artifact, { all: true, ...(libraryId ? { library_id: libraryId } : {}) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
+  });
+  if (!field) return null;
+  const choices = field.choices ?? [];
+  const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+  const below = producer.counts?.below ?? 0;
+  const what = producer.media.length === 1 && producer.media[0] === "video" ? "video" : "clip";
+  return (
+    <div className="space-y-1 text-sm">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span id={`${producer.artifact}-level`} className="text-gray-400">{field.label}</span>
+        {admin ? (
+          <span role="radiogroup" aria-labelledby={`${producer.artifact}-level`}
+                className="inline-flex overflow-hidden rounded-md border border-gray-700">
+            {choices.map((v) => (
+              <button key={v} type="button" role="radio" aria-checked={field.value === v}
+                disabled={save.isPending}
+                onClick={() => field.value !== v && save.mutate(v)}
+                className={`px-2.5 py-0.5 text-sm disabled:opacity-50 ${field.value === v
+                  ? "bg-indigo-500/30 text-indigo-100" : "text-gray-300 hover:bg-gray-800"}`}>
+                {label(v)}
+              </button>
+            ))}
+          </span>
+        ) : (
+          <span className="text-gray-200">{label(String(field.value))}</span>
+        )}
+      </div>
+      {below > 0 && (
+        <p className="flex flex-wrap items-baseline gap-x-3 text-gray-400">
+          <span>{n(below)} {what}{below === 1 ? "" : "s"} below this</span>
+          {admin && canRedo && (
+            <button type="button" className={linkClass} disabled={redo.isPending}
+              aria-label={`Redo ${n(below)} below this: ${producer.title}`} onClick={() => redo.mutate()}>
+              Redo
+            </button>
+          )}
+        </p>
+      )}
+      {(save.error || redo.error) && (
+        <p role="alert" className="text-red-300">{message(save.error ?? redo.error)}</p>
+      )}
+    </div>
   );
 }
 
@@ -600,7 +689,8 @@ function shown(field: SettingField, value: unknown): string {
 /** A producer's settings: changeable ones as a form for admins (advanced
  * ones folded away), the rest with why they can't be changed here. */
 function Settings({ producer, admin }: { producer: Producer; admin: boolean }) {
-  const fields = producer.fields ?? [];
+  // A level is its own control (DetailControl), not a field here.
+  const fields = (producer.fields ?? []).filter((f) => f.kind !== "level");
   if (fields.length === 0) return null;
   const editable = admin && fields.some((f) => !f.fixed);
   return (

@@ -2141,7 +2141,6 @@ class ChunksBusy(Exception):
 class VideoIndexChunkRepository:
     """Repository for video_index_chunks and chunk completion (scenes)."""
 
-    CHUNK_DURATION_SEC: float = 30.0
     LEASE_MINUTES: int = 5
 
     def __init__(self, session: Session) -> None:
@@ -2151,35 +2150,33 @@ class VideoIndexChunkRepository:
         self,
         asset_id: str,
         duration_sec: float,
+        scene_sec: float,
     ) -> int:
         """
-        Pre-generate all pending chunks for a video asset based on duration.
+        Pre-generate all pending chunks for a video asset: whole scene windows
+        of about scene_sec each (src/producers/scenes/detail.py chunk_grid),
+        so no chunk ends inside a scene.
         Idempotent — skips creation if chunks already exist for this asset.
         Returns count of chunks created.
         """
+        from src.producers.scenes.detail import chunk_grid
+
         existing = self._session.exec(
             select(VideoIndexChunk).where(VideoIndexChunk.asset_id == asset_id)
         ).first()
         if existing:
             return 0
 
-        chunks: list[dict] = []
-        start = 0.0
-        index = 0
         now = utcnow()
-        while start < duration_sec:
-            end = min(start + self.CHUNK_DURATION_SEC, duration_sec)
-            chunks.append({
-                "chunk_id": "chk_" + str(ULID()),
-                "asset_id": asset_id,
-                "chunk_index": index,
-                "start_ms": int(start * 1000),
-                "end_ms": int(end * 1000),
-                "status": "pending",
-                "created_at": now,
-            })
-            start = end
-            index += 1
+        chunks = [{
+            "chunk_id": "chk_" + str(ULID()),
+            "asset_id": asset_id,
+            "chunk_index": index,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "status": "pending",
+            "created_at": now,
+        } for index, (start_ms, end_ms) in enumerate(chunk_grid(duration_sec, scene_sec))]
 
         if chunks:
             self._session.execute(insert(VideoIndexChunk), chunks)
@@ -2274,13 +2271,11 @@ class VideoIndexChunkRepository:
         self,
         chunk_id: str,
         worker_id: str,
-        next_anchor_phash: str | None,
-        next_scene_start_ms: int | None,
         scenes: list[dict],
     ) -> bool:
         """
-        Complete a chunk: persist scenes, update anchor state on next pending
-        chunk, mark chunk complete. All in one transaction.
+        Complete a chunk: persist its scenes and mark it complete. Flushed,
+        not committed: the caller commits (with what the last chunk finishes).
         Returns False if chunk not found or not owned by worker_id.
         """
         chunk = self._session.exec(
@@ -2299,9 +2294,8 @@ class VideoIndexChunkRepository:
             text("SELECT COALESCE(max(scene_index) + 1, 0) FROM video_scenes WHERE asset_id = :a"),
             {"a": chunk.asset_id}).scalar() or 0)
 
-        # Persist scenes
         for i, s in enumerate(scenes):
-            scene = VideoScene(
+            self._session.add(VideoScene(
                 scene_id="scn_" + str(ULID()),
                 asset_id=chunk.asset_id,
                 scene_index=first + i,
@@ -2317,27 +2311,44 @@ class VideoIndexChunkRepository:
                 keep_reason=s.get("keep_reason"),
                 phash=s.get("phash"),
                 created_at=now,
-            )
-            self._session.add(scene)
-
-        # Update anchor state on the next pending chunk
-        if next_anchor_phash is not None:
-            next_chunk = self._session.exec(
-                select(VideoIndexChunk).where(
-                    VideoIndexChunk.asset_id == chunk.asset_id,
-                    VideoIndexChunk.chunk_index == chunk.chunk_index + 1,
-                )
-            ).first()
-            if next_chunk:
-                next_chunk.anchor_phash = next_anchor_phash
-                next_chunk.scene_start_ms = next_scene_start_ms
-                self._session.add(next_chunk)
+            ))
 
         chunk.status = "completed"
         chunk.completed_at = now
         self._session.add(chunk)
-        self._session.commit()
+        self._session.flush()
         return True
+
+    def merge_alike(self, asset_id: str, within: int) -> tuple[int, int]:
+        """The discard pass, once every chunk of the clip is found: one pass
+        left to right (src/producers/scenes/detail.py merge_runs), each run of
+        scenes alike kept as its first, which takes the run's whole span; the
+        rest go, and the scenes are numbered again in order. Scenes hold no
+        human data (and aren't described yet: the clip isn't found until
+        this is done). Doesn't commit. Returns (found, kept)."""
+        from src.producers.scenes.detail import merge_runs
+
+        rows = self._session.execute(text(
+            "SELECT scene_id, end_ms, phash FROM video_scenes WHERE asset_id = :a ORDER BY start_ms, scene_index"
+        ), {"a": asset_id}).all()
+        runs = merge_runs([r.phash for r in rows], within)
+        gone = [rows[k].scene_id for first, last in runs for k in range(first + 1, last + 1)]
+        if gone:
+            self._session.execute(text("DELETE FROM video_scenes WHERE scene_id = ANY(:ids)"), {"ids": gone})
+            for first, last in runs:
+                if last > first:
+                    self._session.execute(text("UPDATE video_scenes SET end_ms = :e WHERE scene_id = :s"),
+                                          {"e": rows[last].end_ms, "s": rows[first].scene_id})
+        kept = [rows[first].scene_id for first, _ in runs]
+        # Numbered again, 0 up: through negatives, as (asset_id, scene_index) is unique.
+        self._session.execute(text(
+            "UPDATE video_scenes SET scene_index = -1 - scene_index WHERE asset_id = :a"), {"a": asset_id})
+        self._session.execute(text(
+            "UPDATE video_scenes v SET scene_index = k.n - 1"
+            " FROM unnest(CAST(:ids AS text[])) WITH ORDINALITY AS k(scene_id, n) WHERE v.scene_id = k.scene_id"
+        ), {"ids": kept})
+        self._session.expire_all()
+        return len(rows), len(kept)
 
     def fail_chunk(self, chunk_id: str, worker_id: str, error_message: str) -> bool:
         """Mark a chunk as failed."""

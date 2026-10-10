@@ -45,6 +45,7 @@ from src.shared.producers import (
     PRODUCERS,
     UNKNOWN,
     effective_settings,
+    level_of,
     settings_hash,
     use_settings,
 )
@@ -112,11 +113,12 @@ def uses(session: Session, artifact: str) -> dict[str, Any]:
 
 def desired(session: Session, artifact: str, job_models: Mapping[str, str] | None = None) -> dict[str, Any]:
     """What a current artifact of this kind is made with now: producer,
-    version, settings and their hash. job_models: the account's model per AI job."""
+    version, settings and their hash, and its level (None without a level
+    setting: see below). job_models: the account's model per AI job."""
     p = PRODUCERS[artifact]
     settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, job_models))
     return {"producer": p.producer, "version": p.version, "settings": settings,
-            "settings_hash": settings_hash(settings)}
+            "settings_hash": settings_hash(settings), "level": level_of(artifact, uses(session, artifact))}
 
 
 def _stale_sql() -> str:
@@ -198,15 +200,28 @@ def _scope_sql() -> str:
 def _stale_params(artifact: str, want: dict[str, Any], library_id: str | None,
                   asset_ids: list[str] | None) -> dict[str, Any]:
     return {"artifact": artifact, "lib": library_id, "ids": asset_ids, "person": PERSON,
-            "producer": want["producer"], "version": want["version"], "hash": want["settings_hash"]}
+            "producer": want["producer"], "version": want["version"], "hash": want["settings_hash"],
+            "level": want.get("level")}
+
+
+def _below_sql(artifact: str) -> str:
+    """Made below the level now (:level): the producer's own, current but for
+    its level (a level isn't in the hash), at a lower one or none recorded.
+    "false" for a producer without a level setting."""
+    if PRODUCERS[artifact].level is None:
+        return "false"
+    return (f"(l.asset_id IS NOT NULL AND NOT ({_stale_sql()}) AND NOT ({RECHECK[artifact]})"
+            " AND (l.level IS NULL OR l.level < :level))")
 
 
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
            asset_ids: list[str] | None = None) -> dict[str, int]:
-    """{applicable, current, stale, missing, rechecking, failing, given_up}
-    for one artifact kind, over clips in sight (in one library, or among
-    asset_ids, when given). rechecking: made, and due to be checked again
-    (not stale). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
+    """{applicable, current, stale, missing, rechecking, below, failing,
+    given_up} for one artifact kind, over clips in sight (in one library, or
+    among asset_ids, when given). rechecking: made, and due to be checked
+    again (not stale). below: made below the producer's level now (its level
+    setting; not stale, and not current: made again only when asked,
+    redo_below). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
     if artifact not in MADE:
         raise KeyError(artifact)
     made = f"({MADE[artifact]})"
@@ -216,16 +231,17 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
         f" count(*) FILTER (WHERE NOT {made}),"
         f" count(*) FILTER (WHERE {made} AND {stale}),"
         f" count(*) FILTER (WHERE {made} AND NOT {stale} AND ({RECHECK[artifact]})),"
+        f" count(*) FILTER (WHERE {made} AND {_below_sql(artifact)}),"
         " count(*) FILTER (WHERE l.error IS NOT NULL),"
         " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at = 'infinity')"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
     ), _stale_params(artifact, want, library_id, asset_ids)).one()
-    applicable, n_missing, n_stale, n_rechecking, failing, given_up = (int(v) for v in row)
-    return {"applicable": applicable, "current": applicable - n_missing - n_stale - n_rechecking,
-            "stale": n_stale, "missing": n_missing, "rechecking": n_rechecking, "failing": failing,
-            "given_up": given_up}
+    applicable, n_missing, n_stale, n_rechecking, n_below, failing, given_up = (int(v) for v in row)
+    return {"applicable": applicable, "current": applicable - n_missing - n_stale - n_rechecking - n_below,
+            "stale": n_stale, "missing": n_missing, "rechecking": n_rechecking, "below": n_below,
+            "failing": failing, "given_up": given_up}
 
 
 def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool,
@@ -447,16 +463,22 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
         # claim a person made it: whatever it is, it isn't current.
         producer = UNKNOWN
     source = lineage.get("source_sha256") or source_sha256
+    # The level it was made at, for a producer with a level setting (kept apart from the hash).
+    setting, level = PRODUCERS[artifact].level, lineage.get("level")
+    if producer in (UNKNOWN, PERSON) or setting is None or isinstance(level, bool) \
+            or not isinstance(level, int) or not 0 <= level < len(setting.choices):
+        level = None
     session.execute(text(
         "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-        " source_sha256, produced_at, outcome, error, attempts, retry_at)"
+        " source_sha256, produced_at, outcome, error, attempts, retry_at, level)"
         " VALUES (:a, :artifact, :producer, :version, :hash,"
-        "         COALESCE(:source, (SELECT sha256 FROM assets WHERE asset_id = :a)), :now, :outcome, NULL, 0, NULL)"
+        "         COALESCE(:source, (SELECT sha256 FROM assets WHERE asset_id = :a)), :now, :outcome, NULL, 0, NULL,"
+        "         :level)"
         " ON CONFLICT (asset_id, artifact) DO UPDATE SET producer = EXCLUDED.producer,"
         "   producer_version = EXCLUDED.producer_version, settings_hash = EXCLUDED.settings_hash,"
         "   source_sha256 = EXCLUDED.source_sha256, produced_at = EXCLUDED.produced_at,"
-        "   outcome = EXCLUDED.outcome, error = NULL, attempts = 0, retry_at = NULL"
-    ), {"a": asset_id, "artifact": artifact, "producer": producer,
+        "   outcome = EXCLUDED.outcome, error = NULL, attempts = 0, retry_at = NULL, level = EXCLUDED.level"
+    ), {"a": asset_id, "artifact": artifact, "producer": producer, "level": level,
         "version": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("version") or ""),
         "hash": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("settings_hash") or ""),
         "source": source, "now": produced_at or utcnow(), "outcome": outcome})
@@ -597,6 +619,25 @@ def nudge(session: Session) -> None:
         "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.retry_at', :now, now())"
         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
         {"now": utcnow().isoformat()})
+
+
+def redo_below(session: Session, artifact: str, want: dict[str, Any], *, library_id: str | None = None,
+               asset_ids: list[str] | None = None) -> int:
+    """Make again the clips' artifact made below the level now (counts'
+    below), and only those: among asset_ids, or every such clip in sight
+    (in one library when given) when asset_ids is None; the caller has made
+    sure the target was named, never inferred. As ask_redo, their lineage
+    stops being current, so the scheduler's redo makes them again after
+    anything missing (a stopped redo or a pause holds them like any redo),
+    at the level then. Doesn't commit. Returns how many."""
+    assert redoable(artifact) and PRODUCERS[artifact].level is not None, artifact
+    r = session.execute(text(
+        "UPDATE artifact_lineage l SET settings_hash = '' FROM active_assets a"
+        " WHERE a.asset_id = l.asset_id AND l.artifact = :artifact"
+        f"   AND ({APPLIES[artifact]}) AND ({MADE[artifact]}) AND {_below_sql(artifact)}"
+        f"   AND {_scope_sql()}"
+    ), _stale_params(artifact, want, library_id, asset_ids))
+    return int(r.rowcount or 0)
 
 
 def ask_redo(session: Session, artifact: str, library_id: str | None = None) -> int:

@@ -27,13 +27,13 @@ def test_the_workers_constants_are_the_registrys_settings():
     proxy = P.PRODUCERS["proxy"].defaults
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
     assert AnalysisProxySettings().output() == dict(P.PRODUCERS["analysis_proxy"].defaults)
-    scenes = P.PRODUCERS["scenes"].defaults
-    assert video_scanner.OUT_WIDTH == scenes["frame_width"]
-    assert (scene_segmenter.PHASH_THRESHOLD, scene_segmenter.PHASH_HASH_SIZE) == (
-        scenes["phash_threshold"], scenes["phash_hash_size"])
-    assert (scene_segmenter.TEMPORAL_CEILING_SEC, scene_segmenter.DEBOUNCE_SEC) == (
-        scenes["temporal_ceiling_sec"], scenes["debounce_sec"])
-    assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner) and scenes["frames"] == "keyframes"
+    # Scenes have one setting, Detail, out of the hash: what they're found with is fixed in code.
+    from src.producers.scenes import detail as scene_detail
+
+    assert P.PRODUCERS["scenes"].defaults == {}
+    assert video_scanner.OUT_WIDTH == scene_detail.FRAME_WIDTH
+    assert scene_segmenter.HASH_SIZE == scene_detail.HASH_SIZE == 16
+    assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner)  # keyframes only
     faces = P.PRODUCERS["faces"].defaults
     assert face.MODEL_VERSION == faces["model"]
     assert {k: v for k, v in faces.items() if k != "model"} == face.FaceSettings().__dict__

@@ -1,6 +1,7 @@
 # Reference: Video Scene Segmentation
 > Frozen reference from `media-search` PoC. Do not modify.
 > Source: `src/video/scene_segmenter.py`, `src/video/video_scanner.py`, `src/video/high_res_extractor.py`
+> Stage 2 as built now is different: scenes by Detail (Low / Normal / High), windows scaled to the video's length, cuts that must hold, and a discard pass that merges scenes alike. See `src/producers/scenes/detail.py` and `src/processing/video/scene_segmenter.py`; the 30 s ceiling, the 3 s debounce and the scene anchor below are gone.
 
 ## What It Does
 

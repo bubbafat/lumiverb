@@ -143,6 +143,8 @@ def producers_list(
                       *(("Paused" if held else _duration(took) if took else "",) if eta else ()))
         if p.get("paused"):
             notes.append(f"{p['title']}: paused; lumiverb resume {p['artifact']} carries on.")
+        if c.get("below"):
+            notes.append(f"{p['title']}: {c['below']:,} made below the detail now (not counted as current).")
         if c.get("stale") and not p.get("redoable", True):
             notes.append(f"{p['title']} isn't made again yet: {p.get('why_not') or ''}")
         elif p.get("redo_stopped"):
@@ -255,6 +257,8 @@ def producers_retry(
 def _bounds(f: dict) -> str:
     if f.get("fixed"):
         return "fixed"
+    if f.get("kind") == "level":
+        return " / ".join(f.get("choices") or [])
     if f.get("minimum") is None:
         return f["kind"]
     unit = f" {f['unit']}" if f.get("unit") else ""
@@ -332,6 +336,11 @@ def producers_settings(
         if raw == "":
             body[key] = None
         elif f["kind"] == "text":
+            body[key] = raw
+        elif f["kind"] == "level":
+            if raw not in (f.get("choices") or []):
+                console.print(f"[red]{escape(f['label'])} is one of {', '.join(f.get('choices') or [])}.[/red]")
+                raise typer.Exit(2)
             body[key] = raw
         elif f["kind"] == "bool":
             body[key] = _yes_no(f, raw)

@@ -81,6 +81,8 @@ beforeEach(() => {
       producers = producers.map((p) => (p.artifact === m[1] ? { ...p, redo_stopped: m[2] === "pause" } : p));
       return new Response(null, { status: 204 });
     }
+    const below = path.match(/^\/producers\/([^/]+)\/below\/redo$/);
+    if (below && method === "POST") return json({ redo: 4, paused: false, redo_stopped: false });
     const all = path.match(/^\/producers\/all\/(pause|resume)$/);
     if (all && method === "POST") {
       const next = answers.shift();
@@ -741,6 +743,57 @@ describe("ProcessingSection settings", () => {
   });
 });
 
+
+describe("Scene descriptions' Detail", () => {
+  const detail = (value: string) => ({ key: "detail", label: "Detail", kind: "level" as const, value,
+    default: "normal", minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false,
+    choices: ["low", "normal", "high"] });
+  const sceneProducers = (value: string, below: number) => [
+    producer({ artifact: "scenes", title: "Scenes", media: ["video"], part_of: "scene_vision", level: 1,
+               fields: [detail(value)],
+               counts: { applicable: 10, current: 10 - below, stale: 0, missing: 0, failing: 0, below } }),
+    producer({ artifact: "scene_vision", title: "Scene descriptions", media: ["video"] }),
+  ];
+
+  it("shows one Detail control inside Scene descriptions, scenes as a part of it", async () => {
+    producers = sceneProducers("normal", 0);
+    renderSection();
+    const li = await row("Scene descriptions");
+    expect(within(li).getByRole("heading", { name: "Scenes" })).toBeTruthy();
+    expect(within(li).getByRole("radio", { name: "Normal" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getAllByRole("radiogroup")).toHaveLength(1);
+    expect(screen.queryByText(/below this/)).toBeNull();
+  });
+
+  it("saves the level picked, and the default as null", async () => {
+    producers = sceneProducers("high", 0);
+    renderSection();
+    fireEvent.click(await screen.findByRole("radio", { name: "Normal" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    expect(sent.find((r) => r.method === "PUT")).toMatchObject(
+      { url: expect.stringContaining("/producers/scenes/settings"), body: { settings: { detail: null } } });
+  });
+
+  it("counts the videos below this and redoes them only when asked, naming all", async () => {
+    producers = sceneProducers("high", 412);
+    renderSection();
+    expect(await screen.findByText("412 videos below this")).toBeTruthy();
+    expect(sent.some((r) => r.url.includes("below/redo"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Redo 412 below this: Scenes" }));
+    await waitFor(() => expect(sent.some((r) => r.url.includes("/producers/scenes/below/redo"))).toBe(true));
+    expect(sent.find((r) => r.url.includes("below/redo"))!.body).toEqual({ all: true });
+  });
+
+  it("shows editors the level, with no way to change it or redo", async () => {
+    role = "editor";
+    producers = sceneProducers("high", 3);
+    renderSection();
+    expect(await screen.findByText("3 videos below this")).toBeTruthy();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Redo/ })).toBeNull();
+    expect(screen.getByText("High")).toBeTruthy();
+  });
+});
 
 describe("duration", () => {
   it("says a span of time roughly, as people would", () => {

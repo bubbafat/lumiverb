@@ -12,7 +12,7 @@ from src.processing.producer_settings import ProducerSettings
 from src.producers.scenes.work import ChunkFailed, index_video_scenes
 
 # How the scenes are found, and their record: the producer's (the server's, as the scheduler read them).
-SETTINGS = ProducerSettings(None).settings("scenes")
+DETAIL = "normal"
 LINEAGE = ProducerSettings(None).lineage("scenes", None)
 
 
@@ -44,8 +44,6 @@ class _FakeScene:
 class _FakeSegmenter:
     def __init__(self, scenes: list[_FakeScene]):
         self._scenes = scenes
-        self.next_anchor_phash = "deadbeef"
-        self.next_scene_start_ms = None
 
     def segment(self):
         return self._scenes
@@ -79,8 +77,6 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
         "chunk_index": 0,
         "start_ts": 0.0,
         "end_ts": 30.0,
-        "anchor_phash": None,
-        "scene_start_ts": None,
     })
     done_resp = _FakeResponse(204)
     _claims(client, [work_order, done_resp])
@@ -103,7 +99,7 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
         duration_sec=30.0,
         rel_path="video.mp4",
         lineage=LINEAGE,
-        settings=SETTINGS,
+        detail=DETAIL,
     )
 
     assert result["scenes"] == 2
@@ -111,9 +107,10 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
     assert result["elapsed"] > 0
 
     # Verify chunk init was called
+    # 30 s at Normal: scenes of 5 s (30 / 8, at least 5), so the server cuts chunks of whole 5 s windows.
     client.post.assert_any_call(
         "/v1/video/asset_1/chunks",
-        json={"duration_sec": 30.0},
+        json={"duration_sec": 30.0, "scene_sec": 5.0},
     )
 
     # Verify chunk complete was called with correct scene data
@@ -121,8 +118,8 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
     assert len(complete_call) == 1
     body = complete_call[0].kwargs["json"]
     assert len(body["scenes"]) == 2
-    assert body["next_anchor_phash"] == "deadbeef"
-    assert body["lineage"] == LINEAGE
+    assert "next_anchor_phash" not in body  # a scene never carries over: chunks are whole windows
+    assert body["lineage"] == LINEAGE and body["lineage"]["level"] == 1
 
 
 @patch("src.producers.scenes.work.VideoScanner")
@@ -142,7 +139,7 @@ def test_index_video_scenes_all_complete(mock_segmenter_cls, mock_scanner_cls):
         duration_sec=30.0,
         rel_path="video.mp4",
         lineage=LINEAGE,
-        settings=SETTINGS,
+        detail=DETAIL,
     )
 
     assert result["scenes"] == 0
@@ -180,7 +177,7 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
             duration_sec=30.0,
             rel_path="video.mp4",
             lineage=LINEAGE,
-            settings=SETTINGS,
+            detail=DETAIL,
         )
 
     # Verify fail was posted
@@ -201,12 +198,10 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
     chunk0 = _FakeResponse(200, {
         "chunk_id": "chunk_0", "worker_id": "vid_w", "chunk_index": 0,
         "start_ts": 0.0, "end_ts": 30.0,
-        "anchor_phash": None, "scene_start_ts": None,
     })
     chunk1 = _FakeResponse(200, {
         "chunk_id": "chunk_1", "worker_id": "vid_w", "chunk_index": 1,
         "start_ts": 30.0, "end_ts": 60.0,
-        "anchor_phash": "prev_hash", "scene_start_ts": None,
     })
     done_resp = _FakeResponse(204)
     _claims(client, [chunk0, chunk1, done_resp])
@@ -229,7 +224,7 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
         duration_sec=60.0,
         rel_path="video.mp4",
         lineage=LINEAGE,
-        settings=SETTINGS,
+        detail=DETAIL,
     )
 
     assert result["scenes"] == 2
@@ -253,7 +248,6 @@ def test_index_video_scenes_scans_chunk_window(mock_segmenter_cls, mock_scanner_
     work = _FakeResponse(200, {
         "chunk_id": "c1", "worker_id": "w1", "chunk_index": 1,
         "start_ts": 30.0, "end_ts": 60.0,
-        "anchor_phash": "abc", "scene_start_ts": None,
     })
     _claims(client, [work, _FakeResponse(204)])
     mock_scanner_cls.return_value.scan.return_value = iter([])
@@ -266,15 +260,15 @@ def test_index_video_scenes_scans_chunk_window(mock_segmenter_cls, mock_scanner_
         duration_sec=60.0,
         rel_path="video.mp4",
         lineage=LINEAGE,
-        settings=SETTINGS,
+        detail=DETAIL,
     )
 
     mock_scanner_cls.return_value.scan.assert_called_once_with(30.0, 60.0)
 
-    # Segmenter should receive the anchor_phash from work order
+    # The segmenter cuts just that chunk, in the video's windows (60 s at Normal: 7.5 s).
     mock_segmenter_cls.assert_called_once()
     _, kwargs = mock_segmenter_cls.call_args
-    assert kwargs.get("anchor_phash") == "abc"
+    assert (kwargs["start"], kwargs["end"], kwargs["window_sec"]) == (30.0, 60.0, 7.5)
 
 
 @patch("src.producers.scenes.work.VideoScanner")
@@ -304,7 +298,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
         duration_sec=30.0,
         rel_path="video.mp4",
         lineage=LINEAGE,
-        settings=SETTINGS,
+        detail=DETAIL,
     )
 
     complete_call = [c for c in client.post.call_args_list if "complete" in str(c)]
@@ -344,7 +338,7 @@ def _completing_raises(client: MagicMock, error: BaseException) -> None:
 def _index(client: MagicMock, **kw) -> dict:
     return index_video_scenes(client=client, source_path=Path("/fake/video.mp4"), asset_id="asset_1",
                               duration_sec=kw.pop("duration_sec", 30.0), rel_path="video.mp4", lineage=LINEAGE,
-                              settings=SETTINGS, **kw)
+                              detail=DETAIL, **kw)
 
 
 @patch("src.producers.scenes.work.VideoScanner")

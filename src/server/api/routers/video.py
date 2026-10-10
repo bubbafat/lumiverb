@@ -5,7 +5,7 @@ import uuid
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, select
@@ -37,6 +37,9 @@ router = APIRouter(prefix="/v1/video", tags=["video"])
 
 class InitChunksRequest(BaseModel):
     duration_sec: float
+    # The scene window (src/producers/scenes/detail.py window_sec): chunks
+    # are whole windows, so none ends inside a scene.
+    scene_sec: float = Field(gt=0, le=3600)
     # The clip's scenes were found another way than lineage says (a redo):
     # start it over. Its scenes go, with their descriptions, images and
     # search entries; scenes hold no human data.
@@ -65,7 +68,7 @@ def init_chunks(
         _now_current(session, made)
         _start_over(request, session, asset_id, made)
     chunk_repo = VideoIndexChunkRepository(session)
-    created = chunk_repo.create_chunks_for_asset(asset_id, body.duration_sec)
+    created = chunk_repo.create_chunks_for_asset(asset_id, body.duration_sec, body.scene_sec)
     # A new run: chunks that failed in an earlier one are tried again (within
     # a run a failed chunk stays failed, so one bad chunk can't loop it).
     chunk_repo.retry_failed(asset_id)
@@ -138,8 +141,6 @@ class ChunkWorkOrder(BaseModel):
     chunk_index: int
     start_ts: float
     end_ts: float
-    anchor_phash: str | None
-    scene_start_ts: float | None
     video_duration_sec: float
     is_last: bool
 
@@ -171,8 +172,6 @@ def claim_next_chunk(
         chunk_index=chunk.chunk_index,
         start_ts=chunk.start_ms / 1000.0,
         end_ts=chunk.end_ms / 1000.0,
-        anchor_phash=chunk.anchor_phash,
-        scene_start_ts=chunk.scene_start_ms / 1000.0 if chunk.scene_start_ms is not None else None,
         video_duration_sec=video_duration_sec,
         is_last=(chunk.chunk_index == total_chunks - 1),
     )
@@ -199,9 +198,8 @@ class SceneResult(BaseModel):
 class ChunkCompleteRequest(BaseModel):
     worker_id: str
     scenes: list[SceneResult]
-    next_anchor_phash: str | None
-    next_scene_start_ms: int | None
-    # How the scenes were found; recorded when the clip's last chunk completes.
+    # How the scenes were found (with the level, its Detail); recorded when
+    # the clip's last chunk completes, and the discard pass merges at that level.
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
@@ -227,22 +225,29 @@ def complete_chunk(
     ok = chunk_repo.complete_chunk(
         chunk_id=chunk_id,
         worker_id=body.worker_id,
-        next_anchor_phash=body.next_anchor_phash,
-        next_scene_start_ms=body.next_scene_start_ms,
         scenes=[s.model_dump() for s in body.scenes],
     )
     if not ok:
+        session.rollback()
         raise HTTPException(status_code=409, detail="Chunk not claimable by this worker")
 
     asset_id = chunk.asset_id
     all_done = chunk_repo.all_chunks_complete(asset_id)
 
     if all_done and asset_id:
-        asset_repo = AssetRepository(session)
+        from src.producers.scenes.detail import detail, name_of
+
+        # The discard pass, with the last chunk, before the clip counts as
+        # found: scene descriptions only ever see the scenes kept.
+        found, kept = chunk_repo.merge_alike(asset_id, detail(name_of(made.get("level"))).same_within)
+        _log.info("Scenes of %s: %d found, %d kept (detail %s)", asset_id, found, kept, name_of(made.get("level")))
         # How they were found lands with them: a redo in between sees both or neither.
         record_lineage(session, asset_id, "scenes", made, commit=False)
-        asset_repo.set_video_indexed(asset_id)
-        session.commit()
+        session.execute(text("UPDATE assets SET video_indexed = true, updated_at = now() WHERE asset_id = :a"),
+                        {"a": asset_id})
+    session.commit()
+    if all_done and asset_id:
+        asset_repo = AssetRepository(session)
         # Inline search sync (best-effort)
         asset_obj = asset_repo.get_by_id(asset_id)
         if asset_obj:

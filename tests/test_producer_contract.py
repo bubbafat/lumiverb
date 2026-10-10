@@ -38,8 +38,9 @@ def test_every_producer_declares_what_the_rest_needs():
             assert p.flag.startswith("missing_") and p.pool and callable(load(p.run)), p.artifact
         if p.job:
             assert "model" in p.defaults, p.artifact
-        # A setting that doesn't remake is outside lineage: something must act when it changes.
-        if any(not s.remakes for s in p.settings):
+        # A setting that doesn't remake is outside lineage: something must act when it changes
+        # (a level is compared in lineage apart from the hash: below it is counted, redone when asked).
+        if any(not s.remakes and s.kind != "level" for s in p.settings):
             assert callable(load(p.regroup)), p.artifact
         if p.on_settings:
             assert callable(load(p.on_settings)), p.artifact

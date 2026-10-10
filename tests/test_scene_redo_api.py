@@ -32,8 +32,7 @@ def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]]) -> None:
             return
         assert work.status_code == 200, work.text
         w = work.json()
-        body = {"worker_id": w["worker_id"], "next_anchor_phash": None, "next_scene_start_ms": None,
-                "lineage": made, "scenes": [
+        body = {"worker_id": w["worker_id"], "lineage": made, "scenes": [
                     {"scene_index": i, "start_ms": a, "end_ms": b, "rep_frame_ms": a, "keep_reason": "phash"}
                     for i, (a, b) in enumerate(scenes) if w["chunk_index"] == 0]}
         r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", json=body, headers=headers)
@@ -42,7 +41,7 @@ def _find(lib, vid: str, made: dict, scenes: list[tuple[int, int]]) -> None:
 
 def _start(lib, vid: str, **body):
     client, headers, *_ = lib
-    return client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30.0, **body}, headers=headers)
+    return client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30.0, "scene_sec": 30.0, **body}, headers=headers)
 
 
 def _video_found_the_old_way(lib) -> tuple[str, str]:
@@ -78,15 +77,13 @@ def _lineage(lib, vid: str) -> set[str]:
                                              " AND artifact IN ('scenes', 'scene_vision')"), {"a": vid})}
 
 
-def test_scenes_can_be_found_again_and_their_settings_changed(env):
+def test_detail_is_the_one_scene_setting_offered(env):
     p = {x["artifact"]: x for x in env[0].get("/v1/producers", params={"counts": "false"},
                                               headers=env[1]).json()["producers"]}["scenes"]
     assert p["redoable"] is True and p["why_not"] is None
-    fields = {f["key"]: f for f in p["fields"]}
-    assert {k for k, f in fields.items() if not f["fixed"]} == {
-        "phash_threshold", "temporal_ceiling_sec", "debounce_sec", "frame_width"}
-    assert fields["frames"]["fixed"] and fields["phash_hash_size"]["fixed"]
-    assert fields["phash_threshold"]["maximum"] < 256  # a 16 × 16 hash has 256 bits
+    assert [(f["key"], f["kind"], f["choices"], f["value"], f["remakes"]) for f in p["fields"]] == [
+        ("detail", "level", ["low", "normal", "high"], "normal", False)]
+    assert p["level"] == 1 and p["part_of"] == "scene_vision" and p["settings"] == {}
 
 
 def test_a_redo_starts_the_clip_over_and_new_scenes_are_found_and_described(env, monkeypatch):
@@ -141,29 +138,121 @@ def test_a_redo_must_say_how_the_scenes_will_be_found(env):
     assert len(_scenes(lib, vid)) == 2  # nothing dropped
 
 
-def test_new_scene_settings_ask_naming_the_scene_descriptions_and_redo_the_clips(env):
-    lib = _library(env, "SceneSettings")
-    vid, _ = _video_found_the_old_way(lib)
+def _detail(lib, value):
     client, headers, *_ = lib
-    # Its old scenes are stale already (OLD); make them current with today's settings first.
+    r = client.put("/v1/producers/scenes/settings", json={"settings": {"detail": value}}, headers=headers)
+    assert r.status_code == 200, r.text  # never a 409: a level redoes nothing by itself
+
+
+def _found_at(lib, name: str, level: int) -> str:
+    """A video whose scenes were found, as now but at this level (0 low, 1 normal, 2 high)."""
+    client, headers, *_ = lib
+    sha = _sha()
+    vid = _ingest_with(lib, name, sha, None, media_type="video")
     with _db(lib) as s:
-        want = client.get("/v1/producers", params={"counts": "false"}, headers=headers).json()["producers"]
-        hash_now = next(p["settings_hash"] for p in want if p["artifact"] == "scenes")
-        s.execute(text("UPDATE artifact_lineage SET settings_hash = :h WHERE asset_id = :a AND artifact = 'scenes'"),
-                  {"h": hash_now, "a": vid})
+        s.execute(text("UPDATE assets SET duration_sec = 30, analysis_proxy_key = 'k' WHERE asset_id = :a"),
+                  {"a": vid})
         s.commit()
-    assert _counts(lib, "scenes")["current"] == 1
+    assert _start(lib, vid).status_code == 200
+    _find(lib, vid, {**_want(lib, "scenes", sha), "level": level}, [(0, 30000)])
+    return vid
+
+
+def _level(lib, vid: str):
+    with _db(lib) as s:
+        return s.execute(text("SELECT level FROM artifact_lineage WHERE asset_id = :a AND artifact = 'scenes'"),
+                         {"a": vid}).scalar()
+
+
+def test_scenes_record_the_detail_they_were_found_at_and_must_say_it(env):
+    lib = _library(env, "SceneLevel")
+    vid = _found_at(lib, "high.mov", 2)
+    assert _level(lib, vid) == 2
+    client, headers, *_ = lib
+    other = _ingest_with(lib, "unsaid.mov", _sha(), None, media_type="video")
+    assert _start(lib, other).status_code == 200
+    w = client.post(f"/v1/video/{other}/chunks/next", headers=headers).json()
+    unsaid = {k: v for k, v in _want(lib, "scenes", None).items() if k != "level"}
+    r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete",
+                    json={"worker_id": w["worker_id"], "scenes": [], "lineage": unsaid}, headers=headers)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", r.text
+
+
+def test_raising_detail_redoes_nothing_and_counts_the_videos_below_it(env):
+    lib = _library(env, "SceneUp")
+    vid = _found_at(lib, "normal.mov", 1)
     try:
-        r = client.put("/v1/producers/scenes/settings", json={"settings": {"phash_threshold": 30}}, headers=headers)
-        assert r.status_code == 409, r.text
-        assert "scene descriptions" in r.json()["error"]["message"] and r.json()["error"]["details"]["clips"] >= 1
-        r = client.put("/v1/producers/scenes/settings", json={"settings": {"phash_threshold": 30}, "redo": True},
-                       headers=headers)
-        assert r.status_code == 200, r.text
-        assert _due(lib, "redo_scenes") == [vid]
+        assert _counts(lib, "scenes")["current"] == 1
+        _detail(lib, "high")
+        c = _counts(lib, "scenes")
+        assert (c["below"], c["current"], c["stale"], c["missing"]) == (1, 0, 0, 0)
+        assert _due(lib, "redo_scenes") == [] and _due(lib, "scenes") == []  # out of date, not redone
+        _detail(lib, "low")  # dialling down costs nothing: made higher is current
+        c = _counts(lib, "scenes")
+        assert (c["below"], c["current"]) == (0, 1)
     finally:
-        client.put("/v1/producers/scenes/settings", json={"settings": {"phash_threshold": None}, "redo": True},
-                   headers=headers)
+        _detail(lib, None)
+    assert _level(lib, vid) == 1
+
+
+def test_videos_below_the_detail_are_redone_only_when_asked_by_name_or_all(env):
+    lib = _library(env, "SceneRedoBelow")
+    client, headers, library_id, *_ = lib
+    low, high = _found_at(lib, "low.mov", 0), _found_at(lib, "high.mov", 2)
+    url = "/v1/producers/scenes/below/redo"
+    try:
+        _detail(lib, "high")
+        assert _counts(lib, "scenes")["below"] == 1
+        for body in ({}, {"asset_ids": [low], "all": True}):  # the target is named, never inferred
+            r = client.post(url, json=body, headers=headers)
+            assert r.status_code == 400 and r.json()["error"]["code"] == "scope_required", r.text
+        r = client.post("/v1/producers/transcript/below/redo", json={"all": True}, headers=headers)
+        assert r.status_code == 409 and r.json()["error"]["code"] == "no_level", r.text
+        assert client.post(url, json={"asset_ids": [high]}, headers=headers).json()["redo"] == 0  # not below
+        assert _due(lib, "redo_scenes") == []
+        # Every one below in this library (the account's other libraries have theirs).
+        r = client.post(url, json={"all": True, "library_id": library_id}, headers=headers)
+        assert r.status_code == 200 and r.json()["redo"] == 1, r.text
+        c = _counts(lib, "scenes")
+        assert (c["below"], c["stale"]) == (0, 1)
+        assert _due(lib, "redo_scenes") == [low]  # redone as any redo is, at the detail now
+    finally:
+        _detail(lib, None)
+
+
+def test_scenes_alike_are_merged_when_the_last_chunk_completes(env):
+    lib = _library(env, "SceneMerge")
+    client, headers, *_ = lib
+    sha = _sha()
+    vid = _ingest_with(lib, "merge.mov", sha, None, media_type="video")
+    with _db(lib) as s:
+        s.execute(text("UPDATE assets SET duration_sec = 60, analysis_proxy_key = 'k' WHERE asset_id = :a"),
+                  {"a": vid})
+        s.commit()
+    r = client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 60.0, "scene_sec": 15.0}, headers=headers)
+    assert r.json()["chunk_count"] == 2  # two windows a chunk
+    bits = lambda n: f"{(1 << n) - 1:064x}"  # noqa: E731
+    # A talking head in two windows, then a cut to the beach, in two (Normal: alike within 40 bits).
+    found = {0: [(0, 15000, bits(0)), (15000, 30000, bits(12))], 1: [(30000, 45000, bits(200)),
+                                                                     (45000, 60000, bits(190))]}
+    made = _want(lib, "scenes", sha)
+    for _ in found:
+        w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+        r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", json={
+            "worker_id": w["worker_id"], "lineage": made,
+            "scenes": [{"start_ms": a, "end_ms": b, "rep_frame_ms": a + 1000, "phash": h}
+                       for a, b, h in found[w["chunk_index"]]]}, headers=headers)
+        assert r.status_code == 200, r.text
+        if w["chunk_index"] == 0:  # not found yet: nothing described sees the four
+            assert len(_scenes(lib, vid)) == 2 and _counts(lib, "scene_vision")["applicable"] == 0
+    scenes = _scenes(lib, vid)
+    assert [(s["start_ms"], s["end_ms"], s["rep_frame_ms"]) for s in scenes] == [(0, 30000, 1000),
+                                                                               (30000, 60000, 31000)]
+    with _db(lib) as s:
+        assert [r[0] for r in s.execute(text("SELECT scene_index FROM video_scenes WHERE asset_id = :a"
+                                             " ORDER BY start_ms"), {"a": vid})] == [0, 1]
+    assert _counts(lib, "scenes")["current"] == 1
+    assert _counts(lib, "scene_vision")["missing"] == 1  # the two kept are described next
 
 
 def test_a_redo_with_settings_that_arent_the_accounts_now_starts_nothing_over(env):
@@ -182,7 +271,7 @@ def test_only_editors_start_a_clip_over(env):
     lib = _library(env, "SceneRedoViewer")
     vid, sha = _video_found_the_old_way(lib)
     client, *_ = lib
-    r = client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30.0, "redo": True,
+    r = client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30.0, "scene_sec": 30.0, "redo": True,
                                                       "lineage": _want(lib, "scenes", sha)},
                     headers=_key_with_role(env, "viewer"))
     assert r.status_code == 403, r.text
@@ -205,7 +294,7 @@ def test_a_chunk_from_before_the_start_over_saves_nothing(env):
         s.commit()
     assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
-        "worker_id": w["worker_id"], "next_anchor_phash": None, "next_scene_start_ms": None, "lineage": old,
+        "worker_id": w["worker_id"], "lineage": old,
         "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 0}]})
     assert r.status_code == 404, r.text
     assert _scenes(lib, vid) == []
@@ -241,8 +330,7 @@ def test_a_start_over_deletes_only_images_at_keys_the_server_makes(env, tmp_path
     assert _start(lib, vid).status_code == 200
     w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
-        "worker_id": w["worker_id"], "next_anchor_phash": None, "next_scene_start_ms": None,
-        "lineage": {**_want(lib, "scenes", sha), "settings_hash": OLD},
+        "worker_id": w["worker_id"], "lineage": {**_want(lib, "scenes", sha), "settings_hash": OLD},
         "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 0,
                     "thumbnail_key": str(outside), "proxy_key": f"../{beside.name}"}]})
     assert r.status_code == 200, r.text
