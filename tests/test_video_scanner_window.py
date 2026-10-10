@@ -1,6 +1,6 @@
 """VideoScanner.scan(start, end) on a real clip: each frame's pts is the
 video's time, not the time since the seek, and only [start, end) is
-scanned. FFmpeg's showinfo counts from the -ss seek point, so a later
+scanned, decoding keyframes only. FFmpeg's showinfo counts from the -ss seek point, so a later
 window used to come back timed from 0 and run on to the clip's end."""
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _keyframes(path: Path) -> list[float]:
 
 
 def _scan(path: Path, start: float, end: float) -> list[float]:
-    return [f.pts for f in VideoScanner(path).scan(start, end, hwaccel=False)]
+    return [f.pts for f in VideoScanner(path).scan(start, end)]
 
 
 def _between(times: list[float], start: float, end: float) -> list[float]:
@@ -72,3 +72,14 @@ def test_a_stream_that_doesnt_start_at_zero(tmp_path: Path) -> None:
     got = _scan(clip, 20.0, 30.0)
     assert got == pytest.approx(_between(_keyframes(clip), 20.0, 30.0), abs=1e-3)
     assert all(20.0 <= t < 30.0 for t in got)
+
+
+@pytest.mark.fast
+def test_only_keyframes_are_decoded_with_b_frames_between(tmp_path: Path) -> None:
+    # B-frames reorder decoding; skipping everything but keyframes still finds each one, at its time.
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30:duration=20",
+                    "-c:v", "libx264", "-preset", "medium", "-bf", "3", "-pix_fmt", "yuv420p",
+                    "-g", "45", "-keyint_min", "45", "-sc_threshold", "0", str(clip)], check=True)
+    assert _scan(clip, 0.0, 20.0) == pytest.approx(_keyframes(clip), abs=1e-3)
