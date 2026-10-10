@@ -78,11 +78,13 @@ describe("LocationRow", () => {
     expect(screen.getByRole("button", { name: "Clear" })).toBeTruthy();
   });
 
-  it("shows a guess with its radius, and a suggestion to take", () => {
+  it("shows a guess's coordinates, Guess opens how it was made, and a suggestion to take", () => {
     render(<LocationRow gpsLat={null} gpsLon={null}
       location={{ lat: 1, lon: 2, radius_m: 20_000, source: "time", status: "applied", basis_summary: "from phone photos" }} />);
-    expect(screen.getByText("About 20 km")).toBeTruthy();
-    expect(screen.getByText("Guess").getAttribute("title")).toBe("from phone photos");
+    expect(screen.getByText("1.00000, 2.00000")).toBeTruthy();
+    expect(screen.queryByText(/About 20 km/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Guess" }));
+    expect(screen.getByText("About 20 km · from phone photos")).toBeTruthy();
     cleanup();
     const onAccept = vi.fn();
     render(<LocationRow gpsLat={null} gpsLon={null} canEdit onAccept={onAccept}
