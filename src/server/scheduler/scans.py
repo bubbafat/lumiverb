@@ -24,6 +24,7 @@ import fcntl
 import json
 import logging
 import os
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -205,13 +206,16 @@ def scan_library(
         library["name"], f" / {prefix}" if prefix else "", len(changes),
         ", retrying what failed" if retry_due else "", ", full scan due" if full_due else "",
     )
-    # Archiving is reversible (a file that comes back, anywhere in the library,
-    # restores its asset), so no mass-delete guard: the mount check and
-    # unreadable folders are what keep a glitch from archiving anything.
-    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=True, console=console)
+    # When most of a library looks gone the server asks first (409
+    # mass_missing, ADR-016): a person answers, never the scheduler.
+    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False, console=console)
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return
+    if stats.mass_missing:
+        logger.warning("scheduler: in %s, %d clip(s) look missing, most of the library; not archived. "
+                       "If they're really gone: lumiverb scan --library %s --allow-mass-delete",
+                       library["name"], stats.mass_missing, shlex.quote(library["name"]))
     if prefix is None:
         state.last_full_scan[library_id] = now
     _note_failures(state, library, prefix, stats, changes, now)

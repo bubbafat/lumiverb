@@ -125,7 +125,7 @@ Decided (Robert, Oct 9): changing a setting or a model is the approval (stale wo
 |---|---|
 | User trashes an asset, then a rescan finds the file still on disk | Stays trashed. Trash is human data. |
 | A file goes missing (unmounted share, moved), then comes back | Proposed: restored automatically. Missing-on-disk is a fact about storage, not a user decision, so it is stored apart from user trash. Today both use `deleted_at`, which is why ingest clears it. |
-| Storage unmounted, or mounted but empty, during a scan | No deletions. The server asks first (409 `mass_missing`) before marking more than 50 clips and more than half of a library's clips in sight missing; scanners send a scan's missing clips in one request, and skip them unless told the files are gone (Oct 9: moved from the clients, which had 5% on the Mac and half in Python, to one rule on the server). |
+| Storage unmounted, or mounted but empty, during a scan | No deletions. The server asks first (409 `mass_missing`) before marking more than 50 clips and more than half of a library's clips in sight missing; scanners send a scan's missing clips in one request, and skip them unless told the files are gone (Oct 9: moved from the clients, which had 5% on the Mac and half in Python, to one rule on the server). The scheduler never answers it: a person does, with `lumiverb scan --allow-mass-delete`. |
 | Same file name in NFD (macOS) and NFC (Linux) form | One asset. `rel_path` is NFC everywhere. |
 | Face re-detection on an asset with confirmed faces | Confirmed assignments, "not this person" records and dismissals survive. |
 | User un-assigns a face | A negative record keeps upkeep from re-assigning it to that person. |

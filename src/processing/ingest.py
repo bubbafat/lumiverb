@@ -258,9 +258,6 @@ def _walk_library(
         if stat is None or not S_ISREG(stat.st_mode):
             continue
 
-        if stat.st_size == 0:
-            continue
-
         file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
 
         results.append({

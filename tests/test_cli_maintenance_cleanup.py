@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 pytestmark = pytest.mark.fast
 
-RESULT = {"orphan_tenants": 0, "orphan_libraries": 0, "orphan_files": 0, "bytes_freed": 0, "skipped_libraries": 0,
+RESULT = {"orphan_files": 0, "orphan_folders": [], "bytes_freed": 0, "skipped_libraries": 0,
           "errors": [], "dry_run": False, "paused": False, "paused_tenants": []}
 
 
@@ -34,6 +34,29 @@ def test_a_cleanup_skipped_for_a_pause_says_so(monkeypatch):
 
 def test_a_cleanup_with_nothing_to_do_says_no_pause(monkeypatch):
     assert "paused" not in _run(monkeypatch, RESULT)
+
+
+def test_a_cleanup_lists_the_folders_it_kept(monkeypatch):
+    folder = {"folder_id": "lib_gone", "path": "ten_1/lib_gone", "bytes": 2_000_000, "newest_mtime": "2026-10-01"}
+    out = _run(monkeypatch, {**RESULT, "orphan_folders": [folder]})
+    assert "Kept 1 folder(s)" in out and "lib_gone 2.0 MB" in out and "remove-orphan-folders" in out
+
+
+@pytest.mark.parametrize("args", [[], ["lib_a", "--all"]])
+def test_remove_orphan_folders_needs_ids_or_all(monkeypatch, args):
+    r, c = _invoke(monkeypatch, "remove-orphan-folders", *args)
+    assert r.exit_code == 2, r.output
+    c.post.assert_not_called()
+
+
+def test_remove_orphan_folders_sends_what_is_said(monkeypatch):
+    r, c = _invoke(monkeypatch, "remove-orphan-folders", "lib_a", "lib_b", "--dry-run")
+    assert r.exit_code == 0, r.output
+    c.post.assert_called_once_with("/v1/upkeep/remove-orphan-folders",
+                                   json={"folder_ids": ["lib_a", "lib_b"], "dry_run": True})
+    r, c = _invoke(monkeypatch, "remove-orphan-folders", "--all")
+    assert r.exit_code == 0, r.output
+    c.post.assert_called_once_with("/v1/upkeep/remove-orphan-folders", json={"all": True, "dry_run": False})
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +106,7 @@ def test_cleanup_of_an_unknown_library_sends_nothing(monkeypatch):
 def test_cleanup_all_is_the_account(monkeypatch):
     r, c = _invoke(monkeypatch, "cleanup", "--all", "--execute")
     assert r.exit_code == 0, r.output
-    c.post.assert_called_once_with("/v1/upkeep/cleanup", params={"dry_run": "false"})
+    c.post.assert_called_once_with("/v1/upkeep/cleanup", params={"dry_run": "false", "all": "true"})
 
 
 def test_search_sync_all(monkeypatch):

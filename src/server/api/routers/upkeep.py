@@ -9,7 +9,9 @@ POST /v1/upkeep                    — search sync, face names, expired trash, m
                                      empty dismissed people, face clusters when faces changed
                                      (and, all accounts, old revoked tokens)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
-POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id for one library)
+POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true);
+                                     folders the database doesn't list are only reported
+POST /v1/upkeep/remove-orphan-folders — remove those folders (folder_ids or all: true)
 POST /v1/upkeep/recluster          — recompute face clusters
 POST /v1/upkeep/recreate-search-indexes — wipe and remake the Quickwit indexes
 POST /v1/upkeep/cleanup-dismissed  — delete dismissed people with zero face matches
@@ -34,6 +36,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from src.server.api.limits import MAX_IDS, require_scope
 from src.server.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -60,10 +63,18 @@ class SearchSyncResult(BaseModel):
     transcripts_failed: int = 0
 
 
+class OrphanFolder(BaseModel):
+    """A library or account folder the database doesn't list."""
+    folder_id: str
+    path: str  # under DATA_DIR
+    bytes: int = 0
+    newest_mtime: str | None = None
+
+
 class CleanupResultModel(BaseModel):
-    orphan_tenants: int = 0
-    orphan_libraries: int = 0
     orphan_files: int = 0
+    # Kept, never removed by cleanup: POST /v1/upkeep/remove-orphan-folders removes them.
+    orphan_folders: list[OrphanFolder] = Field(default_factory=list)
     bytes_freed: int = 0
     skipped_libraries: int = 0
     errors: list[str] = []
@@ -393,6 +404,7 @@ def _run_sweep_single_tenant(scope: UpkeepScope, force: bool = False) -> dict:
 def _cleanup_revoked_tokens() -> int:
     """Remove revoked tokens older than 8 days (past any possible refresh window)."""
     from datetime import timedelta
+
     from src.server.database import get_control_session
     from src.shared.utils import utcnow
     from src.server.repository.control_plane import RevokedTokenRepository
@@ -471,23 +483,26 @@ def run_cleanup(
     scope: Scope,
     dry_run: bool = True,
     library_id: str | None = Query(default=None, description="One library of the account (account keys only)."),
+    all_: bool = Query(default=False, alias="all", description="The whole account (account keys only)."),
 ) -> CleanupResultModel:
     """Run filesystem cleanup to remove orphaned files left after trash is emptied.
 
     dry_run=true (default): report what would be deleted without deleting.
     dry_run=false: actually delete orphaned files.
 
-    An account admin's key: that account, or one library of it (library_id;
-    404 when it isn't the account's). The admin key with tenants=all: every
-    account, and the directories of accounts that are gone.
+    An account admin's key: one library of the account (library_id; 404 when
+    it isn't the account's) or the whole account (all=true); neither or both
+    is a 400. The admin key with tenants=all: every account, and the
+    directories of accounts that are gone.
     """
     from src.server.search.cleanup import run_cleanup_all_tenants, run_cleanup_single_tenant
 
     if scope.all_tenants:
-        if library_id is not None:
-            raise HTTPException(status_code=400, detail="library_id needs an account's key, not tenants=all")
+        if library_id is not None or all_:
+            raise HTTPException(status_code=400, detail="library_id and all need an account's key, not tenants=all")
         result = run_cleanup_all_tenants(dry_run=dry_run)
     else:
+        require_scope(library_id is not None, all_, "library_id")
         with _tenant_session(scope) as session:
             if library_id is not None and session.execute(
                 text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},
@@ -496,15 +511,58 @@ def run_cleanup(
             result = run_cleanup_single_tenant(scope.tenant_id, session, dry_run=dry_run, library_id=library_id)
 
     return CleanupResultModel(
-        orphan_tenants=result.orphan_tenants,
-        orphan_libraries=result.orphan_libraries,
         orphan_files=result.orphan_files,
+        orphan_folders=[OrphanFolder(**f) for f in result.orphan_folders],
         bytes_freed=result.bytes_freed,
         skipped_libraries=result.skipped_libraries,
         errors=result.errors,
         dry_run=dry_run,
         paused=result.paused,
         paused_tenants=result.paused_tenants,
+    )
+
+
+class RemoveOrphanFoldersRequest(BaseModel):
+    folder_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    all: bool = False
+    dry_run: bool = False
+
+
+class RemoveOrphanFoldersResult(BaseModel):
+    removed: list[OrphanFolder] = Field(default_factory=list)
+    not_found: list[str] = Field(default_factory=list)
+    bytes_freed: int = 0
+    errors: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+@router.post("/remove-orphan-folders", response_model=RemoveOrphanFoldersResult)
+def remove_orphan_folders(body: RemoveOrphanFoldersRequest, scope: Scope) -> RemoveOrphanFoldersResult:
+    """Remove library folders the database doesn't list (cleanup only reports
+    them): those in folder_ids, or all: true; neither or both is a 400
+    scope_required. Each is checked against the database again just before
+    it goes; ids that aren't such a folder come back in not_found.
+
+    An account admin's key: that account's library folders. The admin key
+    with tenants=all: every account's, and the folders of accounts that are gone.
+    """
+    from pathlib import Path
+
+    from src.server.search import cleanup
+
+    require_scope(body.folder_ids is not None, body.all, "folder_ids")
+    data_dir = Path(get_settings().data_dir)
+    ids = None if body.all else body.folder_ids
+    if scope.all_tenants:
+        out = cleanup.remove_orphan_folders(data_dir, tenant_id=None, session=None, folder_ids=ids,
+                                            dry_run=body.dry_run)
+    else:
+        with _tenant_session(scope) as session:
+            out = cleanup.remove_orphan_folders(data_dir, tenant_id=scope.tenant_id, session=session,
+                                                folder_ids=ids, dry_run=body.dry_run)
+    return RemoveOrphanFoldersResult(
+        removed=[OrphanFolder(**f) for f in out.removed], not_found=out.not_found,
+        bytes_freed=out.bytes_freed, errors=out.errors, dry_run=body.dry_run,
     )
 
 

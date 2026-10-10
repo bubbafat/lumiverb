@@ -83,6 +83,8 @@ class ScanStats:
     settling_paths: list[str] = field(default_factory=list)
     # Folders that couldn't be listed, so nothing was taken for deleted.
     unlisted: list[str] = field(default_factory=list)
+    # Clips the server asked about (409 mass_missing) and that weren't archived.
+    mass_missing: int = 0
 
 
 @dataclass
@@ -697,6 +699,7 @@ def _archive_missing(client, deleted_ids: list[str], stats, console, *, allow_ma
         if err.get("code") == "mass_missing":
             count = (err.get("details") or {}).get("count")
             if not allow_mass_delete:
+                stats.mass_missing = count or len(deleted_ids)
                 console.print(
                     f"[yellow]Skipping {len(deleted_ids):,} deletions: {err.get('message', '')} "
                     "If the files really are gone, re-run with --allow-mass-delete.[/yellow]"
@@ -814,8 +817,10 @@ def run_scan(
     existing = _fetch_existing_assets_with_sha(client, library_id)
     console.print(f"Server has {len(existing):,} existing assets")
 
-    # Every file on disk, ingested or not: none of them is missing.
+    # Every file on disk, ingested or not: none of them is missing. An empty
+    # one (being rewritten, or truncated) is on disk but not ingested.
     on_disk = local_files
+    local_files = [f for f in local_files if f["file_size"]]
     ignored = _fetch_ignored_paths(client, library_id)
     if ignored:
         before = len(local_files)

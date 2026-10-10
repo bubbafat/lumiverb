@@ -160,7 +160,7 @@ def test_cleanup_no_orphans(tmp_path: Path) -> None:
     result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
 
     assert result.orphan_files == 0
-    assert result.orphan_libraries == 0
+    assert result.orphan_folders == []
     assert result.bytes_freed == 0
     # File still exists
     assert (tmp_path / key).exists()
@@ -266,32 +266,135 @@ def test_cleanup_orphan_file_execute(tmp_path: Path) -> None:
         assert (tmp_path / k).exists()
 
 
-@pytest.mark.fast
-def test_cleanup_orphan_library_dir(tmp_path: Path) -> None:
-    """A library dir with no matching DB row is removed."""
-    tenant_id = "ten_AAAA"
-    orphan_lib = "lib_ORPHAN"
-    orphan_file = f"{tenant_id}/{orphan_lib}/proxies/00/ast_X_photo.webp"
-    _setup_library_dir(tmp_path, tenant_id, orphan_lib, [orphan_file])
+def _lib_dir(data_dir: Path, tenant_id: str, lib: str) -> Path:
+    _make_file(data_dir / tenant_id / lib / "proxies" / "00" / "ast_X_photo.webp", content=b"xyz")
+    return data_dir / tenant_id / lib
 
+
+def _session(listed: list[str], *, listed_later: tuple[str, ...] = ()) -> MagicMock:
+    """A tenant session listing `listed`; listed_later are found by the check just before removal."""
     session = MagicMock()
 
-    def execute_side_effect(stmt, params=None):
+    def execute(stmt, params=None):
         result = MagicMock()
         sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            result.fetchall.return_value = []  # no libraries in DB
+        if "WHERE library_id = :id" in sql:
+            result.first.return_value = (1,) if params["id"] in listed or params["id"] in listed_later else None
+        elif "FROM libraries" in sql:
+            result.fetchall.return_value = [(lib,) for lib in listed]
         else:
             result.fetchall.return_value = []
         return result
 
-    session.execute.side_effect = execute_side_effect
+    session.execute.side_effect = execute
+    return session
 
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
 
-    assert result.orphan_libraries == 1
-    assert result.bytes_freed > 0
-    assert not (tmp_path / tenant_id / orphan_lib).exists()
+@pytest.mark.fast
+def test_cleanup_reports_library_dirs_the_db_doesnt_list_and_keeps_them(tmp_path: Path, caplog) -> None:
+    """A database restored from an older backup (or empty) lists none of the
+    newer libraries: their folders are reported, never removed (Robert)."""
+    from src.server.search.cleanup import run_cleanup_single_tenant
+
+    tenant_id = "ten_AAAA"
+    dirs = [_lib_dir(tmp_path, tenant_id, lib) for lib in ("lib_A", "lib_B")]
+
+    with (
+        patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))),
+        patch("src.server.search.cleanup._paused", return_value=False),
+        caplog.at_level("WARNING", logger="src.server.search.cleanup"),
+    ):
+        result = run_cleanup_single_tenant(tenant_id, _session([]), dry_run=False)
+
+    assert all(d.exists() for d in dirs)
+    assert sorted((f["folder_id"], f["path"], f["bytes"]) for f in result.orphan_folders) == [
+        ("lib_A", f"{tenant_id}/lib_A", 3), ("lib_B", f"{tenant_id}/lib_B", 3)]
+    assert all(f["newest_mtime"] for f in result.orphan_folders)
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert "2 folder(s)" in warning and "lib_A" in warning and "lib_B" in warning
+
+
+@pytest.mark.fast
+def test_cleanup_of_every_account_reports_account_dirs_the_db_doesnt_list(tmp_path: Path, caplog) -> None:
+    from types import SimpleNamespace
+
+    from src.server.search.cleanup import run_cleanup_all_tenants
+
+    for t in ("ten_A", "ten_B"):
+        _make_file(tmp_path / t / "x")
+    repo = MagicMock()
+    repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id="ten_B")]
+    with (
+        patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))),
+        patch("src.server.database.get_control_session"),
+        patch("src.server.database.get_tenant_session"),
+        patch("src.server.repository.control_plane.TenantRepository", repo),
+        patch("src.server.search.cleanup.run_cleanup_for_tenant",
+              return_value=CleanupResult(orphan_folders=[{"folder_id": "lib_Z", "path": "ten_B/lib_Z"}])),
+        patch("src.server.search.cleanup._paused", return_value=False),
+        caplog.at_level("WARNING", logger="src.server.search.cleanup"),
+    ):
+        result = run_cleanup_all_tenants(dry_run=False)
+
+    assert sorted(f["folder_id"] for f in result.orphan_folders) == ["lib_Z", "ten_A"]
+    assert (tmp_path / "ten_A").exists()
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1  # one per run
+
+
+@pytest.mark.fast
+def test_remove_orphan_folders_removes_only_what_is_named(tmp_path: Path) -> None:
+    from src.server.search.cleanup import remove_orphan_folders
+
+    t = "ten_AAAA"
+    gone, other, known = (_lib_dir(tmp_path, t, lib) for lib in ("lib_GONE", "lib_OTHER", "lib_KNOWN"))
+
+    dry = remove_orphan_folders(tmp_path, tenant_id=t, session=_session(["lib_KNOWN"]),
+                                folder_ids=["lib_GONE"], dry_run=True)
+    assert [f["folder_id"] for f in dry.removed] == ["lib_GONE"] and gone.exists()
+
+    out = remove_orphan_folders(tmp_path, tenant_id=t, session=_session(["lib_KNOWN"]),
+                                folder_ids=["lib_GONE", "lib_KNOWN", "lib_NOPE"], dry_run=False)
+    assert [f["folder_id"] for f in out.removed] == ["lib_GONE"] and out.bytes_freed == 3
+    assert out.not_found == ["lib_KNOWN", "lib_NOPE"]
+    assert not gone.exists() and other.exists() and known.exists()
+
+
+@pytest.mark.fast
+def test_remove_orphan_folders_checks_the_db_again_before_each(tmp_path: Path) -> None:
+    """A library the database lists by the time its folder's turn comes is kept."""
+    from src.server.search.cleanup import remove_orphan_folders
+
+    t = "ten_AAAA"
+    a, b = _lib_dir(tmp_path, t, "lib_A"), _lib_dir(tmp_path, t, "lib_B")
+
+    out = remove_orphan_folders(tmp_path, tenant_id=t, session=_session([], listed_later=("lib_A",)),
+                                folder_ids=None, dry_run=False)
+
+    assert [f["folder_id"] for f in out.removed] == ["lib_B"]
+    assert a.exists() and not b.exists()
+
+
+@pytest.mark.fast
+def test_remove_orphan_folders_of_every_account_takes_gone_accounts(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from src.server.search.cleanup import remove_orphan_folders
+
+    _make_file(tmp_path / "ten_GONE" / "x")
+    _lib_dir(tmp_path, "ten_LIVE", "lib_KNOWN")
+    repo = MagicMock()
+    repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id="ten_LIVE")]
+    tenant_session = MagicMock()
+    tenant_session.return_value.__enter__.return_value = _session(["lib_KNOWN"])
+    with (
+        patch("src.server.database.get_control_session"),
+        patch("src.server.database.get_tenant_session", tenant_session),
+        patch("src.server.repository.control_plane.TenantRepository", repo),
+    ):
+        out = remove_orphan_folders(tmp_path, tenant_id=None, session=None, folder_ids=None, dry_run=False)
+
+    assert [f["folder_id"] for f in out.removed] == ["ten_GONE"]
+    assert not (tmp_path / "ten_GONE").exists() and (tmp_path / "ten_LIVE" / "lib_KNOWN").exists()
 
 
 @pytest.mark.fast
@@ -439,7 +542,7 @@ def test_cleanup_trashed_library_preserved(tmp_path: Path) -> None:
 
     result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
 
-    assert result.orphan_libraries == 0
+    assert result.orphan_folders == []
     assert result.orphan_files == 0
     assert (tmp_path / key).exists()
 
@@ -470,7 +573,7 @@ def test_cleanup_ignores_non_lib_dirs(tmp_path: Path) -> None:
 
     result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
 
-    assert result.orphan_libraries == 0
+    assert result.orphan_folders == []
     assert (tmp_path / tenant_id / "random_dir" / "file.txt").exists()
 
 

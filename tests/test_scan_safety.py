@@ -809,6 +809,18 @@ def test_a_junk_file_that_cannot_be_checked_doesnt_block_deletions(junk: Path) -
     assert client.stats.unlisted == []
 
 
+@pytest.mark.fast
+def test_an_empty_file_is_on_disk_but_not_ingested(tmp_path: Path) -> None:
+    """A file truncated mid-rewrite is 0 bytes: its clip isn't archived, and
+    the empty file isn't ingested over it."""
+    local = [{"rel_path": f"f{i}.jpg", "file_size": 4 if i else 0, "file_mtime": None, "media_type": "image",
+              "ext": ".jpg"} for i in range(4)]
+    split = MagicMock(return_value=([], [], local[1:]))
+    client = _scan_with(tmp_path, on_disk=4, on_server=4, local=local, split=split)
+    assert _archive_calls(client) == []
+    assert [f["rel_path"] for f in split.call_args.args[0]] == ["f1.jpg", "f2.jpg", "f3.jpg"]
+
+
 def _mass_missing() -> MagicMock:
     return _answer(409, {"error": {"code": "mass_missing", "message": "90 clips would be archived as missing.",
                                    "details": {"count": 90}}})
@@ -832,6 +844,7 @@ def test_the_server_asking_about_mass_missing_skips_them(tmp_path: Path) -> None
         client = _scan_with(tmp_path, on_disk=10, on_server=100, raw_answers=[_mass_missing()])
     assert len(_archive_calls(client)) == 1
     assert client.scan_stats.deleted == 0
+    assert client.scan_stats.mass_missing == 90
 
 
 @pytest.mark.fast

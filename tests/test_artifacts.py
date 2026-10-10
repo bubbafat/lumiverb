@@ -789,6 +789,31 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
     assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] is None
 
 
+@pytest.mark.fast
+@pytest.mark.parametrize("layout", ["no_data_dir", "empty_data_dir", "no_account_dir", "empty_account_dir"])
+def test_upkeep_repairs_nothing_while_the_data_folder_is_gone(tmp_path, layout) -> None:
+    """An unmounted DATA_DIR (or account folder) looks like every file gone:
+    no key is cleared and the reports stay for the next upkeep."""
+    from unittest.mock import MagicMock
+
+    from src.server import missing_artifacts
+
+    data = tmp_path / "data"
+    if layout != "no_data_dir":
+        data.mkdir()
+    if layout in ("no_account_dir", "empty_account_dir"):
+        (data / "ten_other").mkdir()
+    if layout == "empty_account_dir":
+        (data / "ten_1").mkdir()
+    session = MagicMock()
+    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), "ten_1/lib_1/proxies/00/ast_1.webp"]
+    with patch("src.server.missing_artifacts.get_storage", return_value=LocalStorage(str(data))):
+        assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0}
+    assert not any("UPDATE" in str(c.args[0]) for c in session.execute.call_args_list)
+    session.rollback.assert_called_once()
+    session.commit.assert_not_called()
+
+
 @pytest.mark.slow
 def test_download_invalid_type_returns_400(artifact_env) -> None:
     auth, _, _, asset_id, _, _, _ = artifact_env

@@ -975,6 +975,50 @@ def test_a_lock_connection_that_doesnt_answer_counts_as_lost() -> None:
 
 
 @pytest.mark.fast
+def test_the_lock_is_checked_before_every_tick() -> None:
+    # A scheduler that lost the lock (a dropped connection) mustn't hand out
+    # jobs for up to a minute beside the one that took it.
+    from src.server.scheduler import service
+
+    rec = Recorder()
+    s = _scheduler({"t1": FakeAccount()}, {}, rec)
+    stop = threading.Event()
+    seen: list[str] = []
+    s.tick = lambda: (seen.append("tick"), 0)[1]  # type: ignore[method-assign]
+
+    def holds() -> bool:
+        seen.append("check")
+        return seen.count("check") < 4
+
+    assert service.LOCK_CHECK_SEC == 0
+    run(stop=stop, scheduler=s, tick_sec=0.01, holds_lock=holds)
+    assert seen == ["check", "tick"] * 3 + ["check"]
+
+
+@pytest.mark.slow
+def test_the_lock_check_asks_postgres_whether_the_lock_is_held() -> None:
+    from sqlalchemy import create_engine, text
+    from testcontainers.postgres import PostgresContainer
+
+    from src.server.scheduler.service import LOCK_ID, _still_holds
+    from tests.conftest import PG_IMAGE, _ensure_psycopg2
+
+    with PostgresContainer(PG_IMAGE) as pg:
+        engine = create_engine(_ensure_psycopg2(pg.get_connection_url()))
+        try:
+            with engine.connect() as held, engine.connect() as other:
+                assert held.execute(text("SELECT pg_try_advisory_lock(:id)"), {"id": LOCK_ID}).scalar()
+                held.commit()
+                assert _still_holds(held) is True
+                assert _still_holds(other) is False  # a connection without it
+                held.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": LOCK_ID})
+                held.commit()
+                assert _still_holds(held) is False
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.fast
 def test_one_failure_flush_at_a_time_per_account(monkeypatch: pytest.MonkeyPatch) -> None:
     from src.server.scheduler import service
 

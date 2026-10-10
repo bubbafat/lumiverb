@@ -4,6 +4,10 @@ Safety guards:
 - DB query failures skip the affected tenant/library (never treat empty results as "nothing expected")
 - Files newer than 1 hour are skipped (may be mid-ingest)
 - If >25% of files in a library would be deleted, abort that library
+- Library and account folders the database doesn't list are only reported
+  (orphan_folders), never removed here: a database restored from an older
+  backup looks just like that (Robert). remove_orphan_folders removes them,
+  when an admin names them or says all.
 - Dry-run by default
 """
 
@@ -13,6 +17,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import text
@@ -34,9 +39,9 @@ _ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes", "analysis")
 @dataclass
 class CleanupResult:
     """Aggregated cleanup result across all tenants."""
-    orphan_tenants: int = 0
-    orphan_libraries: int = 0
     orphan_files: int = 0
+    # Library and account folders the database doesn't list: reported, kept.
+    orphan_folders: list[dict] = field(default_factory=list)
     bytes_freed: int = 0
     skipped_libraries: int = 0
     errors: list[str] = field(default_factory=list)
@@ -71,15 +76,35 @@ def _file_age_seconds(path: Path) -> float:
         return 0.0
 
 
-def _rmtree(path: Path, dry_run: bool) -> int:
-    """Remove a directory tree. Returns total bytes of files removed."""
-    total = 0
-    for f in _walk_files(path):
-        total += f.stat().st_size
-    if not dry_run:
-        import shutil
-        shutil.rmtree(path)
-    return total
+def _folder(data_dir: Path, path: Path) -> dict:
+    """A folder the database doesn't list, as reported: its id (the folder's
+    name), its path under DATA_DIR, its size and its newest mtime."""
+    size = 0
+    newest = 0.0
+    for root, dirs, files in os.walk(path):
+        for name in [*dirs, *files, ""]:
+            try:
+                st = (Path(root) / name).stat()
+            except OSError:
+                continue
+            newest = max(newest, st.st_mtime)
+            if name in files:
+                size += st.st_size
+    return {
+        "folder_id": path.name,
+        "path": str(path.relative_to(data_dir)),
+        "bytes": size,
+        "newest_mtime": datetime.fromtimestamp(newest, tz=UTC).isoformat() if newest else None,
+    }
+
+
+def _warn_orphan_folders(result: CleanupResult) -> None:
+    """One warning per run naming the folders kept."""
+    if result.orphan_folders:
+        logger.warning(
+            "cleanup: %d folder(s) the database doesn't list, kept (lumiverb maintenance remove-orphan-folders): %s",
+            len(result.orphan_folders), ", ".join(f["path"] for f in result.orphan_folders),
+        )
 
 
 def _get_expected_keys_for_library(
@@ -183,15 +208,7 @@ def run_cleanup_for_tenant(
         lib_dir = tenant_dir / lib_dir_name
 
         if lib_dir_name not in known_library_ids:
-            # Orphan library directory
-            logger.info(
-                "%s orphan library dir: %s",
-                "Would remove" if dry_run else "Removing",
-                lib_dir,
-            )
-            bytes_freed = _rmtree(lib_dir, dry_run)
-            result.orphan_libraries += 1
-            result.bytes_freed += bytes_freed
+            result.orphan_folders.append(_folder(data_dir, lib_dir))
             continue
 
         # Library exists in DB — check individual files
@@ -295,15 +312,7 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
         tenant_dir = data_dir / tenant_dir_name
 
         if tenant_dir_name not in known_tenant_ids:
-            # Orphan tenant directory
-            logger.info(
-                "%s orphan tenant dir: %s",
-                "Would remove" if dry_run else "Removing",
-                tenant_dir,
-            )
-            bytes_freed = _rmtree(tenant_dir, dry_run)
-            result.orphan_tenants += 1
-            result.bytes_freed += bytes_freed
+            result.orphan_folders.append(_folder(data_dir, tenant_dir))
             continue
 
         # Tenant exists — check its libraries and files
@@ -321,12 +330,13 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
             result.errors.append(f"Tenant {tenant_dir_name}: {exc}")
             continue
 
-        result.orphan_libraries += tenant_result.orphan_libraries
+        result.orphan_folders.extend(tenant_result.orphan_folders)
         result.orphan_files += tenant_result.orphan_files
         result.bytes_freed += tenant_result.bytes_freed
         result.skipped_libraries += tenant_result.skipped_libraries
         result.errors.extend(tenant_result.errors)
 
+    _warn_orphan_folders(result)
     return result
 
 
@@ -346,7 +356,9 @@ def run_cleanup_single_tenant(
         return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
     if _paused(session, tenant_id, dry_run):
         return CleanupResult(paused=True, paused_tenants=[tenant_id])
-    return run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)
+    result = run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)
+    _warn_orphan_folders(result)
+    return result
 
 
 def _paused(session: Session, tenant_id: str, dry_run: bool) -> bool:
@@ -358,3 +370,91 @@ def _paused(session: Session, tenant_id: str, dry_run: bool) -> bool:
         return False
     logger.info("cleanup: %s is paused; nothing deleted", tenant_id)
     return True
+
+
+@dataclass
+class RemovedFolders:
+    removed: list[dict] = field(default_factory=list)
+    not_found: list[str] = field(default_factory=list)
+    bytes_freed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+def _remove(data_dir: Path, path: Path, still_unlisted, dry_run: bool, out: RemovedFolders) -> None:
+    """Remove one folder after checking again that the database doesn't list it."""
+    if not still_unlisted():
+        logger.info("remove-orphan-folders: %s is listed now; kept", path)
+        return
+    folder = _folder(data_dir, path)
+    logger.warning("remove-orphan-folders: %s %s (%d bytes)", "would remove" if dry_run else "removing",
+                   path, folder["bytes"])
+    if not dry_run:
+        import shutil
+
+        shutil.rmtree(path)
+    out.removed.append(folder)
+    out.bytes_freed += folder["bytes"]
+
+
+def _listed(session: Session, library_id: str) -> bool:
+    return session.execute(
+        text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},
+    ).first() is not None
+
+
+def remove_orphan_folders(
+    data_dir: Path,
+    *,
+    tenant_id: str | None,
+    session: Session | None,
+    folder_ids: list[str] | None,
+    dry_run: bool,
+) -> RemovedFolders:
+    """Remove library folders (and, for every account: tenant_id None,
+    account folders) the database doesn't list: those in folder_ids, or all
+    (None). Each is checked against the database again just before it goes.
+
+    tenant_id with its session: that account's library folders. tenant_id
+    None: every account's, and the folders of accounts that are gone.
+    """
+    from src.server.database import get_control_session, get_tenant_session
+    from src.server.repository.control_plane import TenantRepository
+
+    wanted = None if folder_ids is None else set(folder_ids)
+    out = RemovedFolders()
+
+    def take(name: str) -> bool:
+        return wanted is None or name in wanted
+
+    def libraries_of(tid: str, sess: Session) -> None:
+        known = {r[0] for r in sess.execute(text("SELECT library_id FROM libraries")).fetchall()}
+        for name in _list_subdirs(data_dir / tid):
+            if name.startswith("lib_") and name not in known and take(name):
+                _remove(data_dir, data_dir / tid / name, lambda n=name: not _listed(sess, n), dry_run, out)
+
+    if tenant_id is not None:
+        libraries_of(tenant_id, session)
+    else:
+        def tenant_ids() -> set[str]:
+            with get_control_session() as ctrl:
+                return {t.tenant_id for t in TenantRepository(ctrl).list_all()}
+
+        known_tenants = tenant_ids()
+        for name in _list_subdirs(data_dir):
+            if not name.startswith("ten_"):
+                continue
+            if name not in known_tenants:
+                if take(name):
+                    _remove(data_dir, data_dir / name, lambda n=name: n not in tenant_ids(), dry_run, out)
+                continue
+            try:
+                with get_tenant_session(name) as sess:
+                    libraries_of(name, sess)
+            except Exception as exc:  # noqa: BLE001 — the other accounts go on
+                logger.error("remove-orphan-folders failed for tenant %s: %s", name, exc)
+                out.errors.append(f"Tenant {name}: {exc}")
+
+    if wanted is not None:
+        done = {f["folder_id"] for f in out.removed}
+        out.not_found = sorted(wanted - done)
+    return out
