@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
-from src.client.workers.exif_extract import parse_gps, parse_gps_accuracy_m, parse_taken_at_offset_min
+from src.processing.workers.exif_extract import parse_gps, parse_gps_accuracy_m, parse_taken_at_offset_min
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import LOCATION_FILTERS, IncludeGuesses
 from src.shared.location import is_fix

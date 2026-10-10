@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import src.client.video.video_scanner as vs_module
-from src.client.video.scene_segmenter import SceneSegmenter, SceneSettings
-from src.client.video.video_scanner import RawFrame, VideoScanner
+import src.processing.video.video_scanner as vs_module
+from src.processing.video.scene_segmenter import SceneSegmenter, SceneSettings
+from src.processing.video.video_scanner import RawFrame, VideoScanner
 from src.producers.scenes import PRODUCER as SCENES
 
 
@@ -19,9 +19,9 @@ def _frames(*pts: float) -> list[RawFrame]:
 
 def _segment(frames, settings: SceneSettings | None = None, distance: int = 0) -> list:
     with (
-        patch("src.client.video.scene_segmenter._frame_to_phash", return_value="00" * 32),
-        patch("src.client.video.scene_segmenter._frame_sharpness", return_value=1.0),
-        patch("src.client.video.scene_segmenter._hamming_hex", return_value=distance),
+        patch("src.processing.video.scene_segmenter._frame_to_phash", return_value="00" * 32),
+        patch("src.processing.video.scene_segmenter._frame_sharpness", return_value=1.0),
+        patch("src.processing.video.scene_segmenter._hamming_hex", return_value=distance),
     ):
         return SceneSegmenter(frames, settings=settings).segment()
 
@@ -68,7 +68,7 @@ def test_the_shortest_scene_holds_off_a_change():
 
 @pytest.mark.fast
 def test_the_hash_size_is_the_one_hashed_with():
-    import src.client.video.scene_segmenter as seg
+    import src.processing.video.scene_segmenter as seg
 
     raw = RawFrame(bytes=b"\x00" * (8 * 8 * 3), pts=0.0, width=8, height=8)
     with patch.object(seg.imagehash, "phash", return_value="h") as phash:
@@ -84,7 +84,7 @@ def scanner_of(tmp_path, monkeypatch):
     video.touch()
 
     def make(size: tuple[int, int], width: int | None):
-        with patch("src.client.video.video_scanner._get_video_size", return_value=size):
+        with patch("src.processing.video.video_scanner._get_video_size", return_value=size):
             return VideoScanner(video, width=width)
     return make
 
@@ -151,11 +151,11 @@ def _client_with_no_chunks_left(producers: list[dict] | None = None) -> MagicMoc
 
 
 def _index(client, **kwargs):
-    from src.client.cli.video_index import index_video_scenes
+    from src.producers.scenes.work import index_video_scenes
 
     with (
-        patch("src.client.cli.video_index.VideoScanner") as scanner_cls,
-        patch("src.client.cli.video_index.SceneSegmenter") as segmenter_cls,
+        patch("src.producers.scenes.work.VideoScanner") as scanner_cls,
+        patch("src.producers.scenes.work.SceneSegmenter") as segmenter_cls,
     ):
         index_video_scenes(client=client, source_path=MagicMock(), asset_id="ast_1", duration_sec=30.0,
                            rel_path="v.mp4", **kwargs)
@@ -169,30 +169,16 @@ def test_the_indexer_finds_scenes_with_the_settings_its_given():
                                  "end_ts": 30.0}), _Resp(204)]
     used = {**SCENES.defaults, "frame_width": 320, "phash_threshold": 20}
     with (
-        patch("src.client.cli.video_index.VideoScanner") as scanner_cls,
-        patch("src.client.cli.video_index.SceneSegmenter") as segmenter_cls,
+        patch("src.producers.scenes.work.VideoScanner") as scanner_cls,
+        patch("src.producers.scenes.work.SceneSegmenter") as segmenter_cls,
     ):
         segmenter_cls.return_value.segment.return_value = []
-        from src.client.cli.video_index import index_video_scenes
+        from src.producers.scenes.work import index_video_scenes
 
         index_video_scenes(client=client, source_path=MagicMock(), asset_id="ast_1", duration_sec=30.0,
                            rel_path="v.mp4", lineage={"producer": "scene-detect"}, settings=used)
     assert scanner_cls.call_args.kwargs["width"] == 320
     assert segmenter_cls.call_args.kwargs["settings"] == SceneSettings.for_producer(used)
-
-
-@pytest.mark.fast
-def test_without_settings_it_reads_the_servers_once_for_both_the_settings_and_the_lineage():
-    from src.shared.producers import lineage
-
-    server = {**SCENES.defaults, "frame_width": 640}
-    client = _client_with_no_chunks_left([{"artifact": "scenes", "settings": server}])
-    scanner_cls, _ = _index(client)
-    assert scanner_cls.call_args.kwargs["width"] == 640
-    init = next(c for c in client.post.call_args_list if c.args[0] == "/v1/video/ast_1/chunks")
-    assert init.kwargs["json"] == {"duration_sec": 30.0}
-    assert client.get.call_count == 1
-    assert lineage("scenes", server, None)["settings_hash"] != lineage("scenes", SCENES.defaults, None)["settings_hash"]
 
 
 @pytest.mark.fast
@@ -205,8 +191,10 @@ def test_a_redo_asks_the_server_to_start_the_clip_over_saying_how_its_scenes_are
 
 
 @pytest.mark.fast
-def test_the_scheduler_hands_the_indexer_the_settings_its_lineage_names_and_each_clips_redo():
-    from src.server.scheduler import runners
+def test_the_scheduler_hands_the_indexer_the_settings_its_lineage_names_and_each_clips_redo(tmp_path):
+    from src.producers.runner import run
+    from src.producers.scenes.work import Scenes
+    from src.server.scheduler.dispatch import Job
     from src.shared.producers import lineage
 
     acct = MagicMock()
@@ -214,14 +202,15 @@ def test_the_scheduler_hands_the_indexer_the_settings_its_lineage_names_and_each
     used = {**SCENES.defaults, "debounce_sec": 1.0}
     acct.producers.settings.return_value = used
     acct.producers.lineage.side_effect = lambda artifact, sha, used=None: lineage(artifact, used, sha)
-    job = MagicMock()
-    job.items = [{"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "sha256": "s1", "redo": True},
-                 {"asset_id": "a2", "rel_path": "b.mp4", "duration_sec": 10.0, "sha256": "s2"}]
-    job.asset_ids = ["a1", "a2"]
-    with patch("src.client.cli.video_index.index_video_scenes") as index:
-        acct.analysis_cache.get.return_value = MagicMock(is_file=lambda: True)
+    proxy = tmp_path / "v.mp4"
+    proxy.write_bytes(b"x")
+    acct.analysis_cache.get.return_value = proxy
+    job = Job("t1", "scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "sha256": "s1",
+                                   "redo": True},
+                                  {"asset_id": "a2", "rel_path": "b.mp4", "duration_sec": 10.0, "sha256": "s2"}))
+    with patch("src.producers.scenes.work.index_video_scenes") as index:
         index.return_value = {"scenes": 1, "chunks": 1, "elapsed": 0.1}
-        runners.scenes(acct, job)
+        assert run(Scenes, acct, job) is None
     calls = {c.kwargs["asset_id"]: c.kwargs for c in index.call_args_list}
     assert calls["a1"]["settings"] == used and calls["a2"]["settings"] == used
     assert calls["a1"]["lineage"] == lineage("scenes", used, "s1")
@@ -238,22 +227,3 @@ def test_a_scene_is_never_longer_than_the_chunk_its_found_in():
     ceiling, debounce = SCENES.setting("temporal_ceiling_sec"), SCENES.setting("debounce_sec")
     assert ceiling.maximum <= VideoIndexChunkRepository.CHUNK_DURATION_SEC
     assert debounce.maximum < ceiling.minimum  # or a change could never start a scene
-
-
-@pytest.mark.fast
-def test_a_scene_dropped_while_its_described_is_skipped_not_failed(tmp_path):
-    from src.client.cli.client import LumiverbAPIError
-    from src.client.cli.video_index import run_video_enrich
-
-    client = MagicMock()
-    client.get.return_value.json.return_value = {"scenes": [{"scene_id": "scn_1", "rep_frame_ms": 0}]}
-    source = tmp_path / "v.mp4"
-    source.write_bytes(b"x")
-    failed: list = []
-    with patch("src.client.cli.video_index.enrich_scene",
-               side_effect=LumiverbAPIError("scene_gone", "found again", 409)):
-        ok, fail = run_video_enrich(client=client, source_for=lambda v: source,
-                                    videos=[{"asset_id": "a1", "rel_path": "v.mp4"}], vision_provider=MagicMock(),
-                                    vision_model_id="m", console=MagicMock(), progress=MagicMock(),
-                                    task_id=None, on_fail=lambda a, e: failed.append(a))
-    assert failed == [] and fail == 0

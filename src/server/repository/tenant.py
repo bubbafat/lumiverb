@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+from collections.abc import Collection
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, bindparam, column, func, insert, or_, text
@@ -609,19 +610,10 @@ class AssetRepository:
         limit: int,
         path_prefix: str | None = None,
         tag: str | None = None,
-        missing_vision: bool = False,
-        missing_embeddings: bool = False,
-        missing_faces: bool = False,
-        missing_face_embeddings: bool = False,
-        missing_video_scenes: bool = False,
-        missing_ocr: bool = False,
-        missing_scene_vision: bool = False,
-        missing_transcription: bool = False,
-        missing_probe: bool = False,
+        missing: Collection[str] = (),
         has_faces: bool | None = None,
         person_id: str | None = None,
         *,
-        missing_analysis_proxy: bool = False,
         sort: str = "taken_at",
         direction: str = "desc",
         media_types: list[str] | None = None,
@@ -722,28 +714,10 @@ class AssetRepository:
         if tag is not None:
             conditions.append("m.tags @> jsonb_build_array(:tag)")
             params["tag"] = tag
-        # What each step is handed: what's missing (the reconciler's).
-        cond = MISSING_CONDITIONS
-        if missing_vision:
-            conditions.append(cond["missing_vision"])
-        if missing_embeddings:
-            conditions.append(cond["missing_embeddings"])
-        if missing_faces:
-            conditions.append(cond["missing_faces"])
-        if missing_face_embeddings:
-            conditions.append(cond["missing_face_embeddings"])
-        if missing_video_scenes:
-            conditions.append(cond["missing_video_scenes"])
-        if missing_ocr:
-            conditions.append(cond["missing_ocr"])
-        if missing_scene_vision:
-            conditions.append(cond["missing_scene_vision"])
-        if missing_transcription:
-            conditions.append(cond["missing_transcription"])
-        if missing_probe:
-            conditions.append(cond["missing_probe"])
-        if missing_analysis_proxy:
-            conditions.append(cond["missing_analysis_proxy"])
+        # What each producer is handed: what's missing (the reconciler's), by
+        # its flag (missing_*: MISSING_CONDITIONS); an unknown one is refused.
+        for flag in missing:
+            conditions.append(MISSING_CONDITIONS[flag])
         if has_faces is True:
             conditions.append("a.face_count > 0")
         elif has_faces is False:
@@ -880,8 +854,9 @@ class AssetRepository:
             lateral_join += f"\n            {LOCATION_JOIN}\n"
 
         # The reconciler's missing_* rules read each clip's lineage (as `la`).
-        if any((missing_vision, missing_embeddings, missing_faces, missing_video_scenes, missing_ocr,
-                missing_scene_vision, missing_transcription, missing_probe, missing_analysis_proxy)):
+        from src.shared.producers import MISSING_FLAGS
+
+        if any(flag in MISSING_FLAGS for flag in missing):
             from src.server.repository.lineage import LINEAGE_JOIN
 
             lateral_join += f"\n            {LINEAGE_JOIN}\n"
@@ -4512,7 +4487,8 @@ class PersonRepository:
         return result
 
     def cleanup_empty_dismissed(self) -> int:
-        """Delete dismissed people that have zero face matches.
+        """Delete dismissed people that have zero face matches (none assigned,
+        by a person or the machine). Never one a person named.
 
         Returns the number of dismissed people deleted.
         """
@@ -4524,6 +4500,7 @@ class PersonRepository:
                     FROM people p
                     LEFT JOIN face_person_matches m ON m.person_id = p.person_id
                     WHERE p.dismissed = true
+                      AND p.display_name = '(dismissed)'
                     GROUP BY p.person_id
                     HAVING COUNT(m.match_id) = 0
                 """)

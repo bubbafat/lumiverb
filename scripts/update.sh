@@ -90,6 +90,12 @@ finish() {
   if [[ $rc -eq 0 && "$DONE" == 1 ]]; then
     echo "Result: OK"
   else
+    # Stopped before the pull (below) and started by update-api.sh at its end;
+    # never started here, as the code may be half-deployed.
+    if systemctl is-enabled --quiet lumiverb-scheduler 2>/dev/null \
+        && ! systemctl is-active --quiet lumiverb-scheduler 2>/dev/null; then
+      echo "The scheduler is stopped. Run the update again; to start it as it is: sudo systemctl start lumiverb-scheduler"
+    fi
     echo "Result: FAILED"
     echo "(exit ${rc}) The step above says where it stopped. Fix that and run the update again."
   fi
@@ -112,6 +118,12 @@ if [[ -z "${LUMIVERB_UPDATE_BEFORE:-}" ]]; then
   # would leave the install half moved.
   as_svc git cat-file -e "refs/remotes/origin/${BRANCH}:scripts/update.sh" 2>/dev/null \
     || fail "${BRANCH} has no scripts/update.sh (it's older than it): merge main into it first. Nothing was changed."
+  # The old scheduler mustn't run on files the pull moves: it stops now, and
+  # update-api.sh starts it once the API answers.
+  if systemctl is-enabled --quiet lumiverb-scheduler 2>/dev/null; then
+    systemctl stop lumiverb-scheduler
+    ok "Scheduler stopped for the update"
+  fi
   if [[ "$BRANCH" != "$CURRENT" ]]; then
     as_svc git checkout "$BRANCH"
     ok "Moved from ${CURRENT:-a detached checkout} to ${BRANCH}"

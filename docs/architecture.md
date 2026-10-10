@@ -158,50 +158,47 @@ Responsibilities:
 - Search sync (timestamp-based sweep to keep Quickwit in sync)
 - Upkeep (search sync, face propagation, orphaned file cleanup, revoked token cleanup)
 
-### 3.4 Local Agent (CLI first, then Mac app)
+### 3.4 The CLI and the Mac app
 
-Runs on a machine that can read the source files. Communicates only via the API. Under ADR-016 the brain runs scan and enrichment as a service against a read-only mount of storage, and the macOS app's built-in AI retires (ADR-016 phase 2).
+API clients. The CLI (`src/client/cli/`) scans libraries (`lumiverb scan`: proxies, thumbnails, EXIF, previews, uploaded through `POST /v1/ingest`), browses, searches and administers. It doesn't process: `lumiverb enrich` asks the scheduler to do a producer's work now (`POST /v1/producers/run`). The macOS app scans and reports file changes; its built-in AI retires (ADR-016 phase 2). Neither has direct Postgres, Quickwit or object storage access.
 
-Responsibilities:
-- Filesystem scanning (recursive, respects path filters)
-- Deduplication (checks `rel_path` against API before upload)
-- Proxy generation (WebP 2048px max; TIFFs use Pillow fallback for large files)
-- EXIF and metadata extraction
-- Vision AI captioning (OpenAI-compatible endpoint, configurable)
-- CLIP embedding generation (open-clip-torch, ViT-B/32)
-- Uploads proxy + all metadata to API atomically via `POST /v1/ingest`
-- Video poster frame extraction, 10-second preview generation
+The processing both the scheduler and the CLI's scan use lives in `src/processing/`: the API client (`api.py`), this machine's settings (`machine.py`: library root map, caches, how video is rendered), scanning (`scan.py`, `ingest.py`), the account's AI machines (`ai_pool.py`, `job_guard.py` and its guards), failure reports, the producers' settings as the server says them, and the media tools (`video/`, `proxy/`, `workers/`). Nothing there imports the CLI or the server, and nothing in `src/server` imports `src/client`.
 
-The local agent has no direct Postgres, Quickwit, or object storage access. The API is its only interface.
+### 3.5 Processing: producers and the scheduler
 
-### 3.5 Processing Model
+All processing runs on the brain, in the scheduler (`src/server/scheduler/`, systemd unit `lumiverb-scheduler`, beside the API, sharing its database). It ranks every job of every account (tier, then oldest first), fills each pool's free slots, and saves results through the API's own routes with a per-account key it makes at start. What's due comes from the reconciler (`repository/lineage.py`): missing, made from a file that changed, or (tier 4) made with another producer version or settings than now.
 
-Today there are no server-side worker queues. Processing runs in API clients (the CLI's `lumiverb scan` and `lumiverb enrich`, or the macOS app), which POST results to the API. ADR-016 moves scheduling to the brain (phase 2) and replaces enqueueing with desired-state reconciliation (phase 3).
+**Producers.** Each kind of derived artifact has one producer, one folder each: `src/producers/<artifact>/`. Its `__init__.py` declares a `ProducerSpec` (`src/producers/contract.py`); its `work.py` holds its `Work`. Everything that lists producers reads the registry (`src/producers/__init__.py`): lineage and the reconciler, the scheduler's kinds, queue, pools and runners, the AI jobs and where each account keeps their models, the asset page's `missing_*` filters and the repair summary, what goes with an artifact when it's made again, pauses, and `GET /v1/producers` (Settings → Processing renders it as it comes).
 
-**Image ingest (client-side):**
-The CLI scans the filesystem, then for each image:
-1. Generates JPEG proxy, then converts to WebP (2048px max)
-2. Extracts EXIF metadata (camera, GPS, duration, taken_at, lens, ISO, aperture, etc.)
-3. Runs vision AI (OpenAI-compatible API) to generate description and tags
-4. Generates CLIP embedding (ViT-B/32, 512-dim vector)
-5. Calls `POST /v1/ingest` with proxy + all metadata atomically
-6. Server normalizes proxy, generates thumbnail (512px), stores everything
-7. The asset only appears on the server once fully populated
+**The runner.** A producer supplies `make(clip)` (the artifact, or raise `Failed` / `Waits` / `NotTried`) and `save(client, made)`. Everything else is the runner's (`src/producers/runner.py`), the same for every producer: stopping (once the scheduler stops nothing more is made or saved, through a client that refuses), saving (right after making, or a job's clips together for a producer that sets `together`, or each part as a generator yields it), no NUL in what's sent, and whose an error is. The clip's (the API refused what was made: 400, 413, 422) is charged now and backs off (5 minutes, doubling up to a day, given up after 10 tries); the API or its database away (401, 403, 408, 429, 502-504, a transport error) charges nothing; anything else is a crash, uncharged but counted, and charged after `CRASHES_BEFORE_CHARGE` in a row; two clips crashing in a row leave the rest of the job waiting. An AI producer hands its failures to its job's guard, which charges a clip only when a machine checks out fine.
 
-**Video ingest (client-side, stage 1):**
-1. Gets source dimensions via ffprobe
-2. Extracts poster frame and generates proxy/thumbnail
-3. Extracts EXIF metadata
-4. Generates 10-second preview MP4 (capped at 720p)
-5. Calls `POST /v1/ingest` atomically
+**Pools and AI jobs.** A spec names its `Pool` (`src/producers/pools.py` for today's shared ones): so many slots, or this machine's setting that sizes it (`sized_by`), or an AI job's machines (`job`: each account's own, sized by its online machines times the job's `per_request`), and whether its jobs hold back AI machines sharing the GPU (`gpu_hold`). An `AiJob` declares its label, its guard (how its machines are checked and called), its default model and whether the scheduler's own machine can do it; the account's model for it is kept under its name (`tenants.ai_job_models`).
 
-**Video scene indexing (server-coordinated):**
-After video ingest, the CLI uses the video chunk API to process scenes:
-1. `POST /v1/video/{asset_id}/chunks` — initialize 30-second chunks
-2. `POST /v1/video/{asset_id}/chunks/next` — claim next chunk
-3. Client segments scenes, extracts rep frames, uploads via artifact API
-4. `POST /v1/video/chunks/{chunk_id}/complete` — submit scene metadata
-5. When all chunks complete, server marks asset as `video_indexed`
+**Models.** The GPU models are the scheduler's, not an account's (`scheduler/models.py`): CLIP loaded once per model and weights, and one face-detection process (ONNX Runtime leaks, so it's replaced after so many photos), shared by every account and let go of when unused. A photo it hasn't answered for in 300 s (`DETECT_TIMEOUT_SEC`, `src/producers/faces/detect.py`) is given up as a crash (counted, uncharged) and the process replaced.
+
+**Pausing.** One switch per processing action (Scans, Upkeep, each producer), paused and resumed on its own, with a scope: `work` (nothing of it starts) or a producer's `redo` alone (its stale clips wait). Both are rows of `producer_pauses`, read by the scheduler every second on one path; a new producer version stops its redo until an admin resumes it.
+
+**Settings.** The scheduler reads this machine's way of processing from its environment (`src/server/scheduler/settings.py`: `LUMIVERB_ROOT_MAP`, `LUMIVERB_ANALYSIS_PROXY_*`, `LUMIVERB_GPU_DECODES`, `LUMIVERB_RENDER_CONCURRENCY`, `LUMIVERB_ANALYSIS_CACHE_GB`, `LUMIVERB_FACE_BATCHES_PER_PROCESS`, `LUMIVERB_API_URL`; `/etc/lumiverb/env` on the brain), never the CLI's config.
+
+**Video scene indexing** is saved as it's found: the scenes producer initializes a video's 30-second chunks (`POST /v1/video/{asset_id}/chunks`), claims each (`.../chunks/next`), segments it and completes it with its scenes, all through the runner's client; the server marks the video `video_indexed` once every chunk is done.
+
+#### Adding a producer
+
+A producer ships as one folder (ADR-016's test, `tests/test_producer_contract.py::test_a_producer_is_one_folder`):
+
+1. `src/producers/<artifact>/__init__.py` sets `PRODUCER = ProducerSpec(...)`: `artifact`, `producer` (recorded in lineage), `version` (bump when its output changes), `media`, `title`, `applies` and `made` (SQL on `active_assets a`), its output-affecting `settings`, `needs` (what it's made from), `redo_also` (what goes with it when it's made again), and to be scheduled `kind`, `flag` (`missing_<something>`), `run` (`"src.producers.<artifact>.work:<Class>"`), `tier`, `pool`, `batch`, `storage` (it reads the originals) and `unit` (`clip` or `second`). It imports only `contract.py`, `prompts.py` and `pools.py`.
+2. `src/producers/<artifact>/work.py` defines the `Work`: `make(clip)` returns what `save` sends (use `self.original(clip)` for the file on storage, `self.acct.proxy_cache(...)` / `self.acct.analysis_cache` for proxies, `self.lineage(clip, used=...)` for what a save records), and `save(client, made)` posts it through the given client.
+3. A server route that takes the artifact, with `require_lineage(body.lineage, "<artifact>")`, records it with `lineage.record(...)`.
+
+Whose an error is, as the runner judges it:
+
+- An API error raised inside `make()` (a proxy fetched from the server, say) is judged by `whose()`, like a save's: refused (400, 413, 422) is the clip's; the API away is nobody's; anything else is a crash.
+- `OSError` from `make()` is this machine's (no ffmpeg or ffprobe, a disk or mount error): a crash, counted, never the clip's. That holds for probe, CLIP, transcripts and OCR; only output that can't be read (ffprobe refusing the file, a proxy PIL can't open) is the clip's.
+- Scenes with no analysis proxy in this machine's cache wait for it (so do their descriptions); a transcript with none is charged.
+- A save that fails with anything but an API error (the cache's disk full) is a crash, counted.
+- A scene whose frame can't be read, or that the model describes as nothing, is its video's failure, charged once the video's other scenes are saved.
+
+Nothing else is edited: the kinds and their redo kind, the queue, the pool (declare a new `Pool` in the folder, or name a shared one), an AI job (declare an `AiJob` with its guard in the folder), the account's model storage, the page filter and summary count, Settings → Processing, pauses and failures all follow. A producer that reads the originals (EXIF, say) sets `storage=True` and calls `self.original(clip)`: jobs then go only to libraries whose storage was reachable at the last look, and the file missing or the storage gone is handled for it.
 
 **Search sync:**
 Search sync is timestamp-based: assets and video scenes have a `search_synced_at` column. The `POST /v1/upkeep/search-sync` endpoint sweeps records where `search_synced_at` is stale, builds Quickwit documents, and ingests them. The CLI `lumiverb maintenance search-sync --all` command triggers this for the account. Inline sync also runs on each ingest. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.

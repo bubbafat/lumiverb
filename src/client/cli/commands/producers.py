@@ -161,7 +161,7 @@ def _error(r) -> str:
         body = r.json() or {}
     except ValueError:
         body = {}
-    return (body.get("error") or {}).get("message") or body.get("detail") or r.text
+    return (body.get("error") or {}).get("message") or r.text
 
 
 @redo_app.command("stop")
@@ -169,7 +169,7 @@ def redo_stop(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. vision, ocr, clip).")],
 ) -> None:
     """Stop redoing a producer's stale clips (admins). What's missing is still made."""
-    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/redo/stop")
+    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/pause", json={"scope": "redo"})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't stop: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
@@ -182,7 +182,7 @@ def redo_resume(
     artifact: Annotated[str, typer.Argument(help="The producer whose redo carries on.")],
 ) -> None:
     """Redo a producer's stale clips again (admins), after anything missing."""
-    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/redo/resume")
+    r = LumiverbClient().raw("POST", f"/v1/producers/{artifact}/resume", json={"scope": "redo"})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't resume: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
@@ -221,24 +221,29 @@ def producers_failures(
     console.print(table)
     if data.get("next_cursor"):
         console.print(f"[dim]The {len(items)} most recent; --limit shows more.[/dim]")
-    console.print("[dim]lumiverb producers retry tries them again.[/dim]")
+    console.print("[dim]lumiverb producers retry PRODUCER|all --all tries them again.[/dim]")
 
 
 @producers_app.command("retry")
 def producers_retry(
-    artifact: Annotated[str | None, typer.Argument(help="Only this producer's failing clips.")] = None,
-    asset: Annotated[list[str] | None, typer.Option("--asset", help="Only this clip (repeatable).")] = None,
-    library: Annotated[str | None, typer.Option("--library", help="Only this library (name or id).")] = None,
+    artifact: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), or all.")] = None,
+    asset: Annotated[list[str] | None, typer.Option("--asset", help="This clip (repeatable).")] = None,
+    library: Annotated[str | None, typer.Option("--library", help="A library (name or id).")] = None,
+    every_library: Annotated[bool, typer.Option("--all", help="Every library.")] = False,
 ) -> None:
-    """Try failing clips again now, given up or not (editors and admins); the back-off starts over."""
+    """Try failing clips again now, given up or not (editors and admins); the back-off starts over.
+    Name the producer (or all) and the clips: --library, --all or --asset."""
+    if not artifact or (library is not None) + every_library + bool(asset) != 1:
+        console.print("Usage: lumiverb producers retry PRODUCER|all (--library NAME | --all | --asset ID...)")
+        raise typer.Exit(2)
     client = LumiverbClient()
-    body: dict = {}
-    if artifact:
-        body["artifact"] = artifact
+    body: dict = {} if artifact == "all" else {"artifact": artifact}
     if asset:
         body["asset_ids"] = list(asset)
-    if library:
-        body["library_id"] = library_id_for(client, library)
+    else:
+        body["all"] = True
+        if library is not None:
+            body["library_id"] = library_id_for(client, library)
     r = client.raw("POST", "/v1/producers/failures/retry", json=body)
     if r.status_code >= 400:
         console.print(f"[red]Couldn't try them again: {escape(_error(r))}[/red]")

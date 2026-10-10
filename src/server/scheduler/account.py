@@ -2,9 +2,10 @@
 
 Its API client (the scheduler saves results through the API's own routes,
 as the worker did: the same checks and lineage), the server's producer
-settings, its AI machines (Settings → AI), the caches of proxies and
-analysis copies, and the models loaded once (CLIP, face detection), let go
-of after a while unused so the GPU is free for the rest.
+settings, its AI machines (Settings → AI: a guard per AI job the producers
+declare), the caches of proxies and analysis copies, and the scheduler's
+models (CLIP, face detection: src/server/scheduler/models.py), which every
+account shares.
 
 Settings and machines are read again every minute, off the scheduler's
 dispatching thread; machines that can't be used are looked at again as
@@ -35,32 +36,32 @@ logger = logging.getLogger(__name__)
 REFRESH_SEC = 60.0
 # ...and sooner when the server didn't answer.
 RETRY_SEC = 15.0
-# A model unused this long is let go of (its GPU memory with it).
-IDLE_SEC = 600.0
 
 
 class Account:
-    def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *,
+    def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *, models: Any = None,
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None) -> None:
-        from src.client.cli.config import load_config
-        from src.client.cli.failure_report import FailureReport
-        from src.client.cli.producer_settings import ProducerSettings
-        from src.client.cli.transcript_guard import TranscriptGuard
-        from src.client.cli.vision_guard import VisionGuard
-        from src.client.proxy.analysis_cache import AnalysisProxyCache
+        from src.processing.failure_report import FailureReport
+        from src.processing.machine import current
+        from src.processing.producer_settings import ProducerSettings
+        from src.processing.proxy.analysis_cache import AnalysisProxyCache
+        from src.producers import load
+        from src.shared.ai_jobs import AI_JOBS
 
         self.tenant_id = tenant_id
         self.client = client
         self.scan_state = scan_state
-        self.cfg = load_config()
+        self.machine = current()  # this machine's way of processing (the scheduler's settings)
+        # The GPU models, the scheduler's (every account's).
+        self.models = models
         self._clock = clock
         if wall is None:
             from src.shared.utils import utcnow as wall
         self._wall = wall
         self.failures = FailureReport(client)
         self.producers = ProducerSettings(client, fetch=False)  # read by refresh()
-        self.vision = VisionGuard(client, self.failures)
-        self.transcripts = TranscriptGuard(client, self.failures)
+        # Each AI job's machines (Settings → AI), checked and called by its guard.
+        self.guards: dict[str, Any] = {name: load(job.guard)(client) for name, job in AI_JOBS.items()}
         self.analysis_cache = AnalysisProxyCache(client)
         # Set when the scheduler stops: jobs in hand save nothing more.
         self.stopping = threading.Event()
@@ -78,16 +79,16 @@ class Account:
         self._checked: set[str] = set()
         self._lock = threading.Lock()
         self._proxy_caches: dict[str, Any] = {}
-        self._clip: tuple[tuple, Any] | None = None
-        self._clip_loading = threading.Lock()
-        self._faces: Any = None
         self._vision_provider: tuple[tuple, Any] | None = None
         self._transcriber: tuple[str, Any] | None = None
         self._refreshed_at: float | None = None
         self._job_checked_at: dict[str, float] = {}
         self._followed_at: float | None = None
-        self._used: dict[str, float] = {}
-        self.ready = {"vision": False, "transcripts": False}
+        self.ready = {job: False for job in self.guards}
+
+    def guard(self, job: str) -> Any:
+        """The AI job's machines (src/processing/job_guard.py)."""
+        return self.guards[job]
 
     # -- settings and machines ----------------------------------------------
 
@@ -107,9 +108,9 @@ class Account:
         self.producers.refresh()
 
     def refresh(self, force: bool = False) -> None:
-        """Read the settings and libraries again when due, check the AI
-        machines, and let go of idle models. Slow (it asks each machine): the
-        scheduler calls it off its dispatching thread."""
+        """Read the settings and libraries again when due, and check the AI
+        machines. Slow (it asks each machine): the scheduler calls it off its
+        dispatching thread."""
         now = self._clock()
         wait = REFRESH_SEC if self.settings_ready else RETRY_SEC
         if force or self._refreshed_at is None or now - self._refreshed_at >= wait:
@@ -121,7 +122,7 @@ class Account:
             except Exception:  # noqa: BLE001 — tried again at the next refresh
                 logger.exception("scheduler: couldn't read %s's libraries", self.tenant_id)
             self._job_checked_at.clear()
-        for job, guard in (("vision", self.vision), ("transcripts", self.transcripts)):
+        for job, guard in self.guards.items():
             checked = self._job_checked_at.get(job)
             if checked is None or now - checked >= REFRESH_SEC:
                 self._job_checked_at[job] = now
@@ -132,7 +133,6 @@ class Account:
                     self.ready[job] = False
             elif guard.down:
                 self.ready[job] = False
-        self._let_go_of_idle_models(now)
 
     def set_libraries(self, libraries: list[dict]) -> None:
         with self._lock:
@@ -184,7 +184,7 @@ class Account:
     def storage_gone(self, library_id: str) -> bool:
         """The library's storage can't be read now, looked at as the scan pass
         does (with a timeout; an unmounted mount point is an empty folder)."""
-        from src.client.cli.roots import reachable_root
+        from src.processing.roots import reachable_root
 
         with self._lock:
             library = self.libraries.get(library_id)
@@ -202,13 +202,13 @@ class Account:
 
     def set_gpu_hold(self, hold: int) -> None:
         """Requests AI machines sharing this machine's GPU give up while video is decoded on it."""
-        self.vision.pool.set_gpu_hold(hold)
-        self.transcripts.pool.set_gpu_hold(hold)
+        for guard in self.guards.values():
+            guard.pool.set_gpu_hold(hold)
 
     def capacity(self, job: str) -> int:
         """Requests the job's online machines take at once (0 while none can be used)."""
-        guard = self.vision if job == "vision" else self.transcripts
-        if not self.ready[job] or guard.down:
+        guard = self.guards[job]
+        if not self.ready.get(job) or guard.down:
             return 0
         return guard.capacity()
 
@@ -217,8 +217,8 @@ class Account:
     def proxy_cache(self, library_id: str) -> Any:
         """The images CLIP, faces and vision see, for clips of one library
         (made from the original while its storage is reachable)."""
-        from src.client.cli.repair import PROXY_CACHE_EDGE
-        from src.client.proxy.proxy_cache import ProxyCache
+        from src.processing.proxy.proxy_cache import ProxyCache
+        from src.producers.clip import PROXY_CACHE_EDGE
 
         root = self.root(library_id)
         with self._lock:
@@ -228,81 +228,30 @@ class Account:
                 self._proxy_caches[library_id] = cache
             return cache
 
-    def clip(self) -> tuple[Any, dict]:
-        """The CLIP model, loaded once per settings (not while holding the
-        account's lock: loading takes seconds), and the settings it's used with."""
-        from src.client.cli.repair import PROXY_CACHE_EDGE
-        from src.client.workers.embeddings.clip_provider import CLIPEmbeddingProvider
-
-        settings = self.producers.settings("clip")
-        key = (settings["model"], settings["pretrained"])
-        with self._clip_loading:
-            current = self._clip
-            if current is None or current[0] != key:
-                current = (key, CLIPEmbeddingProvider(model_name=settings["model"],
-                                                      pretrained=settings["pretrained"]))
-                self._clip = current
-        self._used["clip"] = self._clock()
-        # The images CLIP sees are the proxy cache's: its size is what was used.
-        return current[1], {**settings, "input_edge": PROXY_CACHE_EDGE}
-
     def vision_provider(self) -> tuple[Any, str]:
         """Describes and reads images on whichever vision machine is free, and the model."""
-        model = self.vision.model
+        vision = self.guards["vision"]
+        model = vision.model
         vision_settings = self.producers.with_model("vision", model)
         ocr_settings = self.producers.with_model("ocr", model)
         key = (model, repr(sorted(vision_settings.items())), repr(sorted(ocr_settings.items())))
         with self._lock:
             if self._vision_provider is None or self._vision_provider[0] != key:
-                self._vision_provider = (key, self.vision.provider(settings=vision_settings,
-                                                                   ocr_settings=ocr_settings))
+                self._vision_provider = (key, vision.provider(settings=vision_settings, ocr_settings=ocr_settings))
             return self._vision_provider[1], model
 
     def transcriber(self) -> Any:
-        model = self.transcripts.model
+        transcripts = self.guards["transcripts"]
+        model = transcripts.model
         with self._lock:
             if self._transcriber is None or self._transcriber[0] != model:
-                self._transcriber = (model, self.transcripts.transcriber())
+                self._transcriber = (model, transcripts.transcriber())
             return self._transcriber[1]
-
-    def faces(self) -> Any:
-        from src.server.scheduler.runners import FaceRunner
-
-        with self._lock:
-            if self._faces is None:
-                self._faces = FaceRunner(self.client, self.cfg)
-            self._used["faces"] = self._clock()
-            return self._faces
-
-    def _let_go_of_idle_models(self, now: float) -> None:
-        if self._clip is not None and now - self._used.get("clip", now) >= IDLE_SEC:
-            with self._clip_loading:
-                self._clip = None
-            _free_gpu_memory()
-            logger.info("scheduler: let go of %s's CLIP model (unused)", self.tenant_id)
-        faces = self._faces
-        if faces is not None and now - self._used.get("faces", now) >= IDLE_SEC and faces.idle and faces.close():
-            logger.info("scheduler: let go of %s's face detection process (unused)", self.tenant_id)
 
     def close(self) -> None:
         self.stopping.set()
         self.failures.flush()
-        if self._faces is not None:
-            self._faces.close()
         try:
             self.client.close()
         except Exception:  # noqa: BLE001
             pass
-
-
-def _free_gpu_memory() -> None:
-    import gc
-
-    gc.collect()  # the model's tensors, held by reference cycles, before the cache is emptied
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:  # noqa: BLE001 — no torch, or no GPU
-        pass

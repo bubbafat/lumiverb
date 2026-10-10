@@ -1,6 +1,6 @@
 """Server-side InsightFace provider used by hybrid similarity search.
 
-The CLI workers use `src.client.workers.faces.insightface_provider` for
+The CLI workers use `src.processing.workers.faces.insightface_provider` for
 ingest-time face detection. The server uses the *same* provider class
 to extract faces from query images uploaded via search-by-image — but
 needs two extra setup steps that don't apply on the worker side:
@@ -29,7 +29,7 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.client.workers.faces.insightface_provider import (
+    from src.processing.workers.faces.insightface_provider import (
         FaceDetection,
         InsightFaceProvider,
     )
@@ -67,7 +67,7 @@ def get_provider() -> "InsightFaceProvider":
             return _provider
         cache_root = _ensure_writable_cache()
         try:
-            from src.client.workers.faces.insightface_provider import (
+            from src.processing.workers.faces.insightface_provider import (
                 InsightFaceProvider,
             )
         except ImportError as exc:

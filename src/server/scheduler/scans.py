@@ -32,12 +32,12 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
-from src.client.cache_dir import cache_dir
-from src.client.cli.roots import reachable_root
+from src.processing.cache_dir import cache_dir
+from src.processing.roots import reachable_root
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
 if TYPE_CHECKING:
-    from src.client.cli.scan import ScanStats
+    from src.processing.scan import ScanStats
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +261,21 @@ def _note_failures(
         state.retries[library_id] = Retry(left, old.delay, old.due, held)
 
 
+# Whether this process has said its root map is empty (once per start).
+_said_no_root_map = False
+
+
+def _warn_if_no_root_map() -> None:
+    """A library out of reach with no root map: the likely cause, said once."""
+    global _said_no_root_map
+    from src.processing.machine import current
+
+    if _said_no_root_map or current().root_map:
+        return
+    _said_no_root_map = True
+    logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; library roots are used as stored")
+
+
 def scan_pass(
     client: Any,
     libraries: list[dict],
@@ -279,7 +294,7 @@ def scan_pass(
     Each library is looked at again right before its scan: a share can
     sleep during another library's long scan."""
     if scan_fn is None:
-        from src.client.cli.scan import run_scan as scan_fn
+        from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
     # require_entries: an unmounted mount point is an empty folder, and
     # scanning it would mark every file missing.
@@ -297,6 +312,7 @@ def scan_pass(
                     on_roots(dict(roots))
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
+            _warn_if_no_root_map()
             continue
         try:
             scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,

@@ -159,12 +159,12 @@ def test_stop_and_resume_a_redo(client):
     client.raw.return_value = _response(204)
     result = _run("redo", "stop", "vision")
     assert result.exit_code == 0, result.output
-    client.raw.assert_called_with("POST", "/v1/producers/vision/redo/stop")
+    client.raw.assert_called_with("POST", "/v1/producers/vision/pause", json={"scope": "redo"})
     assert "Stopped redoing vision" in result.output
     assert "lumiverb producers redo resume vision" in " ".join(result.output.split())
     result = _run("redo", "resume", "vision")
     assert result.exit_code == 0, result.output
-    client.raw.assert_called_with("POST", "/v1/producers/vision/redo/resume")
+    client.raw.assert_called_with("POST", "/v1/producers/vision/resume", json={"scope": "redo"})
     assert "Redoing vision again" in result.output
 
 
@@ -225,14 +225,22 @@ def test_retry_some_or_all(client):
     assert result.exit_code == 0 and "1 clip will be tried again shortly." in result.output
     assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "asset_ids": ["ast_1"]}
     client.raw.return_value = _response(200, {"retried": 0})
-    result = _run("retry")
+    result = _run("retry", "all", "--all")
     assert "Nothing was failing." in result.output
-    assert client.raw.call_args.kwargs["json"] == {}
+    assert client.raw.call_args.kwargs["json"] == {"all": True}
+
+
+def test_retry_names_what_it_tries_again_never_infers_all(client):
+    """Robert, Oct 9: an impactful action needs an explicit target; all is named."""
+    for args in ((), ("vision",), ("all",), ("vision", "--all", "--asset", "ast_1")):
+        result = _run("retry", *args)
+        assert result.exit_code == 2 and "Usage" in result.output, args
+    client.raw.assert_not_called()
 
 
 def test_retry_refused_says_why(client):
     client.raw.return_value = _response(403, {"detail": "Editors only"})
-    result = _run("retry")
+    result = _run("retry", "all", "--all")
     assert result.exit_code == 1 and "Editors only" in result.output
 
 

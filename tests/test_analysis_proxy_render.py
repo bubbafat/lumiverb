@@ -17,13 +17,13 @@ from pathlib import Path
 
 import pytest
 
-from src.client.video.analysis_proxy import (
+from src.processing.video.analysis_proxy import (
     AnalysisProxySettings,
     RenderError,
     build_command,
     render_analysis_proxy,
 )
-from src.client.video.audio import MIX_HANDLER, audio_tracks, speech_wav_command
+from src.processing.video.audio import MIX_HANDLER, audio_tracks, speech_wav_command
 
 
 def _make(path: Path, *, size: str = "1280x720", rate: int = 30, seconds: float = 2.0,
@@ -229,7 +229,7 @@ def test_an_undecodable_track_is_left_out_not_fatal(tmp_path: Path) -> None:
 ])
 def test_a_render_that_fails_on_several_tracks_retries_with_the_first(
         tmp_path: Path, monkeypatch, decoder: str, expected: list) -> None:
-    from src.client.video import analysis_proxy
+    from src.processing.video import analysis_proxy
 
     src = _make(tmp_path / "two.mov", layouts=["mono", "mono"])
     real = analysis_proxy.build_command
@@ -314,7 +314,7 @@ def test_settings_shape_the_command() -> None:
 # Decoding on the GPU
 # ---------------------------------------------------------------------------
 
-from src.client.video import analysis_proxy as AP  # noqa: E402
+from src.processing.video import analysis_proxy as AP  # noqa: E402
 
 needs_vulkan = pytest.mark.skipif(not AP._vulkan_decodes(), reason="no Vulkan video decoding here")
 _real_gpu_has_room = AP._gpu_has_room
@@ -528,7 +528,7 @@ def test_the_gpu_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: py
 # Cache
 # ---------------------------------------------------------------------------
 
-from src.client.proxy.analysis_cache import AnalysisProxyCache  # noqa: E402
+from src.processing.proxy.analysis_cache import AnalysisProxyCache  # noqa: E402
 
 
 class _Resp:

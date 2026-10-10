@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ def test_extract_text_reasoning_response(mock_chat, provider, tmp_path):
 def test_extract_text_missing_file(mock_chat, provider):
     """A missing file is an error (not "no text"), the image's not the
     endpoint's, and the model isn't called."""
-    from src.client.workers.captions.base import CaptionError
+    from src.processing.workers.captions.base import CaptionError
 
     with pytest.raises(CaptionError) as e:
         provider.extract_text(Path("/nonexistent/file.jpg"))
@@ -316,10 +316,10 @@ def test_extract_text_missing_file(mock_chat, provider):
 
 
 # ---------------------------------------------------------------------------
-# _ocr_one tests
+# One photo's text (the ocr producer's read_text)
 # ---------------------------------------------------------------------------
 
-from src.client.cli.repair import _ocr_one
+from src.producers.ocr.work import read_text as _ocr_one  # noqa: E402
 
 
 def test_ocr_one_success():
@@ -398,7 +398,7 @@ def test_ocr_one_provider_exception():
 # ProxyCache._ensure_size tests
 # ---------------------------------------------------------------------------
 
-from src.client.proxy.proxy_cache import ProxyCache
+from src.processing.proxy.proxy_cache import ProxyCache
 
 
 def _isolated_cache(tmp_path, **kwargs):

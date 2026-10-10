@@ -10,39 +10,23 @@ from pydantic import BaseModel
 class CLIConfig(BaseModel):
     """CLI configuration stored in ~/.lumiverb/config.json.
 
-    Only how this machine works (where things are, how much at once). What
-    changes the output (models, prompts, sizes) is the account's, on the
-    server: one source of truth, and so are its AI machines (Settings → AI).
-    Keys an older config file still has are ignored.
+    Who this CLI is (the API and its key) and where things are on this
+    machine. What changes the output (models, prompts, sizes) is the
+    account's, on the server; processing is the scheduler's, with its own
+    settings (src/server/scheduler/settings.py). Keys an older config file
+    still has are ignored.
     """
 
     api_url: str = "http://localhost:8000"
     api_key: str = ""
     admin_key: str = ""
-    face_batch_size: int = 25
-    face_batch_limit: int = 20
-    max_concurrency: int = 4
-    # How many vision and transcription requests go at once is each AI machine's (Settings → AI).
-    ocr_batch_size: int = 25
     # Library roots as stored on the server -> where they are on this
-    # machine, by path prefix (src/client/cli/roots.py).
+    # machine, by path prefix (src/processing/roots.py).
     root_map: dict[str, str] = {}
-    # Analysis proxies (src/client/video/analysis_proxy.py) and their cache.
-    # The encoder and decoder are this machine's way of rendering (they don't change what's tracked).
-    analysis_proxy_encoder: str = "libx264"
-    # Where originals are decoded: "auto" (the GPU through Vulkan when it
-    # works), "cpu", or an ffmpeg hwaccel such as "cuda". Same pictures either way.
-    analysis_proxy_decoder: str = "auto"
-    # Renders that decode on the GPU at once; the rest decode on the CPU
-    # meanwhile. Each takes a few hundred MB of video memory beside the models.
-    gpu_decodes: int = 1
-    # Analysis proxies rendered at once; 0: one per six cores, at most three.
-    render_concurrency: int = 0
-    analysis_cache_gb: float = 50.0
-    # Where caches, and the worker's lock and state, go instead of ~/.cache,
-    # when XDG_CACHE_HOME isn't set (src/client/cache_dir.py). The brain's
-    # install sets it to the data disk, so a manual `worker --once` finds the
-    # service's lock.
+    # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set
+    # (src/processing/cache_dir.py). The brain's install sets it to the data
+    # disk, so a command run by hand as the lumiverb user finds the
+    # scheduler's caches and lock.
     cache_home: str = ""
 
 
@@ -102,3 +86,12 @@ def get_api_key() -> str:
 def get_admin_key() -> str:
     """Return configured admin key."""
     return load_config().admin_key
+
+
+def machine_settings():
+    """This machine's processing settings, as the CLI's config has them
+    (src/processing/machine.py): where library roots are, and caches."""
+    from src.processing.machine import Machine
+
+    cfg = load_config()
+    return Machine(root_map=dict(cfg.root_map), cache_home=cfg.cache_home)

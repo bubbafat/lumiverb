@@ -362,3 +362,29 @@ def test_ctrl_c_in_the_terminal_still_logs_that_it_failed(install):
     assert out.returncode != 0
     lines = _lines(install)
     assert "Result: FAILED" in lines and "Result: OK" not in lines
+
+
+def test_the_scheduler_stops_before_the_pull(install):
+    """Review: the old scheduler ran on between the pull and update-api.sh's
+    stop, on files the pull had moved. update-api.sh starts it again."""
+    text = UPDATE.read_text()
+    stop = text.index("systemctl stop lumiverb-scheduler")
+    assert stop < text.index('as_svc git checkout "$BRANCH"') < text.index("as_svc git pull")
+    out = _run(install)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "systemctl stop lumiverb-scheduler" in install["calls"].read_text()
+    assert "The scheduler is stopped" not in _log(install)
+
+
+def test_a_failure_with_the_scheduler_stopped_says_how_to_start_it(install):
+    app = install["app"]
+    _git(app, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "local")
+    _push(install, "README", "upstream\n", branch="feat/brain")
+    out = _run(install, INACTIVE="lumiverb-scheduler")  # stopped, then the pull fails
+    assert out.returncode != 0
+    lines = _lines(install)
+    said = next(i for i, line in enumerate(lines) if "The scheduler is stopped" in line)
+    assert "sudo systemctl start lumiverb-scheduler" in lines[said]
+    assert lines.index("Result: FAILED") > said
+    # Not started for you: the code may be half-deployed.
+    assert "systemctl start lumiverb-scheduler" not in install["calls"].read_text()

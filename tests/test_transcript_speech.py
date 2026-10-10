@@ -18,9 +18,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.client.workers.transcripts import child
-from src.client.workers.transcripts.base import Segment
-from src.client.workers.transcripts.speech import SpeechError, SpeechMap, find_speech, restore, to_srt
+from src.processing.workers.transcripts import child
+from src.processing.workers.transcripts.base import Segment
+from src.processing.workers.transcripts.speech import SpeechError, SpeechMap, find_speech, restore, to_srt
 
 FIXTURES = Path(__file__).resolve().parents[1] / "clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/Fixtures"
 RATE = 16_000
