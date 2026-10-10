@@ -1,6 +1,7 @@
 """Assets API: upsert for scanner, trash and restore. All routes require tenant auth (middleware)."""
 
 import base64
+import inspect
 import json
 import logging
 from datetime import datetime
@@ -9,7 +10,7 @@ from typing import Any, Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
@@ -18,7 +19,13 @@ from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
-from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository, AssetRepository, LibraryRepository
+from src.server.repository.tenant import (
+    MISSING_CONDITIONS,
+    AssetMetadataRepository,
+    AssetOcrRepository,
+    AssetRepository,
+    LibraryRepository,
+)
 from src.server.repository import lineage
 from src.shared.producers import CLIP_MODEL_ID
 from src.shared.producers import PERSON as P_PERSON
@@ -48,7 +55,7 @@ class UpsertAssetResponse(BaseModel):
 
 
 class VideoFacetModel(BaseModel):
-    """One ffprobe pass over a video (see src/client/video/probe.py).
+    """One ffprobe pass over a video (see src/processing/video/probe.py).
 
     Validated on the way in: a malformed value would break every export of
     every project that holds the clip.
@@ -295,6 +302,17 @@ class VisionSubmitResponse(BaseModel):
     status: str
 
 
+def missing_filters(**flags: bool) -> frozenset[str]:
+    """The missing_* filters asked for: one per producer the scheduler runs
+    (its flag, src/producers/<artifact>/), and missing_face_embeddings."""
+    return frozenset(flag for flag, on in flags.items() if on)
+
+
+missing_filters.__signature__ = inspect.Signature([  # type: ignore[attr-defined]
+    inspect.Parameter(flag, inspect.Parameter.KEYWORD_ONLY, default=False, annotation=bool)
+    for flag in MISSING_CONDITIONS])
+
+
 @router.get("/page", response_model=AssetPageResponse)
 def page_assets(
     request: Request,
@@ -304,16 +322,7 @@ def page_assets(
     limit: int = Query(default=500, ge=1, le=MAX_PAGE),
     path_prefix: str | None = None,
     tag: str | None = None,
-    missing_vision: bool = False,
-    missing_embeddings: bool = False,
-    missing_faces: bool = False,
-    missing_face_embeddings: bool = False,
-    missing_video_scenes: bool = False,
-    missing_ocr: bool = False,
-    missing_scene_vision: bool = False,
-    missing_transcription: bool = False,
-    missing_probe: bool = False,
-    missing_analysis_proxy: bool = False,
+    missing: Annotated[frozenset[str], Depends(missing_filters)] = frozenset(),
     has_faces: bool | None = None,
     person_id: str | None = None,
     sort: str = "taken_at",
@@ -360,6 +369,12 @@ def page_assets(
                   aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure)
         if any(v is not None for v in camera):
             raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
+        from src.server.api.routers.query import PUBLIC_SORTS, require_public_folder
+
+        if sort not in PUBLIC_SORTS:
+            raise HTTPException(status_code=403, detail="That sort isn't available on public pages")
+        if public_folder := normalize_path_prefix(path_prefix):
+            require_public_folder(session, [library_id], public_folder)
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -398,16 +413,7 @@ def page_assets(
         limit=limit,
         path_prefix=normalized_prefix,
         tag=tag,
-        missing_vision=missing_vision,
-        missing_embeddings=missing_embeddings,
-        missing_faces=missing_faces,
-        missing_face_embeddings=missing_face_embeddings,
-        missing_video_scenes=missing_video_scenes,
-        missing_ocr=missing_ocr,
-        missing_scene_vision=missing_scene_vision,
-        missing_transcription=missing_transcription,
-        missing_probe=missing_probe,
-        missing_analysis_proxy=missing_analysis_proxy,
+        missing=missing,
         has_faces=has_faces,
         person_id=person_id,
         sort=sort_col,
@@ -479,23 +485,13 @@ def page_assets(
     return AssetPageResponse(items=items, next_cursor=next_cursor)
 
 
-class RepairSummary(BaseModel):
-    total_assets: int = 0
-    missing_proxy: int = 0
-    missing_exif: int = 0
-    missing_vision: int = 0
-    missing_embeddings: int = 0
-    missing_faces: int = 0
-    missing_face_embeddings: int = 0
-    missing_ocr: int = 0
-    missing_video_scenes: int = 0
-    missing_scene_vision: int = 0
-    missing_transcription: int = 0
-    missing_probe: int = 0
-    missing_analysis_proxy: int = 0
-    stale_search_sync: int = 0
-    # Items whose last try failed, waiting their turn (not in the counts above).
-    waiting_failures: int = 0
+# Counts for a library: its clips, what scans left out (proxies, EXIF), each
+# missing_* filter (one per producer the scheduler runs, and face
+# embeddings), stale search entries, and failures waiting their turn (not in
+# the counts above).
+RepairSummary = create_model("RepairSummary", total_assets=(int, 0), missing_proxy=(int, 0), missing_exif=(int, 0),
+                             **{flag: (int, 0) for flag in MISSING_CONDITIONS}, stale_search_sync=(int, 0),
+                             waiting_failures=(int, 0))
 
 
 def _waiting_failures_sql() -> str:
@@ -520,26 +516,17 @@ def repair_summary(
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    from src.server.repository.tenant import MISSING_CONDITIONS
-
-    c = MISSING_CONDITIONS
     from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
+
+    flags = list(MISSING_CONDITIONS)
+    counts = ",\n".join(f"COUNT(*) FILTER (WHERE {MISSING_CONDITIONS[f]}) AS {f}" for f in flags)
     row = session.execute(
         text(f"""
             SELECT
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
                 COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
-                COUNT(*) FILTER (WHERE {c["missing_vision"]}) AS missing_vision,
-                COUNT(*) FILTER (WHERE {c["missing_embeddings"]}) AS missing_embeddings,
-                COUNT(*) FILTER (WHERE {c["missing_faces"]}) AS missing_faces,
-                COUNT(*) FILTER (WHERE {c["missing_face_embeddings"]}) AS missing_face_embeddings,
-                COUNT(*) FILTER (WHERE {c["missing_ocr"]}) AS missing_ocr,
-                COUNT(*) FILTER (WHERE {c["missing_video_scenes"]}) AS missing_video_scenes,
-                COUNT(*) FILTER (WHERE {c["missing_scene_vision"]}) AS missing_scene_vision,
-                COUNT(*) FILTER (WHERE {c["missing_transcription"]}) AS missing_transcription,
-                COUNT(*) FILTER (WHERE {c["missing_probe"]}) AS missing_probe,
-                COUNT(*) FILTER (WHERE {c["missing_analysis_proxy"]}) AS missing_analysis_proxy,
+                {counts},
                 COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
                 {_waiting_failures_sql()} AS waiting_failures
             FROM active_assets a
@@ -547,24 +534,10 @@ def repair_summary(
             WHERE library_id = :library_id
         """),
         {"library_id": library_id},
-    ).one()
-    return RepairSummary(
-        total_assets=row.total,
-        missing_proxy=row.missing_proxy,
-        missing_exif=row.missing_exif,
-        missing_vision=row.missing_vision,
-        missing_embeddings=row.missing_embeddings,
-        missing_faces=row.missing_faces,
-        missing_face_embeddings=row.missing_face_embeddings,
-        missing_ocr=row.missing_ocr,
-        missing_video_scenes=row.missing_video_scenes,
-        missing_scene_vision=row.missing_scene_vision,
-        missing_transcription=row.missing_transcription,
-        missing_probe=row.missing_probe,
-        missing_analysis_proxy=row.missing_analysis_proxy,
-        waiting_failures=row.waiting_failures,
-        stale_search_sync=row.stale_search_sync,
-    )
+    ).mappings().one()
+    return RepairSummary(total_assets=row["total"], missing_proxy=row["missing_proxy"],
+                         missing_exif=row["missing_exif"], **{f: row[f] for f in flags},
+                         waiting_failures=row["waiting_failures"], stale_search_sync=row["stale_search_sync"])
 
 
 def _stream_file_with_range(
@@ -800,17 +773,14 @@ def get_asset_by_path(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
-    rel_path = normalize_rel_path(rel_path)
     if getattr(request.state, "is_public_request", False):
-        lib = LibraryRepository(session).get_by_id(library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=403, detail="Not available on public pages")  # a file-name probe
+    rel_path = normalize_rel_path(rel_path)
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
-    response = _asset_detail(session, request, asset)
-    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
+    return _asset_detail(session, request, asset)
 
 
 class ProjectUsageRequest(BaseModel):
@@ -1498,7 +1468,7 @@ def submit_transcript(
         session.add(asset)
         session.commit()
         lineage.record(session, asset_id, "transcript", **made, outcome="empty")
-        _transcript_searched(session, request, asset, None)
+        _transcript_searched(session, request, asset)
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
     if not validate_srt(body.srt):
@@ -1516,11 +1486,11 @@ def submit_transcript(
     session.add(asset)
     session.commit()
     lineage.record(session, asset_id, "transcript", **made, outcome="ok" if asset.has_transcript else "empty")
-    _transcript_searched(session, request, asset, body.srt)
+    _transcript_searched(session, request, asset)
     return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
 
 
-def _transcript_searched(session: Session, request: Request, asset: Asset, srt: str | None) -> None:
+def _transcript_searched(session: Session, request: Request, asset: Asset) -> None:
     """Search has the clip's transcript as it is now (segments replaced), and its library changed."""
     from src.server.search.sync import index_transcript_segments, try_sync_asset
 
@@ -1533,11 +1503,7 @@ def _transcript_searched(session: Session, request: Request, asset: Asset, srt: 
     tid = getattr(request.state, "tenant_id", None)
     if tid:
         try:
-            from src.server.search.quickwit_client import QuickwitClient
-
-            QuickwitClient().delete_tenant_transcript_documents(tid, asset.asset_id)
-            if srt:
-                index_transcript_segments(session, tid, asset, srt)
+            index_transcript_segments(session, tid, asset)  # the transcript as committed, or none
         except Exception as exc:  # noqa: BLE001 — search catches up on its own
             logger.warning("Transcript segment re-index failed for %s: %s", asset.asset_id, exc)
     LibraryRepository(session).bump_revision(asset.library_id)
@@ -1589,7 +1555,7 @@ def delete_transcript(
         # A person removed the machine's: their choice stands, nothing makes it again.
         lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty", commit=False)
     session.commit()
-    _transcript_searched(session, request, asset, None)
+    _transcript_searched(session, request, asset)
 
 
 class NoteUpdateRequest(BaseModel):

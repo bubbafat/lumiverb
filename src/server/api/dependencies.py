@@ -94,6 +94,16 @@ def get_current_user_id(request: Request) -> str:
 
 
 
+def checked_root_path(root_path: str) -> str:
+    """A library root a request sent; 400 unless absolute and in one form:
+    no ".", ".." or empty part (so no trailing "/"), no backslash, no NUL."""
+    parts = root_path[1:].split("/")
+    if (not root_path.startswith("/") or "\x00" in root_path or "\\" in root_path
+            or any(p in ("", ".", "..") for p in parts)):
+        raise HTTPException(status_code=400, detail="Invalid root_path")
+    return root_path
+
+
 def checked_rel_path(rel_path: str) -> str:
     """A rel_path a request sent, as stored (NFC); 400 unless it stays inside
     its library (relative, no "..", no leading "/"). Every write that takes a

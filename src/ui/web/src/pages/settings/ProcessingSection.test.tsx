@@ -73,11 +73,12 @@ beforeEach(() => {
       if (next) return next;
       return json(producers.find((p) => p.artifact === set[1]));
     }
-    const m = path.match(/^\/producers\/([^/]+)\/redo\/(stop|resume)$/);
+    // A producer's redo: its switch's other scope.
+    const m = body?.scope === "redo" ? path.match(/^\/producers\/([^/]+)\/(pause|resume)$/) : null;
     if (m && method === "POST") {
       const next = answers.shift();
       if (next) return next;
-      producers = producers.map((p) => (p.artifact === m[1] ? { ...p, redo_stopped: m[2] === "stop" } : p));
+      producers = producers.map((p) => (p.artifact === m[1] ? { ...p, redo_stopped: m[2] === "pause" } : p));
       return new Response(null, { status: 204 });
     }
     const all = path.match(/^\/producers\/all\/(pause|resume)$/);
@@ -211,10 +212,12 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Stop redoing Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/redo/stop"))).toBe(true));
+    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/pause")
+                                               && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
     expect(await screen.findByText("Redo stopped: 3 clips stay as they are until it's resumed.")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Resume redoing Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/redo/resume"))).toBe(true));
+    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/resume")
+                                               && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
     expect(await screen.findByText("Redoing 3 clips, after anything missing.")).toBeTruthy();
   });
 
@@ -380,7 +383,9 @@ describe("ProcessingSection", () => {
       artifact: "vision", asset_ids: ["ast_1"] });
     fireEvent.click(within(vision).getByRole("button", { name: "Try all again" }));
     await waitFor(() => expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry")).length).toBe(2));
-    expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry"))[1].body).toEqual({ artifact: "vision" });
+    // Every failing clip of the producer's: named (all: true), never inferred.
+    expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry"))[1].body).toEqual({
+      artifact: "vision", all: true });
   });
 
   it("lets viewers see failures but not try them again", async () => {

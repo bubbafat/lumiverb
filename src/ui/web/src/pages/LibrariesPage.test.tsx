@@ -128,6 +128,19 @@ describe("LibrariesPage a library in the trash", () => {
     }
   });
 
+  it("shows the public toggle to admins only", async () => {
+    api.listLibraries.mockResolvedValue([
+      { library_id: "lib_2", name: "Card", root_path: "/card", status: "active", is_public: false, last_scan_at: null },
+    ]);
+    renderPage();
+    expect(await screen.findByRole("button", { name: "Private" })).toBeTruthy();
+    cleanup();
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
+    renderPage();
+    expect(await screen.findByText("Card")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Private" })).toBeNull();
+  });
+
   it("editors restore but don't delete for good", async () => {
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
     api.restoreLibrary.mockResolvedValue({});

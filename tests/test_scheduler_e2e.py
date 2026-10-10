@@ -82,8 +82,8 @@ class FakeVision:
     def capacity(self) -> int:
         return 1
 
-    def on_fail(self, artifact: str):
-        return MagicMock()
+    def charges(self, error) -> bool:
+        return True
 
     def provider(self, settings=None, ocr_settings=None):
         provider = MagicMock()
@@ -109,7 +109,7 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
     lib = _library(env, "Scheduler end to end")
     photo = _ingest_with(lib, "red.jpg", _sha(), None)
     acct = Account(env[4], _client(scheduler_key(env[4])), ScanState())
-    acct.vision, acct.transcripts = FakeVision(), NoMachines()
+    acct.guards = {"vision": FakeVision(), "transcripts": NoMachines()}
     acct.refresh(force=True)
     assert acct.settings_ready  # the server's settings were read
     # Only the vision pool has slots: nothing else runs here.

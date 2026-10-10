@@ -420,7 +420,7 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     if not made:
         return
     clips = sum(made.values())
-    held = lineage.processing_paused(session)
+    held = lineage.pauses(session).work
     kinds = [{"artifact": a, "title": PRODUCERS[a].title, "clips": n, "paused": a in held} for a, n in made.items()]
     what = ", ".join(f"{k['title'].lower()} ({k['clips']:,})" for k in kinds)
     paused = [k["title"] for k in kinds if k["paused"]]
@@ -476,7 +476,7 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
         if changing:  # the newest ask wins: a stopped redo goes on with the new model
             from src.server.repository import lineage
 
-            lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()))
+            lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()), lineage.REDO)
             session.commit()
         return _settings(ctrl, tenant_id)
 
@@ -497,7 +497,7 @@ def job_machines(job: str, request: Request) -> WorkerJob:
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 
 
-@router.post("/machines/{machine_id}/status", status_code=204, dependencies=[Depends(require_editor)])
+@router.post("/machines/{machine_id}/status", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def report_status(machine_id: str, body: StatusIn, request: Request) -> Response:
     """The worker's check of a machine: online with its models, or why not.
     Not a failure of any clip."""

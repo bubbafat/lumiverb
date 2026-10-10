@@ -158,42 +158,49 @@ def _transcript_documents(asset: Asset, srt: str | None) -> list[dict]:
     ]
 
 
-def index_transcript_segments(session: Session, tenant_id: str, asset: Asset, srt: str | None = None) -> None:
-    """Replace an asset's documents in the transcript-segment index.
+def index_transcript_segments(session: Session, tenant_id: str, asset: Asset) -> None:
+    """Replace an asset's documents in the transcript-segment index with its
+    transcript as committed (none: its documents just go).
 
     Called wherever the segments change or come back: when a transcript is
-    submitted, and when a trashed asset is restored (trashing deletes them).
-    Best effort: on failure the clip's transcript_synced_at is cleared and
-    the sync sweep indexes it. That's written in its own transaction on the
-    session's database (the caller's isn't touched).
+    submitted or removed, and when a trashed asset is restored (trashing
+    deletes them). One at a time per clip (an advisory lock), each reading
+    the transcript once it holds the clip: of two saves at once, the later
+    one's segments are what search keeps. Best effort: on failure the clip's
+    transcript_synced_at is cleared and the sync sweep indexes it. That's
+    written in its own transaction on the session's database (the caller's
+    isn't touched).
     """
     from src.server.search import quickwit_client as qwc
 
-    srt = srt if srt is not None else asset.transcript_srt
-    started = utcnow()
-    synced: datetime | None = None
     remade = False
     try:
-        qw = qwc.QuickwitClient()
-        if not qw.enabled:
-            return
-        remade = qw.ensure_tenant_transcript_index(tenant_id)
-        qw.delete_tenant_transcript_documents(tenant_id, asset.asset_id)
-        docs = _transcript_documents(asset, srt)
-        if docs:
-            qw.ingest_tenant_transcript_documents(tenant_id, docs)
-        synced = started
-    except Exception as exc:
-        logger.warning("Transcript segment indexing failed for %s: %s", asset.asset_id, exc)
-    try:
         with Session(session.get_bind()) as own:
-            if remade:
-                mark_reindex(own, ["transcripts"])
+            own.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                        {"k": f"transcript_index:{asset.asset_id}"})
+            started = utcnow()
+            synced: datetime | None = None
+            try:
+                qw = qwc.QuickwitClient()
+                if not qw.enabled:
+                    return
+                remade = qw.ensure_tenant_transcript_index(tenant_id)
+                qw.delete_tenant_transcript_documents(tenant_id, asset.asset_id)
+                now = own.get(Asset, asset.asset_id)
+                docs = _transcript_documents(now, now.transcript_srt) if now is not None else []
+                if docs:
+                    qw.ingest_tenant_transcript_documents(tenant_id, docs)
+                synced = started
+            except Exception as exc:
+                logger.warning("Transcript segment indexing failed for %s: %s", asset.asset_id, exc)
             # Never waits long on a lock the caller holds on the row.
             own.execute(text("SET LOCAL lock_timeout = '2s'"))
             own.execute(text("UPDATE assets SET transcript_synced_at = :t WHERE asset_id = :a"),
                         {"t": synced, "a": asset.asset_id})
             own.commit()
+        if remade:
+            with Session(session.get_bind()) as own:
+                mark_reindex(own, ["transcripts"])
     except Exception as exc:
         logger.warning("Couldn't record %s's transcript sync: %s", asset.asset_id, exc)
 
@@ -234,6 +241,10 @@ def try_sync_asset(
         doc = build_asset_document(asset, meta, AssetOcrRepository(session).text_for(asset.asset_id),
                                    CorrectionsRepository(session).get(asset.asset_id))
         if tenant_id:
+            # Quickwit doesn't upsert: the old document goes first (the asset
+            # index's only; the clip's scenes and transcript stay), or its old
+            # words stay searchable.
+            qw.delete_asset_index_documents_by_asset_ids(tenant_id, [asset.asset_id])
             qw.ingest_tenant_documents(tenant_id, [doc])
         asset.search_synced_at = utcnow()
         session.add(asset)
@@ -262,6 +273,7 @@ def try_sync_scene(
             mark_reindex(session, ["scenes"])
         doc = build_scene_document(scene, asset)
         if tenant_id:
+            qw.delete_scene_index_documents_by_scene_ids(tenant_id, [scene.scene_id])  # no upsert: the old one goes
             qw.ingest_tenant_scene_documents(tenant_id, [doc])
         scene.search_synced_at = utcnow()
         session.add(scene)
@@ -286,6 +298,17 @@ STALE_SEARCH = (
     " OR a.search_synced_at < (SELECT so.generated_at FROM asset_ocr so WHERE so.asset_id = a.asset_id)"
     " OR a.search_synced_at < (SELECT sc.updated_at FROM asset_corrections sc WHERE sc.asset_id = a.asset_id))"
 )
+
+
+def _mark_synced(session: Session, table: str, key: str, at: datetime, ids: list[str], xmins: list[str]) -> None:
+    """Mark these rows synced at `at`, each only if its xmin is still the one
+    read (nothing wrote the row since its document was built)."""
+    session.execute(
+        text(f"UPDATE {table} t SET search_synced_at = :at"
+             " FROM unnest(CAST(:ids AS text[]), CAST(:xmins AS text[])) AS v(id, x)"
+             f" WHERE t.{key} = v.id AND t.xmin::text = v.x"),
+        {"at": at, "ids": ids, "xmins": xmins},
+    )
 
 
 def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dict:
@@ -320,12 +343,19 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     for kind in reset_marked(session):
         logger.info("Search sync times cleared for %s's %s: reindexing", tenant_id, kind)
 
+    # Synced as of when this began: a description, OCR, correction or
+    # transcript saved meanwhile is newer, and goes in next time. And only a
+    # row nothing wrote meanwhile (its xmin) is marked: a write that cleared
+    # its sync time (a note, a move) stays cleared.
+    started = utcnow()
+
     # --- Asset sync ---
     rows = session.execute(text(f"""
         SELECT a.asset_id, a.library_id, COALESCE(o.text, '') AS ocr_text,
                c.description AS c_description, c.ocr_text AS c_ocr_text,
-               c.asset_id AS c_asset_id, c.tags AS c_tags
+               c.asset_id AS c_asset_id, c.tags AS c_tags, x.xmin::text AS row_xmin
         FROM active_assets a
+        JOIN assets x ON x.asset_id = a.asset_id
         LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id
         LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id
         WHERE {STALE_SEARCH}
@@ -339,6 +369,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     meta_repo = AssetMetadataRepository(session)
     all_docs: list[dict] = []
     all_asset_ids: list[str] = []
+    all_xmins: list[str] = []
 
     for r in rows:
         asset = session.get(Asset, r.asset_id)
@@ -350,6 +381,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             corrections = {"description": r.c_description, "ocr_text": r.c_ocr_text, "tags": r.c_tags}
         all_docs.append(build_asset_document(asset, meta, r.ocr_text, corrections))
         all_asset_ids.append(r.asset_id)
+        all_xmins.append(r.row_xmin)
 
     if all_docs:
         try:
@@ -359,11 +391,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             # re-syncs, which broke the position-based ranking math.
             qw.delete_asset_index_documents_by_asset_ids(tenant_id, all_asset_ids)
             qw.ingest_tenant_documents(tenant_id, all_docs)
-            now = utcnow()
-            session.execute(
-                text("UPDATE assets SET search_synced_at = :now WHERE asset_id = ANY(:ids)"),
-                {"now": now, "ids": all_asset_ids},
-            )
+            _mark_synced(session, "assets", "asset_id", started, all_asset_ids, all_xmins)
             session.commit()
             result["synced"] += len(all_asset_ids)
         except Exception as exc:
@@ -372,14 +400,22 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             result["failed"] += len(all_docs)
 
     # --- Scene sync ---
+    # A clip's scene documents are deleted together (by clip: that also takes
+    # those of scenes found again under new ids), so every described scene of
+    # a clip with a stale one goes in again, not only the stale ones; and the
+    # limit is on clips, so none is split.
     scene_rows = session.execute(text("""
-        SELECT vs.scene_id, a.asset_id, a.library_id
+        SELECT vs.scene_id, vs.asset_id, vs.xmin::text AS row_xmin
         FROM video_scenes vs
-        JOIN active_assets a ON a.asset_id = vs.asset_id
         WHERE vs.description IS NOT NULL
-          AND (vs.search_synced_at IS NULL OR vs.search_synced_at < vs.created_at)
-        ORDER BY a.library_id, vs.scene_id
-        LIMIT 1000
+          AND vs.asset_id IN (
+              SELECT DISTINCT s.asset_id FROM video_scenes s
+              JOIN active_assets a ON a.asset_id = s.asset_id
+              WHERE s.description IS NOT NULL
+                AND (s.search_synced_at IS NULL OR s.search_synced_at < s.created_at)
+              ORDER BY s.asset_id
+              LIMIT 100)
+        ORDER BY vs.asset_id, vs.scene_id
     """)).fetchall()
     if "scenes" not in ready:
         result["scenes_failed"] += len(scene_rows)
@@ -387,6 +423,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     all_scene_docs: list[dict] = []
     all_scene_ids: list[str] = []
+    scene_xmins: list[str] = []
     for r in scene_rows:
         scene = session.get(VideoScene, r.scene_id)
         asset = session.get(Asset, r.asset_id)
@@ -394,24 +431,15 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             continue
         all_scene_docs.append(build_scene_document(scene, asset))
         all_scene_ids.append(r.scene_id)
+        scene_xmins.append(r.row_xmin)
 
     if all_scene_docs:
         try:
-            # Same delete-then-insert dedupe gate as the asset path.
-            # We delete by asset_id (not scene_id) because all scenes
-            # for an asset are re-synced as a unit when the asset's
-            # video gets re-analyzed.
-            asset_ids_for_scenes = sorted({
-                session.get(VideoScene, sid).asset_id  # type: ignore[union-attr]
-                for sid in all_scene_ids
-            })
-            qw.delete_scene_index_documents_by_asset_ids(tenant_id, asset_ids_for_scenes)
+            # Same delete-then-insert dedupe gate as the asset path, by clip
+            # (above: each picked clip's described scenes all go in again).
+            qw.delete_scene_index_documents_by_asset_ids(tenant_id, sorted({r.asset_id for r in scene_rows}))
             qw.ingest_tenant_scene_documents(tenant_id, all_scene_docs)
-            now = utcnow()
-            session.execute(
-                text("UPDATE video_scenes SET search_synced_at = :now WHERE scene_id = ANY(:ids)"),
-                {"now": now, "ids": all_scene_ids},
-            )
+            _mark_synced(session, "video_scenes", "scene_id", started, all_scene_ids, scene_xmins)
             session.commit()
             result["scenes_synced"] += len(all_scene_ids)
         except Exception as exc:
@@ -420,8 +448,7 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             result["scenes_failed"] += len(all_scene_docs)
 
     # --- Transcript sync ---
-    # Synced as of when this began: a transcript replaced meanwhile is newer, and goes in next time.
-    started = utcnow()
+    # Synced as of when this began (above): a transcript replaced meanwhile is newer, and goes in next time.
     transcript_ids = list(session.execute(text("""
         SELECT a.asset_id FROM active_assets a
         WHERE a.transcript_srt IS NOT NULL

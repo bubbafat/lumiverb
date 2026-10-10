@@ -492,6 +492,23 @@ class QuickwitClient:
                     index_id, len(batch), exc,
                 )
 
+    def delete_scene_index_documents_by_scene_ids(self, tenant_id: str, scene_ids: list[str]) -> None:
+        """Bulk-delete these scenes' docs from the scene index (a clip's
+        other scenes stay), 500 a request: inline scene sync's dedupe gate."""
+        if not self._enabled or not scene_ids:
+            return
+        index_id = self.tenant_scene_index_id(tenant_id)
+        for i in range(0, len(scene_ids), 500):
+            query = " OR ".join(f'scene_id:"{sid}"' for sid in scene_ids[i : i + 500])
+            try:
+                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                                     json={"query": query}, timeout=30)
+                if resp.status_code not in (200, 201, 202):
+                    logger.warning("Quickwit bulk scene delete failed for %s: %s %s",
+                                   index_id, resp.status_code, resp.text)
+            except requests.RequestException as exc:
+                logger.warning("Quickwit bulk scene delete request failed for %s: %s", index_id, exc)
+
     def delete_transcript_index_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
         """Bulk-delete transcript-index docs for a list of asset_ids, 500 a
         request: the sync sweep's dedupe gate before transcript ingest."""

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Literal, Sequence
 
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.registry import registered_upgrade_steps
 from src.server.upgrade.step import UpgradeStep
+
+logger = logging.getLogger(__name__)
 
 
 StepStatus = Literal["completed", "pending", "skipped", "failed"]
@@ -46,6 +49,17 @@ class TenantUpgradeRunner:
 
     def _failure_key(self, step_id: str) -> str:
         return f"upgrade.failed.{step_id}"
+
+    def _record_failure(self, ctx: UpgradeContext, step_id: str, error: Exception) -> None:
+        """Save upgrade.failed.<step>. The step's error may have aborted the
+        transaction, so roll it back first; failing to save never hides the
+        step's own error."""
+        ts = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
+        try:
+            ctx.session.rollback()
+            ctx.metadata.set_value(self._failure_key(step_id), f"{ts} :: {error.__class__.__name__}: {error}")
+        except Exception:  # noqa: BLE001 — the caller raises the step's error
+            logger.exception("Couldn't save the failure of upgrade step %s", step_id)
 
     def get_status(self, ctx: UpgradeContext) -> dict:
         total_steps = len(self._steps)
@@ -220,11 +234,7 @@ class TenantUpgradeRunner:
             try:
                 result = self._steps[target_index].run(ctx)
             except Exception as e:
-                ts = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
-                ctx.metadata.set_value(
-                    self._failure_key(step_id),
-                    f"{ts} :: {e.__class__.__name__}: {e}",
-                )
+                self._record_failure(ctx, step_id, e)
                 raise
 
             # If run() succeeds, mark completed for this step version.
@@ -255,11 +265,7 @@ class TenantUpgradeRunner:
             try:
                 result = s.run(ctx)
             except Exception as e:
-                ts = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
-                ctx.metadata.set_value(
-                    self._failure_key(sid),
-                    f"{ts} :: {e.__class__.__name__}: {e}",
-                )
+                self._record_failure(ctx, sid, e)
                 raise
 
             ctx.metadata.set_value(self._completion_key(sid), s.info.version)

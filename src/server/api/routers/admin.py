@@ -186,7 +186,7 @@ def update_tenant(
     """Update a tenant's vision endpoint and model. Only provided fields are
     changed. The endpoint is its first machine doing vision (/v1/ai): an
     empty URL removes that machine; another makes or moves it."""
-    from src.server.repository.ai_machines import first_vision_machine, new_vision_machine
+    from src.server.repository.ai_machines import first_vision_machine, job_model, new_vision_machine, set_job_model
 
     tenant_repo = TenantRepository(session)
     tenant = tenant_repo.get_by_id(tenant_id)
@@ -208,14 +208,14 @@ def update_tenant(
     if machine is not None:
         session.add(machine)
     if body.vision_model_id is not None:
-        tenant.vision_model_id = body.vision_model_id
+        set_job_model(tenant, "vision", body.vision_model_id)
     session.add(tenant)
     session.commit()
     session.refresh(tenant)
     return UpdateTenantResponse(
         tenant_id=tenant.tenant_id,
         vision_api_url=machine.api_url if machine is not None else "",
-        vision_model_id=tenant.vision_model_id,
+        vision_model_id=job_model(tenant, "vision"),
     )
 
 

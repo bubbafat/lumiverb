@@ -123,8 +123,8 @@ def test_a_proxy_cache_follows_its_librarys_storage(acct, tmp_path: Path) -> Non
 
 
 def test_nothing_is_ready_until_the_servers_settings_were_read(acct) -> None:
-    acct.vision.check = MagicMock(return_value=False)
-    acct.transcripts.check = MagicMock(return_value=False)
+    acct.guards["vision"].check = MagicMock(return_value=False)
+    acct.guards["transcripts"].check = MagicMock(return_value=False)
     acct.client.get.side_effect = ConnectionError("the API isn't answering yet")
     acct.refresh()
     assert acct.settings_ready is False
@@ -133,54 +133,6 @@ def test_nothing_is_ready_until_the_servers_settings_were_read(acct) -> None:
     acct.clock.now += account_mod.RETRY_SEC  # tried again sooner than the usual minute
     acct.refresh()
     assert acct.settings_ready is True
-
-
-def test_idle_models_are_let_go_of(acct) -> None:
-    acct.vision.check = MagicMock(return_value=True)
-    acct.transcripts.check = MagicMock(return_value=True)
-    acct.client.get.return_value.json.return_value = {"producers": []}
-    acct._clip = (("ViT-B-32", "openai"), MagicMock())
-    acct._used["clip"] = acct.clock.now
-    faces = MagicMock(idle=True)
-    acct._faces = faces
-    acct._used["faces"] = acct.clock.now
-    acct.clock.now += account_mod.IDLE_SEC - 1
-    acct.refresh()
-    assert acct._clip is not None and not faces.close.called
-    acct.clock.now += 2
-    acct.refresh()
-    assert acct._clip is None and faces.close.called
-
-
-def test_letting_go_of_the_face_process_is_said_once(acct, caplog) -> None:
-    # Review round 2: every refresh after the first said it again (1 a second).
-    from src.server.scheduler.runners import FaceRunner
-
-    acct.vision.check = MagicMock(return_value=True)
-    acct.transcripts.check = MagicMock(return_value=True)
-    acct.client.get.return_value.json.return_value = {"producers": []}
-    runner = FaceRunner(acct.client, MagicMock(), pool_factory=MagicMock)
-    runner._pool = MagicMock()  # a batch ran
-    acct._faces = runner
-    acct._used["faces"] = acct.clock.now
-    caplog.set_level("INFO", logger="src.server.scheduler.account")
-    for _ in range(5):
-        acct.clock.now += account_mod.IDLE_SEC + 1
-        acct.refresh()
-    assert sum("face detection process" in r.getMessage() for r in caplog.records) == 1
-
-
-@pytest.mark.fast
-def test_a_face_process_in_the_middle_of_a_batch_isnt_let_go_of(acct) -> None:
-    acct.vision.check = MagicMock(return_value=True)
-    acct.transcripts.check = MagicMock(return_value=True)
-    acct.client.get.return_value.json.return_value = {"producers": []}
-    faces = MagicMock(idle=False)
-    acct._faces = faces
-    acct._used["faces"] = acct.clock.now
-    acct.clock.now += account_mod.IDLE_SEC + 1
-    acct.refresh()
-    assert not faces.close.called
 
 
 def test_closing_tells_jobs_to_save_nothing_more(acct) -> None:
@@ -197,7 +149,7 @@ def test_storage_is_looked_at_as_the_scan_pass_does(acct, tmp_path: Path, monkey
         seen.append((library["library_id"], require_entries))
         return tmp_path if library["library_id"] == "lib_1" else None
 
-    monkeypatch.setattr("src.client.cli.roots.reachable_root", reachable_root)
+    monkeypatch.setattr("src.processing.roots.reachable_root", reachable_root)
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
     assert acct.storage_gone("lib_1") is False and acct.storage_gone("lib_2") is True
     assert acct.storage_gone("lib_unknown") is True

@@ -7,10 +7,16 @@ Redo on change (Robert, Oct 9): changing a setting is the approval, so a
 producer's stale clips are made again after anything missing, everywhere.
 An admin can stop that for a producer and resume it.
 
-Pausing (Robert, Oct 9): an admin pauses all of the account's processing,
-its scans alone, or one producer's, and resumes it with its own switch
-(nothing else lifts a pause). The scheduler starts nothing more of it;
-what's running finishes."""
+Pausing (Robert, Oct 9): one switch per processing action (Scans, Upkeep,
+each producer the scheduler makes), or all of them, paused and resumed on
+its own (nothing else lifts a pause), with a scope: its work (nothing of it
+starts) or, for a producer, its redo alone (its stale clips wait). The
+scheduler starts nothing more of what's paused; what's running finishes.
+
+Doing work now: POST /v1/producers/run asks the scheduler to make a
+producer's (or every producer's) work now, in one library or all of them,
+named, never inferred (Robert, Oct 9): failing clips are tried again at
+once, and with scope redo what's made is made again."""
 
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.errors import ConflictError
+from src.server.api.limits import MAX_IDS
 from src.server.repository import lineage
 from src.shared.producers import (
     PAUSE_ALL,
@@ -215,11 +222,11 @@ def list_producers(
         require_editor(request)  # like every project route
         asset_ids = _project_clips(request, session, user_id, project_id)
     admin = _admin(request)
-    stopped, held = lineage.paused(session), lineage.processing_paused(session)
+    paused = lineage.pauses(session)
     items = []
     for artifact in PRODUCERS:
         want = lineage.desired(session, artifact, models)
-        item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), stopped, held, admin)
+        item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), paused, admin)
         if counts:
             item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
         items.append(item)
@@ -230,12 +237,12 @@ def _admin(request: Request) -> bool:
     return getattr(request.state, "role", None) == "admin"
 
 
-def _with_state(item: ProducerItem, stopped: dict, held: dict, admin: bool) -> ProducerItem:
+def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> ProducerItem:
     """Whether its redo is stopped and whether it's paused (who did it: admins only)."""
-    if (redo := stopped.get(item.artifact)) is not None:
+    if (redo := paused.redo.get(item.artifact)) is not None:
         item.redo_stopped, item.redo_stopped_at = True, redo["paused_at"]
         item.redo_stopped_by = redo["paused_by"] if admin else None
-    if (pause := held.get(item.artifact)) is not None:
+    if (pause := paused.work.get(item.artifact)) is not None:
         item.paused, item.paused_at = True, pause["paused_at"]
         item.paused_by = pause["paused_by"] if admin else None
     return item
@@ -307,10 +314,10 @@ def set_settings(
     if after["settings_hash"] != before["settings_hash"]:
         clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
-            stopped = artifact in lineage.paused(session)
-            held = artifact in lineage.processing_paused(session)
+            paused = lineage.pauses(session)
+            stopped, held = artifact in paused.redo, artifact in paused.work
             session.rollback()
-            also = " and ".join(PRODUCERS[a].title.lower() for a in p.redo_also)
+            also = " and ".join(PRODUCERS[a].title.lower() for a in lineage.made_from(artifact)[1:])
             raise DecisionRequiredError(
                 "redo_on_change",
                 f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again"
@@ -322,15 +329,14 @@ def set_settings(
                 {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
                  "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
-        lineage.resume(session, [artifact])
+        lineage.resume(session, [artifact], lineage.REDO)
     if uses != used and p.regroup:
         from src.producers import load
 
         load(p.regroup)(session)
     session.commit()
     # Settings unchanged leave a stopped redo stopped.
-    return _with_state(_item(artifact, after, waits, uses), lineage.paused(session),
-                       lineage.processing_paused(session), admin=True)
+    return _with_state(_item(artifact, after, waits, uses), lineage.pauses(session), admin=True)
 
 
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
@@ -344,71 +350,73 @@ def _project_clips(request: Request, session: Session, user_id: str, project_id:
     return [a.asset_id for a in _all_project_assets(project, request, session, user_id)]
 
 
-@router.post("/{artifact}/redo/stop", status_code=204, dependencies=[Depends(require_tenant_admin)])
-def stop_redo(
-    artifact: str,
-    session: Annotated[Session, Depends(get_tenant_session)],
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> None:
-    """Stop redoing the producer's stale clips: they stay as they are until
-    it's resumed, or its settings change. What's missing is still made."""
-    p = producer_or_404(artifact)
-    if not lineage.redoable(artifact):
-        raise ConflictError("cant_redo", f"{p.title} isn't made again yet. {lineage.CANT_REDO.get(artifact, '')}".strip())
-    lineage.pause(session, artifact, by=user_id)
-    session.commit()
-
-
-@router.post("/{artifact}/redo/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
-def resume_redo(artifact: str, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Redo the producer's stale clips again, after anything missing."""
-    producer_or_404(artifact)
-    lineage.resume(session, [artifact])
-    session.commit()
-
-
 SWITCH_TITLES = {PAUSE_SCANS: "Scans", PAUSE_UPKEEP: "Upkeep"}
 
 
-def _switch_or_error(target: str) -> str:
-    """A pause switch: Scans, Upkeep or a producer the scheduler makes, or all
-    of them (named, never a missing target). 404 for no such producer; 409
-    not_scheduled for what scans make (Scans pauses it)."""
-    if target in SWITCH_TITLES or target == PAUSE_ALL:
-        return target
+class PauseIn(BaseModel):
+    # "work": all of the switch's work (nothing of it starts, missing or
+    # stale); "redo": a producer's redo alone (its stale clips wait; what's
+    # missing is still made). Named, never inferred.
+    scope: Literal["work", "redo"]
+
+
+def _targets(target: str, scope: str) -> list[str]:
+    """What a pause names: one switch (Scans, Upkeep or a producer the
+    scheduler makes) or every one ("all", named, never a missing target).
+    404 for no such producer; 409 not_scheduled for what scans make (Scans
+    pauses it). A redo is a producer's: 422 bad_scope for Scans and Upkeep,
+    409 cant_redo for a producer that isn't made again yet; "all" names
+    every producer that is."""
+    from src.server.api.errors import InvalidChoiceError
+
+    if target == PAUSE_ALL:
+        if scope == lineage.WORK:
+            return list(pause_targets())
+        return [a for a in pause_targets() if a in PRODUCERS and lineage.redoable(a)]
+    if target in SWITCH_TITLES:
+        if scope == lineage.REDO:
+            raise InvalidChoiceError("bad_scope", f"{SWITCH_TITLES[target]} make nothing again: pause its work.",
+                                     {"target": target})
+        return [target]
     p = producer_or_404(target)
+    if scope == lineage.REDO and not lineage.redoable(target):
+        raise ConflictError("cant_redo", f"{p.title} isn't made again yet. {lineage.CANT_REDO.get(target, '')}".strip())
     if not p.scheduled:
         raise ConflictError("not_scheduled", f"{p.title} are made by scans: pausing Scans stops them.",
                             {"artifact": target})
-    return target
+    return [target]
 
 
 @router.post("/{target}/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def pause_switch(
     target: str,
+    body: PauseIn,
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Pause one switch (admins), whatever the others are: scans (no new or
-    changed files found, no thumbnails or video previews made), upkeep (no
-    trash purge, file cleanup or face names spread; search sync goes on) or
-    a producer (nothing more of it starts, missing or stale); or "all", every
-    switch (state paused; each can be resumed alone after; nothing stores
-    "all"). What's running finishes. Again is fine: who paused first stays."""
-    if _switch_or_error(target) == PAUSE_ALL:
-        lineage.pause_everything(session, by=user_id)
-    else:
-        lineage.pause_processing(session, target, by=user_id)
+    """Pause one switch (admins), or "all", whatever the others are. Scope
+    work: scans (no new or changed files found, no thumbnails or video
+    previews made), upkeep (no trash purge, file cleanup or face names
+    spread; search sync goes on) or a producer (nothing more of it starts,
+    missing or stale); all is every switch (state paused; each can be
+    resumed alone after; nothing stores "all"). Scope redo: a producer's
+    stale clips stay as they are until it's resumed, or its settings change
+    (what's missing is still made). What's running finishes. Again is
+    fine: who paused first stays."""
+    for name in _targets(target, body.scope):
+        lineage.pause(session, name, body.scope, by=user_id)
     session.commit()
 
 
 @router.post("/{target}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
-def resume_switch(target: str, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Resume one switch (admins), whatever the others are; "all", every one."""
-    if _switch_or_error(target) == PAUSE_ALL:
-        lineage.resume_everything(session)
+def resume_switch(target: str, body: PauseIn, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
+    """Resume one switch (admins), or "all", in that scope, whatever the others are."""
+    if target == PAUSE_ALL and body.scope == lineage.WORK:
+        lineage.resume_everything(session)  # a row for what's no longer a switch goes too
+    elif body.scope == lineage.REDO and target != PAUSE_ALL and target in PRODUCERS:
+        lineage.resume(session, [target], body.scope)  # always: a leftover stop is never stuck
     else:
-        lineage.resume_processing(session, target)
+        lineage.resume(session, _targets(target, body.scope), body.scope)
     session.commit()
 
 
@@ -422,7 +430,7 @@ class FailuresIn(BaseModel):
     items: list[Failure] = Field(max_length=500)
 
 
-@router.post("/failures", dependencies=[Depends(require_editor)])
+@router.post("/failures", dependencies=[Depends(require_tenant_admin)])  # the scheduler's
 def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """The scheduler couldn't make these: each is kept with its error and not
     handed out again for 5 minutes, then 10, 20 and so on up to a day, and
@@ -539,7 +547,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
             pass
     now = utcnow()
     status.live = status.at is not None and now - status.at < timedelta(seconds=30)
-    held, admin = lineage.processing_paused(session), _admin(request)
+    held, admin = lineage.pauses(session).work, _admin(request)
     status.state = pause_state(set(held))
     status.switches = [
         PauseSwitch(target=t, title=SWITCH_TITLES.get(t) or PRODUCERS[t].title, paused=t in held,
@@ -574,7 +582,7 @@ def _work_left(request: Request, session: Session, away: list[str]) -> dict[str,
     from src.server.repository.ai_machines import account_job_models
 
     models = account_job_models(tenant_id)
-    stopped = lineage.paused(session)
+    stopped = lineage.pauses(session).redo
     out = {}
     for artifact, p in PRODUCERS.items():
         if not p.scheduled:
@@ -632,23 +640,107 @@ def list_failures(
 
 
 class RetryIn(BaseModel):
-    """Which failing clips to try again: one producer's, one library's, or
-    these clips' (any combination; nothing given = every failing clip)."""
+    """Failing clips to try again: these (asset_ids), or every failing clip
+    (all: true); a producer's (artifact) or one library's (library_id) alone
+    when given."""
 
+    asset_ids: list[str] | None = Field(default=None, min_length=1, max_length=MAX_IDS)
+    all: bool = False
     artifact: str | None = Field(default=None, max_length=64)
     library_id: str | None = Field(default=None, max_length=64)
-    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
 
 
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
 def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """Try failing clips again now, given up or not; the back-off starts
-    over. Returns {"retried"}."""
+    over. asset_ids, or all: true; neither or both is a 400 scope_required.
+    Returns {"retried"}."""
+    from src.server.api.limits import require_scope
+
+    require_scope(body.asset_ids is not None, body.all, "asset_ids")
     if body.artifact is not None:
         producer_or_404(body.artifact)
     n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=body.asset_ids)
     session.commit()
     return {"retried": n}
+
+
+class RunIn(BaseModel):
+    """Work for the scheduler to do now: a producer's (or "all", named), in
+    these libraries (library_ids) or every one (all: true), new work or a redo."""
+
+    producer: str = Field(max_length=64)
+    library_ids: list[str] | None = Field(default=None, min_length=1, max_length=MAX_IDS)
+    all: bool = False
+    # "new": what's missing, failing clips tried again at once; "redo": that,
+    # and what's made made again (admins), as new settings would.
+    scope: Literal["new", "redo"]
+
+
+class RunProducer(BaseModel):
+    artifact: str
+    title: str
+    missing: int  # clips the scheduler makes now
+    redo: int  # made, to be made again (with scope redo: those asked for, and any stale)
+    retried: int  # failing clips tried again now
+    paused: bool = False  # its switch is paused: nothing starts until it's resumed
+    redo_stopped: bool = False  # its redo is stopped: what's made waits until it's resumed
+
+
+class RunOut(BaseModel):
+    producers: list[RunProducer]
+
+
+@router.post("/run", response_model=RunOut, dependencies=[Depends(require_editor)])
+def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> RunOut:
+    """Ask the scheduler to do work now (what lumiverb enrich does): failing
+    clips of the producers named are tried again at once and the scheduler
+    looks again now; with scope redo (admins), what they've made in the
+    libraries named is made again, after anything missing (a person's never
+    is). It goes as the scheduler goes: by tier, within its pools, and what's
+    paused waits (each producer says). library_ids, or all: true; neither
+    or both is a 400 scope_required."""
+    from src.server.api.limits import require_scope
+    from src.server.repository.tenant import LibraryRepository
+
+    require_scope(body.library_ids is not None, body.all, "library_ids")
+    libraries: list[str | None] = [None] if body.all else list(dict.fromkeys(body.library_ids or []))
+    if any(LibraryRepository(session).get_by_id(lib) is None for lib in libraries if lib):
+        raise HTTPException(status_code=404, detail="Library not found")
+    if body.producer == PAUSE_ALL:
+        artifacts = [a for a, p in PRODUCERS.items() if p.scheduled]
+    else:
+        p = producer_or_404(body.producer)
+        if not p.scheduled:
+            raise ConflictError("not_scheduled", f"{p.title} are made by scans.", {"artifact": body.producer})
+        artifacts = [body.producer]
+    redo = body.scope == "redo"
+    if redo:
+        if not _admin(request):
+            raise HTTPException(status_code=403, detail="Making things again is for admins")
+        cant = [a for a in artifacts if not lineage.redoable(a)]
+        if body.producer != PAUSE_ALL and cant:
+            p = PRODUCERS[cant[0]]
+            raise ConflictError("cant_redo", f"{p.title} isn't made again yet. {lineage.CANT_REDO.get(cant[0], '')}".strip())
+        artifacts = [a for a in artifacts if a not in cant]
+    models, _ = tenant_ai(request)
+    paused = lineage.pauses(session)
+    out = []
+    for artifact in artifacts:
+        want = lineage.desired(session, artifact, models)
+        retried = missing = stale = 0
+        for library_id in libraries:
+            retried += lineage.retry(session, artifact=artifact, library_id=library_id)
+            if redo:
+                lineage.ask_redo(session, artifact, library_id)
+            c = lineage.counts(session, artifact, want, library_id)
+            missing, stale = missing + c["missing"], stale + c["stale"]
+        out.append(RunProducer(artifact=artifact, title=PRODUCERS[artifact].title, missing=missing,
+                               redo=stale if lineage.redoable(artifact) else 0, retried=retried,
+                               paused=artifact in paused.work, redo_stopped=artifact in paused.redo))
+    lineage.nudge(session)
+    session.commit()
+    return RunOut(producers=out)
 
 
 def producer_or_404(artifact: str):

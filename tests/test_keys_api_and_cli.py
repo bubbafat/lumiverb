@@ -174,7 +174,7 @@ def test_last_admin_key_cannot_be_revoked(keys_client: tuple[TestClient, str]) -
 
     # Find the sole remaining admin key (exclude the editor key we just downgraded
     # and the viewer key from the previous test).
-    r_list = client.get("/v1/keys", headers=auth_editor)
+    r_list = client.get("/v1/keys", headers=auth_admin)  # an editor lists only its own
     assert r_list.status_code == 200
     keys = r_list.json()["keys"]
     admin_keys = [k for k in keys if k.get("role") == "admin"]
@@ -222,8 +222,9 @@ def test_editor_cannot_revoke_an_admin_key_even_with_admins_to_spare(keys_client
                              params={"k": spare["key_id"]}).first()
     assert still is not None and still[0] is None
 
-    # At or below its own role is fine.
-    assert client.delete(f"/v1/keys/{viewer['key_id']}", headers=auth_editor).status_code == 204
+    # Below its own role, but not its own key (an admin minted it): not the editor's to revoke.
+    assert client.delete(f"/v1/keys/{viewer['key_id']}", headers=auth_editor).status_code == 404
+    assert client.delete(f"/v1/keys/{viewer['key_id']}", headers=auth_admin).status_code == 204
     assert client.delete(f"/v1/keys/{spare['key_id']}", headers=auth_admin).status_code == 204
 
 

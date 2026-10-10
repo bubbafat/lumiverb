@@ -1,7 +1,9 @@
-"""Faces in photos (InsightFace), on the brain's GPU, 25 photos a batch
-(src/client/workers/faces/insightface_provider.py, run by src/client/cli/repair.py)."""
+"""Faces in photos (InsightFace), on the brain's GPU, 25 photos a job
+(src/processing/workers/faces/insightface_provider.py, in a process of its
+own: detect.py; work.py saves a job's photos together)."""
 
 from src.producers.contract import IMAGE, ProducerSpec, Setting
+from src.producers.pools import GPU
 
 # Proposed (PR: "merge close face clusters"): leaf selection splits one person's
 # sub-modes (years, glasses, light) into groups; ones closer than this merge. On
@@ -44,5 +46,5 @@ PRODUCER = ProducerSpec(
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
     regroup="src.server.repository.tenant:_mark_clusters_dirty",
-    kind="faces", flag="missing_faces", run="src.server.scheduler.runners:faces", pool="gpu", batch=25,
+    kind="faces", flag="missing_faces", run="src.producers.faces.work:Faces", pool=GPU, batch=25,
 )

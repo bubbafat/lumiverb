@@ -1,8 +1,9 @@
-"""A video's scenes, found from its analysis copy (src/client/video/scene_segmenter.py,
-run by src/client/cli/video_index.py). Found again, a clip's old scenes go
-with their descriptions (POST /v1/video/{id}/chunks with redo)."""
+"""A video's scenes, found from its analysis copy (src/processing/video/scene_segmenter.py,
+run by work.py). Found again, a clip's old scenes go with their
+descriptions (POST /v1/video/{id}/chunks with redo)."""
 
 from src.producers.contract import VIDEO, ProducerSpec, Setting
+from src.producers.pools import SCENES
 
 PRODUCER = ProducerSpec(
     artifact="scenes", producer="scene-detect", version="1", media=VIDEO, unit="second", title="Scenes", order=50,
@@ -29,5 +30,5 @@ PRODUCER = ProducerSpec(
     # Found again, a clip's scenes are new ones: their descriptions go with the old.
     redo_also=("scene_vision",),
     redo_on_source_change=False,
-    kind="scenes", flag="missing_video_scenes", run="src.server.scheduler.runners:scenes", pool="scenes",
+    kind="scenes", flag="missing_video_scenes", run="src.producers.scenes.work:Scenes", pool=SCENES,
 )

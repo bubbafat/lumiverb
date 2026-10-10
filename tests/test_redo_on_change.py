@@ -256,22 +256,22 @@ def test_a_video_is_redone_until_every_scene_is_described_again(env):
 
 
 def test_an_admin_stops_a_redo_and_resumes_it(env):
-    from src.server.scheduler.service import _paused_in_database
+    from src.server.scheduler.service import _on_hold_in_database
 
     lib = _library(env, "RedoStop")
     client, headers, *_ = lib
     _stale_clip(lib, "a.jpg")
     try:
-        assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204
+        assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
         p = _producer(lib)
         assert p["redo_stopped"] is True and p["redo_stopped_at"] and p["redo_stopped_by"]
-        assert "vision" in _paused_in_database(env[4])
+        assert "vision" in _on_hold_in_database(env[4]).redo
         assert p["counts"]["stale"] >= 1  # still stale, waiting
-        assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204  # again: fine
+        assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204  # again: fine
     finally:
-        assert client.post("/v1/producers/vision/redo/resume", headers=headers).status_code == 204
+        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
     assert _producer(lib)["redo_stopped"] is False
-    assert "vision" not in _paused_in_database(env[4])
+    assert "vision" not in _on_hold_in_database(env[4]).redo
 
 
 def test_only_admins_stop_or_resume_and_only_they_see_who(env):
@@ -281,14 +281,14 @@ def test_only_admins_stop_or_resume_and_only_they_see_who(env):
     client, headers, *_ = lib
     editor = _key_with_role(env, "editor")
     viewer = _key_with_role(env, "viewer")
-    assert client.post("/v1/producers/ocr/redo/stop", headers=editor).status_code == 403
-    assert client.post("/v1/producers/ocr/redo/resume", headers=editor).status_code == 403
+    assert client.post("/v1/producers/ocr/pause", json={"scope": "redo"}, headers=editor).status_code == 403
+    assert client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=editor).status_code == 403
     try:
-        assert client.post("/v1/producers/ocr/redo/stop", headers=headers).status_code == 204
+        assert client.post("/v1/producers/ocr/pause", json={"scope": "redo"}, headers=headers).status_code == 204
         seen = _producer(lib, "ocr", headers=viewer)
         assert seen["redo_stopped"] is True and seen["redo_stopped_by"] is None
     finally:
-        client.post("/v1/producers/ocr/redo/resume", headers=headers)
+        client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env):
@@ -297,10 +297,10 @@ def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env):
     for artifact in ("proxy", "video_preview"):
         p = _producer(lib, artifact)
         assert p["redoable"] is False and p["why_not"]
-        r = client.post(f"/v1/producers/{artifact}/redo/stop", headers=headers)
+        r = client.post(f"/v1/producers/{artifact}/pause", json={"scope": "redo"}, headers=headers)
         assert r.status_code == 409 and _error(r)["code"] == "cant_redo"
     assert _producer(lib, "vision")["redoable"] is True and _producer(lib, "scenes")["redoable"] is True
-    assert client.post("/v1/producers/nope/redo/stop", headers=headers).status_code == 404
+    assert client.post("/v1/producers/nope/pause", json={"scope": "redo"}, headers=headers).status_code == 404
 
 
 def test_the_upgrade_step_is_gone(env):
@@ -313,7 +313,7 @@ def test_the_upgrade_step_is_gone(env):
     assert r.status_code == 200 and all("upgrade" not in i for i in r.json()["items"])
     with _db(env) as s:
         tables = {r[0] for r in s.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))}
-    assert "producer_redo_paused" in tables
+    assert "producer_pauses" in tables
     assert not tables & {"producer_upgrades", "producer_upgrade_items", "correction_history"}
 
 
@@ -335,7 +335,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert r.status_code == 201, r.text
             assert client.put("/v1/ai/jobs/vision", json={"model": "m1", "redo": True}, headers=headers).status_code == 200
             _stale_clip(lib, "a.jpg")
-            assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204
+            assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
 
             r = client.put("/v1/ai/jobs/vision", json={"model": "m2"}, headers=headers)
             assert r.status_code == 409, r.text
@@ -347,9 +347,9 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert "m2 makes" in err["message"] and "after anything missing" in err["message"]
             assert "paused" not in err["message"] and "all_paused" not in err["details"]
             # Paused, the question says nothing is made until it's resumed.
-            assert client.post("/v1/producers/all/pause", headers=headers).status_code == 204
+            assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
             err = _error(client.put("/v1/ai/jobs/vision", json={"model": "m2"}, headers=headers))
-            client.post("/v1/producers/all/resume", headers=headers)
+            client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
             assert "Paused, so not made until it's resumed" in err["message"]
             assert {k["artifact"]: k["paused"] for k in err["details"]["artifacts"]}["vision"] is True
             assert client.get("/v1/ai", headers=headers).json()["jobs"][0]["model"] == "m1"  # nothing changed
@@ -362,8 +362,8 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert r.status_code == 200, r.text
             assert _producer(lib)["redo_stopped"] is False  # the newest ask wins
     finally:
-        client.post("/v1/producers/all/resume", headers=headers)
-        client.post("/v1/producers/vision/redo/resume", headers=headers)
+        client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
                 client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)

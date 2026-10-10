@@ -141,7 +141,7 @@ def test_no_public_response_holds_an_email(seeded):
                             leaks.append(f"{url} {params} -> {r.status_code}: {EMAIL.search(text)}")
     assert not leaks, "Emails on public responses:\n" + "\n".join(leaks)
     # The routes that matter answered the visitor (a test of 401s would prove nothing).
-    for must in ("/v1/query", "/v1/assets/page", "/v1/assets/{asset_id}", "/v1/assets/by-path",
+    for must in ("/v1/query", "/v1/assets/page", "/v1/assets/{asset_id}",  # by-path refuses visitors (403)
                  "/v1/public/projects/{project_id}", "/v1/public/projects/{project_id}/assets", "/v1/assets/facets",
                  "/v1/libraries/{library_id}/directories", "/v1/libraries/{library_id}"):
         assert must in answered, (must, sorted(answered))

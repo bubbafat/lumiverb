@@ -12,7 +12,7 @@ from src.client.cli.client import LumiverbClient
 from src.client.cli.commands.archive import library_id_for
 
 console = Console()
-maintenance_app = typer.Typer(help="Maintenance tasks: cleanup, search sync, prune dismissed people, tenant upgrades.")
+maintenance_app = typer.Typer(help="Maintenance tasks: cleanup, orphan folders, search sync, prune dismissed people, tenant upgrades.")
 
 
 @maintenance_app.command("cleanup")
@@ -36,6 +36,8 @@ def cleanup(
     params = {"dry_run": str(dry_run).lower()}
     if library is not None:
         params["library_id"] = library_id_for(client, library)
+    else:
+        params["all"] = "true"
 
     resp = client.post("/v1/upkeep/cleanup", params=params)
     result = resp.json()
@@ -50,18 +52,8 @@ def cleanup(
     table.add_column(style="dim")
     table.add_column()
 
-    table.add_row("Orphan tenant dirs", str(result.get("orphan_tenants", 0)))
-    table.add_row("Orphan library dirs", str(result.get("orphan_libraries", 0)))
     table.add_row("Orphan files", str(result.get("orphan_files", 0)))
-
-    bytes_freed = result.get("bytes_freed", 0)
-    if bytes_freed > 1_000_000:
-        size_str = f"{bytes_freed / 1_000_000:.1f} MB"
-    elif bytes_freed > 1_000:
-        size_str = f"{bytes_freed / 1_000:.1f} KB"
-    else:
-        size_str = f"{bytes_freed} bytes"
-    table.add_row("Space freed" if execute else "Space to free", size_str)
+    table.add_row("Space freed" if execute else "Space to free", _size(result.get("bytes_freed", 0)))
 
     skipped = result.get("skipped_libraries", 0)
     if skipped:
@@ -75,10 +67,51 @@ def cleanup(
         for err in errors:
             console.print(f"    [dim]•[/dim] {err}")
 
-    if not execute and (result.get("orphan_files", 0) or result.get("orphan_libraries", 0) or result.get("orphan_tenants", 0)):
+    if not execute and result.get("orphan_files", 0):
         console.print("\n  [dim]Run with --execute to delete these files.[/dim]")
 
+    folders = result.get("orphan_folders", [])
+    if folders:
+        console.print(f"\n  [yellow]Kept {len(folders)} folder(s) the database doesn't list:[/yellow]")
+        for f in folders:
+            console.print(f"    {f['folder_id']}  {_size(f.get('bytes', 0))}  {f.get('newest_mtime') or ''}")
+        console.print("  [dim]`lumiverb maintenance remove-orphan-folders` removes them.[/dim]")
+
     console.print()
+
+
+def _size(n: int) -> str:
+    if n > 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f} GB"
+    if n > 1_000_000:
+        return f"{n / 1_000_000:.1f} MB"
+    if n > 1_000:
+        return f"{n / 1_000:.1f} KB"
+    return f"{n} bytes"
+
+
+@maintenance_app.command("remove-orphan-folders")
+def remove_orphan_folders(
+    folder_ids: Annotated[list[str] | None, typer.Argument(help="Folder ids that cleanup listed.")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every folder the database doesn't list.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Say what would go; remove nothing.")] = False,
+) -> None:
+    """Remove library folders the database doesn't list (cleanup only lists
+    them): the ones named, or --all. Admins only."""
+    if bool(folder_ids) == all_:
+        console.print("[red]Give folder ids, or --all.[/red]")
+        raise typer.Exit(2)
+    client = LumiverbClient()
+    body = {"all": True, "dry_run": dry_run} if all_ else {"folder_ids": folder_ids, "dry_run": dry_run}
+    result = client.post("/v1/upkeep/remove-orphan-folders", json=body).json()
+    verb = "Would remove" if dry_run else "Removed"
+    for f in result.get("removed", []):
+        console.print(f"{verb} {f['path']}  {_size(f.get('bytes', 0))}")
+    for fid in result.get("not_found", []):
+        console.print(f"[yellow]Not an orphan folder: {fid}[/yellow]")
+    for err in result.get("errors", []):
+        console.print(f"[red]{err}[/red]")
+    console.print(f"{verb} {len(result.get('removed', []))} folder(s), {_size(result.get('bytes_freed', 0))}")
 
 
 @maintenance_app.command("search-sync")

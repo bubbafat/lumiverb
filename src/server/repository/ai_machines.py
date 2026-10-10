@@ -7,9 +7,6 @@ from ulid import ULID
 
 from src.server.models.control_plane import AiMachine, Tenant
 
-# Where each AI job's model is kept on the tenant (one model per job).
-JOB_MODEL_FIELDS: dict[str, str] = {"vision": "vision_model_id", "transcripts": "transcript_model_id"}
-
 BUILT_IN_NAME = "Built in"
 
 
@@ -20,12 +17,18 @@ def machines(ctrl: Session, tenant_id: str) -> list[AiMachine]:
 
 
 def job_model(tenant: Tenant | None, job: str) -> str:
-    """The job's model for the tenant; "" when the job is off."""
-    return (getattr(tenant, JOB_MODEL_FIELDS[job], "") or "") if tenant else ""
+    """The job's model for the tenant ("" when the job is off): the one kept
+    under the job's name, else the one its producers declare."""
+    from src.shared.ai_jobs import AI_JOBS
+
+    if tenant is None or job not in AI_JOBS:
+        return ""
+    kept = tenant.ai_job_models or {}
+    return str(kept[job] or "") if job in kept else AI_JOBS[job].default_model
 
 
 def set_job_model(tenant: Tenant, job: str, model: str) -> None:
-    setattr(tenant, JOB_MODEL_FIELDS[job], model)
+    tenant.ai_job_models = {**(tenant.ai_job_models or {}), job: model}
 
 
 def account_job_models(tenant_id: str) -> dict[str, str]:
@@ -41,7 +44,9 @@ def account_job_models(tenant_id: str) -> dict[str, str]:
 
 def job_models(tenant: Tenant | None) -> dict[str, str]:
     """{job: model} for the tenant, for the producers (src/shared/producers.py)."""
-    return {job: job_model(tenant, job) for job in JOB_MODEL_FIELDS}
+    from src.shared.ai_jobs import AI_JOBS
+
+    return {job: job_model(tenant, job) for job in AI_JOBS}
 
 
 def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
@@ -53,7 +58,7 @@ def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
     tenant = ctrl.get(Tenant, tenant_id)
     every = machines(ctrl, tenant_id)
     out: dict[str, str | None] = {}
-    for job in JOB_MODEL_FIELDS:
+    for job in JOBS:
         label = JOBS[job]
         doing = [m for m in every if m.enabled and job in m.jobs]
         if not job_model(tenant, job):
@@ -68,9 +73,11 @@ def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
 
 
 def new_built_in_machine(tenant_id: str) -> AiMachine:
-    """The tenant's built-in machine: the worker's own Whisper, transcripts one at a time."""
+    """The tenant's built-in machine: the scheduler's own, doing the jobs it can (its Whisper), one at a time."""
+    from src.shared.ai_jobs import BUILT_IN_JOBS
+
     return AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=BUILT_IN_NAME, api_url="",
-                     jobs=["transcripts"], at_once=1, built_in=True)
+                     jobs=sorted(BUILT_IN_JOBS), at_once=1, built_in=True)
 
 
 def first_vision_machine(ctrl: Session, tenant_id: str) -> AiMachine | None:

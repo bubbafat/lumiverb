@@ -89,6 +89,7 @@ def get_facets(
                     session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
                     include_transcripts=public_cap_ms is None,
                     include_notes=not getattr(request.state, "is_public_request", False),
+                    include_file_details=not getattr(request.state, "is_public_request", False),
                 )
             if not scores:
                 return _empty_facets()

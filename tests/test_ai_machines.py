@@ -334,7 +334,7 @@ def test_the_workers_check_shows_per_machine_until_fixed(env, none):
         _add(env, name="Studio", api_url=STUDIO)
         _model(env, "vision", QWEN)
     studio = _machine(_ai(env), "Studio")["machine_id"]
-    worker = _key_with_role(env, "editor")
+    worker = _key_with_role(env, "admin")  # the scheduler's key
     r = client.post(f"/v1/ai/machines/{studio}/status",
                     json={"online": False, "error": f"Couldn't reach {STUDIO}: ConnectionError.", "models": []},
                     headers=worker)
@@ -342,8 +342,9 @@ def test_the_workers_check_shows_per_machine_until_fixed(env, none):
     status = _machine(_ai(env), "Studio")["status"]
     assert status["online"] is False and "Couldn't reach" in status["error"] and status["checked_at"]
     assert _job(_ai(env), "vision")["offering"] == 1
-    assert client.post(f"/v1/ai/machines/{studio}/status", json={"online": True, "models": [QWEN]},
-                       headers=_key_with_role(env, "viewer")).status_code == 403
+    for role in ("viewer", "editor"):  # only the scheduler reports
+        assert client.post(f"/v1/ai/machines/{studio}/status", json={"online": True, "models": [QWEN]},
+                           headers=_key_with_role(env, role)).status_code == 403
     assert client.post("/v1/ai/machines/aim_nope/status", json={"online": True, "models": []},
                        headers=worker).status_code == 404
 
@@ -394,7 +395,7 @@ def test_a_job_whose_machines_are_all_offline_says_so_in_processing(env, none):
         _add(env, name="Brain")
         _model(env, "vision", QWEN, redo=True)
     brain = _machine(_ai(env), "Brain")["machine_id"]
-    worker = _key_with_role(env, "editor")
+    worker = _key_with_role(env, "admin")  # the scheduler's key
     client.post(f"/v1/ai/machines/{brain}/status", json={"online": False, "error": "Couldn't reach it."},
                 headers=worker)
     assert _waiting(env, "vision") == ("No machine doing descriptions & text is online: its work waits. "
@@ -539,7 +540,7 @@ def test_every_account_starts_with_the_built_in_whisper_doing_transcripts(env, n
 def test_a_new_account_gets_its_built_in_whisper(env, none):
     from src.server.database import get_control_session
     from src.server.models.control_plane import Tenant
-    from src.server.repository.ai_machines import machines
+    from src.server.repository.ai_machines import job_model, machines
 
     client, *_ = env
     with patch("src.server.api.routers.admin.provision_tenant_database"):
@@ -551,7 +552,8 @@ def test_a_new_account_gets_its_built_in_whisper(env, none):
         [m] = machines(ctrl, tenant_id)
         assert (m.built_in, m.name, m.api_url, m.api_key, m.jobs, m.at_once, m.enabled) == (
             True, "Built in", "", "", ["transcripts"], 1, True)
-        assert ctrl.get(Tenant, tenant_id).transcript_model_id == "small"
+        # Transcripts start at the model the job declares (kept by the job's name once chosen).
+        assert job_model(ctrl.get(Tenant, tenant_id), "transcripts") == "small"
 
 
 @pytest.mark.slow
@@ -645,7 +647,7 @@ def test_the_workers_check_of_the_built_in_whisper_shows(env, none):
 
     client, *_ = env
     built_in = _built_in(_ai(env))["machine_id"]
-    worker = _key_with_role(env, "editor")
+    worker = _key_with_role(env, "admin")  # the scheduler's key
     r = client.post(f"/v1/ai/machines/{built_in}/status", json={"online": True, "models": BUILT_IN_MODELS},
                     headers=worker)
     assert r.status_code == 204, r.text
@@ -713,7 +715,7 @@ def test_the_workers_report_of_a_server_is_kept_by_one_name(env, none):
         _add(env, name="Speaches", api_url=SPEACHES, jobs=["transcripts"])
     sp = _machine(_ai(env), "Speaches")["machine_id"]
     r = client.post(f"/v1/ai/machines/{sp}/status", json={"online": True, "models": [SMALL_REPO, LARGE_REPO, KOKORO]},
-                    headers=_key_with_role(env, "editor"))
+                    headers=_key_with_role(env, "admin"))
     assert r.status_code == 204
     assert _machine(_ai(env), "Speaches")["status"]["models"] == ["large-v3", "small", KOKORO]
 

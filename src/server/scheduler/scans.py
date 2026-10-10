@@ -24,6 +24,7 @@ import fcntl
 import json
 import logging
 import os
+import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -32,12 +33,12 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
-from src.client.cache_dir import cache_dir
-from src.client.cli.roots import reachable_root
+from src.processing.cache_dir import cache_dir
+from src.processing.roots import reachable_root
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
 if TYPE_CHECKING:
-    from src.client.cli.scan import ScanStats
+    from src.processing.scan import ScanStats
 
 logger = logging.getLogger(__name__)
 
@@ -205,13 +206,16 @@ def scan_library(
         library["name"], f" / {prefix}" if prefix else "", len(changes),
         ", retrying what failed" if retry_due else "", ", full scan due" if full_due else "",
     )
-    # Archiving is reversible (a file that comes back, anywhere in the library,
-    # restores its asset), so no mass-delete guard: the mount check and
-    # unreadable folders are what keep a glitch from archiving anything.
-    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=True, console=console)
+    # When most of a library looks gone the server asks first (409
+    # mass_missing, ADR-016): a person answers, never the scheduler.
+    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False, console=console)
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return
+    if stats.mass_missing:
+        logger.warning("scheduler: in %s, %d clip(s) look missing, most of the library; not archived. "
+                       "If they're really gone: lumiverb scan --library %s --allow-mass-delete",
+                       library["name"], stats.mass_missing, shlex.quote(library["name"]))
     if prefix is None:
         state.last_full_scan[library_id] = now
     _note_failures(state, library, prefix, stats, changes, now)
@@ -261,6 +265,21 @@ def _note_failures(
         state.retries[library_id] = Retry(left, old.delay, old.due, held)
 
 
+# Whether this process has said its root map is empty (once per start).
+_said_no_root_map = False
+
+
+def _warn_if_no_root_map() -> None:
+    """A library out of reach with no root map: the likely cause, said once."""
+    global _said_no_root_map
+    from src.processing.machine import current
+
+    if _said_no_root_map or current().root_map:
+        return
+    _said_no_root_map = True
+    logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; no library can be scanned")
+
+
 def scan_pass(
     client: Any,
     libraries: list[dict],
@@ -279,7 +298,7 @@ def scan_pass(
     Each library is looked at again right before its scan: a share can
     sleep during another library's long scan."""
     if scan_fn is None:
-        from src.client.cli.scan import run_scan as scan_fn
+        from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
     # require_entries: an unmounted mount point is an empty folder, and
     # scanning it would mark every file missing.
@@ -297,6 +316,7 @@ def scan_pass(
                     on_roots(dict(roots))
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
+            _warn_if_no_root_map()
             continue
         try:
             scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,

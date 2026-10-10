@@ -111,7 +111,7 @@ def test_trying_again_starts_the_back_off_over_given_up_or_not(env):
     assert _due(lib, "vision") == [gave_up]
     item = [i for i in _failures(lib, library_id=lib[2])["items"] if i["asset_id"] == gave_up][0]
     assert item["attempts"] == 0 and item["given_up"] is False  # the last error stays until it's made
-    r = client.post("/v1/producers/failures/retry", json={"artifact": "vision", "library_id": lib[2]},
+    r = client.post("/v1/producers/failures/retry", json={"artifact": "vision", "library_id": lib[2], "all": True},
                     headers=headers)
     assert r.json() == {"retried": 2}
     assert sorted(_due(lib, "vision")) == sorted([gave_up, waiting])
@@ -135,7 +135,7 @@ def test_who_sees_and_who_tries_again(env):
 def test_unknown_producers_are_404(env):
     client, headers, *_ = env
     assert client.get("/v1/producers/failures", params={"artifact": "nope"}, headers=headers).status_code == 404
-    assert client.post("/v1/producers/failures/retry", json={"artifact": "nope"}, headers=headers).status_code == 404
+    assert client.post("/v1/producers/failures/retry", json={"artifact": "nope", "all": True}, headers=headers).status_code == 404
 
 
 def test_a_trashed_clip_isnt_listed_or_tried_again(env):

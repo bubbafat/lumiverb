@@ -20,9 +20,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from src.client.workers.transcripts.base import Heard, Segment, TranscriptError
-from src.client.workers.transcripts.local import BuiltInWhisper, unavailable
-from src.client.workers.transcripts.openai_compatible import OpenAITranscriber
+from src.processing.workers.transcripts.base import Heard, Segment, TranscriptError
+from src.processing.workers.transcripts.local import BuiltInWhisper, unavailable
+from src.processing.workers.transcripts.openai_compatible import OpenAITranscriber
 
 pytestmark = pytest.mark.fast
 
@@ -146,7 +146,7 @@ def test_a_server_that_isnt_there_or_breaks_off_is_the_machines_fault(speech):
     assert e.value.endpoint_fault and "Couldn't reach" in str(e.value)
     for error, says in ((requests.ConnectTimeout(), "didn't answer"),
                         (requests.exceptions.ChunkedEncodingError(), "broke off")):
-        with patch("src.client.workers.transcripts.openai_compatible.requests.post", side_effect=error):
+        with patch("src.processing.workers.transcripts.openai_compatible.requests.post", side_effect=error):
             with pytest.raises(TranscriptError) as e:
                 OpenAITranscriber("http://brain/v1", None, "small").transcribe(speech)
         assert e.value.endpoint_fault and says in str(e.value)
@@ -167,7 +167,7 @@ def test_a_server_gets_time_for_the_speech_it_was_sent_and_running_out_is_the_cl
     """Ten minutes and four times the speech; a server reached but not done in
     that time is stuck on this clip, which is charged once the machine checks out."""
     wav = _real_wav(tmp_path / "speech.wav", 100)
-    with patch("src.client.workers.transcripts.openai_compatible.requests.post",
+    with patch("src.processing.workers.transcripts.openai_compatible.requests.post",
                side_effect=requests.ReadTimeout()) as post:
         with pytest.raises(TranscriptError) as e:
             OpenAITranscriber("http://brain/v1", None, "small").transcribe(wav)

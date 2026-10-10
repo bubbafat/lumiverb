@@ -15,9 +15,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from src.client.cli import roots
+from src.processing import roots
 from src.client.cli.config import CLIConfig, load_config, save_config
-from src.client.cli.roots import local_library_root, map_root, reachable_root
+from src.processing import machine
+from src.processing.roots import local_library_root, map_root, reachable_root
 
 MAC = "/Volumes/media-01"
 
@@ -152,7 +153,12 @@ def test_an_unreadable_folder_is_unreachable(monkeypatch: pytest.MonkeyPatch, tm
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home whose CLI config is this machine's settings, as the CLI has them."""
+    from src.client.cli.config import machine_settings
+    from src.processing import machine
+
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    machine.use(machine_settings)
     return tmp_path
 
 
@@ -267,13 +273,13 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
 
     from rich.console import Console
 
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     library, here = _mapped_library(home, tmp_path)
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=[]) as walk,
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", return_value=[]) as walk,
     ):
         run_scan(MagicMock(), library, console=Console(quiet=True))
     assert walk.call_args.args[0] == here
@@ -285,7 +291,7 @@ def test_scan_of_an_unreachable_root_touches_nothing(home: Path, tmp_path: Path)
 
     from rich.console import Console
 
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     save_config(CLIConfig(root_map={MAC: str(tmp_path / "not-mounted")}))
     client = MagicMock()
@@ -297,23 +303,110 @@ def test_scan_of_an_unreachable_root_touches_nothing(home: Path, tmp_path: Path)
 
 
 @pytest.mark.fast
-def test_enrich_probes_files_under_the_mapped_root(home: Path, tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
+def test_the_schedulers_map_is_its_own_settings_not_the_clis(home: Path, tmp_path: Path, monkeypatch) -> None:
+    import json
 
-    from rich.console import Console
+    from src.server.scheduler.settings import SchedulerSettings
 
-    from src.client.cli.repair import run_repair
+    save_config(CLIConfig(root_map={MAC: "/cli/only"}))
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", json.dumps({MAC: str(tmp_path)}))
+    machine.use(SchedulerSettings().machine())
+    lib = {"library_id": "lib_1", "root_path": f"{MAC}/Footage"}
+    assert local_library_root(lib) == tmp_path / "Footage"
 
-    library, here = _mapped_library(home, tmp_path)
-    client = MagicMock()
-    asset = {"asset_id": "ast_1", "rel_path": "a.mov"}
-    with (
-        patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_probe": 1}),
-        patch("src.client.cli.repair._page_missing", return_value=[asset]),
-        patch("src.client.cli.repair._probe_one", return_value="ok") as probe,
-    ):
-        run_repair(client, library, job_type="probe", console=Console(quiet=True))
-    assert probe.call_args.args[1] == here
+
+# ---------------------------------------------------------------------------
+# What the scheduler refuses to read: it reads every account's libraries
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def brain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The scheduler's settings: /Volumes/media-01 -> tmp_path/mnt, DATA_DIR tmp_path/data."""
+    import json
+
+    from src.server.config import get_settings
+    from src.server.scheduler.settings import SchedulerSettings
+
+    mount = tmp_path / "mnt"
+    (mount / "Footage").mkdir(parents=True)
+    (mount / "Footage" / "a.mov").write_bytes(b"x")
+    data = tmp_path / "data"
+    (data / "ten_other").mkdir(parents=True)
+    (data / "ten_other" / "p.jpg").write_bytes(b"x")
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", json.dumps({MAC: str(mount)}))
+    monkeypatch.setenv("DATA_DIR", str(data))
+    get_settings.cache_clear()
+    machine.use(SchedulerSettings().machine())
+    monkeypatch.setattr(roots, "_said", set())
+    yield tmp_path
+    get_settings.cache_clear()
+
+
+@pytest.mark.fast
+def test_the_scheduler_reads_a_mapped_root(brain: Path) -> None:
+    lib = {"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}
+    assert reachable_root(lib, require_entries=True) == (brain / "mnt" / "Footage").resolve()
+
+
+@pytest.mark.fast
+def test_the_scheduler_refuses_an_unmapped_root(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
+    for root_path in ("/", "/etc", str(brain / "mnt" / "Footage")):
+        lib = {"library_id": "lib_x", "name": "Sneaky", "root_path": root_path}
+        assert reachable_root(lib) is None
+    assert "Sneaky (lib_x) refused: root isn't under the root map" in caplog.text
+
+
+@pytest.mark.fast
+def test_the_scheduler_refuses_a_mapped_root_that_climbs_out(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # /Volumes/media-01/../data maps to <mnt>/../data: the server's data.
+    lib = {"library_id": "lib_x", "name": "Climb", "root_path": f"{MAC}/../data/ten_other"}
+    assert reachable_root(lib) is None
+    lib = {"library_id": "lib_y", "name": "Up", "root_path": f"{MAC}/.."}
+    assert reachable_root(lib) is None
+    assert "Up (lib_y) refused: root leaves the root map" in caplog.text
+
+
+@pytest.mark.fast
+def test_the_scheduler_refuses_a_root_symlinked_out(brain: Path) -> None:
+    (brain / "mnt" / "out").symlink_to(brain / "data")
+    lib = {"library_id": "lib_x", "name": "Link", "root_path": f"{MAC}/out"}
+    assert reachable_root(lib) is None
+
+
+@pytest.mark.fast
+def test_the_servers_data_is_never_read_even_when_mapped(brain: Path, monkeypatch, caplog) -> None:
+    from src.server.scheduler.settings import SchedulerSettings
+
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/Volumes/data": "%s"}' % (brain / "data"))
+    machine.use(SchedulerSettings().machine())
+    lib = {"library_id": "lib_x", "name": "Data", "root_path": "/Volumes/data/ten_other"}
+    assert reachable_root(lib) is None
+    assert "Data (lib_x) refused: root is in the server's data" in caplog.text
+
+
+@pytest.mark.fast
+def test_a_relative_root_is_never_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Not the scheduler (no mapped_roots_only): still never the working directory.
+    (tmp_path / "Footage").mkdir()
+    (tmp_path / "Footage" / "a.mov").write_bytes(b"x")
+    monkeypatch.chdir(tmp_path)
+    assert reachable_root({"library_id": "lib_1", "root_path": "Footage"}, root_map={}) is None
+
+
+@pytest.mark.fast
+def test_a_refusal_is_logged_once(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lib = {"library_id": "lib_x", "name": "Sneaky", "root_path": "/etc"}
+    reachable_root(lib)
+    reachable_root(lib)
+    assert caplog.text.count("Sneaky (lib_x) refused") == 1
+
+
+@pytest.mark.fast
+def test_the_cli_reads_its_own_unmapped_root(tmp_path: Path) -> None:
+    # On the editor's Mac, roots are where the files are: no map needed.
+    (tmp_path / "a.mov").write_bytes(b"x")
+    assert reachable_root({"library_id": "lib_1", "root_path": str(tmp_path)}, root_map={}) == tmp_path.resolve()
 
 
 @pytest.mark.fast

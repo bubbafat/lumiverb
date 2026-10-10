@@ -47,6 +47,47 @@ def _hash_key(storage, key: str) -> str | None:
     return _hash_file(path)
 
 
+def _backfill(ctx: UpgradeContext, *, table: str, id_col: str, key_col: str, sha_col: str, what: str) -> dict:
+    """Hash each row's file and write its SHA-256, a page at a time by id
+    (keyset: missing files are passed over, not re-read every page). The
+    write only lands while the row still names that file and has no hash: a
+    re-render meanwhile records its own."""
+    storage = get_storage()
+    updated = 0
+    missing = 0
+    after = ""
+    while True:
+        rows = ctx.session.exec(
+            text(
+                f"SELECT {id_col}, {key_col} FROM {table}"  # noqa: S608 — fixed names
+                f" WHERE {key_col} IS NOT NULL AND {sha_col} IS NULL AND {id_col} > :after"
+                f" ORDER BY {id_col} LIMIT :limit"
+            ).bindparams(after=after, limit=_BATCH_SIZE)
+        ).fetchall()
+        if not rows:
+            break
+
+        for row_id, key in rows:
+            sha256 = _hash_key(storage, key)
+            if sha256 is None:
+                logger.warning("%s file missing for %s: %s", what, row_id, key)
+                missing += 1
+                continue
+            ctx.session.exec(
+                text(
+                    f"UPDATE {table} SET {sha_col} = :sha"  # noqa: S608 — fixed names
+                    f" WHERE {id_col} = :id AND {key_col} = :key AND {sha_col} IS NULL"
+                ).bindparams(sha=sha256, id=row_id, key=key)
+            )
+            updated += 1
+
+        after = rows[-1][0]
+        ctx.session.commit()
+
+    logger.info("backfill %s sha256 complete: updated=%d missing=%d", what, updated, missing)
+    return {"updated": updated, "missing": missing}
+
+
 class BackfillProxySha256Step:
     """Hash all existing proxy files and write proxy_sha256 on the assets table."""
 
@@ -66,47 +107,8 @@ class BackfillProxySha256Step:
         return bool(row and row[0] > 0)
 
     def run(self, ctx: UpgradeContext) -> dict:
-        storage = get_storage()
-        updated = 0
-        missing = 0
-        # IDs whose files are missing — excluded from subsequent batches so the loop terminates.
-        skip_ids: set[str] = set()
-
-        while True:
-            query = (
-                "SELECT asset_id, proxy_key FROM assets"
-                " WHERE proxy_key IS NOT NULL AND proxy_sha256 IS NULL"
-            )
-            params: dict = {"limit": _BATCH_SIZE}
-            if skip_ids:
-                placeholders = ", ".join(f":skip_{i}" for i in range(len(skip_ids)))
-                query += f" AND asset_id NOT IN ({placeholders})"
-                for i, sid in enumerate(skip_ids):
-                    params[f"skip_{i}"] = sid
-            query += " LIMIT :limit"
-
-            rows = ctx.session.exec(text(query).bindparams(**params)).fetchall()
-            if not rows:
-                break
-
-            for asset_id, proxy_key in rows:
-                sha256 = _hash_key(storage, proxy_key)
-                if sha256 is None:
-                    logger.warning("proxy file missing for asset %s: %s", asset_id, proxy_key)
-                    missing += 1
-                    skip_ids.add(asset_id)
-                    continue
-                ctx.session.exec(
-                    text(
-                        "UPDATE assets SET proxy_sha256 = :sha WHERE asset_id = :id"
-                    ).bindparams(sha=sha256, id=asset_id)
-                )
-                updated += 1
-
-            ctx.session.commit()
-
-        logger.info("backfill_proxy_sha256 complete: updated=%d missing=%d", updated, missing)
-        return {"updated": updated, "missing": missing}
+        return _backfill(ctx, table="assets", id_col="asset_id", key_col="proxy_key", sha_col="proxy_sha256",
+                         what="proxy")
 
 
 class BackfillThumbnailSha256Step:
@@ -128,50 +130,8 @@ class BackfillThumbnailSha256Step:
         return bool(row and row[0] > 0)
 
     def run(self, ctx: UpgradeContext) -> dict:
-        storage = get_storage()
-        updated = 0
-        missing = 0
-        skip_ids: set[str] = set()
-
-        while True:
-            query = (
-                "SELECT asset_id, thumbnail_key FROM assets"
-                " WHERE thumbnail_key IS NOT NULL AND thumbnail_sha256 IS NULL"
-            )
-            params: dict = {"limit": _BATCH_SIZE}
-            if skip_ids:
-                placeholders = ", ".join(f":skip_{i}" for i in range(len(skip_ids)))
-                query += f" AND asset_id NOT IN ({placeholders})"
-                for i, sid in enumerate(skip_ids):
-                    params[f"skip_{i}"] = sid
-            query += " LIMIT :limit"
-
-            rows = ctx.session.exec(text(query).bindparams(**params)).fetchall()
-            if not rows:
-                break
-
-            for asset_id, thumbnail_key in rows:
-                sha256 = _hash_key(storage, thumbnail_key)
-                if sha256 is None:
-                    logger.warning(
-                        "thumbnail file missing for asset %s: %s", asset_id, thumbnail_key
-                    )
-                    missing += 1
-                    skip_ids.add(asset_id)
-                    continue
-                ctx.session.exec(
-                    text(
-                        "UPDATE assets SET thumbnail_sha256 = :sha WHERE asset_id = :id"
-                    ).bindparams(sha=sha256, id=asset_id)
-                )
-                updated += 1
-
-            ctx.session.commit()
-
-        logger.info(
-            "backfill_thumbnail_sha256 complete: updated=%d missing=%d", updated, missing
-        )
-        return {"updated": updated, "missing": missing}
+        return _backfill(ctx, table="assets", id_col="asset_id", key_col="thumbnail_key",
+                         sha_col="thumbnail_sha256", what="thumbnail")
 
 
 class BackfillSceneRepSha256Step:
@@ -193,47 +153,5 @@ class BackfillSceneRepSha256Step:
         return bool(row and row[0] > 0)
 
     def run(self, ctx: UpgradeContext) -> dict:
-        storage = get_storage()
-        updated = 0
-        missing = 0
-        skip_ids: set[str] = set()
-
-        while True:
-            query = (
-                "SELECT scene_id, proxy_key FROM video_scenes"
-                " WHERE proxy_key IS NOT NULL AND rep_frame_sha256 IS NULL"
-            )
-            params: dict = {"limit": _BATCH_SIZE}
-            if skip_ids:
-                placeholders = ", ".join(f":skip_{i}" for i in range(len(skip_ids)))
-                query += f" AND scene_id NOT IN ({placeholders})"
-                for i, sid in enumerate(skip_ids):
-                    params[f"skip_{i}"] = sid
-            query += " LIMIT :limit"
-
-            rows = ctx.session.exec(text(query).bindparams(**params)).fetchall()
-            if not rows:
-                break
-
-            for scene_id, rep_key in rows:
-                sha256 = _hash_key(storage, rep_key)
-                if sha256 is None:
-                    logger.warning(
-                        "scene rep file missing for scene %s: %s", scene_id, rep_key
-                    )
-                    missing += 1
-                    skip_ids.add(scene_id)
-                    continue
-                ctx.session.exec(
-                    text(
-                        "UPDATE video_scenes SET rep_frame_sha256 = :sha WHERE scene_id = :id"
-                    ).bindparams(sha=sha256, id=scene_id)
-                )
-                updated += 1
-
-            ctx.session.commit()
-
-        logger.info(
-            "backfill_scene_rep_sha256 complete: updated=%d missing=%d", updated, missing
-        )
-        return {"updated": updated, "missing": missing}
+        return _backfill(ctx, table="video_scenes", id_col="scene_id", key_col="proxy_key",
+                         sha_col="rep_frame_sha256", what="scene rep")

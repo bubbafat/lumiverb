@@ -10,7 +10,7 @@ from typing import Annotated
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -26,6 +26,10 @@ router = APIRouter(prefix="/v1/auth", tags=["auth"])
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = 3600  # 1 hour
 REFRESH_WINDOW_SECONDS = 7 * 24 * 3600  # 7 days — how long a token can be refreshed
+# bcrypt reads only the first 72 bytes (bcrypt 5 raises past them).
+MAX_PASSWORD_BYTES = 72
+# An unknown email's login checks against this, so it takes as long as a known one's.
+_DUMMY_HASH = bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12))
 
 
 def _get_session() -> Session:
@@ -104,20 +108,24 @@ def login(
     session: Annotated[Session, Depends(_get_db)],
 ) -> LoginResponse:
     login_limiter.check(request)
+    login_limiter.check(request, key=f"email:{body.email.strip().lower()}")
 
     settings = get_settings()
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
 
+    password = body.password.encode()
+    if len(password) > MAX_PASSWORD_BYTES:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
     user_repo = UserRepository(session)
     user = user_repo.get_by_email(body.email)
 
     if user is None:
-        # Dummy compare to mitigate timing attacks on unknown email.
-        bcrypt.checkpw(body.password.encode(), bcrypt.hashpw(b"dummy", bcrypt.gensalt()))
+        bcrypt.checkpw(password, _DUMMY_HASH)  # as long as a known email's check
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
+    if not bcrypt.checkpw(password, user.password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = _issue_jwt(user, settings.jwt_secret)
@@ -185,9 +193,10 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
 def forgot_password(
     body: ForgotPasswordRequest,
     request: Request,
-    session: Annotated[Session, Depends(_get_db)],
+    background: BackgroundTasks,
 ) -> None:
     forgot_password_limiter.check(request)
+    forgot_password_limiter.check(request, key=f"email:{body.email.strip().lower()}")
 
     settings = get_settings()
     smtp_ready = all(
@@ -204,22 +213,25 @@ def forgot_password(
         # Return the same result for any email when reset is unavailable.
         raise HTTPException(status_code=501, detail="Password reset not configured")
 
-    user_repo = UserRepository(session)
-    user = user_repo.get_by_email(body.email)
-    if user is None:
-        return  # 204 always — prevents user enumeration
+    # 204 always, at once: whether the email is known (and the mail's sent) happens after.
+    background.add_task(_send_reset_email, body.email)
 
-    plaintext_token = secrets.token_urlsafe(32)
-    expires_at = utcnow() + timedelta(hours=1)
 
-    token_repo = PasswordResetTokenRepository(session)
-    token_repo.create(user.user_id, plaintext_token, expires_at)
+def _send_reset_email(email: str) -> None:
+    settings = get_settings()
+    with _get_session() as session:
+        user = UserRepository(session).get_by_email(email)
+        if user is None:
+            return
+        user_id, user_email = user.user_id, user.email
+        plaintext_token = secrets.token_urlsafe(32)
+        PasswordResetTokenRepository(session).create(user_id, plaintext_token, utcnow() + timedelta(hours=1))
 
     reset_url = f"{settings.app_host.rstrip('/')}/reset-password?token={plaintext_token}"
     msg = MIMEText(f"Click the link to reset your password (expires in 1 hour):\n\n{reset_url}")
     msg["Subject"] = "Reset your Lumiverb password"
     msg["From"] = settings.smtp_from
-    msg["To"] = user.email
+    msg["To"] = user_email
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as smtp:
         smtp.starttls()
@@ -240,6 +252,8 @@ def reset_password(
 
     if len(body.password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(body.password.encode()) > MAX_PASSWORD_BYTES:
+        raise HTTPException(status_code=400, detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
     token_repo = PasswordResetTokenRepository(session)
     password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
     ok = token_repo.consume_valid_and_update_password(body.token, password_hash)

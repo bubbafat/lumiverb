@@ -169,7 +169,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
     from src.server.database import get_control_session
     from src.server.repository.control_plane import TenantRepository
 
-    from src.server.repository.ai_machines import first_vision_machine
+    from src.server.repository.ai_machines import first_vision_machine, job_model
 
     tenant_id = request.state.tenant_id
     with get_control_session() as session:
@@ -183,7 +183,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
         tenant_id=tenant_id,
         vision_api_url=machine.api_url if machine else "",
         vision_api_key=(machine.api_key if machine and may_see_key else "") or "",
-        vision_model_id=tenant.vision_model_id if tenant else "",
+        vision_model_id=job_model(tenant, "vision"),
     )
 
 

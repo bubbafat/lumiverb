@@ -458,3 +458,121 @@ def test_runner_marks_all_three_steps_completed(backfill_db, tmp_path: Path) -> 
     # All steps must be either completed or skipped (done_steps == total).
     assert status["done_steps"] == status["steps_total"]
     assert status["pending_steps"] == 0
+
+
+def _own_rows(engine, lib_id: str, n: int) -> list[str]:
+    ids = [f"ast_{lib_id}_{i:02d}" for i in range(n)]
+    with engine.connect() as conn:
+        _insert_library(conn, library_id=lib_id)
+        for aid in ids:
+            _insert_asset(conn, asset_id=aid, library_id=lib_id, proxy_key=f"ten1/{lib_id}/proxies/{aid}.jpg",
+                          thumbnail_key=None)
+        conn.commit()
+    return ids
+
+
+def _drop_rows(engine, lib_id: str) -> None:
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM assets WHERE library_id = :l"), {"l": lib_id})
+        conn.commit()
+
+
+@pytest.mark.slow
+def test_proxy_backfill_pages_past_missing_files(backfill_db, tmp_path: Path) -> None:
+    """Missing files are passed over by a keyset cursor: every page is read
+    once, however many are missing (no growing NOT IN list)."""
+    lib_id = "lib_" + secrets.token_hex(4)
+    ids = _own_rows(backfill_db, lib_id, 7)
+    present = ids[-1]
+    path = tmp_path / f"ten1/{lib_id}/proxies/{present}.jpg"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"there")
+    storage = MagicMock()
+    storage.abs_path.side_effect = lambda key: tmp_path / key
+    ctx = _make_ctx(backfill_db)
+    try:
+        with (
+            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage),
+            patch("src.server.upgrade.steps.backfill_artifact_sha256._BATCH_SIZE", 2),
+        ):
+            result = BackfillProxySha256Step().run(ctx)
+        assert result["missing"] >= 6 and result["updated"] >= 1
+        with backfill_db.connect() as conn:
+            got = conn.execute(text("SELECT proxy_sha256 FROM assets WHERE asset_id = :id"), {"id": present}).scalar()
+        assert got == hashlib.sha256(b"there").hexdigest()
+    finally:
+        ctx.session.close()
+        _drop_rows(backfill_db, lib_id)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("rerender", ["new_key", "same_key"])
+def test_proxy_backfill_never_overwrites_a_rerender(backfill_db, tmp_path: Path, rerender: str) -> None:
+    """A proxy re-rendered while the step hashed the old file keeps what the
+    render recorded: the write needs the same key and no hash yet."""
+    lib_id = "lib_" + secrets.token_hex(4)
+    [aid] = _own_rows(backfill_db, lib_id, 1)
+    key = f"ten1/{lib_id}/proxies/{aid}.jpg"
+    path = tmp_path / key
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"old render")
+
+    def hash_then_rerender(storage, k):
+        from src.server.upgrade.steps.backfill_artifact_sha256 import _hash_file
+
+        sha = _hash_file(storage.abs_path(k))
+        with backfill_db.connect() as conn:  # the render lands between the read and the write
+            if rerender == "new_key":
+                conn.execute(text("UPDATE assets SET proxy_key = :k WHERE asset_id = :id"),
+                             {"k": key + ".v2", "id": aid})
+            else:
+                conn.execute(text("UPDATE assets SET proxy_sha256 = 'render' WHERE asset_id = :id"), {"id": aid})
+            conn.commit()
+        return sha
+
+    storage = MagicMock()
+    storage.abs_path.side_effect = lambda k: tmp_path / k
+    ctx = _make_ctx(backfill_db)
+    try:
+        with (
+            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage),
+            patch("src.server.upgrade.steps.backfill_artifact_sha256._hash_key", side_effect=hash_then_rerender),
+        ):
+            BackfillProxySha256Step().run(ctx)
+        with backfill_db.connect() as conn:
+            got = conn.execute(text("SELECT proxy_sha256 FROM assets WHERE asset_id = :id"), {"id": aid}).scalar()
+        assert got == (None if rerender == "new_key" else "render")
+    finally:
+        ctx.session.close()
+        _drop_rows(backfill_db, lib_id)
+
+
+@pytest.mark.slow
+def test_a_failed_step_is_recorded_and_its_own_error_raised(backfill_db) -> None:
+    """A step whose SQL fails aborts the transaction: the runner rolls back,
+    saves upgrade.failed.<step>, and raises the step's error (not
+    InFailedSqlTransaction)."""
+    from sqlalchemy.exc import ProgrammingError
+    from sqlmodel import Session
+
+    from src.server.repository.system_metadata import SystemMetadataRepository
+
+    step_id = "bad_" + secrets.token_hex(4)
+
+    class Bad:
+        info = UpgradeStepInfo(step_id=step_id, version="1", display_name="bad")
+
+        def needs_work(self, _ctx) -> bool:
+            return True
+
+        def run(self, ctx) -> dict:
+            ctx.session.exec(text("UPDATE no_such_table SET x = 1"))
+            return {}
+
+    with Session(backfill_db) as session:
+        ctx = UpgradeContext(session=session, metadata=SystemMetadataRepository(session))
+        with pytest.raises(ProgrammingError, match="no_such_table"):
+            TenantUpgradeRunner(steps=[Bad()]).execute(ctx)
+    with Session(backfill_db) as session:
+        saved = SystemMetadataRepository(session).get_value(f"upgrade.failed.{step_id}")
+    assert saved and "no_such_table" in saved

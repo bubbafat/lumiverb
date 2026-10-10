@@ -11,12 +11,15 @@ database. Every second or so it:
    (dispatch.py: tier, then oldest first), run on a thread;
 3. collects finished jobs.
 
-Pools are sized from this machine's config and each account's AI machines
-(Settings → AI): a job whose machines can't be used isn't handed out, and
-no clip is charged for it. Jobs save their results through the API's
-routes on the brain (runners.py). A crash restarts the scheduler, never the
-site; ffmpeg and face detection run in their own processes. One scheduler
-runs at a time, on any machine (a lock in the control-plane database).
+Pools are sized as the producers declare them (src/producers/pools.py
+for today's): so many slots, or this machine's setting, or each account's
+AI machines (Settings → AI) times the job's per_request; a job whose
+machines can't be used isn't handed out, and no clip is charged for it.
+Jobs save their results through the API's routes on the brain (runners.py,
+src/producers/runner.py). The GPU models are the scheduler's, shared by
+every account (models.py). A crash restarts the scheduler, never the site;
+ffmpeg and face detection run in their own processes. One scheduler runs
+at a time, on any machine (a lock in the control-plane database).
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
-from src.shared.producers import PAUSE_SCANS, pause_targets
+from src.shared.producers import PAUSE_SCANS
 
 logger = logging.getLogger(__name__)
 
@@ -46,36 +49,42 @@ STOP_GRACE_SEC = 25.0
 FLUSH_EVERY_SEC = 10.0
 # What the scheduler is doing is written for Settings → Processing this often.
 STATUS_EVERY_SEC = 5.0
-# What an admin paused is read this often, apart from the refill (which can be slow).
+# What an admin paused (every switch, both scopes: lineage.pauses) is read
+# this often, apart from the refill (which can be slow).
 HOLD_EVERY_SEC = 1.0
 # The control-plane lock only one scheduler holds ("lumv"), and how often
-# it's checked that the lock is still held.
+# it's checked that the lock is still held: before every tick hands out
+# jobs (one query on its own connection), so a scheduler that lost it
+# never runs beside the one that took it.
 LOCK_ID = 0x6C756D76
-LOCK_CHECK_SEC = 60.0
+LOCK_CHECK_SEC = 0.0
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
 
 
-def default_capacity(cfg: Any) -> dict[str, int]:
-    """The shared pools' slots: today's limits, which the brain handles; a
-    pool only a producer names gets the slots it declares."""
-    from src.client.cli.repair import default_render_concurrency
-    from src.shared.producers import PRODUCERS
+def default_capacity(here: Any) -> dict[str, int]:
+    """The shared pools' slots, as each pool declares them: so many, or this
+    machine's setting that sizes it (src/processing/machine.py). An account's
+    own pools are its AI machines' (set as they're checked)."""
+    from src.producers import pools
 
-    sized = {
-        "scan": 1,  # each scan is parallel inside
-        "probe": 2,
-        "render": cfg.render_concurrency or default_render_concurrency(),
-        # CLIP and face detection take turns on this machine's GPU, beside
-        # the decodes and the AI machine that may share it.
-        "gpu": 1,
-        "scenes": 1,
-    }
-    for p in PRODUCERS.values():
-        if p.scheduled and not p.per_account and p.pool not in sized:
-            sized[p.pool] = p.slots
-    return sized
+    return {p.name: (here.slots(p.sized_by) if p.sized_by else p.slots)
+            for p in pools().values() if not p.per_account}
+
+
+def account_pools() -> list[Any]:
+    """Each account's own pools: its AI jobs' machines (Settings → AI)."""
+    from src.producers import pools
+
+    return [p for p in pools().values() if p.per_account]
+
+
+def gpu_holds() -> dict[str, str]:
+    """Pools whose jobs hold back the AI machines sharing this machine's GPU, and how."""
+    from src.producers import pools
+
+    return {p.name: p.gpu_hold for p in pools().values() if p.gpu_hold}
 
 
 class Scheduler:
@@ -85,8 +94,7 @@ class Scheduler:
         *,
         capacity: Mapping[str, int],
         candidates: Callable[..., list[dict] | None] | None = None,
-        paused: Callable[[str], set[str]] | None = None,
-        on_hold: Callable[[str], set[str]] | None = None,
+        on_hold: Callable[[str], Any] | None = None,
         retry_requested: Callable[[str], str | None] | None = None,
         runners: Mapping[str, Callable[..., Outcome]] | None = None,
         scan: Callable[..., None] | None = None,
@@ -98,12 +106,14 @@ class Scheduler:
         write_status: Callable[[str, dict], None] | None = None,
         last_status: Callable[[str], dict | None] | None = None,
         crashed: Callable[[str, str, list[str], str], list[str]] | None = None,
+        models: Any = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
         self._accounts = accounts
+        # The GPU models every account's jobs share (models.py): idle ones let go of.
+        self._models = models
         self._candidates = candidates or _from_database
-        self._paused = paused or _paused_in_database
         self._on_hold = on_hold or _on_hold_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
         # Counts each clip's crashes in a row; returns those to charge now.
@@ -159,6 +169,8 @@ class Scheduler:
                 started += 1
         self.collect()
         self._share_the_gpu(accounts)
+        if self._models is not None:
+            self._models.let_go_of_idle()
         if self._clock() - self._flushed_at >= FLUSH_EVERY_SEC:
             self._flushed_at = self._clock()
             for acct_id, acct in accounts.items():
@@ -170,13 +182,17 @@ class Scheduler:
         return started
 
     def _share_the_gpu(self, accounts: Mapping[str, Any]) -> None:
-        """Video work comes first on this machine's GPU (Robert, Oct 9): each
-        render decoding there, and scene detection, takes a request from the
-        AI machines that share it, down to none."""
+        """Video work comes first on this machine's GPU (Robert, Oct 9): the
+        jobs of a pool that declares it (gpu_hold) take requests from the AI
+        machines that share it, down to none: each decoding on the GPU (up to
+        this machine's GPU decodes), or one while any runs."""
+        from src.producers.contract import DECODES
+
         if self._gpu_decodes <= 0:
             hold = 0
         else:
-            hold = min(self._gpu_decodes, self.dispatcher.running("render")) + min(1, self.dispatcher.running("scenes"))
+            hold = sum(min(self._gpu_decodes if how == DECODES else 1, self.dispatcher.running(pool))
+                       for pool, how in gpu_holds().items())
         self.gpu_hold = hold
         for acct in accounts.values():
             set_hold = getattr(acct, "set_gpu_hold", None)
@@ -199,12 +215,14 @@ class Scheduler:
             self._holding[tenant_id] = self._hold_pool.submit(self._read_hold, tenant_id)
 
     def _read_hold(self, tenant_id: str) -> set[str]:
-        """The pause switches an admin paused: PAUSE_SCANS, PAUSE_UPKEEP or producers'
-        artifacts. The dispatcher hands out none of it from now on; what's
-        running finishes. Until it can be read, as if every switch is paused."""
+        """What an admin paused, in one read (lineage.pauses): a switch's work
+        (Scans, or a producer's: its kinds, and its redo's) and a producer's
+        redo alone (its redo kind). The dispatcher hands out none of those
+        kinds from now on; what's running finishes. Until it can be read, as
+        if everything is paused. Returns the kinds held."""
         seq = next(self._hold_reads)
         try:
-            held = set(self._on_hold(tenant_id))
+            held = held_kinds(self._on_hold(tenant_id))
             if tenant_id in self._hold_unread:
                 self._hold_unread.discard(tenant_id)
                 logger.warning("scheduler: what %s paused can be read again", tenant_id)
@@ -212,10 +230,8 @@ class Scheduler:
             if tenant_id not in self._hold_unread:  # once, not every second
                 self._hold_unread.add(tenant_id)
                 logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
-            held = set(pause_targets())
-        self.dispatcher.hold(tenant_id, {k.name for k in KINDS.values()
-                                         if (k.flag and k.artifact in held)
-                                         or (k.name == "scan" and PAUSE_SCANS in held)}, seq=seq)
+            held = set(KINDS)
+        self.dispatcher.hold(tenant_id, held, seq=seq)
         return held
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
@@ -229,8 +245,8 @@ class Scheduler:
     def _refill(self, tenant_id: str, acct: Any) -> None:
         """Read the account's settings and machines when due, size its AI
         pools, list what's due for each kind that wants more, and say what's
-        running (every few seconds). What an admin paused hands out nothing
-        more, at once; what's running finishes."""
+        running (every few seconds). What an admin paused (a switch, or a
+        producer's redo) hands out nothing more, at once; what's running finishes."""
         held = self._read_hold(tenant_id)
         try:
             acct.refresh()
@@ -258,11 +274,13 @@ class Scheduler:
                                                "storage": acct.storage_seen()})
             except Exception:  # noqa: BLE001 — only a view of it
                 logger.exception("scheduler: writing %s's status failed", tenant_id)
-        for job in AI_JOB_KINDS:
+        for pool in account_pools():
+            job = pool.job.name
             slots = acct.capacity(job)
-            # Transcripts: twice the machines', so each clip's audio is got
-            # ready while the machines work on others (they hold their own limits).
-            self.dispatcher.set_capacity(f"{job}@{tenant_id}", slots if job == "vision" else 2 * slots)
+            # As many jobs as the machines take requests, times the job's
+            # per_request (transcripts: each clip's audio got ready while the
+            # machines hear others; they hold their own limits).
+            self.dispatcher.set_capacity(f"{pool.name}@{tenant_id}", slots * pool.job.per_request)
             if not slots:
                 for kind in AI_JOB_KINDS[job]:
                     self.dispatcher.clear(tenant_id, kind)
@@ -276,16 +294,7 @@ class Scheduler:
         if tenant_id in self._retry_seen and asked != self._retry_seen[tenant_id]:
             self.dispatcher.forget_taken(tenant_id)
         self._retry_seen[tenant_id] = asked
-        # A redo an admin stopped hands out nothing more, at once.
-        try:
-            stopped = self._paused(tenant_id)
-        except Exception:  # noqa: BLE001 — as if stopped, until it can be read
-            logger.exception("scheduler: reading %s's stopped redos failed", tenant_id)
-            stopped = {k.artifact for k in QUEUED if k.redo}
-        for kind in QUEUED:
-            if kind.redo and kind.artifact in stopped:
-                self.dispatcher.clear(tenant_id, kind.name)
-        if PAUSE_SCANS not in held and self.dispatcher.wanted(tenant_id, "scan"):
+        if "scan" not in held and self.dispatcher.wanted(tenant_id, "scan"):
             self.dispatcher.offer(tenant_id, "scan", [{"asset_id": f"scan:{tenant_id}", "created_at": ""}],
                                   complete=False)
         if not acct.settings_ready:
@@ -294,7 +303,7 @@ class Scheduler:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
                 continue
-            if kind.artifact in held or (kind.redo and kind.artifact in stopped):
+            if kind.name in held:
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
@@ -335,7 +344,7 @@ class Scheduler:
         nothing; anything else (a crash) charges nothing either, but each
         clip's crashes in a row are counted, and the CRASHES_BEFORE_CHARGE-th
         is charged, so the back-off and giving up apply."""
-        from src.server.scheduler.runners import NOT_TRIED, Crashed, Stopped, whose
+        from src.producers.runner import NOT_TRIED, Crashed, Stopped, whose
 
         kind = KINDS[job.kind]
         try:
@@ -385,7 +394,7 @@ class Scheduler:
 
     def collect(self, timeout: float | None = 0) -> None:
         """Free the slots of finished jobs (waiting up to timeout for one)."""
-        from src.server.scheduler.runners import NOT_TRIED
+        from src.producers.runner import NOT_TRIED
 
         if not self._running:
             return
@@ -445,12 +454,13 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
     from src.server.scheduler.queue import candidates
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        if kind.artifact in lineage.processing_paused(session):
+        paused = lineage.pauses(session)
+        if kind.artifact in paused.work:
             return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
         # A new producer version stops its redo until an admin resumes it.
-        if lineage.hold_new_version(session, kind.artifact) or kind.artifact in lineage.paused(session):
+        if kind.artifact in paused.redo or lineage.hold_new_version(session, kind.artifact):
             return None
         return candidates(session, kind, libraries, skip=skip,
                           want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
@@ -500,15 +510,28 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
         session.commit()
 
 
-def _on_hold_in_database(tenant_id: str) -> set[str]:
-    """The pause switches an admin paused (lineage.processing_paused)."""
+def held_kinds(paused: Any) -> set[str]:
+    """The kinds what's paused holds (lineage.Pauses): the scan for Scans; a
+    producer's kinds for its switch; its redo kind for its redo alone."""
+    held = set()
+    for kind in KINDS.values():
+        if not kind.flag:
+            if kind.name == "scan" and PAUSE_SCANS in paused.work:
+                held.add(kind.name)
+        elif kind.artifact in paused.work or (kind.redo and kind.artifact in paused.redo):
+            held.add(kind.name)
+    return held
+
+
+def _on_hold_in_database(tenant_id: str) -> Any:
+    """What an admin paused, both scopes (lineage.pauses)."""
     from sqlmodel import Session
 
     from src.server.database import get_engine_for_url
     from src.server.repository import lineage
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        return set(lineage.processing_paused(session))
+        return lineage.pauses(session)
 
 
 def _status_from_database(tenant_id: str) -> dict | None:
@@ -528,36 +551,11 @@ def _status_from_database(tenant_id: str) -> dict | None:
         return None
 
 
-def _paused_in_database(tenant_id: str) -> set[str]:
-    from sqlmodel import Session
-
-    from src.server.database import get_engine_for_url
-    from src.server.repository import lineage
-
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
-        return set(lineage.paused(session))
-
-
 # ---------------------------------------------------------------------------
 # Accounts
 # ---------------------------------------------------------------------------
 
 KEY_LABEL = "scheduler"
-
-
-def api_url() -> str:
-    """Where the scheduler reaches the API: LUMIVERB_API_URL, else the API's own port on this machine."""
-    if url := os.environ.get("LUMIVERB_API_URL"):
-        return url.rstrip("/")
-    port = os.environ.get("API_PORT")
-    if port:
-        host = os.environ.get("API_LISTEN_HOST", "127.0.0.1")
-        if host in ("0.0.0.0", "::", ""):
-            host = "127.0.0.1"
-        return f"http://{host}:{port}"
-    from src.client.cli.config import get_api_url
-
-    return get_api_url()
 
 
 def scheduler_key(tenant_id: str) -> str:
@@ -575,29 +573,12 @@ def scheduler_key(tenant_id: str) -> str:
     return plaintext
 
 
-def strip_nul(value: Any) -> Any:
-    """value with every NUL taken out of its strings (keys too), however deep."""
-    if isinstance(value, str):
-        return value.replace("\x00", "")
-    if isinstance(value, dict):
-        return {strip_nul(k): strip_nul(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [strip_nul(v) for v in value]
-    return value
-
-
-def _without_nul(kwargs: dict) -> dict:
-    if "json" in kwargs:
-        return {**kwargs, "json": strip_nul(kwargs["json"])}
-    return kwargs
-
-
 def scheduler_client(url: str, key: str) -> Any:
     """An API client that notes when its key stops working (someone revoked
     it), so the account gets a new one."""
-    from src.client.cli.client import LumiverbClient
+    from src.processing.api import ApiClient
 
-    class SchedulerClient(LumiverbClient):
+    class SchedulerClient(ApiClient):
         unauthorized = False
 
         def _handle_response(self, response):  # type: ignore[no-untyped-def]
@@ -605,18 +586,7 @@ def scheduler_client(url: str, key: str) -> Any:
                 self.unauthorized = True
             return super()._handle_response(response)
 
-        # Everything the scheduler saves goes through here: Postgres takes no
-        # NUL in text (a model's output can have one), so none is sent.
-        def post(self, path, **kwargs):  # type: ignore[no-untyped-def]
-            return super().post(path, **_without_nul(kwargs))
-
-        def put(self, path, **kwargs):  # type: ignore[no-untyped-def]
-            return super().put(path, **_without_nul(kwargs))
-
-        def patch(self, path, **kwargs):  # type: ignore[no-untyped-def]
-            return super().patch(path, **_without_nul(kwargs))
-
-    return SchedulerClient(base_url=url, token=key)
+    return SchedulerClient(url, key)
 
 
 class Accounts:
@@ -628,8 +598,12 @@ class Accounts:
     # A listing that failed (the control plane away) is tried again sooner.
     LIST_RETRY_SEC = 30.0
 
-    def __init__(self, scan_state: Any, *, url: str | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, scan_state: Any, *, url: str | None = None, models: Any = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._scan_state = scan_state
+        self._models = models
+        from src.server.scheduler.settings import api_url
+
         self._url = url or api_url()
         self._clock = clock
         self._accounts: dict[str, Any] = {}
@@ -667,7 +641,7 @@ class Accounts:
                 continue
             try:
                 client = scheduler_client(self._url, scheduler_key(tenant_id))
-                self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state)
+                self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state, models=self._models)
                 logger.info("scheduler: working for %s", tenant_id)
             except Exception:  # noqa: BLE001 — tried again at the next listing
                 logger.exception("scheduler: couldn't start work for %s", tenant_id)
@@ -724,18 +698,21 @@ def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None]
 
 
 def _still_holds(conn: Any, timeout: float = 10.0) -> bool:
-    """The lock's connection still answers (a database restart ends it, and
-    the lock). One that doesn't answer within timeout (a dead connection can
-    block for many minutes) counts as lost."""
+    """The lock's connection still answers and holds the lock (a database
+    restart ends both). One that doesn't answer within timeout (a dead
+    connection can block for many minutes) counts as lost."""
     from sqlalchemy import text
 
     answered: list[bool] = []
 
     def ask() -> None:
         try:
-            conn.execute(text("SELECT 1")).scalar()
+            held = conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted"
+                " AND pid = pg_backend_pid() AND classid = 0 AND objid = :id AND objsubid = 1)"),
+                {"id": LOCK_ID}).scalar()
             conn.commit()
-            answered.append(True)
+            answered.append(bool(held))
         except Exception:  # noqa: BLE001
             answered.append(False)
 
@@ -772,9 +749,9 @@ def configure_logging() -> None:
 
 def main() -> int:
     """lumiverb-scheduler: run every account's processing on this machine."""
-    from src.client.cache_dir import cache_dir
-    from src.client.cli.config import load_config
-    from src.client.proxy.analysis_cache import clear_leftovers
+    from src.processing.cache_dir import cache_dir
+    from src.processing import machine
+    from src.processing.proxy.analysis_cache import clear_leftovers
     from src.server.scheduler.scans import (
         STATE_FILE,
         ServiceLock,
@@ -783,7 +760,11 @@ def main() -> int:
         saved_form,
     )
 
+    from src.server.scheduler.settings import SchedulerSettings
+
     configure_logging()
+    here = SchedulerSettings().machine()
+    machine.use(here)  # never the CLI's config
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")
@@ -808,16 +789,19 @@ def main() -> int:
                 save_state(state_path, now)
                 last[0] = now
 
-        accounts = Accounts(state)
-        cfg = load_config()
-        gpu_decodes = cfg.gpu_decodes if cfg.analysis_proxy_decoder != "cpu" else 0
-        scheduler = Scheduler(accounts, capacity=default_capacity(cfg), gpu_decodes=gpu_decodes)
+        from src.server.scheduler.models import Models
+
+        models = Models(face_batches_per_process=here.face_batches_per_process)
+        accounts = Accounts(state, models=models)
+        scheduler = Scheduler(accounts, capacity=default_capacity(here), gpu_decodes=here.gpu_decodes_here,
+                              models=models)
         logger.info("scheduler: started")
         try:
             kept = run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all,
                        holds_lock=lambda: _still_holds(held))
         finally:
             accounts.close()
+            models.close()
         logger.info("scheduler: stopped")
         return 0 if kept else 1
     finally:

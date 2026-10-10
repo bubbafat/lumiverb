@@ -17,9 +17,10 @@ from unittest.mock import MagicMock
 import pytest
 from rich.console import Console
 
-from src.client.cli import roots
-from src.client.cli.config import CLIConfig, save_config
-from src.client.cli.scan import ScanStats
+from src.processing import roots
+from src.processing import machine
+from src.processing.machine import Machine
+from src.processing.scan import ScanStats
 from src.server.scheduler.scans import (
     Retry,
     ScanState,
@@ -126,7 +127,7 @@ def das(home: Path, tmp_path: Path) -> Path:
     mount = tmp_path / "mnt"
     (mount / "Footage" / "Day 1").mkdir(parents=True)
     (mount / "Footage" / "Day 1" / "A001.mov").write_bytes(b"x")
-    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    machine.use(Machine(root_map={MAC: str(mount)}))
     return mount
 
 
@@ -149,11 +150,22 @@ def test_reported_changes_are_scanned_then_acknowledged(das: Path) -> None:
     [call] = scan.call_args_list
     assert call.kwargs["path_prefix"] == "Day 1"
     assert call.kwargs["allow_moves"] is True
-    # The archive model: missing files are archived (reversible) on a healthy
-    # mount, so no guard holds them back (Robert's call, Oct 8).
-    assert call.kwargs["allow_mass_delete"] is True
+    # When most of a library looks gone the server asks a person (ADR-016):
+    # the scheduler never answers for them.
+    assert call.kwargs["allow_mass_delete"] is False
     assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
     assert reachable == {"lib_1": True}
+
+
+@pytest.mark.fast
+def test_the_server_asking_about_mass_missing_is_left_for_a_person(das: Path, caplog) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    with caplog.at_level("WARNING", logger="src.server.scheduler.scans"):
+        _pass(server, scan=MagicMock(return_value=ScanStats(mass_missing=90)))
+    [warning] = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert "Footage" in warning.getMessage() and "90 clip(s)" in warning.getMessage()
+    assert "lumiverb scan --library Footage --allow-mass-delete" in warning.getMessage()
+    assert server.acks  # the rest of the scan is done; the daily full scan asks again
 
 
 @pytest.mark.fast
@@ -259,7 +271,7 @@ def test_a_truncated_backlog_scans_everything(das: Path) -> None:
 
 @pytest.mark.fast
 def test_sleeping_storage_is_not_scanned_and_says_so(home: Path) -> None:
-    save_config(CLIConfig(root_map={MAC: str(home / "not-mounted")}))
+    machine.use(Machine(root_map={MAC: str(home / "not-mounted")}))
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
     scan, _, reachable = _pass(server, ScanState())
     scan.assert_not_called()
@@ -268,12 +280,41 @@ def test_sleeping_storage_is_not_scanned_and_says_so(home: Path) -> None:
 
 
 @pytest.mark.fast
+def test_no_root_map_is_said_once_per_start(home: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """Review: a library out of reach with LUMIVERB_ROOT_MAP empty said only
+    "isn't reachable" at INFO, every pass. The likely cause is said once."""
+    import logging
+
+    from src.server.scheduler import scans
+
+    monkeypatch.setattr(scans, "_said_no_root_map", False)
+    machine.use(Machine(root_map={}))
+    with caplog.at_level(logging.INFO, logger="src.server.scheduler.scans"):
+        _pass(FakeServer([LIB]), ScanState())
+        _pass(FakeServer([LIB]), ScanState())
+    said = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert said.count((logging.WARNING, "scheduler: LUMIVERB_ROOT_MAP is empty; no library can be scanned")) == 1
+    assert said.count((logging.INFO, "scheduler: Footage isn't reachable from here; not scanning it")) == 2
+
+
+@pytest.mark.fast
+def test_a_root_map_that_doesnt_reach_says_nothing_of_it(home: Path, monkeypatch: pytest.MonkeyPatch,
+                                                         caplog) -> None:
+    from src.server.scheduler import scans
+
+    monkeypatch.setattr(scans, "_said_no_root_map", False)
+    machine.use(Machine(root_map={MAC: str(home / "not-mounted")}))
+    _pass(FakeServer([LIB]), ScanState())
+    assert "LUMIVERB_ROOT_MAP" not in caplog.text
+
+
+@pytest.mark.fast
 def test_an_empty_mount_point_is_never_scanned(home: Path, tmp_path: Path) -> None:
     # An unmounted share is an empty folder; scanning it would mark every
     # file missing.
     mount = tmp_path / "empty-mount"
     (mount / "Footage").mkdir(parents=True)
-    save_config(CLIConfig(root_map={MAC: str(mount)}))
+    machine.use(Machine(root_map={MAC: str(mount)}))
     scan, _, reachable = _pass(FakeServer([LIB]), ScanState())
     scan.assert_not_called()
     assert reachable == {"lib_1": False}
@@ -507,8 +548,10 @@ def test_report_changes_sends_paths_as_libraries_store_them(home: Path, tmp_path
 
     from typer.testing import CliRunner
 
+    from src.client.cli.config import CLIConfig, save_config
+
     main = importlib.import_module("src.client.cli.main")
-    save_config(CLIConfig(root_map={MAC: "/mnt/media-01"}))
+    save_config(CLIConfig(root_map={MAC: "/mnt/media-01"}))  # the CLI's own map
     client = MagicMock()
     client.post.return_value.json.return_value = {
         "accepted": 1, "libraries": {"lib_1": 1}, "unmatched": 1, "unmatched_sample": ["/elsewhere/x.mov"],
