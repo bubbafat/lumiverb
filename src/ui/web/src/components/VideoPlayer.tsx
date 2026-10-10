@@ -66,7 +66,7 @@ export default function VideoPlayer({
           controls
           playsInline
           preload="metadata"
-          className="block max-h-[calc(100svh-8rem)] max-w-full lg:max-h-[calc(100svh-6rem)]"
+          className="block max-h-[55svh] max-w-full lg:max-h-[calc(100svh-6rem)]"
           onTimeUpdate={(e) => {
             // A new source starts at 0 and says so; keep where the old one was.
             if (resumeOn.current === null) last.current.time = e.currentTarget.currentTime;

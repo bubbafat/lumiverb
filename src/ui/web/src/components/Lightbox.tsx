@@ -762,7 +762,7 @@ export function Lightbox({
       {/* Two-column layout */}
       <div className="flex w-full flex-col overflow-y-auto lg:flex-row lg:overflow-visible">
         {/* Left: image */}
-        <div className="relative flex flex-auto shrink-0 items-center justify-center p-4 lg:flex-1 lg:p-8 min-h-[50vh] lg:min-h-0">
+        <div className="relative flex flex-none items-center justify-center p-4 lg:flex-1 lg:p-8 lg:min-h-0">
           <div className="relative flex max-h-full min-h-0 flex-1 items-center justify-center">
             {mediaLoading ? (
               <div className="flex h-64 w-64 items-center justify-center">
@@ -805,7 +805,7 @@ export function Lightbox({
                 <img
                   src={mediaUrl}
                   alt={filename}
-                  className="max-h-[calc(100svh-4rem)] max-w-full object-contain"
+                  className="max-h-[55svh] max-w-full object-contain lg:max-h-[calc(100svh-4rem)]"
                 />
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;
