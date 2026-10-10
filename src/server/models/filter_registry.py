@@ -28,12 +28,14 @@ from src.server.models.query_filter import (
     HasGps,
     HasRating,
     IncludeGuesses,
+    InProject,
     IsoRange,
     LeafFilter,
     LensModel,
     LibraryScope,
     MediaType,
     NearLocation,
+    NotInProject,
     PathPrefix,
     PersonFilter,
     QuerySpec,
@@ -73,6 +75,8 @@ _ALL_FILTER_TYPES: list[type[LeafFilter]] = [
     HasFaces,
     PersonFilter,
     TagFilter,
+    InProject,
+    NotInProject,
 ]
 
 PREFIX_MAP: dict[str, type[LeafFilter]] = {cls.prefix(): cls for cls in _ALL_FILTER_TYPES}

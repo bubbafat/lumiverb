@@ -54,10 +54,12 @@ def get_facets(
 
     Accepts the same ``?f=prefix:value`` params as ``/v1/query``.
     """
+    from src.server.api.routers.projects import guard_project_filters
     from src.server.api.routers.query import guard_public_spec
 
     spec = parse_f_params(f)
     public_cap_ms = guard_public_spec(request, session, spec)
+    guard_project_filters(request, session, spec)
 
     conditions: list[str] = []
     params: dict[str, object] = {}

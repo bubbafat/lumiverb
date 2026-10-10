@@ -18,6 +18,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.api.limits import MAX_PAGE
+from src.server.api.routers.projects import guard_project_filters
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
     ApertureRange,
@@ -585,6 +586,7 @@ def unified_query(
     # Visitors have no user: ratings are someone's, and who's in a photo
     # isn't for them to probe, so those filters are refused.
     public_cap_ms = guard_public_spec(request, session, spec)
+    guard_project_filters(request, session, spec)
 
     search_terms = spec.search_terms
     candidate_ids: list[str] | None = None
