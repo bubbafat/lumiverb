@@ -1741,9 +1741,12 @@ class AssetRepository:
         if not isinstance(taken_at_offset_min, int) or isinstance(taken_at_offset_min, bool) \
                 or abs(taken_at_offset_min) > 14 * 60:
             taken_at_offset_min = None
-        self._session.execute(
+        located = "taken_at, taken_at_offset_min, gps_lat, gps_lon"
+        before = self._session.execute(
+            text(f"SELECT {located} FROM assets WHERE asset_id = :a"), {"a": asset_id}).mappings().first()
+        after = self._session.execute(
             text(
-                """
+                f"""
                 UPDATE assets SET
                     sha256 = :sha256,
                     exif = :exif,
@@ -1765,6 +1768,7 @@ class AssetRepository:
                     flash_fired = :flash_fired,
                     orientation = :orientation
                 WHERE asset_id = :asset_id
+                RETURNING {located}
                 """
             ),
             {
@@ -1789,7 +1793,12 @@ class AssetRepository:
                 "orientation": orientation,
                 "asset_id": asset_id,
             },
-        )
+        ).mappings().first()
+        if after is not None:
+            # A fix that appeared, moved or went: the guesses around it are made again (ADR-017).
+            from src.server.repository import locations
+
+            locations.file_changed(self._session, asset_id, dict(before) if before else None, dict(after))
         self._session.commit()
 
     def set_capture(self, asset_id: str, taken_at: datetime | None, taken_at_offset_min: int | None,

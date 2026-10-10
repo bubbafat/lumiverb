@@ -287,6 +287,7 @@ def set_settings(
     a pause stays. A setting that doesn't remake (how faces are grouped)
     asks nothing and makes nothing again: when one changes, the producer's
     regroup runs (the face groups are worked out again)."""
+    from src.producers import load
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
     p = producer_or_404(artifact)
@@ -312,6 +313,19 @@ def set_settings(
     lineage.set_overrides(session, artifact, values)
     after, uses = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
     if after["settings_hash"] != before["settings_hash"]:
+        on_settings = load(p.on_settings) if p.on_settings else None
+        # What the new settings drop that a redo wouldn't (location guesses once inferring is off).
+        dropped = on_settings(session, before["settings"], after["settings"], apply=False) if on_settings else 0
+        if dropped and not body.redo:
+            session.rollback()
+            raise DecisionRequiredError(
+                "redo_on_change",
+                f"New settings remove {p.title.lower()} from {dropped:,} clip{'' if dropped == 1 else 's'}.",
+                {"artifact": artifact, "clips": dropped, "redo_stopped": False, "paused": False,
+                 "artifacts": [{"artifact": artifact, "title": p.title, "clips": dropped}]},
+            )
+        if on_settings:
+            on_settings(session, before["settings"], after["settings"], apply=True)
         clips = lineage.would_redo(session, artifact, after)
         if clips and not body.redo:
             paused = lineage.pauses(session)
@@ -331,8 +345,6 @@ def set_settings(
             )
         lineage.resume(session, [artifact], lineage.REDO)
     if uses != used and p.regroup:
-        from src.producers import load
-
         load(p.regroup)(session)
     session.commit()
     # Settings unchanged leave a stopped redo stopped.
