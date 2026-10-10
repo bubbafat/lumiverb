@@ -15,6 +15,7 @@ from src.server.repository.control_plane import ApiKeyRepository, PublicProjectR
 logger = logging.getLogger(__name__)
 
 _JWT_ALGORITHM = "HS256"
+_API_KEY_PREFIX = "lv_"  # ApiKeyRepository._generate_plaintext
 
 
 def _skip_tenant_middleware(path: str) -> bool:
@@ -90,15 +91,16 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
 
             # Try JWT first; fall through to API key lookup on failure.
+            # API keys (lv_ prefix) go straight to the key lookup.
             jwt_secret = get_settings().jwt_secret
-            if jwt_secret:
+            if jwt_secret and not token.startswith(_API_KEY_PREFIX):
                 try:
                     claims = jwt.decode(token, jwt_secret, algorithms=[_JWT_ALGORITHM], options={"verify_exp": True})
                     tenant_id = claims["tenant_id"]
                     user_id = claims["sub"]
                     role = claims["role"]
                 except (jwt.PyJWTError, KeyError) as exc:
-                    logger.warning("JWT decode failed for %s %s — %s: %s — falling through to API key", request.method, request.url.path, type(exc).__name__, exc)
+                    logger.debug("JWT decode failed for %s %s — %s: %s — falling through to API key", request.method, request.url.path, type(exc).__name__, exc)
                 else:
                     # JWT decoded successfully — resolve tenant and dispatch
                     from src.server.api.routers.auth import token_user_is_current
