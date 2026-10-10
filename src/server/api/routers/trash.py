@@ -172,9 +172,10 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
             or archived.deleted_at is None or archived.deleted_reason != "missing"):
         session.rollback()
         return None
-    # A person un-assigning a face or merging people locks in the other order
-    # (people or matches, then faces): give way within 200 ms, before Postgres
-    # would call it a deadlock and fail their request.
+    # The people routes lock faces first, as this does (tenant._lock_faces);
+    # anything else a person does on the copy that locks in another order:
+    # give way within 200 ms, before Postgres would call it a deadlock and
+    # fail their request.
     session.execute(text("SET LOCAL lock_timeout = '200ms'"))
     copy = repo.find_empty_newer_copy(archived)
     if copy is None:

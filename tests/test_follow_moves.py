@@ -532,10 +532,11 @@ def test_a_person_confirmed_on_the_copy_during_the_handover_isnt_lost_silently(e
 @pytest.mark.slow
 @pytest.mark.parametrize("action", ["unassign", "merge"])
 def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch, action):
-    """Un-assigning a face or merging people locks matches or people first, then
-    faces: the opposite order to the handover. The handover gives way (it times
-    out and the original stays archived) rather than deadlocking the person's
-    request into an error."""
+    """Un-assigning a face or merging people locks the faces first, as the
+    handover does (the clip, then its faces): the person's request waits for
+    the handover and never deadlocks into an error. A face that went with the
+    handed-over copy has no assignment left to remove, and the person is told
+    (unassign_face is False: a 404)."""
     import threading
     import time
 
@@ -584,7 +585,10 @@ def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch
     outcome["thread"].join(15)
     engine.dispose()
     assert "error" not in outcome, outcome
-    assert outcome.get("ok"), outcome
+    assert "ok" in outcome, outcome
+    with _db(env) as session:
+        copy_left = session.execute(text("SELECT count(*) FROM assets WHERE asset_id = :a"), {"a": copy}).scalar()
+    assert outcome["ok"] or (action == "unassign" and copy_left == 0), outcome
 
 
 @pytest.mark.slow
