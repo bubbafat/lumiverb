@@ -130,3 +130,19 @@ def test_no_route_nests_the_envelope_in_detail():
                     ):
                         offenders.append(f"{path.relative_to(SERVER)}:{node.lineno}")
     assert offenders == []
+
+
+def test_an_unhandled_error_keeps_the_security_headers(monkeypatch):
+    # Starlette makes an unhandled error's 500 outside every middleware.
+    from src.server.api.main import SECURITY_HEADERS
+    from src.server.api.routers import filters
+
+    def boom():
+        raise RuntimeError("a surprise")
+
+    monkeypatch.setattr(filters, "capabilities", boom)
+    r = TestClient(app, raise_server_exceptions=False).get("/v1/filters/capabilities")
+    assert r.status_code == 500
+    assert _envelope(r)["code"] == "internal_error"
+    for name, value in SECURITY_HEADERS.items():
+        assert r.headers.get(name) == value, name
