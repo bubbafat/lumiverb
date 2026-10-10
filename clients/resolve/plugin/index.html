@@ -28,13 +28,22 @@
             <button type="submit">Search</button>
         </form>
         <div class="options">
+            <select id="project" aria-label="Project"></select>
+            <div class="segmented" role="radiogroup" aria-label="Search">
+                <label><input type="radio" name="scope" value="all" checked><span>All</span></label>
+                <label><input type="radio" name="scope" value="in"><span>In project</span></label>
+                <label><input type="radio" name="scope" value="out"><span>Not in project</span></label>
+            </div>
+        </div>
+        <div class="options">
             <select id="media" aria-label="Type">
                 <option value="video" selected>Video</option>
                 <option value="image">Images</option>
                 <option value="all">All</option>
             </select>
-            <label class="check"><input type="checkbox" id="hide-in-project"> Hide clips already in the project</label>
+            <label class="check" id="also-add-label"><input type="checkbox" id="also-add" checked> Also add to project</label>
         </div>
+        <p class="busy" id="busy" hidden><span class="spinner" aria-hidden="true"></span><span id="busy-text"></span></p>
         <ol id="results"></ol>
         <nav id="pager" hidden>
             <button type="button" id="prev">Previous</button>

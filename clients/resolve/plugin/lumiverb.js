@@ -12,6 +12,12 @@ const PAGE_SIZE = 10;
 // The type choices and the `media:` filter each adds to a search.
 const MEDIA_FILTERS = { video: 'video', image: 'image', all: null };
 
+// The scope choices and the project filter each adds (with the project's id).
+const SCOPE_FILTERS = { all: null, in: 'project', out: 'not_project' };
+
+// The most asset ids the server takes in one request.
+const MAX_IDS = 10000;
+
 class LumiverbError extends Error {
     constructor(message, { status = null, code = null } = {}) {
         super(message);
@@ -156,14 +162,19 @@ class LumiverbClient {
         await this.refreshing;
     }
 
-    async request(apiPath) {
+    // `body` is sent as JSON.
+    async request(apiPath, { method = 'GET', body } = {}) {
         if (!this.signedIn) throw new SignedOutError('Sign in first.');
         for (let attempt = 0; attempt < 2; attempt += 1) {
             const token = this.session.token;
+            const headers = { Authorization: `Bearer ${token}` };
+            if (body !== undefined) headers['Content-Type'] = 'application/json';
             let response;
             try {
                 response = await this.fetch(`${this.session.serverUrl}${apiPath}`, {
-                    headers: { Authorization: `Bearer ${token}` },
+                    method,
+                    headers,
+                    body: body === undefined ? undefined : JSON.stringify(body),
                 });
             } catch {
                 throw new LumiverbError(`Couldn't reach ${this.session.serverUrl}.`);
@@ -183,12 +194,16 @@ class LumiverbClient {
     }
 
     // One page of a text search, most relevant first. `after` is the
-    // previous page's next_cursor; `media` one of MEDIA_FILTERS' keys.
-    async search(text, { after = null, limit = PAGE_SIZE, media = 'all' } = {}) {
+    // previous page's next_cursor; `media` one of MEDIA_FILTERS' keys;
+    // `scope` one of SCOPE_FILTERS' keys, for `project` (its id).
+    async search(text, { after = null, limit = PAGE_SIZE, media = 'all', scope = 'all', project = null } = {}) {
         if (!Object.hasOwn(MEDIA_FILTERS, media)) throw new LumiverbError(`Unknown type: ${media}.`);
+        if (!Object.hasOwn(SCOPE_FILTERS, scope)) throw new LumiverbError(`Unknown scope: ${scope}.`);
+        if (SCOPE_FILTERS[scope] && !project) throw new LumiverbError('Choose a project first.');
         const params = new URLSearchParams();
         params.append('f', `query:${text}`);
         if (MEDIA_FILTERS[media]) params.append('f', `media:${MEDIA_FILTERS[media]}`);
+        if (SCOPE_FILTERS[scope]) params.append('f', `${SCOPE_FILTERS[scope]}:${project}`);
         params.append('limit', String(limit));
         if (after) params.append('after', after);
         const response = await this.request(`/v1/query?${params}`);
@@ -198,6 +213,57 @@ class LumiverbClient {
             nextCursor: body.next_cursor || null,
             totalEstimate: body.total_estimate ?? null,
         };
+    }
+
+    // The caller's projects: their own and ones shared with them. Only an
+    // owner can add clips (`own`).
+    async projects() {
+        const response = await this.request('/v1/projects');
+        const body = await response.json();
+        return (body.items || []).map((project) => ({
+            projectId: project.project_id,
+            name: project.name,
+            own: project.ownership === 'own',
+            assetCount: project.asset_count,
+            updatedAt: project.updated_at,
+        }));
+    }
+
+    // A new project holding these clips, in this order. The server takes
+    // MAX_IDS at a time, so the rest are added after.
+    async createProject(name, assetIds) {
+        const response = await this.request('/v1/projects', {
+            method: 'POST',
+            body: { name, asset_ids: assetIds.slice(0, MAX_IDS) },
+        });
+        const project = await response.json();
+        await this.addToProject(project.project_id, assetIds.slice(MAX_IDS));
+        return { projectId: project.project_id, name: project.name, own: true };
+    }
+
+    // How many were added: clips already in the project aren't counted.
+    async addToProject(projectId, assetIds) {
+        let added = 0;
+        for (let start = 0; start < assetIds.length; start += MAX_IDS) {
+            const response = await this.request(`/v1/projects/${encodeURIComponent(projectId)}/assets`, {
+                method: 'POST',
+                body: { asset_ids: assetIds.slice(start, start + MAX_IDS) },
+            });
+            added += (await response.json()).added || 0;
+        }
+        return added;
+    }
+
+    // The asset at a path in a library, or null when Lumiverb has none there.
+    async assetIdAt(libraryId, relPath) {
+        const params = new URLSearchParams({ library_id: libraryId, rel_path: relPath });
+        try {
+            const response = await this.request(`/v1/assets/by-path?${params}`);
+            return (await response.json()).asset_id;
+        } catch (error) {
+            if (error.status === 404) return null;
+            throw error;
+        }
     }
 
     // library_id -> root_path, read once per session.
@@ -225,8 +291,10 @@ class LumiverbClient {
 }
 
 module.exports = {
+    MAX_IDS,
     MEDIA_FILTERS,
     PAGE_SIZE,
+    SCOPE_FILTERS,
     LumiverbClient,
     LumiverbError,
     SignedOutError,
