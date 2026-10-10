@@ -2,7 +2,6 @@ import type {
   ApiKeyCreateResponse,
   ApiKeyItem,
   AssetDetail,
-  AssetPageItem,
   BatchAddResponse,
   BatchRemoveResponse,
   ProjectAssetsResponse,
@@ -77,7 +76,7 @@ export function getApiKey(): string {
   return getStoredApiKey();
 }
 
-const authHeaders = (): HeadersInit => {
+const authHeaders = (): Record<string, string> => {
   const key = getApiKey();
   return key ? { Authorization: `Bearer ${key}` } : {};
 };
@@ -113,7 +112,7 @@ async function tryRefresh(): Promise<boolean> {
   }
 }
 
-export function handleUnauthorized(): void {
+function handleUnauthorized(): void {
   const stored = getStoredApiKey();
   if (!stored) return;
 
@@ -131,86 +130,62 @@ export async function logout(): Promise<void> {
   window.location.href = "/login";
 }
 
-type ApiFetchOptions = Omit<RequestInit, "body"> & { body?: unknown };
+type AuthFetchInit = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
+
+/**
+ * fetch `/v1${path}` with the stored token. On a 401 it refreshes the token
+ * once and retries, and hands back the retry's response whatever it is, so a
+ * 409 decision or a 404 after a refresh reaches the caller like any other.
+ * It signs out only when the refresh fails or the retry is 401 again.
+ */
+export async function authFetch(path: string, init: AuthFetchInit = {}): Promise<Response> {
+  const send = () =>
+    fetch(`/v1${path}`, { ...init, headers: { ...authHeaders(), ...init.headers } });
+  let res = await send();
+  if (res.status !== 401) return res;
+  if (await tryRefresh()) {
+    res = await send();
+    if (res.status !== 401) return res;
+  }
+  handleUnauthorized();
+  return res;
+}
+
+/** Turn a non-OK response into an ApiError, reading the error envelope. */
+async function toApiError(res: Response): Promise<ApiError> {
+  let message = res.statusText;
+  let code: string | undefined;
+  let details: Record<string, unknown> | undefined;
+  try {
+    const json = (await res.json()) as {
+      error?: { code?: string; message?: string; details?: Record<string, unknown> };
+    };
+    message = json?.error?.message ?? message;
+    code = json?.error?.code;
+    details = json?.error?.details;
+  } catch {
+    // not JSON
+  }
+  return new ApiError(res.status, message, code, details);
+}
+
+type ApiFetchOptions = Omit<AuthFetchInit, "body"> & { body?: unknown };
 
 async function apiFetch<T>(
   path: string,
   options?: ApiFetchOptions,
 ): Promise<T> {
-  const { body, ...rest } = options ?? {};
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...authHeaders(),
-    ...rest.headers,
-  };
-  const fetchBody =
-    body !== undefined ? JSON.stringify(body) : (rest as RequestInit).body;
-  const res = await fetch(`/v1${path}`, {
+  const { body, headers, ...rest } = options ?? {};
+  const res = await authFetch(path, {
     ...rest,
-    headers,
-    body: fetchBody,
+    headers: { "Content-Type": "application/json", ...headers },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    if (res.status === 401) {
-      // Try silent refresh before giving up
-      const refreshed = await tryRefresh();
-      if (refreshed) {
-        // Retry the original request with the new token
-        const retryHeaders: HeadersInit = {
-          "Content-Type": "application/json",
-          ...authHeaders(),
-          ...rest.headers,
-        };
-        const retryBody =
-          body !== undefined ? JSON.stringify(body) : (rest as RequestInit).body;
-        const retryRes = await fetch(`/v1${path}`, {
-          ...rest,
-          headers: retryHeaders,
-          body: retryBody,
-        });
-        if (retryRes.ok) {
-          if (retryRes.status === 204) return null as T;
-          return retryRes.json() as Promise<T>;
-        }
-      }
-      handleUnauthorized();
-    }
-    let message = res.statusText;
-    let code: string | undefined;
-    let details: Record<string, unknown> | undefined;
-    try {
-      const json = (await res.json()) as {
-        error?: { code?: string; message?: string; details?: Record<string, unknown> };
-      };
-      message = json?.error?.message ?? message;
-      code = json?.error?.code;
-      details = json?.error?.details;
-    } catch {
-      // ignore
-    }
-    throw new ApiError(res.status, message, code, details);
-  }
+  if (!res.ok) throw await toApiError(res);
   if (res.status === 204) {
     return null as T;
   }
   return res.json() as Promise<T>;
-}
-
-/** Fetch blob (e.g. image) with auth. Used for thumbnail/proxy URLs. */
-export async function apiFetchBlob(path: string): Promise<Blob> {
-  let res = await fetch(`/v1${path}`, { headers: authHeaders() });
-  if (!res.ok) {
-    if (res.status === 401) {
-      const refreshed = await tryRefresh();
-      if (refreshed) {
-        res = await fetch(`/v1${path}`, { headers: authHeaders() });
-        if (res.ok) return res.blob();
-      }
-      handleUnauthorized();
-    }
-    throw new ApiError(res.status, res.statusText);
-  }
-  return res.blob();
 }
 
 export async function listLibraries(
@@ -441,19 +416,9 @@ export async function listLibraryHealth(): Promise<LibraryHealthItem[]> {
   return apiFetch<LibraryHealthItem[]>("/libraries/health");
 }
 
-/** Fetch aggregated filter facets for a library (legacy — use getFilteredFacets). */
-export async function getFacets(
-  libraryId: string,
-  pathPrefix?: string,
-): Promise<FacetsResponse> {
-  const params = new URLSearchParams({ library_id: libraryId });
-  if (pathPrefix) params.set("path_prefix", pathPrefix);
-  return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
-}
-
 // ---------- Unified Query (filter algebra) ----------
 
-import type { LeafFilter, FilterCapability } from "../lib/queryFilter";
+import type { LeafFilter } from "../lib/queryFilter";
 
 /** Response from GET /v1/query. */
 export interface QueryItem {
@@ -529,12 +494,6 @@ export async function getFilteredFacets(
   return apiFetch<FacetsResponse>(`/assets/facets?${params}`);
 }
 
-/** Fetch filter capabilities catalog from the server. */
-export async function fetchFilterCapabilities(): Promise<FilterCapability[]> {
-  const data = await apiFetch<{ filters: FilterCapability[] }>("/filters/capabilities");
-  return data.filters;
-}
-
 /** List detected faces for an asset. */
 export async function listFaces(assetId: string): Promise<FaceListResponse> {
   return apiFetch<FaceListResponse>(`/assets/${assetId}/faces`);
@@ -593,13 +552,6 @@ export async function listPeople(cursor?: string, limit = 50): Promise<PersonLis
   if (cursor) params.set("after", cursor);
   params.set("limit", String(limit));
   return apiFetch<PersonListResponse>(`/people?${params}`);
-}
-
-/** Create a named person. */
-export async function createPerson(displayName: string, faceIds?: string[]): Promise<PersonItem> {
-  const body: Record<string, unknown> = { display_name: displayName };
-  if (faceIds) body.face_ids = faceIds;
-  return apiFetch<PersonItem>("/people", { method: "POST", body });
 }
 
 /** Search people by name (typeahead). */
@@ -705,11 +657,9 @@ export async function getNearestPeopleForFace(faceId: string, limit = 5): Promis
 
 /** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. Returns person_id for undo. */
 export async function dismissCluster(clusterIndex: number): Promise<{ person_id: string }> {
-  const res = await fetch(`/v1/faces/clusters/${clusterIndex}/dismiss`, {
+  return apiFetch<{ person_id: string }>(`/faces/clusters/${clusterIndex}/dismiss`, {
     method: "POST",
-    headers: authHeaders(),
   });
-  return res.json();
 }
 
 export interface ClusterFacesResponse {
@@ -1140,14 +1090,6 @@ export async function findSimilar(params: {
   return apiFetch<SimilarityResponse>(`/similar?${qs.toString()}`);
 }
 
-export function thumbnailUrl(assetId: string): string {
-  return `/v1/assets/${assetId}/thumbnail`;
-}
-
-export function proxyUrl(assetId: string): string {
-  return `/v1/assets/${assetId}/proxy`;
-}
-
 export interface PathFilterItem {
   filter_id: string;
   pattern: string;
@@ -1157,17 +1099,6 @@ export interface PathFilterItem {
 export interface LibraryFiltersResponse {
   includes: PathFilterItem[];
   excludes: PathFilterItem[];
-}
-
-export interface TenantFilterDefaultItem {
-  default_id: string;
-  pattern: string;
-  created_at: string;
-}
-
-export interface TenantFilterDefaultsResponse {
-  includes: TenantFilterDefaultItem[];
-  excludes: TenantFilterDefaultItem[];
 }
 
 export interface CreatedFilterResponse {
@@ -1180,13 +1111,6 @@ export interface CreatedFilterResponse {
 
 export interface PreviewFilterResponse {
   matching_asset_count: number;
-}
-
-export interface CreatedTenantDefaultResponse {
-  default_id: string;
-  type: string;
-  pattern: string;
-  created_at: string;
 }
 
 export async function getLibraryFilters(
@@ -1229,28 +1153,6 @@ export async function deleteLibraryFilter(
   filterId: string,
 ): Promise<void> {
   return apiFetch<void>(`/libraries/${libraryId}/filters/${filterId}`, {
-    method: "DELETE",
-  });
-}
-
-export async function getTenantFilterDefaults(): Promise<TenantFilterDefaultsResponse> {
-  return apiFetch<TenantFilterDefaultsResponse>("/path-filter-defaults");
-}
-
-export async function addTenantFilterDefault(
-  type: "include" | "exclude",
-  pattern: string,
-): Promise<CreatedTenantDefaultResponse> {
-  return apiFetch<CreatedTenantDefaultResponse>("/path-filter-defaults", {
-    method: "POST",
-    body: { type, pattern },
-  });
-}
-
-export async function deleteTenantFilterDefault(
-  defaultId: string,
-): Promise<void> {
-  return apiFetch<void>(`/path-filter-defaults/${defaultId}`, {
     method: "DELETE",
   });
 }
@@ -1444,16 +1346,6 @@ export async function removeAssetsFromProject(
   });
 }
 
-export async function reorderProject(
-  projectId: string,
-  assetIds: string[],
-): Promise<void> {
-  return apiFetch<void>(`/projects/${projectId}/reorder`, {
-    method: "PATCH",
-    body: { asset_ids: assetIds },
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Ratings
 // ---------------------------------------------------------------------------
@@ -1476,16 +1368,6 @@ export async function batchRateAssets(
     method: "PUT",
     body: { asset_ids: assetIds, ...body },
   });
-}
-
-export async function listFavorites(
-  cursor?: string,
-  limit = 200,
-): Promise<{ items: (AssetPageItem & { library_id: string; library_name: string })[]; next_cursor: string | null }> {
-  const qs = new URLSearchParams();
-  if (cursor) qs.set("after", cursor);
-  qs.set("limit", String(limit));
-  return apiFetch(`/assets/favorites?${qs}`);
 }
 
 export async function lookupRatings(
@@ -1538,13 +1420,6 @@ export async function updateSavedView(
 
 export async function deleteSavedView(viewId: string): Promise<void> {
   return apiFetch<void>(`/views/${viewId}`, { method: "DELETE" });
-}
-
-export async function reorderSavedViews(viewIds: string[]): Promise<void> {
-  return apiFetch<void>("/views/reorder", {
-    method: "PATCH",
-    body: { view_ids: viewIds },
-  });
 }
 
 /** Upload or replace an SRT transcript for a video asset. */
@@ -1628,11 +1503,7 @@ function filenameFromDisposition(header: string | null): string | null {
  * stills, pointing at the originals as the libraries know them (relinked in the editor). */
 export async function exportProject(projectId: string, format: string): Promise<ProjectExportFile> {
   const qs = new URLSearchParams({ format });
-  const url = `/v1/projects/${projectId}/export?${qs.toString()}`;
-  let res = await fetch(url, { headers: authHeaders() });
-  if (res.status === 401 && (await tryRefresh())) {
-    res = await fetch(url, { headers: authHeaders() });
-  }
+  const res = await authFetch(`/projects/${projectId}/export?${qs.toString()}`);
   if (!res.ok) {
     let message = `Export failed (${res.status})`;
     try {
