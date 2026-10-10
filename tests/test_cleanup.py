@@ -266,32 +266,119 @@ def test_cleanup_orphan_file_execute(tmp_path: Path) -> None:
         assert (tmp_path / k).exists()
 
 
+def _age_tree(path: Path, age_seconds: float = 7200) -> None:
+    """Set every file's and folder's mtime under path (path included) to age_seconds ago."""
+    import os
+
+    old = time.time() - age_seconds
+    for p in [*path.rglob("*"), path]:
+        os.utime(p, (old, old))
+
+
+def _lib_dir(data_dir: Path, tenant_id: str, lib: str, *, age_seconds: float = 7200) -> Path:
+    _make_file(data_dir / tenant_id / lib / "proxies" / "00" / "ast_X_photo.webp")
+    _age_tree(data_dir / tenant_id / lib, age_seconds)
+    return data_dir / tenant_id / lib
+
+
 @pytest.mark.fast
 def test_cleanup_orphan_library_dir(tmp_path: Path) -> None:
     """A library dir with no matching DB row is removed."""
     tenant_id = "ten_AAAA"
-    orphan_lib = "lib_ORPHAN"
-    orphan_file = f"{tenant_id}/{orphan_lib}/proxies/00/ast_X_photo.webp"
-    _setup_library_dir(tmp_path, tenant_id, orphan_lib, [orphan_file])
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            result.fetchall.return_value = []  # no libraries in DB
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
+    for lib in ("lib_KEEP1", "lib_KEEP2", "lib_KEEP3"):
+        (tmp_path / tenant_id / lib).mkdir(parents=True)
+    orphan = _lib_dir(tmp_path, tenant_id, "lib_ORPHAN")
+    session = _mock_session_with_libraries(["lib_KEEP1", "lib_KEEP2", "lib_KEEP3"], {})
 
     result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
 
     assert result.orphan_libraries == 1
     assert result.bytes_freed > 0
-    assert not (tmp_path / tenant_id / orphan_lib).exists()
+    assert not orphan.exists()
+
+
+@pytest.mark.fast
+def test_cleanup_keeps_every_library_dir_when_the_db_lists_no_libraries(tmp_path: Path) -> None:
+    """A database restored empty (or recreated) lists no libraries: nothing is removed."""
+    tenant_id = "ten_AAAA"
+    dirs = [_lib_dir(tmp_path, tenant_id, lib) for lib in ("lib_A", "lib_B")]
+    session = _mock_session_with_libraries([], {})
+
+    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+
+    assert result.orphan_libraries == 0
+    assert all(d.exists() for d in dirs)
+    assert "lists no libraries" in result.errors[0]
+
+
+@pytest.mark.fast
+def test_cleanup_keeps_library_dirs_when_too_many_would_go(tmp_path: Path) -> None:
+    """A database restored from an older backup misses the newer libraries:
+    more than one and over 25% of the folders, so none is removed."""
+    tenant_id = "ten_AAAA"
+    (tmp_path / tenant_id / "lib_OLD").mkdir(parents=True)
+    newer = [_lib_dir(tmp_path, tenant_id, lib) for lib in ("lib_NEW1", "lib_NEW2")]
+    session = _mock_session_with_libraries(["lib_OLD"], {})
+
+    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+
+    assert result.orphan_libraries == 0
+    assert result.skipped_libraries == 2
+    assert all(d.exists() for d in newer)
+    assert "safety threshold" in result.errors[0]
+
+
+@pytest.mark.fast
+def test_cleanup_keeps_a_library_dir_changed_in_the_last_hour(tmp_path: Path) -> None:
+    """A folder is as new as its newest file: one written a minute ago keeps it."""
+    tenant_id = "ten_AAAA"
+    for lib in ("lib_KEEP1", "lib_KEEP2", "lib_KEEP3"):
+        (tmp_path / tenant_id / lib).mkdir(parents=True)
+    orphan = _lib_dir(tmp_path, tenant_id, "lib_ORPHAN")
+    _make_file(orphan / "analysis" / "00" / "ast_Y.mp4", age_seconds=60)
+    session = _mock_session_with_libraries(["lib_KEEP1", "lib_KEEP2", "lib_KEEP3"], {})
+
+    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+
+    assert result.orphan_libraries == 0
+    assert result.skipped_libraries == 1
+    assert orphan.exists()
+
+
+@pytest.mark.fast
+def test_cleanup_of_every_account_keeps_account_dirs_the_db_doesnt_list(tmp_path: Path) -> None:
+    """No accounts listed, or too many account folders unlisted, or one changed
+    in the last hour: no account folder is removed."""
+    from types import SimpleNamespace
+
+    from src.server.search.cleanup import run_cleanup_all_tenants
+
+    for t in ("ten_A", "ten_B", "ten_C"):
+        (tmp_path / t).mkdir()
+    _age_tree(tmp_path / "ten_B")
+    _age_tree(tmp_path / "ten_C")
+
+    def run(known: list[str]) -> CleanupResult:
+        repo = MagicMock()
+        repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id=t) for t in known]
+        with (
+            patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))),
+            patch("src.server.database.get_control_session"),
+            patch("src.server.database.get_tenant_session"),
+            patch("src.server.repository.control_plane.TenantRepository", repo),
+            patch("src.server.search.cleanup.run_cleanup_for_tenant", return_value=CleanupResult()),
+            patch("src.server.search.cleanup._paused", return_value=False),
+        ):
+            return run_cleanup_all_tenants(dry_run=False)
+
+    assert "lists no accounts" in run([]).errors[0]
+    assert run(["ten_X"]).orphan_tenants == 0  # three of four unlisted
+    young = run(["ten_B", "ten_C"])  # ten_A is new
+    assert young.orphan_tenants == 0 and "last hour" in young.errors[0]
+    assert all((tmp_path / t).exists() for t in ("ten_A", "ten_B", "ten_C"))
+    _age_tree(tmp_path / "ten_A")
+    assert run(["ten_B", "ten_C"]).orphan_tenants == 1
+    assert not (tmp_path / "ten_A").exists()
 
 
 @pytest.mark.fast

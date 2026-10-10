@@ -9,7 +9,7 @@ POST /v1/upkeep                    — search sync, face names, expired trash, m
                                      empty dismissed people, face clusters when faces changed
                                      (and, all accounts, old revoked tokens)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
-POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id for one library)
+POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true)
 POST /v1/upkeep/recluster          — recompute face clusters
 POST /v1/upkeep/recreate-search-indexes — wipe and remake the Quickwit indexes
 POST /v1/upkeep/cleanup-dismissed  — delete dismissed people with zero face matches
@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from src.server.api.limits import require_scope
 from src.server.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -471,23 +472,26 @@ def run_cleanup(
     scope: Scope,
     dry_run: bool = True,
     library_id: str | None = Query(default=None, description="One library of the account (account keys only)."),
+    all_: bool = Query(default=False, alias="all", description="The whole account (account keys only)."),
 ) -> CleanupResultModel:
     """Run filesystem cleanup to remove orphaned files left after trash is emptied.
 
     dry_run=true (default): report what would be deleted without deleting.
     dry_run=false: actually delete orphaned files.
 
-    An account admin's key: that account, or one library of it (library_id;
-    404 when it isn't the account's). The admin key with tenants=all: every
-    account, and the directories of accounts that are gone.
+    An account admin's key: one library of the account (library_id; 404 when
+    it isn't the account's) or the whole account (all=true); neither or both
+    is a 400. The admin key with tenants=all: every account, and the
+    directories of accounts that are gone.
     """
     from src.server.search.cleanup import run_cleanup_all_tenants, run_cleanup_single_tenant
 
     if scope.all_tenants:
-        if library_id is not None:
-            raise HTTPException(status_code=400, detail="library_id needs an account's key, not tenants=all")
+        if library_id is not None or all_:
+            raise HTTPException(status_code=400, detail="library_id and all need an account's key, not tenants=all")
         result = run_cleanup_all_tenants(dry_run=dry_run)
     else:
+        require_scope(library_id is not None, all_, "library_id")
         with _tenant_session(scope) as session:
             if library_id is not None and session.execute(
                 text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},

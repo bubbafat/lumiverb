@@ -286,8 +286,9 @@ def test_extract_poster_from_truncated_video_raises():
 
 
 @pytest.mark.fast
-def test_walk_library_skips_zero_byte_files(tmp_path):
-    """Zero-byte files should be excluded during discovery."""
+def test_walk_library_lists_zero_byte_files(tmp_path):
+    """A zero-byte file is on disk (maybe mid-rewrite): listed, so it isn't
+    taken for deleted; the scan doesn't ingest it."""
     from src.processing.ingest import _walk_library
 
     lib_root = tmp_path / "library"
@@ -304,7 +305,7 @@ def test_walk_library_skips_zero_byte_files(tmp_path):
     rel_paths = [r["rel_path"] for r in results]
 
     assert "good.jpg" in rel_paths
-    assert "empty.jpg" not in rel_paths
+    assert "empty.jpg" in rel_paths
 
 
 # ---------------------------------------------------------------------------

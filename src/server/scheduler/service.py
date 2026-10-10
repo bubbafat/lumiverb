@@ -53,9 +53,11 @@ STATUS_EVERY_SEC = 5.0
 # this often, apart from the refill (which can be slow).
 HOLD_EVERY_SEC = 1.0
 # The control-plane lock only one scheduler holds ("lumv"), and how often
-# it's checked that the lock is still held.
+# it's checked that the lock is still held: before every tick hands out
+# jobs (one query on its own connection), so a scheduler that lost it
+# never runs beside the one that took it.
 LOCK_ID = 0x6C756D76
-LOCK_CHECK_SEC = 60.0
+LOCK_CHECK_SEC = 0.0
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
@@ -696,18 +698,21 @@ def run(*, stop: threading.Event, scheduler: Scheduler, save: Callable[[], None]
 
 
 def _still_holds(conn: Any, timeout: float = 10.0) -> bool:
-    """The lock's connection still answers (a database restart ends it, and
-    the lock). One that doesn't answer within timeout (a dead connection can
-    block for many minutes) counts as lost."""
+    """The lock's connection still answers and holds the lock (a database
+    restart ends both). One that doesn't answer within timeout (a dead
+    connection can block for many minutes) counts as lost."""
     from sqlalchemy import text
 
     answered: list[bool] = []
 
     def ask() -> None:
         try:
-            conn.execute(text("SELECT 1")).scalar()
+            held = conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted"
+                " AND pid = pg_backend_pid() AND classid = 0 AND objid = :id AND objsubid = 1)"),
+                {"id": LOCK_ID}).scalar()
             conn.commit()
-            answered.append(True)
+            answered.append(bool(held))
         except Exception:  # noqa: BLE001
             answered.append(False)
 

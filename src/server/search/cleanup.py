@@ -2,8 +2,12 @@
 
 Safety guards:
 - DB query failures skip the affected tenant/library (never treat empty results as "nothing expected")
-- Files newer than 1 hour are skipped (may be mid-ingest)
-- If >25% of files in a library would be deleted, abort that library
+- Files newer than 1 hour are skipped (may be mid-ingest); so are whole
+  folders holding any such file
+- If >25% of files in a library would be deleted, abort that library; the
+  same for library and account folders (more than one, and >25% of them)
+- A database that lists no libraries (or no accounts) while folders exist
+  deletes nothing: more likely a restored or empty database than a wipe
 - Dry-run by default
 """
 
@@ -69,6 +73,39 @@ def _file_age_seconds(path: Path) -> float:
         return time.time() - path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+def _newest_age_seconds(directory: Path) -> float:
+    """Age in seconds of the newest file or folder under directory (its own mtime included)."""
+    newest = 0.0
+    for root, dirs, files in os.walk(directory):
+        for name in [*dirs, *files, ""]:
+            try:
+                newest = max(newest, (Path(root) / name).stat().st_mtime)
+            except OSError:
+                return 0.0  # can't tell: as good as new
+    return time.time() - newest
+
+
+def _orphan_dirs(parent: Path, orphans: list[str], total: int, what: str, result: CleanupResult) -> list[str]:
+    """The orphan folders safe to remove: none when too many of them would go
+    (likely a database restored from an older backup), and none newer than
+    the age threshold. What's skipped is logged and said in result.errors."""
+    if len(orphans) > 1 and len(orphans) > _MAX_DELETE_FRACTION * total:
+        msg = (f"Skipped {len(orphans)}/{total} {what} folders under {parent} the database doesn't list: "
+               f"exceeds {_MAX_DELETE_FRACTION:.0%} safety threshold")
+        logger.warning(msg)
+        result.errors.append(msg)
+        return []
+    safe = []
+    for name in orphans:
+        if _newest_age_seconds(parent / name) < _MIN_AGE_SECONDS:
+            msg = f"Skipped {what} folder {parent / name}: changed in the last hour"
+            logger.warning(msg)
+            result.errors.append(msg)
+        else:
+            safe.append(name)
+    return safe
 
 
 def _rmtree(path: Path, dry_run: bool) -> int:
@@ -174,15 +211,24 @@ def run_cleanup_for_tenant(
         return result
 
     # Check library dirs on disk
-    disk_lib_dirs = [
-        d for d in _list_subdirs(tenant_dir)
-        if d.startswith("lib_") and (library_id is None or d == library_id)
-    ]
+    all_lib_dirs = [d for d in _list_subdirs(tenant_dir) if d.startswith("lib_")]
+    if all_lib_dirs and not known_library_ids:
+        msg = f"Skipped tenant {tenant_id}: the database lists no libraries, {len(all_lib_dirs)} folder(s) on disk"
+        logger.warning(msg)
+        result.errors.append(msg)
+        return result
+    disk_lib_dirs = [d for d in all_lib_dirs if library_id is None or d == library_id]
+    removable = set(_orphan_dirs(
+        tenant_dir, [d for d in disk_lib_dirs if d not in known_library_ids], len(all_lib_dirs), "library", result,
+    ))
 
     for lib_dir_name in disk_lib_dirs:
         lib_dir = tenant_dir / lib_dir_name
 
         if lib_dir_name not in known_library_ids:
+            if lib_dir_name not in removable:
+                result.skipped_libraries += 1
+                continue
             # Orphan library directory
             logger.info(
                 "%s orphan library dir: %s",
@@ -290,11 +336,20 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
     disk_tenant_dirs = [
         d for d in _list_subdirs(data_dir) if d.startswith("ten_")
     ]
+    if disk_tenant_dirs and not known_tenant_ids:
+        msg = f"Skipped cleanup: the database lists no accounts, {len(disk_tenant_dirs)} folder(s) on disk"
+        logger.warning(msg)
+        return CleanupResult(errors=[msg])
+    removable = set(_orphan_dirs(
+        data_dir, [d for d in disk_tenant_dirs if d not in known_tenant_ids], len(disk_tenant_dirs), "account", result,
+    ))
 
     for tenant_dir_name in disk_tenant_dirs:
         tenant_dir = data_dir / tenant_dir_name
 
         if tenant_dir_name not in known_tenant_ids:
+            if tenant_dir_name not in removable:
+                continue
             # Orphan tenant directory
             logger.info(
                 "%s orphan tenant dir: %s",

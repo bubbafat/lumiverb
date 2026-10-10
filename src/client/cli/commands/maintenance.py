@@ -36,6 +36,8 @@ def cleanup(
     params = {"dry_run": str(dry_run).lower()}
     if library is not None:
         params["library_id"] = library_id_for(client, library)
+    else:
+        params["all"] = "true"
 
     resp = client.post("/v1/upkeep/cleanup", params=params)
     result = resp.json()

@@ -12,6 +12,8 @@ is still made.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
@@ -288,6 +290,8 @@ def test_while_upkeep_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_repo
     stray = tmp_path / tenant_id / "lib_gone" / "x.jpg"  # a library no longer in the database
     stray.parent.mkdir(parents=True)
     stray.write_bytes(b"x")
+    for p in (stray, stray.parent):  # older than cleanup's hour
+        os.utime(p, (1, 1))
     try:
         assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
         with _db(env) as session:

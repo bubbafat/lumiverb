@@ -75,7 +75,7 @@ def test_cleanup_with_tenant_key_runs_dry_run(env) -> None:
     client, api_key, *_ = env
 
     r = client.post(
-        "/v1/upkeep/cleanup", params={"dry_run": "true"},
+        "/v1/upkeep/cleanup", params={"dry_run": "true", "all": "true"},
         headers={"Authorization": f"Bearer {api_key}"},
     )
 
@@ -164,10 +164,23 @@ def test_every_upkeep_call_needs_an_account_admin(env, path, role) -> None:
 @pytest.mark.parametrize("path", ENDPOINTS)
 def test_an_account_admin_acts_on_the_account(env, path) -> None:
     client, api_key, *_ = env
+    params = {"all": "true"} if path == "/v1/upkeep/cleanup" else {}
 
-    r = client.post(path, headers={"Authorization": f"Bearer {api_key}"})
+    r = client.post(path, params=params, headers={"Authorization": f"Bearer {api_key}"})
 
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("params", [{}, {"dry_run": "false"}, {"library_id": "lib_x", "all": "true"}])
+def test_cleanup_with_an_account_key_names_a_library_or_all(env, params) -> None:
+    """Nothing cleans the whole account from a missing argument (Robert)."""
+    client, api_key, *_ = env
+
+    r = client.post("/v1/upkeep/cleanup", params=params, headers={"Authorization": f"Bearer {api_key}"})
+
+    assert r.status_code == 400, r.text
+    assert r.json()["error"]["code"] == "scope_required"
 
 
 @pytest.mark.slow
@@ -222,9 +235,11 @@ def test_upkeep_for_every_account_reaches_the_account(env) -> None:
 
 
 def _old(path) -> None:
+    """An old file in old folders: lib/proxies/00/file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x")
-    os.utime(path, (1, 1))
+    for p in [path, *path.parents[:3]]:
+        os.utime(p, (1, 1))
 
 
 @pytest.mark.slow
@@ -238,7 +253,7 @@ def test_cleanup_of_one_library_leaves_the_rest_of_the_account(env) -> None:
     _old(data_dir / tenant_id / "lib_gone" / "proxies" / "00" / "stray.webp")
 
     one = client.post("/v1/upkeep/cleanup", params={"library_id": library_id}, headers=headers)
-    whole = client.post("/v1/upkeep/cleanup", headers=headers)
+    whole = client.post("/v1/upkeep/cleanup", params={"all": "true"}, headers=headers)
 
     assert one.status_code == 200, one.text
     # The library's one stray file is all of it: held back by the 25% guard, but looked at.
@@ -262,7 +277,8 @@ def test_cleanup_of_a_library_needs_an_account_key(env) -> None:
     client, *_ = env
 
     r = client.post("/v1/upkeep/cleanup", params={"tenants": "all", "library_id": "lib_x"}, headers=ADMIN)
-
+    assert r.status_code == 400, r.text
+    r = client.post("/v1/upkeep/cleanup", params={"tenants": "all", "all": "true"}, headers=ADMIN)
     assert r.status_code == 400, r.text
 
 

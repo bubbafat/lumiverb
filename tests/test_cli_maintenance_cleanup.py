@@ -83,7 +83,7 @@ def test_cleanup_of_an_unknown_library_sends_nothing(monkeypatch):
 def test_cleanup_all_is_the_account(monkeypatch):
     r, c = _invoke(monkeypatch, "cleanup", "--all", "--execute")
     assert r.exit_code == 0, r.output
-    c.post.assert_called_once_with("/v1/upkeep/cleanup", params={"dry_run": "false"})
+    c.post.assert_called_once_with("/v1/upkeep/cleanup", params={"dry_run": "false", "all": "true"})
 
 
 def test_search_sync_all(monkeypatch):

@@ -102,6 +102,10 @@ def repair(session: Session) -> dict[str, int]:
                               {"a": asset_id}).scalar()
         if not key:
             continue
+        if _storage_gone(storage, key):
+            logger.warning("Missing files not repaired: the data folder (or the account's) is missing or empty")
+            session.rollback()  # the reports stay for the next upkeep
+            return {"checked": 0, "cleared": 0}
         try:
             gone = not storage.abs_path(key).is_file()
         except ValueError:  # a key storage refuses is as good as gone
@@ -113,3 +117,19 @@ def repair(session: Session) -> dict[str, int]:
             logger.info("Cleared the missing %s of %s for its producer to make again", kind, asset_id)
     session.commit()
     return {"checked": checked, "cleared": cleared}
+
+
+def _storage_gone(storage, key: str) -> bool:
+    """DATA_DIR, or the account's folder in it (a key's first part), missing
+    or empty: an unmounted disk, not files gone one by one."""
+    try:
+        account = storage.abs_path(key.split("/", 1)[0])
+    except ValueError:  # a key storage refuses: judged on its own below
+        return False
+    for folder in (account.parent, account):
+        try:
+            if next(folder.iterdir(), None) is None:
+                return True
+        except OSError:
+            return True
+    return False
