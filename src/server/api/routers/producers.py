@@ -411,12 +411,16 @@ def pause_switch(
     previews made), upkeep (no trash purge, file cleanup or face names
     spread; search sync goes on) or a producer (nothing more of it starts,
     missing or stale); all is every switch (state paused; each can be
-    resumed alone after; nothing stores "all"). Scope redo: a producer's
+    resumed alone after; "all" is stored, so a producer a later version
+    adds is paused too). Scope redo: a producer's
     stale clips stay as they are until it's resumed, or its settings change
     (what's missing is still made). What's running finishes. Again is
     fine: who paused first stays."""
-    for name in _targets(target, body.scope):
-        lineage.pause(session, name, body.scope, by=user_id)
+    if target == PAUSE_ALL and body.scope == lineage.WORK:
+        lineage.pause_everything(session, by=user_id)
+    else:
+        for name in _targets(target, body.scope):
+            lineage.pause(session, name, body.scope, by=user_id)
     session.commit()
 
 

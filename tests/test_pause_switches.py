@@ -1,8 +1,9 @@
 """Pause switches (Robert, Oct 9, after #50): one per processing action, and
 the global state derived from them.
 
-Each switch is Scans, Upkeep or a producer the scheduler makes. Nothing
-stores "pause all": it pauses every switch, and the global state is green
+Each switch is Scans, Upkeep or a producer the scheduler makes. Pause all
+is stored as one "all" pause (repository/lineage.py pauses() reads it as
+every switch, those added later too), and the global state is green
 (all running), yellow (some paused, some running) or red (all paused).
 """
 
@@ -35,7 +36,8 @@ def test_unpausing_one_switch_while_all_are_paused_is_yellow():
 
 
 def test_a_new_producer_while_all_are_paused_is_running_so_yellow():
-    # Everything that existed was paused; a producer added since has no row: it runs.
+    # Switches paused one by one: a producer added since has no row, so it runs
+    # (Pause all is stored, so it would be paused: test_processing_pause_api).
     before = set(pause_targets()) - {"ocr"}
     assert pause_state(before) == "partly"
 

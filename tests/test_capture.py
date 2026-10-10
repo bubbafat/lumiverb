@@ -244,3 +244,19 @@ def test_storage_away_tries_nothing(env, tmp_path) -> None:
     acct = FakeAccount(scheduler_client(env[4]), {lib: None})
     assert run_job(Capture, acct, env[4], "capture", due(env[-1], "capture", [lib])) == NOT_TRIED
     assert acct.away == [lib]
+
+
+@pytest.mark.slow
+def test_only_the_scheduler_saves_capture_facts(env) -> None:
+    """Machine data: admins only (the scheduler's key is an admin's), as #80 made its other routes."""
+    from tests.test_archive_trash_safety import _key_with_role
+
+    client, *_ = env
+    a = _ingest(env, "cap/who.jpg", {"taken_at": "2024-06-15T10:30:00+00:00"})
+    body = {"taken_at": "2024-06-15T14:30:00", "lineage": made("capture")}
+    for role in ("viewer", "editor"):
+        r = client.put(f"/v1/assets/{a}/capture", json=body, headers=_key_with_role(env, role))
+        assert r.status_code == 403, (role, r.text)
+    assert _row(env, a)["taken_at"] == datetime(2024, 6, 15, 10, 30, tzinfo=UTC)
+    r = client.put(f"/v1/assets/{a}/capture", json=body, headers=_key_with_role(env, "admin"))
+    assert r.status_code == 200, r.text

@@ -289,14 +289,28 @@ class Pauses:
     redo: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+# Pause all is a row of its own (target "all", scope work): every switch,
+# those there now and any a later version adds, is paused while it's there.
+# An account someone paused stays paused through an update that brings a
+# new producer.
+ALL = "all"
+
+
 def pauses(session: Session) -> Pauses:
     """Every pause, in one read: the switches paused (WORK) and the producers
     whose redo is stopped (REDO). What's paused starts nothing more; what's
-    running finishes."""
+    running finishes. While Pause all is on, every switch there is now shows
+    as paused, by whoever paused all (unless it was paused alone before)."""
+    from src.shared.producers import pause_targets
+
     out = Pauses()
     for target, scope, by, at in session.execute(text(
             "SELECT target, scope, paused_by, paused_at FROM producer_pauses")):
         (out.work if scope == WORK else out.redo)[target] = {"paused_by": by, "paused_at": at}
+    everything = out.work.pop(ALL, None)
+    if everything is not None:
+        for target in pause_targets():
+            out.work.setdefault(target, everything)
     return out
 
 
@@ -310,19 +324,32 @@ def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:
 
 
 def resume(session: Session, targets: list[str] | tuple[str, ...], scope: str) -> None:
-    """Carry on with what was paused, in that scope. Doesn't commit."""
+    """Carry on with what was paused, in that scope. Resuming one switch while
+    Pause all is on leaves every other switch there is now paused, each by
+    a row of its own: the account is partly paused from then on. Doesn't commit."""
     assert scope in SCOPES, scope
-    if targets:
-        session.execute(text("DELETE FROM producer_pauses WHERE target = ANY(:t) AND scope = :s"),
-                        {"t": list(targets), "s": scope})
+    if not targets:
+        return
+    if scope == WORK:
+        from src.shared.producers import pause_targets
+
+        everything = session.execute(text(
+            "DELETE FROM producer_pauses WHERE target = :all AND scope = :s RETURNING paused_by, paused_at"
+        ), {"all": ALL, "s": WORK}).first()
+        if everything is not None:
+            for target in pause_targets():
+                session.execute(text(
+                    "INSERT INTO producer_pauses (target, scope, paused_by, paused_at) VALUES (:t, :s, :by, :at)"
+                    " ON CONFLICT (target, scope) DO NOTHING"),
+                    {"t": target, "s": WORK, "by": everything[0], "at": everything[1]})
+    session.execute(text("DELETE FROM producer_pauses WHERE target = ANY(:t) AND scope = :s"),
+                    {"t": list(targets), "s": scope})
 
 
 def pause_everything(session: Session, *, by: str | None) -> None:
-    """Pause all: every switch's work paused (each keeps who paused it first). Doesn't commit."""
-    from src.shared.producers import pause_targets
-
-    for target in pause_targets():
-        pause(session, target, WORK, by=by)
+    """Pause all: every switch's work paused, now and any added later (the
+    "all" row; a switch paused alone before keeps who paused it). Doesn't commit."""
+    pause(session, ALL, WORK, by=by)
 
 
 def resume_everything(session: Session) -> None:
@@ -360,8 +387,8 @@ def upkeep_paused(session: Session) -> bool:
     face names wait; search sync goes on, so the site keeps up with edits."""
     from src.shared.producers import PAUSE_UPKEEP
 
-    return session.execute(text("SELECT 1 FROM producer_pauses WHERE target = :t AND scope = :s"),
-                           {"t": PAUSE_UPKEEP, "s": WORK}).first() is not None
+    return session.execute(text("SELECT 1 FROM producer_pauses WHERE target IN (:t, :all) AND scope = :s"),
+                           {"t": PAUSE_UPKEEP, "all": ALL, "s": WORK}).first() is not None
 
 
 def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:
