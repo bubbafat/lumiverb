@@ -141,6 +141,71 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
 
         return "".join(out)
 
+    def _parse_description(self, raw: str) -> dict:
+        """{"description", "tags"} from the model's reply; ValueError when it holds none."""
+        # Strip markdown code fences if present
+        clean = raw.strip()
+        if not clean:
+            raise ValueError("Empty completion content")
+        if clean.startswith("```"):
+            clean = re.sub(r"^```[a-z]*\n?", "", clean)
+            clean = re.sub(r"\n?```$", "", clean)
+            clean = clean.strip()
+
+        # The first balanced object; else first { to last } (a stray quote
+        # throws the brace count off), each as is or with its quotes repaired.
+        candidates = [self._extract_first_json_object(clean)]
+        start, end = clean.find("{"), clean.rfind("}")
+        if start != -1 and end > start:
+            candidates.append(clean[start:end + 1])
+        for json_str in filter(None, candidates):
+            for text in (json_str, self._repair_json(json_str)):
+                try:
+                    parsed = json.loads(text, strict=False)  # a newline inside a string
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    description = str(parsed.get("description") or "").strip()
+                    tags = [t.strip() for t in parsed.get("tags") or [] if isinstance(t, str) and t.strip()]
+                    return {"description": description, "tags": tags}
+        salvaged = self._salvage(clean)
+        if salvaged is not None:
+            logger.warning("AI reply cut off (%d chars); kept its description and %d whole tags",
+                           len(clean), len(salvaged["tags"]))
+            return salvaged
+        raise ValueError(f"No JSON object found in response ({len(clean)} chars): {clean[:100]!r}")
+
+    _WHOLE_DESCRIPTION = re.compile(r'"description"\s*:\s*("(?:[^"\\]|\\.)*")\s*[,}]', re.DOTALL)
+    _WHOLE_TAG = re.compile(r'("(?:[^"\\]|\\.)*")\s*(?=[,\]])')
+    MAX_SALVAGED_TAGS = 10
+
+    def _salvage(self, text: str) -> dict | None:
+        """A reply cut off after its description (max_tokens, a loop in the
+        tags): the description, and the tags that are whole (no repeats, at
+        most MAX_SALVAGED_TAGS). None when the description isn't whole."""
+        m = self._WHOLE_DESCRIPTION.search(text)
+        if m is None:
+            return None
+        try:
+            description = json.loads(m.group(1), strict=False).strip()
+        except json.JSONDecodeError:
+            return None
+        if not description:
+            return None
+        tags: list[str] = []
+        t = re.search(r'"tags"\s*:\s*\[', text)
+        if t is not None:
+            for raw in self._WHOLE_TAG.findall(text, t.end()):
+                try:
+                    tag = json.loads(raw, strict=False).strip()
+                except json.JSONDecodeError:
+                    continue
+                if tag and tag not in tags:
+                    tags.append(tag)
+                if len(tags) == self.MAX_SALVAGED_TAGS:
+                    break
+        return {"description": description, "tags": tags}
+
     def _strip_thinking(self, text: str) -> str:
         """Strip <think>...</think> blocks; some reasoning models prefix responses with them."""
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
@@ -200,26 +265,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
             try:
                 raw = self._chat(data_url, prompt, self._vision)
                 last_raw = raw
-
-                # Strip markdown code fences if present
-                clean = raw.strip()
-                if not clean:
-                    raise ValueError("Empty completion content")
-                if clean.startswith("```"):
-                    clean = re.sub(r"^```[a-z]*\n?", "", clean)
-                    clean = re.sub(r"\n?```$", "", clean)
-                    clean = clean.strip()
-
-                json_str = self._extract_first_json_object(clean)
-                if not json_str:
-                    raise ValueError(f"No JSON object found in response: {clean[:100]!r}")
-                try:
-                    parsed = json.loads(json_str)
-                except json.JSONDecodeError:
-                    parsed = json.loads(self._repair_json(json_str))
-                description = parsed.get("description", "").strip()
-                tags = [t.strip() for t in parsed.get("tags", []) if t.strip()]
-                return {"description": description, "tags": tags}
+                return self._parse_description(raw)
             except Exception as e:  # noqa: BLE001
                 last_error = e
                 if attempt < self.MAX_ATTEMPTS:
@@ -463,8 +509,14 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
                 raise err
         resp.raise_for_status()
 
-        msg = resp.json()["choices"][0]["message"]
+        choice = resp.json()["choices"][0]
+        msg = choice["message"]
         content = msg.get("content") or ""
+        finish = choice.get("finish_reason")
+        logger.debug("AI reply (finish_reason=%s): %s", finish, content[:2000])
+        if finish not in (None, "stop"):
+            logger.warning("AI reply ended with finish_reason=%s after %d chars (max_tokens %s)",
+                           finish, len(content), payload["max_tokens"])
         # Reasoning models (e.g. Qwen 3.5) may put the answer in reasoning_content
         # when content is empty — fall back to it
         if not content.strip():
