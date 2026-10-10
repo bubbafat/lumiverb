@@ -19,7 +19,15 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
+    ApertureRange,
+    CameraMake,
+    CameraModel,
     Combinator,
+    ExposureRange,
+    FocalLengthRange,
+    HasExposure,
+    IsoRange,
+    LensModel,
     HasGps,
     NearLocation,
     GroupFilter,
@@ -458,6 +466,10 @@ def _run_postgres_fallback(
 # ---------------------------------------------------------------------------
 
 
+_CAMERA_FILTERS = (CameraMake, CameraModel, LensModel, IsoRange, ApertureRange, FocalLengthRange,
+                   ExposureRange, HasExposure)
+
+
 def guard_public_spec(request: Request, session: Session, spec) -> int | None:
     """For a public page's request, keep it to what the page shows.
 
@@ -479,6 +491,9 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
     # Nor where a clip was shot: repeated near searches would find it.
     if any(isinstance(leaf, (HasGps, NearLocation)) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
+    # Nor camera or exposure: the visitor view hides them, so filters mustn't reveal them.
+    if any(isinstance(leaf, _CAMERA_FILTERS) for leaf in spec.leaves):
+        raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
     scoped_lib_ids: set[str] = set()
     for leaf in spec.leaves:
         if isinstance(leaf, LibraryScope):

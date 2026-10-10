@@ -379,6 +379,10 @@ def page_assets(
             raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
         if has_gps or near_lat is not None or near_lon is not None:
             raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
+        camera = (camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us,
+                  aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure)
+        if any(v is not None for v in camera):
+            raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"

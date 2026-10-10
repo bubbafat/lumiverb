@@ -607,3 +607,15 @@ def test_public_facets_count_no_locations_or_cameras(public_lib_client, located)
     assert public["has_gps_count"] == 0 and public["camera_makes"] == [] and public["iso_range"] == [None, None]
     signed_in = client.get("/v1/assets/facets", params=params, headers={"Authorization": f"Bearer {api_key}"}).json()
     assert signed_in["has_gps_count"] >= 1 and "Acme" in signed_in["camera_makes"]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("camera_filter", ["camera_make:Acme", "lens:L", "iso:100-400", "has_exposure:yes"])
+def test_public_queries_cant_filter_by_camera(public_lib_client, located, camera_filter):
+    """The visitor view hides camera details, so filters mustn't reveal them."""
+    client, _, library_id, _ = public_lib_client
+    params = [("f", f"library:{library_id}"), ("f", camera_filter)]
+    assert client.get("/v1/query", params=params).status_code == 403
+    assert client.get("/v1/assets/facets", params=params).status_code == 403
+    r = client.get("/v1/assets/page", params={"library_id": library_id, "camera_make": "Acme"})
+    assert r.status_code == 403, r.text

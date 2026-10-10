@@ -51,3 +51,18 @@ def test_api_refuses_unsafe_rel_paths() -> None:
         with pytest.raises(HTTPException) as exc:
             checked_rel_path(bad)
         assert exc.value.status_code == 400
+
+
+def test_proxy_cache_never_reads_outside_the_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    from src.client.proxy import proxy_cache
+
+    monkeypatch.setattr(proxy_cache, "cache_dir", lambda name: tmp_path / "cache" / name)
+    root = tmp_path / "library"
+    root.mkdir()
+    (tmp_path / "secret.jpg").write_bytes(b"outside")
+    cache = proxy_cache.ProxyCache(root_path=root)
+    with patch.object(cache, "put_from_path") as put:
+        assert cache.get("ast_x", "../secret.jpg") is None
+    put.assert_not_called()
