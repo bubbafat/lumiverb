@@ -126,4 +126,15 @@ describe("Lightbox signed in", () => {
     fireEvent.click(screen.getByRole("button", { name: "Move to trash" }));
     expect(onTrash).toHaveBeenCalledWith("ast_1");
   });
+
+  it("fills the window where the browser has no element fullscreen (an iPhone)", async () => {
+    // jsdom, like an iPhone, has no Element.requestFullscreen.
+    expect(typeof HTMLElement.prototype.requestFullscreen).not.toBe("function");
+    const { container } = renderLightbox(false);
+    await screen.findByText(/Dimensions/);
+    fireEvent.click(screen.getByRole("button", { name: "Enter fullscreen" }));
+    expect(screen.getByRole("button", { name: "Exit fullscreen" })).toBeTruthy();
+    expect(screen.queryByText(/Dimensions/)).toBeNull();  // the details are hidden
+    expect(container.querySelector("video")!.className).not.toContain("55svh");
+  });
 });

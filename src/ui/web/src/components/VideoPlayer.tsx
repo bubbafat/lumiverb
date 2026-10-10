@@ -17,6 +17,7 @@ export default function VideoPlayer({
   videoRef,
   onRenew,
   failed: renewFailed = false,
+  fill = false,
 }: {
   src: string;
   /** The clip's still, shown before it plays. */
@@ -28,6 +29,8 @@ export default function VideoPlayer({
   onRenew?: () => void;
   /** No fresh link could be had. */
   failed?: boolean;
+  /** Fullscreen: as tall as the screen allows, on a phone too. */
+  fill?: boolean;
 }) {
   const src = poster || link.includes("#") ? link : `${link}#t=0.001`;
   const ownRef = useRef<HTMLVideoElement | null>(null);
@@ -66,7 +69,7 @@ export default function VideoPlayer({
           controls
           playsInline
           preload="metadata"
-          className="block max-h-[55svh] max-w-full lg:max-h-[calc(100svh-6rem)]"
+          className={`block max-w-full ${fill ? "max-h-[calc(100svh-6rem)]" : "max-h-[55svh] lg:max-h-[calc(100svh-6rem)]"}`}
           onTimeUpdate={(e) => {
             // A new source starts at 0 and says so; keep where the old one was.
             if (resumeOn.current === null) last.current.time = e.currentTarget.currentTime;
