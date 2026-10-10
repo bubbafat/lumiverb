@@ -252,6 +252,10 @@ def find_similar(
                 height=asset.height,
             )
         )
+    if getattr(request.state, "is_public_request", False):
+        # A visitor sees no paths or storage keys (as on a public project's page).
+        hits = [h.model_copy(update={"rel_path": "", "thumbnail_key": None, "proxy_key": None, "file_size": None})
+                for h in hits]
 
     return SimilarityResponse(
         source_asset_id=asset_id,

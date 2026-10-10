@@ -20,6 +20,8 @@ from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
     Combinator,
+    HasGps,
+    NearLocation,
     GroupFilter,
     LibraryScope,
     PersonFilter,
@@ -474,6 +476,9 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
         raise HTTPException(status_code=403, detail="Grouped filters aren't available on public pages")
     if spec.needs_rating_join or any(isinstance(leaf, PersonFilter) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
+    # Nor where a clip was shot: repeated near searches would find it.
+    if any(isinstance(leaf, (HasGps, NearLocation)) for leaf in spec.leaves):
+        raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
     scoped_lib_ids: set[str] = set()
     for leaf in spec.leaves:
         if isinstance(leaf, LibraryScope):
@@ -489,6 +494,26 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
 
     cap = playback_cap(session, public=True)
     return None if cap is None else cap * 1000
+
+def _visitor_view(item: QueryItem) -> QueryItem:
+    """A result as a visitor to a public library sees it: what a public
+    project's visitor sees of a clip (assets._project_visitor_view), not
+    where it lives, where it was shot or what shot it."""
+    return QueryItem(
+        asset_id=item.asset_id,
+        library_id=item.library_id,  # the public library the visitor asked for
+        library_name=item.library_name,
+        rel_path="",
+        file_size=0,
+        media_type=item.media_type,
+        width=item.width,
+        height=item.height,
+        taken_at=item.taken_at,
+        status=item.status,
+        duration_sec=item.duration_sec,
+        search_context=item.search_context,
+    )
+
 
 @router.get("", response_model=QueryResponse)
 def unified_query(
@@ -640,6 +665,9 @@ def unified_query(
         )
         for a in assets
     ]
+
+    if getattr(request.state, "is_public_request", False):
+        items = [_visitor_view(i) for i in items]
 
     next_cursor: str | None = None
     if len(assets) == limit:

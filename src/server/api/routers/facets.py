@@ -145,6 +145,12 @@ def get_facets(
     if row.has_videos:
         media_types.append("video")
 
+    if getattr(request.state, "is_public_request", False):
+        # A public page's visitor sees no location or camera details (as a
+        # public project's doesn't): not counted here either.
+        return _empty_facets().model_copy(update={
+            "media_types": media_types, "has_face_count": row.face_count or 0})
+
     return FacetsResponse(
         media_types=media_types,
         camera_makes=sorted(row.camera_makes or []),

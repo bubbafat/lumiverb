@@ -214,9 +214,14 @@ def test_stream_thumbnail_happy_path(
     thumbnail_key = f"{tenant_id}/{library_id}/thumbnails/00/{asset_id}.jpg"
     # Nothing sets a key over the API (the server derives keys); set it in the database.
     from sqlalchemy import text as sa_text
-    from src.server.database import get_tenant_session
+    from sqlmodel import Session
 
-    with get_tenant_session(tenant_id) as session:
+    from src.server.database import get_control_session, get_engine_for_url
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    with get_control_session() as control:
+        url = TenantDbRoutingRepository(control).get_by_tenant_id(tenant_id).connection_string
+    with Session(get_engine_for_url(url)) as session:
         session.execute(sa_text("UPDATE assets SET thumbnail_key = :k WHERE asset_id = :a"),
                         {"k": thumbnail_key, "a": asset_id})
         session.commit()

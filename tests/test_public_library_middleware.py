@@ -518,3 +518,92 @@ def test_public_search_doesnt_read_notes(public_lib_client):
     params = [("f", f"library:{library_id}"), ("f", "query:flamingo")]
     assert [i["asset_id"] for i in client.get("/v1/query", params=params).json()["items"]] == []
     assert asset_id in [i["asset_id"] for i in client.get("/v1/query", params=params, headers=auth).json()["items"]]
+
+
+# ---------------------------------------------------------------------------
+# A public library's visitor sees what a public project's does: no location,
+# paths or camera details, and can't search by location either.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def located(public_lib_client):
+    """A public photo shot somewhere, with a camera."""
+    client, api_key, library_id, _ = public_lib_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    asset_id = _ingest(client, api_key, library_id, "trips/secret-beach.jpg", media_type="image")
+    tenant_id = client.get("/v1/tenant/context", headers=auth).json()["tenant_id"]
+    from sqlmodel import Session
+
+    from src.server.database import get_control_session, get_engine_for_url
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    with get_control_session() as control:
+        url = TenantDbRoutingRepository(control).get_by_tenant_id(tenant_id).connection_string
+    with Session(get_engine_for_url(url)) as session:
+        session.execute(text(
+            "UPDATE assets SET gps_lat = 48.8584, gps_lon = 2.2945, camera_make = 'Acme', camera_model = 'X1',"
+            " lens_model = 'L', iso = 200, aperture = 2.8, focal_length = 35 WHERE asset_id = :a"), {"a": asset_id})
+        session.commit()
+    return asset_id
+
+
+_PRIVATE_FIELDS = ("gps_lat", "gps_lon", "camera_make", "camera_model", "lens_model", "iso", "aperture",
+                   "focal_length")
+
+
+def _assert_trimmed(item: dict) -> None:
+    for field in _PRIVATE_FIELDS:
+        assert item.get(field) is None, (field, item)
+    assert item["rel_path"] == ""
+
+
+@pytest.mark.slow
+def test_public_library_detail_is_the_visitor_view(public_lib_client, located):
+    client, api_key, library_id, _ = public_lib_client
+    r = client.get(f"/v1/assets/{located}", params={"public_library_id": library_id})
+    assert r.status_code == 200, r.text
+    _assert_trimmed(r.json())
+    assert r.json()["thumbnail_key"] is None and r.json()["library_id"] == ""
+    signed_in = client.get(f"/v1/assets/{located}", headers={"Authorization": f"Bearer {api_key}"}).json()
+    assert signed_in["gps_lat"] == 48.8584 and signed_in["rel_path"] == "trips/secret-beach.jpg"
+
+
+@pytest.mark.slow
+def test_public_library_page_and_query_are_trimmed(public_lib_client, located):
+    client, _, library_id, _ = public_lib_client
+    page = client.get("/v1/assets/page", params={"library_id": library_id})
+    assert page.status_code == 200, page.text
+    query = client.get("/v1/query", params=[("f", f"library:{library_id}")])
+    assert query.status_code == 200, query.text
+    for items in (page.json()["items"], query.json()["items"]):
+        mine = [i for i in items if i["asset_id"] == located]
+        assert mine, items
+        _assert_trimmed(mine[0])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("location_filter", ["near:48.8584,2.2945,1", "has_gps:yes"])
+def test_public_queries_cant_search_by_location(public_lib_client, located, location_filter):
+    client, _, library_id, _ = public_lib_client
+    params = [("f", f"library:{library_id}"), ("f", location_filter)]
+    assert client.get("/v1/query", params=params).status_code == 403
+    assert client.get("/v1/assets/facets", params=params).status_code == 403
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("location_params", [{"has_gps": "true"}, {"near_lat": "48.8584", "near_lon": "2.2945"}])
+def test_public_page_cant_filter_by_location(public_lib_client, located, location_params):
+    client, _, library_id, _ = public_lib_client
+    r = client.get("/v1/assets/page", params={"library_id": library_id, **location_params})
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+def test_public_facets_count_no_locations_or_cameras(public_lib_client, located):
+    client, api_key, library_id, _ = public_lib_client
+    params = [("f", f"library:{library_id}")]
+    public = client.get("/v1/assets/facets", params=params).json()
+    assert public["has_gps_count"] == 0 and public["camera_makes"] == [] and public["iso_range"] == [None, None]
+    signed_in = client.get("/v1/assets/facets", params=params, headers={"Authorization": f"Bearer {api_key}"}).json()
+    assert signed_in["has_gps_count"] >= 1 and "Acme" in signed_in["camera_makes"]

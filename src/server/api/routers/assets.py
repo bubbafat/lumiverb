@@ -327,9 +327,12 @@ def page_assets(
         library = lib_repo.get_by_id(library_id)
         if library is None or not library.is_public:
             raise HTTPException(status_code=404, detail="Not found")
-        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe.
+        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe,
+        # nor where it was shot (repeated near searches would find it).
         if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
             raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
+        if has_gps or near_lat is not None or near_lon is not None:
+            raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -436,6 +439,8 @@ def page_assets(
         )
         for a in assets
     ]
+    if getattr(request.state, "is_public_request", False):
+        items = [_page_item_visitor_view(i) for i in items]
     next_cursor: str | None = None
     if items and len(items) == limit:
         last = assets[-1]
@@ -764,7 +769,7 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
 
 
 def _project_visitor_view(response: AssetResponse) -> AssetResponse:
-    """What a public project's page may show of a clip: what its clip list gives
+    """What a public page (a project's or a library's) may show of a clip: what its clip list gives
     (shape, time, length) and what's seen or heard in it. Not where it lives,
     where it was shot, what shot it, or the team's notes."""
     return AssetResponse(
@@ -785,6 +790,26 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
         transcript_srt=response.transcript_srt,
         transcript_language=response.transcript_language,
         video_facet=response.video_facet,
+    )
+
+
+def _page_item_visitor_view(item: AssetPageItem) -> AssetPageItem:
+    """A page item as a visitor to a public library sees it: what
+    _project_visitor_view keeps (shape, time, length), not where it lives,
+    where it was shot or what shot it."""
+    return AssetPageItem(
+        asset_id=item.asset_id,
+        rel_path="",
+        file_size=0,
+        file_mtime=None,
+        sha256=None,
+        media_type=item.media_type,
+        width=item.width,
+        height=item.height,
+        taken_at=item.taken_at,
+        status=item.status,
+        duration_sec=item.duration_sec,
+        has_analysis_proxy=item.has_analysis_proxy,
     )
 
 
@@ -893,7 +918,7 @@ def get_asset_by_path(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
     response = _asset_detail(session, request, asset)
-    return response
+    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 
 
 @router.get("", response_model=list[AssetResponse])
@@ -1087,11 +1112,9 @@ def get_asset(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
     _check_public_request(request, session, asset)
-    via_project = getattr(request.state, "is_public_request", False) and bool(
-        request.query_params.get("public_project_id")
-    )
     response = _asset_detail(session, request, asset)
-    return _project_visitor_view(response) if via_project else response
+    # A visitor, by a public project or a public library, sees the same trimmed clip.
+    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 
 
 class VideoFacetSubmit(VideoFacetModel):
