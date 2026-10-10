@@ -282,7 +282,7 @@ def test_no_root_map_is_said_once_per_start(home: Path, monkeypatch: pytest.Monk
         _pass(FakeServer([LIB]), ScanState())
         _pass(FakeServer([LIB]), ScanState())
     said = [(r.levelno, r.getMessage()) for r in caplog.records]
-    assert said.count((logging.WARNING, "scheduler: LUMIVERB_ROOT_MAP is empty; library roots are used as stored")) == 1
+    assert said.count((logging.WARNING, "scheduler: LUMIVERB_ROOT_MAP is empty; no library can be scanned")) == 1
     assert said.count((logging.INFO, "scheduler: Footage isn't reachable from here; not scanning it")) == 2
 
 

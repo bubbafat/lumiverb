@@ -19,7 +19,7 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
     scan). The server's proxy is downloaded later when there's none."""
     from src.processing.proxy.proxy_gen import generate_face_proxy
     from src.processing.workers.exif_extract import compute_sha256
-    from src.shared.io_utils import resolve_source_path
+    from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
 
     asset_id, expected = item["asset_id"], item.get("sha256")
     if proxy_cache.has(asset_id):
@@ -30,7 +30,10 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
             return True
     if root_path is None:
         return True
-    source = resolve_source_path(root_path, item.get("rel_path", asset_id))
+    try:
+        source = resolve_source_path(root_path, item.get("rel_path", asset_id))
+    except UnsafeRelPathError:
+        return True  # never read outside the library: the server's proxy instead
     if not source.is_file():
         return True
     if expected and compute_sha256(source) != expected:

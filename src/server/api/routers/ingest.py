@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import logging
+import posixpath
 from datetime import datetime
 from typing import Annotated
 
@@ -23,6 +24,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.shared import asset_status
+from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
 from src.server.repository.tenant import (
     AssetEmbeddingRepository,
@@ -380,6 +382,8 @@ async def create_and_ingest(
     if media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="media_type must be 'image' or 'video'")
     rel_path = checked_rel_path(rel_path)
+    if posixpath.splitext(rel_path)[1].lower() not in (VIDEO_EXTENSIONS if media_type == "video" else IMAGE_EXTENSIONS):
+        raise HTTPException(status_code=400, detail=f"Unsupported {media_type} file type")
     if width is not None and (width < 1 or width > 100_000):
         raise HTTPException(status_code=400, detail="width out of range")
     if height is not None and (height < 1 or height > 100_000):

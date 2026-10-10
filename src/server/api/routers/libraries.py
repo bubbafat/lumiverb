@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import (
+    checked_root_path,
     get_current_user_id,
     get_tenant_session,
     require_editor,
@@ -124,11 +125,12 @@ def create_library(
     Returns 409 if a library with the same name already exists.
     New libraries inherit tenant path filter defaults at creation time.
     """
+    root_path = checked_root_path(body.root_path)
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=body.root_path)
+    library = repo.create(name=body.name, root_path=root_path)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -316,7 +318,9 @@ def update_library(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
-    """Update library name and/or is_public."""
+    """Update library name, root_path and/or is_public."""
+    if body.root_path is not None:
+        checked_root_path(body.root_path)
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:

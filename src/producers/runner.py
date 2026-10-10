@@ -208,7 +208,7 @@ class Work:
         """The clip's original on the library's storage. The storage away at
         the last look, or gone since: the job isn't tried (NotTried). The file
         missing from storage that's there waits for the scan that says so."""
-        from src.shared.io_utils import resolve_source_path
+        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
 
         acct, library_id = self.acct, clip["library_id"]
         root = acct.root(library_id)
@@ -216,7 +216,10 @@ class Work:
             logger.info("scheduler: %s's storage isn't reachable; its storage work waits", clip["rel_path"])
             acct.unreachable(library_id)
             raise NotTried(clip["rel_path"])
-        source = resolve_source_path(root, clip["rel_path"])
+        try:
+            source = resolve_source_path(root, clip["rel_path"])
+        except UnsafeRelPathError:
+            raise Failed("outside the library") from None
         if not source.is_file():
             if acct.storage_gone(library_id):
                 logger.info("scheduler: %s's storage went away; its storage work waits", clip["rel_path"])

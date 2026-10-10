@@ -329,6 +329,82 @@ def test_library_trash_soft_deletes_assets(
     assert r_list.json().get("items", []) == [], "Trashed library assets should not appear in active list"
 
 
+# ---------------------------------------------------------------------------
+# Path boundaries: library roots and ingested file types
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("root_path", ["data", "/Volumes/media-01/../../etc", "/a//b", "/a/./b", "/a/", "C:\\Media"])
+def test_library_root_must_be_absolute_and_canonical(
+    audit_fixes_client: tuple[TestClient, str, str, str], root_path: str,
+) -> None:
+    client, api_key, library_id, _ = audit_fixes_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": f"Bad {root_path}", "root_path": root_path}, headers=auth)
+    assert r.status_code == 400, (r.status_code, r.text)
+    r = client.patch(f"/v1/libraries/{library_id}", json={"root_path": root_path}, headers=auth)
+    assert r.status_code == 400, (r.status_code, r.text)
+    assert client.get(f"/v1/libraries/{library_id}", headers=auth).json()["root_path"] == "/audit"
+
+
+@pytest.mark.slow
+def test_library_root_change_is_kept(audit_fixes_client: tuple[TestClient, str, str, str]) -> None:
+    client, api_key, _, _ = audit_fixes_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "Moved", "root_path": "/Volumes/media-01/A"}, headers=auth)
+    assert r.status_code == 200, (r.status_code, r.text)
+    moved = r.json()["library_id"]
+    r = client.patch(f"/v1/libraries/{moved}", json={"root_path": "/Volumes/media-01/B"}, headers=auth)
+    assert r.status_code == 200 and r.json()["root_path"] == "/Volumes/media-01/B"
+
+
+def _ingest(client: TestClient, auth: dict, library_id: str, rel_path: str, media_type: str):
+    import io
+
+    from PIL import Image as PILImage
+
+    from tests.machine_lineage import ingest_made
+
+    buf = io.BytesIO()
+    PILImage.new("RGB", (16, 16)).save(buf, format="JPEG")
+    buf.seek(0)
+    return client.post(
+        "/v1/ingest",
+        data={"lineage": ingest_made(), "library_id": library_id, "rel_path": rel_path, "file_size": "1000",
+              "media_type": media_type},
+        files={"proxy": ("proxy.jpg", buf, "image/jpeg")},
+        headers=auth,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(("rel_path", "media_type"), [
+    ("notes.txt", "image"), ("secrets/.env", "image"), ("noext", "image"), ("clip.mov", "image"),
+    ("photo.jpg", "video"),
+])
+def test_ingest_takes_only_supported_files_of_its_media_type(
+    audit_fixes_client: tuple[TestClient, str, str, str], rel_path: str, media_type: str,
+) -> None:
+    client, api_key, library_id, _ = audit_fixes_client
+    r = _ingest(client, {"Authorization": f"Bearer {api_key}"}, library_id, rel_path, media_type)
+    assert r.status_code == 400, (r.status_code, r.text)
+
+
+@pytest.mark.slow
+def test_ingest_takes_a_supported_file(audit_fixes_client: tuple[TestClient, str, str, str]) -> None:
+    client, api_key, library_id, _ = audit_fixes_client
+    r = _ingest(client, {"Authorization": f"Bearer {api_key}"}, library_id, "boundaries/Photo.JPG", "image")
+    assert r.status_code == 200, (r.status_code, r.text)
+
+
+@pytest.mark.slow
+def test_ingest_refuses_a_non_canonical_path(audit_fixes_client: tuple[TestClient, str, str, str]) -> None:
+    client, api_key, library_id, _ = audit_fixes_client
+    r = _ingest(client, {"Authorization": f"Bearer {api_key}"}, library_id, "./private/a.jpg", "image")
+    assert r.status_code == 400, (r.status_code, r.text)
+
+
 
 # ---------------------------------------------------------------------------
 # FIX-12 (BUG-8): Scan update clears stale artifact keys

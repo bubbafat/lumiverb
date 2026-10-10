@@ -2,6 +2,8 @@
 
 import errno
 import os
+import posixpath
+import re
 import unicodedata
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from pathlib import Path
 _ABSENT = (errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP)
 
 
-def stat_if_present(path: str | os.PathLike) -> os.stat_result | None:
+def stat_if_present(path: str | os.PathLike, *, follow_symlinks: bool = True) -> os.stat_result | None:
     """os.stat, or None if the path isn't there.
 
     Other errors (no permission, an I/O error on a network mount) raise: a
@@ -17,7 +19,7 @@ def stat_if_present(path: str | os.PathLike) -> os.stat_result | None:
     Path.exists() and is_file() say False for those too.
     """
     try:
-        return os.stat(path)
+        return os.stat(path, follow_symlinks=follow_symlinks)
     except OSError as exc:
         if exc.errno in _ABSENT:
             return None
@@ -56,22 +58,27 @@ def normalize_rel_path(rel_path: str) -> str:
     return unicodedata.normalize("NFC", rel_path)
 
 
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
 class UnsafeRelPathError(ValueError):
     """A library-relative path that would leave the library root."""
 
 
 def check_rel_path(rel_path: str, *, allow_root: bool = False) -> str:
     """rel_path as stored (NFC), or UnsafeRelPathError unless it stays inside
-    the library: relative (no leading "/"), no ".." part, no NUL. "" is the
-    library root, allowed only with allow_root. Every write that takes a
-    rel_path checks it here, and resolve_source_path does too."""
+    the library in its one form: relative, no "." or ".." part, no empty part,
+    no backslash, no drive letter, no NUL. "" is the library root, allowed
+    only with allow_root. Every write that takes a rel_path checks it here,
+    and resolve_source_path does too."""
     if not isinstance(rel_path, str) or "\x00" in rel_path:
         raise UnsafeRelPathError(f"Invalid rel_path: {rel_path!r}")
     if rel_path == "":
         if allow_root:
             return rel_path
         raise UnsafeRelPathError("rel_path is empty")
-    if rel_path.startswith("/") or ".." in rel_path.split("/"):
+    if (rel_path.startswith("/") or ".." in rel_path.split("/") or "\\" in rel_path
+            or _DRIVE.match(rel_path) or posixpath.normpath(rel_path) != rel_path):
         raise UnsafeRelPathError(f"rel_path must stay inside the library: {rel_path!r}")
     return normalize_rel_path(rel_path)
 
@@ -90,9 +97,20 @@ def resolve_source_path(root: Path, rel_path: str) -> Path:
     then to matching each path component by its NFC form. Returns
     root / rel_path when nothing matches; raises OSError when a path can't
     be checked (stat_if_present), UnsafeRelPathError for a rel_path that
-    would leave root (absolute, or with a ".." part).
+    would leave root (absolute, with a ".." part, or through a symlink).
     """
     check_rel_path(rel_path, allow_root=True)  # never a path outside root
+    found = _find_source_path(root, rel_path)
+    try:
+        inside = found.resolve().is_relative_to(root.resolve())
+    except RuntimeError:  # a symlink loop
+        inside = False
+    if not inside:
+        raise UnsafeRelPathError(f"rel_path leaves the library: {rel_path!r}")
+    return found
+
+
+def _find_source_path(root: Path, rel_path: str) -> Path:
     direct = root / rel_path
     if stat_if_present(direct) is not None:
         return direct

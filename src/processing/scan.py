@@ -421,8 +421,9 @@ def _scan_one(
     Works for both new and changed files.
     """
     rel_path = f["rel_path"]
-    source_path = resolve_source_path(root_path, rel_path).resolve()
-    if not source_path.is_relative_to(root_path):
+    try:
+        source_path = resolve_source_path(root_path, rel_path).resolve()
+    except UnsafeRelPathError:
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
@@ -498,8 +499,9 @@ def _scan_one_video(
 ) -> None:
     """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
     rel_path = f["rel_path"]
-    source_path = resolve_source_path(root_path, rel_path).resolve()
-    if not source_path.is_relative_to(root_path):
+    try:
+        source_path = resolve_source_path(root_path, rel_path).resolve()
+    except UnsafeRelPathError:
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1

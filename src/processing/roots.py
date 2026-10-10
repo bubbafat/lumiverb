@@ -73,6 +73,52 @@ def _configured_map() -> dict[str, str]:
     return dict(current().root_map)
 
 
+def _maps(root_path: str, root_map: dict[str, str]) -> bool:
+    """Whether a prefix in root_map covers root_path (as map_root matches)."""
+    root = _clean(root_path)
+    for src in root_map:
+        prefix = _clean(src)
+        if prefix == "/" or root == prefix or root.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def _refused(library: dict, mapping: dict[str, str]) -> str | None:
+    """Why the library's root mustn't be read here, before looking at the disk."""
+    from src.processing.machine import current
+
+    if not library["root_path"].startswith("/"):
+        return "root isn't absolute"
+    if current().mapped_roots_only and not _maps(library["root_path"], mapping):
+        return "root isn't under the root map"
+    return None
+
+
+def _outside(resolved: Path, mapping: dict[str, str]) -> str | None:
+    """Why the library's resolved root mustn't be read here. On disk: run
+    in the probe's thread."""
+    from src.processing.machine import current
+
+    here = current()
+    if any(resolved.is_relative_to(Path(d).resolve()) for d in here.refused_roots):
+        return "root is in the server's data"
+    if here.mapped_roots_only and not any(resolved.is_relative_to(Path(t).resolve()) for t in mapping.values()):
+        return "root leaves the root map"
+    return None
+
+
+# Refusals already logged, so each is said once, not on every look.
+_said: set[tuple[str, str]] = set()
+
+
+def _refuse(library: dict, reason: str) -> None:
+    key = (str(library.get("library_id", "")), reason)
+    if key not in _said:
+        _said.add(key)
+        logger.warning("Library %s (%s) refused: %s: %s", library.get("name", ""),
+                       library.get("library_id", ""), reason, library.get("root_path"))
+
+
 def local_library_root(library: dict, root_map: dict[str, str] | None = None) -> Path | None:
     """The library's root on this machine, mapped but not checked."""
     root_path = library.get("root_path")
@@ -131,13 +177,22 @@ def reachable_root(
 ) -> Path | None:
     """The library's root on this machine if it can be read now, else None.
 
+    A root that isn't absolute is never read, nor one in the server's data
+    (the machine's refused_roots). Where the machine reads mapped roots only
+    (the scheduler), a root not under root_map, or resolving outside its
+    targets, is refused too.
+
     require_entries treats an empty folder as unreachable: an unmounted
     mount point is an empty folder, and scanning it would mark every file
     missing. The check gives up after `timeout` seconds, since a stat on a
     network mount whose server sleeps can block far longer.
     """
-    path = local_library_root(library, root_map)
+    mapping = _configured_map() if root_map is None else root_map
+    path = local_library_root(library, mapping)
     if path is None:
+        return None
+    if (reason := _refused(library, mapping)) is not None:
+        _refuse(library, reason)
         return None
 
     with _probes_lock:
@@ -151,7 +206,11 @@ def reachable_root(
 
     def run() -> None:
         try:
-            result["root"] = _probe(path, require_entries)
+            root = _probe(path, require_entries)
+            if root is not None and (reason := _outside(root, mapping)) is not None:
+                _refuse(library, reason)
+                root = None
+            result["root"] = root
         except BaseException as exc:  # noqa: BLE001 — reported below
             result["error"] = exc
 
