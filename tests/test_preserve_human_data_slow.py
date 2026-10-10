@@ -783,6 +783,33 @@ def test_dismissal_survives_redetect_and_cleanup(env) -> None:
 
 
 @pytest.mark.slow
+def test_upkeep_deletes_empty_dismissed_people_and_nothing_a_person_named(env) -> None:
+    """A faces redo no longer runs the cleanup: upkeep does, for the account,
+    and only dismissed people nothing is assigned to and nobody named."""
+    client, headers, library_id, tenant_url = env
+    asset_id = _seed_asset(tenant_url, library_id)
+    face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=12)
+    with _db(tenant_url) as s:
+        repo = PersonRepository(s)
+        empty = repo.create_dismissed(face_ids=[]).person_id
+        named = repo.create_dismissed(face_ids=[]).person_id
+        holding = repo.create_dismissed(face_ids=[face_id]).person_id
+    with _db(tenant_url) as s:
+        s.execute(text("UPDATE people SET display_name = 'Uncle Bob' WHERE person_id = :pid"), {"pid": named})
+        s.commit()
+    nobody = _seed_person(tenant_url, emb=13)  # not dismissed, no faces
+
+    r = client.post("/v1/upkeep", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["dismissed_people"]["deleted"] == 1
+    with _db(tenant_url) as s:
+        left = {row[0] for row in s.execute(text("SELECT person_id FROM people")).all()}
+    assert empty not in left
+    assert {named, holding, nobody} <= left
+    assert _match(tenant_url, face_id) == (holding, True)
+
+
+@pytest.mark.slow
 def test_merge_carries_rejections_to_target(env) -> None:
     client, headers, library_id, tenant_url = env
     asset_id = _seed_asset(tenant_url, library_id)
