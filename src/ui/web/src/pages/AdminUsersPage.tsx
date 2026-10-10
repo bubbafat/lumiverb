@@ -3,21 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listUsers, createUser, updateUserRole, deleteUser, ApiError } from "../api/client";
 import { decodeJwtClaims } from "../api/jwt";
 import type { UserItem } from "../api/types";
+import { timeAgo } from "../lib/format";
 
 const ROLES = ["admin", "editor", "viewer"] as const;
 const MIN_PASSWORD_LENGTH = 12;
 type Role = (typeof ROLES)[number];
 
 function relativeTime(iso: string | null): string {
-  if (!iso) return "never";
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  return iso ? timeAgo(iso) : "never";
 }
 
 function UserRow({
