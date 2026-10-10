@@ -264,9 +264,26 @@ def test_guesses_count_only_when_asked_and_suggestions_never(env):
     assert _put(env, asset_ids=[guessed], lat=5.0, lon=6.0).status_code == 200
     assert _detail(env, guessed)["location"]["source"] == "person"
 
+    # include_guesses alone is a modifier: it matches everything, never fails.
+    assert guessed in _query(env, "include_guesses:yes")
+    assert "guess_count" in _facets(env, "include_guesses:yes")
+
     # Accepting a suggestion makes it a person's.
     r = env[0].post("/v1/assets/locations/accept", json={"asset_ids": [suggested, guessed]}, headers=env[1])
     assert r.status_code == 200 and r.json() == {"accepted": [suggested], "skipped": [guessed]}
     loc = _detail(env, suggested)["location"]
     assert (loc["source"], loc["status"], loc["radius_m"]) == ("person", "applied", 2000)
     assert suggested in _query(env, "has_gps:yes")
+
+
+@pytest.mark.slow
+def test_accepting_a_suggestion_over_the_files_gps_asks(env):
+    filed = _ingest(env, "accept/filed.jpg", {"gps_lat": 12.0, "gps_lon": 34.0})
+    _row(env, filed, "suggestion", "suggested", 50.0, 8.0)
+    client, headers, *_ = env
+    r = client.post("/v1/assets/locations/accept", json={"asset_ids": [filed]}, headers=headers)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "location_exists", r.text
+    assert _detail(env, filed)["location"]["status"] == "suggested"
+    r = client.post("/v1/assets/locations/accept", json={"asset_ids": [filed], "replace": "all"}, headers=headers)
+    assert r.status_code == 200 and r.json()["accepted"] == [filed]
+    assert filed in _query(env, "near:50,8,1")

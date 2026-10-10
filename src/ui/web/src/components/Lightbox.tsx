@@ -699,11 +699,13 @@ export function Lightbox({
   const filename = basename(asset.rel_path);
   // A person's location: clear it, or take a suggestion (editors only).
   const [locationBusy, setLocationBusy] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const changeLocation = (fn: () => Promise<unknown>) => {
     setLocationBusy(true);
+    setLocationError(null);
     fn()
       .then(() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] }))
-      .catch(() => undefined)
+      .catch((err) => setLocationError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLocationBusy(false));
   };
 
@@ -1593,6 +1595,7 @@ export function Lightbox({
                         location={detail.location}
                         canEdit={canCorrect}
                         busy={locationBusy}
+                        error={locationError}
                         onNearbyClick={onNearbyClick}
                         onClear={() => changeLocation(() => clearLocations([asset.asset_id]))}
                         onAccept={() => changeLocation(() => acceptLocations([asset.asset_id]))}

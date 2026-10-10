@@ -34,6 +34,8 @@ export interface LocationRowProps {
   /** An editor or admin: shows Clear, Use this and No. */
   canEdit?: boolean;
   busy?: boolean;
+  /** A change that failed, said under the row. */
+  error?: string | null;
   onNearbyClick?: (lat: number, lon: number) => void;
   onClear?: () => void;
   onAccept?: () => void;
@@ -41,7 +43,7 @@ export interface LocationRowProps {
 }
 
 export function LocationRow({
-  gpsLat, gpsLon, location, canEdit = false, busy = false, onNearbyClick, onClear, onAccept, onReject,
+  gpsLat, gpsLon, location, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
 }: LocationRowProps) {
   const file = gpsLat != null && gpsLon != null ? { lat: gpsLat, lon: gpsLon } : null;
   const person = location && location.source === "person" ? location : null;
@@ -100,6 +102,7 @@ export function LocationRow({
               )}
             </div>
           )}
+          {error && <div role="alert" className="text-xs text-red-300">{error}</div>}
         </dd>
       </div>
       {onNearbyClick && shown && (

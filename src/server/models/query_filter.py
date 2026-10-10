@@ -935,9 +935,10 @@ class IncludeGuesses(LeafFilter):
         return "Includes guesses" if self.value else "No guesses"
 
     def to_sql(self, params: dict, counter: list[int]) -> str:
-        if self.value:
-            params[INCLUDE_GUESSES_PARAM] = True
-        return "TRUE"
+        # A modifier, not a predicate: it matches every clip, but names the
+        # parameter so the query binds it even without has_gps or near.
+        params[INCLUDE_GUESSES_PARAM] = bool(self.value) or params.get(INCLUDE_GUESSES_PARAM, False)
+        return f"{_GUESSES} IS NOT NULL"
 
     def to_url_value(self) -> str:
         return "yes" if self.value else "no"

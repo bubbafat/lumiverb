@@ -40,6 +40,13 @@ def states(session: Session, asset_ids: list[str]) -> dict[str, dict[str, Any]]:
     return {r["asset_id"]: dict(r) for r in rows}
 
 
+def lock(session: Session, asset_ids: list[str]) -> None:
+    """Hold these clips until the transaction ends, so what states() saw is
+    what's replaced (two requests can't both pass the 409 check)."""
+    session.execute(text("SELECT 1 FROM assets WHERE asset_id = ANY(:ids) ORDER BY asset_id FOR UPDATE"),
+                    {"ids": asset_ids})
+
+
 def fix_of(session: Session, asset_id: str) -> tuple[float, float] | None:
     """A clip's location that counts as a fix: a person's, else the file's.
     Guesses and suggestions aren't (None then, or for a clip not in sight)."""

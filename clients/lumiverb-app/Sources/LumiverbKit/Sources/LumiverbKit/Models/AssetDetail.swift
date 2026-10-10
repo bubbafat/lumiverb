@@ -83,14 +83,6 @@ public struct AssetDetail: Decodable, Identifiable, Sendable {
         return "\(w) x \(h)"
     }
 
-    /// The location shown: a person's, else the file's, else an applied guess.
-    public var shownLocation: (lat: Double, lon: Double)? {
-        if let location, location.source == "person" { return (location.lat, location.lon) }
-        if let gpsLat, let gpsLon { return (gpsLat, gpsLon) }
-        if let location, location.status == "applied" { return (location.lat, location.lon) }
-        return nil
-    }
-
     /// Human-readable file size from the rel_path filename.
     public var filename: String {
         (relPath as NSString).lastPathComponent

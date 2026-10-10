@@ -44,6 +44,11 @@ class LocationIdsRequest(BaseModel):
     asset_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
 
 
+class AcceptLocationRequest(LocationIdsRequest):
+    # A suggestion taken on a clip whose file has GPS replaces what shows: "all" says so.
+    replace: Literal["none", "all"] = "none"
+
+
 class SetLocationResponse(BaseModel):
     updated: list[str]
     skipped: list[str] = []  # not in sight (archived, in the trash, unknown), or the same_as clip itself
@@ -105,6 +110,7 @@ def set_locations(
         basis["same_as"] = body.same_as
 
     targets = [i for i in ids if i != body.same_as]
+    locations.lock(session, targets)
     states = locations.states(session, targets)
     person = [i for i in targets if i in states and states[i]["source"] == locations.PERSON]
     file_only = [i for i in targets if i in states and states[i]["has_file"]
@@ -148,10 +154,23 @@ def clear_locations(
 def accept_locations(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    body: Annotated[LocationIdsRequest | None, Body()] = None,
+    body: Annotated[AcceptLocationRequest | None, Body()] = None,
 ) -> AcceptLocationResponse:
-    """The named clips' suggestions become a person's location."""
+    """The named clips' suggestions become a person's location. Over the
+    file's GPS only with replace: "all" (409 location_exists otherwise)."""
     ids = _ids(body)
+    assert body is not None
+    locations.lock(session, ids)
+    states = locations.states(session, ids)
+    filed = [i for i in ids if i in states and states[i]["status"] == locations.SUGGESTED and states[i]["has_file"]]
+    if filed and body.replace != "all":
+        n = len(filed)
+        raise DecisionRequiredError(
+            "location_exists",
+            f"{n} of these clips already {'has' if n == 1 else 'have'} a location from the file."
+            ' Send replace: "all" to replace it.',
+            {"count": n, "person": 0, "file": n, "total": len(ids)},
+        )
     user_id, name = _who(request)
     accepted = locations.accept(session, ids, set_by=user_id, by_name=name)
     session.commit()
