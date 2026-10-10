@@ -216,7 +216,7 @@ def test_empty_trash_hard_deletes(libraries_client: tuple[TestClient, str]) -> N
 
     client.delete(f"/v1/libraries/{library_id}", headers=auth)
 
-    r_empty = client.post("/v1/libraries/empty-trash", headers=auth)
+    r_empty = client.post("/v1/libraries/empty-trash", json={"all": True}, headers=auth)
     assert r_empty.status_code == 200
     deleted = r_empty.json()["deleted"]
     assert deleted >= 1, "empty-trash should have deleted at least our library"
@@ -399,6 +399,6 @@ def test_hard_delete_public_library_removes_control_plane_row(libraries_client: 
     # CP row still present (trash via repo bypassed the route handler)
     assert _get_public_libraries_row(library_id) is not None
 
-    r_empty = client.post("/v1/libraries/empty-trash", headers=auth)
+    r_empty = client.post("/v1/libraries/empty-trash", json={"all": True}, headers=auth)
     assert r_empty.status_code == 200
     assert _get_public_libraries_row(library_id) is None

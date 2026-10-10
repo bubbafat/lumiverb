@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.api.limits import MAX_PAGE
 from src.server.repository.tenant import ProjectRepository
 
 # Mounted at /v1/public/projects. See main.py.
@@ -67,7 +68,7 @@ def list_public_project_assets(
     project_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = Query(None, description="Pagination cursor"),
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(200, ge=1, le=MAX_PAGE),
 ) -> PublicProjectAssetsResponse:
     """List assets in a public project. No auth required. Privacy-stripped."""
     col, repo = _get_public_project(session, project_id)

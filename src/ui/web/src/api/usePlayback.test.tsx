@@ -23,10 +23,30 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 describe("usePlayback", () => {
+  it("plays nothing while the capped copy is made, then its link", async () => {
+    let n = 0;
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ url: `/v1/stream/c${++n}`, expires_at: "x", source: "analysis_proxy",
+                                    max_seconds: 10, ready: n > 1 }), { status: 200 }),
+    );
+    const seen: (string | null)[] = [];
+    const { result } = renderHook(
+      () => {
+        const r = usePlayback("ast_1", { enabled: true, preparingMs: 20 });
+        seen.push(r.src);
+        return r;
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/c2"));
+    expect(seen).not.toContain("/v1/stream/c1");
+    expect(result.current.maxSeconds).toBe(10);
+  });
+
   it("plays the signed full-length link", async () => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes("/playback")
-        ? new Response(JSON.stringify({ url: "/v1/stream/abc.def", expires_at: "x", source: "analysis_proxy", max_seconds: null }), { status: 200 })
+        ? new Response(JSON.stringify({ url: "/v1/stream/abc.def", expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
         : new Response("{}", { status: 404 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
@@ -39,7 +59,7 @@ describe("usePlayback", () => {
 
   it("passes the public library along", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/p.q", expires_at: "x", source: "preview", max_seconds: 30 }), { status: 200 }),
+      new Response(JSON.stringify({ url: "/v1/stream/p.q", expires_at: "x", source: "preview", max_seconds: 30, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, isPublic: true, publicLibraryId: "lib_9" }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/p.q"));
@@ -68,7 +88,7 @@ describe("usePlayback", () => {
     let n = 0;
     fetchMock.mockImplementation(async () => {
       const a = answers[Math.min(n++, answers.length - 1)];
-      return new Response(JSON.stringify({ ...a, expires_at: "x", max_seconds: null }), { status: 200 });
+      return new Response(JSON.stringify({ ...a, expires_at: "x", max_seconds: null, ready: true }), { status: 200 });
     });
     const seen: (string | null)[] = [];
     const { result } = renderHook(
@@ -93,7 +113,7 @@ describe("usePlayback", () => {
   it("renews: a new link for the same video replaces a failed one", async () => {
     let n = 0;
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: `/v1/stream/link${++n}`, expires_at: "x", source: "analysis_proxy", max_seconds: null }), { status: 200 }),
+      new Response(JSON.stringify({ url: `/v1/stream/link${++n}`, expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/link1"));
@@ -105,7 +125,7 @@ describe("usePlayback", () => {
     let n = 0;
     fetchMock.mockImplementation(async () =>
       ++n === 1
-        ? new Response(JSON.stringify({ url: "/v1/stream/one", expires_at: "x", source: "analysis_proxy", max_seconds: null }), { status: 200 })
+        ? new Response(JSON.stringify({ url: "/v1/stream/one", expires_at: "x", source: "analysis_proxy", max_seconds: null, ready: true }), { status: 200 })
         : new Response(JSON.stringify({ error: { code: "x", message: "gone" } }), { status: 404 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
@@ -117,7 +137,7 @@ describe("usePlayback", () => {
 
   it("asks for a public project's clip by project", async () => {
     fetchMock.mockImplementation(async () =>
-      new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "preview", max_seconds: 10 }), { status: 200 }),
+      new Response(JSON.stringify({ url: "/v1/stream/p", expires_at: "x", source: "preview", max_seconds: 10, ready: true }), { status: 200 }),
     );
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, isPublic: true, publicProjectId: "prj_7" }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/p"));

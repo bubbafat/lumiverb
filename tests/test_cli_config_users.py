@@ -194,7 +194,7 @@ def test_user_remove_says_it_cant_remove_the_last_admin() -> None:
 
 
 def test_user_remove_says_why_a_400_failed() -> None:
-    result, _ = _remove(_answer(400, {"detail": "Cannot delete your own account"}), "--yes")
+    result, _ = _remove(_answer(400, {"error": {"code": "bad_request", "message": "Cannot delete your own account", "details": {}}}), "--yes")
 
     assert result.exit_code == 1
     assert "Cannot delete your own account" in result.output

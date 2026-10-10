@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_tenant_admin
+from src.server.api.errors import ConflictError
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.runner import TenantUpgradeRunner
 from src.server.upgrade.runner import UpgradeStepNotReadyError
@@ -77,13 +78,9 @@ def execute_upgrade(
             force=body.force,
         )
     except UpgradeStepNotReadyError as e:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "upgrade_step_not_ready",
-                "message": str(e),
-                "details": {"step_id": e.step_id, "not_done_preceding_step_ids": e.not_done_preceding_step_ids},
-            },
+        raise ConflictError(
+            "upgrade_step_not_ready", str(e),
+            {"step_id": e.step_id, "not_done_preceding_step_ids": e.not_done_preceding_step_ids},
         ) from e
     except Exception as e:
         raise HTTPException(

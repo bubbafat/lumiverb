@@ -210,7 +210,8 @@ def test_update_project_invalid_sort(projects_env):
         json={"sort_order": "invalid"},
         headers=_headers(api_key),
     )
-    assert r2.status_code == 400
+    assert r2.status_code == 422
+    assert r2.json()["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.slow
@@ -1009,7 +1010,7 @@ def test_empty_trash_leaves_active_projects_and_other_peoples_trash(projects_env
     # Naming an active project or someone else's doesn't delete it.
     r = client.post("/v1/projects/empty-trash", json={"project_ids": [active, theirs]}, headers=_headers(api_key))
     assert r.json() == {"deleted": 0}
-    r = client.post("/v1/projects/empty-trash", json={}, headers=_headers(api_key))
+    r = client.post("/v1/projects/empty-trash", json={"all": True}, headers=_headers(api_key))
     assert r.status_code == 200, r.text
 
     assert mine not in _trashed(client, api_key)
@@ -1375,7 +1376,7 @@ def test_emptying_the_whole_clip_trash_asks_too(projects_env):
     clip = _ingest_asset(client, api_key, library_id, "intent/whole-trash.jpg")
     _project(client, api_key, "Intent: whole trash", [clip])
     _trash_clips(client, api_key, clip)
-    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=_headers(api_key))
+    r = client.request("DELETE", "/v1/trash/empty", json={"all": True}, headers=_headers(api_key))
     assert r.status_code == 409, r.text
     assert _error(r)["code"] == "in_projects"
     assert client.post(f"/v1/assets/{clip}/restore", headers=_headers(api_key)).status_code == 204
@@ -1392,12 +1393,12 @@ def test_emptying_library_trash_with_clips_in_projects_needs_a_yes(projects_env)
     assert client.request("DELETE", f"/v1/libraries/{lib}", json={"remove_from_projects": True},
                           headers=_headers(api_key)).status_code == 204
 
-    r = client.post("/v1/libraries/empty-trash", headers=_headers(api_key))
+    r = client.post("/v1/libraries/empty-trash", json={"all": True}, headers=_headers(api_key))
     assert r.status_code == 409, r.text
     assert _error(r)["code"] == "in_projects"
     assert _error(r)["details"]["assets_in_projects"] == 1
 
-    r = client.post("/v1/libraries/empty-trash", json={"remove_from_projects": True}, headers=_headers(api_key))
+    r = client.post("/v1/libraries/empty-trash", json={"all": True, "remove_from_projects": True}, headers=_headers(api_key))
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] >= 1
     assert _item(client, api_key, project_id)["asset_count"] == 0
@@ -1566,7 +1567,7 @@ def test_a_trashed_public_projects_thumbnails_are_gone_until_restored(projects_e
     client, api_key, library_id = projects_env
     clip = _ingest_asset(client, api_key, library_id, "public/thumb.jpg")
     project_id = _project(client, api_key, "Public thumbs", [clip], visibility="public")
-    url = f"/v1/assets/{clip}/thumbnail?public_project_id={project_id}"
+    url = f"/v1/assets/{clip}/artifacts/thumbnail?public_project_id={project_id}"
     assert client.get(url).status_code == 200
     client.delete(f"/v1/projects/{project_id}", headers=_headers(api_key))
     assert client.get(url).status_code == 404
@@ -1600,7 +1601,7 @@ def test_usage_counts_but_doesnt_name_someone_elses_trashed_shared_project(proje
 @pytest.mark.slow
 def test_empty_trash_needs_no_body(projects_env):
     client, api_key, _ = projects_env
-    r = client.post("/v1/projects/empty-trash", headers=_headers(api_key))
+    r = client.post("/v1/projects/empty-trash", json={"all": True}, headers=_headers(api_key))
     assert r.status_code == 200, r.text
 
 

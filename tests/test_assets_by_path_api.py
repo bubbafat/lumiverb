@@ -111,7 +111,7 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
 
 @pytest.mark.slow
 def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path: Path) -> None:
-    """Create library + asset + proxy file; GET /v1/assets/{asset_id}/proxy streams JPEG bytes."""
+    """Create library + asset + proxy file; GET /v1/assets/{asset_id}/artifacts/proxy streams JPEG bytes."""
     from src.server.config import get_settings
     from src.server.database import get_tenant_session
     from src.server.repository.tenant import AssetRepository
@@ -192,7 +192,7 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path
     proxy_path.write_bytes(payload)
 
     # Stream proxy via API
-    r_stream = client.get(f"/v1/assets/{asset_id}/proxy", headers=auth)
+    r_stream = client.get(f"/v1/assets/{asset_id}/artifacts/proxy", headers=auth)
     assert r_stream.status_code == 200
     assert r_stream.headers["content-type"] == "image/jpeg"
     assert r_stream.content == payload

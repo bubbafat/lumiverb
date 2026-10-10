@@ -5,7 +5,7 @@ import AVKit
 ///
 /// URL resolution order:
 /// 1. Local file at `{libraryRootPath}/{relPath}` — full-length playback (macOS only — iOS has no local library access)
-/// 2. Server preview via `GET /v1/assets/{id}/preview` — 10-second clip, downloaded to temp file
+/// 2. Server preview via `GET /v1/assets/{id}/artifacts/video_preview` — 10-second clip, downloaded to temp file
 /// 3. Static proxy image if neither is available
 public struct LightboxVideoPlayerView: View {
     public let detail: AssetDetail
@@ -182,6 +182,19 @@ final class VideoPlayerViewModel: ObservableObject {
         player.play()
     }
 
+    /// The video preview; nil when there's none. While the server makes a
+    /// capped copy it answers 503 (Retry-After 2): asked again for up to 30 s.
+    static func previewData(_ client: APIClient, assetId: String) async throws -> Data? {
+        for _ in 0..<15 {
+            do {
+                return try await client.getData("/v1/assets/\(assetId)/artifacts/video_preview")
+            } catch APIError.serverError(statusCode: 503, _) {
+                try await Task.sleep(for: .seconds(2))
+            }
+        }
+        return nil
+    }
+
     func resolve(
         detail: AssetDetail,
         libraryRootPath: String?,
@@ -212,7 +225,7 @@ final class VideoPlayerViewModel: ObservableObject {
         // 2. Try server preview
         if detail.videoPreviewKey != nil, let client {
             do {
-                if let data = try await client.getData("/v1/assets/\(detail.assetId)/preview") {
+                if let data = try await Self.previewData(client, assetId: detail.assetId) {
                     let dir = FileManager.default.temporaryDirectory
                         .appendingPathComponent("lumiverb-previews")
                     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

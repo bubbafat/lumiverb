@@ -410,7 +410,7 @@ actor EnrichmentPipeline {
 
         // 2. Download from server and cache
         do {
-            if let data = try await client.getData("/v1/assets/\(assetId)/proxy") {
+            if let data = try await client.getData("/v1/assets/\(assetId)/artifacts/proxy") {
                 MacProxyDiskCache.shared.put(assetId: assetId, data: data)
                 return data
             }

@@ -74,7 +74,7 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb archive add [<clip ids>...] | --library <name|id> --folder <path> [--yes]` — Archive clips: out of sight, kept forever with everything they have; scans leave them archived. By id, or every clip under a folder, recursively (`--folder ''` for the whole library; a folder asks first unless `--yes`); a file added to the folder later shows up as usual. Says which ids it skipped (not in sight).
 - `lumiverb archive restore [<clip ids>...] | --library <name|id> --folder <path>` — Unarchive clips a person archived. A missing file's clip is skipped: it comes back when the file does.
 - `lumiverb archive list [--library <name|id>] [--folder <path>] [--missing | --by-hand] [--limit N]` — Archived clips, most recent first, marking those whose file is missing.
-- `lumiverb archive delete-missing [--library <name|id>] [--folder <path>] [--remove-from-projects] [--yes]` — Admins: delete for good the clips whose files went missing, with everything made or written for them. The server says how many first, and asks about projects that use them; `--yes` goes ahead with however many there are (and stops at projects without `--remove-from-projects`). A file that comes back afterwards is a new clip.
+- `lumiverb archive delete-missing (--library <name|id> [--folder <path>] | --all) [--remove-from-projects] [--yes]` — Admins: delete for good the clips whose files went missing, with everything made or written for them: one library's, or every library's (`--all`); exactly one. The server says how many first, and asks about projects that use them; `--yes` goes ahead with however many there are (and stops at projects without `--remove-from-projects`). A file that comes back afterwards is a new clip.
 - `lumiverb trash add <clip ids>... [--remove-from-projects] [--yes]` — Move clips (in sight or archived) to the trash; deleted for good after the trash days. When projects use them it names them and asks.
 - `lumiverb trash restore <clip ids>...` — Take clips out of the trash, back to where they were: in sight, or the archive for clips archived before (it says which). A library's clips come back with the library.
 - `lumiverb trash list [--library <name|id>] [--folder <path>] [--limit N]` — Clips in the trash, most recent first, with the day each is deleted for good.
@@ -90,7 +90,7 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb project archive --id <project_id>` — Archive: it leaves the sidebar and pickers but keeps its clips.
 - `lumiverb project restore --id <project_id> [--with-clips | --without-clips]` — Take a project out of the trash, back to active or archived as it was; a project that isn't in the trash is un-archived. If clips in it are in the trash, asks whether to restore them too (they come back everywhere) unless a flag says.
 - `lumiverb project restore-clips --id <project_id>` — Restore the project's clips that someone trashed. Clips whose files went missing come back when the files do.
-- `lumiverb project empty-trash [--id <project_id> ...] [--yes]` — Delete trashed projects for good (the named ones, or the whole trash) after a confirmation. Their clips stay in the libraries.
+- `lumiverb project empty-trash (--id <project_id> ... | --all) [--yes]` — Delete trashed projects for good (the named ones, or the whole trash with `--all`; exactly one) after a confirmation. Their clips stay in the libraries.
 - `lumiverb project export --id <project_id> --format fcp7|fcpxml [--output <file>]` — Export a bin of master clips for DaVinci Resolve / Premiere Pro (`fcp7`) or Final Cut Pro (`fcpxml`). Writes `<project name>.xml|.fcpxml` unless `--output` is given. Clips point at the originals as the libraries know them (relink in the editor where its paths differ); photos are in it as stills of 5 s. Reports how many photos are stills, and what was left out or approximated: videos with no known length, clips in the trash, clips whose files are missing, clips in a deleted library, archived clips, and unprobed videos exported at the fallback rate.
 
 #### User
@@ -105,9 +105,9 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb keys revoke --key-id <key_id>` — Revoke an API key.
 
 #### Filter
-- `lumiverb filter list [--library <name>]` — List path filters.
-- `lumiverb filter add <pattern> --include|--exclude [--library <name>]` — Add filter.
-- `lumiverb filter remove <filter_id> [--library <name>]` — Remove filter.
+- `lumiverb filter list [--library <name>]` — List path filters (the account's defaults without `--library`).
+- `lumiverb filter add <pattern> --include|--exclude (--library <name> | --tenant-default)` — Add a filter to a library or to the account's defaults; exactly one.
+- `lumiverb filter remove <filter_id> (--library <name> | --tenant-default)` — Remove a filter from a library or the account's defaults; exactly one.
 
 ### Admin / Ops
 

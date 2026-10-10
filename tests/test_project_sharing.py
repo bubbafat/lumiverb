@@ -216,7 +216,13 @@ def test_invalid_visibility_rejected(sharing_env):
         json={"visibility": "unlisted"},
         headers=_headers(api_key),
     )
-    assert r2.status_code == 400
+    # The same as a bad status: a 422 (it was a hand-made 400).
+    assert r2.status_code == 422
+    assert r2.json()["error"]["code"] == "invalid_request"
+    r3 = client.post("/v1/projects", json={"name": "BadVis2", "visibility": "unlisted"}, headers=_headers(api_key))
+    assert r3.status_code == 422
+    r4 = client.patch(f"/v1/projects/{col_id}", json={"status": "gone"}, headers=_headers(api_key))
+    assert r4.status_code == 422
 
 
 # ---------------------------------------------------------------------------

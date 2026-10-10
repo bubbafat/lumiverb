@@ -169,3 +169,16 @@ def test_a_clip_back_and_missing_again_while_deleting_isnt_deleted(env, monkeypa
     r = _delete_missing(env, library_id=library_id, path="dm-again", **asked)
     assert r.status_code == 200 and r.json() == {"deleted": 0}
     assert _exists(env, clip)
+
+
+@pytest.mark.slow
+def test_a_missing_target_is_a_400(env):
+    """library_id, or all: true for every library's; never "everything" by omission."""
+    client, _, library_id, *_ = env
+    for body in ({}, {"path": "dm-folder"}, {"all": True, "library_id": library_id}):
+        r = _delete_missing(env, **body)
+        assert r.status_code == 400, (body, r.text)
+        assert r.json()["error"]["code"] == "scope_required"
+    _missing(env, _ingest(env, "dm-all/gone.jpg", media_type="image", sha=_sha()))
+    asked = _confirm(env, all=True)
+    assert asked["count"] >= 1

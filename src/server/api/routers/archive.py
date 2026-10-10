@@ -18,6 +18,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
+from src.server.api.limits import MAX_PAGE
 from src.server.repository.tenant import AssetRepository
 
 router = APIRouter(prefix="/v1/archive", tags=["archive"], dependencies=[Depends(require_signed_in)])
@@ -69,7 +70,7 @@ def list_archive(
     path: str | None = Query(default=None, description="Only clips under this folder (recursive)."),
     kind: Literal["all", "by_hand", "missing"] = "all",
     after: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=MAX_PAGE),
 ) -> ArchivePage:
     """Archived clips, most recently archived first: archived by a person, or
     their file went missing. Clips of a library in the trash aren't here."""
@@ -91,8 +92,10 @@ def list_archive(
 
 
 class DeleteMissingRequest(BaseModel):
-    # Only this library's, and only under this folder.
+    # This library's (under path when given), or all: true for every
+    # library's. Neither is a 400.
     library_id: str | None = None
+    all: bool = False
     path: str | None = None
     # What the admin was told (409 confirm_delete_missing gives both): how many
     # would go, and when they were listed. Only clips missing since before
@@ -125,10 +128,12 @@ def delete_missing(
     both (count, missing_before) to go ahead, so nothing that went missing
     since goes. Then, about all of them at once, 409 in_projects unless
     remove_from_projects. If a file comes back afterwards, it's a new clip."""
+    from src.server.api.limits import require_scope
     from src.server.api.routers.assets import project_usage_summary
     from src.server.api.routers.trash import purge_assets
     from src.shared.utils import utcnow
 
+    require_scope(body.library_id is not None, body.all, "library_id")
     repo = AssetRepository(session)
     listed_at = utcnow()
     missing = repo.list_missing(library_id=body.library_id, folder=body.path, missing_before=body.missing_before)

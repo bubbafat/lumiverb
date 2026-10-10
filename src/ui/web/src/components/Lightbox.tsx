@@ -558,7 +558,7 @@ export function Lightbox({
       // existing per-face ranking. Wipe the whole prefix.
       queryClient.invalidateQueries({ queryKey: ["nearest-people-for-face"] });
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
-      // Cluster-review face pages are keyed by cluster_index; invalidate
+      // Cluster-review face pages are keyed by cluster_id; invalidate
       // the whole prefix so the caller's paginated list reshapes.
       queryClient.invalidateQueries({ queryKey: ["cluster-faces"] });
 

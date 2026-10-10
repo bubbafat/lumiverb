@@ -159,6 +159,16 @@ def clusters_client() -> Iterator[tuple[_AuthClient, str]]:
         _engines.clear()
 
 
+def _clusters(auth_client: _AuthClient, **params) -> list[dict]:
+    """The clusters as upkeep computes them (reading them computes nothing)."""
+    r = auth_client.post("/v1/upkeep/recluster")
+    assert r.status_code == 200, r.text
+    r = auth_client.get("/v1/faces/clusters", params=params)
+    assert r.status_code == 200, r.text
+    assert r.json()["pending"] is False
+    return r.json()["clusters"]
+
+
 # ---- list_people / search / dismissed -------------------------------------
 
 
@@ -178,14 +188,14 @@ def test_list_people_q_filter_returns_match(clusters_client) -> None:
 
 
 @pytest.mark.slow
-def test_list_people_pagination_limit_clamping(clusters_client) -> None:
+def test_list_people_pagination_limit_out_of_range(clusters_client) -> None:
     auth_client, _ = clusters_client
-    # Limits below 1 are clamped to 1, above 100 to 100
-    r = auth_client.get("/v1/people", params={"limit": 0})
-    assert r.status_code == 200
-    assert len(r.json()["items"]) <= 1
-
-    r = auth_client.get("/v1/people", params={"limit": 999})
+    # Out of range is a 422, not a silent clamp (it clamped to 1..100).
+    for limit in (0, 101):
+        r = auth_client.get("/v1/people", params={"limit": limit})
+        assert r.status_code == 422
+        assert r.json()["error"]["code"] == "invalid_request"
+    r = auth_client.get("/v1/people", params={"limit": 100})
     assert r.status_code == 200
 
 
@@ -196,11 +206,9 @@ def test_list_people_pagination_limit_clamping(clusters_client) -> None:
 def test_get_clusters_returns_seeded_groups(clusters_client) -> None:
     auth_client, _ = clusters_client
 
-    r = auth_client.get("/v1/faces/clusters")
-    assert r.status_code == 200
-    data = r.json()
+    clusters = _clusters(auth_client)
     # Three identity groups → at least three clusters of size >= 2
-    assert len(data["clusters"]) >= 3
+    assert len(clusters) >= 3
 
 
 @pytest.mark.slow
@@ -208,7 +216,7 @@ def test_get_clusters_sorts(clusters_client) -> None:
     """Largest first unless asked otherwise; every order is total (ties by first face)."""
     auth_client, _ = clusters_client
 
-    default = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    default = _clusters(auth_client)
     sizes = [c["size"] for c in default]
     assert sizes == sorted(sizes, reverse=True)
     assert default == auth_client.get("/v1/faces/clusters", params={"sort": "size_desc"}).json()["clusters"]
@@ -233,11 +241,11 @@ def test_get_clusters_unknown_sort_is_refused(clusters_client) -> None:
 def test_list_cluster_faces_paginates(clusters_client) -> None:
     auth_client, _ = clusters_client
 
-    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    clusters = _clusters(auth_client)
     assert clusters, "expected seeded clusters"
-    cluster_index = clusters[0]["cluster_index"]
+    cluster_id = clusters[0]["cluster_id"]
 
-    r = auth_client.get(f"/v1/faces/clusters/{cluster_index}/faces", params={"limit": 2})
+    r = auth_client.get(f"/v1/faces/clusters/{cluster_id}/faces", params={"limit": 2})
     assert r.status_code == 200
     body = r.json()
     assert body["total"] >= 2
@@ -246,9 +254,10 @@ def test_list_cluster_faces_paginates(clusters_client) -> None:
         assert "face_id" in item
         assert "asset_id" in item
 
-    # 404 for an out-of-range cluster index
-    r = auth_client.get("/v1/faces/clusters/99999/faces")
-    assert r.status_code == 404
+    # 409 for an id no cluster has
+    r = auth_client.get("/v1/faces/clusters/fc_gone/faces")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "cluster_changed"
 
 
 @pytest.mark.slow
@@ -256,21 +265,21 @@ def test_nearest_people_for_cluster(clusters_client) -> None:
     auth_client, _ = clusters_client
 
     # Need at least one named person with a centroid for ranking to return rows
-    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    clusters = _clusters(auth_client)
     cluster_to_name = clusters[0]
     r = auth_client.post(
-        f"/v1/faces/clusters/{cluster_to_name['cluster_index']}/name",
+        f"/v1/faces/clusters/{cluster_to_name['cluster_id']}/name",
         json={"display_name": f"NameClusterTarget_{secrets.token_urlsafe(3)}"},
     )
     assert r.status_code == 201, r.text
     named_person_id = r.json()["person_id"]
 
     # Now query nearest people for a *different* cluster
-    remaining = auth_client.get("/v1/faces/clusters").json()["clusters"]
-    other = next((c for c in remaining if c["cluster_index"] != cluster_to_name["cluster_index"]), None)
+    remaining = _clusters(auth_client)
+    other = next((c for c in remaining if c["cluster_id"] != cluster_to_name["cluster_id"]), None)
     assert other is not None, "needed at least 2 clusters"
 
-    r = auth_client.get(f"/v1/faces/clusters/{other['cluster_index']}/nearest-people")
+    r = auth_client.get(f"/v1/faces/clusters/{other['cluster_id']}/nearest-people")
     assert r.status_code == 200
     items = r.json()
     assert isinstance(items, list)
@@ -278,9 +287,9 @@ def test_nearest_people_for_cluster(clusters_client) -> None:
     for p in items:
         assert 0.0 <= p["distance"] <= 2.0  # cosine distance bound
 
-    # Out-of-range cluster → 404
-    r = auth_client.get("/v1/faces/clusters/99999/nearest-people")
-    assert r.status_code == 404
+    # An id no cluster has → 409
+    r = auth_client.get("/v1/faces/clusters/fc_gone/nearest-people")
+    assert r.status_code == 409
 
 
 @pytest.mark.slow
@@ -293,12 +302,12 @@ def test_name_cluster_assigns_to_existing_person(clusters_client) -> None:
     assert r.status_code == 201
     person_id = r.json()["person_id"]
 
-    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    clusters = _clusters(auth_client)
     target_cluster = clusters[0]
     expected_size = target_cluster["size"]
 
     r = auth_client.post(
-        f"/v1/faces/clusters/{target_cluster['cluster_index']}/name",
+        f"/v1/faces/clusters/{target_cluster['cluster_id']}/name",
         json={"display_name": "ignored", "person_id": person_id},
     )
     assert r.status_code == 201
@@ -327,12 +336,12 @@ def test_name_cluster_merge_without_display_name(clusters_client) -> None:
     assert r.status_code == 201
     person_id = r.json()["person_id"]
 
-    clusters = auth_client.get("/v1/faces/clusters").json()["clusters"]
+    clusters = _clusters(auth_client)
     target_cluster = clusters[0]
 
     # Send ONLY person_id, exactly as the Swift client does for merge.
     r = auth_client.post(
-        f"/v1/faces/clusters/{target_cluster['cluster_index']}/name",
+        f"/v1/faces/clusters/{target_cluster['cluster_id']}/name",
         json={"person_id": person_id},
     )
     assert r.status_code == 201, (r.status_code, r.text)
@@ -345,17 +354,18 @@ def test_name_cluster_validation_errors(clusters_client) -> None:
 
     # Empty display_name + no person_id → 400
     r = auth_client.post(
-        "/v1/faces/clusters/0/name",
+        "/v1/faces/clusters/fc_any/name",
         json={"display_name": "  ", "person_id": None},
     )
     assert r.status_code == 400
 
-    # Cluster index out of range → 404
+    # An id no cluster has → 409 cluster_changed
     r = auth_client.post(
-        "/v1/faces/clusters/99999/name",
+        "/v1/faces/clusters/fc_gone/name",
         json={"display_name": "Whatever"},
     )
-    assert r.status_code == 404
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "cluster_changed"
 
 
 # ---- dismiss_cluster + undismiss_person -----------------------------------
@@ -370,14 +380,12 @@ def test_dismiss_then_list_then_undismiss_cluster(clusters_client) -> None:
     _, face_ids = _create_asset_with_faces(
         auth_client, library_id, "dismiss_flow", "dismiss_flow", n_faces=3
     )
-    clusters = auth_client.get(
-        "/v1/faces/clusters", params={"limit": 50, "faces_per_cluster": 20}
-    ).json()["clusters"]
+    clusters = _clusters(auth_client, limit=50, faces_per_cluster=20)
     mine = [c for c in clusters if {f["face_id"] for f in c["faces"]} & set(face_ids)]
     assert mine, "the seeded faces should form a cluster"
-    cluster_index = mine[0]["cluster_index"]
+    cluster_id = mine[0]["cluster_id"]
 
-    r = auth_client.post(f"/v1/faces/clusters/{cluster_index}/dismiss", json={})
+    r = auth_client.post(f"/v1/faces/clusters/{cluster_id}/dismiss", json={})
     assert r.status_code == 200
     dismissed_pid = r.json()["person_id"]
 
@@ -402,10 +410,36 @@ def test_dismiss_then_list_then_undismiss_cluster(clusters_client) -> None:
 
 
 @pytest.mark.slow
-def test_dismiss_cluster_404_for_invalid_index(clusters_client) -> None:
+def test_dismiss_cluster_409_for_an_unknown_id(clusters_client) -> None:
     auth_client, _ = clusters_client
-    r = auth_client.post("/v1/faces/clusters/99999/dismiss", json={})
-    assert r.status_code == 404
+    r = auth_client.post("/v1/faces/clusters/fc_gone/dismiss", json={})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "cluster_changed"
+
+
+@pytest.mark.slow
+def test_a_cluster_keeps_its_id_and_a_changed_one_is_a_409(clusters_client) -> None:
+    """The id names the faces, not a position: computed again, the same faces
+    have the same id. Once its faces are named, the id answers 409, and the
+    next load doesn't show it even before upkeep computes them again."""
+    auth_client, library_id = clusters_client
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "stable_id", "stable_id", n_faces=3)
+
+    def mine(clusters):
+        return [c["cluster_id"] for c in clusters if {f["face_id"] for f in c["faces"]} & set(face_ids)]
+
+    first = mine(_clusters(auth_client, limit=50, faces_per_cluster=20))
+    assert first and first == mine(_clusters(auth_client, limit=50, faces_per_cluster=20))
+    cluster_id = first[0]
+
+    r = auth_client.post(f"/v1/faces/clusters/{cluster_id}/name", json={"display_name": "Stable"})
+    assert r.status_code == 201, r.text
+    again = auth_client.post(f"/v1/faces/clusters/{cluster_id}/dismiss", json={})
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "cluster_changed"
+    shown = auth_client.get("/v1/faces/clusters", params={"limit": 50, "faces_per_cluster": 20}).json()
+    assert cluster_id not in [c["cluster_id"] for c in shown["clusters"]]
+    assert shown["pending"] is True
 
 
 @pytest.mark.slow

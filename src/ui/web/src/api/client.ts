@@ -239,13 +239,13 @@ export async function updateLibraryVisibility(
   });
 }
 
-/** Delete trashed libraries for good: these ones, or all of them. If their
- * clips are in projects, the server refuses (409 in_projects, with the
- * projects) unless removeFromProjects says the user agreed. */
-export async function emptyTrash(removeFromProjects = false, libraryIds?: string[]): Promise<EmptyTrashResponse> {
+/** Delete these trashed libraries for good. If their clips are in projects,
+ * the server refuses (409 in_projects, with the projects) unless
+ * removeFromProjects says the user agreed. */
+export async function emptyTrash(removeFromProjects: boolean, libraryIds: string[]): Promise<EmptyTrashResponse> {
   return apiFetch<EmptyTrashResponse>("/libraries/empty-trash", {
     method: "POST",
-    body: { remove_from_projects: removeFromProjects, ...(libraryIds ? { library_ids: libraryIds } : {}) },
+    body: { remove_from_projects: removeFromProjects, library_ids: libraryIds },
   });
 }
 
@@ -293,15 +293,15 @@ export async function restoreClips(
  * or under a folder. Asks first: 409 confirm_delete_missing (details.count,
  * details.listed_at) until `told` says both; then 409 in_projects unless removeFromProjects. */
 export async function deleteMissingClips(
-  scope: { libraryId?: string; path?: string },
+  scope: { libraryId: string; path?: string } | "all",
   told?: { count: number; listedAt: string },
   removeFromProjects = false,
 ): Promise<{ deleted: number }> {
   return apiFetch("/archive/missing", {
     method: "DELETE",
     body: {
-      ...(scope.libraryId ? { library_id: scope.libraryId } : {}),
-      ...(scope.path ? { path: scope.path } : {}),
+      ...(scope === "all" ? { all: true } : { library_id: scope.libraryId }),
+      ...(scope !== "all" && scope.path ? { path: scope.path } : {}),
       // What the admin was told: only clips missing since before then go.
       ...(told ? { count: told.count, missing_before: told.listedAt } : {}),
       remove_from_projects: removeFromProjects,
@@ -309,18 +309,18 @@ export async function deleteMissingClips(
   });
 }
 
-/** Delete clips in the trash for good now: these, or every one shown (a
+/** Delete clips in the trash for good now: these, or "all" shown (a
  * library's, under a folder, when given). Admins. 409 in_projects until
  * removeFromProjects. Never reaches archived clips or a trashed library's. */
 export async function emptyClipTrash(
-  assetIds?: string[],
+  assetIds: string[] | "all",
   removeFromProjects = false,
   scope: { libraryId?: string; path?: string; trashedBefore?: string } = {},
 ): Promise<{ deleted: number }> {
   return apiFetch("/trash/empty", {
     method: "DELETE",
     body: {
-      ...(assetIds ? { asset_ids: assetIds } : {}),
+      ...(assetIds === "all" ? { all: true } : { asset_ids: assetIds }),
       ...(scope.libraryId ? { library_id: scope.libraryId } : {}),
       ...(scope.path ? { path: scope.path } : {}),
       // Only what was there when the view listed it: nothing trashed since.
@@ -531,7 +531,8 @@ export interface PersonFacesResponse {
 }
 
 export interface ClusterItem {
-  cluster_index: number;
+  /** Names the cluster by its faces; a route given one that no longer matches answers 409 cluster_changed. */
+  cluster_id: string;
   size: number;
   faces: PersonFaceItem[];
   /** Its latest photo (taken, else the file's time); null when none says. */
@@ -546,6 +547,10 @@ export interface ClustersResponse {
   clusters: ClusterItem[];
   truncated: boolean;
   max_cluster_size: number;
+  /** When upkeep grouped them (null: not yet); reading them never does. */
+  computed_at: string | null;
+  /** Faces changed since: upkeep groups them again within minutes. */
+  pending: boolean;
 }
 
 /** List people sorted by face count descending. */
@@ -626,12 +631,12 @@ export async function getClusters(
 
 /** Name a cluster: creates a new person or assigns to existing, for ALL faces in the cluster. */
 export async function nameCluster(
-  clusterIndex: number,
+  clusterId: string,
   opts: { displayName: string } | { personId: string; displayName: string },
 ): Promise<PersonItem> {
   const body: Record<string, unknown> = { display_name: opts.displayName };
   if ("personId" in opts) body.person_id = opts.personId;
-  return apiFetch<PersonItem>(`/faces/clusters/${clusterIndex}/name`, {
+  return apiFetch<PersonItem>(`/faces/clusters/${clusterId}/name`, {
     method: "POST",
     body,
   });
@@ -645,8 +650,8 @@ export interface NearestPersonItem {
 }
 
 /** Get people sorted by similarity to a cluster's centroid. */
-export async function getNearestPeople(clusterIndex: number, limit = 5): Promise<NearestPersonItem[]> {
-  return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterIndex}/nearest-people?limit=${limit}`);
+export async function getNearestPeople(clusterId: string, limit = 5): Promise<NearestPersonItem[]> {
+  return apiFetch<NearestPersonItem[]>(`/faces/clusters/${clusterId}/nearest-people?limit=${limit}`);
 }
 
 /** Get people sorted by similarity to a single face's embedding. Used by
@@ -658,8 +663,8 @@ export async function getNearestPeopleForFace(faceId: string, limit = 5): Promis
 }
 
 /** Dismiss a cluster: creates a dismissed person that absorbs future similar faces. Returns person_id for undo. */
-export async function dismissCluster(clusterIndex: number): Promise<{ person_id: string }> {
-  return apiFetch<{ person_id: string }>(`/faces/clusters/${clusterIndex}/dismiss`, {
+export async function dismissCluster(clusterId: string): Promise<{ person_id: string }> {
+  return apiFetch<{ person_id: string }>(`/faces/clusters/${clusterId}/dismiss`, {
     method: "POST",
   });
 }
@@ -671,10 +676,10 @@ export interface ClusterFacesResponse {
 }
 
 /** List all faces in a cluster, paginated. */
-export async function listClusterFaces(clusterIndex: number, cursor?: string, limit = 50): Promise<ClusterFacesResponse> {
+export async function listClusterFaces(clusterId: string, cursor?: string, limit = 50): Promise<ClusterFacesResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (cursor) params.set("after", cursor);
-  return apiFetch<ClusterFacesResponse>(`/faces/clusters/${clusterIndex}/faces?${params}`);
+  return apiFetch<ClusterFacesResponse>(`/faces/clusters/${clusterId}/faces?${params}`);
 }
 
 /** Assign a face to a person (existing or new). */
@@ -732,6 +737,8 @@ export interface Playback {
   source: "analysis_proxy" | "preview";
   /** Seconds the link plays; null means the whole video. */
   max_seconds: number | null;
+  /** False while the capped copy is made: ask again shortly (the link answers 503 until then). */
+  ready: boolean;
 }
 
 export async function getPlayback(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<Playback> {
@@ -1296,12 +1303,11 @@ export async function restoreProject(
   });
 }
 
-/** Delete trashed projects for good: these ones, or the whole trash. Their
- * clips stay in the library. */
-export async function emptyProjectTrash(projectIds?: string[]): Promise<{ deleted: number }> {
+/** Delete these trashed projects for good. Their clips stay in the library. */
+export async function emptyProjectTrash(projectIds: string[]): Promise<{ deleted: number }> {
   return apiFetch<{ deleted: number }>("/projects/empty-trash", {
     method: "POST",
-    body: projectIds ? { project_ids: projectIds } : {},
+    body: { project_ids: projectIds },
   });
 }
 
@@ -1510,7 +1516,7 @@ export async function exportProject(projectId: string, format: string): Promise<
     let message = `Export failed (${res.status})`;
     try {
       const body = await res.json();
-      message = body?.error?.message ?? body?.detail ?? message;
+      message = body?.error?.message ?? message;
     } catch {
       /* not JSON */
     }

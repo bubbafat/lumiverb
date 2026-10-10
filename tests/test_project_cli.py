@@ -237,10 +237,10 @@ def test_restore_clips() -> None:
 
 def test_empty_trash_asks_first() -> None:
     client = _trash_client()
-    result = _run(client, "empty-trash", input="n\n")
+    result = _run(client, "empty-trash", "--all", input="n\n")
     assert result.exit_code == 0, result.output
     client.post.assert_not_called()
-    result = _run(client, "empty-trash", input="y\n")
+    result = _run(client, "empty-trash", "--all", input="y\n")
     # Exactly the projects it listed, not whatever is in the trash by now.
     client.post.assert_called_once_with("/v1/projects/empty-trash", json={"project_ids": ["prj_1"]})
 
@@ -255,8 +255,17 @@ def test_empty_trash_named_projects_without_asking() -> None:
 def test_empty_trash_when_empty() -> None:
     client = _trash_client()
     client.get.return_value.json.return_value = {"items": []}
-    result = _run(client, "empty-trash", "--yes")
+    result = _run(client, "empty-trash", "--all", "--yes")
     assert "The trash is empty" in result.output
+    client.post.assert_not_called()
+
+
+@pytest.mark.parametrize("args", [[], ["--yes"], ["--id", "prj_1", "--all"]])
+def test_empty_trash_needs_ids_or_all(args) -> None:
+    """Never the whole trash by leaving out --id."""
+    client = _trash_client()
+    result = _run(client, "empty-trash", *args, input="y\n")
+    assert result.exit_code == 2, result.output
     client.post.assert_not_called()
 
 

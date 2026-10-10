@@ -95,7 +95,7 @@ def project_show(
 
     if json:
         # Also fetch assets
-        assets_resp = client.get(f"/v1/projects/{project_id}/assets?limit=1000")
+        assets_resp = client.get(f"/v1/projects/{project_id}/assets?limit=500")
         assets_data = assets_resp.json()
         import json as _json
         console.print(_json.dumps({"project": col, "assets": assets_data}, indent=2))
@@ -284,12 +284,16 @@ def project_restore_clips(
 @projects_app.command("empty-trash")
 def project_empty_trash(
     project_ids: Annotated[
-        list[str] | None, typer.Option("--id", help="Only these trashed projects (repeatable).")
+        list[str] | None, typer.Option("--id", help="These trashed projects (repeatable).")
     ] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every project in your trash.")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
 ) -> None:
-    """Delete trashed projects for good: the named ones, or your whole trash.
-    Their clips stay in your libraries."""
+    """Delete trashed projects for good: the named ones (--id), or your whole
+    trash (--all). Their clips stay in your libraries."""
+    if bool(project_ids) == all_:
+        console.print("[red]Give --id, or --all for your whole trash.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     trashed = client.get("/v1/projects", params={"status": "trashed"}).json().get("items", [])
     if project_ids:

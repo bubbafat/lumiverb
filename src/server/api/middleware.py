@@ -43,7 +43,7 @@ def _error_response(status_code: int, code: str, message: str, details: dict | N
 
 # Routes where an unauthenticated GET may resolve the tenant from a library_id.
 _PUBLIC_ELIGIBLE_PATH = re.compile(
-    r"^/v1/(libraries/[^/]+|assets/[^/]+|search|similar|query)"
+    r"^/v1/(libraries/[^/]+|assets/[^/]+|similar|query)"
 )
 
 
@@ -150,7 +150,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
         if request.method == "GET" and _PUBLIC_ELIGIBLE_PATH.match(request.url.path):
             library_id = (
                 _extract_library_id_from_path(request.url.path)
-                or request.query_params.get("library_id")        # /search, /similar, /assets/page
+                or request.query_params.get("library_id")        # /similar, /assets/page
                 or request.query_params.get("public_library_id") # /assets/{id}/...
                 or _extract_library_from_f_params(request.query_params)  # /query?f=library:xxx
             )

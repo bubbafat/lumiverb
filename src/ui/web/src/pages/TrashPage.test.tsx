@@ -66,7 +66,7 @@ describe("TrashPage", () => {
 
   it("deletes picked clips for good only after asking, and again about projects", async () => {
     const usage = { assets_in_projects: 1, projects: [{ project_id: "p", name: "Reel", status: "active", in_trash: false, clips: 1 }], other_projects: 0 };
-    api.emptyClipTrash.mockImplementation(async (_ids: string[] | undefined, remove: boolean) => {
+    api.emptyClipTrash.mockImplementation(async (_ids: string[] | "all", remove: boolean) => {
       if (!remove) throw new ApiError(409, "in projects", "in_projects", usage);
       return { deleted: 1 };
     });
@@ -90,7 +90,7 @@ describe("TrashPage", () => {
     expect(dialog.textContent).toMatch(/Every clip in the trash \(2 clips\)/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
     // Only what was listed: nothing trashed since it loaded.
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false,
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith("all", false,
       { libraryId: undefined, trashedBefore: "2026-10-08T12:00:00+00:00" }));
   });
 
@@ -107,7 +107,7 @@ describe("TrashPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "Empty Media's trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash of Media \(2 clips\)/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
-    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith(undefined, false,
+    await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith("all", false,
       { libraryId: "lib_1", trashedBefore: "2026-10-08T12:00:00+00:00" }));
   });
 

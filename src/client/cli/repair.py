@@ -524,7 +524,7 @@ def _face_batch_worker(
                     _cache_hits += 1
             if image_bytes is None:
                 _downloads += 1
-                resp = client._client.get(client._url(f"/v1/assets/{asset_id}/proxy"))
+                resp = client._client.get(client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code != 200:
                     skipped += 1
                     errors.append({"asset_id": asset_id, "rel_path": rel_path,

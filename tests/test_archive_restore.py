@@ -354,7 +354,7 @@ def test_emptying_the_trash_never_reaches_a_missing_files_clip(env):
     _archive(env, asset)
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset]}, headers=headers)
     assert r.json()["deleted"] == 0
-    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"all": True}, headers=headers)
     with _sessions(env, 1) as [(session, _)]:
         assert session.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"),
                                {"a": asset}).scalar() == "missing"

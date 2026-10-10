@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
 from src.server.api.errors import DecisionRequiredError
+from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, ProjectRepository
@@ -26,14 +27,18 @@ router = APIRouter()
 
 
 # The most clips a project is made with at once (asset_ids, or a search's matches).
-_MAX_NEW_CLIPS = 10_000
+_MAX_NEW_CLIPS = MAX_IDS
+
+# Anything else is a 422, like status.
+SortOrder = Literal["manual", "added_at", "taken_at"]
+Visibility = Literal["private", "shared", "public"]
 
 
 class CreateProjectRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
-    sort_order: str = "manual"
-    visibility: str = "private"  # private | shared | public
+    sort_order: SortOrder = "manual"
+    visibility: Visibility = "private"
     asset_ids: list[str] | None = Field(default=None, max_length=_MAX_NEW_CLIPS)
     # A search saved as a project (Robert, Oct 9): the clips that match it now,
     # an explicit list from then on. The query as GET /v1/query takes it, saved
@@ -44,8 +49,8 @@ class CreateProjectRequest(BaseModel):
 class UpdateProjectRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
-    visibility: str | None = None
-    sort_order: str | None = None
+    visibility: Visibility | None = None
+    sort_order: SortOrder | None = None
     cover_asset_id: str | None = None
     # Lifecycle: archived projects leave the default list (sidebar, pickers)
     # but keep their clips and stay readable and exportable.
@@ -85,8 +90,10 @@ class ProjectListResponse(BaseModel):
 
 
 class EmptyTrashRequest(BaseModel):
-    # Which trashed projects to delete for good; all of the caller's when omitted.
-    project_ids: list[str] | None = None
+    # Which trashed projects to delete for good, or all: true for the
+    # caller's whole trash. Neither is a 400.
+    project_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    all: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
@@ -113,7 +120,7 @@ class RestoreClipsResponse(BaseModel):
 
 
 class AssetIdsRequest(BaseModel):
-    asset_ids: list[str]
+    asset_ids: list[str] = Field(max_length=MAX_IDS)
 
 
 class BatchAddResponse(BaseModel):
@@ -144,15 +151,13 @@ class ProjectAssetsResponse(BaseModel):
 
 
 class ReorderRequest(BaseModel):
-    asset_ids: list[str]
+    asset_ids: list[str] = Field(max_length=MAX_IDS)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_SORT_ORDERS = {"manual", "added_at", "taken_at"}
-_VALID_VISIBILITIES = {"private", "shared", "public"}
 
 
 def _ownership_label(col, user_id: str) -> str:
@@ -242,10 +247,6 @@ def create_project(
     """Create a project owned by the current user: with asset_ids, or with
     the clips that match a search now (from_search; 422 search_too_big past
     10,000). A project is an explicit list either way (Robert, Oct 9)."""
-    if body.sort_order not in _VALID_SORT_ORDERS:
-        raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
-    if body.visibility not in _VALID_VISIBILITIES:
-        raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
     if body.asset_ids and body.from_search is not None:
         raise HTTPException(status_code=400, detail="Give asset_ids or from_search, not both")
     asset_ids = body.asset_ids
@@ -304,14 +305,16 @@ def empty_project_trash(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-    body: EmptyTrashRequest | None = None,
+    body: EmptyTrashRequest,
 ) -> EmptyTrashResponse:
     """Delete trashed projects for good: the named ones, or the caller's whole
-    trash. Only the caller's own trash; active projects are never touched.
-    The clips stay in their libraries."""
+    trash (all: true; neither or both is a 400 scope_required). Only the
+    caller's own trash; active projects are never touched. The clips stay
+    in their libraries."""
+    require_scope(body.project_ids is not None, body.all, "project_ids")
     repo = ProjectRepository(session)
     doomed = repo.list_trashed(user_id)
-    if body is not None and body.project_ids is not None:
+    if body.project_ids is not None:
         wanted = set(body.project_ids)
         doomed = [c for c in doomed if c.project_id in wanted]
     return EmptyTrashResponse(deleted=delete_projects_for_good(session, doomed))
@@ -378,12 +381,8 @@ def update_project(
     else:
         kwargs["description"] = _SENTINEL
     if body.visibility is not None:
-        if body.visibility not in _VALID_VISIBILITIES:
-            raise HTTPException(status_code=400, detail=f"Invalid visibility. Must be one of: {', '.join(_VALID_VISIBILITIES)}")
         kwargs["visibility"] = body.visibility
     if body.sort_order is not None:
-        if body.sort_order not in _VALID_SORT_ORDERS:
-            raise HTTPException(status_code=400, detail=f"Invalid sort_order. Must be one of: {', '.join(_VALID_SORT_ORDERS)}")
         kwargs["sort_order"] = body.sort_order
     if "cover_asset_id" in raw:
         kwargs["cover_asset_id"] = body.cover_asset_id
@@ -634,7 +633,7 @@ def list_project_assets(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     after: str | None = Query(None, description="Pagination cursor"),
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(200, ge=1, le=MAX_PAGE),
 ) -> ProjectAssetsResponse:
     """List assets in a project. Must be owner or project must be shared."""
     repo = ProjectRepository(session)

@@ -223,10 +223,19 @@ def test_deleting_missing_clips_in_projects_asks_about_them_too():
             {"project_id": "col_1", "name": "Promo", "asset_count": 1}]}}}),
         _answer(200, {"deleted": 1}),
     ]
-    result = _run(client, "archive", "delete-missing", input="y\ny\n")
+    result = _run(client, "archive", "delete-missing", "--all", input="y\ny\n")
     assert result.exit_code == 0, result.output
     assert "Promo" in result.output
-    assert client.raw.call_args.kwargs["json"] == {"count": 1, "missing_before": "t", "remove_from_projects": True}
+    assert client.raw.call_args.kwargs["json"] == {"all": True, "count": 1, "missing_before": "t",
+                                                   "remove_from_projects": True}
+
+
+def test_deleting_missing_clips_needs_a_library_or_all():
+    client = _client()
+    assert _run(client, "archive", "delete-missing", input="y\n").exit_code == 2
+    assert _run(client, "archive", "delete-missing", "--library", "Media", "--all").exit_code == 2
+    assert _run(client, "archive", "delete-missing", "--all", "--folder", "x").exit_code == 2
+    client.raw.assert_not_called()
 
 
 def test_emptying_asks_first_and_names_what_goes():
@@ -249,7 +258,8 @@ def test_emptying_one_librarys_trash():
     result = _run(client, "trash", "empty", "--all", "--library", "Media", "--folder", "x", input="y\n")
     assert result.exit_code == 0, result.output
     assert "every clip in the trash in Media under 'x'" in result.output
-    assert client.raw.call_args.kwargs["json"] == {"library_id": "lib_1", "path": "x", "remove_from_projects": False}
+    assert client.raw.call_args.kwargs["json"] == {"all": True, "library_id": "lib_1", "path": "x",
+                                                   "remove_from_projects": False}
     assert _run(client, "trash", "empty", "a1", "--library", "Media").exit_code == 2
 
 
@@ -260,7 +270,34 @@ def test_emptying_everything_needs_all():
     client.raw.return_value = _answer(200, {"deleted": 7})
     result = _run(client, "trash", "empty", "--all", "--yes")
     assert result.exit_code == 0, result.output
-    assert client.raw.call_args.kwargs["json"] == {"remove_from_projects": False}
+    assert client.raw.call_args.kwargs["json"] == {"all": True, "remove_from_projects": False}
+
+
+@pytest.mark.parametrize("args", [
+    ["filter", "add", "**/Output/**", "--exclude"],
+    ["filter", "remove", "lpf_1"],
+    ["filter", "add", "**/Output/**", "--exclude", "--library", "Media", "--tenant-default"],
+])
+def test_a_filter_change_says_where(args):
+    """No silent fall back to the account's defaults: --library or --tenant-default."""
+    client = _client()
+    result = _run(client, *args)
+    assert result.exit_code == 2, result.output
+    client.post.assert_not_called()
+    client.delete.assert_not_called()
+
+
+def test_tenant_default_filters_are_asked_for_by_name():
+    client = _client(**{"/v1/tenant/filter-defaults": {"default_id": "tpfd_1"}})
+    result = _run(client, "filter", "add", "**/Output/**", "--exclude", "--tenant-default")
+    assert result.exit_code == 0, result.output
+    assert client.post.call_args.args[0] == "/v1/tenant/filter-defaults"
+    result = _run(client, "filter", "remove", "tpfd_1", "--tenant-default")
+    assert result.exit_code == 0, result.output
+    client.delete.assert_called_with("/v1/tenant/filter-defaults/tpfd_1")
+    result = _run(client, "filter", "add", "**/x/**", "--include", "--library", "Media")
+    assert result.exit_code == 0, result.output
+    assert client.post.call_args.args[0] == "/v1/libraries/lib_1/filters"
 
 
 # ---------------------------------------------------------------------------

@@ -99,7 +99,7 @@ def test_emptying_one_librarys_trash_leaves_the_others(env):
     b = _ingest(b_env, "x/b.mov", sha=_sha())
     _trash(env, a, a_other, b)
 
-    r = client.request("DELETE", "/v1/trash/empty", json={"library_id": a_env[2], "path": "x"}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"all": True, "library_id": a_env[2], "path": "x"}, headers=headers)
     assert r.status_code == 200 and r.json()["deleted"] == 1, r.text
     assert not _exists(env, "assets", "asset_id", a)
     assert _reason(env, a_other) == "user" and _reason(env, b) == "user"
@@ -112,7 +112,7 @@ def test_emptying_everything_leaves_a_trashed_librarys_clips_to_the_library(env)
     clip = _ingest(lib_env, "a.mov", sha=_sha())
     _trash(env, clip)
     assert client.delete(f"/v1/libraries/{lib_env[2]}", headers=headers).status_code == 204
-    client.request("DELETE", "/v1/trash/empty", json={}, headers=headers)
+    client.request("DELETE", "/v1/trash/empty", json={"all": True}, headers=headers)
     assert _reason(env, clip) == "user"
     # ...and the automatic purge leaves it to the library as well.
     _age(env, "assets", "deleted_at", "asset_id", clip, 400)
@@ -340,9 +340,9 @@ def test_a_public_page_never_shows_a_hidden_clips_picture(env):
     clip = _ingest(env, "pub/hidden.jpg", media_type="image", sha=_sha())
     assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=headers).status_code == 200
     try:
-        assert client.get(f"/v1/assets/{clip}/thumbnail", params={"public_library_id": library_id}).status_code == 200
+        assert client.get(f"/v1/assets/{clip}/artifacts/thumbnail", params={"public_library_id": library_id}).status_code == 200
         client.post("/v1/assets/archive", json={"asset_ids": [clip]}, headers=headers)
-        r = client.get(f"/v1/assets/{clip}/thumbnail", params={"public_library_id": library_id})
+        r = client.get(f"/v1/assets/{clip}/artifacts/thumbnail", params={"public_library_id": library_id})
         assert r.status_code == 404
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=headers)
@@ -363,7 +363,7 @@ def test_emptying_what_was_listed_leaves_what_was_trashed_since(env):
     time.sleep(0.05)
     later = _ingest(lib_env, "later.mov", sha=_sha())
     _trash(env, later)  # trashed after the view loaded: never shown
-    r = client.request("DELETE", "/v1/trash/empty", json={"library_id": lib_env[2], "trashed_before": page["listed_at"]},
+    r = client.request("DELETE", "/v1/trash/empty", json={"all": True, "library_id": lib_env[2], "trashed_before": page["listed_at"]},
                        headers=headers)
     assert r.json()["deleted"] == 1
     assert not _exists(env, "assets", "asset_id", shown) and _reason(env, later) == "user"

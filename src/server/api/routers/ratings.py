@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.models.tenant import VALID_COLORS
 from src.server.repository.tenant import AssetRepository, LibraryRepository, RatingRepository, _SENTINEL
 
@@ -49,21 +50,12 @@ class RatingUpdate(BaseModel):
 
 
 class BatchRatingUpdate(BaseModel):
-    asset_ids: list[str]
+    asset_ids: list[str] = Field(min_length=1, max_length=MAX_IDS)
     favorite: bool | None = None
     stars: int | None = None
     color: str | None = None
 
     _color_provided: bool = False
-
-    @field_validator("asset_ids")
-    @classmethod
-    def validate_asset_ids(cls, v: list[str]) -> list[str]:
-        if not v:
-            raise ValueError("asset_ids must not be empty")
-        if len(v) > 1000:
-            raise ValueError("asset_ids must not exceed 1000")
-        return v
 
     @field_validator("stars")
     @classmethod
@@ -81,14 +73,7 @@ class BatchRatingUpdate(BaseModel):
 
 
 class RatingLookupRequest(BaseModel):
-    asset_ids: list[str]
-
-    @field_validator("asset_ids")
-    @classmethod
-    def validate_asset_ids(cls, v: list[str]) -> list[str]:
-        if len(v) > 1000:
-            raise ValueError("asset_ids must not exceed 1000")
-        return v
+    asset_ids: list[str] = Field(max_length=MAX_IDS)
 
 
 class RatingResponse(BaseModel):
@@ -229,13 +214,9 @@ def list_favorites(
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     after: str | None = None,
-    limit: int = 200,
+    limit: int = Query(default=200, ge=1, le=MAX_PAGE),
 ) -> dict:
     """List favorited assets across all libraries, newest first."""
-    if limit > 500:
-        limit = 500
-    if limit < 1:
-        limit = 1
 
     rating_repo = RatingRepository(session)
     assets, next_cursor = rating_repo.list_favorites(user_id, after=after, limit=limit)

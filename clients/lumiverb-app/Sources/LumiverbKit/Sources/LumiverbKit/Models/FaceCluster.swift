@@ -7,19 +7,23 @@ import Foundation
 ///
 /// `faces` is a small *sample* (server cap: `faces_per_cluster`, default 6,
 /// max 20) of representative faces for thumbnail display. To page through
-/// every face in the cluster, call `GET /v1/faces/clusters/{i}/faces`
+/// every face in the cluster, call `GET /v1/faces/clusters/{id}/faces`
 /// which returns the full list via `ClusterFacesResponse`.
+///
+/// `clusterId` names the cluster by its faces, so it's the same whenever
+/// the clusters are computed. A route given one that no longer matches a
+/// cluster answers 409 `cluster_changed`: load the clusters again.
 public struct ClusterItem: Decodable, Identifiable, Sendable {
-    public let clusterIndex: Int
+    public let clusterId: String
     public let size: Int
     public let faces: [PersonFaceItem]
 
-    public var id: Int { clusterIndex }
+    public var id: String { clusterId }
 }
 
 /// Response from `GET /v1/faces/clusters`. **Not** cursor-paginated — this
 /// is a bounded summary view (max 50 clusters per response). Pagination
-/// for individual cluster contents lives on `/clusters/{i}/faces`.
+/// for individual cluster contents lives on `/clusters/{id}/faces`.
 ///
 /// `truncated` is true when the underlying SQL hit its `max_faces` cap
 /// (5,000 unassigned faces), meaning there are more faces in the database
@@ -29,15 +33,21 @@ public struct ClusterItem: Decodable, Identifiable, Sendable {
 /// `maxClusterSize` is the size of the largest cluster *before* the
 /// per-response cluster cap, useful for showing aggregate stats even when
 /// the cluster list itself is truncated.
+///
+/// Reading the clusters never computes them: upkeep does, every few
+/// minutes when faces changed. `computedAt` (ISO 8601) says when; nil
+/// before the first time. `pending` says faces changed since.
 public struct ClustersResponse: Decodable, Sendable {
     public let clusters: [ClusterItem]
     public let truncated: Bool
     public let maxClusterSize: Int
+    public let computedAt: String?
+    public let pending: Bool
 }
 
 // MARK: - Cluster detail (full face list for one cluster)
 
-/// Response from `GET /v1/faces/clusters/{cluster_index}/faces` — the full
+/// Response from `GET /v1/faces/clusters/{cluster_id}/faces` — the full
 /// face list for one cluster, cursor-paginated.
 ///
 /// Used when the user expands a `ClusterCard` to "see all" faces, and by
@@ -51,7 +61,7 @@ public struct ClusterFacesResponse: Decodable, Sendable {
 
 // MARK: - Cluster mutations
 
-/// Body for `POST /v1/faces/clusters/{cluster_index}/name`.
+/// Body for `POST /v1/faces/clusters/{cluster_id}/name`.
 ///
 /// Two mutually-exclusive modes:
 /// - **Create new person**: pass `displayName` only. The server creates a
@@ -79,7 +89,7 @@ public struct ClusterNameRequest: Encodable, Sendable {
     }
 }
 
-/// Response from `POST /v1/faces/clusters/{cluster_index}/dismiss`.
+/// Response from `POST /v1/faces/clusters/{cluster_id}/dismiss`.
 ///
 /// `personId` is the ID of the *dismissed person* the server creates to
 /// represent this rejected cluster — the cluster's faces get attached to

@@ -155,9 +155,9 @@ function ClusterCard({
   cluster: ClusterItem;
   people: PersonItem[];
   fading: false | "locked" | "fading";
-  onProcessed: (clusterIndex: number) => void;
-  onDismissStarted: (clusterIndex: number) => void;
-  onDismissComplete: (clusterIndex: number, personId: string) => void;
+  onProcessed: (clusterId: string) => void;
+  onDismissStarted: (clusterId: string) => void;
+  onDismissComplete: (clusterId: string, personId: string) => void;
 }) {
   const [mode, setMode] = useState<"idle" | "name" | "assign">("idle");
   const [expanded, setExpanded] = useState(false);
@@ -168,8 +168,8 @@ function ClusterCard({
 
   // Fetch nearest people when assign mode opens
   const nearestQuery = useQuery({
-    queryKey: ["nearest-people", cluster.cluster_index],
-    queryFn: () => getNearestPeople(cluster.cluster_index, 5),
+    queryKey: ["nearest-people", cluster.cluster_id],
+    queryFn: () => getNearestPeople(cluster.cluster_id, 5),
     enabled: mode === "assign",
     staleTime: Infinity,
   });
@@ -192,8 +192,8 @@ function ClusterCard({
   }, [assignSearch, mode]);
 
   const allFacesQuery = useInfiniteQuery({
-    queryKey: ["cluster-faces", cluster.cluster_index],
-    queryFn: ({ pageParam }) => listClusterFaces(cluster.cluster_index, pageParam, 50),
+    queryKey: ["cluster-faces", cluster.cluster_id],
+    queryFn: ({ pageParam }) => listClusterFaces(cluster.cluster_id, pageParam, 50),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: expanded,
@@ -240,27 +240,27 @@ function ClusterCard({
 
   const nameMutation = useMutation({
     mutationFn: (name: string) =>
-      nameCluster(cluster.cluster_index, { displayName: name }),
+      nameCluster(cluster.cluster_id, { displayName: name }),
     onSuccess: () => {
-      onProcessed(cluster.cluster_index);
+      onProcessed(cluster.cluster_id);
     },
   });
 
   const assignMutation = useMutation({
     mutationFn: (personId: string) =>
-      nameCluster(cluster.cluster_index, { personId, displayName: "" }),
+      nameCluster(cluster.cluster_id, { personId, displayName: "" }),
     onSuccess: () => {
-      onProcessed(cluster.cluster_index);
+      onProcessed(cluster.cluster_id);
     },
   });
 
   const dismissMutation = useMutation({
     mutationFn: () => {
-      onDismissStarted(cluster.cluster_index);
-      return dismissCluster(cluster.cluster_index);
+      onDismissStarted(cluster.cluster_id);
+      return dismissCluster(cluster.cluster_id);
     },
     onSuccess: (data) => {
-      onDismissComplete(cluster.cluster_index, data.person_id);
+      onDismissComplete(cluster.cluster_id, data.person_id);
     },
   });
 
@@ -479,13 +479,13 @@ export default function PeoplePage() {
   // Remembered per viewer; one it doesn't know is the default.
   const [storedSort, setStoredSort] = useLocalStorage<unknown>("lv_cluster_sort", "size_desc");
   const sort: ClusterSort = isClusterSort(storedSort) ? storedSort : "size_desc";
-  // Track removed cluster indices for optimistic updates — prevents
+  // Track removed cluster ids for optimistic updates — prevents
   // named/dismissed clusters from re-appearing until next manual refresh.
-  const [removedIndices, setRemovedIndices] = useState<Set<number>>(new Set());
+  const [removedIndices, setRemovedIndices] = useState<Set<string>>(new Set());
   // Track clusters currently fading out: "locked" (desaturated) → "fading" (fade out) → removed
-  const [fadingIndices, setFadingIndices] = useState<Map<number, "locked" | "fading">>(new Map());
+  const [fadingIndices, setFadingIndices] = useState<Map<string, "locked" | "fading">>(new Map());
   // Undo state for dismissed clusters — personId is null until API responds
-  const [undoState, setUndoState] = useState<{ clusterIndex: number; personId: string | null; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const [undoState, setUndoState] = useState<{ clusterId: string; personId: string | null; timer: ReturnType<typeof setTimeout> } | null>(null);
 
   const peopleQuery = useInfiniteQuery({
     queryKey: ["people"],
@@ -511,7 +511,7 @@ export default function PeoplePage() {
 
   // Filter out removed clusters, then apply the min size filter (client-side, no re-fetch)
   const remaining = useMemo(
-    () => allClusters.filter((c) => !removedIndices.has(c.cluster_index)),
+    () => allClusters.filter((c) => !removedIndices.has(c.cluster_id)),
     [allClusters, removedIndices],
   );
   const clusters = useMemo(() => remaining.filter((c) => c.size >= minClusterSize), [remaining, minClusterSize]);
@@ -527,35 +527,35 @@ export default function PeoplePage() {
     }
   }, [allClusters.length, remaining.length, removedIndices.size, queryClient]);
 
-  const startFadeSequence = useCallback((clusterIndex: number) => {
+  const startFadeSequence = useCallback((clusterId: string) => {
     // Phase 1: lock (desaturated, disabled) for 400ms
-    setFadingIndices((prev) => new Map(prev).set(clusterIndex, "locked"));
+    setFadingIndices((prev) => new Map(prev).set(clusterId, "locked"));
     setTimeout(() => {
       // Phase 2: fade out over 300ms
-      setFadingIndices((prev) => new Map(prev).set(clusterIndex, "fading"));
+      setFadingIndices((prev) => new Map(prev).set(clusterId, "fading"));
       setTimeout(() => {
         // Phase 3: remove from DOM
-        setFadingIndices((prev) => { const next = new Map(prev); next.delete(clusterIndex); return next; });
-        setRemovedIndices((prev) => new Set(prev).add(clusterIndex));
+        setFadingIndices((prev) => { const next = new Map(prev); next.delete(clusterId); return next; });
+        setRemovedIndices((prev) => new Set(prev).add(clusterId));
       }, 300);
     }, 400);
   }, []);
 
-  const handleClusterProcessed = useCallback((clusterIndex: number) => {
-    startFadeSequence(clusterIndex);
+  const handleClusterProcessed = useCallback((clusterId: string) => {
+    startFadeSequence(clusterId);
     queryClient.invalidateQueries({ queryKey: ["people"] });
   }, [queryClient, startFadeSequence]);
 
-  const handleDismissStarted = useCallback((clusterIndex: number) => {
-    startFadeSequence(clusterIndex);
+  const handleDismissStarted = useCallback((clusterId: string) => {
+    startFadeSequence(clusterId);
     if (undoState) clearTimeout(undoState.timer);
     const timer = setTimeout(() => setUndoState(null), 5000);
-    setUndoState({ clusterIndex, personId: null, timer });
+    setUndoState({ clusterId, personId: null, timer });
   }, [startFadeSequence, undoState]);
 
-  const handleDismissComplete = useCallback((clusterIndex: number, personId: string) => {
+  const handleDismissComplete = useCallback((clusterId: string, personId: string) => {
     // Fill in the personId so undo becomes available
-    setUndoState((prev) => prev && prev.clusterIndex === clusterIndex ? { ...prev, personId } : prev);
+    setUndoState((prev) => prev && prev.clusterId === clusterId ? { ...prev, personId } : prev);
     queryClient.invalidateQueries({ queryKey: ["people"] });
   }, [queryClient]);
 
@@ -565,14 +565,14 @@ export default function PeoplePage() {
     try {
       await deletePerson(undoState.personId);
       // Re-add the cluster to view and mark clusters dirty for next refresh
-      setRemovedIndices((prev) => { const next = new Set(prev); next.delete(undoState.clusterIndex); return next; });
+      setRemovedIndices((prev) => { const next = new Set(prev); next.delete(undoState.clusterId); return next; });
       queryClient.invalidateQueries({ queryKey: ["people"] });
     } catch { /* ignore */ }
     setUndoState(null);
   }, [undoState, queryClient]);
 
-  // Another order is another load, whose cluster_index can name other clusters:
-  // nothing kept from this one (removed, fading, undo, a card's faces or nearest people) carries over.
+  // Another order is another load: nothing kept from this one (removed,
+  // fading, undo, a card's faces or nearest people) carries over.
   const handleSortChange = useCallback((next: ClusterSort) => {
     if (undoState) { clearTimeout(undoState.timer); setUndoState(null); }
     queryClient.removeQueries({ queryKey: ["face-clusters"] });
@@ -644,9 +644,16 @@ export default function PeoplePage() {
                 </span>
               )}
             </button>
-            {clustersQuery.isFetching && (
+            {clustersQuery.isFetching ? (
               <span className="text-xs text-gray-500">loading…</span>
-            )}
+            ) : clustersQuery.data?.pending ? (
+              <span
+                className="text-xs text-gray-500"
+                title={clustersQuery.data.computed_at ? `Grouped ${new Date(clustersQuery.data.computed_at).toLocaleString()}` : undefined}
+              >
+                Updating
+              </span>
+            ) : null}
             {removedIndices.size > 0 && !clustersQuery.isFetching && (
               <button
                 type="button"
@@ -715,10 +722,10 @@ export default function PeoplePage() {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                   {clusters.map((cluster) => (
                     <ClusterCard
-                      key={cluster.cluster_index}
+                      key={cluster.cluster_id}
                       cluster={cluster}
                       people={people}
-                      fading={fadingIndices.get(cluster.cluster_index) ?? false}
+                      fading={fadingIndices.get(cluster.cluster_id) ?? false}
                       onProcessed={handleClusterProcessed}
                       onDismissStarted={handleDismissStarted}
                       onDismissComplete={handleDismissComplete}

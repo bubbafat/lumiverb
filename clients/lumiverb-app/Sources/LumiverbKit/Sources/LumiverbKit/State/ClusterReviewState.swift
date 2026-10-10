@@ -6,9 +6,9 @@ import SwiftUI
 /// `GET /v1/faces/clusters` summary endpoint. Each cluster card has its
 /// own lazy nearest-people fetch (cached here so revisiting doesn't
 /// re-hit the server) and its own optimistic removal on a successful
-/// name / dismiss — the server's cluster cache preserves indices across
-/// rapid mutations so the unnamed cards don't shuffle as the user works
-/// down the list.
+/// name / dismiss. Clusters are named by `clusterId` (their faces), so a
+/// card keeps naming the same faces however the list is reloaded; one that
+/// changed since answers 409 cluster_changed.
 @MainActor
 public final class ClusterReviewState: ObservableObject {
 
@@ -17,28 +17,29 @@ public final class ClusterReviewState: ObservableObject {
     @Published public var clusters: [ClusterItem] = []
     @Published public var truncated: Bool = false
     @Published public var maxClusterSize: Int = 0
+    /// Faces changed since the clusters were computed; upkeep regroups them.
+    @Published public var pending: Bool = false
     @Published public var isLoading: Bool = false
     @Published public var error: String?
 
     // MARK: - Per-cluster suggestion cache
 
-    /// Lazily-fetched nearest-people suggestions, keyed by `clusterIndex`.
-    /// Cleared whenever `loadClusters()` runs because cluster indices
-    /// rebind to new content after a recompute.
-    @Published public var nearestPeople: [Int: [NearestPersonItem]] = [:]
-    private var inFlightNearest: Set<Int> = []
+    /// Lazily-fetched nearest-people suggestions, keyed by `clusterId`.
+    /// Cleared whenever `loadClusters()` runs, since named people change them.
+    @Published public var nearestPeople: [String: [NearestPersonItem]] = [:]
+    private var inFlightNearest: Set<String> = []
 
     // MARK: - Per-cluster mutation state
 
-    /// Cluster indices currently being named/dismissed. Drives spinners
+    /// Clusters currently being named/dismissed. Drives spinners
     /// and disables further actions on those cards.
-    @Published public var pendingMutations: Set<Int> = []
+    @Published public var pendingMutations: Set<String> = []
 
     /// Last dismiss result, for the undo toast. The server returns the
     /// dismissed-person id; deleting that person undoes the dismissal
     /// (Phase 6 M5 toast window — auto-clears after 5s).
     @Published public var lastDismissedPersonId: String?
-    @Published public var lastDismissedClusterIndex: Int?
+    @Published public var lastDismissedClusterId: String?
     private var undoExpiryTask: Task<Void, Never>?
 
     public init(client: APIClient?) {
@@ -55,9 +56,8 @@ public final class ClusterReviewState: ObservableObject {
         }
     }
 
-    /// Force a fresh fetch — triggers server-side recompute if the cache
-    /// has been marked dirty by recent mutations. Resets per-cluster
-    /// caches because indices rebind to new content.
+    /// Fetch the clusters as upkeep last computed them (reading never
+    /// recomputes; `pending` says faces changed since).
     func loadClusters() async {
         guard let client else { return }
 
@@ -65,7 +65,6 @@ public final class ClusterReviewState: ObservableObject {
         error = nil
         defer { isLoading = false }
 
-        // Reset stale per-cluster state — indices won't survive a recompute.
         nearestPeople = [:]
 
         do {
@@ -80,6 +79,7 @@ public final class ClusterReviewState: ObservableObject {
             clusters = response.clusters
             truncated = response.truncated
             maxClusterSize = response.maxClusterSize
+            pending = response.pending
         } catch {
             if Self.isCancellation(error) { return }
             self.error = "Failed to load clusters: \(error)"
@@ -88,26 +88,26 @@ public final class ClusterReviewState: ObservableObject {
 
     // MARK: - Nearest people (suggestions)
 
-    /// Lazy fetch of suggested people for `clusterIndex`. Idempotent —
+    /// Lazy fetch of suggested people for `clusterId`. Idempotent —
     /// safe to call from `onAppear` on every card; the in-flight set
-    /// prevents duplicate parallel fetches for the same index.
-    func loadNearestPeople(forCluster clusterIndex: Int) async {
+    /// prevents duplicate parallel fetches for the same cluster.
+    func loadNearestPeople(forCluster clusterId: String) async {
         guard let client else { return }
-        if nearestPeople[clusterIndex] != nil { return }
-        if inFlightNearest.contains(clusterIndex) { return }
-        inFlightNearest.insert(clusterIndex)
-        defer { inFlightNearest.remove(clusterIndex) }
+        if nearestPeople[clusterId] != nil { return }
+        if inFlightNearest.contains(clusterId) { return }
+        inFlightNearest.insert(clusterId)
+        defer { inFlightNearest.remove(clusterId) }
 
         do {
             let people: [NearestPersonItem] = try await client.get(
-                "/v1/faces/clusters/\(clusterIndex)/nearest-people",
+                "/v1/faces/clusters/\(clusterId)/nearest-people",
                 query: ["limit": "5"]
             )
-            nearestPeople[clusterIndex] = people
+            nearestPeople[clusterId] = people
         } catch {
             // Non-fatal — empty suggestion list is the fallback.
             if !Self.isCancellation(error) {
-                nearestPeople[clusterIndex] = []
+                nearestPeople[clusterId] = []
             }
         }
     }
@@ -116,22 +116,22 @@ public final class ClusterReviewState: ObservableObject {
 
     /// Create a new person from this whole cluster, then optimistically
     /// drop the card from the visible list.
-    func nameCluster(_ clusterIndex: Int, newPersonName name: String) async {
+    func nameCluster(_ clusterId: String, newPersonName name: String) async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        await mutate(clusterIndex) { client in
+        await mutate(clusterId) { client in
             let _: PersonItem = try await client.post(
-                "/v1/faces/clusters/\(clusterIndex)/name",
+                "/v1/faces/clusters/\(clusterId)/name",
                 body: ClusterNameRequest(newPersonName: trimmed)
             )
         }
     }
 
     /// Merge this whole cluster into an existing person.
-    func mergeCluster(_ clusterIndex: Int, intoPersonId personId: String) async {
-        await mutate(clusterIndex) { client in
+    func mergeCluster(_ clusterId: String, intoPersonId personId: String) async {
+        await mutate(clusterId) { client in
             let _: PersonItem = try await client.post(
-                "/v1/faces/clusters/\(clusterIndex)/name",
+                "/v1/faces/clusters/\(clusterId)/name",
                 body: ClusterNameRequest(existingPersonId: personId)
             )
         }
@@ -140,17 +140,17 @@ public final class ClusterReviewState: ObservableObject {
     /// Dismiss the cluster as not-a-person (or noise). Captures the new
     /// dismissed-person id so the undo toast can DELETE it inside the
     /// 5-second window.
-    func dismissCluster(_ clusterIndex: Int) async {
+    func dismissCluster(_ clusterId: String) async {
         guard let client else { return }
-        pendingMutations.insert(clusterIndex)
-        defer { pendingMutations.remove(clusterIndex) }
+        pendingMutations.insert(clusterId)
+        defer { pendingMutations.remove(clusterId) }
 
         do {
             let result: ClusterDismissResult = try await client.post(
-                "/v1/faces/clusters/\(clusterIndex)/dismiss"
+                "/v1/faces/clusters/\(clusterId)/dismiss"
             )
-            removeCluster(clusterIndex)
-            startUndoWindow(personId: result.personId, clusterIndex: clusterIndex)
+            removeCluster(clusterId)
+            startUndoWindow(personId: result.personId, clusterId: clusterId)
         } catch {
             if Self.isCancellation(error) { return }
             self.error = "Failed to dismiss cluster: \(error)"
@@ -165,8 +165,8 @@ public final class ClusterReviewState: ObservableObject {
         cancelUndoWindow()
         do {
             try await client.delete("/v1/people/\(personId)")
-            // Reload — the unassigned faces will reform a cluster (likely
-            // at a new index after the cache recomputes).
+            // Reload — the faces come back as a cluster once upkeep
+            // computes them again.
             await loadClusters()
         } catch {
             if Self.isCancellation(error) { return }
@@ -174,16 +174,16 @@ public final class ClusterReviewState: ObservableObject {
         }
     }
 
-    private func startUndoWindow(personId: String, clusterIndex: Int) {
+    private func startUndoWindow(personId: String, clusterId: String) {
         cancelUndoWindow()
         lastDismissedPersonId = personId
-        lastDismissedClusterIndex = clusterIndex
+        lastDismissedClusterId = clusterId
         undoExpiryTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.lastDismissedPersonId = nil
-                self?.lastDismissedClusterIndex = nil
+                self?.lastDismissedClusterId = nil
             }
         }
     }
@@ -192,7 +192,7 @@ public final class ClusterReviewState: ObservableObject {
         undoExpiryTask?.cancel()
         undoExpiryTask = nil
         lastDismissedPersonId = nil
-        lastDismissedClusterIndex = nil
+        lastDismissedClusterId = nil
     }
 
     // MARK: - Helpers
@@ -200,24 +200,24 @@ public final class ClusterReviewState: ObservableObject {
     /// Run a name/merge mutation, then optimistically drop the card.
     /// Errors land on `self.error` so the user can retry from a banner.
     private func mutate(
-        _ clusterIndex: Int,
+        _ clusterId: String,
         op: (APIClient) async throws -> Void
     ) async {
         guard let client else { return }
-        pendingMutations.insert(clusterIndex)
-        defer { pendingMutations.remove(clusterIndex) }
+        pendingMutations.insert(clusterId)
+        defer { pendingMutations.remove(clusterId) }
         do {
             try await op(client)
-            removeCluster(clusterIndex)
+            removeCluster(clusterId)
         } catch {
             if Self.isCancellation(error) { return }
             self.error = "Failed to update cluster: \(error)"
         }
     }
 
-    private func removeCluster(_ clusterIndex: Int) {
-        clusters.removeAll { $0.clusterIndex == clusterIndex }
-        nearestPeople.removeValue(forKey: clusterIndex)
+    private func removeCluster(_ clusterId: String) {
+        clusters.removeAll { $0.clusterId == clusterId }
+        nearestPeople.removeValue(forKey: clusterId)
     }
 
     private static func isCancellation(_ error: Error) -> Bool {

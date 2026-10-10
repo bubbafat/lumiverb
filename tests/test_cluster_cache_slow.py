@@ -1,11 +1,12 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
 """The face cluster cache (GET /v1/faces/clusters).
 
-Served while nothing that changes which faces are clustered has happened
-since it was computed; computed again once something has: a clip trashed,
-restored, archived, missing, purged, its library trashed, a face found,
-named or un-named. The database says so (triggers on assets, faces and
-face_person_matches), so no path that changes those can forget to.
+Reading it never computes it. Upkeep computes it again once something
+changed which faces are clustered since it was: a clip trashed, restored,
+archived, missing, purged, its library trashed, a face found, named or
+un-named; until then the GET says pending. The database says so (triggers
+on assets, faces and face_person_matches), so no path that changes those
+can forget to.
 """
 
 from __future__ import annotations
@@ -56,13 +57,17 @@ def _db(env):
 
 
 class _Load:
-    """GET /v1/faces/clusters, counting the computations it takes."""
+    """Upkeep's look at the clusters, then GET /v1/faces/clusters, counting
+    the computations upkeep takes (the GET takes none)."""
 
     def __init__(self, env):
         self.env = env
         self.computed = 0
 
     def __call__(self) -> set[str]:
+        from sqlmodel import Session
+
+        from src.server.api.routers.upkeep import _recluster_if_changed
         from src.server.repository.tenant import FaceRepository
 
         real = FaceRepository.cluster_cache
@@ -72,9 +77,18 @@ class _Load:
             return real(repo, **kw)
 
         client, headers, *_ = self.env
-        with patch.object(FaceRepository, "cluster_cache", counted):
-            r = client.get("/v1/faces/clusters", params={"limit": 50, "min_cluster_size": 1}, headers=headers)
+        engine = create_engine(self.env[5])
+        try:
+            with patch.object(FaceRepository, "cluster_cache", counted):
+                with Session(engine) as session:
+                    _recluster_if_changed(session)
+                before = self.computed
+                r = client.get("/v1/faces/clusters", params={"limit": 50, "min_cluster_size": 1}, headers=headers)
+                assert self.computed == before, "reading the clusters must not compute them"
+        finally:
+            engine.dispose()
         assert r.status_code == 200, r.text
+        assert r.json()["pending"] is False and r.json()["computed_at"]
         with _db(self.env) as conn:
             import json
 
@@ -224,3 +238,20 @@ def test_writes_that_leave_faces_as_they_are_keep_the_cache(env):
         conn.execute(text("UPDATE assets SET rel_path = rel_path WHERE asset_id = :a"), {"a": asset_id})
     load()
     assert load.computed == n
+
+
+def test_reading_never_computes_and_says_pending(env):
+    """GET /v1/faces/clusters serves the last result: computed_at and pending say how old."""
+    from src.server.repository.tenant import FaceRepository
+
+    lib = _library(env, "CachePending")
+    client, headers, *_ = lib
+    load = _Load(env)
+    _settled(load)
+    _, faces = _clip_with_faces(lib, "pending", "pending")
+    with patch.object(FaceRepository, "cluster_cache", side_effect=AssertionError("computed in a GET")):
+        r = client.get("/v1/faces/clusters", params={"limit": 50, "min_cluster_size": 1}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["pending"] is True
+    assert r.json()["computed_at"]
+    assert set(faces) <= load()

@@ -32,8 +32,8 @@ public struct AuthenticatedImageView: View {
 
         var path: String {
             switch self {
-            case .thumbnail: return "thumbnail"
-            case .proxy: return "proxy"
+            case .thumbnail: return "artifacts/thumbnail"
+            case .proxy: return "artifacts/proxy"
             }
         }
     }
