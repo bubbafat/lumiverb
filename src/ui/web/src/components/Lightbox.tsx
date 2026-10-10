@@ -331,9 +331,13 @@ export function Lightbox({
 
   const toggleFullscreen = useCallback(() => {
     if (!isFullscreen) {
-      lightboxRef.current?.requestFullscreen().catch(() => {
+      // An iPhone has no requestFullscreen on elements: fill the window instead.
+      const el = lightboxRef.current;
+      if (el && typeof el.requestFullscreen === "function") {
+        el.requestFullscreen().catch(() => setIsFullscreen(true));
+      } else {
         setIsFullscreen(true);
-      });
+      }
     } else {
       if (document.fullscreenElement) {
         document.exitFullscreen();
@@ -799,13 +803,14 @@ export function Lightbox({
                 videoRef={videoRef}
                 onRenew={playback.renew}
                 failed={playback.failed}
+                fill={isFullscreen}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">
                 <img
                   src={mediaUrl}
                   alt={filename}
-                  className="max-h-[55svh] max-w-full object-contain lg:max-h-[calc(100svh-4rem)]"
+                  className={`max-w-full object-contain ${isFullscreen ? "max-h-[calc(100svh-4rem)]" : "max-h-[55svh] lg:max-h-[calc(100svh-4rem)]"}`}
                 />
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;
