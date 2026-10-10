@@ -145,7 +145,6 @@ Known limitations after phase 0 (accepted for now; each is a follow-up):
 | The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the brain (phase 2) |
 | Assets marked missing have no listing or purge UI | They wait, with their human data, until the file returns or someone purges them by id | A "missing files" view |
 | Two rows whose paths differ only in Unicode form are left as they are by the migration | The NFD one is marked missing on the next scan | Merge them by hand; the migration logs the count |
-| `recreate-search-indexes` and forced `search-sync` accept any tenant key | They only rebuild derived data | Require admin with the other upkeep routes |
 
 ## Code References
 

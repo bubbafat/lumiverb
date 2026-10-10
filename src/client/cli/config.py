@@ -1,5 +1,7 @@
 """Local CLI config: API URL and key, stored in ~/.lumiverb/config.json."""
 
+import os
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -48,23 +50,38 @@ def _config_path() -> Path:
     return Path.home() / ".lumiverb" / "config.json"
 
 
+class ConfigError(Exception):
+    """The config file is there but can't be read. Never read as the defaults:
+    the next save would wipe its keys and library roots."""
+
+
 def load_config() -> CLIConfig:
-    """Read config from file; return defaults if file is missing."""
+    """Read config from file; defaults only if there's no file. A file that
+    can't be read or parsed raises ConfigError."""
     path = _config_path()
     if not path.exists():
         return CLIConfig()
     try:
-        data = path.read_text()
-        return CLIConfig.model_validate_json(data)
-    except Exception:
-        return CLIConfig()
+        return CLIConfig.model_validate_json(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"Can't read {path}: {exc}. Fix or move the file; nothing was changed.") from exc
 
 
 def save_config(config: CLIConfig) -> None:
-    """Write config to file; create directory if needed."""
-    path = _config_path()
+    """Write config to file, readable only by its owner (it holds keys), all at
+    once: a temporary file beside it, renamed over it."""
+    path = _config_path().resolve()  # a symlinked config stays a symlink
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(config.model_dump_json(indent=2))
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:  # mkstemp makes it 0600
+            f.write(config.model_dump_json(indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def get_api_url() -> str:

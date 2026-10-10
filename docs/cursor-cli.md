@@ -8,14 +8,15 @@ It never touches the tenant DB, Quickwit, or object storage directly — it is a
 See docs/architecture.md for the full design.
 
 ## Package layout
-- `src/cli/main.py` — Typer app entry point; command groups: `config`, `library`, `tenant`, `filter`, `keys`, `users`, `maintenance`, `admin`
-- `src/cli/commands/` — Subcommand modules: `projects.py`, `keys.py`, `users.py`, `maintenance.py`
-- `src/cli/config.py` — Local config in `~/.lumiverb/config.json`: only how this machine works (`api_url`, `api_key`, `admin_key`, `root_map`, concurrency and batch sizes, `analysis_proxy_encoder`, `analysis_proxy_decoder`, `gpu_decodes`, `analysis_cache_gb`, `cache_home`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`. What changes an artifact's output lives only on the server (one source of truth): the producers' settings (`GET /v1/producers`, read once per run by `src/client/cli/producer_settings.py`: the Whisper model, the analysis proxy's size and quality, the vision prompts) and the AI machines and each job's model (Settings → AI; `/v1/ai`), each machine with its own limit of requests at once. Keys an older config still has (`vision_*` including `vision_concurrency`, `ocr_concurrency`, `whisper_model`, `proxy_max_edge`, `analysis_proxy_max_edge`) are ignored. The encoder and decoder are this machine's and aren't tracked: `analysis_proxy_decoder` is `auto` (decode originals on the GPU through Vulkan when this ffmpeg can open a device; ffmpeg decodes on the CPU what the GPU can't, and a render whose GPU decoding fails runs again on the CPU), `cpu`, or an ffmpeg hwaccel such as `cuda`. Decoding is exact, so the proxy is the same either way. `gpu_decodes` (default 1; 0 = never) says how many renders decode on the GPU at once, and each only while the first NVIDIA GPU has at least 1.5 GB free beside the models using it; the rest decode on the CPU meanwhile. Before vision work, `src/client/cli/vision_guard.py` checks each machine doing vision (`src/client/cli/ai_pool.py`) and tells the server what each said; requests go to the online ones, each up to its limit, and one that fails is skipped and checked again a minute later. With no machine left, vision steps wait and no clip is charged. Each step reports the clips it couldn't make (`src/client/cli/failure_report.py`, `POST /v1/producers/failures`).
-- `src/cli/roots.py` — Where a library's root is on this machine: the server keeps the editing machine's path, `root_map` maps prefixes here (`reachable_root` gives up on a hung mount after a timeout)
+- `src/client/cli/main.py` — Typer app entry point; top-level commands `pause`, `resume`, `download`, `scan`, `enrich`, `search`, `similar`; command groups `config`, `library`, `project`, `keys`, `user`, `settings`, `filter`, `maintenance`, `archive`, `trash`, `producers`, `admin` (with `admin keys`, `admin tenants`). `config`, `library`, `filter` and `admin` are defined in `main.py`.
+- `src/client/cli/commands/` — Subcommand modules: `archive.py`, `keys.py`, `maintenance.py`, `pausing.py`, `producers.py`, `projects.py`, `settings.py`, `trash.py`, `users.py`
+- `src/client/cli/config.py` — Local config in `~/.lumiverb/config.json`, written atomically (a temp file renamed over it) with mode 0600, since it holds keys. A config file that can't be read or parsed is an error (`ConfigError`: the CLI names the file and exits 1), never read as the defaults. Only how this machine works (`api_url`, `api_key`, `admin_key`, `root_map`, concurrency and batch sizes, `analysis_proxy_encoder`, `analysis_proxy_decoder`, `gpu_decodes`, `analysis_cache_gb`, `cache_home`): `load_config`, `save_config`, `get_api_url`, `get_api_key`, `get_admin_key`. What changes an artifact's output lives only on the server (one source of truth): the producers' settings (`GET /v1/producers`, read once per run by `src/client/cli/producer_settings.py`: the Whisper model, the analysis proxy's size and quality, the vision prompts) and the AI machines and each job's model (Settings → AI; `/v1/ai`), each machine with its own limit of requests at once. Keys an older config still has (`vision_*` including `vision_concurrency`, `ocr_concurrency`, `whisper_model`, `proxy_max_edge`, `analysis_proxy_max_edge`) are ignored. The encoder and decoder are this machine's and aren't tracked: `analysis_proxy_decoder` is `auto` (decode originals on the GPU through Vulkan when this ffmpeg can open a device; ffmpeg decodes on the CPU what the GPU can't, and a render whose GPU decoding fails runs again on the CPU), `cpu`, or an ffmpeg hwaccel such as `cuda`. Decoding is exact, so the proxy is the same either way. `gpu_decodes` (default 1; 0 = never) says how many renders decode on the GPU at once, and each only while the first NVIDIA GPU has at least 1.5 GB free beside the models using it; the rest decode on the CPU meanwhile. Before vision work, `src/client/cli/vision_guard.py` checks each machine doing vision (`src/client/cli/ai_pool.py`) and tells the server what each said; requests go to the online ones, each up to its limit, and one that fails is skipped and checked again a minute later. With no machine left, vision steps wait and no clip is charged. Each step reports the clips it couldn't make (`src/client/cli/failure_report.py`, `POST /v1/producers/failures`).
+- `src/client/cli/roots.py` — Where a library's root is on this machine: the server keeps the editing machine's path, `root_map` maps prefixes here (`reachable_root` gives up on a hung mount after a timeout)
 - `src/client/video/analysis_proxy.py`, `src/client/proxy/analysis_cache.py` — Render analysis proxies with ffmpeg; local cache of them (downloads on first use)
-- `src/cli/client.py` — `LumiverbClient`: thin httpx wrapper with persistent connection pool, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and raises `LumiverbAPIError`
-- `src/cli/ingest.py` — Per-asset ingest pipeline: discover files, generate proxies, call vision AI, upload atomically
-- `src/cli/scan.py` — Scan phase (ADR-011): discover files, SHA comparison, EXIF extraction, proxy generation, upload, proxy cache with SHA sidecar
+- `src/client/cli/client.py` — `LumiverbClient`: thin httpx wrapper with persistent connection pool, reads config for base URL and `Authorization: Bearer <api_key>`; accepts `api_key_override` for admin commands; on non-2xx prints error envelope and raises `LumiverbAPIError`
+- `src/client/cli/ingest.py` — Shared ingest helpers (proxy generation, EXIF, video, vision, faces) used by `scan.py` and `repair.py`
+- `src/client/cli/repair.py` — What `lumiverb enrich` runs (`run_repair`): find and fill missing pipeline outputs. There is no `repair` command.
+- `src/client/cli/scan.py` — Scan phase (ADR-011): discover files, SHA comparison, EXIF extraction, proxy generation, upload, proxy cache with SHA sidecar
 
 Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes the Typer app.
 
@@ -29,7 +30,8 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 #### Enrich
 - `lumiverb enrich [--library <name>] [--job-type probe|render|embed|vision|faces|redetect-faces|ocr|transcribe|video-scenes|scene-vision|search-sync|all] [--dry-run] [--concurrency N] [--force]` — Run enrichment on assets with missing pipeline outputs. `probe` runs ffprobe on source videos that have no facet yet (frame rate, timecode, audio layout, display size, duration) and runs first in `all`, since its duration makes videos eligible for transcription and scenes; scan already probes new videos. `render` makes each video's analysis proxy (full length, at most 960 px and 30 fps, with several audio tracks a stereo mix of them first, then every decodable track in order, each 48 kHz AAC at most stereo, 48 kbps per channel), uploads it and caches it; it runs right after `probe`. Only `probe` and `render` need the library's storage; the rest run while it sleeps. Reads proxies from the local cache (populated by scan) and runs inference: CLIP embeddings, vision AI, OCR, face detection, video transcription, search sync. On cache miss, downloads the proxy from the server. `redetect-faces` re-runs face detection on ALL images with the faces producer's gates (Settings → Processing → Faces: least confidence, smallest face, least sharpness, the image size looked at); faces people named, or said aren't a certain person, are kept. `transcribe` hears the proxy's mix (every audio track) as mono. `transcribe`, `video-scenes` and `scene-vision` read each video's analysis proxy (local cache, else downloaded from the server), never the original; videos without one wait and are counted. Omit `--library` to enrich all libraries.
 
-#### Worker
+#### Processing on the brain
+There is no worker command. Processing runs in the server-side scheduler (`lumiverb-scheduler.service`, `python -m src.server.scheduler`), which ranks every job in every library; see docs/brain-setup.md. `pause`, `resume` and `producers` control and report on it.
 
 #### Search
 - `lumiverb search --library <name> --query <query> [--output table|json|text] [--media-type all|image|video] [--limit N]` — Search assets in a library by natural language query via `GET /v1/query` (`f=library:`, `f=query:`, `f=media:`), ranked by relevance. `--limit 0` fetches all results (cursor-paginated). The table shows the match snippet, and the time range for scene hits.
@@ -43,7 +45,7 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 ### Management
 
 #### Config
-- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>] [--cache-home <dir>]` — Write config. The vision endpoint and model are set in the web app (Settings → AI).
+- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>] [--cache-home <dir>]` — Write config. `admin keys` and `admin tenants` take the admin key from `--admin-key`, else `LUMIVERB_ADMIN_KEY`, else the config's `admin_key`. The vision endpoint and model are set in the web app (Settings → AI).
 - `lumiverb config show` — Show current config, including root mappings.
 - `lumiverb config map-root <server-prefix> <local-prefix>` — Where a library root prefix is on this machine, e.g. `/Volumes/media-01 /mnt/media-01`. Libraries keep the editing machine's path (exports point editors there); scan and enrich use the mapped one. Whole folders, longest prefix wins, Unicode form and trailing slashes ignored. Saves even when the target isn't mounted, with a warning.
 - `lumiverb config unmap-root <server-prefix>` — Remove a mapping.
@@ -65,10 +67,10 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb library create --name <name> --path <path>` — Create a library.
 - `lumiverb library list` — List libraries; a **Here** column shows mapped roots.
 - `lumiverb library report-changes <path>... [--stdin]` — Tell the brain these files or folders changed, so its scheduler scans them (`POST /v1/changes`). Paths are as this machine sees them; root mappings turn them back into the library's form. Prints how many matched a library and which didn't.
-- `lumiverb library update <name> [--name <new>] [--root-path <path>]` — Update library.
+- `lumiverb library update --name <name> [--new-name <new>] [--root-path <path>]` — Update library.
 - `lumiverb library delete --name <name> [--yes] [--remove-from-projects]` — Move a library to the trash with everything in it (it says how many archived clips go with it); it's deleted for good after the trash days. When its clips are in projects it names them and asks (in the trash they're hidden there; deleted for good they leave them); `--remove-from-projects` answers for scripts (`--yes` without it stops if there are any).
 - `lumiverb library restore --name <name>` — Take a library out of the trash with the clips that went with it. It comes back private.
-- `lumiverb library empty-trash [--name <name>]` — Permanently delete trashed libraries: that one, or all of them (admins only). First lists the projects their clips are in (deleting removes the clips from those projects) and asks.
+- `lumiverb library empty-trash (--name <name> | --all) [--remove-from-projects] [--yes]` — Permanently delete trashed libraries: that one, or all of them (admins only); exactly one of `--name` or `--all`. First lists the projects their clips are in (deleting removes the clips from those projects) and asks, unless `--yes`; with `--yes` and clips in projects it stops (exit 2) unless `--remove-from-projects`.
 - `lumiverb archive add [<clip ids>...] | --library <name|id> --folder <path> [--yes]` — Archive clips: out of sight, kept forever with everything they have; scans leave them archived. By id, or every clip under a folder, recursively (`--folder ''` for the whole library; a folder asks first unless `--yes`); a file added to the folder later shows up as usual. Says which ids it skipped (not in sight).
 - `lumiverb archive restore [<clip ids>...] | --library <name|id> --folder <path>` — Unarchive clips a person archived. A missing file's clip is skipped: it comes back when the file does.
 - `lumiverb archive list [--library <name|id>] [--folder <path>] [--missing | --by-hand] [--limit N]` — Archived clips, most recent first, marking those whose file is missing.
@@ -95,12 +97,12 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb user create --email <email> [--role admin|editor|viewer]` — Create user (prompts for password).
 - `lumiverb user list` — List all users.
 - `lumiverb user set-role --email <email> --role <role>` — Change user role.
-- `lumiverb user remove --email <email>` — Remove user.
+- `lumiverb user remove --email <email> [--yes]` — Remove user (asks first unless `--yes`).
 
 #### Keys
-- `lumiverb keys list` — List API keys for current tenant.
+- `lumiverb keys list` — List API keys for the current account.
 - `lumiverb keys create [--label <label>] [--role admin|editor|viewer]` — Create API key.
-- `lumiverb keys revoke <key_id>` — Revoke an API key.
+- `lumiverb keys revoke --key-id <key_id>` — Revoke an API key.
 
 #### Filter
 - `lumiverb filter list [--library <name>]` — List path filters.
@@ -114,13 +116,13 @@ Entry point: `lumiverb = "src.client.cli:main"` (setuptools); `main()` invokes t
 - `lumiverb admin keys create --tenant-id <id> --name <label> [--admin-key <key>]` — Create API key for tenant.
 - `lumiverb admin keys list --tenant-id <id> [--admin-key <key>]` — List API keys for tenant.
 - `lumiverb admin tenants list [--admin-key <key>]` — List all tenants.
-- `lumiverb admin tenants set-vision --tenant-id <id> [--vision-api-url <url>] [--vision-api-key <key>] [--vision-model-id <id>]` — Set a tenant's vision config as the operator: the URL and key are its first AI machine doing vision (made or moved; an empty URL removes it), the model its vision model. Settings → AI checks the model is offered; this doesn't.
-- `lumiverb admin vision-test --path <dir> [--url <url>] [--api-key <key>]` — Test vision API against images.
+- `lumiverb admin tenants set-vision --tenant-id <id> [--vision-api-url <url>] [--vision-api-key <key>] [--vision-model-id <id>] [--admin-key <key>]` — Set a tenant's vision config as the operator: the URL and key are its first AI machine doing vision (made or moved; an empty URL removes it), the model its vision model. Settings → AI checks the model is offered; this doesn't.
+- `lumiverb admin vision-test --path <dir> [--url <url>] [--api-key <key>] [--model <id>] [--output <file>]` — Test vision API against images.
 
 #### Maintenance
-- `lumiverb maintenance cleanup [--library <name>] [--execute]` — Remove orphaned files (dry-run by default). Needs an admin API key. While the Upkeep switch is paused, `--execute` deletes nothing and says it was skipped.
-- `lumiverb maintenance search-sync [--library <name>] [--force]` — Push stale assets to search index.
-- `lumiverb maintenance cleanup-dismissed` — Delete dismissed people with zero face matches.
+- `lumiverb maintenance cleanup (--library <name|id> | --all) [--execute]` — Remove orphaned files left after the trash is emptied: only that library, or the whole account; exactly one of `--library` or `--all`. Dry run unless `--execute`. Admins only. While the Upkeep switch is paused, `--execute` deletes nothing and says it was skipped.
+- `lumiverb maintenance search-sync --all [--force]` — Push stale assets to the search index. `--all` is required (the index is the account's; there is no `--library`). `--force` clears the sync timestamps and reindexes everything. Admins only.
+- `lumiverb maintenance cleanup-dismissed --all` — Delete dismissed people with zero face matches, in the caller's account only. Admins only.
 - `lumiverb maintenance upgrade [--dry-run] [--max-steps N] [--step <step_id>] [--force]` — Run tenant-level upgrade steps idempotently.
 
 Output: Rich tables for list; green success for create; errors handled by client (stderr + exit 1).

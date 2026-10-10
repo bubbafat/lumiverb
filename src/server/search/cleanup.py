@@ -149,8 +149,13 @@ def run_cleanup_for_tenant(
     session: Session,
     *,
     dry_run: bool = True,
+    library_id: str | None = None,
 ) -> CleanupResult:
-    """Run file cleanup for a single tenant. Session must be for the tenant DB."""
+    """Run file cleanup for a single tenant. Session must be for the tenant DB.
+
+    library_id: only that library's directory; the account's playback cuts
+    (not a library's) are left for a whole-account run.
+    """
     result = CleanupResult()
     tenant_dir = data_dir / tenant_id
     storage = LocalStorage(str(data_dir))
@@ -170,7 +175,8 @@ def run_cleanup_for_tenant(
 
     # Check library dirs on disk
     disk_lib_dirs = [
-        d for d in _list_subdirs(tenant_dir) if d.startswith("lib_")
+        d for d in _list_subdirs(tenant_dir)
+        if d.startswith("lib_") and (library_id is None or d == library_id)
     ]
 
     for lib_dir_name in disk_lib_dirs:
@@ -245,6 +251,9 @@ def run_cleanup_for_tenant(
                 abs_path.unlink(missing_ok=True)
             result.orphan_files += 1
             result.bytes_freed += size
+
+    if library_id is not None:
+        return result
 
     # Playback cuts (copies of each video's start) of assets that are gone.
     try:
@@ -326,8 +335,10 @@ def run_cleanup_single_tenant(
     session: Session,
     *,
     dry_run: bool = True,
+    library_id: str | None = None,
 ) -> CleanupResult:
-    """Run cleanup for a single tenant (used when called with tenant API key)."""
+    """Run cleanup for a single tenant (used when called with tenant API key),
+    or one library of it."""
     from src.server.config import get_settings
 
     data_dir = Path(get_settings().data_dir)
@@ -335,7 +346,7 @@ def run_cleanup_single_tenant(
         return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
     if _paused(session, tenant_id, dry_run):
         return CleanupResult(paused=True, paused_tenants=[tenant_id])
-    return run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run)
+    return run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)
 
 
 def _paused(session: Session, tenant_id: str, dry_run: bool) -> bool:

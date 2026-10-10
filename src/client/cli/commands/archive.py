@@ -153,7 +153,7 @@ def archive_delete_missing(
     """Delete for good the clips whose files went missing (admins only), with
     everything made or written for them. The server says how many first. A
     file that comes back afterwards is a new clip."""
-    from src.client.cli.commands.trash import _error, projects_say_yes
+    from src.client.cli.decisions import in_projects, send_until_decided
 
     client = LumiverbClient()
     body: dict = {}
@@ -162,28 +162,21 @@ def archive_delete_missing(
     if folder:
         body["path"] = folder
     where = (f" in {library}" if library else "") + (f" under '{folder}'" if folder else "")
-    while True:
-        r = client.raw("DELETE", "/v1/archive/missing", json={**body, "remove_from_projects": remove_from_projects})
-        if r.status_code < 400:
-            break
-        err = _error(r)
-        details = err.get("details") or {}
-        if r.status_code == 409 and err.get("code") == "confirm_delete_missing":
-            n = int(details.get("count", 0))
-            if not yes and not typer.confirm(f"Delete {clips(n)} whose files are missing{where} for good? "
-                                             "This can't be undone.", default=False):
-                console.print("Aborted.")
-                raise typer.Exit(0)
-            body["count"] = n
-            body["missing_before"] = details.get("listed_at")  # nothing gone missing since
-            continue
-        if r.status_code == 409 and err.get("code") == "in_projects" and not remove_from_projects:
-            if not projects_say_yes(details, yes=yes, what="deleted for good, they leave"):
-                raise typer.Exit(2 if yes else 0)
-            remove_from_projects = True
-            continue
-        console.print(f"[red]Couldn't delete them: {escape(err.get('message') or r.text)}[/red]")
-        raise typer.Exit(1)
+
+    def confirm_count(details: dict) -> dict:
+        n = int(details.get("count", 0))
+        if not yes and not typer.confirm(f"Delete {clips(n)} whose files are missing{where} for good? "
+                                         "This can't be undone.", default=False):
+            console.print("Aborted.")
+            raise typer.Exit(0)
+        return {"count": n, "missing_before": details.get("listed_at")}  # nothing gone missing since
+
+    r = send_until_decided(
+        client, "DELETE", "/v1/archive/missing", {**body, "remove_from_projects": remove_from_projects},
+        answers={"confirm_delete_missing": confirm_count,
+                 "in_projects": in_projects(yes=yes, what="deleted for good, they leave")},
+        failed="Couldn't delete them",
+    )
     deleted = r.json().get("deleted", 0)
     console.print(f"Deleted {clips(deleted)} whose files were missing, for good." if deleted
                   else f"No clips with missing files{where}.")

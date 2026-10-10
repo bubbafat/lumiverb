@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.commands.archive import library_id_for
 
 console = Console()
 maintenance_app = typer.Typer(help="Maintenance tasks: cleanup, search sync, prune dismissed people, tenant upgrades.")
@@ -16,26 +17,25 @@ maintenance_app = typer.Typer(help="Maintenance tasks: cleanup, search sync, pru
 
 @maintenance_app.command("cleanup")
 def cleanup(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (optional, cleanup all if omitted).")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Only this library (name or id).")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="The whole account.")] = False,
     execute: Annotated[bool, typer.Option("--execute", help="Actually delete files. Without this flag, only reports what would be deleted.")] = False,
 ) -> None:
-    """Remove orphaned files left after trash is emptied.
+    """Remove orphaned files left after trash is emptied: one library (--library)
+    or the whole account (--all). Admins only.
 
     By default runs in dry-run mode and only reports what would be deleted.
     Pass --execute to actually delete files.
     """
+    if (library is None) == (not all_):
+        console.print("[red]Give --library, or --all for the whole account.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     dry_run = not execute
 
     params = {"dry_run": str(dry_run).lower()}
-
-    if library:
-        # Resolve library name to confirm it exists
-        libraries = client.get("/v1/libraries").json()
-        match = next((lib for lib in libraries if lib["name"] == library), None)
-        if match is None:
-            console.print(f"[red]Library not found: {library}[/red]")
-            raise typer.Exit(1)
+    if library is not None:
+        params["library_id"] = library_id_for(client, library)
 
     resp = client.post("/v1/upkeep/cleanup", params=params)
     result = resp.json()
@@ -83,22 +83,18 @@ def cleanup(
 
 @maintenance_app.command("search-sync")
 def search_sync(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (optional, sync all if omitted).")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="The whole account (the search index is the account's).")] = False,
     force: Annotated[bool, typer.Option("--force", help="Clear timestamps and re-index everything.")] = False,
 ) -> None:
-    """Push stale assets to the Quickwit search index.
+    """Push stale assets to the Quickwit search index (--all: the whole account). Admins only.
 
     Use --force to clear all search_synced_at timestamps and re-index
     everything into the tenant index. Useful after index migrations.
     """
+    if not all_:
+        console.print("[red]Give --all: search sync is for the whole account.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
-
-    if library:
-        libraries = client.get("/v1/libraries").json()
-        match = next((lib for lib in libraries if lib["name"] == library), None)
-        if match is None:
-            console.print(f"[red]Library not found: {library}[/red]")
-            raise typer.Exit(1)
 
     total_synced = 0
     total_failed = 0
@@ -145,12 +141,17 @@ def search_sync(
 
 
 @maintenance_app.command("cleanup-dismissed")
-def cleanup_dismissed() -> None:
-    """Delete dismissed people that have zero face matches.
+def cleanup_dismissed(
+    all_: Annotated[bool, typer.Option("--all", help="The whole account.")] = False,
+) -> None:
+    """Delete the account's dismissed people that have zero face matches (--all). Admins only.
 
-    Runs across all tenants. Useful after redetect-faces or bulk face
-    re-processing where old face records were replaced.
+    Useful after redetect-faces or bulk face re-processing where old face
+    records were replaced.
     """
+    if not all_:
+        console.print("[red]Give --all: it deletes across the whole account.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     resp = client.post("/v1/upkeep/cleanup-dismissed")
     result = resp.json()

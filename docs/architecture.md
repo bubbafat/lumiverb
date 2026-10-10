@@ -203,7 +203,7 @@ After video ingest, the CLI uses the video chunk API to process scenes:
 5. When all chunks complete, server marks asset as `video_indexed`
 
 **Search sync:**
-Search sync is timestamp-based: assets and video scenes have a `search_synced_at` column. The `POST /v1/upkeep/search-sync` endpoint sweeps records where `search_synced_at` is stale, builds Quickwit documents, and ingests them. The CLI `lumiverb maintenance search-sync` command triggers this. Inline sync also runs on each ingest. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
+Search sync is timestamp-based: assets and video scenes have a `search_synced_at` column. The `POST /v1/upkeep/search-sync` endpoint sweeps records where `search_synced_at` is stale, builds Quickwit documents, and ingests them. The CLI `lumiverb maintenance search-sync --all` command triggers this for the account. Inline sync also runs on each ingest. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
 
 ### 3.6 Search Engine (Quickwit)
 
