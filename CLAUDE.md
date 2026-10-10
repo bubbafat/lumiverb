@@ -38,6 +38,7 @@ src/
 
 clients/lumiverb-app/      Native macOS + iOS (XcodeGen)
   Sources/macOS/  iOS/  LumiverbKit/      project.yml, Lumiverb.xcodeproj
+clients/resolve/           DaVinci Resolve Studio Workflow Integration (prototype: search, add to bin / timeline)
 
 tests/        Python tests (pytest)
 migrations/   Alembic — control/ + tenant/ trees
@@ -79,6 +80,7 @@ quickwit/     Quickwit index schemas
 | Menu bar / app lifecycle (macOS) | `Sources/macOS/{LumiverbApp,MenuBarView}.swift`. 3-state SF symbol: `pause.rectangle.fill` (paused) / `arrow.triangle.2.circlepath` (scanning) / `photo.stack` (idle). Favorites (`AppState.favoriteLibraryIds`, persisted) surface in the menu bar; clicking sets `appState.pendingSelectedLibraryId` which `BrowseWindow.consumePendingLibraryId()` consumes on appear/onChange. Start at Login via `SMAppService.mainApp` toggle in Settings (requires app in `/Applications` to actually fire). |
 | Proxy gen / cache (Python) | `src/processing/proxy/proxy_gen.py`, `proxy_cache.py` |
 | Image caches (macOS) | `LumiverbKit/Sources/LumiverbKit/API/ImageCache.swift` (NSCache in-memory, 200 MB / 2000 items), `ProxyCacheOnDisk.swift` (`~/.cache/lumiverb/proxies/`, Python-CLI-compatible, SHA sidecars), `ThumbnailCacheOnDisk.swift` (`~/.cache/lumiverb/thumbnails/`, macOS-local, no sidecar). `AuthenticatedImageView` resolves in-memory → disk → server, on a detached Task so disk I/O and `NSImage(data:)` decode stay off the main actor. |
+| Resolve plugin | `clients/resolve/plugin/`: an Electron app Resolve Studio runs (Workspace → Workflow Integrations). `main.js` (IPC handlers, the only place Lumiverb and Resolve calls happen), `lumiverb.js` (API client: JWT login + shared refresh, `/v1/query`, library roots → the original's path on this Mac), `resolve.js` (add to the current bin; add at the playhead on a free track, read back since `AppendToTimeline` silently drops overlaps), `renderer.js` (sandboxed page). `install.sh` copies it plus Blackmagic's `WorkflowIntegration.node` into Resolve. Tests: `node --test clients/resolve/test/` |
 | Web UI page | `src/ui/web/src/pages/<Page>.tsx`. API client: `src/ui/web/src/api/client.ts`. Filter state: `src/ui/web/src/lib/queryFilter.ts` |
 | Face clustering / people | `repository/tenant.py` (`PersonRepository`, `FaceRepository`); `routers/people.py`. Cluster cache in `system_metadata`, invalidated on writes |
 | Python ↔ Swift shared | `src/shared/` — twins in `LumiverbKit/Sources/LumiverbKit/Models/`: `path_filter.py` ↔ `PathFilter.swift`, `file_extensions.py` ↔ `FileExtensions.swift` |
@@ -103,6 +105,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
   `-n auto` runs it in parallel (pytest-xdist, a module's tests on one worker). One Postgres serves the whole run: `PostgresContainer` in a test is a fresh database on it, and the migration helpers clone a template migrated once (`tests/conftest.py` docstring; `LUMIVERB_TEST_PG_PER_MODULE=1` for a container per module).
   Quickwit is off for every test (conftest pins `QUICKWIT_ENABLED=false`, whatever `.env.local` says; mock `QuickwitClient` to test sync code). `uv run pytest -m quickwit` (opt-in) checks the real document builders against the real index schemas and search in a throwaway Quickwit in Docker (`tests/test_quickwit_real.py`).
 - Swift: XCTest in `LumiverbKit`. **No macOS-target test bundle** — testable code must live in LumiverbKit.
+- Resolve plugin: `node --test clients/resolve/test/` (no dependencies; fakes for `fetch` and Resolve).
 - Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`.
 
 ---

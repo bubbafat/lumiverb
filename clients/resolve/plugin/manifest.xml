@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BlackmagicDesign>
+    <Plugin>
+        <Id>io.lumiverb.resolve</Id>
+        <Name>Lumiverb</Name>
+        <Version>0.1</Version>
+        <Description>Search Lumiverb and add clips to the bin or the timeline</Description>
+        <FilePath>main.js</FilePath>
+    </Plugin>
+</BlackmagicDesign>
