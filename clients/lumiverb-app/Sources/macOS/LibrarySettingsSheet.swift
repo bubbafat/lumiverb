@@ -181,8 +181,11 @@ struct LibrarySettingsSheet: View {
                 .cornerRadius(6)
 
             HStack {
-                Button("Change…") { chooseNewRoot() }
-                    .disabled(isSavingRoot)
+                // Moving a library's root is a tenant admin's (403 for an editor).
+                if appState.currentUser?.role == "admin" {
+                    Button("Change…") { chooseNewRoot() }
+                        .disabled(isSavingRoot)
+                }
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: rootPath)
                 }
