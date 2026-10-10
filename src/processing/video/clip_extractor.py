@@ -16,6 +16,8 @@ logger = _log
 
 _ZERO_BYTE_STDERR_SUFFIX = "\n[lumiverb] Output file is 0 bytes; treating as failure"
 _DEFAULT_STDERR_TAIL_LINES = 40
+# A timestamp rounded to the ms is off by half a ms at most; frames are further apart than this.
+FRAME_SEEK_SLACK_SEC = 0.001
 
 
 def _cmd_to_repro(cmd: list[str]) -> str:
@@ -386,6 +388,11 @@ def extract_video_frame_detailed(
 ) -> FFmpegAttempt:
     """Like extract_video_frame(), but returns cmd+stderr for diagnostics."""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # A timestamp rounded to the ms (a scene's rep_frame_ms) can sit just after
+    # the frame it names; seeking there skips that frame, and when it's the
+    # last one ffmpeg gets no frame at all (and says only that the mjpeg
+    # encoder wouldn't open: "Non full-range YUV is non-standard").
+    seek = max(0.0, timestamp - FRAME_SEEK_SLACK_SEC)
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -393,7 +400,7 @@ def extract_video_frame_detailed(
         "error",
         "-y",
         "-ss",
-        str(timestamp),
+        str(seek),
         "-i",
         str(source),
         "-frames:v",
