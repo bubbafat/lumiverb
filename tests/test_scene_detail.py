@@ -285,6 +285,7 @@ def _scan_once(scanner: VideoScanner, frame_bytes: int) -> tuple[list[str], list
     proc.stdout.read.side_effect = [bytes(frame_bytes), b""]
     proc.poll.return_value = None
     proc.returncode = 0
+    proc.wait.return_value = 0  # FFmpeg finished cleanly once its output ends
     proc.stderr = iter([b"[Parsed_showinfo_1] n:0 pts_time:0.5 \n"])
     with patch("subprocess.Popen", return_value=proc) as popen:
         frames = list(scanner.scan(0.0, 10.0))
