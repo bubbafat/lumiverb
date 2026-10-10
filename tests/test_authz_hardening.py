@@ -340,3 +340,40 @@ def test_a_trashed_library_isnt_public(public_lib_client):
     assert client.delete(f"/v1/libraries/{lib}", headers=admin).status_code == 204
     assert client.post(f"/v1/libraries/{lib}/restore", headers=admin).status_code == 200
     assert client.get(f"/v1/libraries/{lib}", headers=admin).json()["is_public"] is False
+
+
+# ---------------------------------------------------------------------------
+# Making a library public, or re-rooting one, is a tenant admin's call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_only_admins_make_a_library_public_or_move_its_root(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, ed = _user(client, admin, "lib-editor@example.com", "editor")
+    lib = client.post("/v1/libraries", json={"name": "EdLib", "root_path": "/ed"}, headers=ed)
+    assert lib.status_code == 200, lib.text  # creating stays an editor's
+    lib = lib.json()["library_id"]
+
+    for body in ({"is_public": True}, {"is_public": False}, {"root_path": "/elsewhere"},
+                 {"name": "EdLib2", "is_public": True}):
+        assert client.patch(f"/v1/libraries/{lib}", json=body, headers=ed).status_code == 403, body
+    r = client.patch(f"/v1/libraries/{lib}", json={"name": "EdLib2"}, headers=ed)
+    assert r.status_code == 200 and r.json()["is_public"] is False and r.json()["root_path"] == "/ed"
+
+    r = client.patch(f"/v1/libraries/{lib}", json={"is_public": True, "root_path": "/elsewhere"}, headers=admin)
+    assert r.status_code == 200 and r.json()["is_public"] is True and r.json()["root_path"] == "/elsewhere"
+    assert client.get(f"/v1/libraries/{lib}").status_code == 200  # public now
+
+
+@pytest.mark.slow
+def test_an_editors_create_cant_make_it_public(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, ed = _user(client, admin, "lib-creator@example.com", "editor")
+    r = client.post("/v1/libraries", json={"name": "EdPub", "root_path": "/edpub", "is_public": True}, headers=ed)
+    assert r.status_code == 403
+    r = client.post("/v1/libraries", json={"name": "AdPub", "root_path": "/adpub", "is_public": True}, headers=admin)
+    assert r.status_code == 200 and r.json()["is_public"] is True
+    assert client.get(f"/v1/libraries/{r.json()['library_id']}").status_code == 200  # public, signed out

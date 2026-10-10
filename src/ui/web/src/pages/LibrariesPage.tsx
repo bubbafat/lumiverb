@@ -337,6 +337,7 @@ export default function LibrariesPage() {
                       )}
                       {lib.status !== "trashed" && (
                         <>
+                          {isAdmin && (
                           <button
                             type="button"
                             disabled={
@@ -365,6 +366,7 @@ export default function LibrariesPage() {
                           >
                             {lib.is_public ? "Public" : "Private"}
                           </button>
+                          )}
                           {lib.is_public && (
                             <button
                               type="button"

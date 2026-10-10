@@ -29,6 +29,15 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 class CreateLibraryRequest(BaseModel):
     name: str
     root_path: str
+    is_public: bool | None = None
+
+
+def require_admin_for(request: Request, body: BaseModel, fields: set[str]) -> None:
+    """Library fields only a tenant admin may set (is_public, and root_path
+    once a library exists): 403 for anyone else who sends them. The one place
+    to swap in a per-library admin role."""
+    if fields & body.model_fields_set:
+        require_tenant_admin(request)
 
 
 class LibraryUpdateRequest(BaseModel):
@@ -125,6 +134,7 @@ def create_library(
     New libraries inherit tenant path filter defaults at creation time.
     """
     repo = LibraryRepository(session)
+    require_admin_for(request, body, {"is_public"})
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
@@ -133,6 +143,14 @@ def create_library(
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
         path_filter_repo.copy_defaults_to_library(tenant_id=tenant_id, library_id=library.library_id)
+    if body.is_public:
+        library.is_public = True
+        session.add(library)
+        session.commit()
+        session.refresh(library)
+        with get_control_session() as ctrl_session:
+            PublicLibraryRepository(ctrl_session).upsert(library.library_id, tenant_id,
+                                                         request.state.connection_string)
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
@@ -321,6 +339,7 @@ def update_library(
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    require_admin_for(request, body, {"is_public", "root_path"})
     if body.name is not None:
         library.name = body.name
     if body.root_path is not None:
