@@ -21,6 +21,7 @@ A single, long-running FFmpeg process is opened to avoid process-spawn overhead.
 - A dedicated `stderr` thread parses `pts_time:` values via regex and puts them on a `Queue`
 - With `-ss` before `-i`, `showinfo`'s `pts_time` counts from the seek point, so the scanner adds `start_ts` back: every frame's `pts` is video time. A scan covers `[start_ts, end_ts)`.
 - For each frame read from `stdout`, the main thread calls `pts_queue.get(timeout=10.0)` — if no PTS arrives within 10 seconds, `SyncError` is raised (FFmpeg hung)
+- When `stdout` ends on its own, FFmpeg must have exited cleanly; any other exit raises `SyncError` with its last stderr lines. (Stopping at `end_ts` kills FFmpeg after that check, so it isn't a failure.) Before this, ffmpeg 9 refusing the removed `-vsync` option looked like a video with no keyframes.
 - Frame byte size = `480 * out_height * 3` — computed exactly from source dimensions via `ffprobe` so Python and FFmpeg always agree
 
 **FFmpeg command structure:**
@@ -28,8 +29,10 @@ A single, long-running FFmpeg process is opened to avoid process-spawn overhead.
 ffmpeg -hide_banner -loglevel info -skip_frame nokey -ss <start_ts>
   -i <input>
   -vf select='eq(pict_type\,I)',scale=480:<out_height>,showinfo
-  -f rawvideo -pix_fmt rgb24 pipe:1
+  -fps_mode passthrough -f rawvideo -pix_fmt rgb24 pipe:1
 ```
+
+`-fps_mode passthrough` (ffmpeg 5.1+) passes each selected frame on as it is; ffmpeg 9 removed the old `-vsync 0` spelling and stops at once on it.
 
 **Keyframes only, on the CPU:** `-skip_frame nokey` makes the decoder skip everything but keyframes, giving the same keyframes 9-17x faster than decoding all frames on the GPU (`-hwaccel auto`, measured on prod analysis proxies, Oct 2026).
 
