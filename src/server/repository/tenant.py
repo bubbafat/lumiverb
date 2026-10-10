@@ -1727,27 +1727,6 @@ class AssetRepository:
         self._session.add(asset)
         self._session.commit()
 
-    def reset_video_indexed_for_library(self, library_id: str) -> int:
-        """Set video_indexed = False for all video assets in a library. Returns count updated."""
-        from sqlalchemy import update as sa_update
-        result = self._session.exec(  # type: ignore[call-overload]
-            sa_update(Asset)
-            .where(Asset.library_id == library_id, Asset.media_type == "video")
-            .values(video_indexed=False)
-        )
-        self._session.commit()
-        return result.rowcount  # type: ignore[return-value]
-
-    def update_thumbnail_key(self, asset_id: str, thumbnail_key: str) -> None:
-        """Record a thumbnail_key on the asset."""
-        asset = self._session.get(Asset, asset_id)
-        if asset is None:
-            raise ValueError(f"Asset not found: {asset_id}")
-        asset.thumbnail_key = thumbnail_key
-        asset.updated_at = utcnow()
-        self._session.add(asset)
-        self._session.commit()
-
     def update_exif(
         self,
         asset_id: str,
@@ -2114,22 +2093,6 @@ class VideoSceneRepository:
     def get_by_id(self, scene_id: str) -> VideoScene | None:
         return self._session.get(VideoScene, scene_id)
 
-    def delete_for_library(self, library_id: str) -> int:
-        """Delete all scenes for all video assets in a library. Returns count deleted."""
-        from sqlalchemy import delete as sa_delete
-        result = self._session.exec(  # type: ignore[call-overload]
-            sa_delete(VideoScene).where(
-                VideoScene.asset_id.in_(  # type: ignore[attr-defined]
-                    select(Asset.asset_id).where(
-                        Asset.library_id == library_id,
-                        Asset.media_type == "video",
-                    )
-                )
-            )
-        )
-        self._session.commit()
-        return result.rowcount  # type: ignore[return-value]
-
     def update_vision(
         self,
         scene_id: str,
@@ -2335,22 +2298,6 @@ class VideoIndexChunkRepository:
         self._session.add(chunk)
         self._session.commit()
         return True
-
-    def delete_for_library(self, library_id: str) -> int:
-        """Delete all chunks for all video assets in a library. Returns count deleted."""
-        from sqlalchemy import delete as sa_delete
-        result = self._session.exec(  # type: ignore[call-overload]
-            sa_delete(VideoIndexChunk).where(
-                VideoIndexChunk.asset_id.in_(  # type: ignore[attr-defined]
-                    select(Asset.asset_id).where(
-                        Asset.library_id == library_id,
-                        Asset.media_type == "video",
-                    )
-                )
-            )
-        )
-        self._session.commit()
-        return result.rowcount  # type: ignore[return-value]
 
     def all_chunks_complete(self, asset_id: str) -> bool:
         """True if every chunk for this asset is completed."""

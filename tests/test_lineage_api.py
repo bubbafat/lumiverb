@@ -558,8 +558,6 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
                                            headers=headers)),
         ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
                                            headers=headers)),
-        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/thumbnail-key", json={
-            "thumbnail_key": "t/l/thumbnails/00/x.jpg"}, headers=headers)),
         # Lineage that can't be read is no lineage, in the same envelope on every route.
         ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
             "model_id": "m", "description": "d", "lineage": {"producer": "vision"}}, headers=headers)),

@@ -1958,25 +1958,6 @@ def stream_or_enqueue_preview(
     raise HTTPException(status_code=404, detail="No video preview available for this asset")
 
 
-class ThumbnailKeyUpdateRequest(BaseModel):
-    thumbnail_key: str
-    lineage: Any = None  # the proxy producer's: it makes thumbnails
-
-
-@router.post("/{asset_id}/thumbnail-key")
-def set_thumbnail_key(
-    asset_id: str,
-    body: ThumbnailKeyUpdateRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Record a thumbnail_key for a video asset after the index worker extracts
-    the first frame; it says how it was made (the proxy producer's lineage)."""
-    require_lineage(body.lineage, "proxy")
-    asset_repo = AssetRepository(session)
-    asset_repo.update_thumbnail_key(asset_id, body.thumbnail_key)
-    return {"asset_id": asset_id, "thumbnail_key": body.thumbnail_key}
-
-
 @router.post("/upsert", response_model=UpsertAssetResponse)
 def upsert_asset(
     body: UpsertAssetRequest,

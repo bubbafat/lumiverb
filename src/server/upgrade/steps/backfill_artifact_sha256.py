@@ -36,6 +36,17 @@ def _hash_file(path: Path) -> str | None:
     return hasher.hexdigest()
 
 
+def _hash_key(storage, key: str) -> str | None:
+    """_hash_file of a stored key; None (as missing) for a key outside DATA_DIR."""
+    from src.server.storage.local import UnsafeKeyError
+
+    try:
+        path = storage.abs_path(key)
+    except UnsafeKeyError:
+        return None
+    return _hash_file(path)
+
+
 class BackfillProxySha256Step:
     """Hash all existing proxy files and write proxy_sha256 on the assets table."""
 
@@ -79,7 +90,7 @@ class BackfillProxySha256Step:
                 break
 
             for asset_id, proxy_key in rows:
-                sha256 = _hash_file(storage.abs_path(proxy_key))
+                sha256 = _hash_key(storage, proxy_key)
                 if sha256 is None:
                     logger.warning("proxy file missing for asset %s: %s", asset_id, proxy_key)
                     missing += 1
@@ -140,7 +151,7 @@ class BackfillThumbnailSha256Step:
                 break
 
             for asset_id, thumbnail_key in rows:
-                sha256 = _hash_file(storage.abs_path(thumbnail_key))
+                sha256 = _hash_key(storage, thumbnail_key)
                 if sha256 is None:
                     logger.warning(
                         "thumbnail file missing for asset %s: %s", asset_id, thumbnail_key
@@ -205,7 +216,7 @@ class BackfillSceneRepSha256Step:
                 break
 
             for scene_id, rep_key in rows:
-                sha256 = _hash_file(storage.abs_path(rep_key))
+                sha256 = _hash_key(storage, rep_key)
                 if sha256 is None:
                     logger.warning(
                         "scene rep file missing for scene %s: %s", scene_id, rep_key

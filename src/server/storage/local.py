@@ -1,11 +1,16 @@
 """Local filesystem storage for proxy and thumbnail files."""
 
+import os
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ulid import ULID
 
 from src.server.config import get_settings
+
+
+class UnsafeKeyError(ValueError):
+    """A storage key that would reach outside DATA_DIR."""
 
 
 class LocalStorage:
@@ -95,7 +100,21 @@ class LocalStorage:
         return f"{tenant_id}/{library_id}/face_crops/{bucket:02d}/{face_id}.webp"
 
     def abs_path(self, key: str) -> Path:
-        return Path(self._data_dir) / key
+        """Where a key lives under DATA_DIR. Every read, write and delete goes
+        through here, so a key that would leave DATA_DIR is refused: an
+        absolute key, one with a `..` part, or one that resolves outside it."""
+        if not isinstance(key, str) or not key or "\x00" in key:
+            raise UnsafeKeyError(f"Invalid storage key: {key!r}")
+        rel = PurePosixPath(key)
+        if rel.is_absolute() or key.startswith("\\") or ".." in rel.parts:
+            raise UnsafeKeyError(f"Storage key leaves the data directory: {key!r}")
+        root = os.path.abspath(self._data_dir)
+        path = Path(root) / key
+        # Checked on the path itself, not through links: a link inside
+        # DATA_DIR (an operator's choice) is followed as before.
+        if not os.path.normpath(path).startswith(root.rstrip(os.sep) + os.sep):
+            raise UnsafeKeyError(f"Storage key leaves the data directory: {key!r}")
+        return path
 
     def write(self, key: str, data: bytes) -> None:
         path = self.abs_path(key)
