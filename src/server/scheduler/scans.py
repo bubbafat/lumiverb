@@ -261,6 +261,21 @@ def _note_failures(
         state.retries[library_id] = Retry(left, old.delay, old.due, held)
 
 
+# Whether this process has said its root map is empty (once per start).
+_said_no_root_map = False
+
+
+def _warn_if_no_root_map() -> None:
+    """A library out of reach with no root map: the likely cause, said once."""
+    global _said_no_root_map
+    from src.processing.machine import current
+
+    if _said_no_root_map or current().root_map:
+        return
+    _said_no_root_map = True
+    logger.warning("scheduler: LUMIVERB_ROOT_MAP is empty; library roots are used as stored")
+
+
 def scan_pass(
     client: Any,
     libraries: list[dict],
@@ -297,6 +312,7 @@ def scan_pass(
                     on_roots(dict(roots))
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
+            _warn_if_no_root_map()
             continue
         try:
             scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
