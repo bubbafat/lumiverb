@@ -184,7 +184,7 @@ def test_hash_mismatch_returns_409(vision_env) -> None:
     auth, _, _, active_id, _, _, _ = vision_env
     r = _post(auth, active_id, client_proxy_sha256="0" * 64)
     assert r.status_code == 409
-    err = r.json()["detail"]["error"]
+    err = r.json()["error"]
     assert err["code"] == "proxy_hash_mismatch"
 
 

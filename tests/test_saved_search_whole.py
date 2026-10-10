@@ -43,7 +43,7 @@ def _clone(tenant_url: str, src_id: str, n: int, prefix: str) -> list[str]:
 def _project_ids(client, headers, project_id) -> list[str]:
     ids, after = [], None
     while True:
-        params = {"limit": 1000, **({"after": after} if after else {})}
+        params = {"limit": 500, **({"after": after} if after else {})}
         r = client.get(f"/v1/projects/{project_id}/assets", params=params, headers=headers)
         assert r.status_code == 200, r.text
         ids += [i["asset_id"] for i in r.json()["items"]]

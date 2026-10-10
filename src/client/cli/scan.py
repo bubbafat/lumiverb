@@ -134,7 +134,7 @@ def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, l
     ignored: dict[str, list[_ServerAsset] | None] = {}
     cursor: str | None = None
     while True:
-        params: dict[str, str] = {"limit": "1000"}
+        params: dict[str, str] = {"limit": "500"}
         if cursor:
             params["after"] = cursor
         data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
@@ -607,7 +607,7 @@ def _populate_cache_for_unchanged(
             asset_id = f["asset_id"]
             try:
                 resp = client._client.get(
-                    client._url(f"/v1/assets/{asset_id}/proxy"),
+                    client._url(f"/v1/assets/{asset_id}/artifacts/proxy"),
                 )
                 if resp.status_code == 200:
                     sha = f.get("source_sha256") or ""

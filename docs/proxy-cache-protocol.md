@@ -38,7 +38,7 @@ For each asset:
 
 1. Check if `{asset_id}` exists in cache
 2. If yes → load from disk (fast, no network)
-3. If no → download from server via `GET /v1/assets/{asset_id}/proxy`, cache for next time
+3. If no → download from server via `GET /v1/assets/{asset_id}/artifacts/proxy`, cache for next time
 
 ### Delete
 

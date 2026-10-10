@@ -14,11 +14,13 @@ function face(i: number) {
 // named, or is past the clusters sent, so the slider goes further than any shown.
 const clusters = {
   clusters: [
-    { cluster_index: 0, size: 5, faces: [face(1), face(2)] },
-    { cluster_index: 1, size: 3, faces: [face(3)] },
+    { cluster_id: "fc_a", size: 5, faces: [face(1), face(2)] },
+    { cluster_id: "fc_b", size: 3, faces: [face(3)] },
   ],
   truncated: false,
   max_cluster_size: 9,
+  computed_at: "2026-10-09T12:00:00+00:00",
+  pending: false,
 };
 
 beforeEach(() => {
@@ -60,6 +62,37 @@ describe("PeoplePage clusters", () => {
 
     fireEvent.change(screen.getByLabelText("Min faces"), { target: { value: "4" } });
     expect(screen.getByText(/5 faces in 1 clusters/)).toBeTruthy();
+  });
+});
+
+describe("PeoplePage cluster ids", () => {
+  it("names a cluster by its id, not its position", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+      if (path === "/people") return new Response(JSON.stringify({ items: [], next_cursor: null }));
+      if (path === "/faces/clusters") return new Response(JSON.stringify(clusters));
+      if (path === "/me") return new Response(JSON.stringify({ email: "e@x.y", role: "editor" }));
+      if (path === "/faces/clusters/fc_b/dismiss" && init?.method === "POST") {
+        return new Response(JSON.stringify({ person_id: "p_1" }));
+      }
+      return new Response("{}", { status: 404 });
+    });
+    renderPage();
+    const dismiss = await screen.findAllByRole("button", { name: /Dismiss/ });
+    fireEvent.click(dismiss[1]);
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/faces/clusters/fc_b/dismiss"))).toBe(true));
+  });
+
+  it("says when the groups are being worked out again", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+      if (path === "/people") return new Response(JSON.stringify({ items: [], next_cursor: null }));
+      if (path === "/faces/clusters") return new Response(JSON.stringify({ ...clusters, pending: true }));
+      return new Response("{}", { status: 404 });
+    });
+    renderPage();
+    expect(await screen.findByText("Updating")).toBeTruthy();
   });
 });
 

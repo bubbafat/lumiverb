@@ -12,8 +12,10 @@ those resources themselves using the live client.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -718,7 +720,7 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
 
     r = auth.get(f"/v1/assets/{fresh_id}/artifacts/proxy")
     assert r.status_code == 404
-    assert r.json()["detail"]["code"] == "artifact_not_ready"
+    assert r.json()["error"]["code"] == "artifact_not_ready"
 
 
 @pytest.mark.slow
@@ -751,7 +753,40 @@ def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
 
     r = auth.get(f"/v1/assets/{isolated_id}/artifacts/proxy")
     assert r.status_code == 404
-    assert r.json()["detail"]["code"] == "artifact_missing"
+    assert r.json()["error"]["code"] == "artifact_missing"
+
+
+@pytest.mark.slow
+def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
+    """The GET changes nothing (the key stays); it reports the clip, and
+    upkeep clears the key of a file still gone so the producer makes it again."""
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
+    rel_path = f"repair_{secrets.token_hex(4)}.jpg"
+    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 100,
+                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "image"})
+    asset_id = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()["asset_id"]
+    key = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy",
+                    files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
+                    data={"lineage": made_json("proxy")}).json()["key"]
+    storage.abs_path(key).unlink()
+
+    for _ in range(2):  # reported once, however often it's asked for
+        assert auth.get(f"/v1/assets/{asset_id}/artifacts/proxy").status_code == 404
+    assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] == key  # the GET wrote nothing to the clip
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            reported = json.loads(conn.execute(text(
+                "SELECT value FROM system_metadata WHERE key = 'artifacts.missing'")).scalar())
+    finally:
+        engine.dispose()
+    assert reported.count(f"{asset_id}:proxy") == 1
+
+    with patch("src.server.missing_artifacts.get_storage", return_value=storage):
+        r = auth.post("/v1/upkeep")
+    assert r.status_code == 200, r.text
+    assert r.json()["missing_files"]["cleared"] >= 1
+    assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] is None
 
 
 @pytest.mark.slow
@@ -776,11 +811,9 @@ def test_download_missing_auth_returns_401(artifact_env) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests for /v1/assets/{asset_id}/preview — the streaming endpoint the
-# web UI uses to fetch video bytes for the hover preview and lightbox.
-# This is a separate route from /v1/assets/{asset_id}/artifacts/video_preview
-# (which the test_download_video_preview_returns_bytes test covers).
-# Until these tests landed, the user-facing playback path was untested.
+# /v1/assets/{asset_id}/artifacts/video_preview — what the web UI fetches for
+# the hover preview, and the Mac and iPhone lightbox. It is the only preview
+# route: /proxy, /thumbnail and /preview are gone.
 # ---------------------------------------------------------------------------
 
 
@@ -804,7 +837,7 @@ def _create_video_asset(auth, library_id: str, *, prefix: str) -> str:
 
 @pytest.mark.slow
 def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
-    """GET /v1/assets/{id}/preview returns the bytes uploaded as video_preview."""
+    """The video_preview artifact returns the bytes uploaded as video_preview."""
     auth, _, library_id, _, _, _, _ = artifact_env
     video_asset_id = _create_video_asset(auth, library_id, prefix="preview_stream")
 
@@ -816,7 +849,7 @@ def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     )
     assert r_up.status_code == 200, r_up.text
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
     assert r.content == mp4_content
@@ -851,7 +884,7 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     )
     assert r_scene.status_code == 200, r_scene.text
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
     assert r.content == mp4_content, (
@@ -869,13 +902,22 @@ def test_preview_endpoint_returns_404_when_no_preview(artifact_env) -> None:
     auth, _, library_id, _, _, _, _ = artifact_env
     video_asset_id = _create_video_asset(auth, library_id, prefix="preview_missing")
 
-    r = auth.get(f"/v1/assets/{video_asset_id}/preview")
+    r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 404
 
 
 @pytest.mark.slow
 def test_preview_endpoint_rejects_image_assets(artifact_env) -> None:
-    """Image assets must not be served via /preview (it's video-only)."""
+    """An image has no video preview."""
     auth, _, _, image_asset_id, _, _, _ = artifact_env
-    r = auth.get(f"/v1/assets/{image_asset_id}/preview")
-    assert r.status_code == 422
+    r = auth.get(f"/v1/assets/{image_asset_id}/artifacts/video_preview")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "artifact_not_ready"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("route", ["proxy", "thumbnail", "preview"])
+def test_the_duplicate_picture_routes_are_gone(artifact_env, route) -> None:
+    """One route per artifact: /artifacts/{type}."""
+    auth, _, _, asset_id, _, _, _ = artifact_env
+    assert auth.get(f"/v1/assets/{asset_id}/{route}").status_code == 404

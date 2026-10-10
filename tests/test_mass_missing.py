@@ -25,8 +25,8 @@ def _library_of(env, n: int) -> list[str]:
                                                    "file_size": 1, "file_mtime": None, "media_type": "image"},
                         headers=headers)
         assert r.status_code == 200, r.text
-    r = client.get("/v1/assets", params={"library_id": library_id}, headers=headers)
-    return sorted(a["asset_id"] for a in r.json())
+    r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=headers)
+    return sorted(a["asset_id"] for a in r.json()["items"])
 
 
 def _missing(env, ids: list[str], **extra):
@@ -44,8 +44,8 @@ def test_most_of_a_library_missing_asks_first(env):
     assert err["code"] == "mass_missing" and err["details"]["count"] == 51
     assert err["details"]["libraries"][0]["in_sight"] == 100
     client, headers, *_ = env
-    assert len(client.get("/v1/assets", params={"library_id": err["details"]["libraries"][0]["library_id"]},
-                          headers=headers).json()) == 100  # nothing taken
+    assert len(client.get("/v1/assets/page", params={"library_id": err["details"]["libraries"][0]["library_id"]},
+                          headers=headers).json()["items"]) == 100  # nothing taken
 
     assert _missing(env, ids[:51], confirm_missing=50).status_code == 409  # another count asks again
     r = _missing(env, ids[:51], confirm_missing=51)

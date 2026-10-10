@@ -25,7 +25,7 @@ final class FaceClusterTests: XCTestCase {
         {
             "clusters": [
                 {
-                    "cluster_index": 0,
+                    "cluster_id": "fc_a",
                     "size": 42,
                     "faces": [
                         {
@@ -45,13 +45,15 @@ final class FaceClusterTests: XCTestCase {
                     ]
                 },
                 {
-                    "cluster_index": 1,
+                    "cluster_id": "fc_b",
                     "size": 7,
                     "faces": []
                 }
             ],
             "truncated": false,
-            "max_cluster_size": 42
+            "max_cluster_size": 42,
+            "computed_at": "2026-10-09T12:00:00+00:00",
+            "pending": false
         }
         """.data(using: .utf8)!
 
@@ -61,10 +63,12 @@ final class FaceClusterTests: XCTestCase {
         XCTAssertEqual(response.maxClusterSize, 42)
 
         let first = response.clusters[0]
-        XCTAssertEqual(first.clusterIndex, 0)
+        XCTAssertEqual(first.clusterId, "fc_a")
         XCTAssertEqual(first.size, 42)
         XCTAssertEqual(first.faces.count, 2)
-        XCTAssertEqual(first.id, 0)
+        XCTAssertEqual(first.id, "fc_a")
+        XCTAssertFalse(response.pending)
+        XCTAssertEqual(response.computedAt, "2026-10-09T12:00:00+00:00")
         XCTAssertEqual(first.faces[0].faceId, "f1")
         XCTAssertEqual(first.faces[0].boundingBox?.width, 0.3)
         XCTAssertNil(first.faces[1].boundingBox)
@@ -75,7 +79,9 @@ final class FaceClusterTests: XCTestCase {
         {
             "clusters": [],
             "truncated": true,
-            "max_cluster_size": 1528
+            "max_cluster_size": 1528,
+            "computed_at": null,
+            "pending": true
         }
         """.data(using: .utf8)!
 
@@ -83,6 +89,8 @@ final class FaceClusterTests: XCTestCase {
         XCTAssertTrue(response.truncated)
         XCTAssertEqual(response.maxClusterSize, 1528)
         XCTAssertTrue(response.clusters.isEmpty)
+        XCTAssertTrue(response.pending)
+        XCTAssertNil(response.computedAt)
     }
 
     // MARK: - ClusterFacesResponse (paginated full face list per cluster)

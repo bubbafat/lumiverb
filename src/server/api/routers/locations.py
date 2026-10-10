@@ -22,13 +22,13 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
-from src.server.api.errors import DecisionRequiredError
+from src.server.api.errors import ApiError, DecisionRequiredError
+from src.server.api.limits import MAX_IDS
 from src.server.repository import locations
 from src.shared.location import is_fix
 
 router = APIRouter(prefix="/v1/assets/locations", tags=["locations"])
 
-MAX_IDS = 10_000
 
 
 class SetLocationRequest(BaseModel):
@@ -65,10 +65,10 @@ class AcceptLocationResponse(BaseModel):
 
 
 def _ids(body: SetLocationRequest | LocationIdsRequest | None) -> list[str]:
-    """The clips the request names, once each; 400 without any (never "all")."""
+    """The clips the request names, once each; 400 scope_required without any (never "all")."""
     ids = list(dict.fromkeys(body.asset_ids)) if body and body.asset_ids else []
     if not ids:
-        raise HTTPException(status_code=400, detail="asset_ids is required: name the clips")
+        raise ApiError(400, "scope_required", "Give asset_ids.")
     return ids
 
 
@@ -101,7 +101,7 @@ def set_locations(
     basis: dict = {}
     if by_point:
         if body.lat is None or body.lon is None or not is_fix(body.lat, body.lon):
-            raise HTTPException(status_code=400, detail="lat and lon must be a real place: -90..90, -180..180, not 0, 0")
+            raise ApiError(422, "invalid_location", "lat and lon must be a real place: -90..90, -180..180, not 0, 0")
         lat, lon = float(body.lat), float(body.lon)
     else:
         fix = locations.fix_of(session, body.same_as)  # type: ignore[arg-type]

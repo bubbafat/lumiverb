@@ -5,13 +5,14 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cursor
 from src.server.api.errors import DecisionRequiredError
+from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.shared.utils import utcnow
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository, LibraryRepository
@@ -23,8 +24,11 @@ router = APIRouter(prefix="/v1/trash", tags=["trash"])
 
 
 class EmptyTrashRequest(BaseModel):
-    asset_ids: list[str] | None = None
-    trashed_before: str | None = None  # ISO8601
+    # What goes: these clips, or all: true for every clip in the trash
+    # (narrowed by library_id, path and trashed_before). Neither is a 400.
+    asset_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    all: bool = False
+    trashed_before: datetime | None = None
     # Only this library's trash, and only under this folder: what a filtered view showed.
     library_id: str | None = None
     path: str | None = None
@@ -60,7 +64,7 @@ def list_trash(
     library_id: str | None = None,
     path: str | None = Query(default=None, description="Only clips under this folder (recursive)."),
     after: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=MAX_PAGE),
 ) -> TrashPage:
     """Clips a person trashed, most recently trashed first, with when each is
     deleted for good. Clips of a library in the trash go with the library,
@@ -100,19 +104,14 @@ def empty_trash(
 ) -> EmptyTrashResponse:
     """
     Permanently delete trashed assets. Admin only.
-    Scope by asset_ids and/or trashed_before. If neither provided, delete all trashed.
+    asset_ids, or all: true (every clip in the trash, narrowed by library_id,
+    path and trashed_before); neither or both is a 400 scope_required.
     Deletes DB rows in FK-safe order, then best-effort file and Quickwit cleanup.
     """
+    require_scope(body.asset_ids is not None, body.all, "asset_ids")
     asset_repo = AssetRepository(session)
-    trashed_before_dt: datetime | None = None
-    if body.trashed_before:
-        try:
-            trashed_before_dt = datetime.fromisoformat(
-                body.trashed_before.replace("Z", "+00:00")
-            )
-        except ValueError:
-            trashed_before_dt = None
-    if body.asset_ids is None and trashed_before_dt is None:
+    trashed_before_dt = body.trashed_before
+    if body.all and trashed_before_dt is None:
         trashed_before_dt = utcnow()
     to_delete = asset_repo.list_trashed(asset_ids=body.asset_ids, trashed_before=trashed_before_dt,
                                         library_id=body.library_id, folder=body.path)

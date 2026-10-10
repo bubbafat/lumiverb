@@ -28,6 +28,12 @@ public struct ClusterReviewView: View {
                         truncatedBanner
                     }
 
+                    if state.pending {
+                        Text("Updating")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
                     if let error = state.error {
                         errorBanner(error)
                     }
@@ -45,7 +51,7 @@ public struct ClusterReviewView: View {
                             .transition(.opacity.combined(with: .move(edge: .leading)))
                             .onAppear {
                                 Task {
-                                    await state.loadNearestPeople(forCluster: cluster.clusterIndex)
+                                    await state.loadNearestPeople(forCluster: cluster.clusterId)
                                 }
                             }
                         }
@@ -178,11 +184,11 @@ struct ClusterCardView: View {
     @State private var nameInput: String = ""
 
     private var isPending: Bool {
-        state.pendingMutations.contains(cluster.clusterIndex)
+        state.pendingMutations.contains(cluster.clusterId)
     }
 
     private var suggestions: [NearestPersonItem] {
-        state.nearestPeople[cluster.clusterIndex] ?? []
+        state.nearestPeople[cluster.clusterId] ?? []
     }
 
     var body: some View {
@@ -312,7 +318,7 @@ struct ClusterCardView: View {
                     ProgressView().controlSize(.small)
                 }
                 Button(role: .destructive) {
-                    Task { await state.dismissCluster(cluster.clusterIndex) }
+                    Task { await state.dismissCluster(cluster.clusterId) }
                 } label: {
                     Label("Dismiss", systemImage: "trash")
                         .labelStyle(.iconOnly)
@@ -337,7 +343,7 @@ struct ClusterCardView: View {
                     ProgressView().controlSize(.small)
                 }
                 Button(role: .destructive) {
-                    Task { await state.dismissCluster(cluster.clusterIndex) }
+                    Task { await state.dismissCluster(cluster.clusterId) }
                 } label: {
                     Label("Dismiss", systemImage: "trash")
                 }
@@ -381,7 +387,7 @@ struct ClusterCardView: View {
         Button {
             Task {
                 await state.mergeCluster(
-                    cluster.clusterIndex,
+                    cluster.clusterId,
                     intoPersonId: person.personId
                 )
             }
@@ -411,7 +417,7 @@ struct ClusterCardView: View {
         let trimmed = nameInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         Task {
-            await state.nameCluster(cluster.clusterIndex, newPersonName: trimmed)
+            await state.nameCluster(cluster.clusterId, newPersonName: trimmed)
         }
     }
 }

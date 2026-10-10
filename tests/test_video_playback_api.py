@@ -179,6 +179,19 @@ def _playback(env, asset_id: str, headers=None, params=None):
                       params=params or {})
 
 
+def _fetch(client, url: str, **kw):
+    """GET, asking again while the capped copy is made in the background
+    (503 playback_preparing, with Retry-After)."""
+    deadline = time.monotonic() + 60
+    while True:
+        r = client.get(url, **kw)
+        if r.status_code != 503 or r.json()["error"]["code"] != "playback_preparing":
+            return r
+        assert int(r.headers["retry-after"]) > 0
+        assert time.monotonic() < deadline, "the cut never got made"
+        time.sleep(0.05)
+
+
 def _path(url: str) -> str:
     u = urlparse(url)
     return u.path + (f"?{u.query}" if u.query else "")
@@ -267,7 +280,7 @@ def test_full_length_proxy_streams_with_every_audio_track(env, media, tmp_path):
     assert body["max_seconds"] is None
     assert body["expires_at"]
     # No Authorization header: the signature is the credential.
-    got = client.get(_path(body["url"]))
+    got = _fetch(client, _path(body["url"]))
     assert got.status_code == 200
     assert got.headers["content-type"] == "video/mp4"
     assert got.content == media["proxy"]
@@ -278,7 +291,7 @@ def test_full_length_proxy_streams_with_every_audio_track(env, media, tmp_path):
 def test_the_link_seeks(env, media):
     client, *_ = env
     url = _playback(env, _video(env, media, "seek")).json()["url"]
-    got = client.get(_path(url), headers={"Range": "bytes=100-199"})
+    got = _fetch(client, _path(url), headers={"Range": "bytes=100-199"})
     assert got.status_code == 206
     assert got.content == media["proxy"][100:200]
     assert got.headers["accept-ranges"] == "bytes"
@@ -290,7 +303,7 @@ def test_before_the_proxy_exists_the_preview_plays(env, media):
     asset_id = _video(env, media, "early", proxy=False)
     body = _playback(env, asset_id).json()
     assert body["source"] == "preview"
-    assert client.get(_path(body["url"])).content == media["preview"]
+    assert _fetch(client, _path(body["url"])).content == media["preview"]
 
 
 @pytest.mark.slow
@@ -311,7 +324,7 @@ def test_a_trashed_video_stops_streaming(env, media):
     url = _playback(env, asset_id).json()["url"]
     r = client.delete(f"/v1/assets/{asset_id}", headers=admin)
     assert r.status_code == 204, r.text
-    assert client.get(_path(url)).status_code == 404
+    assert _fetch(client, _path(url)).status_code == 404
     assert _playback(env, asset_id).status_code == 404
 
 
@@ -351,7 +364,7 @@ def test_an_expired_link_is_refused(env, media):
 def test_viewers_can_play(env, media):
     client, _admin, _lib, _storage, keys = env
     body = _playback(env, _video(env, media, "viewer"), headers=keys["viewer"]).json()
-    assert client.get(_path(body["url"])).status_code == 200
+    assert _fetch(client, _path(body["url"])).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -366,11 +379,11 @@ def test_a_cap_serves_only_the_first_seconds(env, media, tmp_path):
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
     body = _playback(env, asset_id).json()
     assert body["max_seconds"] == 2
-    got = client.get(_path(body["url"]))
+    got = _fetch(client, _path(body["url"]))
     assert got.status_code == 200
     assert _duration(got.content, tmp_path) == pytest.approx(2.0, abs=0.6)
     assert _audio_tracks(got.content, tmp_path) == 2
-    ranged = client.get(_path(body["url"]), headers={"Range": "bytes=0-99"})
+    ranged = _fetch(client, _path(body["url"]), headers={"Range": "bytes=0-99"})
     assert ranged.status_code == 206 and ranged.content == got.content[:100]
 
 
@@ -379,7 +392,7 @@ def test_a_cap_longer_than_the_video_serves_it_whole(env, media):
     client, admin, *_ = env
     asset_id = _video(env, media, "short")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 600}, headers=admin)
-    got = client.get(_path(_playback(env, asset_id).json()["url"]))
+    got = _fetch(client, _path(_playback(env, asset_id).json()["url"]))
     assert got.content == media["proxy"]
 
 
@@ -387,9 +400,9 @@ def test_a_cap_longer_than_the_video_serves_it_whole(env, media):
 def test_a_new_cap_applies_to_links_already_handed_out(env, media, tmp_path):
     client, admin, *_ = env
     url = _path(_playback(env, _video(env, media, "change")).json()["url"])
-    assert client.get(url).content == media["proxy"]
+    assert _fetch(client, url).content == media["proxy"]
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 1}, headers=admin)
-    assert _duration(client.get(url).content, tmp_path) == pytest.approx(1.0, abs=0.6)
+    assert _duration(_fetch(client, url).content, tmp_path) == pytest.approx(1.0, abs=0.6)
 
 
 @pytest.mark.slow
@@ -397,9 +410,9 @@ def test_the_cap_applies_to_the_preview_too(env, media, tmp_path):
     client, admin, *_ = env
     asset_id = _video(env, media, "preview_capped", proxy=False)
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 1}, headers=admin)
-    got = client.get(_path(_playback(env, asset_id).json()["url"]))
+    got = _fetch(client, _path(_playback(env, asset_id).json()["url"]))
     assert _duration(got.content, tmp_path) == pytest.approx(1.0, abs=0.6)
-    hover = client.get(f"/v1/assets/{asset_id}/preview", headers=admin)
+    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin)
     assert _duration(hover.content, tmp_path) == pytest.approx(1.0, abs=0.6)
 
 
@@ -417,14 +430,14 @@ def test_public_library_playback_and_its_end(env, media):
         r = client.get(f"/v1/assets/{asset_id}/playback", params={"public_library_id": library_id})
         assert r.status_code == 200, r.text
         url = _path(r.json()["url"])
-        assert client.get(url).status_code == 200
+        assert _fetch(client, url).status_code == 200
         # The full analysis proxy isn't downloadable from a public page.
         r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", params={"public_library_id": library_id})
         assert r.status_code == 403
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=admin)
     # Made private again: the link handed to the public stops working.
-    assert client.get(url).status_code == 404
+    assert _fetch(client, url).status_code == 404
 
 
 @pytest.mark.slow
@@ -457,11 +470,11 @@ def test_public_pages_play_10_seconds_by_default(env, media, tmp_path):
     params = _public(env)
     body = client.get(f"/v1/assets/{asset_id}/playback", params=params).json()
     assert body["max_seconds"] == 10
-    assert _duration(client.get(_path(body["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
+    assert _duration(_fetch(client, _path(body["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
     # Signed in, the same video plays whole.
     signed_in = _playback(env, asset_id).json()
     assert signed_in["max_seconds"] is None
-    assert _duration(client.get(_path(signed_in["url"])).content, tmp_path) == pytest.approx(14, abs=0.6)
+    assert _duration(_fetch(client, _path(signed_in["url"])).content, tmp_path) == pytest.approx(14, abs=0.6)
 
 
 @pytest.mark.slow
@@ -471,9 +484,9 @@ def test_an_admin_raises_or_lifts_the_public_cap(env, media, tmp_path):
     params = _public(env)
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": 12}, headers=admin)
     url = _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])
-    assert _duration(client.get(url).content, tmp_path) == pytest.approx(12, abs=0.6)
+    assert _duration(_fetch(client, url).content, tmp_path) == pytest.approx(12, abs=0.6)
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": None}, headers=admin)
-    assert client.get(url).content == media["long"]
+    assert _fetch(client, url).content == media["long"]
 
 
 @pytest.mark.slow
@@ -484,7 +497,7 @@ def test_the_account_cap_limits_public_pages_too(env, media, tmp_path):
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 3}, headers=admin)
     body = client.get(f"/v1/assets/{asset_id}/playback", params=params).json()
     assert body["max_seconds"] == 3
-    assert _duration(client.get(_path(body["url"])).content, tmp_path) == pytest.approx(3, abs=0.6)
+    assert _duration(_fetch(client, _path(body["url"])).content, tmp_path) == pytest.approx(3, abs=0.6)
 
 
 @pytest.mark.slow
@@ -493,12 +506,12 @@ def test_public_hover_and_preview_artifact_follow_the_public_cap(env, media, tmp
     asset_id = _video(env, media, "pub_hover", proxy=False)
     params = _public(env)
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": 1}, headers=admin)
-    hover = client.get(f"/v1/assets/{asset_id}/preview", params=params)
+    hover = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params)
     assert _duration(hover.content, tmp_path) == pytest.approx(1, abs=0.6)
-    art = client.get(f"/v1/assets/{asset_id}/artifacts/video_preview", params=params)
+    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params)
     assert _duration(art.content, tmp_path) == pytest.approx(1, abs=0.6)
     # Signed in, the preview is whole.
-    assert client.get(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin).content == media["preview"]
+    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin).content == media["preview"]
 
 
 @pytest.mark.slow
@@ -534,7 +547,7 @@ def test_changing_a_cap_clears_the_old_cuts(env, media):
     client, admin, *_ = env
     asset_id = _video(env, media, "cut_clear")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
-    client.get(_path(_playback(env, asset_id).json()["url"]))
+    _fetch(client, _path(_playback(env, asset_id).json()["url"]))
     assert any(n.startswith(asset_id) for n in _cuts(env))
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": None}, headers=admin)
     assert not any(n.startswith(asset_id) for n in _cuts(env))
@@ -545,7 +558,7 @@ def test_deleting_for_good_removes_its_cuts(env, media):
     client, admin, *_ = env
     asset_id = _video(env, media, "cut_purge")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
-    client.get(_path(_playback(env, asset_id).json()["url"]))
+    _fetch(client, _path(_playback(env, asset_id).json()["url"]))
     assert any(n.startswith(asset_id) for n in _cuts(env))
     assert client.delete(f"/v1/assets/{asset_id}", headers=admin).status_code == 204
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=admin)
@@ -564,9 +577,12 @@ def test_a_cut_that_cant_be_made_is_a_503(env, media, monkeypatch):
     real = playback.subprocess.run
     monkeypatch.setattr(playback.subprocess, "run",
                         lambda cmd, *a, **k: real(["false"], *a, **k) if cmd[0] == "ffmpeg" else real(cmd, *a, **k))
-    r = client.get(url)
+    r = _fetch(client, url)
     assert r.status_code == 503
-    assert not any(n.startswith(asset_id) or n.startswith(f".{asset_id}") for n in _cuts(env))
+    assert r.json()["error"]["code"] == "playback_cut_failed"
+    # No cut or half-written temp file left behind (the probe's .duration stays).
+    assert not any((n.startswith(asset_id) or n.startswith(f".{asset_id}")) and not n.endswith(".duration")
+                   for n in _cuts(env))
 
 
 # ---------------------------------------------------------------------------
@@ -580,10 +596,10 @@ def test_viewers_cant_download_the_whole_proxy_while_capped(env, media):
     asset_id = _video(env, media, "bypass")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=keys["admin"])
     url = f"/v1/assets/{asset_id}/artifacts/analysis_proxy"
-    assert client.get(url, headers=keys["viewer"]).status_code == 403
-    assert client.get(url, headers=keys["editor"]).status_code == 200  # the brain's tools need it
+    assert _fetch(client, url, headers=keys["viewer"]).status_code == 403
+    assert _fetch(client, url, headers=keys["editor"]).status_code == 200  # the brain's tools need it
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": None}, headers=keys["admin"])
-    assert client.get(url, headers=keys["viewer"]).status_code == 200
+    assert _fetch(client, url, headers=keys["viewer"]).status_code == 200
 
 
 @pytest.mark.slow
@@ -591,7 +607,7 @@ def test_a_signed_in_preview_artifact_follows_the_account_cap(env, media, tmp_pa
     client, admin, *_ = env
     asset_id = _video(env, media, "art_cap", proxy=False)
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 1}, headers=admin)
-    art = client.get(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin)
+    art = _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", headers=admin)
     assert _duration(art.content, tmp_path) == pytest.approx(1, abs=0.6)
 
 
@@ -605,10 +621,10 @@ def test_ranges_from_the_end_and_past_the_end(env, media):
     client, *_ = env
     url = _path(_playback(env, _video(env, media, "ranges")).json()["url"])
     size = len(media["proxy"])
-    tail = client.get(url, headers={"Range": "bytes=-100"})
+    tail = _fetch(client, url, headers={"Range": "bytes=-100"})
     assert tail.status_code == 206 and tail.content == media["proxy"][-100:]
     assert tail.headers["content-range"] == f"bytes {size - 100}-{size - 1}/{size}"
-    past = client.get(url, headers={"Range": f"bytes={size + 10}-"})
+    past = _fetch(client, url, headers={"Range": f"bytes={size + 10}-"})
     assert past.status_code == 416
     assert past.headers["content-range"] == f"bytes */{size}"
 
@@ -618,9 +634,9 @@ def test_the_stream_names_its_version(env, media):
     # A cap change or a new proxy mid-play mustn't splice two files together.
     client, admin, *_ = env
     url = _path(_playback(env, _video(env, media, "etag")).json()["url"])
-    whole = client.get(url).headers["etag"]
+    whole = _fetch(client, url).headers["etag"]
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
-    assert client.get(url).headers["etag"] != whole
+    assert _fetch(client, url).headers["etag"] != whole
 
 
 @pytest.mark.fast
@@ -691,12 +707,12 @@ def test_public_project_pages_play_hover_and_show_details(env, media, tmp_path):
     body = client.get(f"/v1/assets/{asset_id}/playback", params=params)
     assert body.status_code == 200, body.text
     assert body.json()["max_seconds"] == 10
-    assert _duration(client.get(_path(body.json()["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
-    assert client.get(f"/v1/assets/{asset_id}/preview", params=params).status_code == 200
+    assert _duration(_fetch(client, _path(body.json()["url"])).content, tmp_path) == pytest.approx(10, abs=0.6)
+    assert _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).status_code == 200
     assert client.get(f"/v1/assets/{asset_id}", params=params).status_code == 200
     # Only the project's own clips.
     assert client.get(f"/v1/assets/{outsider}/playback", params=params).status_code == 403
-    assert client.get(f"/v1/assets/{outsider}/preview", params=params).status_code == 403
+    assert client.get(f"/v1/assets/{outsider}/artifacts/video_preview", params=params).status_code == 403
     assert client.get(f"/v1/assets/{outsider}", params=params).status_code == 403
 
 
@@ -731,17 +747,17 @@ def test_the_cap_goes_by_the_file_not_a_stored_duration(env, media, tmp_path):
     _upload(env, asset_id, "analysis_proxy", media["long"])
     params = _public(env)
     url = _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])
-    assert _duration(client.get(url).content, tmp_path) == pytest.approx(10, abs=0.6)
+    assert _duration(_fetch(client, url).content, tmp_path) == pytest.approx(10, abs=0.6)
 
 
 @pytest.mark.slow
 def test_if_range_with_an_old_version_gets_the_whole_new_file(env, media):
     client, admin, *_ = env
     url = _path(_playback(env, _video(env, media, "ifrange")).json()["url"])
-    etag = client.get(url).headers["etag"]
-    same = client.get(url, headers={"Range": "bytes=0-99", "If-Range": etag})
+    etag = _fetch(client, url).headers["etag"]
+    same = _fetch(client, url, headers={"Range": "bytes=0-99", "If-Range": etag})
     assert same.status_code == 206 and len(same.content) == 100
-    stale = client.get(url, headers={"Range": "bytes=0-99", "If-Range": '"something-else"'})
+    stale = _fetch(client, url, headers={"Range": "bytes=0-99", "If-Range": '"something-else"'})
     assert stale.status_code == 200 and stale.content == media["proxy"]
 
 
@@ -802,9 +818,67 @@ def test_public_pages_never_serve_where_a_clip_was_shot(env, gps_preview, tmp_pa
     client.patch("/v1/tenant/settings", json={"public_video_preview_max_seconds": public_cap}, headers=admin)
     params = _public(env)
     for body in (
-        client.get(_path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])).content,
-        client.get(f"/v1/assets/{asset_id}/preview", params=params).content,
-        client.get(f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).content,
+        _fetch(client, _path(client.get(f"/v1/assets/{asset_id}/playback", params=params).json()["url"])).content,
+        _fetch(client, f"/v1/assets/{asset_id}/artifacts/video_preview", params=params).content,
     ):
         assert body[:12].find(b"ftyp") != -1
         assert not _has_location(body, tmp_path)
+
+
+@pytest.mark.slow
+def test_a_cut_is_made_off_the_request(env, media, monkeypatch, tmp_path):
+    """A public visitor's GET never waits on ffmpeg: the cut is made in the
+    background, the link says 503 playback_preparing meanwhile, and
+    /playback says ready once it's there."""
+    import threading
+
+    client, admin, *_ = env
+    asset_id = _video(env, media, "off_request")
+    client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
+    from src.server.api.routers import playback
+
+    real = playback.subprocess.run
+    release = threading.Event()
+    in_request = []
+
+    def held(cmd, *a, **k):
+        if cmd[0] == "ffmpeg":
+            in_request.append(threading.current_thread().name)
+            release.wait(30)
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(playback.subprocess, "run", held)
+    body = _playback(env, asset_id).json()
+    assert body["ready"] is False
+    started = time.monotonic()
+    r = client.get(_path(body["url"]))
+    assert time.monotonic() - started < 5
+    assert r.status_code == 503 and r.json()["error"]["code"] == "playback_preparing"
+    assert r.headers["retry-after"] == "2"
+    release.set()
+    got = _fetch(client, _path(body["url"]))
+    assert got.status_code == 200
+    assert _duration(got.content, tmp_path) == pytest.approx(2.0, abs=0.6)
+    assert in_request and all(name.startswith("playback-cut") for name in in_request)
+    assert _playback(env, asset_id).json()["ready"] is True
+
+
+@pytest.mark.slow
+def test_the_old_preview_route_is_gone(env, media):
+    client, admin, *_ = env
+    asset_id = _video(env, media, "no_preview_route", proxy=False)
+    assert client.get(f"/v1/assets/{asset_id}/preview", headers=admin).status_code == 404
+
+
+@pytest.mark.slow
+def test_whether_a_cut_is_needed_is_kept_on_disk_for_every_worker(env, media):
+    """A video no longer than the cap needs no cut; the probe that says so is
+    kept beside the cuts, so another API worker (no memory of it) serves it whole."""
+    client, admin, *_ = env
+    asset_id = _video(env, media, "fits")
+    client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 600}, headers=admin)
+    url = _path(_playback(env, asset_id).json()["url"])
+    assert _fetch(client, url).content == media["proxy"]
+    assert any(n.startswith(asset_id) and n.endswith(".duration") for n in _cuts(env))
+    assert _playback(env, asset_id).json()["ready"] is True
+    assert client.get(url).content == media["proxy"]  # straight away, no 503

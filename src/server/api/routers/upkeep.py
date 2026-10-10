@@ -5,7 +5,8 @@ account. The operator's admin key (ADMIN_KEY) acts on every account, and
 must say so with ?tenants=all; without it the call is a 400, never
 "everything". No key or a dead one is a 401; another role's key a 403.
 
-POST /v1/upkeep                    — search sync, face names, expired trash (and, all accounts, old revoked tokens)
+POST /v1/upkeep                    — search sync, face names, expired trash, missing artifact files,
+                                     face clusters when faces changed (and, all accounts, old revoked tokens)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id for one library)
 POST /v1/upkeep/recluster          — recompute face clusters
@@ -89,10 +90,28 @@ class TrashPurgeResult(BaseModel):
     paused_tenants: list[str] = Field(default_factory=list)
 
 
+class MissingFilesResult(BaseModel):
+    """Artifact files a request found gone (missing_artifacts): checked again,
+    and the keys of those still gone cleared, for the producers to make again."""
+    checked: int = 0
+    cleared: int = 0
+    # Skipped because Upkeep is paused, not "nothing to do"; with the admin key, which accounts.
+    paused: bool = False
+    paused_tenants: list[str] = Field(default_factory=list)
+
+
+class FaceClustersResult(BaseModel):
+    """Accounts whose face clusters were computed again because faces changed
+    since (GET /v1/faces/clusters only reads them)."""
+    computed: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
     trash_purge: TrashPurgeResult = TrashPurgeResult()
+    missing_files: MissingFilesResult = MissingFilesResult()
+    face_clusters: FaceClustersResult = FaceClustersResult()
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -274,6 +293,42 @@ def _purge_expired_trash_single_tenant(scope: UpkeepScope) -> dict:
         return {}
 
 
+def _each_account(scope: UpkeepScope, what: str, work, *, pausable: bool) -> dict:
+    """Run work(session) -> dict of counts for each account of the scope and
+    add them up. pausable: an account whose Upkeep switch is paused is skipped."""
+    from src.server.database import get_tenant_session
+
+    totals: dict[str, int] = {}
+    paused: list[str] = []
+    for tenant_id in _tenant_ids(scope):
+        try:
+            with (get_tenant_session(tenant_id) if scope.all_tenants else _tenant_session(scope)) as session:
+                if pausable and _upkeep_paused(session):
+                    _skipped(what, tenant_id, paused)
+                    continue
+                for key, n in work(session).items():
+                    totals[key] = totals.get(key, 0) + n
+        except Exception as exc:
+            logger.warning("%s failed for tenant %s: %s", what, tenant_id, exc)
+    return {**totals, **({"paused": True, "paused_tenants": paused} if paused else {})}
+
+
+def _repair_missing_files(session) -> dict:
+    from src.server import missing_artifacts
+
+    return missing_artifacts.repair(session)
+
+
+def _recluster_if_changed(session) -> dict:
+    """Compute the face clusters again when faces changed since they were."""
+    from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
+
+    if clusters_current(session, cached_clusters(session)):
+        return {"computed": 0}
+    store_clusters(session)
+    return {"computed": 1}
+
+
 def _reset_search_synced_at(session) -> None:
     """Clear the sync times of all assets, scenes and transcripts to force full re-index."""
     from src.server.search.sync import REINDEX_RESETS
@@ -349,8 +404,10 @@ def _tenant_ids(scope: UpkeepScope) -> list[str]:
 
 @router.post("", response_model=UpkeepResult)
 def run_upkeep(scope: Scope) -> UpkeepResult:
-    """Run all periodic upkeep tasks: search sync, face propagation, and
-    deleting for good what has been in the trash past the trash days.
+    """Run all periodic upkeep tasks: search sync, face propagation,
+    deleting for good what has been in the trash past the trash days,
+    repairing artifact files reported missing, and computing the face
+    clusters again when faces changed since they were.
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, and old revoked tokens are dropped.
@@ -364,10 +421,15 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         sync_result = _run_sweep_single_tenant(scope)
         prop_result = _propagate_faces_single_tenant(scope)
         purge_result = _purge_expired_trash_single_tenant(scope)
+    # After the face names spread, so the clusters leave out what they named.
+    missing = _each_account(scope, "Missing files aren't repaired", _repair_missing_files, pausable=True)
+    clusters = _each_account(scope, "Face clusters", _recluster_if_changed, pausable=False)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
         trash_purge=TrashPurgeResult(**purge_result),
+        missing_files=MissingFilesResult(**missing),
+        face_clusters=FaceClustersResult(**clusters),
     )
 
 
@@ -433,20 +495,12 @@ def run_cleanup(
 def run_recluster(scope: Scope) -> ReclusterResult:
     """Force recompute face clusters, for one account or (tenants=all) every account."""
     from src.server.api.routers.people import store_clusters
-    from src.server.database import get_tenant_session
 
-    totals = {"clusters": 0, "total_faces": 0}
+    def recluster(session) -> dict:
+        clusters = store_clusters(session)["clusters"]
+        return {"clusters": len(clusters), "total_faces": sum(c["size"] for c in clusters)}
 
-    for tenant_id in _tenant_ids(scope):
-        try:
-            with get_tenant_session(tenant_id) as tsession:
-                clusters = store_clusters(tsession)["clusters"]
-                totals["clusters"] += len(clusters)
-                totals["total_faces"] += sum(c["size"] for c in clusters)
-        except Exception as exc:
-            logger.warning("Recluster failed for tenant %s: %s", tenant_id, exc)
-
-    return ReclusterResult(**totals)
+    return ReclusterResult(**_each_account(scope, "Recluster", recluster, pausable=False))
 
 
 class RecreateSearchIndexesResult(BaseModel):

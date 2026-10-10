@@ -8,11 +8,13 @@ import logging
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.errors import ConflictError
+from src.server.api.limits import MAX_IDS
 from src.server.repository.tenant import current_face_model
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ class PersonListResponse(BaseModel):
 
 class PersonCreateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=255)
-    face_ids: list[str] | None = Field(default=None, max_length=10_000)
+    face_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
 
 
 class PersonUpdateRequest(BaseModel):
@@ -69,7 +71,10 @@ class PersonFacesResponse(BaseModel):
 
 
 class ClusterItem(BaseModel):
-    cluster_index: int
+    # Names the cluster by its faces (cluster_id_of): the same faces, the same
+    # id, whenever it was computed. A route given one that no longer matches a
+    # cluster answers 409 cluster_changed.
+    cluster_id: str
     size: int
     faces: list[dict]
     # Its latest photo: taken, else the file's time (None: no photo says).
@@ -80,6 +85,10 @@ class ClustersResponse(BaseModel):
     clusters: list[ClusterItem]
     truncated: bool = False
     max_cluster_size: int = 0
+    # When these were computed (None: never yet), and whether faces changed
+    # since, so upkeep will compute them again (every 5 minutes).
+    computed_at: datetime | None = None
+    pending: bool = False
 
 
 # ---------- Endpoints ----------
@@ -88,16 +97,12 @@ class ClustersResponse(BaseModel):
 def list_people(
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=100),
     q: str | None = None,
 ) -> PersonListResponse:
     """List people sorted by face count descending. Optional q param for name search."""
     from src.server.repository.tenant import PersonRepository, FaceRepository
 
-    if limit > 100:
-        limit = 100
-    if limit < 1:
-        limit = 1
 
     repo = PersonRepository(session)
     rows = repo.list_with_face_counts(after=after, limit=limit, q=q)
@@ -178,7 +183,7 @@ def create_person(
         ).all()
         if already:
             conflicts = [{"face_id": r[0], "person_id": r[1]} for r in already]
-            raise HTTPException(status_code=409, detail={"message": "Faces already assigned", "conflicts": conflicts})
+            raise ConflictError("faces_assigned", "Faces already assigned", {"conflicts": conflicts})
 
     person = repo.create(body.display_name.strip(), face_ids=body.face_ids)
     face_count = repo.get_face_count(person.person_id)
@@ -204,15 +209,11 @@ def create_person(
 def list_dismissed_people(
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonListResponse:
     """List dismissed people sorted by face count descending."""
     from src.server.repository.tenant import PersonRepository
 
-    if limit > 100:
-        limit = 100
-    if limit < 1:
-        limit = 1
 
     repo = PersonRepository(session)
     rows = repo.list_dismissed(after=after, limit=limit)
@@ -274,15 +275,13 @@ class NearestPersonItem(BaseModel):
 def nearest_people_for_person(
     person_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
-    limit: int = 5,
+    limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
     """Return named people sorted by cosine distance to this person's centroid."""
     import numpy as np
     from sqlalchemy import text as sa_text
     from src.server.repository.tenant import PersonRepository
 
-    if limit > 20:
-        limit = 20
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
@@ -465,13 +464,11 @@ def list_person_faces(
     person_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonFacesResponse:
     """List faces matched to a person, cursor-paginated."""
     from src.server.repository.tenant import PersonRepository
 
-    if limit > 100:
-        limit = 100
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
@@ -560,15 +557,16 @@ class ClusterNameRequest(BaseModel):
     person_id: str | None = None  # assign to existing person instead of creating new
 
 
-@faces_router.post("/clusters/{cluster_index}/name", response_model=PersonItem, status_code=201, dependencies=[Depends(require_editor)])
+@faces_router.post("/clusters/{cluster_id}/name", response_model=PersonItem, status_code=201, dependencies=[Depends(require_editor)])
 def name_cluster(
-    cluster_index: int,
+    cluster_id: str,
     body: ClusterNameRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Name all faces in a cluster. Creates a new person or assigns to existing.
 
-    Uses the cached cluster data — if cache is stale, recomputes first.
+    409 cluster_changed when no cluster has this id any more, or some of its
+    faces were named or dismissed since: load the clusters again.
     """
     from src.server.repository.tenant import PersonRepository
 
@@ -576,18 +574,7 @@ def name_cluster(
     if not has_name and not body.person_id:
         raise HTTPException(status_code=400, detail="Provide display_name or person_id")
 
-    # Get cluster face IDs from cache — use existing cache even if dirty
-    # to preserve stable indices during rapid name/dismiss operations.
-    cache_clusters = cached_clusters(session)
-
-    # Find the cluster
-    if cluster_index < 0 or cluster_index >= len(cache_clusters):
-        raise HTTPException(status_code=404, detail="Cluster not found")
-
-    face_ids = cache_clusters[cluster_index].get("face_ids", [])
-    if not face_ids:
-        raise HTTPException(status_code=404, detail="Cluster has no faces")
-
+    face_ids = _unassigned_cluster_faces(session, cluster_id)
     person_repo = PersonRepository(session)
 
     if body.person_id:
@@ -637,9 +624,9 @@ class DismissResult(BaseModel):
     person_id: str
 
 
-@faces_router.post("/clusters/{cluster_index}/dismiss", response_model=DismissResult, dependencies=[Depends(require_editor)])
+@faces_router.post("/clusters/{cluster_id}/dismiss", response_model=DismissResult, dependencies=[Depends(require_editor)])
 def dismiss_cluster(
-    cluster_index: int,
+    cluster_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> DismissResult:
     """Dismiss a cluster by creating a dismissed person.
@@ -647,18 +634,11 @@ def dismiss_cluster(
     All faces are assigned to the dismissed person. Future similar faces
     will be auto-absorbed by the upkeep propagation job, preventing the
     cluster from reforming. Returns the person_id for undo support.
+    409 cluster_changed as for naming.
     """
     from src.server.repository.tenant import PersonRepository, _mark_clusters_dirty
 
-    cache_clusters = cached_clusters(session)
-
-    if cluster_index < 0 or cluster_index >= len(cache_clusters):
-        raise HTTPException(status_code=404, detail="Cluster not found")
-
-    face_ids = cache_clusters[cluster_index].get("face_ids", [])
-    if not face_ids:
-        raise HTTPException(status_code=404, detail="Cluster has no faces")
-
+    face_ids = _unassigned_cluster_faces(session, cluster_id)
     person_repo = PersonRepository(session)
     person = person_repo.create_dismissed(face_ids=face_ids)
     _mark_clusters_dirty(session)
@@ -666,11 +646,11 @@ def dismiss_cluster(
     return DismissResult(person_id=person.person_id)
 
 
-@faces_router.get("/clusters/{cluster_index}/nearest-people", response_model=list[NearestPersonItem])
+@faces_router.get("/clusters/{cluster_id}/nearest-people", response_model=list[NearestPersonItem])
 def nearest_people_for_cluster(
-    cluster_index: int,
+    cluster_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
-    limit: int = 5,
+    limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
     """Return named people sorted by cosine distance to the cluster centroid.
 
@@ -680,15 +660,7 @@ def nearest_people_for_cluster(
     import numpy as np
     from sqlalchemy import text as sa_text
 
-    if limit > 20:
-        limit = 20
-
-    cache_clusters = cached_clusters(session)
-
-    if cluster_index < 0 or cluster_index >= len(cache_clusters):
-        raise HTTPException(status_code=404, detail="Cluster not found")
-
-    face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    face_ids = find_cluster(session, cluster_id).get("face_ids", [])
     if not face_ids:
         return []
 
@@ -751,7 +723,7 @@ def nearest_people_for_cluster(
 def nearest_people_for_face(
     face_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
-    limit: int = 5,
+    limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
     """Return named people sorted by cosine distance to a single face's embedding.
 
@@ -772,8 +744,6 @@ def nearest_people_for_face(
     from sqlalchemy import text as sa_text
     from src.server.models.tenant import Face
 
-    if limit > 20:
-        limit = 20
 
     face = session.get(Face, face_id)
     if face is None:
@@ -837,27 +807,19 @@ class ClusterFacesResponse(BaseModel):
     next_cursor: str | None = None
 
 
-@faces_router.get("/clusters/{cluster_index}/faces", response_model=ClusterFacesResponse)
+@faces_router.get("/clusters/{cluster_id}/faces", response_model=ClusterFacesResponse)
 def list_cluster_faces(
-    cluster_index: int,
+    cluster_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> ClusterFacesResponse:
-    """List all faces in a cluster, cursor-paginated."""
+    """List all faces in a cluster, cursor-paginated. 409 cluster_changed
+    when no cluster has this id any more."""
     from src.server.models.tenant import Face, Asset
     from sqlmodel import select
 
-    if limit > 100:
-        limit = 100
-
-    # Get cluster face IDs from cache
-    cache_clusters = cached_clusters(session)
-
-    if cluster_index < 0 or cluster_index >= len(cache_clusters):
-        raise HTTPException(status_code=404, detail="Cluster not found")
-
-    all_face_ids = cache_clusters[cluster_index].get("face_ids", [])
+    all_face_ids = find_cluster(session, cluster_id).get("face_ids", [])
     total = len(all_face_ids)
 
     # Apply cursor pagination over the sorted face ID list
@@ -984,10 +946,7 @@ def assign_face(
         {"fid": face_id},
     ).scalar()
     if existing:
-        raise HTTPException(status_code=409, detail={
-            "message": "Face already assigned",
-            "current_person_id": existing,
-        })
+        raise ConflictError("face_assigned", "Face already assigned", {"current_person_id": existing})
 
     if body.new_person_name:
         person = repo.create(body.new_person_name.strip(), face_ids=[face_id])
@@ -1023,7 +982,7 @@ def order_clusters(clusters: list[dict], sort: str) -> list[dict]:
     them makes the most progress); size_asc, smallest first; newest, the one
     with the latest photo first (undated last). Ties go by the cluster's
     first face id, which stays while its faces do, so the order doesn't
-    shuffle between loads as cluster_index (a position) can."""
+    shuffle between loads."""
     def first_face(c: dict) -> str:
         return min(c.get("face_ids") or [""])
 
@@ -1036,10 +995,20 @@ def order_clusters(clusters: list[dict], sort: str) -> list[dict]:
     return sorted(by_face, key=lambda c: -c["size"])
 
 
+def cluster_id_of(face_ids: list[str]) -> str:
+    """A cluster's id: a fingerprint of its face ids, in any order."""
+    import hashlib
+
+    return "fc_" + hashlib.sha256("\n".join(sorted(face_ids)).encode()).hexdigest()[:20]
+
+
 def store_clusters(session: Session) -> dict:
     """Compute every cluster and keep them as the cluster cache, with the
     version they were computed at. The version is read first: a change
-    committed while computing makes the cache old at once, never current."""
+    committed while computing makes the cache old at once, never current.
+
+    Run by upkeep (POST /v1/upkeep when the cache is old, and
+    /v1/upkeep/recluster), never by a request that reads them."""
     from src.server.repository.system_metadata import SystemMetadataRepository
     from src.server.repository.tenant import FaceRepository, face_clusters_version
 
@@ -1049,61 +1018,92 @@ def store_clusters(session: Session) -> dict:
     return data
 
 
-def cached_clusters(session: Session) -> list[dict]:
-    """The cached clusters, dirty or not, so the cluster_index a page was
-    shown stays the cluster it named; computed when there's no cache."""
+def cached_clusters(session: Session) -> dict | None:
+    """The cluster cache as last computed, current or not; None when there's none."""
     from src.server.repository.system_metadata import SystemMetadataRepository
 
     cached = SystemMetadataRepository(session).get_value("face_clusters_cache")
     if not cached:
-        return store_clusters(session)["clusters"]
+        return None
     try:
-        return json.loads(cached).get("clusters", [])
-    except (json.JSONDecodeError, AttributeError):
-        raise HTTPException(status_code=500, detail="Cluster cache corrupted")
+        data = json.loads(cached)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def clusters_current(session: Session, data: dict | None) -> bool:
+    """Nothing changed which faces are clustered since the cache was computed."""
+    from src.server.repository.tenant import face_clusters_version
+
+    return data is not None and data.get("version") == face_clusters_version(session)
+
+
+def find_cluster(session: Session, cluster_id: str) -> dict:
+    """The cached cluster with this id; 409 cluster_changed when there's none."""
+    for c in (cached_clusters(session) or {}).get("clusters", []):
+        if cluster_id_of(c.get("face_ids") or []) == cluster_id:
+            return c
+    raise ConflictError("cluster_changed", "This group changed. Reload the groups.", {"cluster_id": cluster_id})
+
+
+def _unassigned_cluster_faces(session: Session, cluster_id: str) -> list[str]:
+    """The cluster's face ids, none named or dismissed since it was computed;
+    409 cluster_changed otherwise. The faces are locked first, so of two
+    requests for one cluster the second waits and then gets the 409."""
+    from sqlalchemy import text as sa_text
+
+    face_ids = find_cluster(session, cluster_id).get("face_ids") or []
+    session.execute(sa_text("SELECT 1 FROM faces WHERE face_id = ANY(:fids) ORDER BY face_id FOR UPDATE"),
+                    {"fids": face_ids})
+    taken = session.execute(
+        sa_text("SELECT count(*) FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": face_ids},
+    ).scalar()
+    if not face_ids or taken:
+        raise ConflictError("cluster_changed", "This group changed. Reload the groups.", {"cluster_id": cluster_id})
+    return face_ids
+
+
+def _without_assigned(session: Session, clusters: list[dict]) -> list[dict]:
+    """The clusters none of whose faces were named or dismissed since they
+    were computed: a cluster just named doesn't show before upkeep computes
+    them again, and one whose dismissal was undone shows again."""
+    from sqlalchemy import text as sa_text
+
+    ids = [fid for c in clusters for fid in (c.get("face_ids") or [])]
+    if not ids:
+        return clusters
+    taken = set(session.execute(
+        sa_text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": ids}).scalars())
+    if not taken:
+        return clusters
+    return [c for c in clusters if not taken.intersection(c.get("face_ids") or [])]
 
 
 @faces_router.get("/clusters", response_model=ClustersResponse)
 def get_clusters(
     session: Annotated[Session, Depends(get_tenant_session)],
-    limit: int = 20,
-    faces_per_cluster: int = 6,
-    min_cluster_size: int = 2,
+    limit: int = Query(default=20, ge=1, le=50),
+    faces_per_cluster: int = Query(default=6, ge=1, le=20),
+    min_cluster_size: int = Query(default=2, ge=1),
     sort: ClusterSort = "size_desc",
 ) -> ClustersResponse:
-    """Return clusters of unassigned faces in the order asked (largest first
-    unless asked otherwise; see order_clusters). Served from the cache while
-    it's current (nothing changed which faces are clustered since it was
-    computed: face_clusters_version); computed again otherwise."""
-    from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import face_clusters_version
-
-    if limit > 50:
-        limit = 50
-    if faces_per_cluster > 20:
-        faces_per_cluster = 20
-    if min_cluster_size < 1:
-        min_cluster_size = 1
-
-    cached = SystemMetadataRepository(session).get_value("face_clusters_cache")
-    data = None
-    if cached:
-        try:
-            data = json.loads(cached)
-        except json.JSONDecodeError:
-            data = None  # corrupted cache, recompute
-    if not isinstance(data, dict) or data.get("version") != face_clusters_version(session):
-        data = store_clusters(session)
-
-    all_clusters = data.get("clusters", [])
+    """Clusters of unassigned faces in the order asked (largest first unless
+    asked otherwise; see order_clusters), as upkeep last computed them.
+    Reading them computes nothing: computed_at says when, and pending that
+    faces changed since (upkeep computes them again within 5 minutes)."""
+    data = cached_clusters(session)
+    all_clusters = _without_assigned(session, (data or {}).get("clusters", []))
     max_size = max((c["size"] for c in all_clusters), default=0)
     shown = order_clusters([c for c in all_clusters if c["size"] >= min_cluster_size], sort)[:limit]
     return ClustersResponse(
         clusters=[
-            ClusterItem(cluster_index=c["cluster_index"], size=c["size"], faces=c.get("faces", [])[:faces_per_cluster],
-                        newest=c.get("newest"))
+            ClusterItem(cluster_id=cluster_id_of(c.get("face_ids") or []), size=c["size"],
+                        faces=c.get("faces", [])[:faces_per_cluster], newest=c.get("newest"))
             for c in shown
         ],
-        truncated=data.get("truncated", False),
+        truncated=(data or {}).get("truncated", False),
         max_cluster_size=max_size,
+        computed_at=(data or {}).get("computed_at"),
+        pending=not clusters_current(session, data),
     )

@@ -3,10 +3,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.limits import MAX_IDS
 from src.server.repository.tenant import SavedViewRepository
 
 router = APIRouter(prefix="/v1/views", tags=["views"])
@@ -25,7 +26,7 @@ class UpdateViewRequest(BaseModel):
 
 
 class ReorderViewsRequest(BaseModel):
-    view_ids: list[str]
+    view_ids: list[str] = Field(max_length=MAX_IDS)
 
 
 class ViewItem(BaseModel):

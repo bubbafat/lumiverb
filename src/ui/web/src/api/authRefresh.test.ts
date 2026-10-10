@@ -69,7 +69,7 @@ describe("apiFetch after a 401", () => {
 
   it("returns the retry's result when it succeeds", async () => {
     stubServer([{ status: 401 }, { status: 200, body: { person_id: "p_1" } }]);
-    await expect(dismissCluster(3)).resolves.toEqual({ person_id: "p_1" });
+    await expect(dismissCluster("fc_3")).resolves.toEqual({ person_id: "p_1" });
     expect(getApiKey()).toBe("new-token");
   });
 
@@ -99,16 +99,17 @@ describe("apiFetch after a 401", () => {
 describe("dismissCluster", () => {
   it("POSTs and returns the person to undo with", async () => {
     const calls = stubServer([{ status: 200, body: { person_id: "p_9" } }]);
-    await expect(dismissCluster(2)).resolves.toEqual({ person_id: "p_9" });
-    expect(calls[0].url).toBe("/v1/faces/clusters/2/dismiss");
+    await expect(dismissCluster("fc_2")).resolves.toEqual({ person_id: "p_9" });
+    expect(calls[0].url).toBe("/v1/faces/clusters/fc_2/dismiss");
   });
 
   it("throws the server's error instead of returning it as a result", async () => {
-    stubServer([{ status: 404, body: { error: { code: "not_found", message: "No such cluster" } } }]);
-    const err = await dismissCluster(7).catch((e: unknown) => e);
+    stubServer([{ status: 409, body: { error: { code: "cluster_changed", message: "This group changed. Reload the groups.", details: {} } } }]);
+    const err = await dismissCluster("fc_7").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
-    expect((err as ApiError).status).toBe(404);
-    expect((err as ApiError).message).toBe("No such cluster");
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).code).toBe("cluster_changed");
+    expect((err as ApiError).message).toBe("This group changed. Reload the groups.");
   });
 });
 

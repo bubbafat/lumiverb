@@ -120,6 +120,16 @@ describe("ArchivePage", () => {
       { count: 1, listedAt: "T" }, true);
   });
 
+  it("asks for every library's missing clips by saying all", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
+    api.listArchive.mockResolvedValue({ items: [clip("a2", "Trips/Paris/b.mov", true)], next_cursor: null, total: 1 });
+    api.deleteMissingClips.mockRejectedValueOnce(
+      new ApiError(409, "1 clip", "confirm_delete_missing", { count: 1, listed_at: "T" }));
+    renderPage("/archive?kind=missing");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete these for good" }));
+    await waitFor(() => expect(api.deleteMissingClips).toHaveBeenLastCalledWith("all", undefined, false));
+  });
+
   it("only admins see Delete these for good, and only on missing clips", async () => {
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
     renderPage("/archive?kind=by_hand");

@@ -162,61 +162,57 @@ def _set_thumbnail_key(tenant_url: str, asset_id: str, thumbnail_key: str) -> No
 
 
 # ---------------------------------------------------------------------------
-# FIX-1 (BUG-1): Stale proxy/thumbnail returns 404 and clears key
+# FIX-1 (BUG-1): a stale proxy/thumbnail is a 404, and the GET leaves the key
+# (upkeep repairs it: src/server/missing_artifacts.py)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
-def test_stale_proxy_returns_404_and_clears_key(
-    audit_fixes_client: tuple[TestClient, str, str, str],
-) -> None:
-    """GET /assets/{id}/proxy for a stale proxy_key returns 404 and clears the key."""
-    client, api_key, library_id, tenant_url = audit_fixes_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-
-    asset_id = _upsert_asset(client, auth, library_id, "stale_proxy_test.jpg")
-    _set_proxy_key(tenant_url, asset_id, "nonexistent/fake_proxy.jpg")
-
-    r = client.get(f"/v1/assets/{asset_id}/proxy", headers=auth)
-    assert r.status_code == 404, (r.status_code, r.text)
-
-    # Key should be cleared
+def _key(tenant_url: str, asset_id: str, column: str) -> str | None:
     engine = create_engine(tenant_url)
     try:
         with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT proxy_key FROM assets WHERE asset_id = :aid"),
-                {"aid": asset_id},
-            ).fetchone()
+            return conn.execute(text(f"SELECT {column} FROM assets WHERE asset_id = :aid"), {"aid": asset_id}).scalar()
     finally:
         engine.dispose()
-    assert row[0] is None, "proxy_key should be cleared after stale download"
 
 
 @pytest.mark.slow
-def test_stale_thumbnail_returns_404_and_clears_key(
+@pytest.mark.parametrize("public", [False, True], ids=["signed_in", "public_visitor"])
+def test_stale_proxy_is_a_404_that_changes_nothing(
+    audit_fixes_client: tuple[TestClient, str, str, str], public: bool,
+) -> None:
+    """GET /artifacts/proxy for a stale proxy_key: 404 artifact_missing; the key stays."""
+    client, api_key, library_id, tenant_url = audit_fixes_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+
+    asset_id = _upsert_asset(client, auth, library_id, f"stale_proxy_{public}.jpg")
+    _set_proxy_key(tenant_url, asset_id, "nonexistent/fake_proxy.jpg")
+    if public:
+        assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth).status_code == 200
+    try:
+        r = (client.get(f"/v1/assets/{asset_id}/artifacts/proxy", params={"public_library_id": library_id})
+             if public else client.get(f"/v1/assets/{asset_id}/artifacts/proxy", headers=auth))
+    finally:
+        client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=auth)
+    assert r.status_code == 404, (r.status_code, r.text)
+    assert r.json()["error"]["code"] == "artifact_missing"
+    assert _key(tenant_url, asset_id, "proxy_key") == "nonexistent/fake_proxy.jpg"
+
+
+@pytest.mark.slow
+def test_stale_thumbnail_is_a_404_that_changes_nothing(
     audit_fixes_client: tuple[TestClient, str, str, str],
 ) -> None:
-    """GET /assets/{id}/thumbnail for a stale thumbnail_key returns 404 and clears the key."""
+    """GET /artifacts/thumbnail for a stale thumbnail_key: 404; the key stays."""
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_image.jpg", "image")
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_thumb.jpg")
 
-    r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/thumbnail", headers=auth)
     assert r.status_code == 404, (r.status_code, r.text)
-
-    engine = create_engine(tenant_url)
-    try:
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT thumbnail_key FROM assets WHERE asset_id = :aid"),
-                {"aid": asset_id},
-            ).fetchone()
-    finally:
-        engine.dispose()
-    assert row[0] is None, "thumbnail_key should be cleared after stale download"
+    assert _key(tenant_url, asset_id, "thumbnail_key") == "nonexistent/fake_thumb.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -326,12 +322,11 @@ def test_library_trash_soft_deletes_assets(
 
     # Assets should no longer appear in active assets via API
     r_list = client.get(
-        "/v1/assets",
+        "/v1/assets/page",
         params={"library_id": test_library_id},
         headers=auth,
     )
-    assert r_list.status_code == 200
-    assert r_list.json() == [], "Trashed library assets should not appear in active list"
+    assert r_list.json().get("items", []) == [], "Trashed library assets should not appear in active list"
 
 
 

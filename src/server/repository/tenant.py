@@ -562,15 +562,6 @@ class AssetRepository:
         )
         return list(self._session.exec(stmt).all())
 
-    def list_by_library(self, library_id: str) -> list[Asset]:
-        """Return all active (non-trashed) assets in library."""
-        stmt = (
-            select(Asset)
-            .where(Asset.library_id == library_id)
-            .where(Asset.deleted_at.is_(None))
-        )
-        return list(self._session.exec(stmt).all())
-
     def list_ids_matching_pattern(self, library_id: str, pattern: str) -> list[str]:
         """Return asset_ids of active assets whose rel_path matches a glob pattern."""
         from src.shared.path_filter import _glob_match
@@ -934,11 +925,6 @@ class AssetRepository:
             .where(Asset.library_id == library_id)
             .where(Asset.deleted_at.is_(None))
         )
-        return list(self._session.exec(stmt).all())
-
-    def list_all(self) -> list[Asset]:
-        """Return all active (non-trashed) assets (all libraries)."""
-        stmt = select(Asset).where(Asset.deleted_at.is_(None))
         return list(self._session.exec(stmt).all())
 
     def trash(self, asset_id: str, *, reason: str = "missing") -> bool:
@@ -1837,28 +1823,6 @@ class AssetRepository:
             .where(Asset.deleted_at.is_(None))
         )
         return list(self._session.exec(stmt).all())
-
-    def get_states(self, asset_ids: list[str]) -> dict[str, dict]:
-        """Fetch deleted status and proxy_sha256 for a list of asset_ids.
-
-        Returns dict keyed by asset_id. IDs not present in DB are not included.
-        Deliberately includes soft-deleted assets — callers must not add a
-        deleted_at IS NULL filter here.
-        """
-        if not asset_ids:
-            return {}
-        stmt = (
-            select(Asset.asset_id, Asset.deleted_at, Asset.proxy_sha256)
-            .where(Asset.asset_id.in_(asset_ids))
-        )
-        rows = self._session.exec(stmt).all()
-        return {
-            row.asset_id: {
-                "deleted": row.deleted_at is not None,
-                "proxy_sha256": row.proxy_sha256,
-            }
-            for row in rows
-        }
 
 
 class AssetOcrRepository:
@@ -4312,8 +4276,8 @@ class FaceRepository:
     def cluster_cache(self, *, faces_per_cluster: int = 20) -> dict:
         """Every cluster of unassigned faces, as the cluster cache keeps them
         (``face_clusters_cache``): largest first, each with its position
-        (``cluster_index``, what the cluster routes take), size, a sample of
-        faces, every face id, and ``newest``, its latest photo (taken, else
+        (``cluster_index``), size, a sample of faces, every face id (the
+        routes name a cluster by them: people.cluster_id_of), and ``newest``, its latest photo (taken, else
         the file's time; ISO 8601, None when no photo says)."""
         from datetime import datetime, timezone
 

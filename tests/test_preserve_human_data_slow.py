@@ -887,7 +887,7 @@ def test_empty_trash_without_ids_spares_missing_files(env) -> None:
                    headers=headers)
     client.delete(f"/v1/assets/{trashed}", headers=headers)
 
-    r = client.request("DELETE", "/v1/trash/empty", json={}, headers=headers)
+    r = client.request("DELETE", "/v1/trash/empty", json={"all": True}, headers=headers)
 
     assert r.status_code == 200, r.text
     assert _ignored(client, headers, library_id).get("trash/spare-trashed.jpg") == "emptied"

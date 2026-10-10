@@ -185,7 +185,7 @@ def test_hard_delete_library_with_asset_embeddings_no_fk_crash(
     assert r_del.status_code == 204, (r_del.status_code, r_del.text)
 
     # Hard-delete via empty-trash: must return 200, not 500.
-    r_trash = client.post("/v1/libraries/empty-trash", json={}, headers=auth)
+    r_trash = client.post("/v1/libraries/empty-trash", json={"all": True}, headers=auth)
     assert r_trash.status_code == 200, (r_trash.status_code, r_trash.text)
     assert r_trash.json()["deleted"] >= 1
 

@@ -11,10 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.server.api.errors import ApiError
 from src.server.repository.lineage import record as record_lineage
 
 from src.server.api.dependencies import get_tenant_session, require_editor
-from src.server.repository.tenant import AssetRepository, LibraryRepository
+from src.server.models.tenant import Asset
+from src.server.repository.tenant import AssetRepository
 from src.server.storage.local import LocalStorage, get_storage
 
 logger = logging.getLogger(__name__)
@@ -278,10 +280,18 @@ def download_artifact(
     session: Annotated[Session, Depends(get_tenant_session)],
     rep_frame_ms: int | None = Query(default=None),
 ) -> StreamingResponse:
-    """Download a proxy, thumbnail, video_preview, scene_rep or analysis_proxy artifact for an asset.
+    """A clip's proxy, thumbnail, video_preview, scene_rep or analysis_proxy:
+    the one route for each of them, for every client.
 
-    Returns the raw file bytes with the correct Content-Type. 404 if the artifact
-    key is not yet set (artifact_not_ready) or the file is missing on disk (artifact_missing).
+    Signed in, a clip out of sight (archived, in the trash) still shows its
+    pictures: the archive and trash views need them. A public page's visitor
+    (public_library_id or public_project_id) sees only that page's clips in
+    sight, never an analysis proxy, and video within the public cap.
+
+    404 artifact_not_ready when it hasn't been made; 404 artifact_missing
+    when its file is gone, which is reported for upkeep to repair (the GET
+    changes nothing). video_preview within the playback cap: 503
+    playback_preparing (Retry-After) while the capped copy is made.
     analysis_proxy answers Range requests and carries its SHA-256 as the ETag.
     """
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
@@ -290,17 +300,20 @@ def download_artifact(
             detail=f"artifact_type must be one of: {', '.join(sorted(ALLOWED_ARTIFACT_TYPES))}",
         )
 
-    asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None or (asset.deleted_at is not None and getattr(request.state, "is_public_request", False)):
+    public = getattr(request.state, "is_public_request", False)
+    asset = session.get(Asset, asset_id)  # out of sight too: signed in, those show
+    if asset is None or (asset.deleted_at is not None and public):
         raise HTTPException(status_code=404, detail="Asset not found")
-    if getattr(request.state, "is_public_request", False):
-        public_library_id = request.query_params.get("public_library_id")
-        if not public_library_id or asset.library_id != public_library_id:
-            raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-        lib = LibraryRepository(session).get_by_id(public_library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+    if public:
+        from src.server.api.routers.playback import _check_public
 
+        public_library_id = request.query_params.get("public_library_id")
+        public_project_id = request.query_params.get("public_project_id")
+        if public_library_id and public_project_id:
+            raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
+        _check_public(session, asset, public_library_id, public_project_id)
+
+    storage: LocalStorage = get_storage()
     if artifact_type == "proxy":
         key = asset.proxy_key
     elif artifact_type == "thumbnail":
@@ -310,7 +323,7 @@ def download_artifact(
     elif artifact_type == "analysis_proxy":
         # The whole video. Public pages and, while the account caps playback,
         # viewers play it through /playback; editors and the brain's tools need it whole.
-        if getattr(request.state, "is_public_request", False):
+        if public:
             raise HTTPException(status_code=403, detail="Analysis proxies aren't public")
         if getattr(request.state, "role", None) == "viewer":
             from src.server.tenant_settings import playback_cap
@@ -323,53 +336,54 @@ def download_artifact(
             raise HTTPException(
                 status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
             )
-        if getattr(request.state, "is_public_request", False):
+        if public:
             from src.server.tenant_settings import playback_cap
 
             cap = playback_cap(session, public=True)
             if cap is not None and rep_frame_ms >= cap * 1000:
                 raise HTTPException(status_code=403, detail="Past what public pages play")
-        tenant_id: str = request.state.tenant_id
-        storage: LocalStorage = get_storage()
-        key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
+        key = storage.scene_rep_key(request.state.tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
     if key is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "artifact_not_ready", "message": "Artifact has not been generated yet"},
-        )
+        raise ApiError(404, "artifact_not_ready", "Artifact has not been generated yet")
 
-    storage: LocalStorage = get_storage()
     path = storage.abs_path(key)
-    if not path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "artifact_missing", "message": "Artifact file not found on storage"},
-        )
+    if not path.is_file():
+        from src.server import missing_artifacts
+
+        missing_artifacts.report(session, asset_id, artifact_type)
+        raise ApiError(404, "artifact_missing", "Artifact file not found on storage")
+
+    from src.server.api.routers.assets import _stream_file_with_range
 
     if artifact_type == "analysis_proxy":
-        from src.server.api.routers.assets import _stream_file_with_range
-
         etag = f'"{asset.analysis_proxy_sha256}"' if asset.analysis_proxy_sha256 else None
         return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type], etag=etag)
 
     if artifact_type == "video_preview":
-        # Within the playback cap for whoever is asking, like /preview.
-        from src.server.api.routers.assets import _stream_file_with_range
+        # Within the playback cap for whoever is asking, like /playback.
         from src.server.api.routers.playback import capped
         from src.server.tenant_settings import playback_cap
 
         st = path.stat()
         path = capped(
-            path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
+            path, playback_cap(session, public=public),
             storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
-            version=f"{int(st.st_mtime)}-{st.st_size}", strip=getattr(request.state, "is_public_request", False),
+            version=f"{int(st.st_mtime)}-{st.st_size}", strip=public,
         )
         return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
+
+    media_type = CONTENT_TYPES[artifact_type]
+    if artifact_type in ("proxy", "thumbnail"):
+        media_type = _IMAGE_TYPES.get(path.suffix.lower(), media_type)
 
     def _iter():
         with open(path, "rb") as f:
             while chunk := f.read(UPLOAD_CHUNK_SIZE):
                 yield chunk
 
-    return StreamingResponse(_iter(), media_type=CONTENT_TYPES[artifact_type])
+    return StreamingResponse(_iter(), media_type=media_type)
+
+
+# Older proxies and thumbnails are JPEGs.
+_IMAGE_TYPES = {".webp": "image/webp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}

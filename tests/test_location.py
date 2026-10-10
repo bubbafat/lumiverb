@@ -153,6 +153,7 @@ def test_every_location_write_names_its_clips(env, body):
         kwargs = {} if body is None else {"json": body}
         r = client.request(method, url, headers=headers, **kwargs)
         assert r.status_code == 400, (method, body, r.status_code, r.text)
+        assert r.json()["error"]["code"] == "scope_required"
 
 
 @pytest.mark.slow
@@ -230,7 +231,9 @@ def test_same_place_as_another_clip(env):
 
     assert _put(env, asset_ids=[target], same_as=nowhere).status_code == 400
     assert _put(env, asset_ids=[target], same_as=source, lat=1, lon=1).status_code == 400
-    assert _put(env, asset_ids=[target], lat=0, lon=0, replace="all").status_code == 400
+    for lat, lon in ((0, 0), (91, 1), (1, 181)):  # out of range is a 422, like every bound
+        r = _put(env, asset_ids=[target], lat=lat, lon=lon, replace="all")
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_location"
 
 
 def _row(env, asset_id: str, source: str, status: str, lat: float, lon: float) -> None:

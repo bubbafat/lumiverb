@@ -106,7 +106,7 @@ def trash_empty(
         console.print("[red]Give clip ids, or --all (with --library or --folder to narrow it).[/red]")
         raise typer.Exit(2)
     client = LumiverbClient()
-    body: dict = {} if all_ else {"asset_ids": asset_ids}
+    body: dict = {"all": True} if all_ else {"asset_ids": asset_ids}
     if library:
         body["library_id"] = library_id_for(client, library)
     if folder:

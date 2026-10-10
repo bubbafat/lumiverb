@@ -186,22 +186,20 @@ def test_page_assets_empty_when_exhausted(
 
 
 @pytest.mark.slow
-def test_page_assets_limit_capped_at_500(
+def test_page_assets_limit_past_500_is_a_422(
     page_api_client: tuple[TestClient, str, str, list[str]]
 ) -> None:
-    """GET /v1/assets/page?limit=9999 still returns <= 500 items (we have 5, so 5)."""
+    """GET /v1/assets/page?limit past 500 is a 422 (it was clamped); 500 is fine."""
     client, api_key, library_id, _ = page_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    r = client.get(
-        "/v1/assets/page",
-        params={"library_id": library_id, "limit": 9999},
-        headers=auth,
-    )
+    for bad in (0, 501, 9999):
+        r = client.get("/v1/assets/page", params={"library_id": library_id, "limit": bad}, headers=auth)
+        assert r.status_code == 422
+        assert r.json()["error"]["code"] == "invalid_request"
+    r = client.get("/v1/assets/page", params={"library_id": library_id, "limit": 500}, headers=auth)
     assert r.status_code == 200
-    items = r.json()["items"]
-    assert len(items) <= 500
-    assert len(items) == 5
+    assert len(r.json()["items"]) == 5
 
 
 @pytest.mark.slow

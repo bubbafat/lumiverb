@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import functools
 import hashlib
 import hmac
 import json
@@ -24,7 +23,10 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -35,6 +37,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.api.errors import ApiError
 from src.server.config import get_settings
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository, LibraryRepository
@@ -62,6 +65,9 @@ class PlaybackResponse(BaseModel):
     source: Source
     # Seconds the link plays for this viewer; None means the whole video.
     max_seconds: int | None
+    # False while the capped copy is made in the background: ask again in a
+    # couple of seconds (the link answers 503 playback_preparing until then).
+    ready: bool
 
 
 # ---------------------------------------------------------------------------
@@ -178,14 +184,142 @@ def _duration(path: Path) -> float | None:
         return None
 
 
-@functools.lru_cache(maxsize=8192)
-def _served_duration(path: str, version: str) -> float | None:
-    """The served file's own length, probed once per version of it."""
-    return _duration(Path(path))
-
-
 def _playback_dir(storage: LocalStorage, tenant_id: str) -> Path:
     return storage.abs_path(f"{tenant_id}/playback")
+
+
+def _duration_file(ask: "_Ask") -> Path:
+    """Where the served file's probed length is kept, beside its cuts: on
+    disk, so every API worker knows it (a cut that isn't needed leaves no
+    file of its own). Cleared with the cuts."""
+    return _playback_dir(ask.storage, ask.tenant_id) / f"{ask.asset_id}_{ask.source}_{ask.version}.duration"
+
+
+def _known_duration(ask: "_Ask") -> tuple[bool, float | None]:
+    """(probed yet, its length; None when unreadable). Never probes: probing is the cut job's."""
+    try:
+        text = _duration_file(ask).read_text().strip()
+    except OSError:
+        return False, None
+    try:
+        return True, float(text) if text else None
+    except ValueError:
+        return False, None
+
+
+def _probe(ask: "_Ask") -> None:
+    duration = _duration(ask.path)
+    target = _duration_file(ask)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_text("" if duration is None else repr(duration))
+    tmp.replace(target)
+    for old in target.parent.glob(f"{ask.asset_id}_{ask.source}_*.duration"):
+        if old != target:
+            old.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class _Ask:
+    """What a request asks to play: `path`, within `max_seconds`, stripped or not."""
+    path: Path
+    max_seconds: int | None
+    storage: LocalStorage
+    tenant_id: str
+    asset_id: str
+    source: Source
+    version: str
+    strip: bool
+
+
+def _cut_for(ask: _Ask) -> tuple[Path, int | None, str] | None:
+    """(cut, its length, label) to serve instead of the file; None: the file itself.
+
+    A file known to be no longer than the cap needs no cut; one not probed
+    yet is planned as cut (the job probes before it cuts)."""
+    strip = ask.strip and ask.source == "preview"
+    max_seconds = ask.max_seconds
+    if max_seconds is not None:
+        probed, duration = _known_duration(ask)
+        if probed and duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
+            max_seconds = None
+    if max_seconds is None and not strip:
+        return None
+    label = f"{max_seconds}s" if max_seconds is not None else "whole"
+    cut = _playback_dir(ask.storage, ask.tenant_id) / f"{ask.asset_id}_{ask.source}_{ask.version}_{label}.mp4"
+    return cut, max_seconds, label
+
+
+# Cuts are made off the request, at most _CUT_WORKERS at once and
+# _MAX_WAITING queued or running; a request for one that isn't ready gets a
+# 503 playback_preparing with Retry-After. One that failed isn't tried again
+# for _FAILED_HOLD_SEC (503 playback_cut_failed meanwhile).
+_CUT_WORKERS = 2
+_MAX_WAITING = 16
+_FAILED_HOLD_SEC = 60.0
+RETRY_AFTER_SEC = 2
+_executor = ThreadPoolExecutor(max_workers=_CUT_WORKERS, thread_name_prefix="playback-cut")
+_running: dict[Path, Future] = {}
+_failed: dict[Path, float] = {}
+_jobs_lock = threading.Lock()
+
+
+class _CutFailed(Exception):
+    pass
+
+
+def _make_cut(ask: _Ask) -> None:
+    """Probe the file when it hasn't been, then make the cut it still needs.
+
+    Cuts are made with stream copy (no re-encoding, every track kept),
+    without the file's metadata, and stored under {tenant}/playback,
+    outside the library folders cleanup walks."""
+    if ask.max_seconds is not None and not _known_duration(ask)[0]:
+        _probe(ask)
+    planned = _cut_for(ask)
+    if planned is None or planned[0].is_file():
+        return
+    cut, max_seconds, label = planned
+    cut.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=cut.parent, prefix=f".{ask.asset_id}_", suffix=".mp4")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    length = ["-t", str(max_seconds)] if max_seconds is not None else []
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(ask.path),
+             "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
+             "-map_metadata", "-1", "-map_chapters", "-1",
+             "-movflags", "+faststart", "-f", "mp4", str(tmp)],
+            capture_output=True, timeout=300, check=False,
+        )
+        if result.returncode != 0 or tmp.stat().st_size == 0:
+            raise _CutFailed(result.stderr.decode(errors="replace")[-300:])
+        tmp.replace(cut)
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise _CutFailed(str(exc)) from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+    # Older versions of this cut, and temp files a killed API left.
+    for old in cut.parent.glob(f"{ask.asset_id}_{ask.source}_*_{label}.mp4"):
+        if old != cut:
+            old.unlink(missing_ok=True)
+    for tmp_old in cut.parent.glob(f".{ask.asset_id}_*.mp4"):
+        with contextlib.suppress(OSError):
+            if time.time() - tmp_old.stat().st_mtime > _STALE_TEMP_SEC:
+                tmp_old.unlink(missing_ok=True)
+
+
+def _run_cut(ask: _Ask, key: Path) -> None:
+    try:
+        _make_cut(ask)
+    except Exception as exc:  # noqa: BLE001 — remembered, and the next request says so
+        logger.warning("Couldn't cut %s for %s: %s", ask.path, key.name, exc)
+        with _jobs_lock:
+            _failed[key] = time.monotonic()
+    finally:
+        with _jobs_lock:
+            _running.pop(key, None)
 
 
 def capped(
@@ -199,61 +333,44 @@ def capped(
     version: str,
     strip: bool = False,
 ) -> Path:
-    """`path`, or a copy of its first `max_seconds` when it runs longer.
+    """`path`, or its cut (its first `max_seconds` when it runs longer) once
+    the cut is ready. Never cuts in the request: a cut that isn't ready is
+    started in the background and the request gets a 503 playback_preparing
+    with Retry-After.
 
-    Copies are made with stream copy (no re-encoding, every track kept),
-    without the file's metadata, and stored under {tenant}/playback,
-    outside the library folders cleanup walks. Whether the file runs longer
-    is the file's own say, not a stored duration that may be wrong; unknown
-    means cut. `strip`: a public page's request, which never gets the
-    original's metadata (GPS, say), even whole: previews made before scan
-    stripped it still have it. Analysis proxies are rendered without it.
+    Whether the file runs longer is the file's own say, not a stored
+    duration that may be wrong. `strip`: a public page's request, which
+    never gets the original's metadata (GPS, say), even whole: previews made
+    before scan stripped it still have it. Analysis proxies are rendered
+    without it.
     """
-    strip = strip and source == "preview"
-    if max_seconds is not None:
-        duration = _served_duration(str(path), version)
-        if duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
-            max_seconds = None
-    if max_seconds is None and not strip:
+    ask = _Ask(path, max_seconds, storage, tenant_id, asset_id, source, version, strip)
+    planned = _cut_for(ask)
+    if planned is None:
         return path
-    label = f"{max_seconds}s" if max_seconds is not None else "whole"
-    cut = _playback_dir(storage, tenant_id) / f"{asset_id}_{source}_{version}_{label}.mp4"
+    cut = planned[0]
     if cut.is_file():
         return cut
-    cut.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=cut.parent, prefix=f".{asset_id}_", suffix=".mp4")
-    os.close(fd)
-    tmp = Path(tmp_name)
-    failed = HTTPException(status_code=503, detail={"code": "playback_cut_failed",
-                                                    "message": "Couldn't prepare the capped video"})
-    length = ["-t", str(max_seconds)] if max_seconds is not None else []
+    with _jobs_lock:
+        failed_at = _failed.get(cut)
+        if failed_at is not None and time.monotonic() - failed_at < _FAILED_HOLD_SEC:
+            raise ApiError(503, "playback_cut_failed", "Couldn't prepare the capped video")
+        _failed.pop(cut, None)
+        if cut not in _running and len(_running) < _MAX_WAITING:
+            _running[cut] = _executor.submit(_run_cut, ask, cut)
+    raise ApiError(503, "playback_preparing", "Preparing the video; try again shortly.",
+                   headers={"Retry-After": str(RETRY_AFTER_SEC)})
+
+
+def is_ready(path: Path, max_seconds: int | None, **where) -> bool:
+    """capped(), for a caller that only asks whether it's ready (starting it if not)."""
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path),
-             "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
-             "-map_metadata", "-1", "-map_chapters", "-1",
-             "-movflags", "+faststart", "-f", "mp4", str(tmp)],
-            capture_output=True, timeout=300, check=False,
-        )
-        if result.returncode != 0 or tmp.stat().st_size == 0:
-            logger.warning("Couldn't cut %s to %s: %s", path, label,
-                           result.stderr.decode(errors="replace")[-300:])
-            raise failed
-        tmp.replace(cut)
-    except (subprocess.SubprocessError, OSError) as exc:
-        logger.warning("Couldn't cut %s to %s: %s", path, label, exc)
-        raise failed from exc
-    finally:
-        tmp.unlink(missing_ok=True)
-    # Older versions of this cut, and temp files a killed API left.
-    for old in cut.parent.glob(f"{asset_id}_{source}_*_{label}.mp4"):
-        if old != cut:
-            old.unlink(missing_ok=True)
-    for tmp_old in cut.parent.glob(f".{asset_id}_*.mp4"):
-        with contextlib.suppress(OSError):
-            if time.time() - tmp_old.stat().st_mtime > _STALE_TEMP_SEC:
-                tmp_old.unlink(missing_ok=True)
-    return cut
+        capped(path, max_seconds, **where)
+    except ApiError as exc:
+        if exc.code == "playback_preparing":
+            return False
+        raise
+    return True
 
 
 def clear_cuts(tenant_id: str, asset_ids: list[str] | None = None) -> None:
@@ -335,10 +452,15 @@ def get_playback(
     if not asset.media_type.startswith("video"):
         raise HTTPException(status_code=422, detail="Playback is only for videos")
 
-    playable = _playable(asset, get_storage())
+    storage = get_storage()
+    playable = _playable(asset, storage)
     if playable is None:
-        raise HTTPException(status_code=404, detail={"code": "nothing_to_play",
-                                                     "message": "This video has no preview or proxy yet"})
+        raise ApiError(404, "nothing_to_play", "This video has no preview or proxy yet")
+    public = bool(public_library_id or public_project_id)
+    max_seconds = playback_cap(session, public=public)
+    source, path, version = playable
+    ready = is_ready(path, max_seconds, storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id,
+                     source=source, version=version, strip=public)
     token = mint_stream_token(
         request.state.tenant_id, asset_id,
         public_library_id=public_library_id,
@@ -348,8 +470,9 @@ def get_playback(
     return PlaybackResponse(
         url=f"/v1/stream/{token}",
         expires_at=expires.isoformat(),
-        source=playable[0],
-        max_seconds=playback_cap(session, public=bool(public_library_id or public_project_id)),
+        source=source,
+        max_seconds=max_seconds,
+        ready=ready,
     )
 
 
@@ -365,10 +488,10 @@ def stream(token: str, request: Request) -> StreamingResponse:
 
     claims = read_stream_token(token)
     if claims is None:
-        raise HTTPException(status_code=403, detail={"code": "invalid_link", "message": "This link is invalid or expired"})
+        raise ApiError(403, "invalid_link", "This link is invalid or expired")
     tenant_id, asset_id = claims.get("t"), claims.get("a")
     if not isinstance(tenant_id, str) or not isinstance(asset_id, str):
-        raise HTTPException(status_code=403, detail={"code": "invalid_link", "message": "This link is invalid or expired"})
+        raise ApiError(403, "invalid_link", "This link is invalid or expired")
     with get_control_session() as ctrl:
         routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(tenant_id)
     if routing is None:

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
+from src.server.api.limits import MAX_PAGE
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
     ApertureRange,
@@ -539,7 +540,7 @@ def unified_query(
     sort: str = "taken_at",
     dir: str = "desc",
     after: str | None = None,
-    limit: int = Query(default=200, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=MAX_PAGE),
 ) -> QueryResponse:
     """Unified query endpoint — all filters via ?f=prefix:value params.
 

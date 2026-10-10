@@ -191,7 +191,7 @@ def test_reset_password_too_short(monkeypatch: pytest.MonkeyPatch) -> None:
         with TestClient(app) as client:
             r = client.post("/v1/auth/reset-password", json={"token": "tok", "password": "short"})
         assert r.status_code == 400
-        assert "12" in r.json()["detail"]
+        assert "12" in r.json()["error"]["message"]
     finally:
         app.dependency_overrides.pop(auth_module._get_db, None)
         get_settings.cache_clear()
@@ -292,7 +292,7 @@ def test_create_user_password_too_short(hybrid_env: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 400
-    assert "12" in r.json()["detail"]
+    assert "12" in r.json()["error"]["message"]
 
 
 # --- Token refresh and revocation (users re-read from the database) ---

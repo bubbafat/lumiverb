@@ -29,7 +29,8 @@ public enum APIError: Error, Equatable, LocalizedError {
     }
 }
 
-/// Matches the server error envelope: `{"error": {"code": "...", "message": "..."}}`.
+/// Matches the server error envelope, which every error has:
+/// `{"error": {"code": "...", "message": "...", "details": {...}}}`.
 struct ErrorEnvelope: Decodable {
     struct Detail: Decodable {
         let code: String
@@ -322,6 +323,9 @@ public actor APIClient {
         }
         if http.statusCode == 404 { return nil }
         if http.statusCode >= 400 {
+            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
+                throw APIError.serverError(statusCode: http.statusCode, message: envelope.error.message)
+            }
             let body = String(data: data, encoding: .utf8) ?? "Unknown error"
             throw APIError.serverError(statusCode: http.statusCode, message: body)
         }

@@ -130,15 +130,6 @@ def remove_user(
         if resp.status_code == 409 and err.get("code") == "last_admin":
             console.print("[red]Error: cannot remove the last admin.[/red]")
         else:
-            console.print(f"[red]Error: {escape(err.get('message') or _detail(resp))}[/red]")
+            console.print(f"[red]Error: {escape(err.get('message') or resp.text or f'HTTP {resp.status_code}')}[/red]")
         raise typer.Exit(1)
     console.print("[green]User removed.[/green]")
-
-
-def _detail(resp) -> str:
-    """A plain HTTPException's {"detail"}, else the body."""
-    try:
-        detail = (resp.json() or {}).get("detail")
-    except ValueError:
-        detail = None
-    return str(detail) if detail else (resp.text or f"HTTP {resp.status_code}")
