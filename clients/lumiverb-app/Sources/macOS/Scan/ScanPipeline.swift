@@ -479,14 +479,18 @@ actor ScanPipeline {
             }
         }
 
-        // GPS
-        if let lat = gps?["Latitude"] as? Double,
-           let latRef = gps?["LatitudeRef"] as? String {
-            payload["gps_lat"] = latRef == "S" ? -lat : lat
+        // Time zone the camera recorded (ADR-017), minutes east of UTC.
+        if let offset = ExifLocation.offsetMinutes(exif) {
+            payload["taken_at_offset_min"] = offset
         }
-        if let lon = gps?["Longitude"] as? Double,
-           let lonRef = gps?["LongitudeRef"] as? String {
-            payload["gps_lon"] = lonRef == "W" ? -lon : lon
+
+        // GPS: (0, 0) is a device with no fix, not a place (ADR-017).
+        if let fix = ExifLocation.gps(gps) {
+            payload["gps_lat"] = fix.lat
+            payload["gps_lon"] = fix.lon
+            if let accuracy = ExifLocation.accuracyMeters(gps) {
+                payload["gps_accuracy_m"] = accuracy
+            }
         }
 
         // Exposure

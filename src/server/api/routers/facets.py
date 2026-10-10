@@ -15,7 +15,14 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import LeafFilter, LibraryScope, SearchTerm
+from src.server.models.query_filter import (
+    LOCATION_JOIN,
+    LeafFilter,
+    LibraryScope,
+    SearchTerm,
+    has_location_sql,
+    location_params,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +37,11 @@ class FacetsResponse(BaseModel):
     iso_range: list[int | None]  # [min, max]
     aperture_range: list[float | None]  # [min, max]
     focal_length_range: list[float | None]  # [min, max]
-    has_gps_count: int = 0
+    has_gps_count: int = 0  # clips with a location: the file's or a person's (guesses with include_guesses)
     has_face_count: int = 0
+    # Clips with an applied guess (0 until the location producer makes some):
+    # whether the "Includes guesses" toggle is worth showing.
+    guess_count: int = 0
 
 
 @router.get("/facets", response_model=FacetsResponse)
@@ -105,6 +115,8 @@ def get_facets(
 
     # Build FROM clause with necessary JOINs
     from_clause = "active_assets a"
+    joins.append(LOCATION_JOIN)  # the location counts read the effective location
+    location_params(params)
     if needs_rating:
         joins.append(
             "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id"
@@ -130,7 +142,8 @@ def get_facets(
             MAX(a.focal_length) AS fl_max,
             bool_or(a.media_type = 'image') AS has_images,
             bool_or(a.media_type = 'video') AS has_videos,
-            COUNT(*) FILTER (WHERE a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) AS gps_count,
+            COUNT(*) FILTER (WHERE {has_location_sql()}) AS gps_count,
+            COUNT(*) FILTER (WHERE loc.status = 'applied' AND loc.source <> 'person') AS guess_count,
             COUNT(*) FILTER (WHERE a.face_count > 0) AS face_count
         FROM {from_clause}
         {join_sql}
@@ -161,6 +174,7 @@ def get_facets(
         focal_length_range=[row.fl_min, row.fl_max],
         has_gps_count=row.gps_count or 0,
         has_face_count=row.face_count or 0,
+        guess_count=row.guess_count or 0,
     )
 
 

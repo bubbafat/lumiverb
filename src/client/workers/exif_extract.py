@@ -8,6 +8,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.shared.location import is_fix
+
 logger = logging.getLogger(__name__)
 
 # Fields to extract. Focused list — full EXIF can be 300+ fields.
@@ -22,6 +24,8 @@ EXIF_FIELDS = [
     # Capture settings
     "DateTimeOriginal",
     "CreateDate",
+    "OffsetTimeOriginal",
+    "OffsetTime",
     "GPSDateTime",
     "ExposureTime",
     "FNumber",
@@ -48,6 +52,7 @@ EXIF_FIELDS = [
     "GPSAltitude",
     "GPSLatitudeRef",
     "GPSLongitudeRef",
+    "GPSHPositioningError",
     # Copyright / creator
     "Artist",
     "Copyright",
@@ -116,9 +121,48 @@ def parse_gps(exif: dict) -> tuple[float | None, float | None]:
             lat = -lat
         if lon_ref == "W" and lon > 0:
             lon = -lon
+        if not is_fix(lat, lon):
+            return None, None
         return lat, lon
     except (TypeError, ValueError):
         return None, None
+
+
+def parse_gps_accuracy_m(exif: dict) -> float | None:
+    """GPSHPositioningError in metres, or None."""
+    import math
+
+    val = exif.get("GPSHPositioningError")
+    if val is None:
+        return None
+    try:
+        m = float(str(val).split()[0])
+    except (ValueError, IndexError):
+        return None
+    return m if math.isfinite(m) and m >= 0 else None
+
+
+_OFFSET_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})$")
+
+
+def parse_taken_at_offset_min(exif: dict) -> int | None:
+    """OffsetTimeOriginal (or OffsetTime), e.g. "+02:00", as minutes east of
+    UTC; None when the file doesn't say."""
+    for key in ("OffsetTimeOriginal", "OffsetTime"):
+        raw = exif.get(key)
+        if raw is None:
+            continue
+        s = str(raw).strip()
+        if s in ("Z", "+00:00", "-00:00"):
+            return 0
+        m = _OFFSET_RE.match(s)
+        if not m:
+            continue
+        minutes = int(m.group(2)) * 60 + int(m.group(3))
+        if int(m.group(3)) >= 60 or minutes > 14 * 60:
+            continue
+        return -minutes if m.group(1) == "-" else minutes
+    return None
 
 
 _SUBSEC_RE = re.compile(r"\.\d+")

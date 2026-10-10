@@ -1,7 +1,8 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, updateNote, deleteNote, correctAsset } from "../api/client";
+import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, updateNote, deleteNote, correctAsset, clearLocations, acceptLocations } from "../api/client";
+import { LocationRow } from "./LocationRow";
 import { CorrectableTags, CorrectableText } from "./CorrectableFields";
 import { NoTranscript, TranscriptActions } from "./TranscriptActions";
 import { useCanEdit } from "../lib/useCanEdit";
@@ -696,8 +697,15 @@ export function Lightbox({
   }, [handleKeyDown]);
 
   const filename = basename(asset.rel_path);
-  const formatGps = (lat: number, lon: number): string =>
-    `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  // A person's location: clear it, or take a suggestion (editors only).
+  const [locationBusy, setLocationBusy] = useState(false);
+  const changeLocation = (fn: () => Promise<unknown>) => {
+    setLocationBusy(true);
+    fn()
+      .then(() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] }))
+      .catch(() => undefined)
+      .finally(() => setLocationBusy(false));
+  };
 
   return (
     <div
@@ -1578,40 +1586,18 @@ export function Lightbox({
                           </dd>
                         </div>
                       )}
-                    {detail &&
-                      detail.gps_lat != null &&
-                      detail.gps_lon != null && (
-                        <>
-                          <div className="flex">
-                            <dt className="w-2/5 text-xs text-gray-500">GPS</dt>
-                            <dd className="w-3/5 text-sm">
-                              <a
-                                href={`https://maps.google.com/?q=${detail.gps_lat},${detail.gps_lon}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={formatGps(detail.gps_lat, detail.gps_lon)}
-                                className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                              >
-                                {formatGps(detail.gps_lat, detail.gps_lon)}
-                              </a>
-                            </dd>
-                          </div>
-                          {onNearbyClick && (
-                            <div className="flex">
-                              <dt className="w-2/5" />
-                              <dd className="w-3/5">
-                                <button
-                                  type="button"
-                                  onClick={() => onNearbyClick(detail.gps_lat!, detail.gps_lon!)}
-                                  className="text-xs text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
-                                >
-                                  Photos nearby
-                                </button>
-                              </dd>
-                            </div>
-                          )}
-                        </>
-                      )}
+                    {detail && (
+                      <LocationRow
+                        gpsLat={detail.gps_lat}
+                        gpsLon={detail.gps_lon}
+                        location={detail.location}
+                        canEdit={canCorrect}
+                        busy={locationBusy}
+                        onNearbyClick={onNearbyClick}
+                        onClear={() => changeLocation(() => clearLocations([asset.asset_id]))}
+                        onAccept={() => changeLocation(() => acceptLocations([asset.asset_id]))}
+                      />
+                    )}
                     {(asset.file_size || detail?.file_size) ? (
                       <div className="flex">
                         <dt className="w-2/5 text-xs text-gray-500">File size</dt>

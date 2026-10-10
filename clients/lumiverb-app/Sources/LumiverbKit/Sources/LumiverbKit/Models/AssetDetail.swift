@@ -20,6 +20,10 @@ public struct AssetDetail: Decodable, Identifiable, Sendable {
     public let takenAt: String?
     public let gpsLat: Double?
     public let gpsLon: Double?
+    public let gpsAccuracyM: Double?
+    /// What the file doesn't say (ADR-017): a person's location, a guess or a
+    /// suggestion, beside the file's GPS. Signed-in only.
+    public let location: AssetLocation?
     public let iso: Int?
     public let exposureTimeUs: Int?
     public let aperture: Double?
@@ -79,8 +83,31 @@ public struct AssetDetail: Decodable, Identifiable, Sendable {
         return "\(w) x \(h)"
     }
 
+    /// The location shown: a person's, else the file's, else an applied guess.
+    public var shownLocation: (lat: Double, lon: Double)? {
+        if let location, location.source == "person" { return (location.lat, location.lon) }
+        if let gpsLat, let gpsLon { return (gpsLat, gpsLon) }
+        if let location, location.status == "applied" { return (location.lat, location.lon) }
+        return nil
+    }
+
     /// Human-readable file size from the rel_path filename.
     public var filename: String {
         (relPath as NSString).lastPathComponent
     }
+}
+
+/// A clip's location beyond the file's (ADR-017).
+public struct AssetLocation: Decodable, Sendable, Equatable {
+    public let lat: Double
+    public let lon: Double
+    /// 0 for a person's exact point.
+    public let radiusM: Int
+    /// "person", "time" (a guess) or "suggestion".
+    public let source: String
+    /// "applied" or "suggested".
+    public let status: String
+    public let basisSummary: String?
+    public let setBy: String?
+    public let setAt: String?
 }
