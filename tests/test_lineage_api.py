@@ -148,7 +148,7 @@ def test_every_producer_with_its_settings_and_counts(env):
     t = producers["transcript"]
     assert (t["producer"], t["version"], t["settings"]["model"]) == ("whisper", "1", "small")
     assert t["settings_hash"] == P.settings_hash(t["settings"])
-    assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "failing", "given_up"}
+    assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "failing", "given_up"}
     assert producers["clip"]["uniform"] is True and producers["transcript"]["uniform"] is False
     assert _producers(env, counts="false")["vision"]["counts"] is None
 

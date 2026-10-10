@@ -38,7 +38,8 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         condition = lineage.redo_due(kind.artifact)
         params |= lineage.redo_params(kind.artifact, want)
     else:
-        condition = MISSING_CONDITIONS[kind.flag]
+        # What's missing, and what's made but due to be checked again.
+        condition = f"({MISSING_CONDITIONS[kind.flag]} OR {lineage.rechecking(kind.artifact)})"
     rows = session.execute(text(
         "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.sha256, a.duration_sec,"
         " a.created_at, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"

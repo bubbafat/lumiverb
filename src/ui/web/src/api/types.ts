@@ -179,6 +179,10 @@ export interface AssetLocation {
   status: "applied" | "suggested";
   /** Why, in a few words ("Same place as IMG_1.jpg", "from phone photos 14:02–14:40"). */
   basis_summary?: string | null;
+  /** A guess whose fixes went, with nothing else to go by: kept, less sure ("source removed"). */
+  basis_gone?: boolean;
+  /** A guess whose fixes a narrower window left outside, with nothing else to go by: kept, less sure. */
+  outside_window?: boolean;
   /** Who set it, for a person's: looked up when a signed-in person reads it (null for an API key). */
   set_by?: string | null;
   set_at?: string | null;

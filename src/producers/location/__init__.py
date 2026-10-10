@@ -26,15 +26,23 @@ PRODUCER = ProducerSpec(
     # Tried: a guess, or nothing within the window (outcome empty).
     made=("EXISTS (SELECT 1 FROM artifact_lineage ll WHERE ll.asset_id = a.asset_id"
           " AND ll.artifact = 'location' AND ll.producer = 'location')"),
+    # A guess due to be checked again (a fix near it changed, came or went;
+    # the window changed): kept meanwhile, and not missing.
+    recheck=("EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id"
+             " AND rl.recheck IS NOT NULL)"),
     settings=(
         Setting("infer_location", INFER_DEFAULT, "Infer location", kind="bool"),
-        Setting("inference_minutes", 360, "Inference window", minimum=5, maximum=1440, unit="min"),
+        # Not in lineage: a new window checks guesses again (regroup), keeping
+        # each unless the new one is surer or its fixes are now outside it.
+        Setting("inference_minutes", 360, "Inference window", minimum=5, maximum=1440, unit="min",
+                remakes=False),
     ),
     # Made from the clip's capture time and zone, read again from the file first.
     needs=("capture",),
     # Its own file changing changes nothing here; its capture time does (which remakes it).
     redo_on_source_change=False,
     on_settings="src.server.repository.locations:settings_changed",
+    regroup="src.server.repository.locations:window_changed",
     kind="location", flag="missing_location", run="src.producers.location.work:Locate", tier=FIND, pool=CPU,
     batch=200,
 )

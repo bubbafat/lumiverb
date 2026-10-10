@@ -162,6 +162,9 @@ class ProducerSpec:
     title: str  # for people: "Transcripts"
     applies: str  # which clips it applies to (SQL)
     made: str  # whether a clip has the artifact (SQL); one made in parts once every part is
+    # Made, but due to be checked again (SQL; "" = never): handed out with
+    # what's missing, yet counted apart ("rechecking"), not as missing.
+    recheck: str = ""
     settings: tuple[Setting, ...] = ()  # output-affecting
     # The artifacts it's made from: the queue waits until a clip has them.
     needs: tuple[str, ...] = ()
@@ -182,8 +185,9 @@ class ProducerSpec:
     redo_on_source_change: bool = True
     # Where it shows in lists (Settings → Processing); one without sorts last.
     order: int = 1000
-    # "module:function", called with (session) when a setting that doesn't
-    # remake changes (faces: the face groups are worked out again).
+    # "module:function", called with (session, before, after) when its
+    # settings that don't remake change, as {key: value} (faces: the face
+    # groups are worked out again; location: guesses are checked again).
     regroup: str = ""
     # "module:function", called with (session, before, after, *, apply) when
     # its output-affecting settings change from before to after: what it

@@ -2,8 +2,9 @@
 """The location producer against the real API and database (ADR-017 phase 3):
 camera clips placed from phone photos across folders, a person's location
 never written over and counted as a fix, guesses never used as fixes, the
-guesses around a fix made again when it changes, the clock offset from
-scene pairs, and turning it off."""
+guesses around a fix checked again when it changes, goes or comes back, or
+the window changes (kept unless the new one is surer, replaced when the old
+one is wrong), the clock offset from scene pairs, and turning it off."""
 
 from __future__ import annotations
 
@@ -211,11 +212,11 @@ def test_a_persons_location_is_never_overwritten_and_is_a_fix(env) -> None:
     # Saved over by hand, the guess route keeps a person's and the file's.
     guess = {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}
     for asset_id in (placed, filed):
-        r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": guess, "lineage": made("location")},
-                       headers=headers)
+        r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": guess, "minutes": 360,
+                                                                          "lineage": made("location")}, headers=headers)
         assert r.status_code == 200 and r.json() == {"result": "kept"}, r.text
-        r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": None, "lineage": made("location")},
-                       headers=headers)
+        r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": None, "minutes": 360,
+                                                                          "lineage": made("location")}, headers=headers)
         assert r.json() == {"result": "kept"}
     assert _location(env, placed)["source"] == "person" and (_location(env, placed)["lat"]) == 1.0
     assert _lineage(env, placed)["producer"] == "person"
@@ -258,7 +259,36 @@ def test_guesses_are_never_fixes(env) -> None:
     assert r.status_code == 200 and all(not d["pairs"] for d in r.json()["days"].values())
 
 
-def test_the_guesses_around_a_fix_are_made_again_when_it_changes(env) -> None:
+def _recheck(env, asset_id: str) -> str | None:
+    rows = _sql(env, "SELECT recheck FROM asset_location WHERE asset_id = :a", a=asset_id)
+    return rows[0]["recheck"] if rows else None
+
+
+def _trash(env, asset_id: str) -> None:
+    client, headers, *_ = env
+    r = client.delete(f"/v1/assets/{asset_id}", params={"remove_from_projects": True}, headers=headers)
+    assert r.status_code == 204, r.text
+
+
+def _restore(env, asset_id: str) -> None:
+    client, headers, *_ = env
+    r = client.post(f"/v1/assets/{asset_id}/restore", headers=headers)
+    assert r.status_code == 204, r.text
+
+
+def _capture(env, asset_id: str, taken_at: str) -> None:
+    client, headers, *_ = env
+    r = client.put(f"/v1/assets/{asset_id}/capture", json={"taken_at": taken_at, "lineage": made("capture")},
+                   headers=headers)
+    assert r.status_code == 200 and r.json() == {"changed": True}, r.text
+
+
+def _detail(env, asset_id: str) -> dict:
+    client, headers, *_ = env
+    return client.get(f"/v1/assets/{asset_id}", headers=headers).json()["location"]
+
+
+def test_the_guesses_around_a_fix_are_checked_again_when_it_changes(env) -> None:
     _settings(env)
     client, headers, *_ = env
     lib = _library(env, "neighbours")
@@ -274,13 +304,15 @@ def test_the_guesses_around_a_fix_are_made_again_when_it_changes(env) -> None:
     assert _location(env, c)["basis"]["fixes"] == [{"asset_id": a, "gap_min": 120.0}]
     untouched = {x: _location(env, x) for x in (days_on, elsewhere)}
 
-    # A new phone photo near it: its guess goes and is made again from both sides.
+    # A new phone photo near it: due again, its guess kept meanwhile; then a surer one from both sides.
     b = _clip(env, lib, "Phone/b.jpg", "2024-06-15T12:30:00", gps=(1.0, 1.01), device=PHONE)
-    assert _location(env, c) is None and _lineage(env, c) is None and c in _due(env, lib)
+    assert _location(env, c)["basis"]["fixes"][0]["asset_id"] == a and _lineage(env, c)["outcome"] == "ok"
+    assert _recheck(env, c) == "new_fix" and c in _due(env, lib)
     _run(env, lib)
     assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, b]
+    assert _recheck(env, c) is None and c not in _due(env, lib)
 
-    # A person places a clip beside it: a fix, so its neighbours are made again.
+    # A person places a clip beside it: a fix, so its neighbours are checked again.
     d = _clip(env, lib, "BMC/d.jpg", "2024-06-15T12:10:00")
     _run(env, lib)
     _person(env, [d], 1.0, 1.005)
@@ -288,24 +320,301 @@ def test_the_guesses_around_a_fix_are_made_again_when_it_changes(env) -> None:
     _run(env, lib)
     assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, d]
 
-    # Cleared: made again without it, and d itself is guessed again.
+    # Cleared: a fix the guess was made from, so it's replaced (less sure), and d itself is guessed.
     r = client.request("DELETE", "/v1/assets/locations", json={"asset_ids": [d]}, headers=headers)
     assert r.status_code == 200, r.text
-    assert {c, d} <= _due(env, lib)
+    assert _recheck(env, c) == "basis_changed" and {c, d} <= _due(env, lib)
     _run(env, lib)
     assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, b]
     assert _location(env, d)["source"] == "time"
 
-    # The phone photo's time read again from its file: made again too.
-    r = client.put(f"/v1/assets/{a}/capture", json={"taken_at": "2024-06-15T11:00:00", "lineage": made("capture")},
-                   headers=headers)
-    assert r.status_code == 200 and r.json() == {"changed": True}
+    # The phone photo's time read again from its file: checked again too.
+    _capture(env, a, "2024-06-15T11:00:00")
     assert c in _due(env, lib)
     _run(env, lib)
     assert _location(env, c)["basis"]["fixes"][0] == {"asset_id": a, "gap_min": 60.0}
 
     # Clips days away and in other libraries kept theirs.
     assert {x: _location(env, x) for x in (days_on, elsewhere)} == untouched
+
+
+def test_a_surer_new_fix_replaces_a_guess_and_a_less_sure_one_doesnt(env) -> None:
+    _settings(env)
+    lib = _library(env, "surer")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    sure = _clip(env, lib, "BMC/sure.jpg", "2024-06-15T10:10:00")  # 10 min after a: 767 m
+    loose = _clip(env, lib, "BMC/loose.jpg", "2024-06-15T13:00:00")  # 3 h after a: 12.1 km
+    _run(env, lib)
+    assert _location(env, sure)["radius_m"] == 767 and _location(env, loose)["radius_m"] == 12_100
+    assert _location(env, sure)["basis"]["fixes"] == [{"asset_id": a, "gap_min": 10.0}]
+    before = _location(env, sure)
+
+    # A phone photo 20 minutes after sure, 0.5° away: both see a guess "between", about 28 km for sure
+    # (less sure than it was: kept) and 1.7 km for loose (surer: taken).
+    b = _clip(env, lib, "Phone/b.jpg", "2024-06-15T10:30:00", gps=(1.0, 1.5), device=PHONE)
+    assert _recheck(env, sure) == "new_fix" and _recheck(env, loose) == "new_fix"
+    _run(env, lib)
+    assert _location(env, sure) == before and _recheck(env, sure) is None and sure not in _due(env, lib)
+    assert _lineage(env, sure) == {"producer": "location", "outcome": "ok"}
+    assert _location(env, loose)["basis"]["fixes"] == [{"asset_id": b, "gap_min": 150.0}]
+    assert _location(env, loose)["radius_m"] == 100 + 10_000
+
+
+def test_a_moved_or_retimed_fix_replaces_the_guess_even_less_sure_or_removes_it(env) -> None:
+    _settings(env)
+    lib = _library(env, "moved")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")  # 60 min after a: 4,100 m
+    _run(env, lib)
+    assert _location(env, c)["radius_m"] == 4_100
+
+    # A person corrects a: the guess moves with it.
+    _person(env, [a], 2.0, 2.0, replace="all")
+    assert _recheck(env, c) == "basis_changed"
+    _run(env, lib)
+    loc = _location(env, c)
+    assert (loc["lat"], loc["lon"], loc["radius_m"]) == (2.0, 2.0, 4_100)
+
+    # a's time read again, 4 hours earlier: less sure, but the old guess was wrong, so it's replaced.
+    _capture(env, a, "2024-06-15T07:00:00")
+    assert _recheck(env, c) == "basis_changed"
+    _run(env, lib)
+    assert _location(env, c)["radius_m"] == 100 + 16_000
+
+    # Again, now a day away: nothing within the window, so the guess goes.
+    _capture(env, a, "2024-06-14T07:00:00")
+    _run(env, lib)
+    assert _location(env, c) is None and _lineage(env, c)["outcome"] == "empty"
+
+
+def test_a_trashed_fix_keeps_a_guess_marked_or_takes_another_and_restoring_rechecks(env) -> None:
+    _settings(env)
+    lib = _library(env, "trashed")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    lone = _clip(env, lib, "BMC/lone.jpg", "2024-06-15T12:00:00")
+    far = _clip(env, lib, "Phone/far.jpg", "2024-06-16T09:00:00", gps=(5.0, 5.0), device=PHONE)
+    near_far = _clip(env, lib, "BMC/near-far.jpg", "2024-06-16T12:10:00")  # 190 min after far
+    f2 = _clip(env, lib, "Phone/f2.jpg", "2024-06-16T12:00:00", gps=(5.1, 5.1), device=PHONE)  # 10 min before
+    _run(env, lib)
+    assert _location(env, near_far)["basis"]["fixes"] == [{"asset_id": f2, "gap_min": 10.0}]
+    kept = _location(env, lone)
+
+    # Its only fix trashed: due, and kept where it was, marked.
+    _trash(env, a)
+    assert _recheck(env, lone) == "basis_gone" and lone in _due(env, lib)
+    _run(env, lib)
+    loc = _location(env, lone)
+    assert {k: loc[k] for k in ("lat", "lon", "radius_m")} == {k: kept[k] for k in ("lat", "lon", "radius_m")}
+    assert loc["basis"]["basis_gone"] is True and _recheck(env, lone) is None and lone not in _due(env, lib)
+    detail = _detail(env, lone)
+    assert detail["basis_gone"] is True and detail["basis_summary"] == "From iPhone 15 Pro photos at 10:00"
+
+    # With another fix in the window: that one's guess, however much less sure.
+    _trash(env, f2)
+    _run(env, lib)
+    loc = _location(env, near_far)
+    assert loc["basis"]["fixes"] == [{"asset_id": far, "gap_min": 190.0}] and loc["radius_m"] == 100 + 12_667
+    assert "basis_gone" not in loc["basis"]
+
+    # Restored: a new fix again, so the marked guess is checked again and made from it, unmarked.
+    _restore(env, a)
+    assert _recheck(env, lone) == "new_fix"
+    _run(env, lib)
+    loc = _location(env, lone)
+    assert loc["basis"]["fixes"] == [{"asset_id": a, "gap_min": 120.0}] and "basis_gone" not in loc["basis"]
+    assert _detail(env, lone)["basis_gone"] is False
+    _restore(env, f2)
+    _run(env, lib)
+    assert _location(env, near_far)["basis"]["fixes"] == [{"asset_id": f2, "gap_min": 10.0}]
+
+
+def test_a_new_window_checks_guesses_again_without_removing_them_first(env) -> None:
+    _settings(env)
+    client, headers, *_ = env
+    lib = _library(env, "window")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T08:00:00", gps=(1.0, 1.0), device=PHONE)
+    b = _clip(env, lib, "Phone/b.jpg", "2024-06-15T19:00:00", gps=(1.0, 1.01), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T12:00:00")  # 240 min after a, 420 before b
+    early = _clip(env, lib, "BMC/early.jpg", "2024-06-15T01:00:00")  # 420 min before a
+    _run(env, lib)
+    assert _location(env, c)["basis"]["fixes"] == [{"asset_id": a, "gap_min": 240.0}]
+    assert _location(env, early) is None and _lineage(env, early)["outcome"] == "empty"
+    guessed_before = _sql(env, "SELECT count(*) AS n FROM asset_location WHERE source = 'time'")[0]["n"]
+
+    # Wider: no question asked, nothing removed; checked again, and the clip where nothing was found is due.
+    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _sql(env, "SELECT count(*) AS n FROM asset_location WHERE source = 'time'")[0]["n"] == guessed_before
+    assert _recheck(env, c) == "window_changed" and {c, early} <= _due(env, lib)
+    _run(env, lib)
+    assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, b]  # surer: between them
+    assert _location(env, early)["basis"]["fixes"] == [{"asset_id": a, "gap_min": -420.0}]
+
+    # Narrower, leaving b outside: replaced from a alone, less sure. early's only fix is outside: kept, marked.
+    early_before = _location(env, early)
+    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 300}}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _recheck(env, c) == "outside_window" and _recheck(env, early) == "outside_window"
+    _run(env, lib)
+    assert _location(env, c)["basis"]["fixes"] == [{"asset_id": a, "gap_min": 240.0}]
+    assert "outside_window" not in _location(env, c)["basis"]
+    loc = _location(env, early)
+    assert {k: loc[k] for k in ("lat", "lon", "radius_m")} == {k: early_before[k] for k in ("lat", "lon", "radius_m")}
+    assert loc["basis"]["outside_window"] is True and _recheck(env, early) is None and early not in _due(env, lib)
+    assert _lineage(env, early) == {"producer": "location", "outcome": "ok"}
+    assert _detail(env, early)["outside_window"] is True and _detail(env, early)["basis_gone"] is False
+
+    # Narrower again, leaving a outside too: still kept, marked, never removed.
+    kept = _location(env, c)
+    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
+    assert r.status_code == 200, r.text
+    _run(env, lib)
+    loc = _location(env, c)
+    assert {k: loc[k] for k in ("lat", "lon", "radius_m")} == {k: kept[k] for k in ("lat", "lon", "radius_m")}
+    assert loc["basis"]["outside_window"] is True
+
+    # Wider again: checked again, and the guesses made again (as sure or surer) clear the marks.
+    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
+    assert r.status_code == 200, r.text
+    _run(env, lib)
+    assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, b]
+    assert _location(env, early)["basis"]["fixes"] == [{"asset_id": a, "gap_min": -420.0}]
+    assert "outside_window" not in _location(env, c)["basis"] and "outside_window" not in _location(env, early)["basis"]
+    _settings(env)
+
+
+def test_a_fix_that_goes_between_working_out_a_guess_and_saving_it_makes_the_save_stale(env) -> None:
+    from src.server.scheduler.dispatch import Job
+    from tests.producer_fakes import FakeAccount, scheduler_client
+
+    _settings(env)
+    lib = _library(env, "race")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
+    _run(env, lib)
+    guess = _location(env, c)
+
+    # A new fix near it: due. Worked out (from b), then b is trashed before the save.
+    b = _clip(env, lib, "Phone/b.jpg", "2024-06-15T11:05:00", gps=(1.0, 1.001), device=PHONE)
+    [item] = [i for i in due(env[-1], "location", [lib]) if i["asset_id"] == c]
+    acct = FakeAccount(scheduler_client(env[4]))
+    work = Locate(acct, Job(tenant_id=env[4], kind="location", tier=3, items=(item,)))
+    result = work.make(item)
+    assert [f["asset_id"] for f in result["guess"]["basis"]["fixes"]] == [a, b]
+    assert [f["asset_id"] for f in result["fixes"]] == [a, b]
+    _trash(env, b)
+    client = scheduler_client(env[4])
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": result["guess"], "minutes": 360,
+                                                            "fixes": result["fixes"], "lineage": made("location")})
+    assert r.json() == {"result": "stale"}
+    assert _location(env, c) == guess and _recheck(env, c) == "new_fix" and c in _due(env, lib)  # nothing written
+
+    # Moved, or retimed, since it was seen: stale too.
+    for change in ("UPDATE assets SET gps_lat = 1.5 WHERE asset_id = :a",
+                   "UPDATE assets SET taken_at = taken_at + interval '1 minute' WHERE asset_id = :a"):
+        seen = [{"asset_id": a, "lat": 1.0, "lon": 1.0, "taken_at": "2024-06-15T10:00:00+00:00"}]
+        guess_a = {**result["guess"], "basis": {"fixes": [{"asset_id": a, "gap_min": 60.0}]}}
+        ok = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess_a, "minutes": 360,
+                                                                 "fixes": seen, "lineage": made("location")})
+        assert ok.json()["result"] != "stale", ok.text
+        _sql_exec(env, change, a=a)
+        r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess_a, "minutes": 360,
+                                                                "fixes": seen, "lineage": made("location")})
+        assert r.json() == {"result": "stale"}, change
+        _sql_exec(env, "UPDATE assets SET gps_lat = 1.0, taken_at = '2024-06-15T10:00:00+00:00' WHERE asset_id = :a",
+                  a=a)
+    # A guess naming a fix it doesn't say it saw is refused.
+    api, headers, *_ = env
+    r = api.put(f"/v1/assets/locations/guess/{c}", json={"guess": result["guess"], "minutes": 360,
+                                                         "lineage": made("location")}, headers=headers)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "fixes_required"
+
+
+def test_a_guess_being_checked_again_isnt_missing(env) -> None:
+    _settings(env)
+    client, headers, *_ = env
+    lib = _library(env, "counts")
+    _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
+    empty = _clip(env, lib, "BMC/empty.jpg", "2024-06-17T11:00:00")
+    _run(env, lib)
+
+    def counts() -> dict:
+        r = client.get("/v1/producers", params={"library_id": lib}, headers=headers)
+        return next(p["counts"] for p in r.json()["producers"] if p["artifact"] == "location")
+
+    def missing_filter() -> set:
+        r = client.get("/v1/assets/page", params={"library_id": lib, "missing_location": "true"}, headers=headers)
+        assert r.status_code == 200, r.text
+        return {i["asset_id"] for i in r.json()["items"]}
+
+    def summary() -> int:
+        r = client.get("/v1/assets/repair-summary", params={"library_id": lib}, headers=headers)
+        return r.json()["missing_location"]
+
+    assert counts()["missing"] == 0 and counts()["rechecking"] == 0 and summary() == 0 and missing_filter() == set()
+    _clip(env, lib, "Phone/b.jpg", "2024-06-15T11:05:00", gps=(1.0, 1.001), device=PHONE)
+    _clip(env, lib, "Phone/d.jpg", "2024-06-17T11:05:00", gps=(2.0, 2.0), device=PHONE)
+    # c has a guess being checked again; empty had none, so it's missing again.
+    assert _recheck(env, c) == "new_fix" and {c, empty} <= _due(env, lib)
+    n = counts()
+    assert n["rechecking"] == 1 and n["missing"] == 1 and n["current"] == n["applicable"] - 2, n
+    assert summary() == 1 and missing_filter() == {empty}
+    _run(env, lib)
+    n = counts()
+    assert n["rechecking"] == 0 and n["missing"] == 0 and summary() == 0 and missing_filter() == set()
+
+
+def test_nothing_else_checks_a_guess_again_and_a_persons_location_is_never_touched(env) -> None:
+    _settings(env)
+    lib = _library(env, "quiet")
+    other = _library(env, "quiet-other")
+    a = _clip(env, lib, "Phone/a.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    z = _clip(env, lib, "Phone/z.jpg", "2024-06-15T09:00:00", gps=(1.5, 1.5), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T12:00:00")
+    placed = _clip(env, lib, "BMC/placed.jpg", "2024-06-15T11:00:00")
+    _person(env, [placed], 3.0, 3.0)
+    _run(env, lib)
+    person = _sql(env, "SELECT * FROM asset_location WHERE asset_id = :a", a=placed)
+    person_lineage = _lineage(env, placed)
+    assert _location(env, c)["basis"]["fixes"][0]["asset_id"] == placed  # the nearest fix before it
+    guess = _location(env, c)
+
+    def quiet() -> None:
+        assert _recheck(env, c) is None and c not in _due(env, lib) and _location(env, c) == guess
+
+    # A clip without a fix near it, added and trashed; a fix in another library; a fix days away; a fix
+    # trashed that the guess wasn't made from; capture facts read again unchanged; the same settings.
+    x = _clip(env, lib, "BMC/x.jpg", "2024-06-15T12:05:00")
+    _run(env, lib, only=[x])
+    quiet()
+    _trash(env, x)
+    quiet()
+    _clip(env, other, "Phone/o.jpg", "2024-06-15T12:00:00", gps=(4.0, 4.0), device=PHONE)
+    _clip(env, lib, "Phone/later.jpg", "2024-06-19T12:00:00", gps=(4.0, 4.0), device=PHONE)
+    quiet()
+    _trash(env, z)
+    quiet()
+    client, headers, *_ = env
+    r = client.put(f"/v1/assets/{a}/capture", json={"taken_at": "2024-06-15T10:00:00", "lineage": made("capture")},
+                   headers=headers)
+    assert r.status_code == 200 and r.json() == {"changed": False}
+    quiet()
+    _settings(env)
+    quiet()
+
+    # Through every trigger, a person's location stays as it was, and is never due.
+    _clip(env, lib, "Phone/new.jpg", "2024-06-15T11:30:00", gps=(1.0, 1.0), device=PHONE)
+    _trash(env, a)
+    _restore(env, a)
+    _capture(env, a, "2024-06-15T10:30:00")
+    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 200}}, headers=headers)
+    assert r.status_code == 200, r.text
+    _run(env, lib)
+    _settings(env)
+    _run(env, lib)
+    assert _sql(env, "SELECT * FROM asset_location WHERE asset_id = :a", a=placed) == person
+    assert _lineage(env, placed) == person_lineage and placed not in _due(env, lib)
 
 
 def test_the_clock_offset_from_scene_pairs_places_a_camera_on_home_time(env) -> None:
@@ -349,7 +658,7 @@ def test_the_clock_offset_from_scene_pairs_places_a_camera_on_home_time(env) -> 
     assert loc["basis"]["summary"].endswith("· clock 6.0 h ahead")
 
 
-def test_changing_the_window_asks_and_turning_it_off_removes_guesses(env) -> None:
+def test_changing_the_window_doesnt_ask_and_turning_it_off_removes_guesses(env) -> None:
     client, headers, *_ = env
     _settings(env)
     lib = _library(env, "toggle")
@@ -360,8 +669,12 @@ def test_changing_the_window_asks_and_turning_it_off_removes_guesses(env) -> Non
     _run(env, lib)
     assert _location(env, guessed)["source"] == "time"
 
+    # The window isn't in lineage: nothing to make again, so nothing asked (guesses are checked again).
     r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
+    assert r.status_code == 200, r.text
+    assert _location(env, guessed)["source"] == "time"
+    _run(env, lib)
+    _settings(env)
     r = client.put("/v1/producers/location/settings", json={"settings": {"infer_location": False}}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
     n = r.json()["error"]["details"]["clips"]
@@ -383,17 +696,25 @@ def test_the_guess_route_takes_only_what_a_machine_says_it_made(env) -> None:
     lib = _library(env, "route")
     c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
     guess = {"lat": 1.0, "lon": 1.0, "radius_m": 100, "basis": {}}
-    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess}, headers=headers)
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "minutes": 360}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required"
-    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 0, "lon": 0},
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 0, "lon": 0}, "minutes": 360,
                                                            "lineage": made("location")}, headers=headers)
     assert r.status_code == 422
-    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 91},
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 91}, "minutes": 360,
                                                            "lineage": made("location")}, headers=headers)
     assert r.status_code == 422
-    r = client.put("/v1/assets/locations/guess/ast_nope", json={"guess": guess, "lineage": made("location")},
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "lineage": made("location")},
                    headers=headers)
+    assert r.status_code == 422  # the window it was made in, always
+    r = client.put("/v1/assets/locations/guess/ast_nope", json={"guess": guess, "minutes": 360,
+                                                               "lineage": made("location")}, headers=headers)
     assert r.json() == {"result": "gone"}
+    # Made in a window that's no longer the setting: nothing written, tried again.
+    _settings(env)
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "minutes": 120,
+                                                           "lineage": made("location")}, headers=headers)
+    assert r.json() == {"result": "stale"} and _location(env, c) is None and _lineage(env, c) is None
     r = client.post("/v1/assets/locations/clocks", json={}, headers=headers)
     assert r.status_code == 400  # named clips only, never "all"
 
@@ -407,7 +728,8 @@ def test_only_the_scheduler_reads_for_guesses_or_saves_them(env) -> None:
     lib = _library(env, "who")
     _clip(env, lib, "Phone/p.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
     c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
-    guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "lineage": made("location")}
+    guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "minutes": 360,
+             "lineage": made("location")}
     for role in ("viewer", "editor"):
         key = _key_with_role(env, role)
         assert client.post("/v1/assets/locations/clocks", json={"asset_ids": [c]}, headers=key).status_code == 403

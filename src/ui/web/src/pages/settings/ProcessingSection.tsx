@@ -166,6 +166,7 @@ function CountsBar({ producer }: { producer: Producer }) {
     <div aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-gray-800">
       <div className="bg-emerald-500/80" style={{ width: pct(c.current) }} />
       <div className="bg-amber-400/80" style={{ width: pct(c.stale) }} />
+      <div className="bg-sky-500/70" style={{ width: pct(c.rechecking ?? 0) }} />
       <div className="bg-gray-600" style={{ width: pct(c.missing) }} />
     </div>
   );
@@ -223,6 +224,7 @@ function ProducerRow({
             <>
               <span className="text-gray-200">{n(c.current)}</span> current · {n(c.missing)} missing ·{" "}
               <span className={c.stale ? "text-amber-300" : undefined}>{n(c.stale)} stale</span>
+              {!!c.rechecking && <span> · {n(c.rechecking)} rechecking</span>}
               {c.failing > 0 && (
                 <span className="text-red-300">
                   {" "}
@@ -739,6 +741,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       )}
       {changed.length > 0 && !remade && producer.artifact === "faces" && (
         <p className="text-gray-400">Face groups are worked out again; no face is found again.</p>
+      )}
+      {changed.length > 0 && !remade && producer.artifact === "location" && (
+        <p className="text-gray-400">Guesses are checked again.</p>
       )}
       {problem && (
         <p role="alert" className="text-red-300">

@@ -1032,7 +1032,7 @@ def put_capture(
         raise HTTPException(status_code=404, detail="Asset not found")
     before, after = stored
     lineage.record(session, asset_id, "capture", made, commit=False)
-    # A new time on a fix remakes the guesses around it; on a clip without one, its own (ADR-017).
+    # A new time on a fix rechecks the guesses from it and near it; on a clip without one, its own (ADR-017).
     from src.server.repository import locations
 
     locations.file_changed(session, asset_id, before, after)

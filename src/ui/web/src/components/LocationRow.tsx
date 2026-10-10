@@ -92,6 +92,8 @@ export function LocationRow({
                 <div className="text-xs text-gray-400">
                   {about(guess.radius_m)}
                   {guess.basis_summary ? ` · ${guess.basis_summary}` : ""}
+                  {guess.basis_gone ? " · source removed" : ""}
+                  {guess.outside_window ? " · outside window" : ""}
                 </div>
               )}
             </>

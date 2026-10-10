@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.shared.producers import PRODUCERS, effective_settings, lineage
+from src.shared.producers import PRODUCERS, effective_settings, lineage, use_settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ class ProducerSettings:
         """fetch=False: the registry's defaults until refresh() reads the server."""
         self._client = client
         self._settings: dict[str, dict[str, Any]] = {a: effective_settings(a) for a in PRODUCERS}
+        self._uses: dict[str, dict[str, Any]] = {a: use_settings(a) for a in PRODUCERS}
         if fetch:
             self.refresh()
 
@@ -30,8 +31,9 @@ class ProducerSettings:
         what was read before stays (the registry's defaults the first time).
         True when the server said."""
         fresh = {a: effective_settings(a) for a in PRODUCERS}
+        uses = {a: use_settings(a) for a in PRODUCERS}
         if self._client is None:
-            self._settings = fresh
+            self._settings, self._uses = fresh, uses
             return False
         try:
             data = self._client.get("/v1/producers", params={"counts": "false"}).json()
@@ -43,11 +45,19 @@ class ProducerSettings:
         for p in data.get("producers", []):
             if p.get("artifact") in fresh and isinstance(p.get("settings"), dict):
                 fresh[p["artifact"]] = dict(p["settings"])
-        self._settings = fresh
+            # Settings that don't remake (not in lineage) are among its fields.
+            for f in p.get("fields") or []:
+                if p.get("artifact") in uses and f.get("key") in uses[p["artifact"]] and f.get("remakes") is False:
+                    uses[p["artifact"]][f["key"]] = f.get("value")
+        self._settings, self._uses = fresh, uses
         return True
 
     def settings(self, artifact: str) -> dict[str, Any]:
         return dict(self._settings[artifact])
+
+    def uses(self, artifact: str) -> dict[str, Any]:
+        """Its settings that don't remake (not in lineage): what's done with what's made."""
+        return dict(self._uses[artifact])
 
     def with_model(self, artifact: str, model: str) -> dict[str, Any]:
         """The settings with the model actually used: the account's, as read

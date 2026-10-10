@@ -94,6 +94,28 @@ describe("LocationRow", () => {
     expect(onAccept).toHaveBeenCalled();
   });
 
+  it("says when a guess's source was removed", () => {
+    render(<LocationRow gpsLat={null} gpsLon={null}
+      location={{ lat: 1, lon: 2, radius_m: 8100, source: "time", status: "applied",
+        basis_summary: "From iPhone 15 Pro photos at 10:00", basis_gone: true }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Guess" }));
+    expect(screen.getByText("About 8 km · From iPhone 15 Pro photos at 10:00 · source removed")).toBeTruthy();
+    cleanup();
+    render(<LocationRow gpsLat={null} gpsLon={null}
+      location={{ lat: 1, lon: 2, radius_m: 8100, source: "time", status: "applied",
+        basis_summary: "From iPhone 15 Pro photos at 10:00", basis_gone: false }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Guess" }));
+    expect(screen.queryByText(/source removed/)).toBeNull();
+  });
+
+  it("says when a guess's fixes are outside the window", () => {
+    render(<LocationRow gpsLat={null} gpsLon={null}
+      location={{ lat: 1, lon: 2, radius_m: 8100, source: "time", status: "applied",
+        basis_summary: "From iPhone 15 Pro photos at 10:00", outside_window: true }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Guess" }));
+    expect(screen.getByText("About 8 km · From iPhone 15 Pro photos at 10:00 · outside window")).toBeTruthy();
+  });
+
   it("shows nothing without any location", () => {
     const { container } = render(<LocationRow gpsLat={null} gpsLon={null} location={null} />);
     expect(container.textContent).toBe("");
