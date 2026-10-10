@@ -140,6 +140,22 @@ sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,ALEMBIC_CONTROL_UR
 ok "Tenant migrations applied"
 
 # ---------------------------------------------------------------------------
+step "Scheduler settings"
+# The scheduler reads its own settings (LUMIVERB_* in this env file), never
+# the CLI's config. What it read from the service user's CLI config before
+# (library roots, how video is rendered) is carried over once; a setting
+# already here stays. Before anything saves that config (config set, below),
+# which keeps only the CLI's own keys.
+if [[ "$PROCESSING" == "true" ]]; then
+  python3 "$APP_DIR/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config "${SVC_HOME}/.lumiverb/config.json"
+  grep -q '^LUMIVERB_ROOT_MAP=' "$ENV_FILE" \
+    || warn "No LUMIVERB_ROOT_MAP in ${ENV_FILE}: libraries are read at the paths the server stores"
+  ok "Scheduler settings in ${ENV_FILE}"
+else
+  ok "No processing on this machine"
+fi
+
+# ---------------------------------------------------------------------------
 step "Ensuring data directory"
 DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
