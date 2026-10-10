@@ -288,6 +288,33 @@ def test_library_empty_trash_yes_asks_nothing() -> None:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize("flags, posted", [([], False), (["--remove-from-projects"], True)])
+def test_library_empty_trash_yes_with_clips_in_projects_needs_the_flag(flags, posted) -> None:
+    """--yes asks no one, so clips in projects leave them only with --remove-from-projects."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "status": "trashed"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+    mock_client.post.return_value.json.return_value = {
+        "assets_in_projects": 2, "projects": [{"name": "Reel", "clips": 2}], "other_projects": 0, "deleted": 1}
+
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash", "--all", "--yes", *flags])
+
+    paths = [c.args[0] for c in mock_client.post.call_args_list]
+    if posted:
+        assert result.exit_code == 0, result.output
+        mock_client.post.assert_called_with("/v1/libraries/empty-trash",
+                                            json={"library_ids": ["lib_trash1"], "remove_from_projects": True})
+    else:
+        assert result.exit_code == 2
+        assert "--remove-from-projects" in result.output
+        assert paths == ["/v1/assets/project-usage"]
+
+
+@pytest.mark.fast
 def test_download_refuses_tty_without_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """When stdout is a TTY and --output is omitted, command should refuse to write binary."""
     # Pretend stdout is a TTY by patching the isatty method on the real stdout object.

@@ -70,6 +70,18 @@ def test_the_same_question_again_fails_rather_than_looping() -> None:
     assert client.raw.call_count == 1
 
 
+def test_in_projects_already_sent_isnt_asked_again(capsys) -> None:
+    client = MagicMock()
+    client.raw.return_value = _conflict("in_projects", assets_in_projects=1)
+
+    with pytest.raises(typer.Exit) as exit_:
+        send_until_decided(client, "POST", "/v1/x", {"remove_from_projects": True},
+                           answers={"in_projects": in_projects(what="they leave", yes=True)}, failed="Nope")
+
+    assert exit_.value.exit_code == 1  # failed, not "add --remove-from-projects" (2)
+    assert "Add --remove-from-projects" not in capsys.readouterr().out
+
+
 def test_in_projects_with_yes_stops_with_2() -> None:
     with pytest.raises(typer.Exit) as exit_:
         in_projects(what="they leave", yes=True)({"assets_in_projects": 1, "projects": []})

@@ -50,7 +50,9 @@ def send_until_decided(
             return r
         err = api_error(r)
         answer = answers.get(err.get("code")) if r.status_code == 409 else None
-        if answer is not None:
+        # An answer whose fields were already sent isn't asked again.
+        already = getattr(answer, "sends", None)
+        if answer is not None and not (already and all(body.get(k) == v for k, v in already.items())):
             more = answer(err.get("details") or {})
             if any(body.get(k) != v for k, v in more.items()):
                 body = {**body, **more}
@@ -87,4 +89,5 @@ def in_projects(*, what: str, yes: bool) -> Answer:
             raise typer.Exit(2 if yes else 0)
         return {"remove_from_projects": True}
 
+    answer.sends = {"remove_from_projects": True}  # type: ignore[attr-defined]
     return answer

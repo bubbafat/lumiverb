@@ -102,6 +102,19 @@ def test_a_save_that_fails_leaves_the_old_file(config_file: Path) -> None:
     assert os.listdir(config_file.parent) == ["config.json"]
 
 
+def test_a_symlinked_config_stays_a_symlink(config_file: Path, tmp_path: Path) -> None:
+    real = tmp_path / "dotfiles" / "lumiverb.json"
+    real.parent.mkdir()
+    real.write_text("{}")
+    config_file.parent.mkdir(parents=True)
+    config_file.symlink_to(real)
+
+    save_config(CLIConfig(api_key="lv_linked"))
+
+    assert config_file.is_symlink()
+    assert json.loads(real.read_text())["api_key"] == "lv_linked"
+
+
 # ---------------------------------------------------------------------------
 # admin key
 # ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ def load_config() -> CLIConfig:
 def save_config(config: CLIConfig) -> None:
     """Write config to file, readable only by its owner (it holds keys), all at
     once: a temporary file beside it, renamed over it."""
-    path = _config_path()
+    path = _config_path().resolve()  # a symlinked config stays a symlink
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.", suffix=".tmp")
     try:

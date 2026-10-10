@@ -340,7 +340,10 @@ def library_restore(
 def library_empty_trash(
     name: Annotated[str | None, typer.Option("--name", "-n", help="This library in the trash.")] = None,
     all_: Annotated[bool, typer.Option("--all", help="Every library in the trash.")] = False,
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
+    remove_from_projects: Annotated[bool, typer.Option(
+        "--remove-from-projects", help="Their clips in projects leave them.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask; with clips in projects, fail "
+                                                          "unless --remove-from-projects.")] = False,
 ) -> None:
     """Permanently delete libraries in the trash and their assets: one (--name), or
     all of them (--all) (admins only)."""
@@ -361,13 +364,13 @@ def library_empty_trash(
     usage = client.post(
         "/v1/assets/project-usage", json={"library_ids": [lib["library_id"] for lib in trashed]}
     ).json()
-    in_projects = usage.get("assets_in_projects", 0)
-    if in_projects:
+    n_in_projects = usage.get("assets_in_projects", 0)
+    if n_in_projects:
         named = usage.get("projects", [])
         total = len(named) + usage.get("other_projects", 0)
-        one = in_projects == 1
+        one = n_in_projects == 1
         console.print(
-            f"[yellow]{in_projects} {'clip' if one else 'clips'} from "
+            f"[yellow]{n_in_projects} {'clip' if one else 'clips'} from "
             f"{'this library' if len(trashed) == 1 else 'these libraries'} "
             f"{'is' if one else 'are'} in {total} {'project' if total == 1 else 'projects'}; "
             f"deleting {'it' if one else 'them'} for good removes {'it' if one else 'them'} from "
@@ -381,6 +384,9 @@ def library_empty_trash(
             console.print(f"  {p.get('name', '')}: {p.get('clips', 0)}" + (f" ({notes})" if notes else ""))
         if usage.get("other_projects"):
             console.print(f"  and {usage['other_projects']} more you can't see")
+        if yes and not remove_from_projects:
+            console.print("[red]Add --remove-from-projects to go ahead.[/red]")
+            raise typer.Exit(2)
     if not yes and not typer.confirm(
         f"Permanently delete {len(trashed)} "
         f"{'library and all its' if len(trashed) == 1 else 'libraries and all their'} assets?",
@@ -388,9 +394,9 @@ def library_empty_trash(
     ):
         console.print("Aborted.")
         raise typer.Exit(0)
-    # The user has seen which projects lose clips and said yes.
+    # The user has seen which projects lose clips and said yes (or gave --remove-from-projects).
     empty_resp = client.post("/v1/libraries/empty-trash", json={
-        "library_ids": [lib["library_id"] for lib in trashed], "remove_from_projects": bool(in_projects),
+        "library_ids": [lib["library_id"] for lib in trashed], "remove_from_projects": bool(n_in_projects),
     })
     data = empty_resp.json()
     n = data.get("deleted", 0)
