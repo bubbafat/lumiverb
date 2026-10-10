@@ -33,7 +33,6 @@ VIEWER_WRITABLE = {
     ("PATCH", "/v1/views/reorder"),
     ("PATCH", "/v1/views/{view_id}"),
     ("DELETE", "/v1/views/{view_id}"),
-    ("POST", "/v1/assets/state-check"),
     ("POST", "/v1/assets/project-usage"),
     ("POST", "/v1/similar/search-by-image"),
     ("POST", "/v1/similar/search-by-vector"),

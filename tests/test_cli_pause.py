@@ -78,8 +78,8 @@ def test_without_a_name_nothing_happens_and_the_names_are_listed(client, command
 @pytest.mark.parametrize(("args", "status", "body", "says"), [
     (["pause", "proxy"], 409, {"error": {"code": "not_scheduled", "message": "Proxies and thumbnails are made by "
                                          "scans: pausing Scans stops them."}}, "made by scans"),
-    (["pause", "all"], 403, {"detail": "Admins only"}, "Admins only"),
-    (["resume", "nope"], 404, {"detail": "No such artifact"}, "No such artifact"),
+    (["pause", "all"], 403, {"error": {"code": "forbidden", "message": "Admins only", "details": {}}}, "Admins only"),
+    (["resume", "nope"], 404, {"error": {"code": "not_found", "message": "No such artifact", "details": {}}}, "No such artifact"),
 ])
 def test_refusals_say_why(client, args, status, body, says):
     client.raw.return_value = _response(status, body)

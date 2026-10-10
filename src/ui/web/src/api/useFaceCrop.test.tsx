@@ -82,7 +82,27 @@ describe("useAuthenticatedImage", () => {
     const calls = stubServer([401, 200]);
     const { result } = renderHook(() => useAuthenticatedImage("ast_1"));
     await waitFor(() => expect(result.current.url).toBe("blob:crop"));
-    expect(calls[2].url).toBe("/v1/assets/ast_1/thumbnail");
+    expect(calls[2].url).toBe("/v1/assets/ast_1/artifacts/thumbnail");
     expect(getApiKey()).toBe("new-token");
+  });
+
+  it("asks for a preview again after the Retry-After of a 503 while it's made", async () => {
+    const calls: string[] = [];
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return ++n === 1
+          ? new Response(JSON.stringify({ error: { code: "playback_preparing", message: "", details: {} } }),
+              { status: 503, headers: { "Retry-After": "1" } })
+          : new Response(new Blob(["mp4"]), { status: 200 });
+      }),
+    );
+    const { result } = renderHook(() => useAuthenticatedImage("ast_1", "video-preview"));
+    await waitFor(() => expect(result.current.generating).toBe(true));
+    await waitFor(() => expect(result.current.url).toBe("blob:crop"), { timeout: 3000 });
+    expect(result.current.generating).toBe(false);
+    expect(calls).toEqual(["/v1/assets/ast_1/artifacts/video_preview", "/v1/assets/ast_1/artifacts/video_preview"]);
   });
 });

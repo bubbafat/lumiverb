@@ -22,11 +22,9 @@ STATE_WORDS = {"running": "Running", "partly": "Partly paused", "paused": "Pause
 
 
 def _error(r) -> str:
-    try:
-        body = r.json() or {}
-    except ValueError:
-        body = {}
-    return (body.get("error") or {}).get("message") or r.text
+    from src.client.cli.decisions import api_error
+
+    return api_error(r).get("message") or r.text
 
 
 def _switches(client: LumiverbClient) -> dict:

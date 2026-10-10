@@ -11,7 +11,9 @@ type Source = "analysis_proxy" | "preview";
  * as a blob when no link is available.
  *
  * While only the preview exists it asks again every `pollMs`, so the player
- * switches to the whole video as soon as it's processed. Each answer carries
+ * switches to the whole video as soon as it's processed. While the capped
+ * copy is made (ready false) it asks again every `preparingMs` and plays
+ * nothing yet. Each answer carries
  * a fresh link; the first link for a source is kept, since a new src would
  * restart the video. `renew()` swaps it for a fresh one, for a link that
  * failed (links last an hour).
@@ -24,7 +26,15 @@ export function usePlayback(
     publicLibraryId,
     publicProjectId,
     pollMs = 30_000,
-  }: { enabled: boolean; isPublic?: boolean; publicLibraryId?: string; publicProjectId?: string; pollMs?: number },
+    preparingMs = 2_000,
+  }: {
+    enabled: boolean;
+    isPublic?: boolean;
+    publicLibraryId?: string;
+    publicProjectId?: string;
+    pollMs?: number;
+    preparingMs?: number;
+  },
 ): {
   src: string | null;
   source: Source | null;
@@ -44,7 +54,14 @@ export function usePlayback(
     staleTime: 30 * 60_000,
     // A new link would restart a playing video; failures renew instead.
     refetchOnWindowFocus: false,
-    refetchInterval: (query) => (query.state.data?.source === "preview" ? pollMs : false),
+    refetchInterval: (query) =>
+      query.state.status === "error"
+        ? false
+        : query.state.data && !query.state.data.ready
+        ? preparingMs
+        : query.state.data?.source === "preview"
+          ? pollMs
+          : false,
   });
   const fallback = useAuthenticatedImage(assetId, "video-preview", {
     enabled: enabled && playback.isError,
@@ -61,7 +78,14 @@ export function usePlayback(
 
   const failed = playback.isRefetchError;
   if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew, failed: false };
-  if (playback.data) {
+  if (playback.data && !playback.data.ready && !playback.isError) {
+    // A link already playing keeps playing until the new one is ready.
+    if (kept.current?.assetId === assetId) {
+      return { src: kept.current.url, source: kept.current.source, maxSeconds: null, isLoading: false, renew, failed };
+    }
+    return { src: null, source: null, maxSeconds: null, isLoading: true, renew, failed: false };
+  }
+  if (playback.data && playback.data.ready) {
     const { source, url, max_seconds } = playback.data;
     const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
     if (stale || (renewing.current && kept.current?.url !== url)) {

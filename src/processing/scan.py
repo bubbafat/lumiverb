@@ -134,7 +134,7 @@ def _fetch_ignored_paths(client: ApiClient, library_id: str) -> dict[str, list[_
     ignored: dict[str, list[_ServerAsset] | None] = {}
     cursor: str | None = None
     while True:
-        params: dict[str, str] = {"limit": "1000"}
+        params: dict[str, str] = {"limit": "500"}
         if cursor:
             params["after"] = cursor
         data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()

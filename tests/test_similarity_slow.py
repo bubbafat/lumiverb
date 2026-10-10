@@ -821,3 +821,35 @@ def test_search_by_vector_hybrid_falls_back_when_face_path_errors(
     # Must not 500 — graceful degradation to scene-only.
     assert resp.status_code == 200, resp.text
 
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("route,extra", [
+    ("search-by-image", {}),
+    ("search-by-vector", {"vector": [0.1] * 8, "model_id": "m", "model_version": "1"}),
+])
+def test_search_bodies_are_bounded_and_bad_base64_is_a_422(
+    similarity_client: Tuple[_AuthClient, str, str], route: str, extra: dict,
+) -> None:
+    """Out-of-range limit or offset, an oversized image or one that isn't
+    base64: a 422, never a 500 and never a silent clamp."""
+    from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
+
+    auth_client, library_id, _ = similarity_client
+    base = {"library_id": library_id, "image_b64": "aGVsbG8=", **extra}
+    for bad in ({"limit": 0}, {"limit": MAX_SIMILAR + 1}, {"offset": -1}, {"offset": MAX_SIMILAR_OFFSET + 1},
+                {"image_b64": "A" * (MAX_IMAGE_B64 + 4)}):
+        r = auth_client.post(f"/v1/similar/{route}", json={**base, **bad})
+        assert r.status_code == 422, (bad, r.status_code)
+        assert r.json()["error"]["code"] == "invalid_request"
+    r = auth_client.post(f"/v1/similar/{route}", json={**base, "image_b64": "not base64!!"})
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "invalid_image"
+
+
+@pytest.mark.slow
+def test_search_by_image_that_isnt_an_image_is_a_422(similarity_client: Tuple[_AuthClient, str, str]) -> None:
+    auth_client, library_id, _ = similarity_client
+    r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": "aGVsbG8="})
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "invalid_image"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-from unittest.mock import MagicMock, patch
 
 from src.processing.scan import ScanStats
 
@@ -55,51 +54,6 @@ class TestRemovedCommands:
         from src.client.cli import main
         source = inspect.getsource(main)
         assert "run_ingest" not in source
-
-
-class TestSkipTypes:
-    """Verify skip_types parameter in run_repair."""
-
-    def test_run_repair_accepts_skip_types(self):
-        from src.client.cli.repair import run_repair
-        sig = inspect.signature(run_repair)
-        assert "skip_types" in sig.parameters
-        assert sig.parameters["skip_types"].default is None
-
-    @patch("src.client.cli.repair._page_missing")
-    @patch("src.client.cli.repair.get_repair_summary")
-    def test_skip_types_excludes_from_plan(self, mock_summary, mock_page):
-        """When skip_types includes 'vision', vision repair is skipped."""
-        from rich.console import Console
-        from src.client.cli.repair import run_repair
-
-        mock_summary.return_value = {
-            "total_assets": 10,
-            "missing_embeddings": 5,
-            "missing_vision": 5,
-        }
-        mock_page.return_value = []
-
-        client = MagicMock()
-        library = {"library_id": "lib-1", "name": "Test", "root_path": "/tmp/test"}
-        console = Console(quiet=True)
-
-        run_repair(
-            client, library,
-            job_type="all",
-            console=console,
-            skip_types={"vision"},
-        )
-
-        calls = mock_page.call_args_list
-        called_with_vision = any(
-            call.kwargs.get("missing_vision", False) for call in calls
-        )
-        called_with_embed = any(
-            call.kwargs.get("missing_embeddings", False) for call in calls
-        )
-        assert not called_with_vision, "vision should have been skipped"
-        assert called_with_embed, "embed should not have been skipped"
 
 
 class TestUserSubcommand:

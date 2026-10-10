@@ -461,14 +461,25 @@ def filter_list(
         console.print(table)
 
 
+def _filter_scope(library: str | None, tenant_default: bool) -> None:
+    """A filter change says where: --library, or --tenant-default for every library's default."""
+    if (library is None) == (not tenant_default):
+        console.print("[red]Give --library, or --tenant-default for the account's defaults.[/red]")
+        raise typer.Exit(2)
+
+
 @filter_app.command("add")
 def filter_add(
     pattern: Annotated[str, typer.Argument(help="Glob pattern (e.g. '**/Output/**').")],
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to add as tenant default.")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    tenant_default: Annotated[bool, typer.Option(
+        "--tenant-default", help="Add to the account's defaults (every new library's).")] = False,
     include: Annotated[bool, typer.Option("--include", help="Add as include filter.")] = False,
     exclude: Annotated[bool, typer.Option("--exclude", help="Add as exclude filter.")] = False,
 ) -> None:
-    """Add a path filter. Specify --include or --exclude."""
+    """Add a path filter to a library (--library) or the account's defaults
+    (--tenant-default). Specify --include or --exclude."""
+    _filter_scope(library, tenant_default)
     if include == exclude:
         console.print("[red]Specify exactly one of --include or --exclude.[/red]")
         raise typer.Exit(1)
@@ -497,9 +508,12 @@ def filter_add(
 @filter_app.command("remove")
 def filter_remove(
     filter_id: Annotated[str, typer.Argument(help="Filter ID to remove (lpf_... or tpfd_...).")],
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name. Omit to remove tenant default.")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name.")] = None,
+    tenant_default: Annotated[bool, typer.Option(
+        "--tenant-default", help="Remove one of the account's defaults.")] = False,
 ) -> None:
-    """Remove a filter by ID."""
+    """Remove a filter by ID, from a library (--library) or the account's defaults (--tenant-default)."""
+    _filter_scope(library, tenant_default)
     client = LumiverbClient()
     if library:
         library_id = _resolve_library_id_for_filter(client, library)

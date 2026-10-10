@@ -239,7 +239,7 @@ def producers_retry(
     client = LumiverbClient()
     body: dict = {} if artifact == "all" else {"artifact": artifact}
     if asset:
-        body["ids"] = list(asset)
+        body["asset_ids"] = list(asset)
     else:
         body["all"] = True
         if library is not None:

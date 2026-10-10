@@ -144,19 +144,24 @@ def archive_list(
 
 @archive_app.command("delete-missing")
 def archive_delete_missing(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Only this library's.")] = None,
-    folder: Annotated[str | None, typer.Option("--folder", "-f", help="Only under this folder.")] = None,
+    library: Annotated[str | None, typer.Option("--library", "-l", help="This library's.")] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Every library's.")] = False,
+    folder: Annotated[str | None, typer.Option("--folder", "-f", help="With --library: only under this folder.")] = None,
     remove_from_projects: Annotated[bool, typer.Option(
         "--remove-from-projects", help="Clips in projects leave them.")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask: go ahead with however many there are.")] = False,
 ) -> None:
     """Delete for good the clips whose files went missing (admins only), with
-    everything made or written for them. The server says how many first. A
-    file that comes back afterwards is a new clip."""
+    everything made or written for them: one library's (--library), or every
+    library's (--all). The server says how many first. A file that comes back
+    afterwards is a new clip."""
     from src.client.cli.decisions import in_projects, send_until_decided
 
+    if (library is None) == (not all_) or (folder and not library):
+        console.print("[red]Give --library (with --folder to narrow it), or --all.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
-    body: dict = {}
+    body: dict = {"all": True} if all_ else {}
     if library:
         body["library_id"] = library_id_for(client, library)
     if folder:

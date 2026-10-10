@@ -301,7 +301,7 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     assert _merge_epsilon(env) == distance
 
     _put(env, "faces", settings={"merge_close_clusters": None})  # the cache starts clean
-    client.get("/v1/faces/clusters", headers=headers)
+    client.post("/v1/upkeep/recluster", headers=headers)
     assert _clusters_current(env)
     try:
         r = _put(env, "faces", settings={"merge_close_clusters": False})  # no redo asked: none needed
@@ -313,7 +313,7 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
         assert not _clusters_current(env)
         assert _merge_epsilon(env) == 0.0
 
-        client.get("/v1/faces/clusters", headers=headers)
+        client.post("/v1/upkeep/recluster", headers=headers)
         r = _put(env, "faces", settings={"merge_close_clusters": False})  # the same again: nothing to redo
         assert r.status_code == 200 and _clusters_current(env)
 

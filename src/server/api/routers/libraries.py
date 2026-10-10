@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import (
@@ -15,6 +15,7 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError
+from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
@@ -64,8 +65,10 @@ class EmptyTrashResponse(BaseModel):
 
 
 class EmptyLibraryTrashRequest(BaseModel):
-    # Which trashed libraries to delete for good; all of them when omitted.
-    library_ids: list[str] | None = None
+    # Which trashed libraries to delete for good, or all: true for every one
+    # in the trash. Neither is a 400.
+    library_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    all: bool = False
     # Required when clips in those libraries are in projects: deleting them
     # for good takes them out of those projects.
     remove_from_projects: bool = False
@@ -226,19 +229,21 @@ def empty_trash(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_tenant_admin)],
     user_id: Annotated[str, Depends(get_current_user_id)],
-    body: EmptyLibraryTrashRequest | None = None,
+    body: EmptyLibraryTrashRequest,
 ) -> EmptyTrashResponse:
-    """Delete trashed libraries for good: those in library_ids, or all of them.
+    """Delete trashed libraries for good: those in library_ids, or all of them
+    (all: true; neither or both is a 400 scope_required).
     Admins only: deleting media for good right away is theirs (Robert's call,
     Oct 8); editors trash and restore, and the trash deletes on its own day.
     Returns how many. 409 in_projects, with the projects in details, when
     their clips are in projects and remove_from_projects isn't set."""
+    require_scope(body.library_ids is not None, body.all, "library_ids")
     tenant_id = getattr(request.state, "tenant_id", None)
     repo = LibraryRepository(session)
     trashed = repo.get_trashed()
-    if body and body.library_ids is not None:
+    if body.library_ids is not None:
         trashed = [lib for lib in trashed if lib.library_id in set(body.library_ids)]
-    if trashed and not (body and body.remove_from_projects):
+    if trashed and not body.remove_from_projects:
         from src.server.api.routers.assets import project_usage_summary
 
         usage = project_usage_summary(session, user_id, library_ids=[lib.library_id for lib in trashed])
@@ -431,7 +436,7 @@ def page_ignored_paths(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
-    limit: int = 500,
+    limit: int = Query(default=500, ge=1, le=MAX_PAGE),
 ) -> IgnoredPathPage:
     """Files a scan must skip because a person trashed, archived or deleted
     them, by rel_path, with their contents.
@@ -441,7 +446,6 @@ def page_ignored_paths(
     """
     if LibraryRepository(session).get_by_id(library_id) is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    limit = max(1, min(limit, 1000))
     rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
     return IgnoredPathPage(
         items=[IgnoredPathItem(rel_path=p, reason=k, files=f) for p, k, f in rows],

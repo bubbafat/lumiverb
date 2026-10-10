@@ -476,7 +476,7 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
     mutationFn: (assetIds?: string[]) =>
       retryFailures({ artifact: producer.artifact, ...(libraryId ? { library_id: libraryId } : {}),
                       // Named, never inferred: these clips, or all of them.
-                      ...(assetIds ? { ids: assetIds } : { all: true as const }) }),
+                      ...(assetIds ? { asset_ids: assetIds } : { all: true as const }) }),
     onSuccess: (r) => {
       setNotice(`${clips(r.retried)} will be tried again shortly.`);
       queryClient.invalidateQueries({ queryKey: key });

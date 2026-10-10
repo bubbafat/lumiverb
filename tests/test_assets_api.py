@@ -108,27 +108,25 @@ def assets_api_client() -> tuple[TestClient, str, str, list[str]]:
 
 @pytest.mark.slow
 def test_list_assets_by_library(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets?library_id=... returns the assets for that library."""
+    """GET /v1/assets/page?library_id=... returns the assets for that library."""
     client, api_key, library_id, asset_ids = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    r = client.get("/v1/assets", params={"library_id": library_id}, headers=auth)
+    r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r.status_code == 200
-    assets = r.json()
+    assets = r.json()["items"]
     assert len(assets) >= 3
     ids = {a["asset_id"] for a in assets}
     for aid in asset_ids:
         assert aid in ids
     for a in assets:
-        assert a["library_id"] == library_id
         assert "rel_path" in a
         assert "media_type" in a
-        assert "status" in a
 
 
 @pytest.mark.slow
 def test_list_assets_empty_library(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets?library_id=... on a library with no assets returns []."""
+    """GET /v1/assets/page?library_id=... on a library with no assets returns no items."""
     client, api_key, _, _ = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -140,24 +138,28 @@ def test_list_assets_empty_library(assets_api_client: tuple[TestClient, str, str
     assert r_lib.status_code == 200
     library_id = r_lib.json()["library_id"]
 
-    r = client.get("/v1/assets", params={"library_id": library_id}, headers=auth)
+    r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["items"] == []
 
 
 @pytest.mark.slow
-def test_list_assets_no_filter(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets (no library_id) returns all assets across the tenant."""
-    client, api_key, library_id, asset_ids = assets_api_client
+def test_the_unpaged_asset_list_is_gone(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+    """GET /v1/assets (every asset at once, the whole account without library_id) is gone: page with /page."""
+    client, api_key, library_id, _ = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    r = client.get("/v1/assets", headers=auth)
-    assert r.status_code == 200
-    assets = r.json()
-    assert len(assets) >= 3
-    ids = {a["asset_id"] for a in assets}
-    for aid in asset_ids:
-        assert aid in ids
+    assert client.get("/v1/assets", headers=auth).status_code == 405
+    assert client.get("/v1/assets", params={"library_id": library_id}, headers=auth).status_code == 405
+
+
+@pytest.mark.slow
+def test_state_check_is_gone(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+    """POST /v1/assets/state-check had no caller; it's gone."""
+    client, api_key, _, asset_ids = assets_api_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/assets/state-check", json={"asset_ids": asset_ids[:1]}, headers=auth)
+    assert r.status_code in (404, 405)
 
 
 @pytest.mark.slow
@@ -192,7 +194,7 @@ def test_list_assets_requires_auth(assets_api_client: tuple[TestClient, str, str
     """Missing Authorization header returns 401."""
     client, _, library_id, _ = assets_api_client
 
-    r = client.get("/v1/assets", params={"library_id": library_id})
+    r = client.get("/v1/assets/page", params={"library_id": library_id})
     assert r.status_code == 401
 
 
@@ -232,7 +234,7 @@ def test_stream_thumbnail_happy_path(
     payload = b"\xff\xd8\xff" + b"\x00" * 10
     thumb_path.write_bytes(payload)
 
-    r = client.get(f"/v1/assets/{asset_id}/thumbnail", headers=auth)
+    r = client.get(f"/v1/assets/{asset_id}/artifacts/thumbnail", headers=auth)
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
     assert r.content == payload

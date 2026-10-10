@@ -1,19 +1,25 @@
 """FastAPI application entry point."""
 
-import math
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from src.server.api.errors import ConflictError, decision_required_handler
+from src.server.api.errors import (
+    ApiError,
+    api_error_handler,
+    envelope,
+    http_exception_handler,
+    unhandled_error_handler,
+    validation_error_handler,
+)
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import hide_stream_links
 
@@ -63,6 +69,7 @@ from src.server.api.routers.views import router as views_router
 from src.server.api.routers.upkeep import router as upkeep_router
 from src.server.api.routers.people import router as people_router, faces_router
 from src.server.api.routers.system import router as system_router
+from src.server.api.routers.locations import router as locations_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -74,24 +81,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
 
 
-app.add_exception_handler(ConflictError, decision_required_handler)
-
-
-@app.exception_handler(RequestValidationError)
-async def _request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """FastAPI's default 422, except that it can echo any input: the default
-    crashes when the rejected input holds inf or NaN (not valid JSON)."""
-
-    def finite(value):
-        if isinstance(value, float) and not math.isfinite(value):
-            return str(value)
-        if isinstance(value, dict):
-            return {k: finite(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [finite(v) for v in value]
-        return value
-
-    return JSONResponse(status_code=422, content={"detail": finite(jsonable_encoder(exc.errors()))})
+# Every error in one envelope: {"error": {"code", "message", "details"}} (errors.py).
+app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(Exception, unhandled_error_handler)
 
 
 def _unavailable(exc: Exception) -> bool:
@@ -117,8 +111,7 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
     if not _unavailable(exc):
         raise exc
     logging.getLogger(__name__).warning("database unavailable for %s: %s", request.url.path, exc)
-    return JSONResponse(status_code=503, content={"error": {
-        "code": "database_unavailable", "message": "The database is unavailable; try again shortly.", "details": {}}})
+    return envelope(503, "database_unavailable", "The database is unavailable; try again shortly.")
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
@@ -139,6 +132,7 @@ app.include_router(faces_router)
 app.include_router(filters_router)
 app.include_router(facets_router)
 app.include_router(playback_router)
+app.include_router(locations_router)  # before /v1/assets/{asset_id}
 app.include_router(assets.router)
 app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])
 app.include_router(public_projects_router, prefix="/v1/public/projects", tags=["public_projects"])

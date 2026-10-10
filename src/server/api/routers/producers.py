@@ -37,6 +37,7 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.errors import ConflictError
+from src.server.api.limits import MAX_IDS
 from src.server.repository import lineage
 from src.shared.producers import (
     PAUSE_ALL,
@@ -636,32 +637,13 @@ def list_failures(
     return FailingClips(items=items, next_cursor=rows[-1]["cursor"] if more and rows else None)
 
 
-class ScopeRequired(ConflictError):
-    """400 in the standard envelope: an impactful action that doesn't say what
-    it acts on: ids, or all: true. "all" is named, never inferred from a
-    missing target (Robert, Oct 9)."""
-
-    status_code = 400
-
-
-class Scoped(BaseModel):
-    """What an impactful request acts on: these (ids), or every one (all: true)."""
-
-    ids: list[str] | None = Field(default=None, min_length=1, max_length=10_000)
-    all: bool = False
-
-    def named(self) -> list[str] | None:
-        """The ids named, or None for every one; 400 scope_required for neither or both."""
-        if bool(self.ids) == self.all:
-            raise ScopeRequired("scope_required", "Say which: ids, or all: true.", {"fields": ["ids", "all"]})
-        return None if self.all else list(self.ids or [])
-
-
-class RetryIn(Scoped):
-    """Failing clips to try again: these clips (ids), or every failing clip
+class RetryIn(BaseModel):
+    """Failing clips to try again: these (asset_ids), or every failing clip
     (all: true); a producer's (artifact) or one library's (library_id) alone
     when given."""
 
+    asset_ids: list[str] | None = Field(default=None, min_length=1, max_length=MAX_IDS)
+    all: bool = False
     artifact: str | None = Field(default=None, max_length=64)
     library_id: str | None = Field(default=None, max_length=64)
 
@@ -669,21 +651,25 @@ class RetryIn(Scoped):
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
 def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """Try failing clips again now, given up or not; the back-off starts
-    over. 400 scope_required unless the clips are named (ids) or all: true.
+    over. asset_ids, or all: true; neither or both is a 400 scope_required.
     Returns {"retried"}."""
-    asset_ids = body.named()
+    from src.server.api.limits import require_scope
+
+    require_scope(body.asset_ids is not None, body.all, "asset_ids")
     if body.artifact is not None:
         producer_or_404(body.artifact)
-    n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=asset_ids)
+    n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=body.asset_ids)
     session.commit()
     return {"retried": n}
 
 
-class RunIn(Scoped):
+class RunIn(BaseModel):
     """Work for the scheduler to do now: a producer's (or "all", named), in
-    these libraries (ids) or every one (all: true), new work or a redo."""
+    these libraries (library_ids) or every one (all: true), new work or a redo."""
 
     producer: str = Field(max_length=64)
+    library_ids: list[str] | None = Field(default=None, min_length=1, max_length=MAX_IDS)
+    all: bool = False
     # "new": what's missing, failing clips tried again at once; "redo": that,
     # and what's made made again (admins), as new settings would.
     scope: Literal["new", "redo"]
@@ -710,11 +696,13 @@ def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(g
     looks again now; with scope redo (admins), what they've made in the
     libraries named is made again, after anything missing (a person's never
     is). It goes as the scheduler goes: by tier, within its pools, and what's
-    paused waits (each producer says). 400 scope_required unless the
-    libraries are named (ids) or all: true."""
+    paused waits (each producer says). library_ids, or all: true; neither
+    or both is a 400 scope_required."""
+    from src.server.api.limits import require_scope
     from src.server.repository.tenant import LibraryRepository
 
-    libraries: list[str | None] = [None] if (named := body.named()) is None else list(dict.fromkeys(named))
+    require_scope(body.library_ids is not None, body.all, "library_ids")
+    libraries: list[str | None] = [None] if body.all else list(dict.fromkeys(body.library_ids or []))
     if any(LibraryRepository(session).get_by_id(lib) is None for lib in libraries if lib):
         raise HTTPException(status_code=404, detail="Library not found")
     if body.producer == PAUSE_ALL:

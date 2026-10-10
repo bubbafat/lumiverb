@@ -223,7 +223,7 @@ def test_retry_some_or_all(client):
     client.raw.return_value = _response(200, {"retried": 1})
     result = _run("retry", "vision", "--asset", "ast_1")
     assert result.exit_code == 0 and "1 clip will be tried again shortly." in result.output
-    assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "ids": ["ast_1"]}
+    assert client.raw.call_args.kwargs["json"] == {"artifact": "vision", "asset_ids": ["ast_1"]}
     client.raw.return_value = _response(200, {"retried": 0})
     result = _run("retry", "all", "--all")
     assert "Nothing was failing." in result.output

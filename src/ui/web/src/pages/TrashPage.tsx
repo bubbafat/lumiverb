@@ -79,7 +79,7 @@ export default function TrashPage() {
     try {
       // Everything shown: this library's trash when filtered, never more.
       const r = await emptyClipTrash(
-        deleting.ids ?? undefined,
+        deleting.ids ?? "all",
         removeFromProjects,
         deleting.ids ? {} : { libraryId, trashedBefore: first?.listed_at },
       );

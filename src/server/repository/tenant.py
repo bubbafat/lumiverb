@@ -563,15 +563,6 @@ class AssetRepository:
         )
         return list(self._session.exec(stmt).all())
 
-    def list_by_library(self, library_id: str) -> list[Asset]:
-        """Return all active (non-trashed) assets in library."""
-        stmt = (
-            select(Asset)
-            .where(Asset.library_id == library_id)
-            .where(Asset.deleted_at.is_(None))
-        )
-        return list(self._session.exec(stmt).all())
-
     def list_ids_matching_pattern(self, library_id: str, pattern: str) -> list[str]:
         """Return asset_ids of active assets whose rel_path matches a glob pattern."""
         from src.shared.path_filter import _glob_match
@@ -792,14 +783,19 @@ class AssetRepository:
                 "a.iso IS NULL AND a.exposure_time_us IS NULL AND a.aperture IS NULL"
             )
 
-        # --- GPS filters ---
+        # --- Location filters: the effective location, the file's or a person's (ADR-017) ---
+        from src.server.models.query_filter import has_location_sql, location_params, location_sql
+
+        join_location = has_gps or (near_lat is not None and near_lon is not None)
+        if join_location:
+            location_params(params)
         if has_gps:
-            conditions.append("a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL")
+            conditions.append(has_location_sql())
         if near_lat is not None and near_lon is not None:
             lat_delta = near_radius_km / 111.0
             lon_delta = near_radius_km / (111.0 * _math.cos(_math.radians(near_lat)))
-            conditions.append("a.gps_lat BETWEEN :min_lat AND :max_lat")
-            conditions.append("a.gps_lon BETWEEN :min_lon AND :max_lon")
+            conditions.append(f"{location_sql('lat')} BETWEEN :min_lat AND :max_lat")
+            conditions.append(f"{location_sql('lon')} BETWEEN :min_lon AND :max_lon")
             params["min_lat"] = near_lat - lat_delta
             params["max_lat"] = near_lat + lat_delta
             params["min_lon"] = near_lon - lon_delta
@@ -852,6 +848,10 @@ class AssetRepository:
         lateral_join = ""
         if join_metadata:
             lateral_join = _corr.TAGS_JOIN  # the tags a person sees
+        if join_location:
+            from src.server.models.query_filter import LOCATION_JOIN
+
+            lateral_join += f"\n            {LOCATION_JOIN}\n"
 
         # The reconciler's missing_* rules read each clip's lineage (as `la`).
         from src.shared.producers import MISSING_FLAGS
@@ -900,11 +900,6 @@ class AssetRepository:
             .where(Asset.library_id == library_id)
             .where(Asset.deleted_at.is_(None))
         )
-        return list(self._session.exec(stmt).all())
-
-    def list_all(self) -> list[Asset]:
-        """Return all active (non-trashed) assets (all libraries)."""
-        stmt = select(Asset).where(Asset.deleted_at.is_(None))
         return list(self._session.exec(stmt).all())
 
     def trash(self, asset_id: str, *, reason: str = "missing") -> bool:
@@ -1721,14 +1716,27 @@ class AssetRepository:
         lens_model: str | None = None,
         flash_fired: bool | None = None,
         orientation: int | None = None,
+        gps_accuracy_m: float | None = None,
+        taken_at_offset_min: int | None = None,
     ) -> None:
-        """Update EXIF fields on asset record."""
+        """Update EXIF fields on asset record: what the file says. GPS that
+        isn't a real position ((0, 0): no fix) is stored as none."""
+        from src.shared.location import is_fix
+
         taken_at_dt: datetime | None = None
         if taken_at:
             try:
                 taken_at_dt = datetime.fromisoformat(taken_at)
             except ValueError:
                 pass
+        if not is_fix(gps_lat, gps_lon):
+            gps_lat = gps_lon = gps_accuracy_m = None
+        if not isinstance(gps_accuracy_m, (int, float)) or isinstance(gps_accuracy_m, bool) \
+                or not 0 <= gps_accuracy_m < 1e7:
+            gps_accuracy_m = None
+        if not isinstance(taken_at_offset_min, int) or isinstance(taken_at_offset_min, bool) \
+                or abs(taken_at_offset_min) > 14 * 60:
+            taken_at_offset_min = None
         self._session.execute(
             text(
                 """
@@ -1741,6 +1749,8 @@ class AssetRepository:
                     taken_at = :taken_at,
                     gps_lat = :gps_lat,
                     gps_lon = :gps_lon,
+                    gps_accuracy_m = :gps_accuracy_m,
+                    taken_at_offset_min = :taken_at_offset_min,
                     duration_sec = COALESCE(:duration_sec, duration_sec),
                     iso = :iso,
                     exposure_time_us = :exposure_time_us,
@@ -1762,6 +1772,8 @@ class AssetRepository:
                 "taken_at": taken_at_dt,
                 "gps_lat": gps_lat,
                 "gps_lon": gps_lon,
+                "gps_accuracy_m": gps_accuracy_m,
+                "taken_at_offset_min": taken_at_offset_min,
                 "duration_sec": duration_sec,
                 "iso": iso,
                 "exposure_time_us": exposure_time_us,
@@ -1786,28 +1798,6 @@ class AssetRepository:
             .where(Asset.deleted_at.is_(None))
         )
         return list(self._session.exec(stmt).all())
-
-    def get_states(self, asset_ids: list[str]) -> dict[str, dict]:
-        """Fetch deleted status and proxy_sha256 for a list of asset_ids.
-
-        Returns dict keyed by asset_id. IDs not present in DB are not included.
-        Deliberately includes soft-deleted assets — callers must not add a
-        deleted_at IS NULL filter here.
-        """
-        if not asset_ids:
-            return {}
-        stmt = (
-            select(Asset.asset_id, Asset.deleted_at, Asset.proxy_sha256)
-            .where(Asset.asset_id.in_(asset_ids))
-        )
-        rows = self._session.exec(stmt).all()
-        return {
-            row.asset_id: {
-                "deleted": row.deleted_at is not None,
-                "proxy_sha256": row.proxy_sha256,
-            }
-            for row in rows
-        }
 
 
 class AssetOcrRepository:
@@ -3201,6 +3191,10 @@ class UnifiedBrowseRepository:
         lateral_join = ""
         if join_metadata:
             lateral_join = _corr.TAGS_JOIN  # the tags a person sees
+        if spec.needs_location_join:
+            from src.server.models.query_filter import LOCATION_JOIN
+
+            lateral_join += f"\n            {LOCATION_JOIN}\n"
 
         rating_join_sql = ""
         if join_ratings:
@@ -4257,8 +4251,8 @@ class FaceRepository:
     def cluster_cache(self, *, faces_per_cluster: int = 20) -> dict:
         """Every cluster of unassigned faces, as the cluster cache keeps them
         (``face_clusters_cache``): largest first, each with its position
-        (``cluster_index``, what the cluster routes take), size, a sample of
-        faces, every face id, and ``newest``, its latest photo (taken, else
+        (``cluster_index``), size, a sample of faces, every face id (the
+        routes name a cluster by them: people.cluster_id_of), and ``newest``, its latest photo (taken, else
         the file's time; ISO 8601, None when no photo says)."""
         from datetime import datetime, timezone
 

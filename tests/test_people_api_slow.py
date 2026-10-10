@@ -167,15 +167,15 @@ def test_list_people(people_client: Tuple[_AuthClient, str, str]) -> None:
 def test_clusters_cache_marked_dirty_on_face_assign(people_client: Tuple[_AuthClient, str, str]) -> None:
     """
     After a cluster cache computation, assigning a face should mark the cache dirty
-    so the next GET /v1/faces/clusters recomputes.
+    so the next upkeep run recomputes (GET /v1/faces/clusters says pending).
     """
     auth_client, library_id, tenant_url = people_client
 
-    # Create at least one unassigned face with an embedding so clusters endpoint can compute/cache.
+    # Create at least one unassigned face with an embedding so upkeep can compute/cache.
     _, face_ids = _create_asset_with_faces(auth_client, library_id, "cluster_dirty", 2)
 
-    r = auth_client.get("/v1/faces/clusters")
-    assert r.status_code == 200
+    r = auth_client.post("/v1/upkeep/recluster")
+    assert r.status_code == 200, r.text
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:

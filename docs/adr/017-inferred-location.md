@@ -2,15 +2,15 @@
 
 ## Status
 
-Accepted. Decisions were made with Robert on 2026-10-09. Not built yet.
+Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 and 2 built.
 
 ## Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Groundwork: better EXIF, the `asset_location` table, the effective location in filters, nothing on public pages | Not started |
-| 2 | A person's location: set it for explicit clips; Lightbox row | Not started |
-| 3 | The `location` producer: camera clips located from phone photos by date and time | Not started |
+| 1 | Groundwork: better EXIF, the `asset_location` table, the effective location in filters, nothing on public pages | Built. New and changed files only: backfilling clips already ingested moves to phase 3 |
+| 2 | A person's location: set it for explicit clips; Lightbox row | Built |
+| 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | Not started |
 | 4 | Offline place names and suggestions from text in the image | Not started |
 | 5 | Landmark suggestions through the vision job | Not started |
 
@@ -223,10 +223,11 @@ Requirements as in the ADR template: the full suite passes, tsc and vite build a
 - Lightbox Location row; "Set location…" on a selection.
 
 ### Phase 3: The `location` producer
+- Backfill `taken_at_offset_min` and `gps_accuracy_m` from the originals for clips ingested before phase 1, in the scheduler (read-only storage), on the producer structure that replaces today's. Phase 1 extracts them only for new and changed files. (0, 0) was already cleared by the phase 1 migration.
 - The `infer_location` and `inference_minutes` settings.
 - Device keys, clock correction, matching, radius, the speed check.
 - The re-run step when a fix changes; a person's location acts as a fix.
-- The "Includes guesses" toggle in the filter bar.
+- The "Includes guesses" toggle in the filter bar shows by itself once guesses exist (built in phase 2: `guess_count` in the facets).
 
 ### Phase 4: Place names
 - GeoNames offline on the brain.

@@ -6,16 +6,32 @@ import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.api.errors import ApiError
+from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
 from src.server.models.similarity import CameraSpec, DateRange, SimilarityScope
 from src.server.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/similar", tags=["similarity"])
+
+# The longest embedding a client sends (CLIP is 512 or 768; Apple's feature print up to 2048).
+MAX_VECTOR = 4096
+
+
+def _decode_image(image_b64: str) -> bytes:
+    """The image's bytes; 422 invalid_image when it isn't base64."""
+    import base64
+    import binascii
+
+    try:
+        return base64.b64decode(image_b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError(422, "invalid_image", "image_b64 isn't base64.") from None
 
 
 class SimilarHit(BaseModel):
@@ -39,11 +55,13 @@ class SimilarityResponse(BaseModel):
 
 class ImageSimilarityRequest(BaseModel):
     library_id: str
-    image_b64: str  # base64-encoded JPEG/PNG, already resized by client
+    # base64-encoded JPEG/PNG, already resized by client; not base64 or not
+    # an image is a 422 invalid_image.
+    image_b64: str = Field(min_length=1, max_length=MAX_IMAGE_B64)
     model_id: str | None = None  # defaults to "clip"
     model_version: str | None = None  # defaults to server CLIP version
-    limit: int = 20
-    offset: int = 0
+    limit: int = Field(default=20, ge=1, le=MAX_SIMILAR)
+    offset: int = Field(default=0, ge=0, le=MAX_SIMILAR_OFFSET)
     # Scope filters — mirrors the GET endpoint's query params as a structured body
     from_ts: float | None = None
     to_ts: float | None = None
@@ -62,16 +80,17 @@ class VectorSimilarityRequest(BaseModel):
     not a replacement, so legacy callers keep working unchanged.
     """
     library_id: str
-    vector: list[float]
+    vector: list[float] = Field(min_length=1, max_length=MAX_VECTOR)
     model_id: str
     model_version: str
-    limit: int = 20
-    offset: int = 0
+    limit: int = Field(default=20, ge=1, le=MAX_SIMILAR)
+    offset: int = Field(default=0, ge=0, le=MAX_SIMILAR_OFFSET)
     from_ts: float | None = None
     to_ts: float | None = None
     asset_types: list[Literal["image", "video"]] | None = None
     cameras: list[CameraSpec] | None = None
-    image_b64: str | None = None  # optional JPEG/PNG bytes for hybrid identity search
+    # optional JPEG/PNG bytes for hybrid identity search; not base64 is a 422
+    image_b64: str | None = Field(default=None, min_length=1, max_length=MAX_IMAGE_B64)
 
 
 class ImageSimilarityResponse(BaseModel):
@@ -85,8 +104,8 @@ def find_similar(
     library_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0, le=10_000),
+    limit: int = Query(default=20, ge=1, le=MAX_SIMILAR),
+    offset: int = Query(default=0, ge=0, le=MAX_SIMILAR_OFFSET),
     model_id: str | None = Query(default=None, description="Embedding model ID. Defaults to 'clip'."),
     model_version: str | None = Query(default=None, description="Embedding model version. Defaults to server CLIP version."),
     from_ts: float | None = Query(default=None, description="Unix timestamp (seconds), inclusive start of capture-time range."),
@@ -270,7 +289,6 @@ def search_by_image(
     body: ImageSimilarityRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ImageSimilarityResponse:
-    import base64
     import io
     from PIL import Image as PILImage
     from src.server.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
@@ -289,8 +307,10 @@ def search_by_image(
             detail=f"Server can only embed with model 'clip'. Use /search-by-vector for '{resolved_model_id}'.",
         )
 
-    image_bytes = base64.b64decode(body.image_b64)
-    pil_image = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    try:
+        pil_image = PILImage.open(io.BytesIO(_decode_image(body.image_b64))).convert("RGB")
+    except (OSError, PILImage.DecompressionBombError):
+        raise ApiError(422, "invalid_image", "image_b64 isn't a JPEG or PNG image.") from None
     try:
         provider = CLIPEmbeddingProvider()
         vector = provider.embed_image(pil_image)
@@ -323,7 +343,7 @@ def search_by_vector(
     return _search_by_vector(
         session, body.library_id, body.vector, body.model_id, body.model_version,
         body.limit, body.offset, body.from_ts, body.to_ts, body.asset_types, body.cameras,
-        image_b64=body.image_b64,
+        image_bytes=_decode_image(body.image_b64) if body.image_b64 is not None else None,
     )
 
 
@@ -371,7 +391,7 @@ def _search_by_vector(
     to_ts: float | None,
     asset_types: list[str] | None,
     cameras: list[CameraSpec] | None,
-    image_b64: str | None = None,
+    image_bytes: bytes | None = None,
 ) -> ImageSimilarityResponse:
     scope: SimilarityScope | None = None
     date_range = (
@@ -394,8 +414,8 @@ def _search_by_vector(
     # to fuse — RRF needs enough headroom on both lists for the
     # reciprocal-rank math to do its job. Without bytes the old
     # behavior is preserved exactly.
-    scene_pool_size = max(limit * 5, 100) if image_b64 else limit
-    scene_offset = 0 if image_b64 else offset
+    scene_pool_size = max(limit * 5, 100) if image_bytes else limit
+    scene_offset = 0 if image_bytes else offset
 
     scene_candidates = emb_repo.find_similar(
         library_id=library_id,
@@ -414,14 +434,11 @@ def _search_by_vector(
     # mid-query, no faces detected — should all degrade gracefully to
     # scene-only ranking, not break the search outright.
     face_candidates: list[tuple[str, float]] = []
-    if image_b64:
+    if image_bytes:
         try:
-            import base64
-
             from src.server.faces.server_face_provider import detect_faces_in_image
             from src.server.repository.tenant import FaceRepository
 
-            image_bytes = base64.b64decode(image_b64)
             detections = detect_faces_in_image(image_bytes)
             face_repo = FaceRepository(session)
 

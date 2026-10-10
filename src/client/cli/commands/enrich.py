@@ -60,7 +60,7 @@ def register(app: typer.Typer) -> None:
             raise typer.Exit(2)
         client = LumiverbClient()
         body = {"producer": producer, "scope": "redo" if redo else "new",
-                **({"all": True} if every_library else {"ids": [library_id_for(client, library or "")]})}
+                **({"all": True} if every_library else {"library_ids": [library_id_for(client, library or "")]})}
         r = client.raw("POST", "/v1/producers/run", json=body)
         if r.status_code >= 400:
             console.print(f"[red]Couldn't ask: {escape(_error(r))}[/red]")

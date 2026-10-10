@@ -1,7 +1,7 @@
 """One pause table: each switch with its scope (ADR-016 phase 4).
 
 Revision ID: 4e3bcb0d9be8
-Revises: f3c4d5e6a7b8
+Revises: a7c3e9d1f2b4
 Create Date: 2026-10-09
 
 processing_paused (a switch paused: nothing of it starts) and
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "4e3bcb0d9be8"
-down_revision: Union[str, Sequence[str], None] = "f3c4d5e6a7b8"
+down_revision: Union[str, Sequence[str], None] = "a7c3e9d1f2b4"
 branch_labels = None
 depends_on = None
 

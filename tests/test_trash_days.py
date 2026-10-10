@@ -264,5 +264,5 @@ def test_hidden_clips_show_their_thumbnails_to_people_signed_in(env):
     client, headers, *_ = env
     clip = _ingest(env, "view/thumb.mov", sha=_sha())
     _trash(env, clip)
-    assert client.get(f"/v1/assets/{clip}/thumbnail", headers=headers).status_code == 200
-    assert client.get(f"/v1/assets/{clip}/thumbnail").status_code in (401, 403, 404)
+    assert client.get(f"/v1/assets/{clip}/artifacts/thumbnail", headers=headers).status_code == 200
+    assert client.get(f"/v1/assets/{clip}/artifacts/thumbnail").status_code in (401, 403, 404)

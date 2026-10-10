@@ -93,7 +93,7 @@ export default function ArchivePage() {
   const deleteMissing = async (told?: { count: number; listedAt: string }, removeFromProjects = false) => {
     setBusy(true);
     try {
-      const r = await deleteMissingClips({ libraryId, path }, told, removeFromProjects);
+      const r = await deleteMissingClips(libraryId ? { libraryId, path } : "all", told, removeFromProjects);
       setPurging(null);
       void queryClient.invalidateQueries();
       setNotice({ text: r.deleted ? `Deleted ${clipCount(r.deleted)} for good.` : "No clips with missing files here." });

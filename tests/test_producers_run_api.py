@@ -45,14 +45,14 @@ def _described(lib, rel_path: str) -> str:
 def test_run_names_its_producer_and_libraries(env):
     lib = _library(env, "RunTargets")
     for body in ({"producer": "vision", "scope": "new"}, {"producer": "vision", "scope": "new", "all": True,
-                                                          "ids": [lib[2]]}):
+                                                          "library_ids": [lib[2]]}):
         r = _run(lib, **body)
         assert r.status_code == 400 and _code(r) == "scope_required", body
-    assert _run(lib, ids=[lib[2]], scope="new").status_code == 422  # the producer is named (or all)
-    assert _run(lib, producer="vision", ids=[lib[2]]).status_code == 422  # and new work or a redo
-    assert _run(lib, producer="nope", ids=[lib[2]], scope="new").status_code == 404
-    assert _run(lib, producer="vision", ids=["lib_nope"], scope="new").status_code == 404
-    r = _run(lib, producer="proxy", ids=[lib[2]], scope="new")
+    assert _run(lib, library_ids=[lib[2]], scope="new").status_code == 422  # the producer is named (or all)
+    assert _run(lib, producer="vision", library_ids=[lib[2]]).status_code == 422  # and new work or a redo
+    assert _run(lib, producer="nope", library_ids=[lib[2]], scope="new").status_code == 404
+    assert _run(lib, producer="vision", library_ids=["lib_nope"], scope="new").status_code == 404
+    r = _run(lib, producer="proxy", library_ids=[lib[2]], scope="new")
     assert r.status_code == 409 and _code(r) == "not_scheduled"
 
 
@@ -62,7 +62,7 @@ def test_run_tries_failing_clips_again_now_and_says_whats_left(env):
     with _db(lib) as s:
         for _ in range(10):  # given up
             lineage.record_failure(s, clip, "vision", "no")
-    r = _run(lib, producer="vision", ids=[lib[2]], scope="new")
+    r = _run(lib, producer="vision", library_ids=[lib[2]], scope="new")
     assert r.status_code == 200, r.text
     [p] = r.json()["producers"]
     assert (p["artifact"], p["retried"], p["missing"]) == ("vision", 1, 1)
@@ -81,7 +81,7 @@ def test_a_redo_makes_whats_made_again_in_the_library_named_and_keeps_a_persons(
     clip = _described(lib, "a.jpg")
     kept = _described(other, "b.jpg")
     assert _counts(lib, "vision")["stale"] == 0
-    r = _run(lib, producer="vision", ids=[lib[2]], scope="redo")
+    r = _run(lib, producer="vision", library_ids=[lib[2]], scope="redo")
     assert r.status_code == 200, r.text
     [p] = r.json()["producers"]
     assert p["redo"] == 1 and _counts(lib, "vision")["stale"] == 1
@@ -96,7 +96,7 @@ def test_a_redo_makes_whats_made_again_in_the_library_named_and_keeps_a_persons(
         s.execute(text("UPDATE artifact_lineage SET producer = 'person', settings_hash = '' WHERE asset_id = :a"
                        " AND artifact = 'vision'"), {"a": kept})
         s.commit()
-    _run(other, producer="vision", ids=[other[2]], scope="redo")
+    _run(other, producer="vision", library_ids=[other[2]], scope="redo")
     with _db(other) as s:
         row = s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"),
                         {"a": kept}).scalar()
@@ -106,16 +106,16 @@ def test_a_redo_makes_whats_made_again_in_the_library_named_and_keeps_a_persons(
 def test_a_redo_is_an_admins_and_says_when_its_redo_is_stopped(env):
     lib = _library(env, "RunRedoWho")
     editor = _key_with_role(lib, "editor")
-    assert _run(lib, editor, producer="vision", ids=[lib[2]], scope="redo").status_code == 403
-    assert _run(lib, editor, producer="vision", ids=[lib[2]], scope="new").status_code == 200
+    assert _run(lib, editor, producer="vision", library_ids=[lib[2]], scope="redo").status_code == 403
+    assert _run(lib, editor, producer="vision", library_ids=[lib[2]], scope="new").status_code == 200
     client, headers, *_ = lib
     try:
         assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-        [p] = _run(lib, producer="vision", ids=[lib[2]], scope="redo").json()["producers"]
+        [p] = _run(lib, producer="vision", library_ids=[lib[2]], scope="redo").json()["producers"]
         assert p["redo_stopped"] is True and p["paused"] is False
     finally:
         client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
-    r = _run(lib, producer="proxy", ids=[lib[2]], scope="redo")  # made by scans: not the scheduler's
+    r = _run(lib, producer="proxy", library_ids=[lib[2]], scope="redo")  # made by scans: not the scheduler's
     assert r.status_code == 409 and _code(r) == "not_scheduled"
 
 
@@ -125,7 +125,7 @@ def test_retrying_failures_names_what_it_retries(env):
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     with _db(lib) as s:
         lineage.record_failure(s, clip, "vision", "no")
-    for body in ({}, {"library_id": lib[2]}, {"artifact": "vision"}, {"ids": [clip], "all": True}):
+    for body in ({}, {"library_id": lib[2]}, {"artifact": "vision"}, {"asset_ids": [clip], "all": True}):
         r = client.post("/v1/producers/failures/retry", json=body, headers=headers)
         assert r.status_code == 400 and _code(r) == "scope_required", body
     assert _counts(lib, "vision")["failing"] == 1

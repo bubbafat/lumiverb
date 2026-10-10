@@ -132,7 +132,7 @@ public struct BrowseFilter: Equatable, Sendable {
             result.append(ActiveFilter(id: "hasColor", label: hasColor == true ? "Has color" : "No color") { f in f.hasColor = nil })
         }
         if hasGps == true {
-            result.append(ActiveFilter(id: "hasGps", label: "Has GPS") { f in f.hasGps = nil })
+            result.append(ActiveFilter(id: "hasGps", label: "Has location") { f in f.hasGps = nil })
         }
         // Non-default sort
         if sortField != "taken_at" || sortDirection != "desc" {

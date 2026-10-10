@@ -14,6 +14,7 @@ import {
 import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
+import { SetLocationModal } from "../components/SetLocationModal";
 import { useCanEdit } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
@@ -318,6 +319,7 @@ export default function UnifiedBrowsePage() {
   const canEdit = useCanEdit();
   const clipActions = useClipActions(selection.clear);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
+  const [locationAssetIds, setLocationAssetIds] = useState<string[] | null>(null);
   const [showSaveAsProject, setShowSaveAsProject] = useState(false);
 
   // ---------------------------------------------------------------------------
@@ -854,6 +856,13 @@ export default function UnifiedBrowsePage() {
           <>
             <button
               type="button"
+              onClick={() => setLocationAssetIds(selection.toArray())}
+              className="rounded-lg border border-gray-600 px-3 py-1.5 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-800"
+            >
+              Set location…
+            </button>
+            <button
+              type="button"
               disabled={clipActions.busy}
               onClick={() => void clipActions.archive(selection.toArray())}
               title="Out of sight, kept forever with everything they have"
@@ -872,6 +881,17 @@ export default function UnifiedBrowsePage() {
           </>
         )}
       </SelectionToolbar>
+
+      {locationAssetIds && (
+        <SetLocationModal
+          assetIds={locationAssetIds}
+          nameOf={(id) => {
+            const a = orderedAssets.find((x) => x.asset_id === id);
+            return a ? a.rel_path.split("/").pop() || id : id;
+          }}
+          onClose={() => setLocationAssetIds(null)}
+        />
+      )}
 
       {/* Project picker */}
       {pickerAssetIds && (

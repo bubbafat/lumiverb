@@ -10,12 +10,13 @@ from typing import Any, Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, create_model, field_validator, model_validator
+from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.errors import ConflictError, DecisionRequiredError
+from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import (
@@ -110,7 +111,6 @@ class AssetResponse(BaseModel):
     orientation: int | None = None
     video_preview_key: str | None = None
     video_preview_generated_at: str | None = None  # ISO8601
-    video_preview_last_accessed_at: str | None = None  # ISO8601
     duration_sec: float | None = None
     ai_description: str | None = None
     ai_tags: list[str] = []
@@ -127,6 +127,10 @@ class AssetResponse(BaseModel):
     note_author: str | None = None
     note_updated_at: str | None = None
     video_facet: VideoFacetModel | None = None
+    # ADR-017: what the file doesn't say (a person's location, a guess or a
+    # suggestion), beside the file's GPS above. Signed-in only.
+    location: dict | None = None
+    gps_accuracy_m: float | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -176,7 +180,7 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
 
 
 class BatchTrashRequest(BaseModel):
-    asset_ids: list[str]
+    asset_ids: list[str] = Field(max_length=MAX_IDS)
     # "user": a person trashed them; deleted for good after the trash days,
     # and scans leave them trashed. "missing": the scanner no longer finds the
     # files (archived; restored when they reappear). Required: a scanner and
@@ -237,7 +241,7 @@ class PickClipsRequest(BaseModel):
     """Clips by id, or every clip under a folder of a library (path "" is the
     whole library). The folder only picks the clips; it has no state of its own."""
 
-    asset_ids: list[str] | None = Field(default=None, max_length=10_000)
+    asset_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
     library_id: str | None = None
     path: str | None = None
 
@@ -264,7 +268,7 @@ class UnarchiveResponse(BaseModel):
 
 
 class RestoreRequest(BaseModel):
-    asset_ids: list[str] = Field(max_length=10_000)
+    asset_ids: list[str] = Field(max_length=MAX_IDS)
 
 
 class RestoreResponse(BaseModel):
@@ -282,29 +286,6 @@ class BatchTrashResponse(BaseModel):
     # Of the trashed, those that moved to an empty copy of their file instead
     # (copy, then delete the original): active again, at the copy's path.
     handed_over: list[str] = []
-
-
-class StateCheckRequest(BaseModel):
-    asset_ids: list[str]
-
-    @field_validator("asset_ids")
-    @classmethod
-    def max_ids(cls, v: list[str]) -> list[str]:
-        if len(v) == 0:
-            raise ValueError("asset_ids must not be empty")
-        if len(v) > 500:
-            raise ValueError("Maximum 500 asset_ids per request")
-        return v
-
-
-class AssetStateItem(BaseModel):
-    asset_id: str
-    deleted: bool
-    proxy_sha256: str | None
-
-
-class StateCheckResponse(BaseModel):
-    assets: list[AssetStateItem]
 
 
 class VisionSubmitRequest(BaseModel):
@@ -338,7 +319,7 @@ def page_assets(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str,
     after: str | None = None,
-    limit: int = 500,
+    limit: int = Query(default=500, ge=1, le=MAX_PAGE),
     path_prefix: str | None = None,
     tag: str | None = None,
     missing: Annotated[frozenset[str], Depends(missing_filters)] = frozenset(),
@@ -373,10 +354,6 @@ def page_assets(
     Keyset-paginated assets with sorting and filtering.
     Returns a response envelope with items and next_cursor.
     """
-    if limit > 500:
-        limit = 500
-    if limit < 1:
-        limit = 1
     if getattr(request.state, "is_public_request", False):
         lib_repo = LibraryRepository(session)
         library = lib_repo.get_by_id(library_id)
@@ -557,123 +534,6 @@ def repair_summary(
                          waiting_failures=row["waiting_failures"], stale_search_sync=row["stale_search_sync"])
 
 
-@router.post("/state-check", response_model=StateCheckResponse)
-def state_check(
-    body: StateCheckRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> StateCheckResponse:
-    """Return deletion status and proxy_sha256 for a batch of asset IDs.
-
-    Includes soft-deleted assets (client needs to evict them from cache).
-    Asset IDs not found in the DB are returned with deleted=True, proxy_sha256=None.
-    Maximum 500 IDs per request.
-    """
-    states = AssetRepository(session).get_states(body.asset_ids)
-    items = [
-        AssetStateItem(
-            asset_id=aid,
-            deleted=states[aid]["deleted"] if aid in states else True,
-            proxy_sha256=states[aid]["proxy_sha256"] if aid in states else None,
-        )
-        for aid in body.asset_ids
-    ]
-    return StateCheckResponse(assets=items)
-
-
-def _stream_asset_file(
-    asset_id: str,
-    size: str,  # "proxy" or "thumbnail"
-    request: Request,
-    session: Session,
-) -> StreamingResponse:
-    # Signed in, a clip out of sight (archived, in the trash) still shows its
-    # pictures: the archive and trash views need them. Public pages never do.
-    asset = session.get(Asset, asset_id)
-    is_public = getattr(request.state, "is_public_request", False)
-    signed_in = getattr(request.state, "role", None) in ("admin", "editor", "viewer")
-    if asset is None or (asset.deleted_at is not None and (is_public or not signed_in)):
-        raise HTTPException(status_code=404, detail="Asset not found")
-    if is_public:
-        public_library_id = request.query_params.get("public_library_id")
-        public_project_id = request.query_params.get("public_project_id")
-        if public_library_id:
-            if asset.library_id != public_library_id:
-                raise HTTPException(status_code=403, detail="Asset does not belong to the requested public library")
-            lib = LibraryRepository(session).get_by_id(public_library_id)
-            if lib is None or not lib.is_public:
-                raise HTTPException(status_code=404, detail="Not found")
-        elif public_project_id:
-            from src.server.repository.tenant import ProjectRepository, ProjectAsset
-            from src.server.models.tenant import Project
-            col_repo = ProjectRepository(session)
-            col = col_repo.get_by_id(public_project_id)
-            if col is None or col.visibility != "public":
-                raise HTTPException(status_code=404, detail="Not found")
-            # Verify asset is in this project
-            from sqlmodel import select
-            membership = session.exec(
-                select(ProjectAsset).where(
-                    ProjectAsset.project_id == public_project_id,
-                    ProjectAsset.asset_id == asset_id,
-                )
-            ).first()
-            if membership is None:
-                raise HTTPException(status_code=403, detail="Asset not in project")
-        else:
-            raise HTTPException(status_code=403, detail="Public access requires library or project context")
-
-    key = asset.proxy_key if size == "proxy" else asset.thumbnail_key
-    if not key:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No {size} available for this asset",
-        )
-
-    storage = get_storage()
-    path = storage.abs_path(key)
-    if not path.exists():
-        # Stale key: file was lost. Clear it so next ingest regenerates it.
-        if size == "proxy":
-            asset.proxy_key = None
-        else:
-            asset.thumbnail_key = None
-        session.add(asset)
-        session.commit()
-        raise HTTPException(status_code=404, detail=f"No {size} available for this asset")
-
-    key_ext = Path(key).suffix.lower()
-    if key_ext == ".webp":
-        content_type = "image/webp"
-        filename = Path(asset.rel_path).stem + ".webp"
-    else:
-        content_type = "image/jpeg"
-        filename = Path(asset.rel_path).stem + ".jpg"
-
-    # HTTP headers must be latin-1 encodable. macOS screenshot filenames
-    # contain \u202f (narrow no-break space) which is not latin-1 safe.
-    # Use RFC 5987 filename* for the full UTF-8 name, and a sanitized
-    # ASCII fallback for the plain filename.
-    from urllib.parse import quote
-    ascii_filename = filename.encode("ascii", errors="replace").decode("ascii")
-    utf8_filename = quote(filename)
-
-    def _iter() -> bytes:
-        with open(path, "rb") as f:
-            while chunk := f.read(65536):
-                yield chunk
-
-    return StreamingResponse(
-        _iter(),
-        media_type=content_type,
-        headers={
-            "Content-Disposition": (
-                f'inline; filename="{ascii_filename}"; '
-                f"filename*=UTF-8''{utf8_filename}"
-            ),
-        },
-    )
-
-
 def _stream_file_with_range(
     path: Path,
     request: Request,
@@ -782,6 +642,10 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
     # Stored rows are returned as they are (validation is for writes).
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     _trim_public_transcript(request, session, response)
+    if not getattr(request.state, "is_public_request", False):
+        from src.server.repository.locations import for_asset
+
+        response.location = for_asset(session, asset.asset_id)
     return response
 
 
@@ -871,6 +735,7 @@ def _to_asset_response(asset) -> AssetResponse:
         taken_at=asset.taken_at.isoformat() if asset.taken_at else None,
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
+        gps_accuracy_m=asset.gps_accuracy_m,
         iso=asset.iso,
         exposure_time_us=asset.exposure_time_us,
         aperture=asset.aperture,
@@ -883,9 +748,6 @@ def _to_asset_response(asset) -> AssetResponse:
         video_preview_generated_at=asset.video_preview_generated_at.isoformat()
         if asset.video_preview_generated_at
         else None,
-        video_preview_last_accessed_at=asset.video_preview_last_accessed_at.isoformat()
-        if asset.video_preview_last_accessed_at
-        else None,
         duration_sec=asset.duration_sec,
         transcript_srt=asset.transcript_srt,
         transcript_language=asset.transcript_language,
@@ -895,26 +757,6 @@ def _to_asset_response(asset) -> AssetResponse:
         note_author=asset.note_author,
         note_updated_at=asset.note_updated_at.isoformat() if asset.note_updated_at else None,
     )
-
-
-@router.get("/{asset_id}/proxy")
-def stream_proxy(
-    asset_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> StreamingResponse:
-    """Stream the proxy JPEG for an asset."""
-    return _stream_asset_file(asset_id, "proxy", request, session)
-
-
-@router.get("/{asset_id}/thumbnail")
-def stream_thumbnail(
-    asset_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> StreamingResponse:
-    """Stream the thumbnail JPEG for an asset."""
-    return _stream_asset_file(asset_id, "thumbnail", request, session)
 
 
 @router.get("/by-path", response_model=AssetResponse)
@@ -938,21 +780,10 @@ def get_asset_by_path(
     return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
 
 
-@router.get("", response_model=list[AssetResponse])
-def list_assets(
-    session: Annotated[Session, Depends(get_tenant_session)],
-    library_id: str | None = None,
-) -> list[AssetResponse]:
-    """List active (non-trashed) assets, optionally filtered by library_id."""
-    asset_repo = AssetRepository(session)
-    assets = asset_repo.list_by_library(library_id) if library_id else asset_repo.list_all()
-    return [_to_asset_response(a) for a in assets]
-
-
 class ProjectUsageRequest(BaseModel):
-    asset_ids: list[str] = []
+    asset_ids: list[str] = Field(default_factory=list, max_length=MAX_IDS)
     # Every clip in these libraries, e.g. before emptying the library trash.
-    library_ids: list[str] = []
+    library_ids: list[str] = Field(default_factory=list, max_length=MAX_IDS)
 
 
 class ProjectUsageItem(BaseModel):
@@ -1319,14 +1150,9 @@ def submit_vision(
 
     if body.client_proxy_sha256 is not None and asset.proxy_sha256 is not None:
         if body.client_proxy_sha256 != asset.proxy_sha256:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": {
-                        "code": "proxy_hash_mismatch",
-                        "message": "Client proxy does not match server proxy. Re-download the proxy and retry.",
-                    }
-                },
+            raise ConflictError(
+                "proxy_hash_mismatch",
+                "Client proxy does not match server proxy. Re-download the proxy and retry.",
             )
 
     AssetMetadataRepository(session).upsert(
@@ -1954,51 +1780,6 @@ def submit_batch_moves(
     return {"updated": updated, "skipped": skipped}
 
 
-@router.get("/{asset_id}/preview")
-def stream_or_enqueue_preview(
-    asset_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-):
-    asset_repo = AssetRepository(session)
-    asset = asset_repo.get_by_id(asset_id)
-    if asset is None or asset.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    _check_public_request(request, session, asset)
-
-    if not asset.media_type.startswith("video"):
-        raise HTTPException(status_code=422, detail="Preview only supported for video assets")
-
-    storage = get_storage()
-
-    if asset.video_preview_key:
-        path = storage.abs_path(asset.video_preview_key)
-        if path.exists():
-            now = utcnow()
-            last = asset.video_preview_last_accessed_at
-            if last is None or (now - last).total_seconds() > 300:
-                asset.video_preview_last_accessed_at = now
-                session.add(asset)
-                session.commit()
-            from src.server.api.routers.playback import capped
-            from src.server.tenant_settings import playback_cap
-
-            path = capped(
-                path, playback_cap(session, public=getattr(request.state, "is_public_request", False)),
-                storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
-                version=f"{int(path.stat().st_mtime)}-{path.stat().st_size}",
-                strip=getattr(request.state, "is_public_request", False),
-            )
-            return _stream_file_with_range(path, request, media_type="video/mp4")
-
-        # File is missing on disk – clear key.
-        asset.video_preview_key = None
-        session.add(asset)
-        session.commit()
-
-    raise HTTPException(status_code=404, detail="No video preview available for this asset")
-
-
 @router.post("/upsert", response_model=UpsertAssetResponse, dependencies=[Depends(require_editor)])
 def upsert_asset(
     body: UpsertAssetRequest,
@@ -2121,8 +1902,6 @@ def _generate_face_crops(
     """Generate 128x128 WebP face crop thumbnails from the asset proxy."""
     import io
     from PIL import Image
-
-    from src.server.storage.local import get_storage
 
     storage = get_storage()
     proxy_key = asset.proxy_key  # type: ignore[union-attr]

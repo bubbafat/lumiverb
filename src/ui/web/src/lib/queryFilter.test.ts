@@ -171,7 +171,7 @@ describe("filterLabel", () => {
   });
 
   it("formats boolean filters", () => {
-    expect(filterLabel({ type: "has_gps", value: "yes" })).toBe("Has GPS");
+    expect(filterLabel({ type: "has_gps", value: "yes" })).toBe("Has location");
     expect(filterLabel({ type: "has_faces", value: "yes" })).toBe("Has faces");
   });
 

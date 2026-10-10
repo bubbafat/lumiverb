@@ -106,7 +106,7 @@ def test_trying_again_starts_the_back_off_over_given_up_or_not(env):
     _fail_times(lib, gave_up, "vision", 10)
     _fail(lib, [{"asset_id": waiting, "artifact": "vision", "error": "no"}])
     assert _due(lib, "vision") == []
-    r = client.post("/v1/producers/failures/retry", json={"ids": [gave_up]}, headers=headers)
+    r = client.post("/v1/producers/failures/retry", json={"asset_ids": [gave_up]}, headers=headers)
     assert r.status_code == 200 and r.json() == {"retried": 1}
     assert _due(lib, "vision") == [gave_up]
     item = [i for i in _failures(lib, library_id=lib[2])["items"] if i["asset_id"] == gave_up][0]
@@ -128,8 +128,8 @@ def test_who_sees_and_who_tries_again(env):
     _fail(lib, [{"asset_id": clip, "artifact": "vision", "error": "no"}])
     viewer, editor = _key_with_role(env, "viewer"), _key_with_role(env, "editor")
     assert client.get("/v1/producers/failures", params={"library_id": lib[2]}, headers=viewer).status_code == 200
-    assert client.post("/v1/producers/failures/retry", json={"ids": [clip]}, headers=viewer).status_code == 403
-    assert client.post("/v1/producers/failures/retry", json={"ids": [clip]}, headers=editor).status_code == 200
+    assert client.post("/v1/producers/failures/retry", json={"asset_ids": [clip]}, headers=viewer).status_code == 403
+    assert client.post("/v1/producers/failures/retry", json={"asset_ids": [clip]}, headers=editor).status_code == 200
 
 
 def test_unknown_producers_are_404(env):
@@ -148,5 +148,5 @@ def test_a_trashed_clip_isnt_listed_or_tried_again(env):
                   {"a": clip})
         s.commit()
     assert _failures(lib, library_id=lib[2])["items"] == []
-    r = client.post("/v1/producers/failures/retry", json={"ids": [clip]}, headers=headers)
+    r = client.post("/v1/producers/failures/retry", json={"asset_ids": [clip]}, headers=headers)
     assert r.json() == {"retried": 0}
