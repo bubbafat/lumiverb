@@ -459,7 +459,9 @@ def _scan_one(
         }
         if f.get("file_mtime") is not None:
             data["file_mtime"] = f["file_mtime"].isoformat()
-        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("source_sha256"))})
+        # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
+        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("source_sha256")),
+                                      "capture": _made("capture", f.get("source_sha256"))})
 
         resp = client.post("/v1/ingest", files=files, data=data)
         result = resp.json()
@@ -542,7 +544,7 @@ def _scan_one_video(
         # Frame rate, timecode, audio layout for editor exports. A failed
         # probe doesn't block ingest; `lumiverb enrich --job-type probe`
         # backfills it.
-        made = {"proxy": _made("proxy", f.get("source_sha256"))}
+        made = {"proxy": _made("proxy", f.get("source_sha256")), "capture": _made("capture", f.get("source_sha256"))}
         try:
             data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
             made["probe"] = _made("probe", f.get("source_sha256"))

@@ -23,6 +23,7 @@ EXIF_FIELDS = [
     "LensSerialNumber",
     # Capture settings
     "DateTimeOriginal",
+    "CreationDate",  # QuickTime Keys (phones' videos): the wall clock with its zone
     "CreateDate",
     "OffsetTimeOriginal",
     "OffsetTime",
@@ -90,6 +91,29 @@ def extract_exif(source_path: Path) -> dict:
         return {}
 
 
+def _cleaned(raw: dict) -> dict:
+    return {(k.split(":")[-1] if ":" in k else k): v for k, v in raw.items()
+            if (k.split(":")[-1] if ":" in k else k) != "SourceFile"}
+
+
+def extract_exif_many(paths: list[Path]) -> dict[str, dict]:
+    """extract_exif for several files with one exiftool: {str(path): tags}.
+    A file exiftool can't read is left out (the caller reads it alone).
+    OSError (no exiftool, the mount's I/O) goes up."""
+    if not paths:
+        return {}
+    import exiftool
+
+    with exiftool.ExifToolHelper(check_execute=False) as et:
+        results = et.get_tags([str(p) for p in paths], tags=EXIF_FIELDS)
+    out: dict[str, dict] = {}
+    for raw in results or []:
+        source = raw.get("SourceFile")
+        if source is not None:
+            out[str(source)] = _cleaned(raw)
+    return out
+
+
 def compute_sha256(source_path: Path) -> str | None:
     """Compute SHA256 hash of file. Returns hex string or None on error."""
     try:
@@ -142,30 +166,58 @@ def parse_gps_accuracy_m(exif: dict) -> float | None:
     return m if math.isfinite(m) and m >= 0 else None
 
 
+_SUBSEC_RE = re.compile(r"\.\d+")
 _OFFSET_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})$")
+# A zone at the end of a date string: "2024:05:01 14:02:03+02:00", "...Z".
+_ZONE_SUFFIX_RE = re.compile(r"(Z|[+-]\d{1,2}:?\d{2})$")
+
+# Where the time a clip was taken comes from, in order: the photo's EXIF,
+# a phone video's QuickTime Keys (it carries its zone), then the container's
+# CreateDate (QuickTime says UTC, but many cameras write their own clock).
+_TAKEN_AT_KEYS = ("DateTimeOriginal", "CreationDate", "CreateDate")
+
+
+def _offset_minutes(raw: object) -> int | None:
+    """"+02:00", "-0530" or "Z" as minutes east of UTC; None otherwise."""
+    s = str(raw).strip()
+    if s in ("Z", "+00:00", "-00:00"):
+        return 0
+    m = _OFFSET_RE.match(s)
+    if not m:
+        return None
+    minutes = int(m.group(2)) * 60 + int(m.group(3))
+    if int(m.group(3)) >= 60 or minutes > 14 * 60:
+        return None
+    return -minutes if m.group(1) == "-" else minutes
+
+
+def _taken_at_raw(exif: dict) -> str | None:
+    for key in _TAKEN_AT_KEYS:
+        raw = exif.get(key)
+        if raw and str(raw).strip() and not str(raw).startswith("0000"):
+            return str(raw).strip()
+    return None
 
 
 def parse_taken_at_offset_min(exif: dict) -> int | None:
-    """OffsetTimeOriginal (or OffsetTime), e.g. "+02:00", as minutes east of
-    UTC; None when the file doesn't say."""
+    """The zone the clip was taken in, as minutes east of UTC:
+    OffsetTimeOriginal (or OffsetTime), else a zone written in the date
+    itself (a phone video's "2024:05:01 14:02:03+02:00"). None when the file
+    doesn't say."""
     for key in ("OffsetTimeOriginal", "OffsetTime"):
         raw = exif.get(key)
         if raw is None:
             continue
-        s = str(raw).strip()
-        if s in ("Z", "+00:00", "-00:00"):
-            return 0
-        m = _OFFSET_RE.match(s)
-        if not m:
-            continue
-        minutes = int(m.group(2)) * 60 + int(m.group(3))
-        if int(m.group(3)) >= 60 or minutes > 14 * 60:
-            continue
-        return -minutes if m.group(1) == "-" else minutes
+        minutes = _offset_minutes(raw)
+        if minutes is not None:
+            return minutes
+    raw = _taken_at_raw(exif)
+    if raw:
+        m = _ZONE_SUFFIX_RE.search(_SUBSEC_RE.sub("", raw))
+        if m and re.search(r"\d{2}:\d{2}:\d{2}", raw):
+            return _offset_minutes(m.group(1))
     return None
 
-
-_SUBSEC_RE = re.compile(r"\.\d+")
 
 # Formats tried in order after stripping sub-seconds and timezone.
 _TAKEN_AT_FORMATS = [
@@ -176,28 +228,38 @@ _TAKEN_AT_FORMATS = [
 
 
 def parse_taken_at(exif: dict) -> datetime | None:
-    """
-    Parse DateTimeOriginal or CreateDate from EXIF dict.
-    Returns UTC datetime or None.
-    Handles sub-second precision and timezone offsets from various camera manufacturers.
-    """
-    raw = exif.get("DateTimeOriginal") or exif.get("CreateDate")
+    """When the clip was taken, as the camera's wall clock: the time the
+    file writes, stored as if it were UTC (ADR-017). A zone written in the
+    date isn't applied: it's the clip's taken_at_offset_min
+    (parse_taken_at_offset_min), so every scanner stores the same taken_at
+    for a file and the real instant is taken_at minus the offset, when known.
+    None when the file doesn't say."""
+    raw = _taken_at_raw(exif)
     if not raw:
         return None
-    s = _SUBSEC_RE.sub("", str(raw).strip())
-    # Try with a trailing timezone offset (%z handles ±HH:MM in Python 3.7+)
+    s = _SUBSEC_RE.sub("", raw)
+    s = _ZONE_SUFFIX_RE.sub("", s).strip()
     for fmt in _TAKEN_AT_FORMATS:
-        for candidate in (s, s.replace(" ", "T")):
-            for suffix in ("", "%z"):
-                try:
-                    dt = datetime.strptime(candidate, fmt + suffix)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-                except ValueError:
-                    continue
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
     logger.debug("Could not parse taken_at from %r", raw)
     return None
+
+
+def capture_facts(exif: dict) -> dict:
+    """When and how precisely the file says it was taken (ADR-017): taken_at
+    (ISO, the wall clock as UTC), taken_at_offset_min, and gps_accuracy_m
+    when the file has a real GPS fix. The scan sends these; the capture
+    producer reads them again for clips scanned before."""
+    taken_at = parse_taken_at(exif)
+    lat, _ = parse_gps(exif)
+    return {
+        "taken_at": taken_at.isoformat() if taken_at else None,
+        "taken_at_offset_min": parse_taken_at_offset_min(exif),
+        "gps_accuracy_m": parse_gps_accuracy_m(exif) if lat is not None else None,
+    }
 
 
 def parse_iso(exif: dict) -> int | None:

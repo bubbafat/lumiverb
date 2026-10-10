@@ -28,7 +28,6 @@ from src.processing.workers.exif_extract import (
     parse_lens_model,
     parse_orientation,
     parse_exposure_time_us,
-    parse_taken_at,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,12 +55,11 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
 
 def _build_exif_payload(source_path: Path, media_type: str) -> dict:
     """Extract EXIF and build the JSON payload for the ingest endpoint."""
-    from src.processing.workers.exif_extract import parse_duration, parse_gps_accuracy_m, parse_taken_at_offset_min
+    from src.processing.workers.exif_extract import capture_facts, parse_duration
 
     exif_data = extract_exif(source_path)
     sha256 = compute_sha256(source_path)
     gps_lat, gps_lon = parse_gps(exif_data)
-    taken_at = parse_taken_at(exif_data)
     duration_sec = parse_duration(exif_data, media_type == "video")
 
     return {
@@ -69,11 +67,9 @@ def _build_exif_payload(source_path: Path, media_type: str) -> dict:
         "exif": exif_data,
         "camera_make": exif_data.get("Make"),
         "camera_model": exif_data.get("Model"),
-        "taken_at": taken_at.isoformat() if taken_at else None,
         "gps_lat": gps_lat,
         "gps_lon": gps_lon,
-        "gps_accuracy_m": parse_gps_accuracy_m(exif_data) if gps_lat is not None else None,
-        "taken_at_offset_min": parse_taken_at_offset_min(exif_data),
+        **capture_facts(exif_data),  # taken_at, taken_at_offset_min, gps_accuracy_m
         "duration_sec": duration_sec,
         "iso": parse_iso(exif_data),
         "exposure_time_us": parse_exposure_time_us(exif_data),

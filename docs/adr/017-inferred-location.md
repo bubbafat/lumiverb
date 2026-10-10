@@ -10,7 +10,7 @@ Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 and 2 built.
 |-------|-------------|--------|
 | 1 | Groundwork: better EXIF, the `asset_location` table, the effective location in filters, nothing on public pages | Built. New and changed files only: backfilling clips already ingested moves to phase 3 |
 | 2 | A person's location: set it for explicit clips; Lightbox row | Built |
-| 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | Not started |
+| 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | In progress: the capture facts (one `taken_at` meaning on every scanner, and the `capture` producer that reads them again) built |
 | 4 | Offline place names and suggestions from text in the image | Not started |
 | 5 | Landmark suggestions through the vision job | Not started |
 
@@ -61,6 +61,7 @@ Scan changes:
 - (0, 0) is rejected as no fix.
 - `OffsetTimeOriginal` (or `OffsetTime`) is stored as `taken_at_offset_min`, an integer, NULL when absent.
 - `GPSHPositioningError` is stored as `gps_accuracy_m`.
+- `taken_at` is the camera's wall clock as the file writes it, stored as if it were UTC, by every scanner (phase 3). A zone written in the date itself (a phone video's `CreationDate`, "…+02:00") isn't applied: it's `taken_at_offset_min`. So the instant is `taken_at` minus `taken_at_offset_min` when the file says, and unknown otherwise. Before phase 3 the Python scan applied a zone written in the date and the Mac scanner read the wall clock in the Mac's own zone; the `capture` producer reads every such clip again.
 
 The new tenant table `asset_location` has one row per clip, holding only what the file doesn't say:
 

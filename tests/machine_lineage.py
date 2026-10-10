@@ -16,7 +16,7 @@ from src.processing.producer_settings import ProducerSettings
 _REGISTRY = ProducerSettings(None)
 
 # Everything an ingest can store; it reads the lineage of what it stores and ignores the rest.
-INGEST_KINDS = ("proxy", "vision", "clip", "probe")
+INGEST_KINDS = ("proxy", "vision", "clip", "probe", "capture")
 
 
 def made(artifact: str, source_sha256: str | None = None) -> dict:

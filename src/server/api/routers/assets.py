@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.dependencies import require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.shared import asset_status
@@ -995,6 +996,45 @@ def put_video_facet(
     lineage.record(session, asset_id, "probe", made)
     LibraryRepository(session).bump_revision(asset.library_id)
     return VideoFacetModel(**facet)
+
+
+class CaptureSubmit(BaseModel):
+    """A clip's capture facts read from its file (the capture producer, ADR-017)."""
+
+    taken_at: datetime | None = None  # the camera's wall clock, as UTC; None keeps the stored one
+    taken_at_offset_min: int | None = Field(default=None, ge=-14 * 60, le=14 * 60)
+    gps_accuracy_m: float | None = Field(default=None, ge=0, lt=1e7, allow_inf_nan=False)
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
+
+
+class CaptureResponse(BaseModel):
+    changed: bool  # taken_at or its zone differ from what was stored
+
+
+@router.put("/{asset_id}/capture", response_model=CaptureResponse, dependencies=[Depends(require_tenant_admin)])
+def put_capture(
+    asset_id: str,
+    body: CaptureSubmit,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> CaptureResponse:
+    """Store a clip's capture facts, read again from its file (the scheduler's
+    capture producer, so admins: its key is an admin's): when it was
+    taken, its zone, and its GPS accuracy (only with the file's GPS). The
+    file's GPS itself is the scan's and isn't touched."""
+    made = require_lineage(body.lineage, "capture")  # before anything is saved
+    taken_at = body.taken_at
+    if taken_at is not None and taken_at.tzinfo is None:
+        from datetime import timezone
+
+        taken_at = taken_at.replace(tzinfo=timezone.utc)
+    stored = AssetRepository(session).set_capture(asset_id, taken_at, body.taken_at_offset_min, body.gps_accuracy_m)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    before, after = stored
+    lineage.record(session, asset_id, "capture", made, commit=False)
+    session.commit()
+    return CaptureResponse(changed=(before["taken_at"], before["taken_at_offset_min"])
+                           != (after["taken_at"], after["taken_at_offset_min"]))
 
 
 @router.delete("/{asset_id}", status_code=204)
