@@ -1229,7 +1229,8 @@ class AssetRepository:
     def has_human_data(self, asset_id: str) -> bool:
         """Whether a person has worked on this asset: a note, a transcript they
         wrote or pasted, a correction, a rating, a project, a confirmed or
-        rejected person."""
+        rejected person, a location they set, or anything else made by a
+        person (their lineage, e.g. the machine's transcript removed for good)."""
         return bool(self._session.execute(
             text(
                 "SELECT EXISTS (SELECT 1 FROM assets WHERE asset_id = :a"
@@ -1241,6 +1242,8 @@ class AssetRepository:
                 "            WHERE f.asset_id = :a AND m.confirmed)"
                 " OR EXISTS (SELECT 1 FROM faces f JOIN face_person_rejections x ON x.face_id = f.face_id"
                 "            WHERE f.asset_id = :a)"
+                " OR EXISTS (SELECT 1 FROM asset_location WHERE asset_id = :a AND source = 'person')"
+                " OR EXISTS (SELECT 1 FROM artifact_lineage WHERE asset_id = :a AND producer = 'person')"
             ),
             {"a": asset_id},
         ).scalar())

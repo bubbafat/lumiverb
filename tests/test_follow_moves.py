@@ -168,12 +168,21 @@ def test_on_the_original_moves_to_its_empty_copy(env):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("own", ["note", "rating", "project", "person"])
+@pytest.mark.parametrize("own", ["note", "rating", "project", "person", "location", "removed_transcript"])
 def test_on_a_copy_with_human_data_of_its_own_keeps_it(env, own):
     client, headers, *_ = env
 
     def give(copy: str) -> None:
-        if own == "note":
+        if own == "location":
+            r = client.put("/v1/assets/locations", json={"asset_ids": [copy], "lat": 40.0, "lon": -74.0},
+                           headers=headers)
+            assert r.status_code == 200, r.text
+        elif own == "removed_transcript":  # a person removed the machine's transcript for good
+            from src.server.repository import lineage
+
+            with _db(env) as session:
+                lineage.record(session, copy, "transcript", None, person=True, outcome="empty")
+        elif own == "note":
             assert client.put(f"/v1/assets/{copy}/note", json={"text": "B-roll"}, headers=headers).status_code == 200
         elif own == "rating":
             assert client.put(f"/v1/assets/{copy}/rating", json={"stars": 2}, headers=headers).status_code == 200
