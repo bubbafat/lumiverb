@@ -63,6 +63,28 @@ def mix_filter(tracks: list[AudioTrack], label: str) -> str:
     return ";".join(parts)
 
 
+def mix_and_tracks_filter(tracks: list[AudioTrack], label: str) -> tuple[str, list[str]]:
+    """A filtergraph giving the mix of `tracks` as `[label]` and each track
+    again on its own: the graph and those tracks' labels, in order.
+
+    Every audio output comes from the one graph, each track laid out from the
+    clip's start once and split between the mix and its own output. Taking
+    the tracks straight from the input alongside a graph mixing them (with
+    the video in the same file) stalls ffmpeg 9 now and then: about half the
+    time under load, a late-starting track's packets queue while the mix
+    waits for them, and ffmpeg sits idle until killed.
+    """
+    parts: list[str] = []
+    outs: list[str] = []
+    for n, t in enumerate(tracks):
+        parts.append(f"[0:a:{t.index}]{_FROM_START},asplit=2[s{n}][t{n}]")
+        parts.append(f"[s{n}]aformat=channel_layouts=stereo[m{n}]")
+        outs.append(f"[t{n}]")
+    inputs = "".join(f"[m{n}]" for n in range(len(tracks)))
+    parts.append(f"{inputs}amix=inputs={len(tracks)}:normalize=0,alimiter=limit=0.95:level=false[{label}]")
+    return ";".join(parts), outs
+
+
 def speech_wav_command(source: Path, wav: Path, tracks: list[AudioTrack]) -> list[str]:
     """ffmpeg command for a 16 kHz mono WAV of everything said on any track, timed as in the clip."""
     if tracks[0].handler == MIX_HANDLER or len(tracks) == 1:
