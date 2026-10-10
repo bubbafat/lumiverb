@@ -39,8 +39,8 @@ VIEWER_WRITABLE = {
     ("POST", "/v1/similar/search-by-vector"),
 }
 
-# Reads that change something: claiming a video chunk takes it from the queue.
-WRITING_GETS = {("GET", "/v1/video/{asset_id}/chunks/next")}
+# Reads that change something (none now: claiming a video chunk is a POST).
+WRITING_GETS: set[tuple[str, str]] = set()
 
 
 def _outside_tenant_auth(path: str) -> bool:

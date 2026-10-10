@@ -161,7 +161,7 @@ Face bounding boxes and embeddings come from the server (populated by macOS enri
 
 ### API Contract
 
-The native clients use the **exact same REST API** as the Python CLI and web UI. No new endpoints are needed for Phases 1-3. Phase 4 (enrichment) may benefit from a `/v1/similar-by-vector` endpoint to keep CLIP client-side, but this is optional — the existing `/search-by-image` endpoint works from day one.
+The native clients use the **exact same REST API** as the Python CLI and web UI. No new endpoints are needed for Phases 1-3. Phase 4 (enrichment) may benefit from a `/v1/similar/search-by-vector` endpoint to keep CLIP client-side, but this is optional — the existing `/search-by-image` endpoint works from day one.
 
 The API contract is documented in `docs/cursor-api.md`. The Swift API client is generated from this documentation, not from shared Python code.
 
@@ -295,7 +295,7 @@ src/
 - Remaining `src/core/` utilities → `src/shared/`
 
 **CLIP on the server (similarity endpoint):** The API's `/search-by-image` endpoint currently imports `CLIPEmbeddingProvider` to embed query images server-side. Two options:
-1. Add a `/v1/similar-by-vector` endpoint — clients embed locally, send the vector. Server only does pgvector search. The existing `/search-by-image` wraps this: accepts image, embeds server-side, calls vector search. This keeps CLIP as a server dependency for the web UI's sake but makes it optional.
+1. Add a `/v1/similar/search-by-vector` endpoint — clients embed locally, send the vector. Server only does pgvector search. The existing `/search-by-image` wraps this: accepts image, embeds server-side, calls vector search. This keeps CLIP as a server dependency for the web UI's sake but makes it optional.
 2. Move CLIP to `src/shared/` — rejected, defeats the purpose.
 
 Option 1 is preferred. The server keeps a copy of CLIP for web UI convenience but it's isolated behind one endpoint.

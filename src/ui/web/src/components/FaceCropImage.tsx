@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import { getApiKey } from "../api/client";
+import { useFaceCrop } from "../api/useFaceCrop";
 
 /**
  * Displays a face crop thumbnail from the server with auth.
@@ -14,32 +13,7 @@ export function FaceCropImage({
   size?: number;
   className?: string;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!faceId) return;
-    let objectUrl: string | null = null;
-    let cancelled = false;
-
-    const key = getApiKey();
-    const headers: HeadersInit = key ? { Authorization: `Bearer ${key}` } : {};
-
-    fetch(`/v1/faces/${faceId}/crop`, { headers })
-      .then(async (res) => {
-        if (cancelled || !res.ok) return;
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setUrl(null);
-    };
-  }, [faceId]);
+  const { url } = useFaceCrop(faceId);
 
   if (!url) {
     return (

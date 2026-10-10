@@ -2113,6 +2113,11 @@ class VideoSceneRepository:
         self._session.commit()
 
 
+class ChunksBusy(Exception):
+    """A clip's chunk is claimed (its lease not run out) or failed in this
+    run: no other is handed out, so scenes are found, and numbered, in order."""
+
+
 class VideoIndexChunkRepository:
     """Repository for video_index_chunks and chunk completion (scenes)."""
 
@@ -2162,35 +2167,46 @@ class VideoIndexChunkRepository:
             self._session.commit()
         return len(chunks)
 
+    def retry_failed(self, asset_id: str) -> int:
+        """A new run over the clip's chunks: those that failed in an earlier
+        run are pending again. (Within a run a failed chunk stays failed:
+        claim_next_chunk never hands it out again.) Returns how many."""
+        failed = self._session.exec(
+            select(VideoIndexChunk).where(
+                VideoIndexChunk.asset_id == asset_id,
+                VideoIndexChunk.status == "failed",
+            )
+        ).all()
+        for chunk in failed:
+            chunk.status = "pending"
+            chunk.worker_id = None
+            chunk.claimed_at = None
+            chunk.lease_expires_at = None
+            self._session.add(chunk)
+        if failed:
+            self._session.commit()
+        return len(failed)
+
     def claim_next_chunk(
         self,
         asset_id: str,
         worker_id: str,
     ) -> VideoIndexChunk | None:
         """
-        Claim the next pending chunk for an asset (lowest chunk_index).
-        Also reclaims chunks whose lease has expired and resets failed chunks
-        back to pending so they are retried by the current video-index job.
-        Returns None if no claimable chunks remain.
+        Claim the next pending chunk for an asset (lowest chunk_index), or
+        one whose lease has expired. A failed chunk isn't handed out again:
+        it waits for the next run (retry_failed), which the scheduler starts
+        under its back-off. Returns None if no claimable chunks remain;
+        raises ChunksBusy while one is claimed or failed (chunks go in order).
         """
         now = utcnow()
         lease_expires = now + timedelta(minutes=self.LEASE_MINUTES)
 
-        # Reset expired-lease claimed chunks and previously-failed chunks back
-        # to pending.  Failed chunks must be retried rather than left stuck —
-        # all_chunks_complete returns False while any chunk is non-completed,
-        # which would permanently prevent video-vision from being enqueued.
-        # The video-index retry ceiling is managed externally.
         reclaimable = self._session.exec(
             select(VideoIndexChunk).where(
                 VideoIndexChunk.asset_id == asset_id,
-                or_(
-                    and_(
-                        VideoIndexChunk.status == "claimed",
-                        VideoIndexChunk.lease_expires_at < now,
-                    ),
-                    VideoIndexChunk.status == "failed",
-                ),
+                VideoIndexChunk.status == "claimed",
+                VideoIndexChunk.lease_expires_at < now,
             )
         ).all()
         for chunk in reclaimable:
@@ -2201,6 +2217,16 @@ class VideoIndexChunkRepository:
             self._session.add(chunk)
         if reclaimable:
             self._session.flush()
+
+        busy = self._session.exec(
+            select(VideoIndexChunk).where(
+                VideoIndexChunk.asset_id == asset_id,
+                VideoIndexChunk.status.in_(("claimed", "failed")),  # type: ignore[attr-defined]
+            )
+        ).first()
+        if busy is not None:
+            self._session.commit()
+            raise ChunksBusy(f"chunk {busy.chunk_index} is {busy.status}")
 
         chunk = self._session.exec(
             select(VideoIndexChunk)
@@ -2246,12 +2272,20 @@ class VideoIndexChunkRepository:
 
         now = utcnow()
 
+        # The clip's scenes are numbered here, after those already stored
+        # (chunks complete in order), so a resumed clip goes on counting.
+        # The clip is locked meanwhile; (asset_id, scene_index) is unique.
+        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": chunk.asset_id})
+        first = int(self._session.execute(
+            text("SELECT COALESCE(max(scene_index) + 1, 0) FROM video_scenes WHERE asset_id = :a"),
+            {"a": chunk.asset_id}).scalar() or 0)
+
         # Persist scenes
-        for s in scenes:
+        for i, s in enumerate(scenes):
             scene = VideoScene(
                 scene_id="scn_" + str(ULID()),
                 asset_id=chunk.asset_id,
-                scene_index=s["scene_index"],
+                scene_index=first + i,
                 start_ms=s["start_ms"],
                 end_ms=s["end_ms"],
                 rep_frame_ms=s["rep_frame_ms"],
@@ -2291,8 +2325,8 @@ class VideoIndexChunkRepository:
         chunk = self._session.exec(
             select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)
         ).first()
-        if chunk is None or chunk.worker_id != worker_id:
-            return False
+        if chunk is None or chunk.worker_id != worker_id or chunk.status != "claimed":
+            return False  # a completed chunk stays completed
         chunk.status = "failed"
         chunk.error_message = error_message
         self._session.add(chunk)

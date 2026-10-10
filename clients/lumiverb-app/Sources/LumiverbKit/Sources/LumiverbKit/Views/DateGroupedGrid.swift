@@ -7,7 +7,7 @@ import SwiftUI
 /// here once and the appearance/behavior propagates everywhere.
 ///
 /// Generic over the item type so each call site keeps its own data
-/// shape (AssetPageItem, CollectionAsset, PersonFaceItem, QueryItem).
+/// shape (AssetPageItem, ProjectAsset, PersonFaceItem, QueryItem).
 /// Each item supplies its own date string, asset id, and is-video flag
 /// via closures, plus a tap handler and a "near the end" hook for
 /// pagination.

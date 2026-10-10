@@ -7,9 +7,11 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
+from src.client.cli.decisions import api_error
 
 console = Console()
 
@@ -111,27 +113,32 @@ def set_user_role(
 @user_app.command("remove")
 def remove_user(
     email: Annotated[str, typer.Option("--email", help="Email of the user to remove.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
 ) -> None:
-    """Remove a user (prompts for confirmation)."""
+    """Remove a user (prompts for confirmation unless --yes)."""
     client = LumiverbClient()
     user = _find_user_by_email(client, email)
     user_id = user["user_id"]
 
-    confirm = typer.confirm(f"Remove {email}?", default=False)
-    if not confirm:
+    if not yes and not typer.confirm(f"Remove {email}?", default=False):
         console.print("Aborted.")
         raise typer.Exit(0)
 
-    resp = client.delete(f"/v1/users/{user_id}")
-    if resp.status_code == 409:
-        err = resp.json().get("error", {}).get("code", "")
-        if err == "last_admin":
+    resp = client.raw("DELETE", f"/v1/users/{user_id}")
+    if resp.status_code >= 400:
+        err = api_error(resp)
+        if resp.status_code == 409 and err.get("code") == "last_admin":
             console.print("[red]Error: cannot remove the last admin.[/red]")
         else:
-            console.print(f"[red]Error: {resp.json().get('error', {}).get('message', 'conflict')}[/red]")
+            console.print(f"[red]Error: {escape(err.get('message') or _detail(resp))}[/red]")
         raise typer.Exit(1)
-    if resp.status_code == 400:
-        console.print(f"[red]Error: {resp.json().get('detail', 'bad request')}[/red]")
-        raise typer.Exit(1)
-    resp.raise_for_status()
     console.print("[green]User removed.[/green]")
+
+
+def _detail(resp) -> str:
+    """A plain HTTPException's {"detail"}, else the body."""
+    try:
+        detail = (resp.json() or {}).get("detail")
+    except ValueError:
+        detail = None
+    return str(detail) if detail else (resp.text or f"HTTP {resp.status_code}")

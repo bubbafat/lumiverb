@@ -26,15 +26,15 @@ public struct AddToCollectionSheet: View {
             List {
                 ForEach(collectionsState.ownCollections) { col in
                     Button {
-                        if selectedIds.contains(col.collectionId) {
-                            selectedIds.remove(col.collectionId)
+                        if selectedIds.contains(col.projectId) {
+                            selectedIds.remove(col.projectId)
                         } else {
-                            selectedIds.insert(col.collectionId)
+                            selectedIds.insert(col.projectId)
                         }
                     } label: {
                         HStack {
-                            Image(systemName: selectedIds.contains(col.collectionId) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedIds.contains(col.collectionId) ? .accentColor : .secondary)
+                            Image(systemName: selectedIds.contains(col.projectId) ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(selectedIds.contains(col.projectId) ? .accentColor : .secondary)
                             Text(col.name)
                             Spacer()
                             Text("\(col.assetCount)")
@@ -101,7 +101,7 @@ public struct AddToCollectionSheet: View {
                 Button("Create") {
                     Task {
                         if let created = await collectionsState.createCollection(name: newName) {
-                            selectedIds.insert(created.collectionId)
+                            selectedIds.insert(created.projectId)
                         }
                         showCreate = false
                         newName = ""

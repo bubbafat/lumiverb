@@ -279,13 +279,13 @@ def test_emptying_the_library_trash_says_which_projects_lose_clips() -> None:
 
     client.post.side_effect = post
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "empty-trash"], input="n\n")
+        result = runner.invoke(app, ["library", "empty-trash", "--all"], input="n\n")
     assert result.exit_code == 0, result.output
     assert "4 clips" in result.output and "2 projects" in result.output and "Customer Video" in result.output
     assert not [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
 
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "empty-trash"], input="y\n")
+        result = runner.invoke(app, ["library", "empty-trash", "--all"], input="y\n")
     assert result.exit_code == 0, result.output
     empty = [c for c in client.post.call_args_list if c.args[0] == "/v1/libraries/empty-trash"]
     assert empty[-1].kwargs["json"] == {"library_ids": ["lib_1"], "remove_from_projects": True}
@@ -314,7 +314,7 @@ def test_emptying_the_library_trash_reads_right_for_one() -> None:
 
     client.post.side_effect = post
     with patch("src.client.cli.main.LumiverbClient", return_value=client):
-        result = runner.invoke(app, ["library", "empty-trash"], input="y\n")
+        result = runner.invoke(app, ["library", "empty-trash", "--all"], input="y\n")
     assert result.exit_code == 0, result.output
     out = " ".join(result.output.split())
     assert "1 clip from this library is in 1 project; deleting it for good removes it from that project" in out

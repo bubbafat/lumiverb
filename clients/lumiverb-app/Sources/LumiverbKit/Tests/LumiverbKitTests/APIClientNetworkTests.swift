@@ -910,11 +910,11 @@ final class APIClientNetworkTests: XCTestCase {
         XCTAssertNil(ratings["a2"]?.color)
     }
 
-    // MARK: - Collections
+    // MARK: - Projects
 
-    private static let sampleCollectionJson = """
+    private static let sampleProjectJson = """
     {
-        "collection_id": "col_1",
+        "project_id": "prj_1",
         "name": "Favorites",
         "description": null,
         "cover_asset_id": null,
@@ -923,31 +923,46 @@ final class APIClientNetworkTests: XCTestCase {
         "ownership": "own",
         "sort_order": "manual",
         "asset_count": 5,
+        "trashed_asset_count": 0,
         "created_at": "2024-01-01T00:00:00",
-        "updated_at": "2024-01-01T00:00:00"
+        "updated_at": "2024-01-01T00:00:00",
+        "status": "active"
     }
     """
 
-    func testListCollections() async throws {
+    func testListProjects() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "GET")
-            XCTAssertEqual(request.url?.path, "/v1/collections")
+            XCTAssertEqual(request.url?.path, "/v1/projects")
             return jsonResponse(200, json: """
-            {"items": [\(Self.sampleCollectionJson)]}
+            {"items": [\(Self.sampleProjectJson)]}
             """, for: request)
         }
 
         let client = makeClient()
-        let cols = try await client.listCollections()
-        XCTAssertEqual(cols.count, 1)
-        XCTAssertEqual(cols[0].name, "Favorites")
-        XCTAssertTrue(cols[0].isOwn)
+        let projects = try await client.listProjects()
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertEqual(projects[0].projectId, "prj_1")
+        XCTAssertEqual(projects[0].name, "Favorites")
+        XCTAssertTrue(projects[0].isOwn)
     }
 
-    func testCreateCollection() async throws {
+    func testGetProject() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1")
+            return jsonResponse(200, json: Self.sampleProjectJson, for: request)
+        }
+
+        let client = makeClient()
+        let project = try await client.getProject(id: "prj_1")
+        XCTAssertEqual(project.assetCount, 5)
+    }
+
+    func testCreateProject() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/collections")
+            XCTAssertEqual(request.url?.path, "/v1/projects")
 
             if let bodyData = readRequestBody(request) {
                 let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
@@ -955,70 +970,98 @@ final class APIClientNetworkTests: XCTestCase {
                 XCTAssertEqual(json["visibility"] as? String, "private")
             }
 
-            return jsonResponse(201, json: Self.sampleCollectionJson, for: request)
+            return jsonResponse(201, json: Self.sampleProjectJson, for: request)
         }
 
         let client = makeClient()
-        let col = try await client.createCollection(
-            body: CreateCollectionRequest(name: "Test")
+        let project = try await client.createProject(
+            body: CreateProjectRequest(name: "Test")
         )
-        XCTAssertEqual(col.collectionId, "col_1")
+        XCTAssertEqual(project.projectId, "prj_1")
     }
 
-    func testUpdateCollection() async throws {
+    func testCreateProjectFromSearch() async throws {
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/projects")
+
+            if let bodyData = readRequestBody(request) {
+                let json = try! JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+                let fromSearch = json["from_search"] as? [String: Any]
+                let filters = fromSearch?["filters"] as? [[String: String]]
+                XCTAssertEqual(filters ?? [], [["type": "camera_make", "value": "Canon"]])
+            }
+
+            return jsonResponse(201, json: Self.sampleProjectJson, for: request)
+        }
+
+        let client = makeClient()
+        let project = try await client.createProject(
+            body: CreateProjectRequest(
+                name: "Canon",
+                fromSearch: SavedQueryV2(filters: [LeafFilter(type: "camera_make", value: "Canon")])
+            )
+        )
+        XCTAssertEqual(project.projectId, "prj_1")
+    }
+
+    func testUpdateProject() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "PATCH")
-            XCTAssertTrue(request.url?.path.contains("/v1/collections/col_1") ?? false)
-            return jsonResponse(200, json: Self.sampleCollectionJson, for: request)
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1")
+            return jsonResponse(200, json: Self.sampleProjectJson, for: request)
         }
 
         let client = makeClient()
-        let col = try await client.updateCollection(
-            id: "col_1", body: UpdateCollectionRequest(name: "Renamed")
+        let project = try await client.updateProject(
+            id: "prj_1", body: UpdateProjectRequest(name: "Renamed")
         )
-        XCTAssertEqual(col.name, "Favorites") // server returned sample
+        XCTAssertEqual(project.name, "Favorites") // server returned sample
     }
 
-    func testDeleteCollection() async throws {
+    func testDeleteProject() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1")
             return jsonResponse(204, json: "{}", for: request)
         }
 
         let client = makeClient()
-        try await client.deleteCollection(id: "col_1")
+        try await client.deleteProject(id: "prj_1")
     }
 
-    func testAddAssetsToCollection() async throws {
+    func testAddAssetsToProject() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertTrue(request.url?.path.contains("/assets") ?? false)
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1/assets")
             return jsonResponse(200, json: """
             {"added": 2}
             """, for: request)
         }
 
         let client = makeClient()
-        let added = try await client.addAssetsToCollection(id: "col_1", assetIds: ["a1", "a2"])
+        let added = try await client.addAssetsToProject(id: "prj_1", assetIds: ["a1", "a2"])
         XCTAssertEqual(added, 2)
     }
 
-    func testRemoveAssetsFromCollection() async throws {
+    func testRemoveAssetsFromProject() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1/assets")
             return jsonResponse(200, json: """
             {"removed": 1}
             """, for: request)
         }
 
         let client = makeClient()
-        let removed = try await client.removeAssetsFromCollection(id: "col_1", assetIds: ["a1"])
+        let removed = try await client.removeAssetsFromProject(id: "prj_1", assetIds: ["a1"])
         XCTAssertEqual(removed, 1)
     }
 
-    func testListCollectionAssets() async throws {
+    func testListProjectAssets() async throws {
         MockURLProtocol.requestHandler = { request in
             XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/projects/prj_1/assets")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
             let items = Dictionary(uniqueKeysWithValues:
                 (components.queryItems ?? []).map { ($0.name, $0.value!) }
@@ -1038,7 +1081,7 @@ final class APIClientNetworkTests: XCTestCase {
         }
 
         let client = makeClient()
-        let response = try await client.listCollectionAssets(id: "col_1", limit: 50)
+        let response = try await client.listProjectAssets(id: "prj_1", limit: 50)
         XCTAssertEqual(response.items.count, 1)
         XCTAssertEqual(response.items[0].assetId, "a1")
         XCTAssertEqual(response.nextCursor, "cur_2")

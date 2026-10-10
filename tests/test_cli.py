@@ -223,7 +223,7 @@ def test_library_empty_trash_aborts_if_none() -> None:
     mock_client.get.return_value = mock_response
 
     with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["library", "empty-trash"])
+        result = runner.invoke(app, ["library", "empty-trash", "--all"])
 
     assert result.exit_code == 0
     assert "Trash is empty" in result.output
@@ -245,11 +245,73 @@ def test_library_empty_trash_requires_confirmation() -> None:
     mock_client.post.return_value.json.return_value = {"assets_in_projects": 0, "projects": [], "other_projects": 0}
 
     with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
-        result = runner.invoke(app, ["library", "empty-trash"], input="n")
+        result = runner.invoke(app, ["library", "empty-trash", "--all"], input="n")
 
     assert result.exit_code == 0
     assert "Aborted" in result.output
     assert [c.args[0] for c in mock_client.post.call_args_list] == ["/v1/assets/project-usage"]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("args", [[], ["--name", "TrashedLib", "--all"]])
+def test_library_empty_trash_needs_a_name_or_all(args) -> None:
+    """Nothing deletes every library in the trash from a missing --name (Robert)."""
+    mock_client = MagicMock()
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash", *args])
+
+    assert result.exit_code == 2
+    assert "--all" in result.output
+    mock_client.get.assert_not_called()
+    mock_client.post.assert_not_called()
+
+
+@pytest.mark.fast
+def test_library_empty_trash_yes_asks_nothing() -> None:
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "status": "trashed"},
+        {"library_id": "lib_trash2", "name": "Other", "root_path": "/y", "status": "trashed"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+    mock_client.post.return_value.json.return_value = {"assets_in_projects": 0, "projects": [], "other_projects": 0,
+                                                       "deleted": 1}
+
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash", "--name", "TrashedLib", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "Deleted 1 library." in result.output
+    mock_client.post.assert_called_with("/v1/libraries/empty-trash",
+                                        json={"library_ids": ["lib_trash1"], "remove_from_projects": False})
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("flags, posted", [([], False), (["--remove-from-projects"], True)])
+def test_library_empty_trash_yes_with_clips_in_projects_needs_the_flag(flags, posted) -> None:
+    """--yes asks no one, so clips in projects leave them only with --remove-from-projects."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [
+        {"library_id": "lib_trash1", "name": "TrashedLib", "root_path": "/x", "status": "trashed"},
+    ]
+    mock_client = MagicMock()
+    mock_client.get.return_value = mock_response
+    mock_client.post.return_value.json.return_value = {
+        "assets_in_projects": 2, "projects": [{"name": "Reel", "clips": 2}], "other_projects": 0, "deleted": 1}
+
+    with patch("src.client.cli.main.LumiverbClient", return_value=mock_client):
+        result = runner.invoke(app, ["library", "empty-trash", "--all", "--yes", *flags])
+
+    paths = [c.args[0] for c in mock_client.post.call_args_list]
+    if posted:
+        assert result.exit_code == 0, result.output
+        mock_client.post.assert_called_with("/v1/libraries/empty-trash",
+                                            json={"library_ids": ["lib_trash1"], "remove_from_projects": True})
+    else:
+        assert result.exit_code == 2
+        assert "--remove-from-projects" in result.output
+        assert paths == ["/v1/assets/project-usage"]
 
 
 @pytest.mark.fast

@@ -94,14 +94,14 @@ public struct CollectionsListView: View {
     }
 
     @ViewBuilder
-    private func collectionRow(_ col: AssetCollection) -> some View {
+    private func collectionRow(_ col: Project) -> some View {
         #if os(iOS)
         // iOS uses NavigationLink so the row pushes a destination
         // (CollectionDetailView) wired by the host app via
         // `.navigationDestination(for: CollectionDetailRoute.self)`.
         // The destination view's `.task` calls `openCollectionDetail`
         // to load the data.
-        NavigationLink(value: CollectionDetailRoute(collectionId: col.collectionId)) {
+        NavigationLink(value: CollectionDetailRoute(collectionId: col.projectId)) {
             collectionRowLabel(col)
         }
         #else
@@ -119,7 +119,7 @@ public struct CollectionsListView: View {
     }
 
     @ViewBuilder
-    private func collectionRowLabel(_ col: AssetCollection) -> some View {
+    private func collectionRowLabel(_ col: Project) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(col.name)
@@ -129,11 +129,6 @@ public struct CollectionsListView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if col.isSmart {
-                Image(systemName: "wand.and.stars")
-                    .font(.caption)
-                    .foregroundColor(.purple)
-            }
             if col.parsedVisibility == .shared {
                 Image(systemName: "person.2")
                     .font(.caption)
@@ -148,9 +143,8 @@ public struct CollectionsListView: View {
 }
 
 /// Marker type for a single collection's detail navigation destination.
-/// Wraps just the collection_id so the value is Hashable + Sendable —
-/// `AssetCollection` itself contains a `SavedQuery` with type-erased
-/// values that can't be made Hashable cheaply.
+/// Wraps just the project id, so the route stays the same while the
+/// project's metadata (name, asset count) changes.
 public struct CollectionDetailRoute: Hashable, Sendable {
     public let collectionId: String
     public init(collectionId: String) {

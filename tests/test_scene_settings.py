@@ -139,8 +139,13 @@ class _Resp:
 
 def _client_with_no_chunks_left(producers: list[dict] | None = None) -> MagicMock:
     client = MagicMock()
-    client.post.return_value = _Resp(data={"chunk_count": 1, "already_initialized": True})
-    client.raw.return_value = _Resp(204)
+    init = _Resp(data={"chunk_count": 1, "already_initialized": True})
+    client.claims = [_Resp(204)]  # what claims (POST .../chunks/next) answer in turn
+
+    def post(path, *args, **kwargs):
+        return client.claims.pop(0) if path.endswith("/chunks/next") else init
+
+    client.post.side_effect = post
     client.get.return_value = _Resp(data={"producers": producers or []})
     return client
 
@@ -160,8 +165,8 @@ def _index(client, **kwargs):
 @pytest.mark.fast
 def test_the_indexer_finds_scenes_with_the_settings_its_given():
     client = _client_with_no_chunks_left()
-    client.raw.side_effect = [_Resp(200, {"chunk_id": "c", "worker_id": "w", "chunk_index": 0, "start_ts": 0.0,
-                                          "end_ts": 30.0}), _Resp(204)]
+    client.claims = [_Resp(200, {"chunk_id": "c", "worker_id": "w", "chunk_index": 0, "start_ts": 0.0,
+                                 "end_ts": 30.0}), _Resp(204)]
     used = {**SCENES.defaults, "frame_width": 320, "phash_threshold": 20}
     with (
         patch("src.client.cli.video_index.VideoScanner") as scanner_cls,

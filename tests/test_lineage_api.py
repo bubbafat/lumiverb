@@ -490,7 +490,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
                        " created_at) VALUES (:i, :a, 0, 0, 999, 0, now())"), {"i": f"scn_{vid}_0", "a": vid})
         s.commit()
     assert client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30}, headers=headers).status_code == 200
-    chunk = client.get(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+    chunk = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
 
     def mp4() -> tuple:
         return ("v.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")

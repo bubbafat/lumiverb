@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 from rich.console import Console
@@ -36,6 +37,14 @@ SourceFor = Callable[[dict], Path | None]
 logger = logging.getLogger(__name__)
 
 
+class ChunkFailed(RuntimeError):
+    """A chunk failed: the run ends, and the chunk stays failed until the next run."""
+
+
+class Stopped(Exception):
+    """The caller is stopping: no more chunks were claimed."""
+
+
 def index_video_scenes(
     *,
     client: LumiverbClient,
@@ -46,6 +55,7 @@ def index_video_scenes(
     lineage: dict | None = None,
     settings: Mapping[str, Any] | None = None,
     redo: bool = False,
+    stopping: Event | None = None,
 ) -> dict:
     """Run scene detection on a single video and submit results to server.
     settings: how scenes are found (the scenes producer's, as the server
@@ -53,6 +63,10 @@ def index_video_scenes(
     when the last completes. Both the server's when not given (it refuses a
     chunk that doesn't say). redo: the clip's scenes were found another way;
     the server starts it over (its old scenes and their descriptions go).
+
+    A chunk that fails ends the run (ChunkFailed): it stays failed until the
+    next run, which the caller's back-off decides. Once stopping is set no
+    more chunks are claimed (Stopped). The server numbers the scenes.
 
     Returns {"scenes": N, "chunks": N, "elapsed": float}.
     """
@@ -67,7 +81,6 @@ def index_video_scenes(
     t0 = time.perf_counter()
     total_scenes = 0
     total_chunks = 0
-    chunk_errors: list[str] = []
 
     # 1. Init chunks (idempotent — safe for retry/repair)
     resp = client.post(
@@ -86,10 +99,11 @@ def index_video_scenes(
     scanner = VideoScanner(source_path, width=found_with.frame_width)
 
     while True:
-        claim_resp = client.raw("GET", f"/v1/video/{asset_id}/chunks/next")
+        if stopping is not None and stopping.is_set():
+            raise Stopped(asset_id)
+        claim_resp = client.post(f"/v1/video/{asset_id}/chunks/next")
         if claim_resp.status_code == 204:
-            break  # all chunks done
-        claim_resp.raise_for_status()
+            break  # none left to claim
         work = claim_resp.json()
 
         chunk_id = work["chunk_id"]
@@ -112,21 +126,33 @@ def index_video_scenes(
                 settings=found_with,
             )
             scenes = segmenter.segment()
+        except Exception as e:
+            if isinstance(e, SyncError):
+                logger.warning("video-index: %s chunk %d — FFmpeg sync error: %s", rel_path, work["chunk_index"], e)
+            else:
+                logger.exception("video-index: %s chunk %d — failed: %s", rel_path, work["chunk_index"], e)
+            error = str(e) or type(e).__name__
+            client.post(
+                f"/v1/video/chunks/{chunk_id}/fail",
+                json={"worker_id": worker_id, "error_message": error},
+            )
+            # The video isn't indexed until every chunk is: it's tried again once its turn comes.
+            raise ChunkFailed(f"chunk {work['chunk_index']} failed: {error}") from e
 
-            # Build scene results for server
-            scene_results = []
-            for i, scene in enumerate(scenes):
-                scene_results.append({
-                    "scene_index": total_scenes + i,
-                    "start_ms": scene.start_ms,
-                    "end_ms": scene.end_ms,
-                    "rep_frame_ms": scene.rep_frame_ms,
-                    "sharpness_score": scene.sharpness_score,
-                    "keep_reason": scene.keep_reason,
-                    "phash": scene.phash,
-                })
+        # Build scene results for server (it numbers them)
+        scene_results = [{
+            "start_ms": scene.start_ms,
+            "end_ms": scene.end_ms,
+            "rep_frame_ms": scene.rep_frame_ms,
+            "sharpness_score": scene.sharpness_score,
+            "keep_reason": scene.keep_reason,
+            "phash": scene.phash,
+        } for scene in scenes]
 
-            # Submit completed chunk
+        # Submit completed chunk. Saving it failing isn't the chunk's fault:
+        # the error goes to the caller as it is, and the chunk is let go of
+        # (failed) so the next run starts from it.
+        try:
             client.post(
                 f"/v1/video/chunks/{chunk_id}/complete",
                 json={
@@ -137,32 +163,21 @@ def index_video_scenes(
                     "lineage": lineage,
                 },
             )
-
-            total_scenes += len(scenes)
-            total_chunks += 1
-            logger.info(
-                "video-index: %s chunk %d — %d scenes",
-                rel_path, work["chunk_index"], len(scenes),
-            )
-
-        except SyncError as e:
-            logger.warning("video-index: %s chunk %d — FFmpeg sync error: %s", rel_path, work["chunk_index"], e)
-            chunk_errors.append(str(e))
-            client.post(
-                f"/v1/video/chunks/{chunk_id}/fail",
-                json={"worker_id": worker_id, "error_message": str(e)},
-            )
         except Exception as e:
-            logger.exception("video-index: %s chunk %d — failed: %s", rel_path, work["chunk_index"], e)
-            chunk_errors.append(str(e) or type(e).__name__)
-            client.post(
-                f"/v1/video/chunks/{chunk_id}/fail",
-                json={"worker_id": worker_id, "error_message": str(e)},
-            )
+            try:
+                client.post(f"/v1/video/chunks/{chunk_id}/fail",
+                            json={"worker_id": worker_id, "error_message": str(e) or type(e).__name__})
+            except Exception:  # noqa: BLE001 — its lease runs out instead
+                logger.warning("video-index: %s chunk %d — couldn't let go of it", rel_path, work["chunk_index"])
+            raise
 
-    if chunk_errors:
-        # The video isn't indexed until every chunk is: it's tried again once its turn comes.
-        raise RuntimeError(f"{len(chunk_errors)} of {total_chunks + len(chunk_errors)} chunks failed: {chunk_errors[0]}")
+        total_scenes += len(scenes)
+        total_chunks += 1
+        logger.info(
+            "video-index: %s chunk %d — %d scenes",
+            rel_path, work["chunk_index"], len(scenes),
+        )
+
     elapsed = time.perf_counter() - t0
     return {"scenes": total_scenes, "chunks": total_chunks, "elapsed": elapsed}
 
@@ -179,11 +194,14 @@ def run_video_index(
     on_fail: "Callable[[str, object], None] | None" = None,
     settings: Mapping[str, Any] | None = None,
     on_done: Callable[[str], None] | None = None,
+    stopping: Event | None = None,
 ) -> tuple[int, int]:
     """Run scene detection on a batch of videos, updating progress.
     on_fail(asset_id, error) hears of each video it couldn't do, on_done(asset_id)
     of each it made. settings:
     how scenes are found (index_video_scenes); a video with "redo" is started over.
+    Once stopping is set nothing more is started (the video under way ends
+    after its chunk), and nothing is said of the rest.
 
     Each video dict must have: asset_id, rel_path, duration_sec.
     Videos are processed sequentially (FFmpeg is CPU/IO heavy).
@@ -193,6 +211,8 @@ def run_video_index(
     fail = 0
 
     for video in videos:
+        if stopping is not None and stopping.is_set():
+            break
         asset_id = video["asset_id"]
         rel_path = video["rel_path"]
         duration_sec = video["duration_sec"]
@@ -215,6 +235,7 @@ def run_video_index(
                 lineage=lineage_for(video) if lineage_for else None,
                 settings=settings,
                 redo=bool(video.get("redo")),
+                stopping=stopping,
             )
             ok += 1
             if on_done:
@@ -223,6 +244,8 @@ def run_video_index(
                 "video-index: %s — %d scenes in %d chunks (%.1fs)",
                 rel_path, result["scenes"], result["chunks"], result["elapsed"],
             )
+        except Stopped:
+            break
         except Exception as e:
             logger.exception("video-index: %s — failed: %s", rel_path, e)
             if on_fail:

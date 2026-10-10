@@ -74,9 +74,10 @@ def test_admin_keys_create_uses_env_var(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.fast
-def test_admin_keys_create_fails_without_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """admin keys create without --admin-key and without env exits 1."""
+def test_admin_keys_create_fails_without_admin_key(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """admin keys create without --admin-key, env or a saved one exits 1."""
     monkeypatch.delenv("LUMIVERB_ADMIN_KEY", raising=False)
+    monkeypatch.setattr("src.client.cli.config._config_path", lambda: tmp_path / "config.json")
 
     result = runner.invoke(
         app,

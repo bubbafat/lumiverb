@@ -16,7 +16,10 @@ doubling up to a day.
 Stale from a producer or settings change is redone too, after anything
 missing (`redo_due`, the scheduler's tier 4): changing the setting was the
 approval (Robert, Oct 9). An admin can stop a producer's redo and resume it
-(`pause`, `resume`); a new setting for it resumes it.
+(`pause`, `resume`); a new setting for it resumes it. A new producer version
+(a deploy, which nobody approved) stops its redo the first time the
+scheduler sees clips made by an older one (`hold_new_version`): an admin
+resumes it.
 """
 
 from __future__ import annotations
@@ -54,6 +57,11 @@ RETRY_MAX = timedelta(days=1)
 # ...and given up after this many tries (about two days), until someone
 # asks for it to be tried again (Robert, Oct 9).
 GIVE_UP_AFTER = 10
+# A job that crashes (no clip charged: the API or its database away, a
+# process that died) holds its clips back an hour, uncharged. The same clip
+# crashing this many times in a row is charged a failure, so the back-off
+# and giving up apply (producer_crashes; a success or a failure clears it).
+CRASHES_BEFORE_CHARGE = 3
 
 
 def _meta(session: Session, key: str) -> str | None:
@@ -273,6 +281,31 @@ def pause(session: Session, artifact: str, *, by: str | None) -> None:
         " ON CONFLICT (artifact) DO NOTHING"), {"a": artifact, "by": by, "now": utcnow()})
 
 
+_VERSION_SEEN = "producer.{}.version_seen"
+
+
+def hold_new_version(session: Session, artifact: str) -> bool:
+    """A producer's new version is like new settings that nobody approved:
+    the first time it's seen (per account) with clips made by an older
+    version of the same producer, its redo is stopped (paused_by None) until
+    an admin resumes it, or its settings change. Seen once, it's not asked
+    again (resuming sticks). True when it stopped the redo just now. Commits."""
+    p = PRODUCERS[artifact]
+    key = _VERSION_SEEN.format(artifact)
+    if _meta(session, key) == p.version:
+        return False
+    older = session.execute(text(
+        "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
+    ), {"a": artifact, "p": p.producer, "v": p.version}).first() is not None
+    if older:
+        pause(session, artifact, by=None)
+    session.execute(text(
+        "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
+        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"k": key, "v": p.version})
+    session.commit()
+    return older
+
+
 def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
     """Redo the producers' stale clips again. Doesn't commit."""
     if artifacts:
@@ -370,6 +403,7 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
         "version": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("version") or ""),
         "hash": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("settings_hash") or ""),
         "source": source, "now": produced_at or utcnow(), "outcome": outcome})
+    _forget_crashes(session, asset_id, artifact)
     if commit:
         session.commit()
 
@@ -403,8 +437,36 @@ def record_failure(session: Session, asset_id: str, artifact: str, error: str, *
         "   attempts = EXCLUDED.attempts, retry_at = EXCLUDED.retry_at, failed_at = EXCLUDED.failed_at"
     ), {"a": asset_id, "artifact": artifact, "now": now, "error": error[:2000], "attempts": attempts,
         "retry": now + wait, "give_up": attempts >= GIVE_UP_AFTER})
+    _forget_crashes(session, asset_id, artifact)
     if commit:
         session.commit()
+
+
+def _forget_crashes(session: Session, asset_id: str, artifact: str) -> None:
+    session.execute(text("DELETE FROM producer_crashes WHERE asset_id = :a AND artifact = :artifact"),
+                    {"a": asset_id, "artifact": artifact})
+
+
+def note_crashes(session: Session, artifact: str, asset_ids: list[str], error: str, *,
+                 limit: int = CRASHES_BEFORE_CHARGE) -> list[str]:
+    """These clips' jobs crashed, uncharged: one more in a row for each.
+    Returns those that reached limit (their count starts over): the caller
+    charges them a failure. Clips that are gone are left out. Commits."""
+    if not asset_ids:
+        return []
+    rows = session.execute(text(
+        "INSERT INTO producer_crashes (asset_id, artifact, crashes, error, updated_at)"
+        " SELECT asset_id, :artifact, 1, :error, now() FROM assets WHERE asset_id = ANY(:ids)"
+        " ON CONFLICT (asset_id, artifact) DO UPDATE SET crashes = producer_crashes.crashes + 1,"
+        "   error = EXCLUDED.error, updated_at = EXCLUDED.updated_at"
+        " RETURNING asset_id, crashes"
+    ), {"artifact": artifact, "error": error[:2000], "ids": list(dict.fromkeys(asset_ids))}).all()
+    reached = sorted(r[0] for r in rows if r[1] >= limit)
+    if reached:
+        session.execute(text("DELETE FROM producer_crashes WHERE artifact = :artifact AND asset_id = ANY(:ids)"),
+                        {"artifact": artifact, "ids": reached})
+    session.commit()
+    return reached
 
 
 def failures(session: Session, *, artifact: str | None = None, library_id: str | None = None,

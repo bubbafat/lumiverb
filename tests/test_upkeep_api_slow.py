@@ -1,7 +1,9 @@
-"""Upkeep endpoints called with a tenant API key (what `lumiverb maintenance` sends).
+"""Upkeep endpoints: who may call them, and on what.
 
-Upkeep routes skip the tenant middleware, so a handler can't rely on
-request.state for the tenant; it resolves the tenant from the key itself.
+An account admin's API key (what `lumiverb maintenance` sends) acts on that
+account; the operator's admin key acts on every account only when it says
+tenants=all (what the systemd timers send). Upkeep routes skip the tenant
+middleware, so the router resolves the tenant from the key itself.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _ru
 
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
-    """Yields (client, tenant_api_key)."""
+    """Yields (client, tenant_api_key, tenant_id, data_dir)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = tmp_path_factory.mktemp("upkeep_data")
 
@@ -61,7 +63,7 @@ def env(tmp_path_factory):
                 session.commit()
 
             with TestClient(app) as client:
-                yield client, api_key
+                yield client, api_key, tenant_id, data_dir
 
     os.environ.pop("DATA_DIR", None)
     get_settings.cache_clear()
@@ -70,7 +72,7 @@ def env(tmp_path_factory):
 
 @pytest.mark.slow
 def test_cleanup_with_tenant_key_runs_dry_run(env) -> None:
-    client, api_key = env
+    client, api_key, *_ = env
 
     r = client.post(
         "/v1/upkeep/cleanup", params={"dry_run": "true"},
@@ -86,7 +88,7 @@ def test_cleanup_with_tenant_key_runs_dry_run(env) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer not-a-key"}])
 def test_cleanup_without_valid_key_is_401(env, headers) -> None:
-    client, _ = env
+    client, *_ = env
 
     r = client.post("/v1/upkeep/cleanup", headers=headers)
 
@@ -106,7 +108,7 @@ def _new_key(client, api_key: str, role: str) -> tuple[str, str]:
 @pytest.mark.parametrize("role", ["viewer", "editor"])
 def test_cleanup_needs_an_admin_key(env, role) -> None:
     """Cleanup deletes files: a viewer or editor key can't run it."""
-    client, api_key = env
+    client, api_key, *_ = env
     _, key = _new_key(client, api_key, role)
 
     r = client.post(
@@ -119,7 +121,7 @@ def test_cleanup_needs_an_admin_key(env, role) -> None:
 
 @pytest.mark.slow
 def test_cleanup_with_revoked_key_is_401(env) -> None:
-    client, api_key = env
+    client, api_key, *_ = env
     key_id, key = _new_key(client, api_key, "admin")
     r = client.delete(f"/v1/keys/{key_id}", headers={"Authorization": f"Bearer {api_key}"})
     assert r.status_code in (200, 204), r.text
@@ -127,3 +129,149 @@ def test_cleanup_with_revoked_key_is_401(env) -> None:
     r = client.post("/v1/upkeep/cleanup", headers={"Authorization": f"Bearer {key}"})
 
     assert r.status_code == 401, r.text
+
+
+ADMIN = {"Authorization": "Bearer test-admin-secret"}
+ENDPOINTS = ["/v1/upkeep", "/v1/upkeep/search-sync", "/v1/upkeep/cleanup", "/v1/upkeep/recluster",
+             "/v1/upkeep/recreate-search-indexes", "/v1/upkeep/cleanup-dismissed"]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer not-a-key"}, {"Authorization": "Basic x"}])
+def test_every_upkeep_call_without_a_live_key_is_401(env, path, headers) -> None:
+    client, *_ = env
+
+    r = client.post(path, headers=headers)
+
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize("role", ["viewer", "editor"])
+def test_every_upkeep_call_needs_an_account_admin(env, path, role) -> None:
+    """A viewer's key can't wipe the search indexes or force a reindex (nor anything else here)."""
+    client, api_key, *_ = env
+    _, key = _new_key(client, api_key, role)
+
+    r = client.post(path, params={"force": "true"}, headers={"Authorization": f"Bearer {key}"})
+
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_an_account_admin_acts_on_the_account(env, path) -> None:
+    client, api_key, *_ = env
+
+    r = client.post(path, headers={"Authorization": f"Bearer {api_key}"})
+
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_an_account_key_cant_ask_for_every_account(env, path) -> None:
+    client, api_key, *_ = env
+
+    r = client.post(path, params={"tenants": "all"}, headers={"Authorization": f"Bearer {api_key}"})
+
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_the_admin_key_must_name_every_account(env, path) -> None:
+    """Nothing acts on every account from a missing argument (Robert)."""
+    client, *_ = env
+
+    r = client.post(path, headers=ADMIN)
+
+    assert r.status_code == 400, r.text
+    assert "tenants=all" in r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_the_admin_key_with_tenants_all_acts_on_every_account(env, path) -> None:
+    client, *_ = env
+
+    r = client.post(path, params={"tenants": "all"}, headers=ADMIN)
+
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.slow
+def test_tenants_takes_only_all(env) -> None:
+    client, *_ = env
+
+    r = client.post("/v1/upkeep", params={"tenants": "ten_someone"}, headers=ADMIN)
+
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.slow
+def test_upkeep_for_every_account_reaches_the_account(env) -> None:
+    client, *_ = env
+
+    r = client.post("/v1/upkeep/cleanup", params={"tenants": "all"}, headers=ADMIN)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["dry_run"] is True
+
+
+def _old(path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+    os.utime(path, (1, 1))
+
+
+@pytest.mark.slow
+def test_cleanup_of_one_library_leaves_the_rest_of_the_account(env) -> None:
+    client, api_key, tenant_id, data_dir = env
+    headers = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "CleanOne", "root_path": "/tmp/clean-one"}, headers=headers)
+    assert r.status_code in (200, 201), r.text
+    library_id = r.json()["library_id"]
+    _old(data_dir / tenant_id / library_id / "proxies" / "00" / "stray.webp")
+    _old(data_dir / tenant_id / "lib_gone" / "proxies" / "00" / "stray.webp")
+
+    one = client.post("/v1/upkeep/cleanup", params={"library_id": library_id}, headers=headers)
+    whole = client.post("/v1/upkeep/cleanup", headers=headers)
+
+    assert one.status_code == 200, one.text
+    # The library's one stray file is all of it: held back by the 25% guard, but looked at.
+    assert (one.json()["orphan_libraries"], one.json()["skipped_libraries"]) == (0, 1)
+    assert (whole.json()["orphan_libraries"], whole.json()["skipped_libraries"]) == (1, 1)
+    assert (data_dir / tenant_id / "lib_gone").exists()  # dry runs both
+
+
+@pytest.mark.slow
+def test_cleanup_of_a_library_not_the_accounts_is_404(env) -> None:
+    client, api_key, *_ = env
+
+    r = client.post("/v1/upkeep/cleanup", params={"library_id": "lib_nope"},
+                    headers={"Authorization": f"Bearer {api_key}"})
+
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.slow
+def test_cleanup_of_a_library_needs_an_account_key(env) -> None:
+    client, *_ = env
+
+    r = client.post("/v1/upkeep/cleanup", params={"tenants": "all", "library_id": "lib_x"}, headers=ADMIN)
+
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.slow
+def test_cleanup_dismissed_works_with_the_accounts_admin_key(env) -> None:
+    """What `lumiverb maintenance cleanup-dismissed` and repair's redetect-faces send."""
+    client, api_key, *_ = env
+
+    r = client.post("/v1/upkeep/cleanup-dismissed", headers={"Authorization": f"Bearer {api_key}"})
+
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": 0}
