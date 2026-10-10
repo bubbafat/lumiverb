@@ -9,7 +9,8 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const WorkflowIntegration = require('./WorkflowIntegration.node');
 const { LumiverbClient, SignedOutError, createSessionStore } = require('./lumiverb');
-const { addAtPlayhead, addToBin, projectFilePaths } = require('./resolve');
+const { alsoAddToProject, newProjectFromResolve } = require('./projects');
+const { addAtPlayhead, addToBin, currentProjectName } = require('./resolve');
 const { searchPage } = require('./search');
 
 const PLUGIN_ID = 'io.lumiverb.resolve';
@@ -39,24 +40,46 @@ function shownClip(assetId) {
     return clip;
 }
 
-// The project's files are read again for every page, so clips added in
-// Resolve meanwhile are hidden too.
-async function search({ text, media, after, hideInProject }) {
-    const inProject = hideInProject ? await projectFilePaths(await getResolve()) : null;
-    const page = await searchPage({ client, text, media, after, inProject });
+async function search({ text, media, scope, project, after }) {
+    const page = await searchPage({ client, text, media, scope, project, after });
     shown = new Map(page.items.map((clip) => [clip.assetId, clip]));
     return page;
 }
 
-// Every handler answers { ok, value } or { ok: false, error, signedOut }, so
-// the page shows the message itself instead of Electron's wrapped one.
-function handle(channel, fn) {
-    ipcMain.handle(channel, async (_event, ...args) => {
+// The caller's projects, and the open Resolve project's name so the page can
+// pick the Lumiverb project of that name (no stored link between them).
+async function projects() {
+    let resolveProject = null;
+    try {
+        resolveProject = await currentProjectName(await getResolve());
+    } catch {
+        // Not knowing it only means nothing is picked.
+    }
+    return { projects: await client.projects(), resolveProject };
+}
+
+function reply(fn) {
+    return async (...args) => {
         try {
             return { ok: true, value: await fn(...args) };
         } catch (error) {
             return { ok: false, error: error.message, signedOut: error instanceof SignedOutError };
         }
+    };
+}
+
+// Every handler answers { ok, value } or { ok: false, error, signedOut }, so
+// the page shows the message itself instead of Electron's wrapped one.
+function handle(channel, fn) {
+    ipcMain.handle(channel, (_event, ...args) => reply(fn)(...args));
+}
+
+// The same, for work that reports progress: `fn(progress, ...args)`, where
+// progress(p) reaches the page as a 'lumiverb:progress' event.
+function handleWithProgress(channel, fn) {
+    ipcMain.handle(channel, (event, ...args) => {
+        const progress = (p) => event.sender.send('lumiverb:progress', p);
+        return reply(fn)(progress, ...args);
     });
 }
 
@@ -70,10 +93,18 @@ function registerHandlers() {
     handle('session:signOut', () => client.signOut());
     handle('lumiverb:search', search);
     handle('lumiverb:thumbnail', (assetId) => client.thumbnail(assetId));
-    handle('resolve:addToBin', async (assetId) => addToBin(await getResolve(), shownClip(assetId).localPath));
-    handle('resolve:addAtPlayhead', async (assetId) => {
+    handle('lumiverb:projects', projects);
+    handleWithProgress('lumiverb:newFromResolve', async (progress) =>
+        newProjectFromResolve({ resolve: await getResolve(), client, onProgress: progress }));
+    // `projectId`: also add the clip to that Lumiverb project, or null.
+    handle('resolve:addToBin', async (assetId, projectId) => {
+        const message = await addToBin(await getResolve(), shownClip(assetId).localPath);
+        return alsoAddToProject({ client, message, projectId, assetId });
+    });
+    handle('resolve:addAtPlayhead', async (assetId, projectId) => {
         const clip = shownClip(assetId);
-        return addAtPlayhead(await getResolve(), clip.localPath, clip.mediaType);
+        const message = await addAtPlayhead(await getResolve(), clip.localPath, clip.mediaType);
+        return alsoAddToProject({ client, message, projectId, assetId });
     });
 }
 

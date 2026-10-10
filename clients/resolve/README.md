@@ -21,21 +21,29 @@ password.
 ## Use
 
 - Search, then page through the results 10 at a time.
-- **Type**: Video (the default), Images or All. It's part of the search
-  (`f=media:video` / `f=media:image`; nothing for All), so changing it
-  searches again from the first page.
-- **Hide clips already in the project** leaves out results whose original is
-  already in the project's Media Pool, in any bin. It matches by the file's
-  real path on disk (below), so a clip imported from another copy of the file
-  isn't recognized. Hidden results are made up for with more requests, so a page
-  still shows up to 10 without skipping any; a search that's nearly all in the
-  project stops after 10 requests and says how many it hid.
+- **Project**: one of your Lumiverb projects (yours, or shared with you). The
+  one named like the open Resolve project is picked when the plugin opens.
+  Nothing links the two: a Lumiverb project is only something to search in or
+  around.
+- **All · In project · Not in project**: search everything, only the
+  project's clips, or everything but them (`f=project:` / `f=not_project:`,
+  filtered on the server, so pages are full and nothing is skipped). Picking a
+  project starts on Not in project.
+- **New from Resolve project…** (at the bottom of the project list) makes a
+  Lumiverb project, named after the Resolve project, of the Lumiverb clips its
+  Media Pool holds, and says how many files Lumiverb doesn't have. It's a
+  snapshot: clips added to Resolve later aren't in it.
+- **Type**: Video (the default), Images or All (`f=media:`).
+- Changing the project, scope or type keeps your place: a cursor is a place
+  in the search's order, whatever the filters. New search text starts over.
 - **Add to bin** imports the original into the Media Pool's current bin. A clip
   already in that bin isn't imported twice.
 - **Add at playhead** puts it on the current timeline at the playhead, on the
   first video track free there (and the audio track with the same number, for
   a clip with sound). When no track is free it adds one. It never covers
   another clip.
+- **Also add to project** (on by default) adds the clip to the chosen project
+  too, after Resolve. Off for a shared project: only its owner can add clips.
 
 ## How it works
 
@@ -45,14 +53,18 @@ password.
 - **Paths.** Libraries store their root as the Mac sees it
   (`/Volumes/media-01/Media`), so a clip's original is the root plus its
   `rel_path`. A result whose file isn't there says "Not on this Mac".
-- **Matching the project's files** (`plugin/paths.js`). A root can be spelled
-  differently from the mount it names: the brain's library says
+- **Paths as the disk spells them** (`plugin/paths.js`). A root can be
+  spelled differently from the mount it names: the brain's library says
   `/Volumes/media-01`, the disk is mounted as `/Volumes/MEDIA-01`, and the Mac
-  treats them as one folder. Resolve stores the mount's spelling. So both
-  sides are compared by the file's real path as the disk spells it
-  (`fs.realpathSync.native`; Node's plain `realpathSync` keeps the case it's
-  given), in NFC; offline media by its path as stored. Clips are imported by
-  that real path too, so they match ones imported from Finder.
+  treats them as one folder. Resolve stores the mount's spelling. So paths are
+  compared by the file's real path (`fs.realpathSync.native`; Node's plain
+  `realpathSync` keeps the case it's given), in NFC; offline media by its path
+  as stored. Clips are imported by that real path, so they match ones imported
+  from Finder.
+- **New from Resolve project** (`plugin/projects.js`). Each Media Pool file
+  is matched to its library by the deepest root holding it (roots spelled as
+  the disk does), then looked up with `GET /v1/assets/by-path`, six at a time.
+  The project is made with `POST /v1/projects` in the Media Pool's order.
 - **Sign-in.** `POST /v1/auth/login`, then the JWT is refreshed on a 401
   (`POST /v1/auth/refresh`); the sign-in lasts 7 days from login. Server, email
   and token are kept in
@@ -71,6 +83,12 @@ node --test clients/resolve/test/
 
 They drive the real modules: the API client against a fake `fetch`, and the
 Resolve operations against a fake Resolve object.
+
+## Needs
+
+The `project:` / `not_project:` query filters (server PR, "search in a
+project or everything but it"). Before they're deployed, In project and Not
+in project are ignored by the server and search everything.
 
 ## Not verified yet
 

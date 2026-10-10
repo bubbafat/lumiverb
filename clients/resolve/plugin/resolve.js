@@ -71,21 +71,31 @@ async function clipFileKey(clip, realpath) {
 }
 
 // The originals of every clip in the current project's Media Pool, every
-// bin, by pathKey.
-async function projectFilePaths(resolve, realpath = fs.realpathSync.native) {
+// bin (bin by bin, as listed), by pathKey. `onProgress(read)` after each clip.
+async function projectFilePaths(resolve, realpath = fs.realpathSync.native, onProgress = () => {}) {
     const project = await currentProject(resolve);
     const mediaPool = await project.GetMediaPool();
     const paths = new Set();
     const folders = [await mediaPool.GetRootFolder()];
+    let read = 0;
     while (folders.length > 0) {
-        const folder = folders.pop();
+        const folder = folders.shift();
         for (const clip of (await folder.GetClipList()) || []) {
             const key = await clipFileKey(clip, realpath);
             if (key) paths.add(key);
+            read += 1;
+            onProgress(read);
         }
         folders.push(...((await folder.GetSubFolderList()) || []));
     }
     return paths;
+}
+
+// The open Resolve project's name, or null when none is open.
+async function currentProjectName(resolve) {
+    const manager = await resolve.GetProjectManager();
+    const project = manager && (await manager.GetCurrentProject());
+    return project ? project.GetName() : null;
 }
 
 // The file's clip in the current bin: the one already there, or imported now.
@@ -174,6 +184,7 @@ async function addAtPlayhead(resolve, filePath, mediaType, realpath = fs.realpat
 module.exports = {
     addAtPlayhead,
     addToBin,
+    currentProjectName,
     pickTrack,
     projectFilePaths,
     timecodeToFrame,
