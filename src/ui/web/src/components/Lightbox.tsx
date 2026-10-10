@@ -346,15 +346,16 @@ export function Lightbox({
   const isVideo =
     asset.media_type === "video" || asset.media_type.startsWith("video/");
 
+  // A video's proxy is its still: the player's poster.
   const image = useAuthenticatedImage(asset.asset_id, "proxy", {
-    enabled: !isVideo,
     isPublic,
     publicLibraryId,
     publicProjectId,
   });
   const playback = usePlayback(asset.asset_id, { enabled: isVideo, isPublic, publicLibraryId, publicProjectId });
   const mediaUrl = isVideo ? playback.src : image.url;
-  const mediaLoading = isVideo ? playback.isLoading : image.isLoading;
+  // The poster settles first, so the player's src never changes for it.
+  const mediaLoading = isVideo ? playback.isLoading || image.isLoading : image.isLoading;
   const generating = !isVideo && image.generating;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const seekVideo =
@@ -759,9 +760,9 @@ export function Lightbox({
       </div>
 
       {/* Two-column layout */}
-      <div className="flex w-full flex-col lg:flex-row">
+      <div className="flex w-full flex-col overflow-y-auto lg:flex-row lg:overflow-visible">
         {/* Left: image */}
-        <div className="relative flex flex-1 items-center justify-center p-4 lg:p-8 min-h-[50vh] lg:min-h-0">
+        <div className="relative flex flex-auto shrink-0 items-center justify-center p-4 lg:flex-1 lg:p-8 min-h-[50vh] lg:min-h-0">
           <div className="relative flex max-h-full min-h-0 flex-1 items-center justify-center">
             {mediaLoading ? (
               <div className="flex h-64 w-64 items-center justify-center">
@@ -792,6 +793,7 @@ export function Lightbox({
               <VideoPlayer
                 key={asset.asset_id}
                 src={mediaUrl}
+                poster={image.url ?? undefined}
                 source={playback.source}
                 maxSeconds={playback.maxSeconds}
                 videoRef={videoRef}
@@ -803,7 +805,7 @@ export function Lightbox({
                 <img
                   src={mediaUrl}
                   alt={filename}
-                  className="max-h-[calc(100vh-4rem)] max-w-full object-contain"
+                  className="max-h-[calc(100svh-4rem)] max-w-full object-contain"
                 />
                 {showFaces && facesData?.faces.map((face) => {
                   if (!face.bounding_box) return null;

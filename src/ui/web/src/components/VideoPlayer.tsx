@@ -5,9 +5,13 @@ import { useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
  * short preview, green once the whole video is ready. The note under it says
  * the same in words. When the source changes mid-play (the whole video
  * arrives, or a failed link is renewed), it carries on from the same moment.
+ *
+ * iOS loads nothing until a tap, so the clip's still shows first; with no
+ * still, a #t fragment makes it paint the first frame.
  */
 export default function VideoPlayer({
-  src,
+  src: link,
+  poster,
   source,
   maxSeconds,
   videoRef,
@@ -15,6 +19,8 @@ export default function VideoPlayer({
   failed: renewFailed = false,
 }: {
   src: string;
+  /** The clip's still, shown before it plays. */
+  poster?: string;
   source: "analysis_proxy" | "preview" | null;
   maxSeconds: number | null;
   videoRef?: MutableRefObject<HTMLVideoElement | null>;
@@ -23,6 +29,7 @@ export default function VideoPlayer({
   /** No fresh link could be had. */
   failed?: boolean;
 }) {
+  const src = poster || link.includes("#") ? link : `${link}#t=0.001`;
   const ownRef = useRef<HTMLVideoElement | null>(null);
   const ref = videoRef ?? ownRef;
   const last = useRef({ time: 0, playing: false });
@@ -55,10 +62,11 @@ export default function VideoPlayer({
         <video
           ref={ref}
           src={src}
+          poster={poster}
           controls
           playsInline
           preload="metadata"
-          className="block max-h-[calc(100vh-6rem)] max-w-full"
+          className="block max-h-[calc(100svh-8rem)] max-w-full lg:max-h-[calc(100svh-6rem)]"
           onTimeUpdate={(e) => {
             // A new source starts at 0 and says so; keep where the old one was.
             if (resumeOn.current === null) last.current.time = e.currentTarget.currentTime;
