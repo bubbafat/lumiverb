@@ -321,7 +321,8 @@ def test_library_health_counts_videos_waiting_for_a_proxy(env) -> None:
 
     before = pending()
     # Probed, length unknown: nothing else is missing, so only the proxy counts.
-    video = _ingest(env, "health/a.mov", facet={"video_codec": "h264"})
+    # As a scan sends it: with its EXIF, so its capture facts count as read.
+    video = _ingest(env, "health/a.mov", sha=os.urandom(32).hex(), facet={"video_codec": "h264"})
     assert pending() == before + 1
     _upload(env, video)
     assert pending() == before

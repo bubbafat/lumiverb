@@ -26,7 +26,7 @@ from tests.machine_lineage import made
 from tests.producer_fakes import FakeAccount, due, run_job, scheduler_client
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 
-UTC = timezone.utc
+UTC = timezone.utc  # noqa: UP017 — as the rest of the tests say it
 
 
 def _jpeg(path: Path, *, taken: str | None = None, offset: str | None = None, gps: tuple | None = None,
