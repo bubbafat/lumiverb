@@ -131,7 +131,7 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
 
     from rich.console import Console
 
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     _, _, library_id, *_ = env
     root = tmp_path / "lib"
@@ -142,12 +142,12 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
     local = [{"rel_path": rp, "file_size": 1000, "file_mtime": hour_ago, "media_type": "image", "ext": ".jpg"}
              for rp in rel_paths]
     with (
-        patch("src.client.cli.scan.reachable_root", return_value=root),
-        patch("src.client.cli.scan._walk_library", return_value=local),
-        patch("src.client.cli.scan._scan_one"),
-        patch("src.client.cli.scan.ProxyCache", MagicMock()),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
-        patch("src.client.cli.scan.compute_sha256", return_value="f" * 64),
+        patch("src.processing.scan.reachable_root", return_value=root),
+        patch("src.processing.scan._walk_library", return_value=local),
+        patch("src.processing.scan._scan_one"),
+        patch("src.processing.scan.ProxyCache", MagicMock()),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan.compute_sha256", return_value="f" * 64),
     ):
         return run_scan(_cli(env), {"library_id": library_id, "root_path": str(root)}, path_prefix=prefix,
                         console=Console(width=200))
@@ -173,7 +173,7 @@ def test_a_file_on_disk_at_an_ignored_path_is_never_missing(env, tmp_path):
 
     path = "ncr-ignored/a.jpg"
     clip = _ingest(env, path, media_type="image", sha=_sha())
-    with patch("src.client.cli.scan._fetch_ignored_paths", return_value={path: None}):
+    with patch("src.processing.scan._fetch_ignored_paths", return_value={path: None}):
         _scan(env, tmp_path, [path], "ncr-ignored")
     assert _row(env, clip)[0] is None
 

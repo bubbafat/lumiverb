@@ -70,10 +70,17 @@ def test_clip_and_faces_are_all_or_nothing():
 
 
 def test_the_prompts_are_the_ones_the_worker_sends():
-    from src.client.workers.captions import openai_caption
+    from src.processing.workers.captions import openai_caption
 
     source = open(openai_caption.__file__).read()
     assert "Describe this image in 2-3 sentences" in P.VISION_PROMPT
     assert "What text is visible in this image?" in P.OCR_PROMPT
     # The worker takes its prompts from the registry, not copies of its own.
     assert "Describe this image in 2-3 sentences" not in source
+
+
+def test_only_probe_and_the_analysis_proxy_read_the_originals():
+    """Transcripts, scenes and their descriptions read the analysis proxy in
+    this machine's cache: they run while the storage is away."""
+    assert {a for a, p in P.PRODUCERS.items() if p.storage} == {"probe", "analysis_proxy"}
+    assert not any(P.PRODUCERS[a].storage for a in ("transcript", "scenes", "scene_vision"))

@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 
-from src.client.cli.ingest import _walk_library
-from src.client.cli.scan import _fetch_existing_assets_with_sha, _record_file_stat, _split_files
+from src.processing.ingest import _walk_library
+from src.processing.scan import _fetch_existing_assets_with_sha, _record_file_stat, _split_files
 from src.server.database import get_engine_for_url
 from tests.machine_lineage import ingest_made
 from tests.test_preserve_human_data_slow import (  # noqa: F401 — the shared server fixture

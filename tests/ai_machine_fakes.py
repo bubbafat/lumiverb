@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from src.client.cli.ai_pool import Machine, MachinePool
+from src.processing.ai_pool import Machine, MachinePool
 
 
 @contextmanager
@@ -26,8 +26,8 @@ def one_machine(model: str = "m", offers: list[str] | BaseException | None = Non
             raise offers
         return [model] if offers is None else list(offers)
 
-    with patch("src.client.cli.ai_pool.MachinePool.load", load), \
-            patch("src.client.cli.ai_pool.list_models", side_effect=list_models):
+    with patch("src.processing.ai_pool.MachinePool.load", load), \
+            patch("src.processing.ai_pool.list_models", side_effect=list_models):
         yield
 
 
@@ -42,5 +42,5 @@ def built_in_whisper(model: str = "small", at_once: int = 1) -> Iterator[None]:
         pool.model = model
         pool.machines = [Machine("aim_self", "Built in", "", None, at_once, built_in=True)]
 
-    with patch("src.client.cli.ai_pool.MachinePool.load", load):
+    with patch("src.processing.ai_pool.MachinePool.load", load):
         yield

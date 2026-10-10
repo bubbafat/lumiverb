@@ -93,6 +93,8 @@ def _start_over(request: Request, session: Session, asset_id: str, made: dict) -
     found again: its scenes, chunks and their lineage (scenes and scene
     descriptions), then their images and search entries. Nothing when the
     clip has no scenes found (under way, or never) or found them this way."""
+    from src.server.repository import lineage
+
     row = session.execute(text(
         "SELECT a.library_id, a.video_indexed, l.producer, l.producer_version, l.settings_hash"
         " FROM assets a LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = 'scenes'"
@@ -106,8 +108,7 @@ def _start_over(request: Request, session: Session, asset_id: str, made: dict) -
                                             {"a": asset_id})]
     session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a"), {"a": asset_id})
     session.execute(text("DELETE FROM video_index_chunks WHERE asset_id = :a"), {"a": asset_id})
-    session.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact IN ('scenes', 'scene_vision')"),
-                    {"a": asset_id})
+    lineage.start_over(session, [asset_id], "scenes")  # and what's made from them (its redo_also)
     session.execute(text("UPDATE assets SET video_indexed = false WHERE asset_id = :a"), {"a": asset_id})
     session.commit()
     _log.info("Scenes of %s found again: %d old ones dropped", asset_id, len(frames))

@@ -576,7 +576,8 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
     # Mark person as dismissed directly in DB
     engine = create_engine(tenant_url)
     with engine.begin() as conn:
-        conn.execute(text("UPDATE people SET dismissed = true WHERE person_id = :pid"), {"pid": person_id})
+        conn.execute(text("UPDATE people SET dismissed = true, display_name = '(dismissed)' WHERE person_id = :pid"),
+                     {"pid": person_id})
     engine.dispose()
 
     # Remove the person's only face, leaving the person empty

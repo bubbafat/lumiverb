@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from src.client.cli.client import LumiverbClient
+    from src.processing.api import ApiClient
     from src.server.storage.local import LocalStorage
 
 
@@ -122,7 +122,7 @@ class LocalArtifactStore:
 class RemoteArtifactStore:
     """Reads and writes artifacts via the Lumiverb artifact API endpoints."""
 
-    def __init__(self, client: "LumiverbClient") -> None:
+    def __init__(self, client: "ApiClient") -> None:
         self._client = client
 
     def write_artifact(
@@ -211,7 +211,7 @@ def get_artifact_store(
     mode: str,
     *,
     storage: "LocalStorage | None" = None,
-    client: "LumiverbClient | None" = None,
+    client: "ApiClient | None" = None,
     tenant_id: str | None = None,
 ) -> LocalArtifactStore | RemoteArtifactStore:
     """Factory: return the appropriate ArtifactStore for the given mode.

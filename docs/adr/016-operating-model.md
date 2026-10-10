@@ -14,7 +14,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
 | 2 | The brain: one machine schedules all processing and reads storage read-only | Built; installed on the brain and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
 | 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
-| 4 | Producers and endpoints | Not started |
+| 4 | Producers and endpoints | Producers in progress: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints not started |
 
 ## Overview
 
@@ -154,12 +154,12 @@ Phase 0 targets, read from the repo on 2026-10-07:
 |---|---|---|
 | Face re-detect wipes confirmations | `src/server/repository/tenant.py` `submit_faces` | Deletes all faces and their `face_person_matches`, confirmed or not |
 | Un-assign leaves no record | `src/server/repository/tenant.py` `unassign_face` | Upkeep's propagation re-assigns within 5 minutes |
-| Dismissals lost after re-detect | `src/server/repository/tenant.py` `cleanup_empty_dismissed`; `src/client/cli/repair.py` (`redetect-faces` calls `/v1/upkeep/cleanup-dismissed`) | Dismissed people with zero matches are deleted |
-| Rescan un-trashes | `src/server/api/routers/ingest.py` (`existing.deleted_at = None`) | Scanner soft-deletes missing files with the same `deleted_at` as user trash (`src/client/cli/scan.py` `_detect_deletions`) |
+| Dismissals lost after re-detect | `src/server/repository/tenant.py` `cleanup_empty_dismissed`; `POST /v1/upkeep/cleanup-dismissed` (`lumiverb maintenance cleanup-dismissed`; a faces redo no longer calls it) | Dismissed people with zero matches are deleted |
+| Rescan un-trashes | `src/server/api/routers/ingest.py` (`existing.deleted_at = None`) | Scanner soft-deletes missing files with the same `deleted_at` as user trash (`src/processing/scan.py` `_detect_deletions`) |
 | Manual transcripts overwritten | `src/server/api/routers/assets.py` `submit_transcript` | `source` is accepted but never stored |
-| No mass-deletion guard in Python | `src/client/cli/scan.py` `run_scan` | macOS has one: `clients/lumiverb-app/Sources/macOS/Scan/ScanPipeline.swift` (5% / 50 files) |
-| No NFC normalization in Python | `src/client/cli/ingest.py` (file discovery, `rel_path`) | macOS normalizes in `ScanPipeline.swift` |
-| What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS`; `src/client/cli/repair.py` | Replaced by the reconciler in phase 3 |
+| No mass-deletion guard in Python | `src/processing/scan.py` `run_scan` | macOS has one: `clients/lumiverb-app/Sources/macOS/Scan/ScanPipeline.swift` (5% / 50 files) |
+| No NFC normalization in Python | `src/processing/ingest.py` (file discovery, `rel_path`) | macOS normalizes in `ScanPipeline.swift` |
+| What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS` | Replaced by the reconciler in phase 3 |
 | Closest model for reconciliation | `src/server/upgrade/` | Upgrade-step registry |
 | Projects (formerly "collections") | `src/server/api/routers/projects.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
 
@@ -189,7 +189,7 @@ Make the repo agree with this ADR and stop losing human data before anything new
 **Deliverables:**
 - This ADR and the doc updates listed above
 - Fix the five human-data overwrites (Code References)
-- Safe scanning from a network mount: port the macOS mass-deletion guard (skip deletions above 5% of assets and 50 files) to `src/client/cli/scan.py`; normalize `rel_path` to NFC in Python
+- Safe scanning from a network mount: port the macOS mass-deletion guard (skip deletions above 5% of assets and 50 files) to `src/processing/scan.py`; normalize `rel_path` to NFC in Python
 - Land open work: the stale `/v1/browse` and `/v1/search` tests and the broken CLI `search` command; the `maintenance cleanup` 500
 
 **Done when:**

@@ -530,7 +530,7 @@ def test_every_account_starts_with_the_built_in_whisper_doing_transcripts(env, n
 def test_a_new_account_gets_its_built_in_whisper(env, none):
     from src.server.database import get_control_session
     from src.server.models.control_plane import Tenant
-    from src.server.repository.ai_machines import machines
+    from src.server.repository.ai_machines import job_model, machines
 
     client, *_ = env
     with patch("src.server.api.routers.admin.provision_tenant_database"):
@@ -542,7 +542,8 @@ def test_a_new_account_gets_its_built_in_whisper(env, none):
         [m] = machines(ctrl, tenant_id)
         assert (m.built_in, m.name, m.api_url, m.api_key, m.jobs, m.at_once, m.enabled) == (
             True, "Built in", "", "", ["transcripts"], 1, True)
-        assert ctrl.get(Tenant, tenant_id).transcript_model_id == "small"
+        # Transcripts start at the model the job declares (kept by the job's name once chosen).
+        assert job_model(ctrl.get(Tenant, tenant_id), "transcripts") == "small"
 
 
 @pytest.mark.slow

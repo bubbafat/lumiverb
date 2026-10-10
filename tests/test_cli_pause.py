@@ -53,7 +53,7 @@ def _run(*args: str):
 def test_pause_or_resume_one_switch_or_all_and_say_the_state(client, args, path):
     result = _run(*args)
     assert result.exit_code == 0, result.output
-    client.raw.assert_called_once_with("POST", path)
+    client.raw.assert_called_once_with("POST", path, json={"scope": "work"})
     out = " ".join(result.output.split())
     assert "Processing: Partly paused" in out and "Paused: Descriptions and tags" in out
 

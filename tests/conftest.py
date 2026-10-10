@@ -425,6 +425,17 @@ def _no_host_fstab(monkeypatch: pytest.MonkeyPatch) -> None:
     machine's mounts unless they write an fstab of their own."""
     from pathlib import Path
 
-    from src.client.cli import roots
+    from src.processing import roots
 
     monkeypatch.setattr(roots, "FSTAB", Path("/nonexistent/lumiverb-test-fstab"))
+
+
+@pytest.fixture(autouse=True)
+def _default_machine():
+    """This machine's processing settings (src/processing/machine.py) are the
+    defaults in every test, never this machine's CLI config; a test sets its own."""
+    from src.processing import machine
+
+    machine.use(None)
+    yield
+    machine.use(None)

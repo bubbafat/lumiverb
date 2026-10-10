@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from src.client.video.probe import VideoFacet, parse_ffprobe, probe_video
+from src.processing.video.probe import VideoFacet, parse_ffprobe, probe_video
 
 FIXTURES = Path("clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/Fixtures")
 
@@ -163,7 +163,7 @@ def _scan_video(tmp_path: Path, probe) -> dict:
     import threading
     from unittest.mock import MagicMock, patch
 
-    from src.client.cli import scan
+    from src.processing import scan
 
     (tmp_path / "clip.mov").write_bytes(b"not really a movie")
     client = MagicMock()

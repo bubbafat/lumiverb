@@ -55,4 +55,4 @@ Remove both `{asset_id}` and `{asset_id}.sha`.
 
 ## Compatibility
 
-Both the Python CLI (`src/client/proxy/proxy_cache.py`) and the Swift macOS app (`ProxyCacheOnDisk`) implement this protocol. Files written by either client are readable by the other.
+Both the Python CLI (`src/processing/proxy/proxy_cache.py`) and the Swift macOS app (`ProxyCacheOnDisk`) implement this protocol. Files written by either client are readable by the other.

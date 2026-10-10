@@ -11,10 +11,10 @@ Python 3.12 (FastAPI + SQLModel + Postgres 18 + Quickwit), React 18 +
 Vite + TanStack web UI, Swift 5.9 / SwiftUI / CoreML / Vision for native
 macOS + iOS (shared `LumiverbKit` package, XcodeGen project).
 
-Today FastAPI is the only persistent service. CLI + macOS run local
-enrichment and POST results back; iOS is browse-only. Direction is
-ADR-016: a Linux "brain" schedules all processing against read-only
-storage, human data is never overwritten by derived data, and what used
+FastAPI and the scheduler (`lumiverb-scheduler`, all processing, on the
+same box) are the persistent services; the CLI and macOS scan and browse;
+iOS is browse-only. Direction is ADR-016: a Linux "brain" schedules all
+processing against read-only storage, human data is never overwritten by derived data, and what used
 to be "collections" are projects (`/v1/projects` for every client;
 `/v1/collections` is gone). Quickwit sidecar with a
 Postgres fallback. Auth: JWT (web) + API keys (CLI), both
@@ -27,7 +27,9 @@ Postgres fallback. Auth: JWT (web) + API keys (CLI), both
 ```
 src/
   server/                  Python API server, DB, search, upgrade runner, scheduler (all processing)
-  client/                  Python CLI + the processing steps the scheduler runs
+  producers/               One folder per producer: its spec and its work; the runner
+  processing/              What the scheduler and the CLI's scan share (API client, scanning, media tools, AI machines)
+  client/                  Python CLI (asks the scheduler; never processes)
   shared/                  Code used by both server and client
   ui/web/                  React web app (Vite)
 
@@ -58,29 +60,29 @@ quickwit/     Quickwit index schemas
 | Token persistence (Swift clients) | `LumiverbKit/Auth/{AuthManager,KeychainHelper,FileTokenStore}.swift`. `TokenStore` protocol with two implementations: `KeychainHelper` (Security framework `kSecClassGenericPassword`) and `FileTokenStore` (`~/Library/Application Support/io.lumiverb.app/credentials.json`, mode 0600). **macOS defaults to `FileTokenStore`** because the legacy macOS keychain prompts the user per-access for ad-hoc dev builds (rebuilds rotate binary identity, busting any "Always Allow" ACL). **iOS uses `KeychainHelper`** explicitly — iOS keychain is data-protection by default and never prompts. `AuthManager` caches the token in memory after first read so refresh calls don't re-hit the store. |
 | DDL migrations | `migrations/control/versions/`, `migrations/tenant/versions/`. Run via `scripts/migrate.sh` |
 | Online data backfills | `src/server/upgrade/` (`steps/`, `registry.py`, `runner.py`). For long-running migrations that can't run in one Alembic txn |
-| Video transcription | Client: `src/client/cli/repair.py` `_transcribe_one` (ffmpeg from the analysis proxy → the speech found here, `workers/transcripts/speech.py` → a machine doing the transcripts job hears it: the built-in faster-whisper `local.py` or a server `openai_compatible.py`, pooled by `cli/transcript_guard.py`). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
-| Producers (what each makes, from what, how it runs) | One folder each: `src/producers/<artifact>/__init__.py` declares a `ProducerSpec` (`src/producers/contract.py`); the registry is `src/producers/__init__.py`. Read from it: `shared/producers.py` (lineage rules), `repository/lineage.py` (reconciler), `server/scheduler/kinds.py`, `runners.py`, `service.py` (pools), `routers/producers.py`. Still named by hand: the repair summary and page `missing_*` filters (`routers/assets.py`, `repository/tenant.py`), a new AI job (`shared/ai_jobs.py` + a guard) |
-| AI machines and jobs | Server: `api/routers/ai.py`, `repository/ai_machines.py`; jobs `src/shared/ai_jobs.py`, Whisper names `src/shared/whisper_models.py`. Worker: `cli/ai_pool.py`, `cli/job_guard.py` (+ `vision_guard.py`, `transcript_guard.py`). Web: `pages/settings/AiSection.tsx` |
-| The brain: all processing (the scheduler) | `src/server/scheduler/` (`lumiverb-scheduler.service`: `kinds.py` tiers and pools, `queue.py` what's due from the database, `dispatch.py` which job runs next, `runners.py` one job of each kind, `scans.py` reported changes and daily full scans), `src/client/cli/roots.py` (library roots mapped to this machine), `routers/changes.py` (change reports from the Mac). Setup and ports: `docs/brain-setup.md` |
-| Analysis proxies | Render: `src/client/video/analysis_proxy.py`. Cache: `src/client/proxy/analysis_cache.py`. Stored as the `analysis_proxy` artifact (`routers/artifacts.py`) |
+| Video transcription | The transcript producer: `src/producers/transcript/work.py` (ffmpeg from the analysis proxy → the speech found here, `src/processing/workers/transcripts/speech.py` → a machine doing the transcripts job hears it: the built-in faster-whisper `local.py` or a server `openai_compatible.py`, pooled by `src/processing/transcript_guard.py`). Server: `api/routers/assets.py`, `server/srt.py`. Index `lumiverb_{tenant}_transcripts` |
+| Producers (what each makes, from what, how it runs) | One folder each: `src/producers/<artifact>/__init__.py` declares a `ProducerSpec` (`src/producers/contract.py`: pools, AI jobs, flags, cascades), `work.py` its `Work` (make and save). One runner for every producer: `src/producers/runner.py` (stopping, saving, whose an error is). Shared pools and AI jobs: `src/producers/pools.py`. Registry: `src/producers/__init__.py`; everything else reads it. Adding one: `docs/architecture.md` "Adding a producer" |
+| AI machines and jobs | Jobs are declared by producers (`AiJob`, `src/producers/pools.py`); `src/shared/ai_jobs.py` lists them; each account keeps its models in `tenants.ai_job_models`. Server: `api/routers/ai.py`, `repository/ai_machines.py`; Whisper names `src/shared/whisper_models.py`. Scheduler side: `src/processing/ai_pool.py`, `job_guard.py` (+ `vision_guard.py`, `transcript_guard.py`). Web: `pages/settings/AiSection.tsx` |
+| The brain: all processing (the scheduler) | `src/server/scheduler/` (`lumiverb-scheduler.service`: `service.py` the loop, pools and pauses, `kinds.py` tiers, `queue.py` what's due from the database, `dispatch.py` which job runs next, `runners.py` a producer's work through the runner, `models.py` the GPU models every account shares, `scans.py` reported changes and daily full scans, `settings.py` its own settings from the environment: `/etc/lumiverb/env`), `src/processing/roots.py` (library roots mapped to this machine), `routers/changes.py` (change reports from the Mac), `routers/producers.py` (pauses, failures, `POST /v1/producers/run`). Setup and ports: `docs/brain-setup.md` |
+| Analysis proxies | Producer: `src/producers/analysis_proxy/work.py`. Render: `src/processing/video/analysis_proxy.py`. Cache: `src/processing/proxy/analysis_cache.py`. Stored as the `analysis_proxy` artifact (`routers/artifacts.py`) |
 | Filter algebra | `src/server/models/query_filter.py` (23 leaf types), `filter_registry.py` (parsing + capabilities). Web: `src/ui/web/src/lib/queryFilter.ts`. Swift: `LumiverbKit/Models/QueryFilter.swift` |
 | Unified query endpoint | `src/server/api/routers/query.py` — single `GET /v1/query?f=prefix:value` replaces old `/v1/browse` + `/v1/search`. Candidate-set pattern for text search (Quickwit → Postgres filters) |
 | Filter capabilities | `src/server/api/routers/filters.py` — `GET /v1/filters/capabilities` returns all filter types for generic client rendering |
 | Search (Quickwit) | `src/server/search/quickwit_client.py`, `sync.py`, `cleanup.py`, `postgres_search.py` (ILIKE fallback) |
-| CLI command | `src/client/cli/<command>.py`. Dispatcher: `main.py`. HTTP: `client.py` (`LumiverbClient`) |
-| Face detection (Python) | `src/client/workers/faces/insightface_provider.py` (InsightFace buffalo_l) |
+| CLI command | `src/client/cli/<command>.py` or `commands/`. Dispatcher: `main.py`. HTTP: `client.py` (`LumiverbClient`, over `src/processing/api.py`). Scan: `src/processing/scan.py` |
+| Face detection (Python) | `src/processing/workers/faces/insightface_provider.py` (InsightFace buffalo_l); the faces producer runs it in a process of its own (`src/producers/faces/detect.py`) |
 | Face detection (macOS/iOS) | `LumiverbKit/Sources/LumiverbKit/Faces/FaceDetectionProvider.swift` (Vision). Lives in LumiverbKit so tests drive the full gate chain end-to-end. Callers: `Sources/macOS/Enrich/{EnrichmentPipeline,ReEnrichmentRunner}.swift` |
 | ArcFace (macOS) | `Sources/macOS/Enrich/ArcFaceProvider.swift`; CoreML built by `scripts/convert-models/convert_arcface.py` |
 | Whisper transcription (macOS) | `Sources/macOS/Enrich/WhisperProvider.swift` (orchestrator). Audio extraction + subprocess wrapper live in LumiverbKit so tests drive the pipeline end-to-end: `LumiverbKit/Sources/LumiverbKit/Audio/{AudioExtraction,WhisperRunner}.swift`. UX: opt-in toggle in Settings, model auto-downloaded on Save (`Sources/macOS/Enrich/WhisperModelManager.swift` + `WhisperDownloadSheet.swift`). Single-active-model invariant — old models cleaned up on size change. Requires `brew install whisper-cpp`. Fixture tests at `Tests/LumiverbKitTests/Fixtures/transcribe-*.mov` (English / Spanish / silence / music). `WhisperRunner.sanitizeSRT` strips whisper's `[BLANK_AUDIO]` placeholders and IPA-glyph silence-loop hallucinations (a known whisper.cpp behavior on near-silent input + macOS AAC decoder dithering). |
 | Enrichment orchestration (macOS) | `Sources/macOS/Enrich/` |
 | Scan orchestration (macOS) | `Sources/macOS/Scan/{ScanState,ScanPipeline,LibraryWatcher}.swift`. `ScanState` is the @MainActor coordinator (persistent pause via `UserDefaults("scanPaused")`, `pendingRescan` to catch mid-scan FSEvents). `LibraryWatcher` uses leading-schedule debounce — first event in a quiet window schedules a fire, subsequent events do NOT reset the timer (intentional, prevents pathological writers from starving the queue). `ScanPipeline.discoverFiles()` applies a 30s mtime quarantine so half-written files (renders, copies) get picked up on a later pass. Initial scan kicks on `startWatching()`. |
 | Menu bar / app lifecycle (macOS) | `Sources/macOS/{LumiverbApp,MenuBarView}.swift`. 3-state SF symbol: `pause.rectangle.fill` (paused) / `arrow.triangle.2.circlepath` (scanning) / `photo.stack` (idle). Favorites (`AppState.favoriteLibraryIds`, persisted) surface in the menu bar; clicking sets `appState.pendingSelectedLibraryId` which `BrowseWindow.consumePendingLibraryId()` consumes on appear/onChange. Start at Login via `SMAppService.mainApp` toggle in Settings (requires app in `/Applications` to actually fire). |
-| Proxy gen / cache (Python) | `src/client/proxy/proxy_gen.py`, `proxy_cache.py` |
+| Proxy gen / cache (Python) | `src/processing/proxy/proxy_gen.py`, `proxy_cache.py` |
 | Image caches (macOS) | `LumiverbKit/Sources/LumiverbKit/API/ImageCache.swift` (NSCache in-memory, 200 MB / 2000 items), `ProxyCacheOnDisk.swift` (`~/.cache/lumiverb/proxies/`, Python-CLI-compatible, SHA sidecars), `ThumbnailCacheOnDisk.swift` (`~/.cache/lumiverb/thumbnails/`, macOS-local, no sidecar). `AuthenticatedImageView` resolves in-memory → disk → server, on a detached Task so disk I/O and `NSImage(data:)` decode stay off the main actor. |
 | Web UI page | `src/ui/web/src/pages/<Page>.tsx`. API client: `src/ui/web/src/api/client.ts`. Filter state: `src/ui/web/src/lib/queryFilter.ts` |
 | Face clustering / people | `repository/tenant.py` (`PersonRepository`, `FaceRepository`); `routers/people.py`. Cluster cache in `system_metadata`, invalidated on writes |
 | Python ↔ Swift shared | `src/shared/` — twins in `LumiverbKit/Sources/LumiverbKit/Models/`: `path_filter.py` ↔ `PathFilter.swift`, `file_extensions.py` ↔ `FileExtensions.swift` |
-| Server config / env | `src/server/config.py` (`Settings(BaseSettings)`). CLI: `src/client/cli/config.py`. Prod env: `/etc/lumiverb/env` |
+| Server config / env | `src/server/config.py` (`Settings(BaseSettings)`). Scheduler: `src/server/scheduler/settings.py` (`LUMIVERB_*`). CLI: `src/client/cli/config.py`. Prod env: `/etc/lumiverb/env` |
 
 ---
 

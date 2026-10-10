@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.client.cli.scan import (
+from src.processing.scan import (
     ScanStats,
     _MoveCandidate,
     _ServerAsset,
@@ -45,7 +45,7 @@ class TestDetectMoves:
         new_file = _make_file(tmp_path, "new_folder/photo.jpg", content)
 
         # Server has the file at old_folder/photo.jpg (same SHA)
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha = compute_sha256(tmp_path / "new_folder/photo.jpg")
 
         existing = {
@@ -66,7 +66,7 @@ class TestDetectMoves:
         content = b"duplicate-content"
         new_file = _make_file(tmp_path, "copy/photo.jpg", content)
 
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha = compute_sha256(tmp_path / "copy/photo.jpg")
 
         existing = {
@@ -115,7 +115,7 @@ class TestDetectMoves:
         file_a = _make_file(tmp_path, "new/a.jpg", content_a)
         file_b = _make_file(tmp_path, "new/b.jpg", content_b)
 
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha_a = compute_sha256(tmp_path / "new/a.jpg")
         sha_b = compute_sha256(tmp_path / "new/b.jpg")
 
@@ -137,7 +137,7 @@ class TestDetectMoves:
         content = b"shared-content"
         new_file = _make_file(tmp_path, "new/photo.jpg", content)
 
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha = compute_sha256(tmp_path / "new/photo.jpg")
 
         existing = {
@@ -175,7 +175,7 @@ class TestDetectMoves:
         content = b"some-file-content"
         new_file = _make_file(tmp_path, "new/photo.jpg", content)
 
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha = compute_sha256(tmp_path / "new/photo.jpg")
 
         existing = {
@@ -238,7 +238,7 @@ class TestCliFlags:
     def test_run_scan_accepts_move_flags(self):
         """run_scan signature accepts allow_moves and skip_moves."""
         import inspect
-        from src.client.cli.scan import run_scan
+        from src.processing.scan import run_scan
         sig = inspect.signature(run_scan)
         assert "allow_moves" in sig.parameters
         assert "skip_moves" in sig.parameters
@@ -306,7 +306,7 @@ class TestFileSizePreFilter:
         content = b"exact-size-match-content"
         new_file = _make_file(tmp_path, "new/photo.jpg", content)
 
-        from src.client.workers.exif_extract import compute_sha256
+        from src.processing.workers.exif_extract import compute_sha256
         sha = compute_sha256(tmp_path / "new/photo.jpg")
 
         existing = {
@@ -331,7 +331,7 @@ class TestSkipMovesSkipsDeletes:
 
     def test_skip_moves_param_exists(self):
         import inspect
-        from src.client.cli.scan import run_scan
+        from src.processing.scan import run_scan
         sig = inspect.signature(run_scan)
         assert "skip_moves" in sig.parameters
 

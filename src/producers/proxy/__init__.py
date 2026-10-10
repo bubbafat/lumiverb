@@ -1,4 +1,4 @@
-"""Proxies and thumbnails, made when a file is scanned (src/client/cli/scan.py)."""
+"""Proxies and thumbnails, made when a file is scanned (src/processing/scan.py)."""
 
 from src.producers.contract import ALL, ProducerSpec, Setting
 

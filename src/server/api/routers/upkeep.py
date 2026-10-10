@@ -6,7 +6,8 @@ must say so with ?tenants=all; without it the call is a 400, never
 "everything". No key or a dead one is a 401; another role's key a 403.
 
 POST /v1/upkeep                    — search sync, face names, expired trash, missing artifact files,
-                                     face clusters when faces changed (and, all accounts, old revoked tokens)
+                                     empty dismissed people, face clusters when faces changed
+                                     (and, all accounts, old revoked tokens)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id for one library)
 POST /v1/upkeep/recluster          — recompute face clusters
@@ -106,11 +107,19 @@ class FaceClustersResult(BaseModel):
     computed: int = 0
 
 
+class DismissedPeopleResult(BaseModel):
+    """Empty dismissed people deleted (a faces redo can leave them)."""
+    deleted: int = 0
+    paused: bool = False
+    paused_tenants: list[str] = Field(default_factory=list)
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
     trash_purge: TrashPurgeResult = TrashPurgeResult()
     missing_files: MissingFilesResult = MissingFilesResult()
+    dismissed_people: DismissedPeopleResult = DismissedPeopleResult()
     face_clusters: FaceClustersResult = FaceClustersResult()
 
 
@@ -319,6 +328,12 @@ def _repair_missing_files(session) -> dict:
     return missing_artifacts.repair(session)
 
 
+def _cleanup_dismissed(session) -> dict:
+    from src.server.repository.tenant import PersonRepository
+
+    return {"deleted": PersonRepository(session).cleanup_empty_dismissed()}
+
+
 def _recluster_if_changed(session) -> dict:
     """Compute the face clusters again when faces changed since they were."""
     from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
@@ -406,8 +421,8 @@ def _tenant_ids(scope: UpkeepScope) -> list[str]:
 def run_upkeep(scope: Scope) -> UpkeepResult:
     """Run all periodic upkeep tasks: search sync, face propagation,
     deleting for good what has been in the trash past the trash days,
-    repairing artifact files reported missing, and computing the face
-    clusters again when faces changed since they were.
+    repairing artifact files reported missing, deleting empty dismissed
+    people, and computing the face clusters again when faces changed since they were.
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, and old revoked tokens are dropped.
@@ -423,12 +438,14 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         purge_result = _purge_expired_trash_single_tenant(scope)
     # After the face names spread, so the clusters leave out what they named.
     missing = _each_account(scope, "Missing files aren't repaired", _repair_missing_files, pausable=True)
+    dismissed = _each_account(scope, "Empty dismissed people aren't deleted", _cleanup_dismissed, pausable=True)
     clusters = _each_account(scope, "Face clusters", _recluster_if_changed, pausable=False)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
         trash_purge=TrashPurgeResult(**purge_result),
         missing_files=MissingFilesResult(**missing),
+        dismissed_people=DismissedPeopleResult(**dismissed),
         face_clusters=FaceClustersResult(**clusters),
     )
 

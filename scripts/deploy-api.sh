@@ -486,6 +486,13 @@ ok "Python venv ready (${EXTRAS[*]})"
 # ---------------------------------------------------------------------------
 step "Running database migrations"
 
+# The scheduler stops first, as in update-api.sh: a migration may drop what
+# its old code reads. "Starting the scheduler" starts it again.
+if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1; then
+  systemctl stop lumiverb-scheduler
+  ok "Scheduler stopped for the migrations"
+fi
+
 export ALEMBIC_CONTROL_URL="${DB_URL}/${PG_DB}"
 sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
   "$APP_DIR/.venv/bin/python" -m alembic -c alembic-control.ini upgrade head
@@ -719,6 +726,13 @@ fi
 # ---------------------------------------------------------------------------
 # 14. Scheduler: where library roots are on this machine, then start it
 # ---------------------------------------------------------------------------
+# The scheduler's own settings (LUMIVERB_* in the env file; never the CLI's
+# config): what an earlier install put in the service user's CLI config is
+# carried over once, then each --root-map. The CLI maps them too, so
+# `lumiverb library list` as the service user shows where each library is.
+ROOT_MAP_ARGS=()
+for map in "${ROOT_MAPS[@]}"; do ROOT_MAP_ARGS+=(--root-map "$map"); done
+python3 "${APP_DIR}/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config "$CLI_CONFIG" "${ROOT_MAP_ARGS[@]}"
 # Caches, and the scheduler's lock and state, on the data disk for commands
 # run as the service user too, so they find the service's.
 sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null

@@ -16,16 +16,23 @@ doubling up to a day.
 Stale from a producer or settings change is redone too, after anything
 missing (`redo_due`, the scheduler's tier 4): changing the setting was the
 approval (Robert, Oct 9). An admin can stop a producer's redo and resume it
-(`pause`, `resume`); a new setting for it resumes it. A new producer version
-(a deploy, which nobody approved) stops its redo the first time the
-scheduler sees clips made by an older one (`hold_new_version`): an admin
-resumes it.
+(`pause` and `resume` with scope REDO); a new setting for it resumes it. A
+new producer version (a deploy, which nobody approved) stops its redo the
+first time the scheduler sees clips made by an older one
+(`hold_new_version`): an admin resumes it.
+
+Pausing (Robert, Oct 9): one switch per processing action, Scans, Upkeep
+and each producer the scheduler makes, each paused and resumed on its own
+(scope WORK: nothing of it starts, missing or stale); a producer's redo is
+its switch's other scope (REDO: its stale clips wait, what's missing is
+made). Both live in producer_pauses and are read in one go (`pauses`).
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -268,17 +275,59 @@ def redo_params(artifact: str, want: dict[str, Any]) -> dict[str, Any]:
             f"h_{artifact}": want["settings_hash"]}
 
 
-def paused(session: Session) -> dict[str, dict[str, Any]]:
-    """Producers whose redo an admin stopped: {artifact: {paused_by, paused_at}}."""
-    return {r[0]: {"paused_by": r[1], "paused_at": r[2]} for r in session.execute(text(
-        "SELECT artifact, paused_by, paused_at FROM producer_redo_paused"))}
+# A pause's scope: all of a switch's work (Scans, Upkeep or a producer's,
+# missing and stale), or a producer's redo alone (its stale clips).
+WORK, REDO = "work", "redo"
+SCOPES = (WORK, REDO)
 
 
-def pause(session: Session, artifact: str, *, by: str | None) -> None:
-    """Stop redoing the producer's stale clips (what's missing goes on). Doesn't commit."""
+@dataclass(frozen=True)
+class Pauses:
+    """What's paused, by scope: {target: {paused_by, paused_at}} each."""
+
+    work: dict[str, dict[str, Any]] = field(default_factory=dict)
+    redo: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def pauses(session: Session) -> Pauses:
+    """Every pause, in one read: the switches paused (WORK) and the producers
+    whose redo is stopped (REDO). What's paused starts nothing more; what's
+    running finishes."""
+    out = Pauses()
+    for target, scope, by, at in session.execute(text(
+            "SELECT target, scope, paused_by, paused_at FROM producer_pauses")):
+        (out.work if scope == WORK else out.redo)[target] = {"paused_by": by, "paused_at": at}
+    return out
+
+
+def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:
+    """Pause a switch's work, or stop a producer's redo. Again is fine: who
+    paused it first, and when, stays. Doesn't commit."""
+    assert scope in SCOPES, scope
     session.execute(text(
-        "INSERT INTO producer_redo_paused (artifact, paused_by, paused_at) VALUES (:a, :by, :now)"
-        " ON CONFLICT (artifact) DO NOTHING"), {"a": artifact, "by": by, "now": utcnow()})
+        "INSERT INTO producer_pauses (target, scope, paused_by, paused_at) VALUES (:t, :s, :by, :now)"
+        " ON CONFLICT (target, scope) DO NOTHING"), {"t": target, "s": scope, "by": by, "now": utcnow()})
+
+
+def resume(session: Session, targets: list[str] | tuple[str, ...], scope: str) -> None:
+    """Carry on with what was paused, in that scope. Doesn't commit."""
+    assert scope in SCOPES, scope
+    if targets:
+        session.execute(text("DELETE FROM producer_pauses WHERE target = ANY(:t) AND scope = :s"),
+                        {"t": list(targets), "s": scope})
+
+
+def pause_everything(session: Session, *, by: str | None) -> None:
+    """Pause all: every switch's work paused (each keeps who paused it first). Doesn't commit."""
+    from src.shared.producers import pause_targets
+
+    for target in pause_targets():
+        pause(session, target, WORK, by=by)
+
+
+def resume_everything(session: Session) -> None:
+    """Resume all: every switch running again (a stopped redo stays stopped). Doesn't commit."""
+    session.execute(text("DELETE FROM producer_pauses WHERE scope = :s"), {"s": WORK})
 
 
 _VERSION_SEEN = "producer.{}.version_seen"
@@ -298,7 +347,7 @@ def hold_new_version(session: Session, artifact: str) -> bool:
         "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
     ), {"a": artifact, "p": p.producer, "v": p.version}).first() is not None
     if older:
-        pause(session, artifact, by=None)
+        pause(session, artifact, REDO, by=None)
     session.execute(text(
         "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"k": key, "v": p.version})
@@ -306,52 +355,13 @@ def hold_new_version(session: Session, artifact: str) -> bool:
     return older
 
 
-def resume(session: Session, artifacts: list[str] | tuple[str, ...]) -> None:
-    """Redo the producers' stale clips again. Doesn't commit."""
-    if artifacts:
-        session.execute(text("DELETE FROM producer_redo_paused WHERE artifact = ANY(:a)"), {"a": list(artifacts)})
-
-
-def processing_paused(session: Session) -> dict[str, dict[str, Any]]:
-    """The pause switches an admin paused (Robert, Oct 9): Scans (PAUSE_SCANS),
-    Upkeep (PAUSE_UPKEEP) or a producer's, {target: {paused_by, paused_at}}.
-    Nothing more of it starts; what's running finishes."""
-    return {r[0]: {"paused_by": r[1], "paused_at": r[2]} for r in session.execute(text(
-        "SELECT target, paused_by, paused_at FROM processing_paused"))}
-
-
-def pause_processing(session: Session, target: str, *, by: str | None) -> None:
-    """Pause one switch. Pausing it again keeps who paused it first, and when. Doesn't commit."""
-    session.execute(text(
-        "INSERT INTO processing_paused (target, paused_by, paused_at) VALUES (:t, :by, :now)"
-        " ON CONFLICT (target) DO NOTHING"), {"t": target, "by": by, "now": utcnow()})
-
-
-def resume_processing(session: Session, target: str) -> None:
-    """Carry on with what was paused. Doesn't commit."""
-    session.execute(text("DELETE FROM processing_paused WHERE target = :t"), {"t": target})
-
-
-def pause_everything(session: Session, *, by: str | None) -> None:
-    """Pause all: every switch paused (each keeps who paused it first). Doesn't commit."""
-    from src.shared.producers import pause_targets
-
-    for target in pause_targets():
-        pause_processing(session, target, by=by)
-
-
-def resume_everything(session: Session) -> None:
-    """Resume all: every switch running again. Doesn't commit."""
-    session.execute(text("DELETE FROM processing_paused"))
-
-
 def upkeep_paused(session: Session) -> bool:
     """The Upkeep switch is paused: the trash purge, file cleanup and spreading
     face names wait; search sync goes on, so the site keeps up with edits."""
     from src.shared.producers import PAUSE_UPKEEP
 
-    return session.execute(text("SELECT 1 FROM processing_paused WHERE target = :t"),
-                           {"t": PAUSE_UPKEEP}).first() is not None
+    return session.execute(text("SELECT 1 FROM producer_pauses WHERE target = :t AND scope = :s"),
+                           {"t": PAUSE_UPKEEP, "s": WORK}).first() is not None
 
 
 def would_redo(session: Session, artifact: str, want: dict[str, Any]) -> int:
@@ -415,6 +425,24 @@ def forget(session: Session, asset_ids: list[str], artifact: str, *, commit: boo
                         {"ids": asset_ids, "artifact": artifact})
         if commit:
             session.commit()
+
+
+def made_from(artifact: str) -> tuple[str, ...]:
+    """The artifact and what goes with it when it's made again: its producer's
+    redo_also, and theirs (src/producers/<artifact>/), in that order."""
+    out = [artifact]
+    for a in out:
+        out.extend(b for b in PRODUCERS[a].redo_also if b not in out)
+    return tuple(out)
+
+
+def start_over(session: Session, asset_ids: list[str], artifact: str) -> None:
+    """The clips' artifact is made again from the start: its lineage goes, with
+    that of what's made from it (made_from), so each is missing again. Doesn't
+    commit (the caller drops the artifacts themselves in the same transaction)."""
+    if asset_ids:
+        session.execute(text("DELETE FROM artifact_lineage WHERE asset_id = ANY(:ids) AND artifact = ANY(:artifacts)"),
+                        {"ids": list(asset_ids), "artifacts": list(made_from(artifact))})
 
 
 def record_failure(session: Session, asset_id: str, artifact: str, error: str, *, commit: bool = True) -> None:
@@ -501,7 +529,8 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
 def retry(session: Session, *, artifact: str | None = None, library_id: str | None = None,
           asset_ids: list[str] | None = None) -> int:
     """Try these failing clips again now, given up or not (the back-off starts
-    over). Doesn't commit. Returns how many."""
+    over). None for a part means every one (the caller has made sure it was
+    named so). Doesn't commit. Returns how many."""
     r = session.execute(text(
         "UPDATE artifact_lineage l SET retry_at = NULL, attempts = 0 FROM active_assets a"
         " WHERE a.asset_id = l.asset_id AND l.error IS NOT NULL"
@@ -510,9 +539,30 @@ def retry(session: Session, *, artifact: str | None = None, library_id: str | No
         "   AND (CAST(:ids AS text[]) IS NULL OR l.asset_id = ANY(CAST(:ids AS text[])))"
     ), {"artifact": artifact, "lib": library_id, "ids": asset_ids})
     if r.rowcount:
-        # The scheduler doesn't wait out its own hour for clips it just tried.
-        session.execute(text(
-            "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.retry_at', :now, now())"
-            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
-            {"now": utcnow().isoformat()})
+        nudge(session)
+    return int(r.rowcount or 0)
+
+
+def nudge(session: Session) -> None:
+    """Have the scheduler look again now: it lets go of the hour it holds
+    clips it just tried, and lists what's due at once. Doesn't commit."""
+    session.execute(text(
+        "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.retry_at', :now, now())"
+        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+        {"now": utcnow().isoformat()})
+
+
+def ask_redo(session: Session, artifact: str, library_id: str | None = None) -> int:
+    """Make the clips' artifact again (in one library, or all when None): its
+    lineage stops being current, as if made with other settings, so the
+    scheduler's redo makes it again after anything missing (and what's made
+    from it with it, as a redo does). A person's is never touched; one
+    already stale stays as it is. Doesn't commit. Returns how many."""
+    assert redoable(artifact), artifact
+    r = session.execute(text(
+        "UPDATE artifact_lineage l SET settings_hash = '' FROM active_assets a"
+        " WHERE a.asset_id = l.asset_id AND l.artifact = :artifact AND l.settings_hash <> ''"
+        "   AND l.producer NOT IN ('', :person, :unknown)"
+        "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
+    ), {"artifact": artifact, "lib": library_id, "person": PERSON, "unknown": UNKNOWN})
     return int(r.rowcount or 0)

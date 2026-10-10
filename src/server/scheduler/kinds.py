@@ -8,9 +8,10 @@ model or settings than now (changing them was the approval), unless an
 admin stopped it; a new producer version stops it until an admin resumes
 it (lineage.hold_new_version). Within a tier, oldest first.
 
-Each kind uses one pool: the resource its work waits on. Descriptions,
-text in images and scene descriptions share the vision machines' requests
-at once; transcripts the transcript machines'.
+Each kind uses one pool: the resource its work waits on, as its producer
+declares it (src/producers/pools.py for today's). Descriptions, text in
+images and scene descriptions share the vision machines' requests at once;
+transcripts the transcript machines'.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from src.producers.contract import FIND, PREPARE, REDO, SEE  # noqa: F401 — the tiers
+from src.producers.pools import SCANS
 from src.server.scheduler.dispatch import KindSpec
 from src.shared.producers import MISSING_FLAGS, PRODUCERS
 
@@ -56,8 +58,8 @@ def _made_first(needs: tuple[str, ...]) -> str:
 
 # A kind per producer the scheduler runs (src/producers/<artifact>/), and the scan.
 _FIRST: dict[str, Kind] = {k.name: k for k in (
-    Kind("scan", KindSpec(SEE, "scan", retake_after=SCAN_EVERY_SEC)),
-    *(Kind(p.kind, KindSpec(p.tier, p.pool, batch=p.batch, per_account=p.per_account,
+    Kind("scan", KindSpec(SEE, SCANS.name, retake_after=SCAN_EVERY_SEC)),
+    *(Kind(p.kind, KindSpec(p.tier, p.pool.name, batch=p.batch, per_account=p.pool.per_account,
                             by_seconds=p.unit == "second"),
            p.flag, _made_first(p.needs), storage=p.storage)
       for p in PRODUCERS.values() if p.scheduled),

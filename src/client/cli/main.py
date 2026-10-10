@@ -1,4 +1,4 @@
-"""Typer CLI entry point: scan, enrich, search, similar, library, user, admin."""
+"""Typer CLI entry point: scan, enrich (asks the scheduler), search, similar, library, user, admin."""
 
 from pathlib import Path
 from typing import Annotated
@@ -44,9 +44,11 @@ app.add_typer(archive_app, name="archive")
 app.add_typer(trash_app, name="trash")
 app.add_typer(producers_app, name="producers")
 
+from src.client.cli.commands.enrich import register as _register_enrich  # noqa: E402
 from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402
 
 _register_pausing(app)
+_register_enrich(app)
 
 console = Console()
 
@@ -54,7 +56,11 @@ console = Console()
 @app.callback()
 def _main() -> None:
     """Lumiverb media asset management CLI."""
+    from src.client.cli.config import machine_settings
+    from src.processing import machine
+
     configure_logging()
+    machine.use(machine_settings)  # read when a command first needs it
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +127,7 @@ def config_map_root(
     Libraries keep the root the editing machine sees, since exports point
     editors there. Scan and enrich on this machine use the mapped path.
     """
-    from src.client.cli.roots import _clean
+    from src.processing.roots import _clean
 
     if not server_prefix.startswith("/") or not local_prefix.startswith("/"):
         console.print("[red]Both paths must be absolute.[/red]")
@@ -141,7 +147,7 @@ def config_unmap_root(
     server_prefix: Annotated[str, typer.Argument(help="A prefix added with map-root.")],
 ) -> None:
     """Remove a root mapping."""
-    from src.client.cli.roots import _clean
+    from src.processing.roots import _clean
 
     src = _clean(server_prefix)
     cfg = load_config()
@@ -184,7 +190,7 @@ def library_list() -> None:
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Root path", overflow="fold")
-    from src.client.cli.roots import local_library_root
+    from src.processing.roots import local_library_root
 
     root_map = load_config().root_map
     # Shown only when a mapping moves a root on this machine.
@@ -216,7 +222,7 @@ def library_report_changes(
     """
     import os
 
-    from src.client.cli.roots import unmap_path
+    from src.processing.roots import unmap_path
 
     given = list(paths or [])
     if stdin:
@@ -753,9 +759,8 @@ def admin_vision_test(
     """
     from datetime import datetime, timezone
 
-    from src.client.cli.ingest import _resolve_vision_config
     from src.shared.file_extensions import IMAGE_EXTENSIONS
-    from src.client.workers.captions.factory import get_caption_provider
+    from src.processing.workers.captions.factory import get_caption_provider
 
     path = path.expanduser().resolve()
     if not path.is_dir():
@@ -787,7 +792,7 @@ def admin_vision_test(
     if model:
         model_id = model
     elif url:
-        from src.client.workers.captions.model_discovery import discover_model_id
+        from src.processing.workers.captions.model_discovery import discover_model_id
         model_id = discover_model_id(vision_url, vision_key)
 
     if not vision_url:
@@ -809,7 +814,7 @@ def admin_vision_test(
     for i, img_path in enumerate(images, 1):
         console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
 
-        from src.client.workers.captions.base import CaptionError
+        from src.processing.workers.captions.base import CaptionError
 
         try:
             desc_result = provider.describe(img_path)  # description + tags
@@ -906,6 +911,20 @@ def _resolve_asset_id(
         raise typer.Exit(1)
     resp.raise_for_status()
     return resp.json()["asset_id"]
+
+
+def _resolve_vision_config(
+    client: LumiverbClient,
+) -> tuple[str, str | None, str, str]:
+    """The account's vision endpoint URL, key and model, chosen in Settings → AI
+    (the one place they live), and where they came from.
+
+    Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
+    """
+    ctx = client.get("/v1/tenant/context").json()
+    return (ctx.get("vision_api_url") or "", ctx.get("vision_api_key") or None,
+            ctx.get("vision_model_id") or "", "account settings")
+
 
 
 @app.command("download")
@@ -1010,16 +1029,15 @@ def scan(
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
 
-    Scan is the first phase of the scan/enrich pipeline. It touches source
-    files, generates 2048px proxies, and uploads them to the server. It does
-    NOT run enrichment (CLIP, vision, OCR, faces): the scheduler does, or
-    `lumiverb enrich`.
+    Scan touches source files, generates 2048px proxies, and uploads them to
+    the server. The rest (CLIP, vision, OCR, faces, ...) is the scheduler's;
+    `lumiverb enrich` asks it to do a producer's work now.
 
     By default, files whose mtime and size match the server are skipped
     without hashing (fast mode). Use --thorough to SHA-verify all files.
     Use --force to re-scan everything regardless of SHA.
     """
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     if allow_moves and skip_moves:
         console.print("[red]Cannot use both --allow-moves and --skip-moves[/red]")
@@ -1077,93 +1095,11 @@ def scan(
             + (f", {len(stats.unlisted):,} folder(s) couldn't be listed" if stats.unlisted else "")
         )
 
-        # Show what enrichment is pending
-        from src.client.cli.repair import get_repair_summary
-        summary = get_repair_summary(client, match["library_id"])
-        needs_enrich = [
-            (label, summary.get(key, 0))
-            for label, key in [
-                ("Vision AI", "missing_vision"),
-                ("Embeddings", "missing_embeddings"),
-                ("Faces", "missing_faces"),
-                ("OCR", "missing_ocr"),
-                ("Search sync", "stale_search_sync"),
-            ]
-            if summary.get(key, 0) > 0
-        ]
-        if needs_enrich:
-            console.print("\n[yellow]Pending enrichment:[/yellow]")
-            for label, count in needs_enrich:
-                console.print(f"  {label}: {count:,}")
-            console.print(f"[dim]Run: lumiverb enrich --library {library}[/dim]")
+        # The scheduler makes the rest; this says how much is left.
+        console.print(f"[dim]What's left: lumiverb producers --library {escape(library)}[/dim]")
 
         if stats.failed > 0:
             raise typer.Exit(1)
-
-
-ENRICH_TYPES = ("probe", "render", "embed", "vision", "faces", "redetect-faces", "ocr", "transcribe", "video-scenes", "scene-vision", "search-sync", "all")
-
-
-@app.command("enrich")
-def enrich(
-    library: Annotated[str | None, typer.Option("--library", "-l", help="Library name (omit to enrich all libraries).")] = None,
-    job_type: Annotated[str, typer.Option("--job-type", "-j", help="Enrichment type.")] = "all",
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be enriched without making changes.")] = False,
-    concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
-    force: Annotated[bool, typer.Option("--force", help="Force full re-processing (search-sync: clear timestamps and re-index all).")] = False,
-) -> None:
-    """Run enrichment on assets with missing pipeline outputs.
-
-    Reads proxies from the local cache (populated by scan) and runs
-    inference. On cache miss, downloads the proxy from the server. Videos
-    are analyzed from their analysis proxies, so only probe and render need
-    the library's storage to be reachable.
-
-    \b
-    Job types:
-      probe           — Read frame rate, timecode and audio layout from videos (needs source files)
-      render          — Render full-length analysis proxies of videos (needs source files)
-      embed           — Generate missing CLIP embeddings (similarity search)
-      vision          — Generate missing AI descriptions and tags
-      faces           — Detect faces using InsightFace (face recognition)
-      redetect-faces  — Re-run face detection on ALL images with quality gates
-      ocr             — Extract text from images via vision AI
-      transcribe      — Transcribe speech in videos on the AI machines doing transcripts (from analysis proxies)
-      video-scenes    — Run scene detection on unindexed videos
-      scene-vision    — Extract rep frames + run vision AI on scenes
-      search-sync     — Push stale assets to Quickwit search index
-      all             — Run all enrichment in logical order (default)
-    """
-    from src.client.cli.repair import run_repair
-
-    if job_type not in ENRICH_TYPES:
-        console.print(f"[red]Invalid --job-type: {job_type}. Must be one of: {', '.join(ENRICH_TYPES)}[/red]")
-        raise typer.Exit(1)
-
-    client = LumiverbClient()
-    libraries = client.get("/v1/libraries").json()
-
-    if library is not None:
-        targets = [lib for lib in libraries if lib["name"] == library]
-        if not targets:
-            console.print(f"[red]Library not found: {library}[/red]")
-            raise typer.Exit(1)
-    else:
-        targets = libraries
-        if not targets:
-            console.print("No libraries found.")
-            return
-
-    for lib in targets:
-        run_repair(
-            client,
-            lib,
-            job_type=job_type,
-            dry_run=dry_run,
-            concurrency=concurrency,
-            force=force,
-            console=console,
-        )
 
 
 @app.command()

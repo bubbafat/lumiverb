@@ -131,24 +131,6 @@ class TestMissingTranscriptionCondition:
 
 
 @pytest.mark.fast
-class TestTranscriptionTypes:
-    """Verify transcribe is in REPAIR_TYPES and ENRICH_TYPES."""
-
-    def test_in_repair_types(self):
-        from src.client.cli.repair import REPAIR_TYPES
-        assert "transcribe" in REPAIR_TYPES
-
-    def test_in_enrich_types(self):
-        from src.client.cli.main import ENRICH_TYPES
-        assert "transcribe" in ENRICH_TYPES
-
-    def test_enrich_help_mentions_transcribe(self):
-        """The enrich command help text should mention transcribe."""
-        from src.client.cli.main import enrich
-        assert "transcribe" in enrich.__doc__
-
-
-@pytest.mark.fast
 class TestCliConfig:
     """Verify new CLI config fields."""
 
@@ -189,29 +171,6 @@ class TestRepairSummaryModel:
         summary = RepairSummary()
         assert hasattr(summary, "missing_transcription")
         assert summary.missing_transcription == 0
-
-
-@pytest.mark.fast
-class TestTranscribeOneErrors:
-    """Test _transcribe_one error handling without actually running Whisper."""
-
-    def test_nonexistent_source_file(self):
-        """_transcribe_one should handle missing source gracefully."""
-        from pathlib import Path
-        from unittest.mock import MagicMock
-        from src.client.cli.repair import _transcribe_one
-        # This will fail at ffmpeg since the file doesn't exist
-        result = _transcribe_one(Path("/nonexistent/video.mp4"), MagicMock())
-        # Should return None (transient failure) or ("", "") (deterministic)
-        # Either is acceptable since ffmpeg will error out
-        assert result is None or result == ("", "")
-
-    def test_page_missing_accepts_transcription_param(self):
-        """_page_missing should accept missing_transcription kwarg."""
-        import inspect
-        from src.client.cli.repair import _page_missing
-        sig = inspect.signature(_page_missing)
-        assert "missing_transcription" in sig.parameters
 
 
 @pytest.mark.fast
@@ -316,16 +275,16 @@ def test_audio_that_couldnt_be_read_is_tried_again_not_saved_as_silence(tmp_path
     import subprocess
     from unittest.mock import MagicMock
 
-    from src.client.cli import repair
-    from src.client.video.audio import AudioTrack
+    from src.processing.video.audio import AudioTrack
+    from src.producers.transcript.work import transcribe
 
     source = tmp_path / "a.mp4"
     source.write_bytes(b"x")
-    monkeypatch.setattr(repair, "audio_tracks", lambda p: [AudioTrack(0, 2, "aac")])
+    monkeypatch.setattr("src.processing.video.audio.audio_tracks", lambda p: [AudioTrack(0, 2, "aac")])
     killed = subprocess.CompletedProcess(args=[], returncode=-15, stdout=b"", stderr=b"Exiting normally, received signal 15.")
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: killed)
-    assert repair._transcribe_one(source, MagicMock()) is None
+    assert transcribe(source, MagicMock()) is None
     no_audio = subprocess.CompletedProcess(args=[], returncode=1, stdout=b"",
                                            stderr=b"Output file #0 does not contain any stream")
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: no_audio)
-    assert repair._transcribe_one(source, MagicMock()) == ("", "")
+    assert transcribe(source, MagicMock()) == ("", "")

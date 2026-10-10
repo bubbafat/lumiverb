@@ -105,10 +105,10 @@ def test_a_new_producer_version_waits_for_an_admin_to_resume_its_redo(env):
         p = {p["artifact"]: p for p in r.json()["producers"]}["vision"]
         assert p["redo_stopped"] is True and p["counts"]["stale"] >= 1  # what Processing shows
         assert _from_database(env[4], redo, [library_id]) is None  # still stopped
-        assert client.post("/v1/producers/vision/redo/resume", headers=headers).status_code == 204
+        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
         assert clip in [i["asset_id"] for i in _from_database(env[4], redo, [library_id])]  # resuming sticks
     finally:
-        client.post("/v1/producers/vision/redo/resume", headers=headers)
+        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_without_clips_an_older_version_made_nothing_is_stopped(env):
@@ -119,7 +119,7 @@ def test_without_clips_an_older_version_made_nothing_is_stopped(env):
         s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.vision.version_seen'"))
         s.commit()
         assert lineage.hold_new_version(s, "vision") is False
-        assert "vision" not in lineage.paused(s)
+        assert "vision" not in lineage.pauses(s).redo
 
 
 def test_the_database_away_is_a_503_the_scheduler_charges_no_clip_for():
@@ -130,7 +130,7 @@ def test_the_database_away_is_a_503_the_scheduler_charges_no_clip_for():
     from sqlalchemy.exc import InterfaceError, OperationalError
 
     from src.server.api import main
-    from src.server.scheduler.runners import NOT_THE_CLIPS
+    from src.producers.runner import NOT_THE_CLIPS
 
     assert main.app.exception_handlers[OperationalError] is main._database_unavailable
     assert main.app.exception_handlers[InterfaceError] is main._database_unavailable

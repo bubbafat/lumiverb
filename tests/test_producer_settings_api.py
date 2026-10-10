@@ -101,7 +101,7 @@ def test_new_settings_ask_before_making_again_what_the_old_ones_made(env):
 
 def test_saving_settings_resumes_a_stopped_redo(env):
     client, headers, *_ = env
-    assert client.post("/v1/producers/analysis_proxy/redo/stop", headers=headers).status_code == 204
+    assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
     assert _producer(env, "analysis_proxy")["redo_stopped"] is True
     r = _put(env, "analysis_proxy", settings={"crf": 30}, redo=True)
     assert r.status_code == 200, r.text
@@ -127,11 +127,11 @@ def test_an_unknown_producer_is_404(env):
 
 def test_saving_the_same_settings_leaves_a_stopped_redo_stopped(env):
     client, headers, *_ = env
-    assert client.post("/v1/producers/analysis_proxy/redo/stop", headers=headers).status_code == 204
+    assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
     r = _put(env, "analysis_proxy", settings={"crf": 28})  # its default: nothing changes
     assert r.status_code == 200 and r.json()["redo_stopped"] is True, r.text
     assert r.json()["redo_stopped_at"] and r.json()["redo_stopped_by"], r.text  # as GET says it, to an admin
-    client.post("/v1/producers/analysis_proxy/redo/resume", headers=headers)
+    client.post("/v1/producers/analysis_proxy/resume", json={"scope": "redo"}, headers=headers)
 
 
 def _stored(env, artifact: str) -> str | None:
@@ -172,13 +172,13 @@ def test_the_question_says_a_stopped_redo_starts_again(env):
     lib = _library(env, "SettingsStopped")
     sha = _sha()
     _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
-    assert client.post("/v1/producers/vision/redo/stop", headers=headers).status_code == 204
+    assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
     try:
         r = _put(env, "vision", settings={"temperature": 0.7})
         assert r.status_code == 409, r.text
         assert "stopped" in r.json()["error"]["message"] and r.json()["error"]["details"]["redo_stopped"] is True
     finally:
-        client.post("/v1/producers/vision/redo/resume", headers=headers)
+        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
 
 
 @pytest.mark.parametrize("raw", [

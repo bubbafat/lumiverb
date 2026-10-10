@@ -55,8 +55,9 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
         p = PRODUCERS[artifact]
         if not p.scheduled:
             continue
-        members.setdefault(p.pool, [])
-        per, n = pace.get(p.kind), slots.get(p.pool, 0)
+        pool = p.pool.name
+        members.setdefault(pool, [])
+        per, n = pace.get(p.kind), slots.get(pool, 0)
         if work <= 0:
             continue
         if artifact in paused:
@@ -65,15 +66,16 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
         if not n or not per:
             not_counted.append({"artifact": artifact, "title": p.title, "why": "no_machine" if not n else "not_known_yet"})
             continue
-        members[p.pool].append(artifact)
-        pools[p.pool] = pools.get(p.pool, 0.0) + work * per / n
+        members[pool].append(artifact)
+        pools[pool] = pools.get(pool, 0.0) + work * per / n
     # Producers sharing a pool take turns at its slots, oldest clip first: each
     # finishes about when the pool does.
     producers: dict[str, float | None] = {}
     for artifact, work in left.items():
         p = PRODUCERS[artifact]
         if p.scheduled:
-            producers[artifact] = 0.0 if work <= 0 else pools.get(p.pool) if artifact in members.get(p.pool, ()) else None
+            pool = p.pool.name
+            producers[artifact] = 0.0 if work <= 0 else pools.get(pool) if artifact in members.get(pool, ()) else None
     if pools:
         caught_up: float | None = max(pools.values())
     else:

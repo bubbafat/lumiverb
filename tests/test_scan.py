@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from src.client.cli.scan import (
+from src.processing.scan import (
     ScanStats,
     _ServerAsset,
     _detect_deletions,
@@ -205,7 +205,7 @@ class TestRunScanAcceptsThorough:
 
     def test_thorough_param_exists(self):
         import inspect
-        from src.client.cli.scan import run_scan
+        from src.processing.scan import run_scan
         sig = inspect.signature(run_scan)
         assert "thorough" in sig.parameters
 
@@ -283,7 +283,7 @@ class TestPopulateCacheForUnchanged:
 
     def test_skips_cached(self, tmp_path):
         """Files already in cache are skipped."""
-        from src.client.proxy.proxy_cache import ProxyCache
+        from src.processing.proxy.proxy_cache import ProxyCache
         cache = ProxyCache()
         cache._dir = tmp_path
         cache.put_scan("id-1", b"proxy", "sha")
@@ -302,7 +302,7 @@ class TestPopulateCacheForUnchanged:
 
     def test_downloads_missing(self, tmp_path):
         """Files not in cache are downloaded from server."""
-        from src.client.proxy.proxy_cache import ProxyCache
+        from src.processing.proxy.proxy_cache import ProxyCache
         cache = ProxyCache()
         cache._dir = tmp_path
 
@@ -336,7 +336,7 @@ class TestUnchangedFileStat:
 
     def _scan(self, tmp_path: Path, *, local_mtime, local_sha="abc", thorough=False,
               client: MagicMock | None = None) -> MagicMock:
-        from src.client.cli.scan import run_scan
+        from src.processing.scan import run_scan
 
         root = tmp_path / "lib"
         root.mkdir(exist_ok=True)
@@ -347,15 +347,15 @@ class TestUnchangedFileStat:
                                           file_mtime=self.OLD.isoformat(), media_type="image")}
         client = client or MagicMock()
         with (
-            patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-            patch("src.client.cli.scan._load_library_filters", return_value=[]),
-            patch("src.client.cli.scan._walk_library", return_value=local),
-            patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-            patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-            patch("src.client.cli.scan.compute_sha256", return_value=local_sha),
-            patch("src.client.cli.scan._scan_one") as scan_one,
-            patch("src.client.cli.scan.ProxyCache"),
-            patch("src.client.cli.scan._populate_cache_for_unchanged"),
+            patch("src.processing.scan._load_tenant_filters", return_value=[]),
+            patch("src.processing.scan._load_library_filters", return_value=[]),
+            patch("src.processing.scan._walk_library", return_value=local),
+            patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
+            patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+            patch("src.processing.scan.compute_sha256", return_value=local_sha),
+            patch("src.processing.scan._scan_one") as scan_one,
+            patch("src.processing.scan.ProxyCache"),
+            patch("src.processing.scan._populate_cache_for_unchanged"),
         ):
             scan_one.return_value = None
             client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
