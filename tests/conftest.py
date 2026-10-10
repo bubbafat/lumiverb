@@ -89,6 +89,13 @@ _QUICKWIT_OFF = {k: os.environ[k] for k in ("QUICKWIT_ENABLED", "QUICKWIT_URL", 
 # (scripts/deploy-api.sh); LUMIVERB_TEST_PG_IMAGE overrides it to try another.
 PG_IMAGE = os.environ.get("LUMIVERB_TEST_PG_IMAGE", "pgvector/pgvector:pg18")
 
+# The install and update scripts are Linux's (systemd, apt, flock, GNU sed):
+# a Mac installs and updates with Homebrew instead, so their tests run on Linux.
+LINUX_INSTALLER = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="tests a Linux installer (systemd, apt, flock, GNU sed); a Mac installs with Homebrew",
+)
+
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PG_PER_MODULE = os.environ.get("LUMIVERB_TEST_PG_PER_MODULE") == "1"
 # Each tree's alembic ini, the revision it upgrades to and the variable its env.py reads.

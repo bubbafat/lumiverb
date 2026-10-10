@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.fast
+from tests.conftest import LINUX_INSTALLER
+
+pytestmark = [pytest.mark.fast, LINUX_INSTALLER]
 
 REPO = Path(__file__).resolve().parents[1]
 UPDATE = REPO / "scripts" / "update.sh"
