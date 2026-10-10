@@ -115,11 +115,15 @@ test('alsoAddToProject says what happened in the project after what happened in 
     });
     const args = { message: 'Added to Master.', projectId: 'prj_1', assetId: 'a1' };
 
-    assert.equal(await alsoAddToProject({ ...args, client: client(1) }), 'Added to Master. Added to the project.');
-    assert.equal(await alsoAddToProject({ ...args, client: client(0) }), 'Added to Master. Already in the project.');
-    assert.equal(
+    assert.deepEqual(await alsoAddToProject({ ...args, client: client(1) }),
+        { message: 'Added to Master. Added to the project.', warning: false });
+    assert.deepEqual(await alsoAddToProject({ ...args, client: client(0) }),
+        { message: 'Added to Master. Already in the project.', warning: false });
+    assert.deepEqual(
         await alsoAddToProject({ ...args, client: client(new Error('Only the project owner can perform this action')) }),
-        "Added to Master. Couldn't add it to the project: Only the project owner can perform this action",
+        { message: "Added to Master. Couldn't add it to the project: Only the project owner can perform this action", warning: true },
+        'the clip is in Resolve, so a warning, not a failure',
     );
-    assert.equal(await alsoAddToProject({ ...args, projectId: null, client: client(1) }), 'Added to Master.');
+    assert.deepEqual(await alsoAddToProject({ ...args, projectId: null, client: client(1) }),
+        { message: 'Added to Master.', warning: false });
 });
