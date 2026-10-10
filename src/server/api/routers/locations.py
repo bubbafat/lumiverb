@@ -235,12 +235,16 @@ class GuessIn(BaseModel):
 
 class GuessRequest(BaseModel):
     guess: GuessIn | None = None  # None: nothing within the window
+    minutes: int = Field(ge=1, le=1440)  # the Inference window it was made in
     lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
 
 
 class GuessResponse(BaseModel):
     # stored | empty (none found: the clip's guess goes) | kept (a person's
-    # location or the file's GPS: nothing written) | gone (not in sight)
+    # location or the file's GPS: nothing written) | gone (not in sight) |
+    # unchanged (rechecked: the guess it had is as sure or surer) | marked
+    # (rechecked: its fixes went and nothing else was found; kept, "source
+    # removed") | stale (made in a window that's no longer the setting: nothing written)
     result: str
 
 
@@ -251,7 +255,9 @@ def save_location_guess(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> GuessResponse:
     """The location producer's guess for a clip, or that it found none. A
-    person's location and the file's GPS are never written over."""
+    person's location and the file's GPS are never written over. A guess
+    due to be checked again is kept or replaced by the recheck rules
+    (repository/locations.py save_guess)."""
     import json
 
     from src.server.api.routers.producers import require_lineage
@@ -263,6 +269,6 @@ def save_location_guess(
             raise ApiError(422, "invalid_location", "lat and lon must be a real place: not 0, 0")
         if len(json.dumps(guess["basis"])) > 16_000:
             raise ApiError(422, "basis_too_big", "basis is at most 16,000 characters of JSON")
-    result = locations.save_guess(session, asset_id, guess, made)
+    result = locations.save_guess(session, asset_id, guess, made, minutes=body.minutes)
     session.commit()
     return GuessResponse(result=result)

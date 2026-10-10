@@ -526,25 +526,30 @@ def test_public_search_doesnt_read_notes(public_lib_client):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def located(public_lib_client):
-    """A public photo shot somewhere, with a camera."""
-    client, api_key, library_id, _ = public_lib_client
-    auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _ingest(client, api_key, library_id, "trips/secret-beach.jpg", media_type="image")
-    tenant_id = client.get("/v1/tenant/context", headers=auth).json()["tenant_id"]
+def _tenant_sql(client, api_key: str, sql: str, **params) -> None:
+    """Write straight to the tenant's database (what no route sets)."""
     from sqlmodel import Session
 
     from src.server.database import get_control_session, get_engine_for_url
     from src.server.repository.control_plane import TenantDbRoutingRepository
 
+    auth = {"Authorization": f"Bearer {api_key}"}
+    tenant_id = client.get("/v1/tenant/context", headers=auth).json()["tenant_id"]
     with get_control_session() as control:
         url = TenantDbRoutingRepository(control).get_by_tenant_id(tenant_id).connection_string
     with Session(get_engine_for_url(url)) as session:
-        session.execute(text(
-            "UPDATE assets SET gps_lat = 48.8584, gps_lon = 2.2945, camera_make = 'Acme', camera_model = 'XU1',"
-            " lens_model = 'L', iso = 200, aperture = 2.8, focal_length = 35 WHERE asset_id = :a"), {"a": asset_id})
+        session.execute(text(sql), params)
         session.commit()
+
+
+@pytest.fixture(scope="module")
+def located(public_lib_client):
+    """A public photo shot somewhere, with a camera."""
+    client, api_key, library_id, _ = public_lib_client
+    asset_id = _ingest(client, api_key, library_id, "trips/secret-beach.jpg", media_type="image")
+    _tenant_sql(client, api_key,
+                "UPDATE assets SET gps_lat = 48.8584, gps_lon = 2.2945, camera_make = 'Acme', camera_model = 'XU1',"
+                " lens_model = 'L', iso = 200, aperture = 2.8, focal_length = 35 WHERE asset_id = :a", a=asset_id)
     return asset_id
 
 
@@ -621,13 +626,21 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
     auth = {"Authorization": f"Bearer {api_key}"}
     guessed = _ingest(client, api_key, library_id, "trips/guessed.jpg", media_type="image")
     guess = {"lat": 3.5, "lon": 4.5, "radius_m": 900, "basis": {"summary": "From iPhone photos at 14:02"}}
-    r = client.put(f"/v1/assets/locations/guess/{guessed}", json={"guess": guess, "lineage": made("location")},
-                   headers=auth)
+    minutes = client.get("/v1/producers", params={"counts": "false"}, headers=auth).json()
+    minutes = next(f["value"] for p in minutes["producers"] if p["artifact"] == "location"
+                   for f in p["fields"] if f["key"] == "inference_minutes")
+    r = client.put(f"/v1/assets/locations/guess/{guessed}",
+                   json={"guess": guess, "minutes": minutes, "lineage": made("location")}, headers=auth)
     assert r.json() == {"result": "stored"}, r.text
+    # Kept with its fixes gone ("source removed"): no more public than any guess.
+    _tenant_sql(client, api_key, "UPDATE asset_location SET basis = basis || '{\"basis_gone\": true}'"
+                " WHERE asset_id = :a", a=guessed)
+    assert client.get(f"/v1/assets/{guessed}", headers=auth).json()["location"]["basis_gone"] is True
     public = client.get(f"/v1/assets/{guessed}", params={"public_library_id": library_id}).json()
     for field in ("location", "gps_lat", "gps_lon", "gps_accuracy_m"):
         assert public.get(field) is None, (field, public)
     assert "3.5" not in _json.dumps(public) and "iPhone" not in _json.dumps(public)
+    assert "basis_gone" not in _json.dumps(public) and "removed" not in _json.dumps(public)
     facets = client.get("/v1/assets/facets", params=[("f", f"library:{library_id}")]).json()
     assert facets["guess_count"] == 0
     assert client.get(f"/v1/assets/{guessed}", headers=auth).json()["location"]["source"] == "time"
@@ -636,7 +649,7 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
     assert client.post("/v1/assets/locations/clocks", params=visitor,
                        json={"asset_ids": [guessed]}).status_code in (401, 403)
     assert client.put(f"/v1/assets/locations/guess/{guessed}", params=visitor,
-                      json={"guess": None, "lineage": made("location")}).status_code in (401, 403)
+                      json={"guess": None, "minutes": minutes, "lineage": made("location")}).status_code in (401, 403)
 
 
 @pytest.mark.slow

@@ -928,12 +928,17 @@ class AssetRepository:
                 WHERE asset_id = ANY(:ids)
                   AND (deleted_at IS NULL
                        OR (CAST(:reason AS text) = 'user' AND deleted_reason IN ('missing', 'archived')))
-                RETURNING asset_id
+                RETURNING asset_id, trashed_from
                 """
             ),
             {"now": utcnow(), "reason": reason, "ids": asset_ids},
         )
-        changed = {row[0] for row in result.fetchall()}
+        rows = result.fetchall()
+        changed = {row[0] for row in rows}
+        # Those that were in sight: guesses made from them are checked again (ADR-017).
+        from src.server.repository import locations
+
+        locations.fixes_gone(self._session, [row[0] for row in rows if row[1] is None])
         if reason == "user" and changed:
             # A person deleting a project's or library's chosen cover clip
             # clears the choice: the first active clip shows until a new one
@@ -1025,6 +1030,9 @@ class AssetRepository:
             {"now": utcnow(), "ids": asset_ids},
         )
         archived = {row[0] for row in result.fetchall()}
+        from src.server.repository import locations
+
+        locations.fixes_gone(self._session, list(archived))  # out of sight, as trashed
         self._session.commit()
         return _split(asset_ids, archived)
 
@@ -1041,6 +1049,9 @@ class AssetRepository:
             {"now": utcnow(), "lib": library_id, "under": _under(folder)},
         )
         archived = [row[0] for row in result.fetchall()]
+        from src.server.repository import locations
+
+        locations.fixes_gone(self._session, archived)  # out of sight, as trashed
         self._session.commit()
         return archived
 
@@ -1093,6 +1104,10 @@ class AssetRepository:
             self._session.execute(
                 text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"), {"ids": back}
             )
+            # Fixes back in sight: the guesses near them are checked again (ADR-017).
+            from src.server.repository import locations
+
+            locations.fixes_back(self._session, back)
         self._session.commit()
         return _split(asset_ids, set(back))
 
@@ -1303,6 +1318,10 @@ class AssetRepository:
             text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
             {"a": asset.asset_id},
         )
+        # A fix back in sight: the guesses near it are checked again (ADR-017).
+        from src.server.repository import locations
+
+        locations.fixes_back(self._session, [asset.asset_id])
 
     def page_ignored_paths(
         self, library_id: str, *, after: str | None = None, limit: int = 500
@@ -1795,7 +1814,7 @@ class AssetRepository:
             },
         ).mappings().first()
         if after is not None:
-            # A fix that appeared, moved or went: the guesses around it are made again (ADR-017).
+            # A fix that appeared, moved or went: the guesses from it and near it are checked again (ADR-017).
             from src.server.repository import locations
 
             locations.file_changed(self._session, asset_id, dict(before) if before else None, dict(after))
@@ -3372,6 +3391,11 @@ def _mark_clusters_dirty(session: Session) -> None:
     clustered (migration d7f2a3b4c5e6); this is for what else regroups them
     (the faces' grouping settings)."""
     session.execute(text("SELECT mark_face_clusters_changed()"))
+
+
+def regroup_faces(session: Session, before: dict, after: dict) -> None:
+    """The faces producer's regroup: its grouping settings changed."""
+    _mark_clusters_dirty(session)
 
 
 def face_clusters_version(session: Session) -> str:

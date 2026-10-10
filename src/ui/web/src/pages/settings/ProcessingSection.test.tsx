@@ -704,6 +704,17 @@ describe("ProcessingSection settings", () => {
       expect(screen.queryByText(/Face groups/)).toBeNull();
     });
 
+    it("says a new inference window checks guesses again, not that they're made again", async () => {
+      producers = [producer({ artifact: "location", title: "Location guesses", fields: [
+        { key: "inference_minutes", label: "Inference window", kind: "int", value: 360, default: 360, minimum: 5,
+          maximum: 1440, unit: "min", advanced: false, fixed: null, remakes: false }] })];
+      renderSection();
+      fireEvent.click(await screen.findByText("Settings · version 1"));
+      fireEvent.change(screen.getByLabelText(/Inference window/), { target: { value: "120" } });
+      expect(screen.getByText("Guesses are checked again.")).toBeTruthy();
+      expect(screen.queryByText(/Saving redoes/)).toBeNull();
+    });
+
     it("shows editors yes or no as On or Off", async () => {
       role = "editor";
       producers = [producer({ artifact: "faces", title: "Faces",

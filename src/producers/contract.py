@@ -182,8 +182,9 @@ class ProducerSpec:
     redo_on_source_change: bool = True
     # Where it shows in lists (Settings → Processing); one without sorts last.
     order: int = 1000
-    # "module:function", called with (session) when a setting that doesn't
-    # remake changes (faces: the face groups are worked out again).
+    # "module:function", called with (session, before, after) when its
+    # settings that don't remake change, as {key: value} (faces: the face
+    # groups are worked out again; location: guesses are checked again).
     regroup: str = ""
     # "module:function", called with (session, before, after, *, apply) when
     # its output-affecting settings change from before to after: what it

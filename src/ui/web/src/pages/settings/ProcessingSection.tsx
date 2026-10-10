@@ -740,6 +740,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       {changed.length > 0 && !remade && producer.artifact === "faces" && (
         <p className="text-gray-400">Face groups are worked out again; no face is found again.</p>
       )}
+      {changed.length > 0 && !remade && producer.artifact === "location" && (
+        <p className="text-gray-400">Guesses are checked again.</p>
+      )}
       {problem && (
         <p role="alert" className="text-red-300">
           {problem}

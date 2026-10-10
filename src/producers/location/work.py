@@ -51,9 +51,8 @@ class Locate(Work):
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)
-        settings = acct.producers.settings(self.artifact)
-        self.on = bool(settings["infer_location"])
-        self.minutes = int(settings["inference_minutes"])
+        self.on = bool(acct.producers.settings(self.artifact)["infer_location"])
+        self.minutes = int(acct.producers.uses(self.artifact)["inference_minutes"])
         self._clocks: dict[str, Clock] | None = None
 
     def clock(self, asset_id: str) -> Clock:
@@ -77,6 +76,14 @@ class Locate(Work):
         return locate(stamp(ctx["clip"]), [fix(f) for f in ctx["fixes"]], self.minutes, clock)
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
+        """Each guess with the window it was made in: the server keeps the
+        old guess or takes this one (the recheck rules, save_guess), and
+        refuses one made in a window that's no longer the setting ("stale":
+        the settings are read again, and the clip is tried again later)."""
+        stale = False
         for clip, result in made:
-            client.put(f"/v1/assets/locations/guess/{clip['asset_id']}",
-                       json={"guess": result["guess"], "lineage": self.lineage(clip)})
+            r = client.put(f"/v1/assets/locations/guess/{clip['asset_id']}",
+                           json={"guess": result["guess"], "minutes": self.minutes, "lineage": self.lineage(clip)})
+            stale = stale or (r.json() or {}).get("result") == "stale"
+        if stale:
+            self.acct.producers.refresh()

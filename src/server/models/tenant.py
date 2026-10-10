@@ -588,6 +588,8 @@ class AssetLocation(SQLModel, table=True):
     __table_args__ = (
         CheckConstraint("source IN ('person', 'time', 'suggestion')", name="ck_asset_location_source"),
         CheckConstraint("status IN ('applied', 'suggested')", name="ck_asset_location_status"),
+        CheckConstraint("recheck IS NULL OR recheck IN ('new_fix', 'window_changed', 'basis_gone', 'basis_changed')",
+                        name="ck_asset_location_recheck"),
     )
 
     asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)  # ON DELETE CASCADE
@@ -603,6 +605,8 @@ class AssetLocation(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+    # A guess due to be checked again, and why (repository/locations.py): NULL when it isn't.
+    recheck: str | None = Field(default=None, nullable=True)
 
 
 class IgnoredFile(SQLModel, table=True):

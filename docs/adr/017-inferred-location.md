@@ -101,7 +101,7 @@ Settings, declared on the producer so lineage tracks them:
 | `infer_location` | `false` | Off: nothing is guessed and existing guesses are removed. |
 | `inference_minutes` | `360` | A clip takes a location from fixes up to this far before or after it. |
 
-These live in Settings → Processing → Location. Changing either one goes through the usual counted 409 and redo.
+These live in Settings → Processing → Location. Turning Infer location off goes through the usual counted 409; a new Inference window checks guesses again (see "As built").
 
 The producer:
 - `media = ALL`, `storage = False` (it never reads originals);
@@ -132,9 +132,8 @@ The producer:
 The UI shows the radius and the reason, e.g. "About 2 km · from phone photos 14:02–14:40".
 
 **Re-running when neighbours change:**
-- The reconciler only sees a clip's own changes. So when a clip gains or loses a fix (file GPS appears, or a person sets or clears a location), the guess and lineage rows go for clips on the same day within `inference_minutes` of it, in the same library.
-- Person rows are never removed this way.
-- The reconciler then sees those clips as missing and guesses again. Guesses are cheap and derived, so deleting them is safe.
+- The reconciler only sees a clip's own changes. So when a clip gains, loses or moves a fix, the guesses near it and made from it are checked again (see "As built": a guess is never removed to be made again).
+- Person rows are never touched this way.
 
 ### API Endpoints
 
@@ -183,7 +182,8 @@ Other UI:
 | A flight between two fixes | Over 900 km/h: skipped. |
 | A person sets a location on a clip with file GPS | The person's location wins; the file value stays visible. |
 | A person clears their location | The row goes; the machine may guess again if `infer_location` is on. |
-| A neighbour gains GPS on a rescan | Neighbours' guesses are removed and remade. |
+| A neighbour gains GPS on a rescan | Neighbours' guesses are checked again: replaced only by a surer one. |
+| A fix a guess was made from is trashed, with no other fix near | The guess stays, marked "source removed". |
 | `infer_location` turned off | Guesses are removed. Person locations stay. |
 | (0, 0) in EXIF | Treated as no GPS. |
 | A public page | No location at all; location filters are refused. |
@@ -233,7 +233,19 @@ Requirements as in the ADR template: the full suite passes, tsc and vite build a
 **As built** (where it differs from the design above, or settles what it left open):
 - **Capture facts are a producer of their own** (`capture`, exiftool, its own pool, tier 2, reads the originals), not part of probe: probe is video only and one ffprobe pass; these are every clip's EXIF. The Python scan sends them and says so (`capture` lineage on the ingest); an ingest that doesn't (the macOS app) leaves them for the producer, which also reads that clip's `taken_at` again in the one meaning. `location` needs `capture`, so a clip is guessed only once its own time is read the one way.
 - **Fixes come from the clip's library.** Matching isn't limited to a folder; it is limited to the library, as the re-run step is.
-- **Re-running when a fix changes** reaches further than "the same day within `inference_minutes`": every clip in the library within `inference_minutes` + 14 h of the fix (the clock correction can move a camera clip that far), the fix itself, and any guess whose `basis` names it. The guess rows and their lineage go (`lineage.start_over`), so they are missing and made again ahead of stale work. Triggers: a scan's `update_exif`, the capture facts read again, a person setting, clearing or accepting a location. Not yet: a fix trashed or restored (its guesses stay until something else near it changes).
+- **Rechecks, not remakes** (Robert, 2026-10-10). Data is better than no data, and a guess's confidence (`radius_m`, smaller is surer) only improves. A guess is never removed to be made again: it's marked due (`asset_location.recheck`, the reason; the producer's `made` is false while it's set) and stays until the producer saves what it finds now (`repository/locations.py` `save_guess`). A clip with no guess (tried, nothing found) is simply due again, its lineage gone. A guess is checked again only when:
+  1. a fix it was made from (its `basis`) is trashed, archived or found missing, or changes: its GPS or a person's location on it moves or is cleared, or its capture time changes. Reason `basis_gone` for the first three, `basis_changed` for the rest;
+  2. a new fix appears near it (every clip in sight in its library within `inference_minutes` + 14 h, the clock correction's reach): GPS from a scan, a person setting or accepting a location, or a fix restored, unarchived or found again. Reason `new_fix`;
+  3. the Inference window changes. Reason `window_changed`, or `basis_changed` for a guess made from a fix now outside it.
+
+  A stronger reason replaces a weaker one while it waits (`basis_changed` > `basis_gone` > the others). What the save does:
+  - `new_fix`, `window_changed`: the new guess replaces the old only when `radius_m` is no larger; otherwise the old stays as it was ("unchanged");
+  - `basis_changed`: the old one is wrong: replaced, or removed when nothing is found;
+  - `basis_gone`: the new guess, however sure; with none, the old stays, marked `basis.basis_gone` ("marked"). The Lightbox's Guess details end " · source removed". Restoring the fix is a new fix, and the guess made from it replaces the marked one (as sure), unmarked.
+
+  Triggers: a scan's `update_exif` and the capture facts read again (`file_changed`; a clip without a fix whose own time changes is `basis_changed` too: its guess was worked out for the old time), a person setting, clearing or accepting a location, and the asset repository's trash, archive and restore (`trash_many`, `archive`, `archive_folder`, `_bring_back`, `clear_trash`). A library in the trash takes all its clips, fixes and guesses alike, so it triggers nothing. Nothing else rechecks a guess, and a person's location is never touched.
+- **The Inference window doesn't remake** (`remakes=False`, not in lineage). A change used to make every guess stale and redo it; now it's the producer's `regroup` (`locations.window_changed`, called with the old and new values), which marks the rechecks above and, for a wider window, makes clips where nothing was found due again. Nothing is removed and nothing is asked. The producer sends the window it worked in with each save, and a save from a window that's no longer the setting is refused ("stale": nothing written, the scheduler reads its settings again). The migration (`c4e8a1d7b3f9`) rewrote existing lineage to the new hash, so the change redid nothing.
+- **A new producer version's redo** (stale lineage, no recheck reason) still replaces or removes guesses as made: that's new code, not one of the triggers.
 - **Clock pairs** are each camera clip's single most alike fix from another device (one vote per clip), at CLIP cosine similarity ≥ 0.9, at most 300 of the device's clips a day. Only photos have CLIP vectors, so a camera that shoots only video gets no votes: its offset is the recorded zones' difference, or none.
 - **Gaps** are between real instants when both clips record a zone, otherwise between wall clocks as written (the ADR's offset 0); the clock offset applies only to fixes from another device.
 - **Radius** adds the larger GPS accuracy (`gps_accuracy_m`) of the fixes used.

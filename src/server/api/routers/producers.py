@@ -286,7 +286,8 @@ def set_settings(
     Settings → AI asks. Saving resumes its redo if an admin had stopped it;
     a pause stays. A setting that doesn't remake (how faces are grouped)
     asks nothing and makes nothing again: when one changes, the producer's
-    regroup runs (the face groups are worked out again)."""
+    regroup runs (the face groups are worked out again; location guesses
+    are checked again)."""
     from src.producers import load
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
@@ -345,7 +346,7 @@ def set_settings(
             )
         lineage.resume(session, [artifact], lineage.REDO)
     if uses != used and p.regroup:
-        load(p.regroup)(session)
+        load(p.regroup)(session, used, uses)
     session.commit()
     # Settings unchanged leave a stopped redo stopped.
     return _with_state(_item(artifact, after, waits, uses), lineage.pauses(session), admin=True)
