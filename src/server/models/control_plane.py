@@ -17,10 +17,11 @@ class Tenant(SQLModel, table=True):
     name: str = Field(nullable=False)
     plan: str = Field(default="free", nullable=False)
     status: str = Field(default="active", nullable=False)
-    # Each AI job's model (one model per job; the machines that run it are
-    # ai_machines). "" turns the job off. Transcripts start at small.
-    vision_model_id: str = Field(default="", nullable=False)
-    transcript_model_id: str = Field(default="small", nullable=False)
+    # Each AI job's model by the job's name (one model per job; the machines
+    # that run it are ai_machines). "" turns the job off; a job not listed has
+    # the model its producers declare (src/producers AiJob.default_model).
+    # Assign a new dict to change it (JSONB isn't watched in place).
+    ai_job_models: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
