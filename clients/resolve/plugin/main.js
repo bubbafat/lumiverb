@@ -6,11 +6,11 @@
 // happen here.
 
 const { app, BrowserWindow, ipcMain } = require('electron');
-const fs = require('fs');
 const path = require('path');
 const WorkflowIntegration = require('./WorkflowIntegration.node');
-const { LumiverbClient, SignedOutError, createSessionStore, localPath } = require('./lumiverb');
-const { addAtPlayhead, addToBin } = require('./resolve');
+const { LumiverbClient, SignedOutError, createSessionStore } = require('./lumiverb');
+const { addAtPlayhead, addToBin, projectFilePaths } = require('./resolve');
+const { searchPage } = require('./search');
 
 const PLUGIN_ID = 'io.lumiverb.resolve';
 
@@ -39,29 +39,13 @@ function shownClip(assetId) {
     return clip;
 }
 
-async function search(text, after) {
-    const page = await client.search(text, after);
-    const roots = await client.libraryRoots();
-    shown = new Map();
-    const items = page.items.map((item) => {
-        const filePath = localPath(roots.get(item.library_id), item.rel_path);
-        const clip = {
-            assetId: item.asset_id,
-            name: path.posix.basename(item.rel_path || ''),
-            folder: path.posix.dirname(item.rel_path || ''),
-            libraryName: item.library_name || '',
-            mediaType: item.media_type,
-            durationSec: item.duration_sec ?? null,
-            snippet: (item.search_context && item.search_context.snippet) || '',
-            hitType: (item.search_context && item.search_context.hit_type) || null,
-            relPath: item.rel_path,
-            localPath: filePath,
-            onThisMac: Boolean(filePath && fs.existsSync(filePath)),
-        };
-        shown.set(clip.assetId, clip);
-        return clip;
-    });
-    return { items, nextCursor: page.nextCursor, totalEstimate: page.totalEstimate };
+// The project's files are read again for every page, so clips added in
+// Resolve meanwhile are hidden too.
+async function search(text, after, hideInProject) {
+    const inProject = hideInProject ? await projectFilePaths(await getResolve()) : null;
+    const page = await searchPage({ client, text, after, inProject });
+    shown = new Map(page.items.map((clip) => [clip.assetId, clip]));
+    return page;
 }
 
 // Every handler answers { ok, value } or { ok: false, error, signedOut }, so

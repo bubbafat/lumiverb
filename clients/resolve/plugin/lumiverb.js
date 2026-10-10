@@ -181,10 +181,10 @@ class LumiverbClient {
 
     // One page of a text search, most relevant first. `after` is the
     // previous page's next_cursor.
-    async search(text, after = null) {
+    async search(text, after = null, limit = PAGE_SIZE) {
         const params = new URLSearchParams();
         params.append('f', `query:${text}`);
-        params.append('limit', String(PAGE_SIZE));
+        params.append('limit', String(limit));
         if (after) params.append('after', after);
         const response = await this.request(`/v1/query?${params}`);
         const body = await response.json();

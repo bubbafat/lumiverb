@@ -1,16 +1,27 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { addAtPlayhead, addToBin, pickTrack, timecodeToFrame, timelineFrames } = require('../plugin/resolve');
+const { addAtPlayhead, addToBin, pickTrack, projectFilePaths, timecodeToFrame, timelineFrames } = require('../plugin/resolve');
 
 // A fake of the slice of Resolve's scripting API the plugin uses. Like
 // Resolve, AppendToTimeline drops a clip that would land on another one.
-function fakeResolve({ binClips = [], timeline = null } = {}) {
+function fakeClip(filePath, properties = {}) {
+    return { GetClipProperty: async () => ({ 'File Path': filePath, Frames: '120', FPS: 24, 'Audio Ch': '2', ...properties }) };
+}
+
+// A Media Pool bin: { name, clips: [paths], bins: [nested] }.
+function fakeBin({ name = 'Master', clips = [], bins = [] } = {}) {
+    return {
+        GetName: async () => name,
+        GetClipList: async () => clips.map((filePath) => fakeClip(filePath)),
+        GetSubFolderList: async () => bins.map(fakeBin),
+    };
+}
+
+function fakeResolve({ binClips = [], root = null, timeline = null } = {}) {
     const calls = { imported: [], appended: [], addedTracks: [] };
-    const clip = (filePath, properties = {}) => ({
-        GetClipProperty: async () => ({ 'File Path': filePath, Frames: '120', FPS: 24, 'Audio Ch': '2', ...properties }),
-    });
-    const bin = { GetName: async () => 'Master', GetClipList: async () => binClips };
+    const clip = fakeClip;
+    const bin = fakeBin({ clips: binClips });
     const item = (start, end) => ({ GetStart: async () => start, GetEnd: async () => end });
     const tracks = timeline && { video: timeline.video.map((t) => t.map(([s, e]) => item(s, e))), audio: timeline.audio.map((t) => t.map(([s, e]) => item(s, e))) };
     const busy = (list, start, end) => list.some((it) => it.start < end && start < it.end);
@@ -29,6 +40,7 @@ function fakeResolve({ binClips = [], timeline = null } = {}) {
     };
 
     const mediaPool = {
+        GetRootFolder: async () => fakeBin(root || {}),
         GetCurrentFolder: async () => bin,
         ImportMedia: async (infos) => {
             calls.imported.push(...infos);
@@ -94,10 +106,37 @@ test('addToBin imports the original into the current bin', async () => {
 });
 
 test("addToBin doesn't import a file the bin already has", async () => {
-    const setup = fakeResolve();
-    const { resolve, calls } = fakeResolve({ binClips: [setup.clip('/Volumes/media-01/Media/a.mov')] });
+    const { resolve, calls } = fakeResolve({ binClips: ['/Volumes/media-01/Media/a.mov'] });
     assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov'), 'Already in Master.');
     assert.deepEqual(calls.imported, []);
+});
+
+test('addToBin matches a file the bin has under the other Unicode form', async () => {
+    const { resolve, calls } = fakeResolve({ binClips: ['/Volumes/media-01/Media/Café.mov'] });
+    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/Café.mov'), 'Already in Master.');
+    assert.deepEqual(calls.imported, []);
+});
+
+test('projectFilePaths lists every clip in every bin, in NFC', async () => {
+    const { resolve } = fakeResolve({
+        root: {
+            name: 'Master',
+            clips: ['/Volumes/media-01/Media/a.mov'],
+            bins: [
+                { name: 'Selects', clips: ['/Volumes/media-01/Media/b.mov'], bins: [{ name: 'Deep', clips: ['/Volumes/media-01/Media/Café.mov'] }] },
+                { name: 'Music', clips: ['/Users/robert/Music/track.wav'] },
+            ],
+        },
+    });
+
+    const paths = await projectFilePaths(resolve);
+
+    assert.deepEqual([...paths].sort(), [
+        '/Users/robert/Music/track.wav',
+        '/Volumes/media-01/Media/Café.mov',
+        '/Volumes/media-01/Media/a.mov',
+        '/Volumes/media-01/Media/b.mov',
+    ]);
 });
 
 test('addAtPlayhead puts the clip at the playhead on the first free track', async () => {

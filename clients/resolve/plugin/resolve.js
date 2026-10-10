@@ -1,5 +1,5 @@
-// What the plugin does in Resolve: add a file to the current bin, or put it
-// on the current timeline at the playhead.
+// What the plugin does in Resolve: add a file to the current bin, put it on
+// the current timeline at the playhead, or list the files the project has.
 //
 // Every function takes the `resolve` object (WorkflowIntegration.GetResolve())
 // so tests drive them with a fake. Targets the Resolve 21.1 scripting API
@@ -58,13 +58,38 @@ async function currentProject(resolve) {
     return project;
 }
 
+// A clip's original, in NFC: Lumiverb's paths are NFC, and macOS may hand
+// Resolve either form of an accented name.
+async function clipFilePath(clip) {
+    const properties = await clip.GetClipProperty();
+    const filePath = properties && properties['File Path'];
+    return filePath ? filePath.normalize('NFC') : null;
+}
+
+// The originals of every clip in the current project's Media Pool, every bin.
+async function projectFilePaths(resolve) {
+    const project = await currentProject(resolve);
+    const mediaPool = await project.GetMediaPool();
+    const paths = new Set();
+    const folders = [await mediaPool.GetRootFolder()];
+    while (folders.length > 0) {
+        const folder = folders.pop();
+        for (const clip of (await folder.GetClipList()) || []) {
+            const filePath = await clipFilePath(clip);
+            if (filePath) paths.add(filePath);
+        }
+        folders.push(...((await folder.GetSubFolderList()) || []));
+    }
+    return paths;
+}
+
 // The file's clip in the current bin: the one already there, or imported now.
 async function clipInCurrentBin(mediaPool, filePath) {
     const bin = await mediaPool.GetCurrentFolder();
     if (!bin) throw new Error('Select a bin in the Media Pool first.');
+    const wanted = filePath.normalize('NFC');
     for (const clip of (await bin.GetClipList()) || []) {
-        const properties = await clip.GetClipProperty();
-        if (properties && properties['File Path'] === filePath) return { clip, bin, added: false };
+        if ((await clipFilePath(clip)) === wanted) return { clip, bin, added: false };
     }
     const imported = await mediaPool.ImportMedia([{ FilePath: filePath }]);
     if (!imported || imported.length === 0) throw new Error("Resolve couldn't import the file.");
@@ -145,6 +170,7 @@ module.exports = {
     addAtPlayhead,
     addToBin,
     pickTrack,
+    projectFilePaths,
     timecodeToFrame,
     timelineFrames,
 };

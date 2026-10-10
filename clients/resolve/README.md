@@ -21,6 +21,13 @@ password.
 ## Use
 
 - Search, then page through the results 10 at a time.
+- **Hide clips already in the project** leaves out results whose original is
+  already in the project's Media Pool, in any bin. It matches by file path
+  (Unicode-normalized, since macOS may store an accented name either way), so a
+  clip imported from another copy or another mount of the file isn't
+  recognized. Hidden results are made up for with more requests, so a page
+  still shows up to 10 without skipping any; a search that's nearly all in the
+  project stops after 10 requests and says how many it hid.
 - **Add to bin** imports the original into the Media Pool's current bin. A clip
   already in that bin isn't imported twice.
 - **Add at playhead** puts it on the current timeline at the playhead, on the

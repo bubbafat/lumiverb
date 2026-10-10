@@ -99,16 +99,17 @@ async function loadPage() {
     $('prev').disabled = true;
     $('next').disabled = true;
     try {
-        const page = await call('search', query, cursors[pageIndex]);
+        const page = await call('search', query, cursors[pageIndex], $('hide-in-project').checked);
         if (mine !== ticket) return;
         nextCursor = page.nextCursor;
         $('results').replaceChildren(...page.items.map(row));
         const about = page.totalEstimate ? ` · about ${page.totalEstimate} results` : '';
         $('page').textContent = `Page ${pageIndex + 1}${about}`;
-        $('pager').hidden = page.items.length === 0 && pageIndex === 0;
+        $('pager').hidden = page.items.length === 0 && pageIndex === 0 && !nextCursor;
         $('prev').disabled = pageIndex === 0;
         $('next').disabled = !nextCursor;
-        $('status').textContent = page.items.length ? '' : 'No results.';
+        const hidden = page.hidden ? `Hid ${page.hidden} already in the project.` : '';
+        $('status').textContent = page.items.length ? hidden : `No results. ${hidden}`.trim();
     } catch (error) {
         if (mine === ticket) $('status').textContent = error.message;
     }
@@ -139,6 +140,14 @@ $('signout').addEventListener('click', async () => {
 $('search-form').addEventListener('submit', (event) => {
     event.preventDefault();
     query = $('query').value.trim();
+    if (!query) return;
+    cursors = [null];
+    pageIndex = 0;
+    loadPage();
+});
+
+// What's hidden changes the pages, so start again from the first.
+$('hide-in-project').addEventListener('change', () => {
     if (!query) return;
     cursors = [null];
     pageIndex = 0;

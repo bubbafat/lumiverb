@@ -1,0 +1,59 @@
+// One page of results for the plugin: each clip with its path on this Mac,
+// leaving out the ones already in the Resolve project when asked.
+//
+// Lumiverb can't filter by what's in Resolve, so hidden clips are made up
+// for here: each further request asks for just the number still missing,
+// so a page never runs past PAGE_SIZE and nothing is skipped (the cursor
+// always ends right after the last clip looked at).
+
+const fs = require('fs');
+const path = require('path');
+const { PAGE_SIZE, localPath } = require('./lumiverb');
+
+// Requests per page at most, for a search whose clips are nearly all in the
+// project already.
+const MAX_REQUESTS = 10;
+
+function toClip(item, roots, exists) {
+    const filePath = localPath(roots.get(item.library_id), item.rel_path);
+    const context = item.search_context || {};
+    return {
+        assetId: item.asset_id,
+        name: path.posix.basename(item.rel_path || ''),
+        folder: path.posix.dirname(item.rel_path || ''),
+        libraryName: item.library_name || '',
+        mediaType: item.media_type,
+        durationSec: item.duration_sec ?? null,
+        snippet: context.snippet || '',
+        hitType: context.hit_type || null,
+        relPath: item.rel_path,
+        localPath: filePath,
+        onThisMac: Boolean(filePath && exists(filePath)),
+    };
+}
+
+// `inProject`: a Set of NFC paths to leave out, or null to show everything.
+async function searchPage({ client, text, after = null, inProject = null, exists = fs.existsSync }) {
+    const roots = await client.libraryRoots();
+    const items = [];
+    let cursor = after;
+    let hidden = 0;
+    let totalEstimate = null;
+    for (let request = 0; request < MAX_REQUESTS; request += 1) {
+        const page = await client.search(text, cursor, PAGE_SIZE - items.length);
+        cursor = page.nextCursor;
+        if (totalEstimate === null) totalEstimate = page.totalEstimate;
+        for (const item of page.items) {
+            const clip = toClip(item, roots, exists);
+            if (inProject && clip.localPath && inProject.has(clip.localPath.normalize('NFC'))) {
+                hidden += 1;
+            } else {
+                items.push(clip);
+            }
+        }
+        if (!inProject || items.length >= PAGE_SIZE || !cursor) break;
+    }
+    return { items, nextCursor: cursor, totalEstimate, hidden };
+}
+
+module.exports = { MAX_REQUESTS, searchPage };

@@ -40,7 +40,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: var(--muted); }
 button.link { border: none; background: none; color: var(--muted); padding: 0; text-decoration: underline; }
 
-#search-form { display: flex; gap: 6px; margin-bottom: 12px; }
+#search-form { display: flex; gap: 6px; margin-bottom: 8px; }
+label.check { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; color: var(--muted); }
 #query { flex: 1; }
 
 #results { list-style: none; margin: 0; padding: 0; }
