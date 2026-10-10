@@ -25,13 +25,13 @@ A single, long-running FFmpeg process is opened to avoid process-spawn overhead.
 
 **FFmpeg command structure:**
 ```
-ffmpeg -hide_banner -loglevel info [-hwaccel auto] [-ss start_pts]
+ffmpeg -hide_banner -loglevel info -skip_frame nokey -ss <start_ts>
   -i <input>
-  -vf fps=1,scale=480:<out_height>,showinfo
+  -vf select='eq(pict_type\,I)',scale=480:<out_height>,showinfo
   -f rawvideo -pix_fmt rgb24 pipe:1
 ```
 
-**Hardware acceleration:** `hwaccel=auto` by default. On retry after truncation failure, software decode is used (`hwaccel=None`).
+**Keyframes only, on the CPU:** `-skip_frame nokey` makes the decoder skip everything but keyframes, giving the same keyframes 9-17x faster than decoding all frames on the GPU (`-hwaccel auto`, measured on prod analysis proxies, Oct 2026).
 
 **Width constant:** `OUT_WIDTH = 480`
 **PTS timeout:** `PTS_QUEUE_TIMEOUT = 10.0` seconds
