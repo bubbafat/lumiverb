@@ -13,12 +13,16 @@ class Probe(Work):
     artifact = "probe"
 
     def make(self, clip: dict) -> dict:
+        import subprocess
+
         from src.processing.video.probe import probe_video
 
         source = self.original(clip)
         try:
             return probe_video(source).to_dict()
-        except Exception as e:  # noqa: BLE001 — any ffprobe failure is the clip's
+        # ffprobe refusing the file, or output that can't be read, is the clip's.
+        # Anything else (OSError: no ffprobe, the mount's EIO) is a crash: counted, not charged.
+        except (subprocess.CalledProcessError, ValueError, TypeError, AttributeError) as e:
             logger.warning("Probe failed for %s: %s", clip["rel_path"], e)
             raise Failed(e) from e
 

@@ -319,3 +319,125 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
     assert result_scene["keep_reason"] == "phash"
     assert result_scene["phash"] == "deadbeef"
     assert "scene_index" not in result_scene  # the server numbers them
+
+
+def _work(index: int) -> _FakeResponse:
+    return _FakeResponse(200, {"chunk_id": f"chunk_{index}", "worker_id": "vid_w", "chunk_index": index,
+                               "start_ts": 30.0 * index, "end_ts": 30.0 * (index + 1), "overlap_sec": 2.0})
+
+
+def _claimed(client: MagicMock) -> int:
+    return sum(1 for c in client.post.call_args_list if c.args and c.args[0].endswith("/chunks/next"))
+
+
+def _completing_raises(client: MagicMock, error: BaseException) -> None:
+    init = _FakeResponse(data={"chunk_count": 1, "already_initialized": False})
+    answers = iter([_work(0), _FakeResponse(204)])
+
+    def post(path, *args, **kwargs):
+        if path.endswith("/chunks/next"):
+            return next(answers)
+        if path.endswith("/complete"):
+            raise error
+        return init
+
+    client.post.side_effect = post
+
+
+def _index(client: MagicMock, **kw) -> dict:
+    return index_video_scenes(client=client, source_path=Path("/fake/video.mp4"), asset_id="asset_1",
+                              duration_sec=kw.pop("duration_sec", 30.0), rel_path="video.mp4", lineage=LINEAGE,
+                              settings=SETTINGS, **kw)
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+@patch("src.producers.scenes.work.SceneSegmenter")
+def test_a_failed_chunk_ends_the_run(mock_segmenter_cls, mock_scanner_cls):
+    """The server hands a failed chunk straight back: the run ends at the
+    first failed chunk, and nothing more is claimed."""
+    from src.processing.video.video_scanner import SyncError
+
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(data={"chunk_count": 3, "already_initialized": False})
+    _claims(client, [_work(0), _work(1), _work(2), _FakeResponse(204)])
+    mock_scanner_cls.return_value.scan.side_effect = SyncError("FFmpeg hung")
+    with pytest.raises(ChunkFailed):
+        _index(client, duration_sec=90.0)
+    assert _claimed(client) == 1
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+@patch("src.producers.scenes.work.SceneSegmenter")
+def test_a_chunk_that_cant_be_saved_is_let_go_of_and_the_error_goes_up_as_it_is(mock_segmenter_cls,
+                                                                                  mock_scanner_cls):
+    """Saving a chunk failing isn't the chunk's fault: the runner judges the
+    API's error; the chunk is failed so the next turn starts from it."""
+    from src.processing.api import LumiverbAPIError
+
+    client = MagicMock()
+    _completing_raises(client, LumiverbAPIError("unavailable", "database away", 503))
+    mock_scanner_cls.return_value.scan.return_value = iter([])
+    mock_segmenter_cls.return_value = _FakeSegmenter([_FakeScene(0, 30000, 1000)])
+    with pytest.raises(LumiverbAPIError) as raised:
+        _index(client)
+    assert raised.value.status_code == 503
+    fails = [c for c in client.post.call_args_list if c.args[0] == "/v1/video/chunks/chunk_0/fail"]
+    assert len(fails) == 1 and fails[0].kwargs["json"]["worker_id"] == "vid_w"
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+@patch("src.producers.scenes.work.SceneSegmenter")
+def test_a_chunk_stopped_while_saving_isnt_failed(mock_segmenter_cls, mock_scanner_cls):
+    """Stopping isn't the chunk's trouble: no /fail (its lease runs out), Stopped goes up."""
+    from src.producers.runner import Stopped
+
+    client = MagicMock()
+    _completing_raises(client, Stopped("/v1/video/chunks/chunk_0/complete"))
+    mock_scanner_cls.return_value.scan.return_value = iter([])
+    mock_segmenter_cls.return_value = _FakeSegmenter([_FakeScene(0, 30000, 1000)])
+    with pytest.raises(Stopped):
+        _index(client)
+    assert not [c for c in client.post.call_args_list if c.args[0].endswith("/fail")]
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+@patch("src.producers.scenes.work.SceneSegmenter")
+def test_a_chunk_that_cant_be_let_go_of_still_raises_the_saving_error(mock_segmenter_cls, mock_scanner_cls):
+    from src.processing.api import LumiverbAPIError
+
+    client = MagicMock()
+    error = LumiverbAPIError("unavailable", "database away", 503)
+    init = _FakeResponse(data={"chunk_count": 1, "already_initialized": False})
+    answers = iter([_work(0)])
+
+    def post(path, *args, **kwargs):
+        if path.endswith("/chunks/next"):
+            return next(answers)
+        if path.endswith("/complete"):
+            raise error
+        if path.endswith("/fail"):
+            raise LumiverbAPIError("unavailable", "still away", 503)
+        return init
+
+    client.post.side_effect = post
+    mock_scanner_cls.return_value.scan.return_value = iter([])
+    mock_segmenter_cls.return_value = _FakeSegmenter([])
+    with pytest.raises(LumiverbAPIError) as raised:
+        _index(client)
+    assert raised.value is error
+
+
+@patch("src.producers.scenes.work.VideoScanner")
+def test_once_stopping_no_chunk_is_claimed(mock_scanner_cls):
+    import threading
+
+    from src.producers.runner import Stopped
+
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(data={"chunk_count": 3, "already_initialized": False})
+    _claims(client, [_work(0)])
+    stopping = threading.Event()
+    stopping.set()
+    with pytest.raises(Stopped):
+        _index(client, duration_sec=90.0, stopping=stopping)
+    assert _claimed(client) == 0

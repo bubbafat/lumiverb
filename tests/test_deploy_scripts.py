@@ -858,7 +858,7 @@ def test_without_docker_the_step_does_nothing(tmp_path):
 def test_the_gpu_comes_back_after_the_last_reload_and_before_the_scheduler_restarts():
     text = UPDATE_API.read_text()
     gpu = text.index('step "Giving the GPU back to containers"')
-    assert text.rindex("systemctl daemon-reload") < gpu < text.index("systemctl start lumiverb-scheduler")
+    assert text.rindex("systemctl daemon-reload") < gpu < text.rindex("systemctl start lumiverb-scheduler")
 
 
 # --- The scheduler is stopped while the API restarts --------------------------
@@ -866,7 +866,7 @@ def test_the_gpu_comes_back_after_the_last_reload_and_before_the_scheduler_resta
 # against its clip as a failure ("Connection refused" after the 08:49 update, Oct 9).
 
 
-def _restart_calls(tmp_path: Path) -> list[str]:
+def _restart_calls(tmp_path: Path, *, answers: bool = True) -> list[str]:
     calls = tmp_path / "calls"
     calls.write_text("")
     text = UPDATE_API.read_text()
@@ -874,13 +874,15 @@ def _restart_calls(tmp_path: Path) -> list[str]:
     script = (
         'step() { :; }; ok() { :; }; warn() { :; }; fail() { echo "fail: $1"; exit 1; }\n'
         f'systemctl() {{ echo "systemctl $*" >> "{calls}"; }}\n'
-        f'curl() {{ echo "curl $*" >> "{calls}"; }}\n'
-        'sudo() { :; }\n'
+        f'curl() {{ echo "curl $*" >> "{calls}"; {"" if answers else "return 7;"} }}\n'
+        'sudo() { :; }; sleep() { :; }\n'
         'API_PORT=8100; SVC_USER=lumiverb; UV_BIN=uv\n'
         + block
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stdout + out.stderr
+    assert (out.returncode == 0) == answers, out.stdout + out.stderr
+    if not answers:
+        assert "fail: API server not responding after 10 s" in out.stdout
     return [c for c in calls.read_text().splitlines() if not c.startswith(("systemctl is-enabled", "systemctl status"))]
 
 
@@ -891,3 +893,37 @@ def test_the_scheduler_stops_before_the_api_restarts_and_starts_once_it_answers(
     health = next(i for i, c in enumerate(calls) if c.startswith("curl") and "/health" in c)
     start = calls.index("systemctl start lumiverb-scheduler")
     assert stop < api < health < start
+
+
+def test_an_api_that_doesnt_answer_in_10_s_fails_before_the_scheduler_starts(tmp_path):
+    """Review: the scheduler was started whether or not the API answered."""
+    calls = _restart_calls(tmp_path, answers=False)
+    assert "systemctl start lumiverb-scheduler" not in calls
+    assert sum(1 for c in calls if c.startswith("curl")) == 10
+
+
+def test_a_failure_with_the_scheduler_stopped_says_how_to_start_it(tmp_path):
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    assert "The scheduler is stopped" in err and "sudo systemctl start lumiverb-scheduler" in err
+
+
+def test_under_update_sh_the_scheduler_line_is_update_sh_s(tmp_path, monkeypatch):
+    """update.sh says it once, before its Result line."""
+    monkeypatch.setenv("LUMIVERB_UPDATE_LOG", str(tmp_path / "log"))
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="lumiverb /usr/local/bin/uv sync", ok=False)
+    assert "isn't running" in err and "The scheduler is stopped" not in err
+
+
+def test_a_running_scheduler_isnt_said_to_be_stopped(tmp_path):
+    _, _, err = _update_python(tmp_path, VENV_CFG.format("3.14.4"), fail_on="python install", ok=False)
+    assert "The scheduler is stopped" not in err
+
+
+def test_deploy_stops_the_scheduler_before_the_migrations():
+    """Review: deploy-api.sh migrated with the old scheduler running; its
+    "Starting the scheduler" step starts it again."""
+    text = DEPLOY_API.read_text()
+    step = text.index('step "Running database migrations"')
+    stop = text.index("systemctl stop lumiverb-scheduler", step)
+    assert step < stop < text.index("alembic -c alembic-control.ini upgrade head")
+    assert stop < text.index("systemctl restart lumiverb-scheduler")

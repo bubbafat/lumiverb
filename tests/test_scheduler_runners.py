@@ -138,6 +138,28 @@ def test_a_description_that_fails_goes_through_the_machines_guard(acct, monkeypa
     acct.client.post.assert_not_called()
 
 
+def test_no_proxy_on_the_server_either_goes_to_the_guard(acct) -> None:
+    """Not in the cache, and the server's says 404: nothing to describe, and the guard decides."""
+    acct.cache.get.return_value = None
+    acct.client.get.side_effect = LumiverbAPIError("not_found", "no proxy", 404)
+    assert _run(acct, "vision", "ast_1") is None
+    assert "no description" in str(acct.vision.charges.call_args.args[0])
+    assert _charged(acct) == [("vision", "ast_1")]
+
+
+@pytest.mark.parametrize("status, outcome", [(503, "waits"), (500, "crash")])
+def test_the_servers_proxy_failing_otherwise_is_judged_by_whose(acct, status, outcome) -> None:
+    acct.cache.get.return_value = None
+    acct.client.get.side_effect = LumiverbAPIError("e", "x", status)
+    if outcome == "crash":
+        with pytest.raises(Crashed):
+            _run(acct, "vision", "ast_1")
+    else:
+        assert _run(acct, "vision", "ast_1") == ["ast_1"]
+    acct.vision.charges.assert_not_called()
+    acct.failures.add.assert_not_called()
+
+
 def test_text_in_an_image_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.ocr.work.read_text", lambda **kw: {"asset_id": kw["asset_id"],
                                                                           "ocr_text": "STOP"})
@@ -170,6 +192,16 @@ def test_a_proxy_that_cant_be_read_is_the_clips(acct) -> None:
     acct.models.clip.return_value = MagicMock(model_id="clip", model_version="v")
     assert _run(acct, "clip", "ast_1") is None
     assert _charged(acct) == [("clip", "ast_1")]
+
+
+@pytest.mark.parametrize("kind", ["clip", "ocr"])
+def test_this_machines_trouble_reading_a_proxy_is_a_crash(acct, kind) -> None:
+    acct.models.clip.return_value = MagicMock(model_id="clip", model_version="v")
+    acct.cache.get.side_effect = OSError(5, "Input/output error")
+    with pytest.raises(Crashed):
+        _run(acct, kind, "ast_1")
+    acct.failures.add.assert_not_called()
+    acct.vision.charges.assert_not_called()
 
 
 def test_an_embedding_that_cannot_be_made_is_a_failure(acct, monkeypatch) -> None:
@@ -205,6 +237,29 @@ def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypa
 def test_a_probe_that_ffprobe_cant_read_is_the_clips(acct, monkeypatch, tmp_path) -> None:
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     monkeypatch.setattr("src.processing.video.probe.probe_video", MagicMock(side_effect=ValueError("invalid data")))
+    assert _run(acct, "probe", "ast_1") is None
+    assert _charged(acct) == [("probe", "ast_1")]
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError(2, "No such file or directory: 'ffprobe'"),
+                                   OSError(5, "Input/output error")])
+def test_a_probe_this_machine_cant_run_is_a_crash_not_the_clips(acct, monkeypatch, tmp_path, error) -> None:
+    """Review: OSError was the clip's, so no ffprobe or the mount's EIO charged
+    every video at once. It's a crash: counted, uncharged."""
+    (tmp_path / "ast_1.jpg").write_bytes(b"x")
+    monkeypatch.setattr("src.processing.video.probe.probe_video", MagicMock(side_effect=error))
+    with pytest.raises(Crashed) as crashed:
+        _run(acct, "probe", "ast_1")
+    assert crashed.value.asset_ids == ["ast_1"]
+    acct.failures.add.assert_not_called()
+
+
+def test_a_probe_ffprobe_refuses_is_the_clips(acct, monkeypatch, tmp_path) -> None:
+    import subprocess
+
+    (tmp_path / "ast_1.jpg").write_bytes(b"x")
+    monkeypatch.setattr("src.processing.video.probe.probe_video",
+                        MagicMock(side_effect=subprocess.CalledProcessError(1, "ffprobe")))
     assert _run(acct, "probe", "ast_1") is None
     assert _charged(acct) == [("probe", "ast_1")]
 
@@ -270,6 +325,40 @@ def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, 
     acct.client.post.assert_not_called()
 
 
+def _renders(monkeypatch) -> None:
+    def render(source, dest, settings, *, timeout):
+        dest.write_bytes(b"mp4")
+
+    monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
+
+
+def test_an_upload_that_fails_leaves_nothing_in_the_cache(acct, monkeypatch, tmp_path) -> None:
+    (tmp_path / "ast_1.jpg").write_bytes(b"x")
+    _renders(monkeypatch)
+    acct.client.post.side_effect = LumiverbAPIError("bad", "refused", 422)
+    assert _run(acct, "render", "ast_1") is None
+    assert _charged(acct) == [("analysis_proxy", "ast_1")]
+    acct.analysis_cache.put.assert_not_called()
+    assert not list((tmp_path / "analysis").glob("*"))  # the .rendering file is gone
+
+
+def test_an_analysis_proxys_lineage_leaves_out_this_machines_way_of_rendering(acct, monkeypatch, tmp_path) -> None:
+    import json
+
+    from src.processing.video.analysis_proxy import AnalysisProxySettings
+
+    (tmp_path / "ast_1.jpg").write_bytes(b"x")
+    _renders(monkeypatch)
+    hashes = []
+    for encoder, decoder, gpus in (("libx264", "cpu", 0), ("h264_nvenc", "cuda", 2)):
+        acct.machine = Machine(analysis_proxy_encoder=encoder, analysis_proxy_decoder=decoder, gpu_decodes=gpus)
+        acct.client.post.reset_mock()
+        _run(acct, "render", "ast_1")
+        hashes.append(json.loads(acct.client.post.call_args.kwargs["data"]["lineage"])["settings_hash"])
+    settings = AnalysisProxySettings.for_producer(acct.producers.settings("analysis_proxy"), "libx264")
+    assert hashes == [acct.producers.lineage("analysis_proxy", SHA, used=settings.output())["settings_hash"]] * 2
+
+
 def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     heard = MagicMock(return_value=("1\n00:00:00,000 --> 00:00:01,000\nhola\n", "es"))
@@ -279,6 +368,25 @@ def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> 
     body = _posted(acct)["/v1/assets/ast_1/transcript"]
     assert body["language"] == "es" and body["source"] == "whisper"
     assert body["lineage"]["producer"] == "whisper"
+
+
+def test_a_transcripts_lineage_says_its_model(acct, monkeypatch, tmp_path) -> None:
+    acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
+    monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a: ("", ""))
+    _run(acct, "transcript", "ast_1")
+    lineage = _posted(acct)["/v1/assets/ast_1/transcript"]["lineage"]
+    assert lineage == acct.producers.lineage("transcript", SHA, used=acct.producers.with_model("transcript", "small"))
+    assert lineage != acct.producers.lineage("transcript", SHA,
+                                             used=acct.producers.with_model("transcript", "large-v3"))
+
+
+def test_this_machines_trouble_transcribing_is_a_crash(acct, monkeypatch, tmp_path) -> None:
+    acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
+    monkeypatch.setattr("src.producers.transcript.work.transcribe",
+                        MagicMock(side_effect=FileNotFoundError(2, "No such file or directory: 'ffmpeg'")))
+    with pytest.raises(Crashed):
+        _run(acct, "transcript", "ast_1")
+    acct.failures.add.assert_not_called()
 
 
 def test_the_machines_trouble_with_a_transcript_charges_no_clip(acct, monkeypatch, tmp_path) -> None:
@@ -491,23 +599,23 @@ def test_a_video_without_its_analysis_copy_or_duration_waits(acct) -> None:
     acct.failures.add.assert_not_called()
 
 
-def _described(acct, monkeypatch, tmp_path, scenes: list[dict], describe=None, patch=None):
+def _described(acct, monkeypatch, tmp_path, scenes: list[dict], describe=None, patch=None, extract=None, **extra):
     proxy = tmp_path / "v.mp4"
     proxy.write_bytes(b"x")
     acct.analysis_cache.get.return_value = proxy
 
-    def extract(source, dest, timestamp):
+    def extracted(source, dest, timestamp):
         dest.write_bytes(b"jpg")
         return MagicMock(ok=True)
 
-    monkeypatch.setattr("src.processing.video.clip_extractor.extract_video_frame_detailed", extract)
+    monkeypatch.setattr("src.processing.video.clip_extractor.extract_video_frame_detailed", extract or extracted)
     provider = MagicMock()
     provider.describe.side_effect = describe or (lambda path: {"description": "a beach", "tags": ["sea"]})
     acct.vision.provider.return_value = provider
     acct.client.get.return_value.json.return_value = {"scenes": scenes}
     if patch is not None:
         acct.client.patch.side_effect = patch
-    return _run(acct, "scene_vision", "ast_1")
+    return _run(acct, "scene_vision", "ast_1", **extra)
 
 
 def _scene(scene_id: str, ms: int = 1000, **extra) -> dict:
@@ -572,6 +680,102 @@ def test_scenes_described_this_way_already_are_skipped(acct, monkeypatch, tmp_pa
     assert [c.args[0] for c in acct.client.patch.call_args_list] == ["/v1/video/scenes/s2"]
 
 
+def _this_way(acct) -> dict:
+    """A scene's record as this job would make it."""
+    lineage = acct.producers.lineage("scene_vision", SHA,
+                                     used=acct.producers.with_model("scene_vision", acct.vision.model))
+    return {k: lineage[k] for k in ("producer", "version", "settings_hash")}
+
+
+def test_a_redo_with_every_scene_described_this_way_describes_them_all_again(acct, monkeypatch, tmp_path) -> None:
+    """Every scene matches but the video was handed out: its own record is
+    what's stale (made before its file had a hash, say). Describing them all
+    again records it; skipping them would hand it out forever."""
+    done = [_scene("s1", description="a cat", lineage=_this_way(acct)),
+            _scene("s2", description="a dog", lineage=_this_way(acct))]
+    assert _described(acct, monkeypatch, tmp_path, done, redo=True) is None
+    assert [c.args[0] for c in acct.client.patch.call_args_list] == ["/v1/video/scenes/s1", "/v1/video/scenes/s2"]
+
+
+def test_without_a_redo_scenes_described_this_way_are_left(acct, monkeypatch, tmp_path) -> None:
+    done = [_scene("s1", description="a cat", lineage=_this_way(acct))]
+    assert _described(acct, monkeypatch, tmp_path, done) is None
+    acct.client.patch.assert_not_called()
+
+
+def test_a_scene_described_another_way_is_described_again() -> None:
+    from src.producers.scene_vision.work import described
+
+    now = {"producer": "scene-vision", "version": 2, "settings_hash": "abc"}
+    assert described({"description": "x", "lineage": dict(now)}, now)
+    for key, other in (("producer", "other"), ("version", 1), ("settings_hash", "def")):
+        assert not described({"description": "x", "lineage": {**now, key: other}}, now)
+    assert not described({"description": "x", "lineage": None}, now)  # said, but not how: described again
+    assert not described({"description": None, "lineage": dict(now)}, now)
+
+
+def test_a_scene_whose_record_isnt_said_counts_as_described() -> None:
+    from src.producers.scene_vision.work import described
+
+    now = {"producer": "scene-vision", "version": 2, "settings_hash": "abc"}
+    assert described({"description": "x"}, now)  # no lineage key: the old rule, described is done
+    assert described({"description": "x", "lineage": {}}, None)
+
+
+def test_a_video_without_scenes_is_done(acct, monkeypatch, tmp_path) -> None:
+    assert _described(acct, monkeypatch, tmp_path, []) is None
+    acct.client.patch.assert_not_called()
+    acct.failures.add.assert_not_called()
+
+
+def _no_frame_at(ms: int, how: str):
+    """An extract that gives no frame for the scene at ms: ok=False, or an empty file."""
+    def extract(source, dest, timestamp):
+        if round(timestamp * 1000) == ms:
+            if how == "empty":
+                dest.write_bytes(b"")
+                return MagicMock(ok=True)
+            return MagicMock(ok=False)
+        dest.write_bytes(b"jpg")
+        return MagicMock(ok=True)
+    return extract
+
+
+@pytest.mark.parametrize("case", ["not ok", "empty", "nothing said", "empty description"])
+def test_a_scene_with_no_frame_or_no_description_is_the_videos_once_the_rest_are_saved(
+        acct, monkeypatch, tmp_path, case) -> None:
+    import tempfile
+
+    frames: list[Path] = []
+    real = tempfile.NamedTemporaryFile
+
+    def named(*a, **kw):  # every frame file the job makes
+        f = real(*a, **kw)
+        frames.append(Path(f.name))
+        return f
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", named)
+    order: list[str] = []
+    acct.failures.add.side_effect = lambda *a: order.append("charged")
+
+    def patched(path, **kw):
+        order.append(path)
+
+    describe = None
+    extract = None
+    if case in ("not ok", "empty"):
+        extract = _no_frame_at(1000, "empty" if case == "empty" else "not ok")
+    else:
+        said = None if case == "nothing said" else {"description": "  ", "tags": ["sea"]}
+        describe = lambda path: said if path == frames[0] else {"description": "a beach", "tags": []}  # noqa: E731
+    assert _described(acct, monkeypatch, tmp_path, [_scene("s1", 1000), _scene("s2", 5000)], describe=describe,
+                      patch=patched, extract=extract) is None
+    assert order == ["/v1/video/scenes/s2", "charged"]
+    assert _charged(acct) == [("scene_vision", "ast_1")]
+    assert "1 of 2 scenes failed" in str(acct.failures.add.call_args.args[2])
+    assert len(frames) == 2 and not any(f.exists() for f in frames)
+
+
 # ---------------------------------------------------------------------------
 # Faces: the scheduler's face process, a job's photos saved together
 # ---------------------------------------------------------------------------
@@ -613,6 +817,14 @@ def test_faces_say_which_clips_wait(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.faces.work.face_proxy", lambda item, root, cache: item["asset_id"] != "ast_1")
     assert _run(acct, "faces", "ast_1", "ast_2", "ast_3", "ast_4", "ast_5") == ["ast_1", "ast_2", "ast_3"]
     assert _charged(acct) == [("faces", "ast_4")]
+
+
+def test_a_face_photo_with_no_proxy_is_the_clips(acct, monkeypatch) -> None:
+    detector = _faces(acct, monkeypatch, _face)
+    acct.cache.get.side_effect = lambda asset_id, rel_path=None: None
+    assert _run(acct, "faces", "ast_1") is None
+    assert acct.failures.add.call_args.args == ("faces", "ast_1", "no proxy")
+    detector.detect.assert_not_called()
 
 
 def test_a_face_save_the_api_cant_take_now_charges_nothing(acct, monkeypatch) -> None:

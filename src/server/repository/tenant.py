@@ -4487,7 +4487,8 @@ class PersonRepository:
         return result
 
     def cleanup_empty_dismissed(self) -> int:
-        """Delete dismissed people that have zero face matches.
+        """Delete dismissed people that have zero face matches (none assigned,
+        by a person or the machine). Never one a person named.
 
         Returns the number of dismissed people deleted.
         """
@@ -4499,6 +4500,7 @@ class PersonRepository:
                     FROM people p
                     LEFT JOIN face_person_matches m ON m.person_id = p.person_id
                     WHERE p.dismissed = true
+                      AND p.display_name = '(dismissed)'
                     GROUP BY p.person_id
                     HAVING COUNT(m.match_id) = 0
                 """)

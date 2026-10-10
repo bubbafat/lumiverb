@@ -100,7 +100,24 @@ fi
 HAVE_PY="$(sed -n 's/^version_info *= *\([0-9]*\.[0-9]*\).*/\1/p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null || true)"
 WANT_PY="$(grep -oE '[0-9]+\.[0-9]+' "$APP_DIR/.python-version" 2>/dev/null | head -1 || true)"
 # From here a failure may leave Lumiverb stopped (now, or by an earlier run): say so.
-trap 'rc=$?; if [[ $rc -ne 0 ]] && ! systemctl is-active --quiet lumiverb-api; then echo -e "${RED}  ✗ Lumiverb isn'"'"'t running. Fix the error above, then run the update again (update.sh): it carries on from here.${NC}" >&2; fi' EXIT
+# The scheduler isn't started for you: the code may be half-deployed.
+stopped_after_failure() {
+  local rc=$?
+  [[ $rc -ne 0 ]] || return 0
+  if ! systemctl is-active --quiet lumiverb-api; then
+    echo -e "${RED}  ✗ Lumiverb isn't running. Fix the error above, then run the update again (update.sh): it carries on from here.${NC}" >&2
+  fi
+  if [[ -z "${LUMIVERB_UPDATE_LOG:-}" ]] && scheduler_stopped; then
+    echo -e "${RED}  ✗ $(scheduler_stopped_line)${NC}" >&2
+  fi
+}
+scheduler_stopped() {
+  systemctl is-enabled --quiet lumiverb-scheduler 2>/dev/null && ! systemctl is-active --quiet lumiverb-scheduler
+}
+scheduler_stopped_line() {
+  echo "The scheduler is stopped. Run the update again; to start it as it is: sudo systemctl start lumiverb-scheduler"
+}
+trap stopped_after_failure EXIT
 if [[ -n "$HAVE_PY" && -n "$WANT_PY" && "$HAVE_PY" != "$WANT_PY" ]]; then
   warn "Python changes from ${HAVE_PY} to ${WANT_PY}: building the new environment (a few GB) while Lumiverb keeps running"
   sudo -u "$SVC_USER" "$UV_BIN" python install "$WANT_PY"
@@ -367,12 +384,15 @@ systemctl restart lumiverb-api
 # them), and the venv doesn't need it. Every update, so a rerun gets there.
 sudo -u "$SVC_USER" "$UV_BIN" cache clean || warn "Couldn't clear uv's cache"
 
+ANSWERS=false
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
+    ANSWERS=true
     break
   fi
   sleep 1
 done
+[[ "$ANSWERS" == true ]] || fail "API server not responding after 10 s — check: journalctl -u lumiverb-api -n 50"
 # The scheduler last, once the API answers: its jobs save through the API.
 systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl start lumiverb-scheduler
 

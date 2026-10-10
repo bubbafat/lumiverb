@@ -174,7 +174,7 @@ All processing runs on the brain, in the scheduler (`src/server/scheduler/`, sys
 
 **Pools and AI jobs.** A spec names its `Pool` (`src/producers/pools.py` for today's shared ones): so many slots, or this machine's setting that sizes it (`sized_by`), or an AI job's machines (`job`: each account's own, sized by its online machines times the job's `per_request`), and whether its jobs hold back AI machines sharing the GPU (`gpu_hold`). An `AiJob` declares its label, its guard (how its machines are checked and called), its default model and whether the scheduler's own machine can do it; the account's model for it is kept under its name (`tenants.ai_job_models`).
 
-**Models.** The GPU models are the scheduler's, not an account's (`scheduler/models.py`): CLIP loaded once per model and weights, and one face-detection process (ONNX Runtime leaks, so it's replaced after so many photos), shared by every account and let go of when unused.
+**Models.** The GPU models are the scheduler's, not an account's (`scheduler/models.py`): CLIP loaded once per model and weights, and one face-detection process (ONNX Runtime leaks, so it's replaced after so many photos), shared by every account and let go of when unused. A photo it hasn't answered for in 300 s (`DETECT_TIMEOUT_SEC`, `src/producers/faces/detect.py`) is given up as a crash (counted, uncharged) and the process replaced.
 
 **Pausing.** One switch per processing action (Scans, Upkeep, each producer), paused and resumed on its own, with a scope: `work` (nothing of it starts) or a producer's `redo` alone (its stale clips wait). Both are rows of `producer_pauses`, read by the scheduler every second on one path; a new producer version stops its redo until an admin resumes it.
 
@@ -189,6 +189,14 @@ A producer ships as one folder (ADR-016's test, `tests/test_producer_contract.py
 1. `src/producers/<artifact>/__init__.py` sets `PRODUCER = ProducerSpec(...)`: `artifact`, `producer` (recorded in lineage), `version` (bump when its output changes), `media`, `title`, `applies` and `made` (SQL on `active_assets a`), its output-affecting `settings`, `needs` (what it's made from), `redo_also` (what goes with it when it's made again), and to be scheduled `kind`, `flag` (`missing_<something>`), `run` (`"src.producers.<artifact>.work:<Class>"`), `tier`, `pool`, `batch`, `storage` (it reads the originals) and `unit` (`clip` or `second`). It imports only `contract.py`, `prompts.py` and `pools.py`.
 2. `src/producers/<artifact>/work.py` defines the `Work`: `make(clip)` returns what `save` sends (use `self.original(clip)` for the file on storage, `self.acct.proxy_cache(...)` / `self.acct.analysis_cache` for proxies, `self.lineage(clip, used=...)` for what a save records), and `save(client, made)` posts it through the given client.
 3. A server route that takes the artifact, with `require_lineage(body.lineage, "<artifact>")`, records it with `lineage.record(...)`.
+
+Whose an error is, as the runner judges it:
+
+- An API error raised inside `make()` (a proxy fetched from the server, say) is judged by `whose()`, like a save's: refused (400, 413, 422) is the clip's; the API away is nobody's; anything else is a crash.
+- `OSError` from `make()` is this machine's (no ffmpeg or ffprobe, a disk or mount error): a crash, counted, never the clip's. That holds for probe, CLIP, transcripts and OCR; only output that can't be read (ffprobe refusing the file, a proxy PIL can't open) is the clip's.
+- Scenes with no analysis proxy in this machine's cache wait for it (so do their descriptions); a transcript with none is charged.
+- A save that fails with anything but an API error (the cache's disk full) is a crash, counted.
+- A scene whose frame can't be read, or that the model describes as nothing, is its video's failure, charged once the video's other scenes are saved.
 
 Nothing else is edited: the kinds and their redo kind, the queue, the pool (declare a new `Pool` in the folder, or name a shared one), an AI job (declare an `AiJob` with its guard in the folder), the account's model storage, the page filter and summary count, Settings → Processing, pauses and failures all follow. A producer that reads the originals (EXIF, say) sets `storage=True` and calls `self.original(clip)`: jobs then go only to libraries whose storage was reachable at the last look, and the file missing or the storage gone is handled for it.
 
