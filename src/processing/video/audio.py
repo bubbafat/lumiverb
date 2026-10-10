@@ -49,18 +49,24 @@ def audio_tracks(path: Path, *, timeout: float = 60.0) -> list[AudioTrack]:
     return tracks
 
 
-def mix_filter(tracks: list[AudioTrack], label: str) -> str:
-    """A filtergraph mixing `tracks` into stereo `[label]`, each at its own level.
+def _amix(count: int, label: str) -> str:
+    """Mixes stereo inputs [m0]..[m<count-1>] into `[label]`, each at its own level.
 
     amix's default divides by the number of tracks, so one live lav among
     eight would come out 18 dB down; the limiter stops loud ones clipping.
-    amix also takes samples in order, so each track is first laid out from
-    the clip's start, with silence where it starts late or skips.
+    """
+    inputs = "".join(f"[m{n}]" for n in range(count))
+    return f"{inputs}amix=inputs={count}:normalize=0,alimiter=limit=0.95:level=false[{label}]"
+
+
+def mix_filter(tracks: list[AudioTrack], label: str) -> str:
+    """A filtergraph mixing `tracks` into stereo `[label]` (_amix).
+
+    amix takes samples in order, so each track is first laid out from the
+    clip's start, with silence where it starts late or skips.
     """
     parts = [f"[0:a:{t.index}]{_FROM_START},aformat=channel_layouts=stereo[m{n}]" for n, t in enumerate(tracks)]
-    inputs = "".join(f"[m{n}]" for n in range(len(tracks)))
-    parts.append(f"{inputs}amix=inputs={len(tracks)}:normalize=0,alimiter=limit=0.95:level=false[{label}]")
-    return ";".join(parts)
+    return ";".join([*parts, _amix(len(tracks), label)])
 
 
 def mix_and_tracks_filter(tracks: list[AudioTrack], label: str) -> tuple[str, list[str]]:
@@ -80,9 +86,7 @@ def mix_and_tracks_filter(tracks: list[AudioTrack], label: str) -> tuple[str, li
         parts.append(f"[0:a:{t.index}]{_FROM_START},asplit=2[s{n}][t{n}]")
         parts.append(f"[s{n}]aformat=channel_layouts=stereo[m{n}]")
         outs.append(f"[t{n}]")
-    inputs = "".join(f"[m{n}]" for n in range(len(tracks)))
-    parts.append(f"{inputs}amix=inputs={len(tracks)}:normalize=0,alimiter=limit=0.95:level=false[{label}]")
-    return ";".join(parts), outs
+    return ";".join([*parts, _amix(len(tracks), label)]), outs
 
 
 def speech_wav_command(source: Path, wav: Path, tracks: list[AudioTrack]) -> list[str]:
