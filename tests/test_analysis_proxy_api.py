@@ -300,7 +300,7 @@ def test_cleanup_keeps_proxies_and_removes_orphans(env) -> None:
 
     engine = create_engine(tenant_url)
     with Session(engine) as session:
-        result = run_cleanup_for_tenant(storage.abs_path(""), tenant_id, session, dry_run=False)
+        result = run_cleanup_for_tenant(storage.abs_path("x").parent, tenant_id, session, dry_run=False)
     engine.dispose()
 
     assert all(p.exists() for p in kept)

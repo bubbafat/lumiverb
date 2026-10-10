@@ -317,7 +317,7 @@ def test_add_trashed_asset_rejected(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
@@ -360,7 +360,7 @@ def test_remove_assets(projects_env):
     r2 = client.request(
         "DELETE",
         f"/v1/projects/{col_id}/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
     assert r2.status_code == 200
@@ -416,7 +416,7 @@ def test_trashed_asset_hidden_in_project(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
@@ -530,7 +530,7 @@ def test_cover_stale_self_heals(projects_env):
     client.request(
         "DELETE",
         "/v1/assets",
-        json={"asset_ids": [a1]},
+        json={"asset_ids": [a1], "reason": "missing"},
         headers=_headers(api_key),
     )
 
