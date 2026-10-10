@@ -70,7 +70,7 @@ def test_clip_and_faces_are_all_or_nothing():
 
 
 def test_the_prompts_are_the_ones_the_worker_sends():
-    from src.client.workers.captions import openai_caption
+    from src.processing.workers.captions import openai_caption
 
     source = open(openai_caption.__file__).read()
     assert "Describe this image in 2-3 sentences" in P.VISION_PROMPT

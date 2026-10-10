@@ -26,10 +26,10 @@ from typing import Any
 from rich.console import Console
 from rich.progress import Progress
 
-from src.client.cli.client import LumiverbAPIError, LumiverbClient
-from src.client.video.clip_extractor import extract_video_frame_detailed
-from src.client.video.scene_segmenter import SceneSegmenter, SceneSettings
-from src.client.video.video_scanner import SyncError, VideoScanner
+from src.processing.api import ApiClient, LumiverbAPIError
+from src.processing.video.clip_extractor import extract_video_frame_detailed
+from src.processing.video.scene_segmenter import SceneSegmenter, SceneSettings
+from src.processing.video.video_scanner import SyncError, VideoScanner
 
 # Where to read a video from: its analysis proxy, or None when there isn't one.
 SourceFor = Callable[[dict], Path | None]
@@ -47,7 +47,7 @@ class Stopped(Exception):
 
 def index_video_scenes(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     source_path: Path,
     asset_id: str,
     duration_sec: float,
@@ -71,7 +71,7 @@ def index_video_scenes(
     Returns {"scenes": N, "chunks": N, "elapsed": float}.
     """
     if lineage is None or settings is None:
-        from src.client.cli.producer_settings import ProducerSettings
+        from src.processing.producer_settings import ProducerSettings
 
         server = ProducerSettings(client)
         settings = server.settings("scenes") if settings is None else settings
@@ -184,7 +184,7 @@ def index_video_scenes(
 
 def run_video_index(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     source_for: SourceFor,
     videos: Iterable[dict],
     console: Console,
@@ -287,7 +287,7 @@ _GONE = object()
 
 def enrich_scene(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     source_path: Path,
     asset_id: str,
     rel_path: str,
@@ -339,7 +339,7 @@ def enrich_scene(
 
                 # 4. PATCH scene with vision results
                 if lineage is None:
-                    from src.client.cli.producer_settings import ProducerSettings
+                    from src.processing.producer_settings import ProducerSettings
 
                     producers = ProducerSettings(client)
                     lineage = producers.lineage("scene_vision", None,
@@ -386,7 +386,7 @@ class _VideoScenes:
 
 def run_video_enrich(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     source_for: SourceFor,
     videos: Iterable[dict],
     vision_provider: object | None,
@@ -413,7 +413,7 @@ def run_video_enrich(
     Each video dict must have: asset_id, rel_path.
     Returns (ok, failed).
     """
-    from src.client.workers.captions.base import CaptionError
+    from src.processing.workers.captions.base import CaptionError
 
     concurrency = max(1, concurrency)
     ok = 0

@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from src.client.cli import roots
+from src.processing import roots
 from src.client.cli.config import CLIConfig, load_config, save_config
-from src.client.cli.roots import local_library_root, map_root, reachable_root
+from src.processing.roots import local_library_root, map_root, reachable_root
 
 MAC = "/Volumes/media-01"
 
@@ -152,7 +152,12 @@ def test_an_unreadable_folder_is_unreachable(monkeypatch: pytest.MonkeyPatch, tm
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home whose CLI config is this machine's settings, as the CLI has them."""
+    from src.client.cli.config import machine_settings
+    from src.processing import machine
+
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    machine.use(machine_settings)
     return tmp_path
 
 
@@ -267,13 +272,13 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
 
     from rich.console import Console
 
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     library, here = _mapped_library(home, tmp_path)
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=[]) as walk,
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", return_value=[]) as walk,
     ):
         run_scan(MagicMock(), library, console=Console(quiet=True))
     assert walk.call_args.args[0] == here
@@ -285,7 +290,7 @@ def test_scan_of_an_unreachable_root_touches_nothing(home: Path, tmp_path: Path)
 
     from rich.console import Console
 
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     save_config(CLIConfig(root_map={MAC: str(tmp_path / "not-mounted")}))
     client = MagicMock()

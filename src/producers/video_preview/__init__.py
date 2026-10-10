@@ -1,4 +1,4 @@
-"""Video previews, made when a file is scanned (src/client/cli/scan.py)."""
+"""Video previews, made when a file is scanned (src/processing/scan.py)."""
 
 from src.producers.contract import VIDEO, ProducerSpec, Setting
 from src.producers.proxy import MADE_AT_SCAN

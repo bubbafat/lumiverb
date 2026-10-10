@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.fast
 def test_openai_provider_id():
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     assert (
         OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "qwen").provider_id
@@ -15,8 +15,8 @@ def test_openai_provider_id():
 
 @pytest.mark.fast
 def test_factory_returns_openai_compatible():
-    from src.client.workers.captions.factory import get_caption_provider
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.factory import get_caption_provider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = get_caption_provider(
         vision_model_id="qwen3-visioncaption-2b",
@@ -29,8 +29,8 @@ def test_factory_returns_openai_compatible():
 
 @pytest.mark.fast
 def test_factory_arbitrary_model_id():
-    from src.client.workers.captions.factory import get_caption_provider
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.factory import get_caption_provider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = get_caption_provider(
         vision_model_id="llava:13b",
@@ -43,7 +43,7 @@ def test_factory_arbitrary_model_id():
 
 @pytest.mark.fast
 def test_openai_strips_thinking_blocks():
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "qwen")
     raw = "<think>some reasoning here</think>A sunset over mountains."
@@ -55,7 +55,7 @@ def test_openai_provider_sends_auth_header_when_api_key_set() -> None:
     """When api_key is provided, _chat sends Authorization: Bearer <key>."""
     from unittest.mock import MagicMock, patch
 
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key="sk-test")
     assert p._api_key == "sk-test"
@@ -78,7 +78,7 @@ def test_openai_provider_omits_auth_header_when_no_api_key() -> None:
     """When api_key is None, no Authorization header is included."""
     from unittest.mock import MagicMock, patch
 
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "gpt-4o", api_key=None)
 
@@ -101,7 +101,7 @@ def test_openai_provider_retries_once_on_empty_completion(tmp_path) -> None:
 
     from PIL import Image
 
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     img_path = tmp_path / "img.jpg"
     Image.new("RGB", (16, 16), color=(255, 0, 0)).save(img_path)
@@ -132,14 +132,14 @@ def test_openai_provider_sends_the_settings_it_was_given() -> None:
     recorded in lineage is what was sent."""
     from unittest.mock import MagicMock, patch
 
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
     from src.shared.producers import effective_settings
 
     settings = {**effective_settings("vision"), "prompt": "Say what you see.", "temperature": 0.7, "max_tokens": 99}
     p = OpenAICompatibleCaptionProvider("http://x/v1", "m", settings=settings)
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
-    with patch("src.client.workers.captions.openai_caption.requests.post", return_value=resp) as post:
+    with patch("src.processing.workers.captions.openai_caption.requests.post", return_value=resp) as post:
         p._chat("data:image/jpeg;base64,abc", p._vision["prompt"], p._vision)
     payload = post.call_args.kwargs["json"]
     assert (payload["temperature"], payload["max_tokens"]) == (0.7, 99)
@@ -184,8 +184,8 @@ def test_a_failure_says_whether_the_endpoint_was_at_fault(tmp_path, answer, endp
 
     import requests
 
-    from src.client.workers.captions.base import CaptionError
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
     if answer == "connection":
@@ -208,8 +208,8 @@ def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):
 
     import requests
 
-    from src.client.workers.captions.base import CaptionError
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
     with patch("requests.post", side_effect=requests.Timeout()), \
@@ -220,8 +220,8 @@ def test_ocr_that_fails_raises_instead_of_saying_no_text(tmp_path):
 
 
 def test_a_missing_proxy_is_the_images_problem(tmp_path):
-    from src.client.workers.captions.base import CaptionError
-    from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+    from src.processing.workers.captions.base import CaptionError
+    from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
     p = OpenAICompatibleCaptionProvider("http://localhost:1234/v1", "m", api_key=None)
     for call in (p.describe, p.extract_text):

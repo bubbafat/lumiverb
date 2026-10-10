@@ -16,7 +16,7 @@ import imagehash
 import numpy as np
 from PIL import Image
 
-from src.client.video.video_scanner import RawFrame
+from src.processing.video.video_scanner import RawFrame
 
 _log = logging.getLogger(__name__)
 

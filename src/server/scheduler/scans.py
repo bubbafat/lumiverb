@@ -32,12 +32,12 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
-from src.client.cache_dir import cache_dir
-from src.client.cli.roots import reachable_root
+from src.processing.cache_dir import cache_dir
+from src.processing.roots import reachable_root
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
 if TYPE_CHECKING:
-    from src.client.cli.scan import ScanStats
+    from src.processing.scan import ScanStats
 
 logger = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ def scan_pass(
     Each library is looked at again right before its scan: a share can
     sleep during another library's long scan."""
     if scan_fn is None:
-        from src.client.cli.scan import run_scan as scan_fn
+        from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
     # require_entries: an unmounted mount point is an empty folder, and
     # scanning it would mark every file missing.

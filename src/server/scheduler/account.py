@@ -42,17 +42,18 @@ IDLE_SEC = 600.0
 class Account:
     def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *,
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None) -> None:
-        from src.client.cli.config import load_config
-        from src.client.cli.failure_report import FailureReport
-        from src.client.cli.producer_settings import ProducerSettings
-        from src.client.cli.transcript_guard import TranscriptGuard
-        from src.client.cli.vision_guard import VisionGuard
-        from src.client.proxy.analysis_cache import AnalysisProxyCache
+        from src.processing.failure_report import FailureReport
+        from src.processing.producer_settings import ProducerSettings
+        from src.processing.transcript_guard import TranscriptGuard
+        from src.processing.vision_guard import VisionGuard
+        from src.processing.proxy.analysis_cache import AnalysisProxyCache
 
         self.tenant_id = tenant_id
         self.client = client
         self.scan_state = scan_state
-        self.cfg = load_config()
+        from src.processing.machine import current
+
+        self.machine = current()  # this machine's way of processing (the scheduler's settings)
         self._clock = clock
         if wall is None:
             from src.shared.utils import utcnow as wall
@@ -184,7 +185,7 @@ class Account:
     def storage_gone(self, library_id: str) -> bool:
         """The library's storage can't be read now, looked at as the scan pass
         does (with a timeout; an unmounted mount point is an empty folder)."""
-        from src.client.cli.roots import reachable_root
+        from src.processing.roots import reachable_root
 
         with self._lock:
             library = self.libraries.get(library_id)
@@ -218,7 +219,7 @@ class Account:
         """The images CLIP, faces and vision see, for clips of one library
         (made from the original while its storage is reachable)."""
         from src.client.cli.repair import PROXY_CACHE_EDGE
-        from src.client.proxy.proxy_cache import ProxyCache
+        from src.processing.proxy.proxy_cache import ProxyCache
 
         root = self.root(library_id)
         with self._lock:
@@ -232,7 +233,7 @@ class Account:
         """The CLIP model, loaded once per settings (not while holding the
         account's lock: loading takes seconds), and the settings it's used with."""
         from src.client.cli.repair import PROXY_CACHE_EDGE
-        from src.client.workers.embeddings.clip_provider import CLIPEmbeddingProvider
+        from src.processing.workers.embeddings.clip_provider import CLIPEmbeddingProvider
 
         settings = self.producers.settings("clip")
         key = (settings["model"], settings["pretrained"])
@@ -270,7 +271,7 @@ class Account:
 
         with self._lock:
             if self._faces is None:
-                self._faces = FaceRunner(self.client, self.cfg)
+                self._faces = FaceRunner(self.client, self.machine)
             self._used["faces"] = self._clock()
             return self._faces
 

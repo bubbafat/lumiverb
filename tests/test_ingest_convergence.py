@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-from src.client.cli.scan import ScanStats
+from src.processing.scan import ScanStats
 
 
 class TestScanReturnsAssetIds:

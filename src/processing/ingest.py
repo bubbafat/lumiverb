@@ -22,11 +22,11 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, TimeRemainingColumn, SpinnerColumn
 
-from src.client.cli.client import LumiverbClient
+from src.processing.api import ApiClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
 from src.shared.io_utils import resolve_source_path, stat_if_present
-from src.client.workers.exif_extract import (
+from src.processing.workers.exif_extract import (
     compute_sha256,
     extract_exif,
     parse_aperture,
@@ -51,11 +51,11 @@ def _silence_subprocess_stdout() -> None:
     os.close(devnull)
 
 
-from src.client.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
+from src.processing.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
 
 if TYPE_CHECKING:
-    from src.client.cli.producer_settings import ProducerSettings
-    from src.client.workers.captions.base import CaptionProvider
+    from src.processing.producer_settings import ProducerSettings
+    from src.processing.workers.captions.base import CaptionProvider
 
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -71,13 +71,13 @@ def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
 
 def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
     """Generate a resized JPEG proxy from a source image. Returns (bytes, width_orig, height_orig)."""
-    from src.client.proxy.proxy_gen import generate_proxy_bytes
+    from src.processing.proxy.proxy_gen import generate_proxy_bytes
     return generate_proxy_bytes(source_path)
 
 
 def _build_exif_payload(source_path: Path, media_type: str) -> dict:
     """Extract EXIF and build the JSON payload for the ingest endpoint."""
-    from src.client.workers.exif_extract import parse_duration
+    from src.processing.workers.exif_extract import parse_duration
 
     exif_data = extract_exif(source_path)
     sha256 = compute_sha256(source_path)
@@ -139,7 +139,7 @@ def _call_vision_ai(
 
 
 def _resolve_vision_config(
-    client: "LumiverbClient",
+    client: "ApiClient",
 ) -> tuple[str, str | None, str, str]:
     """The account's vision endpoint URL, key and model, chosen in Settings → AI
     (the one place they live), and where they came from.
@@ -186,7 +186,7 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
 def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
     """Extract a poster frame (first frame) from a video. Returns (jpeg_bytes, width, height)."""
     import tempfile
-    from src.client.video.clip_extractor import extract_video_frame
+    from src.processing.video.clip_extractor import extract_video_frame
     import pyvips
 
     width_orig, height_orig = _probe_video_dimensions(source_path)
@@ -369,7 +369,7 @@ def _walk_library(
     return results
 
 
-def _load_tenant_filters(client: LumiverbClient) -> list[PathFilter]:
+def _load_tenant_filters(client: ApiClient) -> list[PathFilter]:
     """Load tenant-level default filters from the API."""
     try:
         resp = client.get("/v1/tenant/filter-defaults")
@@ -385,7 +385,7 @@ def _load_tenant_filters(client: LumiverbClient) -> list[PathFilter]:
         return []
 
 
-def _load_library_filters(client: LumiverbClient, library_id: str) -> list[PathFilter]:
+def _load_library_filters(client: ApiClient, library_id: str) -> list[PathFilter]:
     """Load library-level filters from the API."""
     try:
         resp = client.get(f"/v1/libraries/{library_id}/filters")
@@ -413,7 +413,7 @@ def _backfill_one(
     vision_model_id: str,
     vision_provider: object,
     proxy_cache: "ProxyCache | None" = None,
-    client: "LumiverbClient | None" = None,
+    client: "ApiClient | None" = None,
 ) -> dict | None:
     """Read proxy from cache, call vision AI. Returns result dict or None."""
     import time as _time
@@ -447,7 +447,7 @@ def _backfill_one(
 
 
 def run_backfill_vision(
-    client: LumiverbClient,
+    client: ApiClient,
     library: dict,
     *,
     concurrency: int = 4,
@@ -471,8 +471,8 @@ def run_backfill_vision(
     """
     library_id = library["library_id"]
 
-    from src.client.cli.producer_settings import ProducerSettings
-    from src.client.workers.captions.factory import get_caption_provider
+    from src.processing.producer_settings import ProducerSettings
+    from src.processing.workers.captions.factory import get_caption_provider
 
     producers = producers or ProducerSettings(client)
     if provider is not None and model:
@@ -520,8 +520,8 @@ def run_backfill_vision(
         console.print("All assets already have AI descriptions.")
         return stats
 
-    from src.client.proxy.proxy_cache import ProxyCache
-    from src.client.cli.roots import reachable_root
+    from src.processing.proxy.proxy_cache import ProxyCache
+    from src.processing.roots import reachable_root
     root_path = reachable_root(library)
     proxy_cache = ProxyCache(root_path=root_path, client=client)
 

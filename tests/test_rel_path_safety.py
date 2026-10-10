@@ -56,7 +56,7 @@ def test_api_refuses_unsafe_rel_paths() -> None:
 def test_proxy_cache_never_reads_outside_the_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import patch
 
-    from src.client.proxy import proxy_cache
+    from src.processing.proxy import proxy_cache
 
     monkeypatch.setattr(proxy_cache, "cache_dir", lambda name: tmp_path / "cache" / name)
     root = tmp_path / "library"

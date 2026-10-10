@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from src.client.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
+from src.processing.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
 from src.producers.faces import PRODUCER as FACES
 from tests.test_face_detection import _make_mock_face, _make_sharp_image
 

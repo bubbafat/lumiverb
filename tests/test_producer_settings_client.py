@@ -18,11 +18,11 @@ def test_the_workers_constants_are_the_registrys_settings():
     import inspect
 
     from src.client.cli import config as cli_config
-    from src.client.proxy import proxy_gen
-    from src.client.video import scene_segmenter, video_scanner
-    from src.client.video.analysis_proxy import AnalysisProxySettings
-    from src.client.workers.embeddings import clip_provider
-    from src.client.workers.faces import insightface_provider as face
+    from src.processing.proxy import proxy_gen
+    from src.processing.video import scene_segmenter, video_scanner
+    from src.processing.video.analysis_proxy import AnalysisProxySettings
+    from src.processing.workers.embeddings import clip_provider
+    from src.processing.workers.faces import insightface_provider as face
 
     proxy = P.PRODUCERS["proxy"].defaults
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
@@ -40,7 +40,7 @@ def test_the_workers_constants_are_the_registrys_settings():
     clip = P.PRODUCERS["clip"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
     from src.client.cli import repair
-    from src.client.proxy import proxy_cache
+    from src.processing.proxy import proxy_cache
 
     assert repair.PROXY_CACHE_EDGE == proxy_cache._DEFAULT_MAX_EDGE == clip["input_edge"]
     # What changes the output lives only on the server: the worker's config has none of it.
@@ -51,7 +51,7 @@ def test_the_workers_constants_are_the_registrys_settings():
 def test_the_previews_settings_are_what_the_scan_renders():
     import inspect
 
-    from src.client.cli import ingest
+    from src.processing import ingest
 
     source = inspect.getsource(ingest._generate_video_preview)
     preview = P.PRODUCERS["video_preview"].defaults
@@ -77,7 +77,7 @@ def _client(settings: dict | None = None, fails: bool = False) -> MagicMock:
 
 
 def test_it_uses_the_servers_settings_and_says_so():
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
 
     ps = ProducerSettings(_client({"transcript": {"model": "medium"}}))
     assert ps.settings("transcript")["model"] == "medium"
@@ -88,14 +88,14 @@ def test_it_uses_the_servers_settings_and_says_so():
 
 
 def test_an_older_server_means_the_registrys_settings():
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
 
     ps = ProducerSettings(_client(fails=True))
     assert ps.settings("transcript") == P.effective_settings("transcript")
 
 
 def test_settings_actually_used_are_what_lineage_hashes():
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
 
     ps = ProducerSettings(_client())
     used = {**ps.settings("clip"), "input_edge": 2048}
@@ -111,7 +111,7 @@ SHA = "cd" * 32
 
 
 def _scan_args(tmp_path, media_type: str) -> dict:
-    from src.client.cli.scan import ScanStats
+    from src.processing.scan import ScanStats
 
     (tmp_path / "a.file").write_bytes(b"x")
     client = MagicMock()
@@ -125,7 +125,7 @@ def test_a_scanned_image_says_how_its_proxy_was_made(tmp_path):
     import json
     from unittest.mock import patch
 
-    from src.client.cli import scan
+    from src.processing import scan
 
     args = _scan_args(tmp_path, "image")
     with (
@@ -143,7 +143,7 @@ def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path
     import json
     from unittest.mock import patch
 
-    from src.client.cli import scan
+    from src.processing import scan
 
     args = _scan_args(tmp_path, "video")
     facet = MagicMock()
@@ -168,7 +168,7 @@ def test_a_failed_probe_isnt_claimed(tmp_path):
     import json
     from unittest.mock import patch
 
-    from src.client.cli import scan
+    from src.processing import scan
 
     args = _scan_args(tmp_path, "video")
     with (
@@ -188,8 +188,8 @@ def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
 
     from rich.console import Console
 
-    from src.client.cli import ingest
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing import ingest
+    from src.processing.producer_settings import ProducerSettings
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     model = "qwen3-vl:8b"
@@ -198,7 +198,7 @@ def test_descriptions_say_which_file_each_came_from(tmp_path, monkeypatch):
     client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
     with (
         patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
-        patch("src.client.workers.captions.factory.get_caption_provider") as provider,
+        patch("src.processing.workers.captions.factory.get_caption_provider") as provider,
         patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": model,
                                                             "description": "a dog", "tags": []}),
     ):
@@ -217,8 +217,8 @@ def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
 
     from rich.console import Console
 
-    from src.client.cli import ingest
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing import ingest
+    from src.processing.producer_settings import ProducerSettings
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     client = _client({a: {"model": "llava:13b"} for a in ("vision", "ocr", "scene_vision")})
@@ -227,7 +227,7 @@ def test_descriptions_record_the_model_that_made_them(tmp_path, monkeypatch):
     with (
         patch.object(ingest, "_resolve_vision_config",
                      return_value=("http://vision", None, "qwen3-vl:8b", "account settings")),
-        patch("src.client.workers.captions.factory.get_caption_provider") as provider,
+        patch("src.processing.workers.captions.factory.get_caption_provider") as provider,
         patch.object(ingest, "_backfill_one", return_value={"asset_id": "ast_a", "model_id": "qwen3-vl:8b",
                                                             "description": "a dog", "tags": []}),
     ):
@@ -246,8 +246,8 @@ def test_descriptions_ask_for_whats_missing_only(tmp_path, monkeypatch):
 
     from rich.console import Console
 
-    from src.client.cli import ingest
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing import ingest
+    from src.processing.producer_settings import ProducerSettings
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     model = "qwen3-vl:8b"
@@ -264,7 +264,7 @@ def test_descriptions_ask_for_whats_missing_only(tmp_path, monkeypatch):
 
     with (
         patch.object(ingest, "_resolve_vision_config", return_value=("http://vision", None, model, "account settings")),
-        patch("src.client.workers.captions.factory.get_caption_provider"),
+        patch("src.processing.workers.captions.factory.get_caption_provider"),
         patch.object(ingest, "_backfill_one", side_effect=one),
     ):
         ingest.run_backfill_vision(client, {"library_id": "lib_1", "name": "L", "root_path": str(tmp_path)},
@@ -279,7 +279,7 @@ def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_
     defaults in between, nor after the server fails to answer."""
     import threading
 
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
 
     client = _client({"vision": {"model": "custom", "max_edge": 999}})
     producers = ProducerSettings(client)

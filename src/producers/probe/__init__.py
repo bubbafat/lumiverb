@@ -1,4 +1,4 @@
-"""Video facts: one ffprobe pass over a video (src/client/video/probe.py),
+"""Video facts: one ffprobe pass over a video (src/processing/video/probe.py),
 stored as its facet (PUT /v1/assets/{id}/video-facet)."""
 
 from src.producers.contract import SEE, VIDEO, ProducerSpec

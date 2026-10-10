@@ -1,5 +1,5 @@
 """Faces in photos (InsightFace), on the brain's GPU, 25 photos a batch
-(src/client/workers/faces/insightface_provider.py, run by src/client/cli/repair.py)."""
+(src/processing/workers/faces/insightface_provider.py, run by src/client/cli/repair.py)."""
 
 from src.producers.contract import IMAGE, ProducerSpec, Setting
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from src.client.cli.producer_settings import ProducerSettings
+from src.processing.producer_settings import ProducerSettings
 
 _REGISTRY = ProducerSettings(None)
 

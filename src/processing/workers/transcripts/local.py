@@ -9,9 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from src.client.workers.transcripts import child
-from src.client.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
-from src.client.workers.transcripts.speech import speech_seconds, time_allowed
+from src.processing.workers.transcripts import child
+from src.processing.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
+from src.processing.workers.transcripts.speech import speech_seconds, time_allowed
 
 # Failures mid-transcription that are the computer's, not the clip's.
 _MACHINE_TROUBLE = ("out of memory", "cuda", "cublas", "cudnn", "no space left")

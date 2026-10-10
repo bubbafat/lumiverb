@@ -57,16 +57,15 @@ LOCK_CHECK_SEC = 60.0
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
 
 
-def default_capacity(cfg: Any) -> dict[str, int]:
+def default_capacity(here: Any) -> dict[str, int]:
     """The shared pools' slots: today's limits, which the brain handles; a
     pool only a producer names gets the slots it declares."""
-    from src.client.cli.repair import default_render_concurrency
     from src.shared.producers import PRODUCERS
 
     sized = {
         "scan": 1,  # each scan is parallel inside
         "probe": 2,
-        "render": cfg.render_concurrency or default_render_concurrency(),
+        "render": here.renders,
         # CLIP and face detection take turns on this machine's GPU, beside
         # the decodes and the AI machine that may share it.
         "gpu": 1,
@@ -545,21 +544,6 @@ def _paused_in_database(tenant_id: str) -> set[str]:
 KEY_LABEL = "scheduler"
 
 
-def api_url() -> str:
-    """Where the scheduler reaches the API: LUMIVERB_API_URL, else the API's own port on this machine."""
-    if url := os.environ.get("LUMIVERB_API_URL"):
-        return url.rstrip("/")
-    port = os.environ.get("API_PORT")
-    if port:
-        host = os.environ.get("API_LISTEN_HOST", "127.0.0.1")
-        if host in ("0.0.0.0", "::", ""):
-            host = "127.0.0.1"
-        return f"http://{host}:{port}"
-    from src.client.cli.config import get_api_url
-
-    return get_api_url()
-
-
 def scheduler_key(tenant_id: str) -> str:
     """A key for the scheduler's calls on the account's behalf: made at
     start, the previous one revoked. Nothing to configure."""
@@ -595,9 +579,9 @@ def _without_nul(kwargs: dict) -> dict:
 def scheduler_client(url: str, key: str) -> Any:
     """An API client that notes when its key stops working (someone revoked
     it), so the account gets a new one."""
-    from src.client.cli.client import LumiverbClient
+    from src.processing.api import ApiClient
 
-    class SchedulerClient(LumiverbClient):
+    class SchedulerClient(ApiClient):
         unauthorized = False
 
         def _handle_response(self, response):  # type: ignore[no-untyped-def]
@@ -616,7 +600,7 @@ def scheduler_client(url: str, key: str) -> Any:
         def patch(self, path, **kwargs):  # type: ignore[no-untyped-def]
             return super().patch(path, **_without_nul(kwargs))
 
-    return SchedulerClient(base_url=url, token=key)
+    return SchedulerClient(url, key)
 
 
 class Accounts:
@@ -630,6 +614,8 @@ class Accounts:
 
     def __init__(self, scan_state: Any, *, url: str | None = None, clock: Callable[[], float] = time.monotonic) -> None:
         self._scan_state = scan_state
+        from src.server.scheduler.settings import api_url
+
         self._url = url or api_url()
         self._clock = clock
         self._accounts: dict[str, Any] = {}
@@ -772,9 +758,9 @@ def configure_logging() -> None:
 
 def main() -> int:
     """lumiverb-scheduler: run every account's processing on this machine."""
-    from src.client.cache_dir import cache_dir
-    from src.client.cli.config import load_config
-    from src.client.proxy.analysis_cache import clear_leftovers
+    from src.processing.cache_dir import cache_dir
+    from src.processing import machine
+    from src.processing.proxy.analysis_cache import clear_leftovers
     from src.server.scheduler.scans import (
         STATE_FILE,
         ServiceLock,
@@ -783,7 +769,11 @@ def main() -> int:
         saved_form,
     )
 
+    from src.server.scheduler.settings import SchedulerSettings
+
     configure_logging()
+    here = SchedulerSettings().machine()
+    machine.use(here)  # never the CLI's config
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")
@@ -809,9 +799,7 @@ def main() -> int:
                 last[0] = now
 
         accounts = Accounts(state)
-        cfg = load_config()
-        gpu_decodes = cfg.gpu_decodes if cfg.analysis_proxy_decoder != "cpu" else 0
-        scheduler = Scheduler(accounts, capacity=default_capacity(cfg), gpu_decodes=gpu_decodes)
+        scheduler = Scheduler(accounts, capacity=default_capacity(here), gpu_decodes=here.gpu_decodes_here)
         logger.info("scheduler: started")
         try:
             kept = run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all,

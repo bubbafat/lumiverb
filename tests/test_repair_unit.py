@@ -315,9 +315,9 @@ def test_ocr_one_returns_empty_text_on_none() -> None:
 
 # ---- _transcribe_one ------------------------------------------------------
 
-from src.client.video.audio import AudioTrack  # noqa: E402
-from src.client.workers.transcripts.base import Heard, Segment, TranscriptError  # noqa: E402
-from src.client.workers.transcripts.speech import SpeechError  # noqa: E402
+from src.processing.video.audio import AudioTrack  # noqa: E402
+from src.processing.workers.transcripts.base import Heard, Segment, TranscriptError  # noqa: E402
+from src.processing.workers.transcripts.speech import SpeechError  # noqa: E402
 
 
 def _ffmpeg_writes(size: int = 10_000, returncode: int = 0, stderr: bytes = b""):
@@ -357,7 +357,7 @@ def test_transcribe_one_hears_every_audio_track(tmp_path: Path) -> None:
     src.write_bytes(b"\x00" * 16)
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac"), AudioTrack(1, 1, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()) as run, \
-         patch("src.client.workers.transcripts.speech.find_speech", return_value=[]):
+         patch("src.processing.workers.transcripts.speech.find_speech", return_value=[]):
         assert _transcribe_one(src, _hears(Heard())) == ("", "")
     ffmpeg_cmd = " ".join(run.call_args_list[0].args[0])
     assert "amix=inputs=2" in ffmpeg_cmd
@@ -390,7 +390,7 @@ def test_transcribe_one_finds_the_speech_then_a_machine_hears_only_it(tmp_path: 
     transcriber = _hears(Heard([Segment(0.0, 0.8, " hi there")], "english"))
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), \
-         patch("src.client.workers.transcripts.speech.find_speech", side_effect=find_speech):
+         patch("src.processing.workers.transcripts.speech.find_speech", side_effect=find_speech):
         out = _transcribe_one(src, transcriber, 700)
     assert found == [("audio.wav", "speech.wav", 700)]
     [call] = transcriber.transcribe.call_args_list
@@ -404,7 +404,7 @@ def test_transcribe_one_nothing_said_needs_no_machine(tmp_path: Path) -> None:
     transcriber = _hears(Heard())
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), \
-         patch("src.client.workers.transcripts.speech.find_speech", return_value=[]):
+         patch("src.processing.workers.transcripts.speech.find_speech", return_value=[]):
         assert _transcribe_one(src, transcriber) == ("", "")
     transcriber.transcribe.assert_not_called()
 
@@ -414,7 +414,7 @@ def test_transcribe_one_speech_that_cant_be_found_is_retried_later(tmp_path: Pat
     src.write_bytes(b"\x00" * 16)
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), \
-         patch("src.client.workers.transcripts.speech.find_speech", side_effect=SpeechError("boom")):
+         patch("src.processing.workers.transcripts.speech.find_speech", side_effect=SpeechError("boom")):
         assert _transcribe_one(src, _hears(Heard())) is None
 
 
@@ -423,7 +423,7 @@ def test_transcribe_one_a_machines_failure_says_whose_it_is(tmp_path: Path) -> N
     src.write_bytes(b"\x00" * 16)
     with patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), \
-         patch("src.client.workers.transcripts.speech.find_speech", return_value=[{"start": 0, "end": 16_000}]), \
+         patch("src.processing.workers.transcripts.speech.find_speech", return_value=[{"start": 0, "end": 16_000}]), \
          pytest.raises(TranscriptError) as e:
         _transcribe_one(src, _hears(TranscriptError("refused", endpoint_fault=True)))
     assert e.value.endpoint_fault
@@ -654,7 +654,7 @@ def test_run_repair_redetect_faces_dry_run_pages_all_images(tmp_path: Path) -> N
 
 def test_probe_one_puts_facet(tmp_path: Path) -> None:
     from src.client.cli.repair import _probe_one
-    from src.client.video.probe import VideoFacet
+    from src.processing.video.probe import VideoFacet
     from src.shared import producers as P
 
     (tmp_path / "a.mov").write_bytes(b"x")
@@ -715,7 +715,7 @@ def test_probe_one_api_failure_is_a_failed_clip(tmp_path: Path) -> None:
     """An asset trashed mid-run (404 on PUT) fails that clip, not the run."""
     from src.client.cli.client import LumiverbAPIError
     from src.client.cli.repair import _probe_one
-    from src.client.video.probe import VideoFacet
+    from src.processing.video.probe import VideoFacet
 
     (tmp_path / "a.mov").write_bytes(b"x")
     facet = VideoFacet(

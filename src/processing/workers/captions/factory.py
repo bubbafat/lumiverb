@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.client.workers.captions.base import CaptionProvider
-from src.client.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
+from src.processing.workers.captions.base import CaptionProvider
+from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
 
 
 def get_caption_provider(

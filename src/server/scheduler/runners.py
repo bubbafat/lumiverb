@@ -2,7 +2,7 @@
 
 Each runner does what the worker's step did for one clip (faces: one
 batch), with the same code: src/client/cli/repair.py's per-clip functions,
-src/client/cli/video_index.py for scenes. Results are saved through the
+src/processing/video_index.py for scenes. Results are saved through the
 API's batch routes on the brain (one clip each: the batch routes leave
 search to the upkeep sweep instead of committing the index per clip), with
 lineage, as before. A clip that can't be made is reported as failing (the
@@ -90,7 +90,7 @@ def whose(error: object) -> str:
 def _api_error(error: object) -> bool:
     import httpx
 
-    from src.client.cli.client import LumiverbAPIError
+    from src.processing.api import LumiverbAPIError
 
     return isinstance(error, (LumiverbAPIError, httpx.HTTPError))
 
@@ -191,12 +191,12 @@ def probe(acct: Account, job: Job) -> Outcome:
 
 def render(acct: Account, job: Job) -> Outcome:
     from src.client.cli.repair import _render_one
-    from src.client.video.analysis_proxy import AnalysisProxySettings
+    from src.processing.video.analysis_proxy import AnalysisProxySettings
 
-    cfg = acct.cfg
+    here = acct.machine
     settings = AnalysisProxySettings.for_producer(acct.producers.settings("analysis_proxy"),
-                                                  cfg.analysis_proxy_encoder, cfg.analysis_proxy_decoder,
-                                                  cfg.gpu_decodes)
+                                                  here.analysis_proxy_encoder, here.analysis_proxy_decoder,
+                                                  here.gpu_decodes)
     fail = _saving(acct.failures.for_artifact("analysis_proxy"))
     client = _Saves(acct)
     return _on_storage(acct, job, lambda root, a: _render_one(client, root, a, settings, acct.analysis_cache,
@@ -231,7 +231,7 @@ def clip(acct: Account, job: Job) -> Outcome:
 
 
 def vision(acct: Account, job: Job) -> Outcome:
-    from src.client.cli.ingest import _backfill_one
+    from src.processing.ingest import _backfill_one
 
     provider, model = acct.vision_provider()
     used = acct.producers.with_model("vision", model)
@@ -259,7 +259,7 @@ def vision(acct: Account, job: Job) -> Outcome:
 
 def ocr(acct: Account, job: Job) -> Outcome:
     from src.client.cli.repair import _ocr_one
-    from src.client.workers.captions.base import CaptionError
+    from src.processing.workers.captions.base import CaptionError
 
     provider, model = acct.vision_provider()
     used = acct.producers.with_model("ocr", model)
@@ -287,7 +287,7 @@ def ocr(acct: Account, job: Job) -> Outcome:
 
 def transcript(acct: Account, job: Job) -> Outcome:
     from src.client.cli.repair import _transcribe_one
-    from src.client.workers.transcripts.base import TranscriptError
+    from src.processing.workers.transcripts.base import TranscriptError
 
     vad_ms = acct.producers.settings("transcript")["vad_min_silence_ms"]
     used = acct.producers.with_model("transcript", acct.transcripts.model)
@@ -333,7 +333,7 @@ def _noting(fail: Callable[[str, object], Any], reported: set[str]) -> Callable[
 
 def scenes(acct: Account, job: Job) -> Outcome:
     """A video's scenes. A clip neither made nor reported waits the long while."""
-    from src.client.cli.video_index import run_video_index
+    from src.processing.video_index import run_video_index
 
     if acct.stopping.is_set():
         return NOT_TRIED
@@ -354,7 +354,7 @@ def scenes(acct: Account, job: Job) -> Outcome:
 
 def scene_vision(acct: Account, job: Job) -> Outcome:
     """A video's scenes described (as scenes(): a clip neither made nor reported waits)."""
-    from src.client.cli.video_index import run_video_enrich
+    from src.processing.video_index import run_video_enrich
 
     if acct.stopping.is_set():
         return NOT_TRIED
@@ -405,7 +405,7 @@ class FaceRunner:
         from src.client.cli.repair import _silence_subprocess_stdout
 
         return mp.get_context("spawn").Pool(1, initializer=_silence_subprocess_stdout,
-                                            maxtasksperchild=self._cfg.face_batch_limit)
+                                            maxtasksperchild=self._cfg.face_batches_per_process)
 
     @property
     def idle(self) -> bool:

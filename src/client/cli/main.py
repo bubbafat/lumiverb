@@ -54,7 +54,11 @@ console = Console()
 @app.callback()
 def _main() -> None:
     """Lumiverb media asset management CLI."""
+    from src.client.cli.config import machine_settings
+    from src.processing import machine
+
     configure_logging()
+    machine.use(machine_settings)  # read when a command first needs it
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +125,7 @@ def config_map_root(
     Libraries keep the root the editing machine sees, since exports point
     editors there. Scan and enrich on this machine use the mapped path.
     """
-    from src.client.cli.roots import _clean
+    from src.processing.roots import _clean
 
     if not server_prefix.startswith("/") or not local_prefix.startswith("/"):
         console.print("[red]Both paths must be absolute.[/red]")
@@ -141,7 +145,7 @@ def config_unmap_root(
     server_prefix: Annotated[str, typer.Argument(help="A prefix added with map-root.")],
 ) -> None:
     """Remove a root mapping."""
-    from src.client.cli.roots import _clean
+    from src.processing.roots import _clean
 
     src = _clean(server_prefix)
     cfg = load_config()
@@ -184,7 +188,7 @@ def library_list() -> None:
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Root path", overflow="fold")
-    from src.client.cli.roots import local_library_root
+    from src.processing.roots import local_library_root
 
     root_map = load_config().root_map
     # Shown only when a mapping moves a root on this machine.
@@ -216,7 +220,7 @@ def library_report_changes(
     """
     import os
 
-    from src.client.cli.roots import unmap_path
+    from src.processing.roots import unmap_path
 
     given = list(paths or [])
     if stdin:
@@ -739,9 +743,9 @@ def admin_vision_test(
     """
     from datetime import datetime, timezone
 
-    from src.client.cli.ingest import _resolve_vision_config
+    from src.processing.ingest import _resolve_vision_config
     from src.shared.file_extensions import IMAGE_EXTENSIONS
-    from src.client.workers.captions.factory import get_caption_provider
+    from src.processing.workers.captions.factory import get_caption_provider
 
     path = path.expanduser().resolve()
     if not path.is_dir():
@@ -773,7 +777,7 @@ def admin_vision_test(
     if model:
         model_id = model
     elif url:
-        from src.client.workers.captions.model_discovery import discover_model_id
+        from src.processing.workers.captions.model_discovery import discover_model_id
         model_id = discover_model_id(vision_url, vision_key)
 
     if not vision_url:
@@ -795,7 +799,7 @@ def admin_vision_test(
     for i, img_path in enumerate(images, 1):
         console.print(f"[dim][{i}/{len(images)}][/dim] {img_path.name} ... ", end="")
 
-        from src.client.workers.captions.base import CaptionError
+        from src.processing.workers.captions.base import CaptionError
 
         try:
             desc_result = provider.describe(img_path)  # description + tags
@@ -1005,7 +1009,7 @@ def scan(
     without hashing (fast mode). Use --thorough to SHA-verify all files.
     Use --force to re-scan everything regardless of SHA.
     """
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     if allow_moves and skip_moves:
         console.print("[red]Cannot use both --allow-moves and --skip-moves[/red]")

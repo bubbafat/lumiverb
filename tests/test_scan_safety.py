@@ -19,8 +19,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from src.client.cli.ingest import _walk_library
-from src.client.cli.scan import _ServerAsset, run_scan
+from src.processing.ingest import _walk_library
+from src.processing.scan import _ServerAsset, run_scan
 from src.shared.io_utils import resolve_source_path
 from src.shared.path_filter import PathFilter
 
@@ -109,13 +109,13 @@ def _scan_with(
     elif settings is not None:
         client.get.return_value.json.return_value = settings
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", side_effect=walk or (lambda *a, **k: local)),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value=ignored or {}),
-        patch("src.client.cli.scan._split_files", split or MagicMock(return_value=([], [], local))),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", side_effect=walk or (lambda *a, **k: local)),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.processing.scan._fetch_ignored_paths", return_value=ignored or {}),
+        patch("src.processing.scan._split_files", split or MagicMock(return_value=([], [], local))),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         client.scan_stats = run_scan(
             client,
@@ -157,7 +157,7 @@ def test_a_mount_gone_when_files_look_missing_stops_the_scan(tmp_path: Path) -> 
     gone (a network drop, a clean unmount mid-walk), the scan stops and
     archives nothing (Robert's rule, Oct 8). The worker keeps the changes."""
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, None]) as probe:
+    with patch("src.processing.scan.reachable_root", side_effect=[root, None]) as probe:
         client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
 
     assert _deleted_ids(client) == []
@@ -168,7 +168,7 @@ def test_a_mount_gone_when_files_look_missing_stops_the_scan(tmp_path: Path) -> 
 @pytest.mark.fast
 def test_files_missing_from_a_mount_still_there_are_archived(tmp_path: Path) -> None:
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True)
 
     assert len(_deleted_ids(client)) == 90
@@ -178,7 +178,7 @@ def test_files_missing_from_a_mount_still_there_are_archived(tmp_path: Path) -> 
 @pytest.mark.fast
 def test_a_scan_with_nothing_missing_doesnt_check_the_mount_again(tmp_path: Path) -> None:
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", return_value=root) as probe:
+    with patch("src.processing.scan.reachable_root", return_value=root) as probe:
         _scan_with(tmp_path, on_disk=100, on_server=100)
 
     assert probe.call_count == 1
@@ -188,7 +188,7 @@ def test_a_scan_with_nothing_missing_doesnt_check_the_mount_again(tmp_path: Path
 def test_an_unmounted_share_mid_scan_archives_nothing(tmp_path: Path, monkeypatch) -> None:
     """End to end through the real mount check: fstab lists the share, it's
     mounted when the scan starts, and it goes away during the walk."""
-    from src.client.cli import roots
+    from src.processing import roots
 
     root = tmp_path / "lib"
     fstab = tmp_path / "fstab"
@@ -215,7 +215,7 @@ def test_a_share_gone_before_the_walk_found_anything_keeps_the_changes(tmp_path:
     again, and if it's gone the scan says so (the worker then keeps the
     change reports for when it's back)."""
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, None]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, None]):
         client = _scan_with(tmp_path, on_disk=0, on_server=100, allow_mass_delete=True)
     assert _deleted_ids(client) == []
     assert client.scan_stats.root_unreachable
@@ -224,7 +224,7 @@ def test_a_share_gone_before_the_walk_found_anything_keeps_the_changes(tmp_path:
 @pytest.mark.fast
 def test_a_library_with_no_media_on_a_present_share_is_just_empty(tmp_path: Path) -> None:
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=0, on_server=0)
     assert not client.scan_stats.root_unreachable
 
@@ -234,9 +234,9 @@ def _moved_file_scan(tmp_path: Path, *, follow_moves: bool, **kwargs) -> tuple[M
     moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
     local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
     with (
-        patch("src.client.cli.scan._detect_moves", return_value=([], [moved])) as detect,
-        patch("src.client.cli.scan._scan_one") as scan_one,
-        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.processing.scan._detect_moves", return_value=([], [moved])) as detect,
+        patch("src.processing.scan._scan_one") as scan_one,
+        patch("src.processing.scan.ProxyCache"),
     ):
         client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
                             split=MagicMock(return_value=([moved], [], [local[0]])),
@@ -276,9 +276,9 @@ def _moved_file_scan_unreadable(tmp_path: Path):
     moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
     local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
     with (
-        patch("src.client.cli.scan._detect_moves", return_value=([], [moved])) as detect,
-        patch("src.client.cli.scan._scan_one") as scan_one,
-        patch("src.client.cli.scan.ProxyCache"),
+        patch("src.processing.scan._detect_moves", return_value=([], [moved])) as detect,
+        patch("src.processing.scan._scan_one") as scan_one,
+        patch("src.processing.scan.ProxyCache"),
     ):
         client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
                             split=MagicMock(return_value=([moved], [], [local[0]])), settings="unreadable")
@@ -291,7 +291,7 @@ def test_settings_it_cant_read_still_let_skip_moves_hold_back_deletions(tmp_path
     deletion might be half of a move, so none are sent."""
     moved = {"rel_path": "moved/f1.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}
     local = [{"rel_path": "f0.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}, moved]
-    with patch("src.client.cli.scan._scan_one"), patch("src.client.cli.scan.ProxyCache"):
+    with patch("src.processing.scan._scan_one"), patch("src.processing.scan.ProxyCache"):
         client = _scan_with(tmp_path, on_disk=1, on_server=2, local=local,
                             split=MagicMock(return_value=([moved], [], [local[0]])), settings="unreadable",
                             skip_moves=True)
@@ -309,7 +309,7 @@ def test_an_archive_that_moved_to_a_copy_counts_as_moved(tmp_path: Path) -> None
 
 
 def _scan_counting(tmp_path: Path, client: MagicMock):
-    from src.client.cli.scan import run_scan
+    from src.processing.scan import run_scan
 
     root = tmp_path / "lib"
     root.mkdir(exist_ok=True)
@@ -319,13 +319,13 @@ def _scan_counting(tmp_path: Path, client: MagicMock):
                 for i in range(3)}
     client.get.return_value.json.return_value = {"follow_moves": True}
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=local),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], local))),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", return_value=local),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._split_files", MagicMock(return_value=([], [], local))),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         return run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, console=Console(quiet=True),
                         allow_moves=True, allow_mass_delete=True)
@@ -378,11 +378,11 @@ def test_scan_skips_trashed_paths(tmp_path: Path) -> None:
 @pytest.mark.fast
 def test_another_file_at_a_trashed_path_is_scanned(tmp_path: Path) -> None:
     # A changed file is a new clip: only the file a person removed is skipped.
-    from src.client.cli.scan import _ServerAsset
+    from src.processing.scan import _ServerAsset
 
     split = MagicMock(return_value=([], [], []))
     removed = [_ServerAsset(asset_id="", sha256="a" * 64)]
-    with patch("src.client.cli.scan.compute_sha256",
+    with patch("src.processing.scan.compute_sha256",
                side_effect=lambda p: "a" * 64 if p.name == "f1.jpg" else "b" * 64) as hashed:
         _scan_with(tmp_path, on_disk=4, on_server=4, ignored={"f1.jpg": removed, "f2.jpg": removed}, split=split)
 
@@ -396,14 +396,14 @@ def test_a_removed_file_left_as_it_was_isnt_read_again(tmp_path: Path) -> None:
     # Review round 2: archives kept on disk were hashed on every scan.
     from datetime import datetime, timezone
 
-    from src.client.cli.scan import _ServerAsset
+    from src.processing.scan import _ServerAsset
 
     when = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
     local = [{"rel_path": f"f{i}.jpg", "file_size": 4, "file_mtime": when, "media_type": "image", "ext": ".jpg"}
              for i in range(3)]
     removed = [_ServerAsset(asset_id="", sha256="a" * 64, file_size=4, file_mtime="2026-10-01T08:00:00-04:00")]
     split = MagicMock(return_value=([], [], []))
-    with patch("src.client.cli.scan.compute_sha256", return_value="b" * 64) as hashed:
+    with patch("src.processing.scan.compute_sha256", return_value="b" * 64) as hashed:
         _scan_with(tmp_path, on_disk=3, on_server=3, local=local, ignored={"f1.jpg": removed}, split=split)
     assert hashed.call_count == 0
     assert {f["rel_path"] for f in split.call_args[0][0]} == {"f0.jpg", "f2.jpg"}
@@ -454,13 +454,13 @@ def test_scan_counts_files_still_being_written(tmp_path: Path) -> None:
     root.mkdir()
     local = [_local("done.jpg", 600), _local("copying.jpg", 2)]
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=local),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._split_files", MagicMock(return_value=([], [], []))),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", return_value=local),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._split_files", MagicMock(return_value=([], [], []))),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
                          console=Console(quiet=True), skip_moves=True)
@@ -485,14 +485,14 @@ def test_scan_names_the_files_that_failed(tmp_path: Path) -> None:
     (root / "bad.jpg").write_bytes(b"jpeg")
     new = [{"rel_path": "bad.jpg", "file_size": 4, "file_mtime": None, "media_type": "image", "ext": ".jpg"}]
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._walk_library", return_value=new),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value={}),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._generate_proxy_bytes", side_effect=RuntimeError("not a JPEG")),
-        patch("src.client.cli.scan.ProxyCache"),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._walk_library", return_value=new),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._generate_proxy_bytes", side_effect=RuntimeError("not a JPEG")),
+        patch("src.processing.scan.ProxyCache"),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(root)},
                          console=Console(quiet=True), skip_moves=True)
@@ -515,13 +515,13 @@ def _scan_disk(root: Path, existing: dict[str, _ServerAsset], *, library_filters
     client = MagicMock()
     client.raw.return_value = _answer(200, {"trashed": [], "not_found": [], "handed_over": []})
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=library_filters or []),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
-        patch("src.client.cli.scan.ProxyCache"),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=library_filters or []),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.processing.scan.ProxyCache"),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
                                 console=Console(quiet=True), allow_moves=True, **kwargs)
@@ -617,13 +617,13 @@ def test_a_folder_that_cannot_be_listed_deletes_nothing(locked: Path) -> None:
 @needs_permissions
 def test_a_scan_says_which_folders_it_could_not_list(locked: Path) -> None:
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=_assets("open/a.jpg")),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
-        patch("src.client.cli.scan.ProxyCache"),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=_assets("open/a.jpg")),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._split_files", side_effect=lambda files, existing, thorough: ([], [], files)),
+        patch("src.processing.scan.ProxyCache"),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": str(locked)}, console=Console(quiet=True))
     assert stats.unlisted == ["Locked"]
@@ -632,7 +632,7 @@ def test_a_scan_says_which_folders_it_could_not_list(locked: Path) -> None:
 @pytest.mark.fast
 @needs_permissions
 def test_moves_outside_a_folder_that_cannot_be_listed_still_apply(locked: Path) -> None:
-    from src.client.workers.exif_extract import compute_sha256
+    from src.processing.workers.exif_extract import compute_sha256
 
     moved = _write(locked, "open/moved.jpg", b"moved bytes")
     for f in (moved, locked / "open" / "a.jpg"):
@@ -644,13 +644,13 @@ def test_moves_outside_a_folder_that_cannot_be_listed_still_apply(locked: Path) 
     }
     client = MagicMock()
     with (
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
-        patch("src.client.cli.scan._fetch_existing_assets_with_sha", return_value=existing),
-        patch("src.client.cli.scan._fetch_ignored_paths", return_value={}),
-        patch("src.client.cli.scan._scan_one"),
-        patch("src.client.cli.scan.ProxyCache"),
-        patch("src.client.cli.scan._populate_cache_for_unchanged"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan._scan_one"),
+        patch("src.processing.scan.ProxyCache"),
+        patch("src.processing.scan._populate_cache_for_unchanged"),
     ):
         run_scan(client, {"library_id": "lib_1", "root_path": str(locked)}, path_prefix=None,
                  console=Console(quiet=True), allow_moves=True)
@@ -665,9 +665,9 @@ def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
     # Checked reachable, then unmounted: nothing was scanned, so the worker
     # must keep the reports.
     with (
-        patch("src.client.cli.scan.reachable_root", return_value=tmp_path / "gone"),
-        patch("src.client.cli.scan._load_tenant_filters", return_value=[]),
-        patch("src.client.cli.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan.reachable_root", return_value=tmp_path / "gone"),
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
     ):
         stats = run_scan(MagicMock(), {"library_id": "lib_1", "root_path": "/x"}, path_prefix="Day 1",
                          console=Console(quiet=True))
@@ -806,7 +806,7 @@ def _mass_missing() -> MagicMock:
 def test_a_scan_sends_its_missing_clips_in_one_request(tmp_path: Path) -> None:
     """The server's mass-missing rule judges a scan's missing clips together."""
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=10, on_server=1200)
     calls = _archive_calls(client)
     assert len(calls) == 1 and len(calls[0].kwargs["json"]["asset_ids"]) == 1190
@@ -816,7 +816,7 @@ def test_a_scan_sends_its_missing_clips_in_one_request(tmp_path: Path) -> None:
 @pytest.mark.fast
 def test_the_server_asking_about_mass_missing_skips_them(tmp_path: Path) -> None:
     root = tmp_path / "lib"
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=10, on_server=100, raw_answers=[_mass_missing()])
     assert len(_archive_calls(client)) == 1
     assert client.scan_stats.deleted == 0
@@ -826,7 +826,7 @@ def test_the_server_asking_about_mass_missing_skips_them(tmp_path: Path) -> None
 def test_allow_mass_delete_answers_with_the_count(tmp_path: Path) -> None:
     root = tmp_path / "lib"
     ok = _answer(200, {"trashed": [], "not_found": [], "handed_over": []})
-    with patch("src.client.cli.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
         client = _scan_with(tmp_path, on_disk=10, on_server=100, allow_mass_delete=True,
                             raw_answers=[_mass_missing(), ok])
     calls = _archive_calls(client)

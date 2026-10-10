@@ -1,7 +1,7 @@
 """Transcripts of videos, by the transcripts machines (Settings → AI).
 
 The silences skipped (VAD) are found by the scheduler, whichever machine
-transcribes the speech (src/client/workers/transcripts/speech.py)."""
+transcribes the speech (src/processing/workers/transcripts/speech.py)."""
 
 from src.producers.contract import ITS_JOBS, VIDEO, ProducerSpec, Setting
 

@@ -47,7 +47,7 @@ class UpsertAssetResponse(BaseModel):
 
 
 class VideoFacetModel(BaseModel):
-    """One ffprobe pass over a video (see src/client/video/probe.py).
+    """One ffprobe pass over a video (see src/processing/video/probe.py).
 
     Validated on the way in: a malformed value would break every export of
     every project that holds the clip.

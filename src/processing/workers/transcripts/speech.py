@@ -19,8 +19,8 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-from src.client.workers.transcripts import child
-from src.client.workers.transcripts.base import Segment
+from src.processing.workers.transcripts import child
+from src.processing.workers.transcripts.base import Segment
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ import logging
 import threading
 from pathlib import Path
 
-from src.client.workers.embeddings.base import EmbeddingProvider
+from src.processing.workers.embeddings.base import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

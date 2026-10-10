@@ -33,9 +33,9 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.client.cli.client import LumiverbAPIError, LumiverbClient
-from src.client.cli.roots import local_library_root, reachable_root
-from src.client.cli.ingest import (
+from src.processing.api import ApiClient, LumiverbAPIError
+from src.processing.roots import local_library_root, reachable_root
+from src.processing.ingest import (
     SUPPORTED_EXTENSIONS,
     _build_exif_payload,
     _detect_media_type,
@@ -47,9 +47,9 @@ from src.client.cli.ingest import (
     _load_tenant_filters,
     _walk_library,
 )
-from src.client.proxy.proxy_cache import ProxyCache
-from src.client.workers.exif_extract import compute_sha256
-from src.client.video.probe import probe_video
+from src.processing.proxy.proxy_cache import ProxyCache
+from src.processing.workers.exif_extract import compute_sha256
+from src.processing.video.probe import probe_video
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 from src.shared.producers import effective_settings, lineage as producer_lineage
 
@@ -95,7 +95,7 @@ class _ServerAsset:
 
 
 def _fetch_existing_assets_with_sha(
-    client: LumiverbClient, library_id: str,
+    client: ApiClient, library_id: str,
 ) -> dict[str, _ServerAsset]:
     """Page through all assets on the server. Returns {rel_path: _ServerAsset}."""
     existing: dict[str, _ServerAsset] = {}
@@ -126,7 +126,7 @@ def _fetch_existing_assets_with_sha(
     return existing
 
 
-def _fetch_ignored_paths(client: LumiverbClient, library_id: str) -> dict[str, list[_ServerAsset] | None]:
+def _fetch_ignored_paths(client: ApiClient, library_id: str) -> dict[str, list[_ServerAsset] | None]:
     """Files a person trashed, archived or deleted for good, by rel_path: each
     one's content, size and time, or None for whatever is at the path. Scans
     skip them: Lumiverb never deletes originals, so they may still be on
@@ -218,7 +218,7 @@ def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
     return local_mtime == server_mtime
 
 
-def _record_file_stat(client: LumiverbClient, library_id: str, f: dict) -> None:
+def _record_file_stat(client: ApiClient, library_id: str, f: dict) -> None:
     """Tell the server a file's current size and mtime, so the next scan's
     fast check matches. A failure only costs a hash next time."""
     data = {"library_id": library_id, "rel_path": f["rel_path"], "file_size": f["file_size"],
@@ -230,7 +230,7 @@ def _record_file_stat(client: LumiverbClient, library_id: str, f: dict) -> None:
         logger.warning("Couldn't record the new mtime of %s: %s", f["rel_path"], exc)
 
 
-def _fetch_follow_moves(client: LumiverbClient) -> bool | None:
+def _fetch_follow_moves(client: ApiClient) -> bool | None:
     """The account's "follow moves and renames" setting: on when the server is
     too old to say, None when it can't be read."""
     try:
@@ -406,7 +406,7 @@ def _made(artifact: str, source_sha256: str | None) -> dict:
 
 def _scan_one(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     library_id: str,
     root_path: Path,
     f: dict,
@@ -486,7 +486,7 @@ def _scan_one(
 
 def _scan_one_video(
     *,
-    client: LumiverbClient,
+    client: ApiClient,
     library_id: str,
     root_path: Path,
     f: dict,
@@ -581,7 +581,7 @@ def _scan_one_video(
 
 
 def _populate_cache_for_unchanged(
-    client: LumiverbClient,
+    client: ApiClient,
     unchanged_files: list[dict],
     proxy_cache: ProxyCache,
     stats: ScanStats,
@@ -630,7 +630,7 @@ def _drain(inflight: set[Future]) -> tuple[set[Future], set[Future]]:
 
 
 def _apply_moves(
-    client: LumiverbClient,
+    client: ApiClient,
     moves: list[_MoveCandidate],
     stats: ScanStats,
     console: Console,
@@ -712,7 +712,7 @@ def _archive_missing(client, deleted_ids: list[str], stats, console, *, allow_ma
 
 
 def run_scan(
-    client: LumiverbClient,
+    client: ApiClient,
     library: dict,
     *,
     concurrency: int = 4,

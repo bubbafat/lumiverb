@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from src.client.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_filter
+from src.processing.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_filter
 
 logger = logging.getLogger(__name__)
 

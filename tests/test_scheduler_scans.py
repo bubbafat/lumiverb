@@ -17,9 +17,9 @@ from unittest.mock import MagicMock
 import pytest
 from rich.console import Console
 
-from src.client.cli import roots
+from src.processing import roots
 from src.client.cli.config import CLIConfig, save_config
-from src.client.cli.scan import ScanStats
+from src.processing.scan import ScanStats
 from src.server.scheduler.scans import (
     Retry,
     ScanState,

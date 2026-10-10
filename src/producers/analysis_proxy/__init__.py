@@ -1,5 +1,5 @@
 """Analysis copies: a small video and its audio that transcripts and scenes
-are made from (src/client/video/analysis_proxy.py)."""
+are made from (src/processing/video/analysis_proxy.py)."""
 
 from src.producers.contract import PREPARE, VIDEO, ProducerSpec, Setting
 

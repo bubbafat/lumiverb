@@ -2,7 +2,7 @@
 
 Before a job's steps, the worker checks each of the account's machines
 doing it (Settings → AI) and tells the server what each said; Settings
-shows it. Requests go to the online machines (src/client/cli/ai_pool.py);
+shows it. Requests go to the online machines (src/processing/ai_pool.py);
 one that fails is skipped and its item goes to another. When no machine can
 be used, the job's work doesn't start, or stops: that's the machines'
 problem, not any clip's, so no clip is charged a failure. An item's failure
@@ -19,10 +19,10 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from src.client.cli.ai_pool import MachinePool
+from src.processing.ai_pool import MachinePool
 
 if TYPE_CHECKING:
-    from src.client.cli.failure_report import FailureReport
+    from src.processing.failure_report import FailureReport
 
 logger = logging.getLogger(__name__)
 

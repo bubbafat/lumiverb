@@ -17,14 +17,14 @@ class TestVisionProxyCache:
 
     def test_backfill_one_uses_proxy_cache(self):
         """_backfill_one reads from proxy cache, not server."""
-        from src.client.cli.ingest import _backfill_one
+        from src.processing.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg-bytes"
 
         mock_provider = MagicMock()
 
-        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -47,7 +47,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_falls_back_to_server(self):
         """Falls back to server download when proxy cache misses."""
-        from src.client.cli.ingest import _backfill_one
+        from src.processing.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -55,7 +55,7 @@ class TestVisionProxyCache:
         mock_client = MagicMock()
         mock_client.get.return_value.content = b"server-proxy"
 
-        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = {
                 "model_id": "test",
                 "model_version": "1",
@@ -77,7 +77,7 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_no_proxy(self):
         """Returns None when proxy cache misses and no client fallback."""
-        from src.client.cli.ingest import _backfill_one
+        from src.processing.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = None
@@ -94,12 +94,12 @@ class TestVisionProxyCache:
 
     def test_backfill_one_returns_none_on_vision_failure(self):
         """Returns None when vision AI returns no result."""
-        from src.client.cli.ingest import _backfill_one
+        from src.processing.ingest import _backfill_one
 
         mock_cache = MagicMock()
         mock_cache.get.return_value = b"fake-jpeg"
 
-        with patch("src.client.cli.ingest._call_vision_ai") as mock_vision:
+        with patch("src.processing.ingest._call_vision_ai") as mock_vision:
             mock_vision.return_value = None
 
             result = _backfill_one(

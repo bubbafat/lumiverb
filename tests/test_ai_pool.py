@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.client.cli.ai_pool import MachinePool, PooledCaptionProvider
-from src.client.workers.captions.base import CaptionError
+from src.processing.ai_pool import MachinePool, PooledCaptionProvider
+from src.processing.workers.captions.base import CaptionError
 from src.shared.vision_endpoint import VisionEndpointError
 
 pytestmark = pytest.mark.fast
@@ -40,7 +40,7 @@ def _offering(answers: dict):
         if isinstance(answer, BaseException):
             raise answer
         return list(answer)
-    return patch("src.client.cli.ai_pool.list_models", side_effect=list_models)
+    return patch("src.processing.ai_pool.list_models", side_effect=list_models)
 
 
 def _statuses(client) -> dict[str, list[dict]]:
@@ -254,7 +254,7 @@ def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
         return [QWEN]
 
     got: list = []
-    with patch("src.client.cli.ai_pool.list_models", side_effect=slow_models):
+    with patch("src.processing.ai_pool.list_models", side_effect=slow_models):
         first = threading.Thread(target=lambda: got.append(pool.acquire()))
         first.start()
         for _ in range(50):
@@ -313,7 +313,7 @@ def test_the_built_in_whisper_is_checked_on_this_computer_not_asked():
 
 def test_the_built_in_whisper_without_faster_whisper_or_the_model_says_why():
     client = _transcripts((BUILT_IN,))
-    with patch("src.client.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
+    with patch("src.processing.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
         pool = MachinePool(client, "transcripts")
         assert pool.check() is False
     assert "faster-whisper isn't installed" in _statuses(client)["aim_self"][-1]["error"]
@@ -334,8 +334,8 @@ def test_a_server_is_asked_for_the_model_by_the_name_it_lists():
 
 
 def test_transcripts_go_to_each_machine_as_it_names_the_model_and_move_on_when_one_fails():
-    from src.client.cli.ai_pool import PooledTranscriber
-    from src.client.workers.transcripts.base import Heard, Segment, TranscriptError
+    from src.processing.ai_pool import PooledTranscriber
+    from src.processing.workers.transcripts.base import Heard, Segment, TranscriptError
 
     client = _transcripts()
     with _offering({"http://speaches/v1": ("Systran/faster-whisper-small",)}):
@@ -374,8 +374,8 @@ def test_transcripts_go_to_each_machine_as_it_names_the_model_and_move_on_when_o
 def test_a_clip_one_server_refuses_goes_to_the_others_first():
     """A server may refuse what another takes (nginx's body limit in front of
     it, say); the clip is the clip's only once every machine has refused it."""
-    from src.client.cli.ai_pool import PooledTranscriber
-    from src.client.workers.transcripts.base import Heard, TranscriptError
+    from src.processing.ai_pool import PooledTranscriber
+    from src.processing.workers.transcripts.base import Heard, TranscriptError
 
     client = _transcripts()
     with _offering({"http://speaches/v1": ("Systran/faster-whisper-small",)}):
@@ -524,7 +524,7 @@ def test_a_check_for_a_model_no_longer_chosen_is_left_out():
         pool.load()
         return [QWEN]
 
-    with patch("src.client.cli.ai_pool.list_models", side_effect=list_models):
+    with patch("src.processing.ai_pool.list_models", side_effect=list_models):
         pool.load()
         pool._check(pool.machines[0])
     brain = pool.machines[0]

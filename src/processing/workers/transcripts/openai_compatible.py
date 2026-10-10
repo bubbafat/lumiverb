@@ -16,9 +16,9 @@ from pathlib import Path
 
 import requests
 
-from src.client.workers.captions.base import ENDPOINT_FAULT_STATUSES
-from src.client.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
-from src.client.workers.transcripts.speech import speech_seconds, time_allowed
+from src.processing.workers.captions.base import ENDPOINT_FAULT_STATUSES
+from src.processing.workers.transcripts.base import Heard, Segment, Transcriber, TranscriptError
+from src.processing.workers.transcripts.speech import speech_seconds, time_allowed
 
 CONNECT_TIMEOUT_SEC = 10
 # Segments may end a little past the speech; far past it, the times aren't seconds.

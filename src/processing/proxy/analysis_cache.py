@@ -11,7 +11,7 @@ import logging
 import os
 from pathlib import Path
 
-from src.client.cache_dir import cache_dir
+from src.processing.cache_dir import cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,9 @@ def clear_leftovers(directory: Path | None = None) -> int:
 class AnalysisProxyCache:
     def __init__(self, client: object, *, cache_dir: Path | None = None, max_bytes: int | None = None) -> None:
         if max_bytes is None:
-            from src.client.cli.config import load_config
+            from src.processing.machine import current
 
-            max_bytes = int(load_config().analysis_cache_gb * 1024**3)
+            max_bytes = int(current().analysis_cache_gb * 1024**3)
         self._client = client
         self._dir = cache_dir or default_cache_dir()
         self._max_bytes = max_bytes

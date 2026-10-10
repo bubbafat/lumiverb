@@ -18,25 +18,25 @@ from rich.progress import Progress, BarColumn, TextColumn, MofNCompleteColumn, T
 from rich.table import Table
 
 from src.client.cli.client import LumiverbClient
-from src.client.video.analysis_proxy import (
+from src.processing.video.analysis_proxy import (
     AnalysisProxySettings,
     RenderError,
     gpu_decoder,
     render_analysis_proxy,
     render_timeout,
 )
-from src.client.video.audio import audio_tracks, speech_wav_command
-from src.client.video.probe import probe_video
-from src.client.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
+from src.processing.video.audio import audio_tracks, speech_wav_command
+from src.processing.video.probe import probe_video
+from src.processing.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
 from src.shared.io_utils import resolve_source_path
 from src.shared.producers import PRODUCERS
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from src.client.cli.producer_settings import ProducerSettings
-    from src.client.proxy.analysis_cache import AnalysisProxyCache
-    from src.client.workers.transcripts.base import Transcriber
+    from src.processing.producer_settings import ProducerSettings
+    from src.processing.proxy.analysis_cache import AnalysisProxyCache
+    from src.processing.workers.transcripts.base import Transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _ocr_one(
     """Run OCR on one asset. Returns {"asset_id", "ocr_text"}, or None when
     there's no proxy or the image can't be prepared. The model's failure
     raises CaptionError (saying whether the endpoint was at fault)."""
-    from src.client.workers.captions.base import CaptionError
+    from src.processing.workers.captions.base import CaptionError
 
     import time as _time
     try:
@@ -175,7 +175,7 @@ def _probe_one(client: LumiverbClient, lib_root: "Path", asset: dict,
         return "failed"
     try:
         if producers is None:  # the server refuses a probe that doesn't say how it was made
-            from src.client.cli.producer_settings import ProducerSettings
+            from src.processing.producer_settings import ProducerSettings
 
             producers = ProducerSettings(client)
         body = {**facet.to_dict(), "lineage": producers.lineage("probe", asset.get("sha256"))}
@@ -212,7 +212,7 @@ def _render_one(
     try:
         render_analysis_proxy(source, work, settings, timeout=render_timeout(asset.get("duration_sec")))
         if producers is None:  # the server refuses a copy that doesn't say how it was made
-            from src.client.cli.producer_settings import ProducerSettings
+            from src.processing.producer_settings import ProducerSettings
 
             producers = ProducerSettings(client)
         data = {"lineage": json.dumps(producers.lineage("analysis_proxy", asset.get("sha256"),
@@ -258,7 +258,7 @@ def _transcribe_one(
     import tempfile
     from pathlib import Path
 
-    from src.client.workers.transcripts.speech import SpeechError, find_speech, restore, to_srt
+    from src.processing.workers.transcripts.speech import SpeechError, find_speech, restore, to_srt
     from src.shared.whisper_models import language_code
 
     try:
@@ -483,7 +483,7 @@ def _face_batch_worker(
 
     client = LumiverbClient(base_url=base_url, token=token)
     if lineage is None or settings is None:  # the server's, read once: what's found and its lineage agree
-        from src.client.cli.producer_settings import ProducerSettings
+        from src.processing.producer_settings import ProducerSettings
 
         server = ProducerSettings(client)
         settings = server.settings("faces") if settings is None else settings
@@ -678,7 +678,7 @@ def _generate_proxy_for_item(
     Skips generation if the proxy is already in the persistent cache.
     """
     from pathlib import Path
-    from src.client.proxy.proxy_gen import generate_face_proxy
+    from src.processing.proxy.proxy_gen import generate_face_proxy
 
     asset_id = item["asset_id"]
     rel_path = item.get("rel_path", asset_id)
@@ -701,7 +701,7 @@ def _generate_proxy_for_item(
         source = resolve_source_path(root_path, rel_path)
         if source.is_file():
             if expected_hash:
-                from src.client.workers.exif_extract import compute_sha256
+                from src.processing.workers.exif_extract import compute_sha256
                 local_hash = compute_sha256(source)
                 if local_hash != expected_hash:
                     return None  # SHA mismatch — skip
@@ -854,7 +854,7 @@ def _run_face_pipeline(
 
 def _here(library: dict) -> str:
     """The library's root as this machine sees it, for messages."""
-    from src.client.cli.roots import local_library_root
+    from src.processing.roots import local_library_root
 
     return str(local_library_root(library) or library.get("root_path") or "")
 
@@ -1009,17 +1009,17 @@ def run_repair(
     _cfg = _load_cfg()
     # What each producer makes its artifact with now: the server's settings,
     # so what's recorded in lineage is current.
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
     producers = ProducerSettings(client)
     # What a step couldn't make goes to the server, which waits before
     # handing it out again (5 minutes, doubling up to a day).
-    from src.client.cli.failure_report import FailureReport
-    from src.client.cli.vision_guard import VisionGuard
+    from src.processing.failure_report import FailureReport
+    from src.processing.vision_guard import VisionGuard
     failures = FailureReport(client)
     # Vision steps run only while a machine doing vision offers the account's model.
     vision = VisionGuard(client, failures)
     # Transcription only while a machine doing transcripts can (the built-in Whisper, or a server).
-    from src.client.cli.transcript_guard import TranscriptGuard
+    from src.processing.transcript_guard import TranscriptGuard
     transcripts = TranscriptGuard(client, failures)
 
     def _vision_ready() -> bool:
@@ -1045,15 +1045,15 @@ def run_repair(
     # The library's root on this machine (mapped by `lumiverb config
     # map-root`), or None when it can't be read now. Checked again before
     # each step that reads source files: storage can go to sleep mid-run.
-    from src.client.cli.roots import reachable_root
+    from src.processing.roots import reachable_root
     root_path = reachable_root(library)
 
     # Shared proxy cache: generates from local source → server download → cached at configured size
-    from src.client.proxy.proxy_cache import ProxyCache
+    from src.processing.proxy.proxy_cache import ProxyCache
     # The images CLIP, faces and vision see: CLIP's input size (the registry's).
     proxy_cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root_path, client=client)
     # Videos are analyzed from their analysis proxies, never the originals.
-    from src.client.proxy.analysis_cache import AnalysisProxyCache
+    from src.processing.proxy.analysis_cache import AnalysisProxyCache
     analysis_cache = AnalysisProxyCache(client)
 
     def _waiting_for_proxy(assets: list[dict]) -> list[dict]:
@@ -1180,7 +1180,7 @@ def run_repair(
         if repair_type == "embed":
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             try:
-                from src.client.workers.embeddings.clip_provider import CLIPEmbeddingProvider
+                from src.processing.workers.embeddings.clip_provider import CLIPEmbeddingProvider
                 clip_set = producers.settings("clip")
                 clip_provider = CLIPEmbeddingProvider(model_name=clip_set["model"], pretrained=clip_set["pretrained"])
                 # The images CLIP sees are the proxy cache's: its size is what was used.
@@ -1275,7 +1275,7 @@ def run_repair(
             console.print(f"\n[bold]Repairing: {desc} ({count})[/bold]")
             if not _vision_ready():
                 continue
-            from src.client.cli.ingest import run_backfill_vision
+            from src.processing.ingest import run_backfill_vision
             # As many at once as the online machines take together (Settings → AI).
             run_backfill_vision(
                 client, library, concurrency=vision.capacity(), console=console,
@@ -1334,7 +1334,7 @@ def run_repair(
                             pass
                 batch_buf.clear()
 
-            from src.client.workers.captions.base import CaptionError
+            from src.processing.workers.captions.base import CaptionError
 
             def _ocr(a: dict) -> tuple[dict, dict | None, object]:
                 try:
@@ -1520,7 +1520,7 @@ def run_repair(
             if not assets:
                 continue
 
-            from src.client.workers.transcripts.base import TranscriptError
+            from src.processing.workers.transcripts.base import TranscriptError
 
             # The silences skipped are the producer's; the model is the one the
             # guard just read, which may be newer than the run's settings.
@@ -1627,7 +1627,7 @@ def run_repair(
                 console.print("No videos with known duration found.")
                 continue
 
-            from src.client.cli.video_index import run_video_index
+            from src.processing.video_index import run_video_index
             found_with = producers.settings("scenes")  # one read: what's found and its lineage agree
             progress = _make_progress(console)
             with progress:
@@ -1668,7 +1668,7 @@ def run_repair(
             videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "sha256": a.get("sha256")}
                       for a in assets]
 
-            from src.client.cli.video_index import run_video_enrich
+            from src.processing.video_index import run_video_enrich
             progress = _make_progress(console)
             with progress:
                 tid = progress.add_task("Scene vision", total=len(videos), ok=0, fail=0)

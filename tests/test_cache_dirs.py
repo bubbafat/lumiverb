@@ -11,10 +11,18 @@ from pathlib import Path
 import pytest
 
 from src.server.scheduler.scans import STATE_FILE, ServiceLock
-from src.client.proxy.analysis_cache import AnalysisProxyCache
-from src.client.proxy.proxy_cache import ProxyCache
+from src.processing.proxy.analysis_cache import AnalysisProxyCache
+from src.processing.proxy.proxy_cache import ProxyCache
 
 pytestmark = pytest.mark.fast
+
+
+def _as_the_cli() -> None:
+    """This machine's settings from the CLI's config, as the CLI reads them."""
+    from src.client.cli.config import machine_settings
+    from src.processing import machine
+
+    machine.use(machine_settings)
 
 
 def test_caches_follow_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +47,7 @@ def test_caches_follow_the_cli_config_without_xdg_cache_home(tmp_path: Path, mon
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
+    _as_the_cli()
     assert ServiceLock()._path == tmp_path / "data" / "cache" / "lumiverb" / "worker.lock"
     assert ProxyCache().path == tmp_path / "data" / "cache" / "lumiverb" / "proxies"
 
@@ -48,17 +57,19 @@ def test_xdg_cache_home_wins_over_the_cli_config(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
+    _as_the_cli()
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     assert ServiceLock()._path == tmp_path / "xdg" / "lumiverb" / "worker.lock"
 
 
 def test_scan_state_lives_beside_the_configured_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cache_dir import cache_dir
+    from src.processing.cache_dir import cache_dir
     from src.client.cli.config import CLIConfig, save_config
 
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
+    _as_the_cli()
     assert cache_dir(STATE_FILE) == tmp_path / "data" / "cache" / "lumiverb" / "worker-state.json"
 
 

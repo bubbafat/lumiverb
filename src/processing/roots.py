@@ -4,7 +4,8 @@ The database keeps each library's ingest root as the editing machine sees
 it (for example /Volumes/media-01/Footage on the Mac Studio), because
 exports point editors there. A machine that reaches the same storage at
 another path, such as the brain mounting the DAS at /mnt/media-01, maps
-the prefix in its own config (`lumiverb config map-root`), never in the
+the prefix in its own settings (src/processing/machine.py: the scheduler's
+LUMIVERB_ROOT_MAP, the CLI's `lumiverb config map-root`), never in the
 database (ADR-016 phase 2).
 """
 
@@ -67,9 +68,9 @@ def unmap_path(local_path: str, root_map: dict[str, str]) -> str:
 
 
 def _configured_map() -> dict[str, str]:
-    from src.client.cli.config import load_config
+    from src.processing.machine import current
 
-    return load_config().root_map
+    return dict(current().root_map)
 
 
 def local_library_root(library: dict, root_map: dict[str, str] | None = None) -> Path | None:

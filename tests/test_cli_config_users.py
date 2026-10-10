@@ -40,7 +40,7 @@ def test_no_file_is_the_defaults(config_file: Path) -> None:
     assert load_config() == CLIConfig()
 
 
-@pytest.mark.parametrize("text", ["{not json", '{"max_concurrency": "many"}'])
+@pytest.mark.parametrize("text", ["{not json", '{"root_map": "many"}'])
 def test_a_file_that_cant_be_parsed_raises(config_file: Path, text: str) -> None:
     config_file.parent.mkdir(parents=True)
     config_file.write_text(text)

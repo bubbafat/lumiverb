@@ -153,7 +153,7 @@ def test_similar_with_embeddings(similarity_client: Tuple[_AuthClient, str, str]
         )
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.processing.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -298,7 +298,7 @@ def test_similar_date_range_filter(similarity_client: Tuple[_AuthClient, str, st
         session.commit()
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.processing.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -357,7 +357,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
 
     from PIL import Image as PILImage
 
-    from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+    from src.processing.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
     auth_client, library_id, tenant_url = similarity_client
 
@@ -408,7 +408,7 @@ def test_search_by_image_basic(similarity_client: Tuple[_AuthClient, str, str]) 
             # Use the base vector so similarity is defined vs stored embeddings
             return base_vec
 
-    with patch("src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider", return_value=_DummyProvider()):
+    with patch("src.processing.workers.embeddings.clip_provider.CLIPEmbeddingProvider", return_value=_DummyProvider()):
         resp = auth_client.post(
             "/v1/similar/search-by-image",
             json={
@@ -462,7 +462,7 @@ def test_similar_asset_types_filter(similarity_client: Tuple[_AuthClient, str, s
         )
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.processing.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -548,7 +548,7 @@ def test_similar_camera_filter(similarity_client: Tuple[_AuthClient, str, str]) 
         session.commit()
 
         emb_repo = AssetEmbeddingRepository(session)
-        from src.client.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+        from src.processing.workers.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
 
         emb_repo.upsert(base_asset.asset_id, "clip", CLIP_VERSION, base_vec)
         emb_repo.upsert(close_asset.asset_id, "clip", CLIP_VERSION, close_vec)
@@ -669,7 +669,7 @@ def test_search_by_vector_hybrid_face_match_promotes(
 
     from PIL import Image as PILImage
 
-    from src.client.workers.faces.insightface_provider import FaceDetection
+    from src.processing.workers.faces.insightface_provider import FaceDetection
     from src.server.repository.tenant import FaceRepository
 
     auth_client, library_id, tenant_url = similarity_client

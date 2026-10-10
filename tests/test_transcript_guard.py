@@ -21,9 +21,9 @@ from rich.console import Console
 
 from src.client.cli.config import CLIConfig, save_config
 from src.client.cli.repair import run_repair
-from src.client.cli.transcript_guard import TranscriptGuard
-from src.client.video.audio import AudioTrack
-from src.client.workers.transcripts.base import TranscriptError
+from src.processing.transcript_guard import TranscriptGuard
+from src.processing.video.audio import AudioTrack
+from src.processing.workers.transcripts.base import TranscriptError
 from src.shared import producers as P
 from src.shared.vision_endpoint import VisionEndpointError
 from tests.test_transcribers import _Server
@@ -95,7 +95,7 @@ def _statuses(client: MagicMock, machine_id: str) -> list[dict]:
 
 def test_no_usable_machine_means_no_transcription_and_no_clip_charged(library):
     client = _client([_speaches()])
-    with patch("src.client.cli.ai_pool.list_models", side_effect=VisionEndpointError("Couldn't reach it.")), \
+    with patch("src.processing.ai_pool.list_models", side_effect=VisionEndpointError("Couldn't reach it.")), \
             patch("src.client.cli.repair._transcribe_one") as one:
         _run(client, library, _clips("ast_a"))
     one.assert_not_called()
@@ -110,8 +110,8 @@ def test_transcription_is_off_without_a_model(library):
 
 def test_without_faster_whisper_here_the_speech_cant_be_found_so_nothing_starts(library):
     client = _client([_speaches()])
-    with patch("src.client.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."), \
-            patch("src.client.cli.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
+    with patch("src.processing.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."), \
+            patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
             patch("src.client.cli.repair._transcribe_one") as one:
         _run(client, library, _clips("ast_a"))
         guard = TranscriptGuard(client)
@@ -121,9 +121,9 @@ def test_without_faster_whisper_here_the_speech_cant_be_found_so_nothing_starts(
 
 def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
     """Each machine up to its own limit; meanwhile more clips get their speech ready."""
-    from src.client.workers.transcripts.base import Heard
-    from src.client.workers.transcripts.local import BuiltInWhisper
-    from src.client.workers.transcripts.openai_compatible import OpenAITranscriber
+    from src.processing.workers.transcripts.base import Heard
+    from src.processing.workers.transcripts.local import BuiltInWhisper
+    from src.processing.workers.transcripts.openai_compatible import OpenAITranscriber
 
     client = _client([BUILT_IN, _speaches(at_once=2)])
     lock = threading.Lock()
@@ -148,7 +148,7 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
         return ("", "") if transcriber.transcribe(source) == Heard() else None
 
     clips = [f"ast_{c}" for c in "abcdefgh"]
-    with patch("src.client.cli.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
+    with patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small"]), \
             patch.object(BuiltInWhisper, "transcribe", hear), patch.object(OpenAITranscriber, "transcribe", hear), \
             patch("src.client.cli.repair._transcribe_one", side_effect=transcribe_one):
         _run(client, library, _clips(*clips))
@@ -189,7 +189,7 @@ def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
 
 def test_without_faster_whisper_here_settings_says_so(library):
     client = _client([BUILT_IN])
-    with patch("src.client.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
+    with patch("src.processing.workers.transcripts.local.unavailable", return_value="faster-whisper isn't installed."):
         assert TranscriptGuard(client).check() is False
     [status] = _statuses(client, "aim_self")
     assert status["online"] is False and "faster-whisper isn't installed" in status["error"]
@@ -229,11 +229,11 @@ def test_the_built_in_failing_to_load_moves_the_clip_to_a_server_timed_onto_the_
             speech.write_bytes(b"RIFF speech")
             return [{"start": 2 * 16_000, "end": 3 * 16_000}]  # one second of speech at 2 s
 
-        with patch("src.client.cli.ai_pool.list_models", return_value=["Systran/faster-whisper-small", "kokoro"]), \
+        with patch("src.processing.ai_pool.list_models", return_value=["Systran/faster-whisper-small", "kokoro"]), \
                 patch("src.client.cli.repair.audio_tracks", return_value=[AudioTrack(0, 2, "aac")]), \
                 patch("subprocess.run", side_effect=ffmpeg), \
-                patch("src.client.workers.transcripts.speech.find_speech", side_effect=find_speech), \
-                patch("src.client.workers.transcripts.local.BuiltInWhisper.transcribe",
+                patch("src.processing.workers.transcripts.speech.find_speech", side_effect=find_speech), \
+                patch("src.processing.workers.transcripts.local.BuiltInWhisper.transcribe",
                       side_effect=TranscriptError("Couldn't load small: no space left", endpoint_fault=True)):
             _run(client, library, _clips("ast_a"))
         [req] = server.requests

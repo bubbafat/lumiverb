@@ -56,7 +56,7 @@ def test_face_batch_worker_processes_assets() -> None:
     post_resp.json.return_value = {"processed": 3, "skipped": 0}
     mock_client_instance.post.return_value = post_resp
 
-    from src.client.workers.faces.insightface_provider import FaceDetection
+    from src.processing.workers.faces.insightface_provider import FaceDetection
 
     mock_provider = MagicMock()
     mock_provider.model_id = "insightface"
@@ -92,7 +92,7 @@ def test_face_batch_worker_processes_assets() -> None:
     assert len(items) == 3
     assert [item["asset_id"] for item in items] == ["ast_001", "ast_002", "ast_003"]
     # Nobody handed it lineage: it says how the faces were found, with the server's settings.
-    from src.client.cli.producer_settings import ProducerSettings
+    from src.processing.producer_settings import ProducerSettings
 
     assert call_args.kwargs["json"]["lineage"] == ProducerSettings(None).lineage("faces", None)
 

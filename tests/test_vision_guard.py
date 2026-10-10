@@ -14,9 +14,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.client.cli.failure_report import FailureReport
-from src.client.cli.vision_guard import VisionGuard
-from src.client.workers.captions.base import CaptionError
+from src.processing.failure_report import FailureReport
+from src.processing.vision_guard import VisionGuard
+from src.processing.workers.captions.base import CaptionError
 from src.shared.vision_endpoint import VisionEndpointError
 
 pytestmark = pytest.mark.fast
@@ -39,7 +39,7 @@ def _offers(*answers):
             raise a
         return list(a)
     it = iter(answers)
-    return patch("src.client.cli.ai_pool.list_models", side_effect=answer)
+    return patch("src.processing.ai_pool.list_models", side_effect=answer)
 
 
 def _guard(client: MagicMock):
@@ -186,7 +186,7 @@ def test_a_vision_step_doesnt_start_without_a_usable_machine(tmp_path, monkeypat
     with (
         patch("src.client.cli.repair._page_missing") as page,
         _offers(*[VisionEndpointError("no answer")] * 5),
-        patch("src.client.cli.ingest.run_backfill_vision") as backfill,
+        patch("src.processing.ingest.run_backfill_vision") as backfill,
     ):
         _repair(tmp_path, monkeypatch, client,
                 {"total_assets": 3, "missing_vision": 1, "missing_ocr": 1, "missing_scene_vision": 1}, "all")
@@ -200,7 +200,7 @@ def test_descriptions_go_to_every_online_machine_as_many_at_once_as_they_take(tm
     client = _client((BRAIN, studio))
     with (
         _offers((QWEN,), (QWEN,)),
-        patch("src.client.cli.ingest.run_backfill_vision") as backfill,
+        patch("src.processing.ingest.run_backfill_vision") as backfill,
     ):
         _repair(tmp_path, monkeypatch, client, {"total_assets": 3, "missing_vision": 3}, "vision")
     kwargs = backfill.call_args.kwargs
@@ -295,10 +295,10 @@ def _describe_scenes(tmp_path, monkeypatch, client, videos: dict[str, int], desc
 
     with (
         patch("src.client.cli.repair._page_missing", return_value=page),
-        patch("src.client.proxy.analysis_cache.AnalysisProxyCache.get", side_effect=proxy),
-        patch("src.client.cli.video_index.extract_video_frame_detailed", side_effect=frame),
-        patch("src.client.workers.captions.factory.get_caption_provider", side_effect=provider),
-        patch("src.client.cli.ai_pool.list_models", return_value=[QWEN]),
+        patch("src.processing.proxy.analysis_cache.AnalysisProxyCache.get", side_effect=proxy),
+        patch("src.processing.video_index.extract_video_frame_detailed", side_effect=frame),
+        patch("src.processing.workers.captions.factory.get_caption_provider", side_effect=provider),
+        patch("src.processing.ai_pool.list_models", return_value=[QWEN]),
     ):
         _repair(tmp_path, monkeypatch, client,
                 {"total_assets": len(videos), "missing_scene_vision": len(videos)}, "scene-vision")
@@ -408,7 +408,7 @@ def test_each_machine_is_asked_for_the_model_by_its_own_name():
     with _offers((QWEN,)):
         assert guard.check()
     guard.pool.machines[0].serves = "qwen3-vl:8b-q4"  # what that machine lists it as
-    with patch("src.client.workers.captions.factory.get_caption_provider") as make:
+    with patch("src.processing.workers.captions.factory.get_caption_provider") as make:
         make.return_value.describe.return_value = {"description": "a cat", "tags": []}
         guard.provider().describe("a.jpg")
     assert make.call_args.args[0] == "qwen3-vl:8b-q4"

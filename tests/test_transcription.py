@@ -317,7 +317,7 @@ def test_audio_that_couldnt_be_read_is_tried_again_not_saved_as_silence(tmp_path
     from unittest.mock import MagicMock
 
     from src.client.cli import repair
-    from src.client.video.audio import AudioTrack
+    from src.processing.video.audio import AudioTrack
 
     source = tmp_path / "a.mp4"
     source.write_bytes(b"x")

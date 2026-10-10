@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from src.client.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
+from src.processing.workers.captions.base import CaptionError, CaptionProvider, is_endpoint_fault
 
 logger = logging.getLogger(__name__)
 
@@ -456,7 +456,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         if not resp.ok:
             logger.warning("Error from AI Provider: %s: %s", resp.status_code, resp.text)
             if resp.status_code == 429:
-                from src.client.workers.captions.retry_after import parse_retry_after
+                from src.processing.workers.captions.retry_after import parse_retry_after
                 retry_after = parse_retry_after(resp)
                 err = requests.HTTPError(response=resp)
                 err.retry_after = retry_after  # type: ignore[attr-defined]

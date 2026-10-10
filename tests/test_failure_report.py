@@ -16,7 +16,7 @@ import pytest
 from rich.console import Console
 
 from src.client.cli.config import CLIConfig, save_config
-from src.client.cli.failure_report import FailureReport
+from src.processing.failure_report import FailureReport
 from src.client.cli.repair import run_repair
 from tests.ai_machine_fakes import built_in_whisper
 
@@ -161,7 +161,7 @@ def test_what_the_server_cant_take_isnt_reported():
 
 
 def test_unsent_reports_are_kept_up_to_a_limit(monkeypatch: pytest.MonkeyPatch):
-    from src.client.cli import failure_report
+    from src.processing import failure_report
 
     monkeypatch.setattr(failure_report, "KEEP", 3)
     client = MagicMock()
@@ -192,7 +192,7 @@ def test_a_probe_that_fails_is_reported_with_its_error(library: dict):
 
 
 def test_a_render_that_fails_is_reported(home: Path, library: dict):
-    from src.client.video.analysis_proxy import RenderError
+    from src.processing.video.analysis_proxy import RenderError
 
     client = MagicMock()
     page = [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0}]
@@ -215,7 +215,7 @@ def test_an_embedding_that_fails_is_reported(home: Path, library: dict):
     client = MagicMock()
     page = [{"asset_id": "ast_a", "rel_path": "a.jpg"}]
     with (
-        patch("src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider"),
+        patch("src.processing.workers.embeddings.clip_provider.CLIPEmbeddingProvider"),
         patch("src.client.cli.repair._repair_embed_one", side_effect=RuntimeError("CUDA out of memory")),
     ):
         _run(client, library, "embed", "missing_embeddings", page)
@@ -226,7 +226,7 @@ def test_scenes_that_fail_are_reported(home: Path, library: dict):
     _cached(home, "ast_a")
     client = MagicMock()
     page = [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "has_analysis_proxy": True}]
-    with patch("src.client.cli.video_index.index_video_scenes", side_effect=RuntimeError("no keyframes")):
+    with patch("src.processing.video_index.index_video_scenes", side_effect=RuntimeError("no keyframes")):
         _run(client, library, "video-scenes", "missing_video_scenes", page)
     assert _reported(client) == [{"asset_id": "ast_a", "artifact": "scenes", "error": "no keyframes"}]
 
@@ -236,8 +236,8 @@ def test_a_description_that_fails_is_reported(home: Path, library: dict):
     client.get.return_value.json.return_value = {"items": [{"asset_id": "ast_a", "rel_path": "a.jpg"}]}
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_vision": 1}),
-        patch("src.client.workers.captions.factory.get_caption_provider"),
-        patch("src.client.cli.ingest._backfill_one", return_value=None),
+        patch("src.processing.workers.captions.factory.get_caption_provider"),
+        patch("src.processing.ingest._backfill_one", return_value=None),
     ):
         run_repair(client, library, job_type="vision", console=Console(quiet=True))
     [item] = _reported(client)
@@ -268,7 +268,7 @@ def test_it_says_which_of_a_jobs_clips_it_charged_since_the_job_began() -> None:
 def test_one_item_that_keeps_failing_otherwise_doesnt_block_the_rest_for_long():
     # A 500 caused by one item: it's tried alone a few times, then dropped;
     # the others go meanwhile.
-    from src.client.cli import failure_report
+    from src.processing import failure_report
     from src.client.cli.client import LumiverbAPIError
 
     client = MagicMock()

@@ -1042,7 +1042,7 @@ def test_each_accounts_pace_starts_from_its_last_status_after_a_restart() -> Non
 
 @pytest.mark.fast
 def test_a_kind_learns_its_pace_only_from_the_clips_its_jobs_made() -> None:
-    from src.client.cli.failure_report import FailureReport
+    from src.processing.failure_report import FailureReport
 
     acct = FakeAccount()
     acct.failures = FailureReport(None)

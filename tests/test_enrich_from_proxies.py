@@ -136,7 +136,7 @@ def test_render_waits_while_storage_sleeps(home: Path, asleep: dict) -> None:
 
 @pytest.mark.fast
 def test_a_failed_render_uploads_nothing_and_leaves_nothing(home: Path, library: dict) -> None:
-    from src.client.video.analysis_proxy import RenderError
+    from src.processing.video.analysis_proxy import RenderError
 
     client = MagicMock()
     pages = {"missing_analysis_proxy": [{"asset_id": "ast_a", "rel_path": "a.mov"}]}
@@ -210,7 +210,7 @@ def test_scene_detection_reads_the_proxy_while_storage_sleeps(home: Path, asleep
         {"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "has_analysis_proxy": True},
         {"asset_id": "ast_b", "rel_path": "b.mov", "duration_sec": 4.0, "has_analysis_proxy": False},
     ]}
-    with patch("src.client.cli.video_index.index_video_scenes",
+    with patch("src.processing.video_index.index_video_scenes",
                return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}) as idx:
         _run(client, asleep, "video-scenes", {"missing_video_scenes": 2}, pages)
     assert [c.kwargs["source_path"] for c in idx.call_args_list] == [proxy]
@@ -225,8 +225,8 @@ def test_scene_vision_reads_the_proxy_while_storage_sleeps(home: Path, asleep: d
         {"asset_id": "ast_b", "rel_path": "b.mov", "has_analysis_proxy": False},
     ]}
     with (
-        patch("src.client.workers.captions.factory.get_caption_provider"),
-        patch("src.client.cli.video_index.enrich_scene") as enr,
+        patch("src.processing.workers.captions.factory.get_caption_provider"),
+        patch("src.processing.video_index.enrich_scene") as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 2}, pages)
     assert [c.kwargs["source_path"] for c in enr.call_args_list] == [proxy]
@@ -242,7 +242,7 @@ def test_without_a_usable_vision_model_scene_vision_waits(home: Path, asleep: di
 
     with (
         one_machine("model", offers=VisionEndpointError("no answer")),
-        patch("src.client.cli.video_index.enrich_scene") as enr,
+        patch("src.processing.video_index.enrich_scene") as enr,
     ):
         _run(client, asleep, "scene-vision", {"missing_scene_vision": 1}, pages)
     enr.assert_not_called()
@@ -289,7 +289,7 @@ def test_scene_steps_count_what_they_did(home: Path, asleep: dict) -> None:
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_video_scenes": 1}),
         patch("src.client.cli.repair._page_missing", side_effect=page_missing),
-        patch("src.client.cli.video_index.index_video_scenes", return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}),
+        patch("src.processing.video_index.index_video_scenes", return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}),
     ):
         run_repair(client, asleep, job_type="video-scenes", console=console)
     assert "1 fixed" in console.export_text()
@@ -307,14 +307,14 @@ STEPS = [
     ("probe", "missing_probe", "src.client.cli.repair._probe_one", {}),
     ("render", "missing_analysis_proxy", "src.client.cli.repair._render_one", {}),
     ("embed", "missing_embeddings", "src.client.cli.repair._repair_embed_one",
-     {"src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider": MagicMock()}),
+     {"src.processing.workers.embeddings.clip_provider.CLIPEmbeddingProvider": MagicMock()}),
     ("ocr", "missing_ocr", "src.client.cli.repair._ocr_one",
-     {"src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
+     {"src.processing.workers.captions.factory.get_caption_provider": MagicMock()}),
     ("faces", "missing_faces", "src.client.cli.repair._run_face_pipeline", {}),
     ("transcribe", "missing_transcription", "src.client.cli.repair._transcribe_one", {}),
-    ("video-scenes", "missing_video_scenes", "src.client.cli.video_index.index_video_scenes", {}),
-    ("scene-vision", "missing_scene_vision", "src.client.cli.video_index.enrich_scene",
-     {"src.client.workers.captions.factory.get_caption_provider": MagicMock()}),
+    ("video-scenes", "missing_video_scenes", "src.processing.video_index.index_video_scenes", {}),
+    ("scene-vision", "missing_scene_vision", "src.processing.video_index.enrich_scene",
+     {"src.processing.workers.captions.factory.get_caption_provider": MagicMock()}),
 ]
 
 
@@ -358,8 +358,8 @@ def test_vision_told_to_stop_does_no_more_items(home: Path, library: dict) -> No
     client.get.side_effect = get
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 1, "missing_vision": 1}),
-        patch("src.client.workers.captions.factory.get_caption_provider"),
-        patch("src.client.cli.ingest._backfill_one") as one,
+        patch("src.processing.workers.captions.factory.get_caption_provider"),
+        patch("src.processing.ingest._backfill_one") as one,
     ):
         run_repair(client, library, job_type="vision", console=Console(quiet=True), should_stop=lambda: stop["now"])
     one.assert_not_called()
@@ -478,8 +478,8 @@ def test_vision_leaves_skipped_items_and_reports_what_it_takes(home: Path, libra
     taken: list[tuple[str, str]] = []
     with (
         patch("src.client.cli.repair.get_repair_summary", return_value={"total_assets": 2, "missing_vision": 2}),
-        patch("src.client.workers.captions.factory.get_caption_provider"),
-        patch("src.client.cli.ingest._backfill_one", return_value=None) as one,
+        patch("src.processing.workers.captions.factory.get_caption_provider"),
+        patch("src.processing.ingest._backfill_one", return_value=None) as one,
     ):
         run_repair(client, library, job_type="vision", console=Console(quiet=True), skip_items={("vision", "ast_a")},
                    on_take=lambda step, asset_id: taken.append((step, asset_id)))
@@ -568,7 +568,7 @@ def test_the_encoder_and_decoder_are_this_machines_and_dont_make_a_proxy_stale(h
 
 @pytest.mark.fast
 def test_transcription_uses_the_jobs_model_and_the_servers_silences_and_says_so(home: Path, library: dict) -> None:
-    from src.client.cli.ai_pool import PooledTranscriber
+    from src.processing.ai_pool import PooledTranscriber
     from src.shared import producers as P
 
     _cached(home, "ast_a")
@@ -593,7 +593,7 @@ def test_embeddings_say_which_file_each_came_from_and_what_clip_saw(home: Path, 
     client = _with_producers()
     pages = {"missing_embeddings": [{"asset_id": "ast_a", "rel_path": "a.jpg", "sha256": SHA}]}
     with (
-        patch("src.client.workers.embeddings.clip_provider.CLIPEmbeddingProvider") as clip,
+        patch("src.processing.workers.embeddings.clip_provider.CLIPEmbeddingProvider") as clip,
         patch("src.client.cli.repair._repair_embed_one",
               return_value={"asset_id": "ast_a", "model_id": "clip", "model_version": "x", "vector": [0.1]}),
     ):
@@ -621,7 +621,7 @@ def test_ocr_says_which_file_each_came_from(home: Path, library: dict) -> None:
 
     with (
         one_machine("qwen3-vl:8b"),
-        patch("src.client.workers.captions.factory.get_caption_provider") as provider,
+        patch("src.processing.workers.captions.factory.get_caption_provider") as provider,
         patch("src.client.cli.repair._ocr_one", side_effect=ocr_one),
     ):
         _run(client, library, "ocr", {"missing_ocr": 1}, pages)
@@ -642,7 +642,7 @@ def test_scenes_say_how_they_were_found(home: Path, library: dict) -> None:
     client = _with_producers()
     pages = {"missing_video_scenes": [{"asset_id": "ast_a", "rel_path": "a.mov", "duration_sec": 4.0, "sha256": SHA,
                                          "has_analysis_proxy": True}]}
-    with patch("src.client.cli.video_index.index_video_scenes",
+    with patch("src.processing.video_index.index_video_scenes",
                return_value={"scenes": 1, "chunks": 1, "elapsed": 0.1}) as index:
         _run(client, library, "video-scenes", {"missing_video_scenes": 1}, pages)
 

@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.client.workers.captions.base import CaptionError, CaptionProvider
-from src.client.workers.transcripts.base import Heard, Transcriber, TranscriptError
+from src.processing.workers.captions.base import CaptionError, CaptionProvider
+from src.processing.workers.transcripts.base import Heard, Transcriber, TranscriptError
 from src.shared.ai_jobs import JOBS
 from src.shared.vision_endpoint import VisionEndpointError, list_models
 from src.shared.whisper_models import BUILT_IN_MODELS, canonical, served_as
@@ -210,7 +210,7 @@ class MachinePool:
 
     def _check_built_in(self) -> tuple[list[str], str, str]:
         """(models, the name it serves the model by, why it can't): this computer's Whisper."""
-        from src.client.workers.transcripts.local import unavailable
+        from src.processing.workers.transcripts.local import unavailable
 
         why = unavailable()
         if why:

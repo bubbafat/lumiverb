@@ -197,7 +197,7 @@ def test_storage_is_looked_at_as_the_scan_pass_does(acct, tmp_path: Path, monkey
         seen.append((library["library_id"], require_entries))
         return tmp_path if library["library_id"] == "lib_1" else None
 
-    monkeypatch.setattr("src.client.cli.roots.reachable_root", reachable_root)
+    monkeypatch.setattr("src.processing.roots.reachable_root", reachable_root)
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
     assert acct.storage_gone("lib_1") is False and acct.storage_gone("lib_2") is True
     assert acct.storage_gone("lib_unknown") is True

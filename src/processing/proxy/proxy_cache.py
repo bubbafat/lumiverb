@@ -22,7 +22,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from src.client.cache_dir import cache_dir
+from src.processing.cache_dir import cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class ProxyCache:
         Args:
             max_edge: Maximum long edge for cached proxies (for put/get).
             root_path: Library root for local source file generation.
-            client: LumiverbClient for server download fallback.
+            client: ApiClient for server download fallback.
         """
         self._dir = cache_dir("proxies")
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +87,7 @@ class ProxyCache:
 
     def put_from_path(self, asset_id: str, source_path: Path) -> bytes:
         """Generate proxy from a source file and cache it. Returns the bytes."""
-        from src.client.proxy.proxy_gen import generate_proxy_bytes
+        from src.processing.proxy.proxy_gen import generate_proxy_bytes
         image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
         self._atomic_write(self._dir / asset_id, image_bytes)
         return image_bytes

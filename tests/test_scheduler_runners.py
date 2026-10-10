@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.client.cli.producer_settings import ProducerSettings
+from src.processing.producer_settings import ProducerSettings
 from src.server.scheduler import runners
 from src.server.scheduler.dispatch import Job
 
@@ -95,7 +95,7 @@ def _item_posted(acct: FakeAccount, route: str) -> tuple[dict, dict]:
 
 @pytest.mark.fast
 def test_a_description_is_saved_with_its_lineage(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.ingest._backfill_one", lambda **kw: {
+    monkeypatch.setattr("src.processing.ingest._backfill_one", lambda **kw: {
         "asset_id": kw["asset_id"], "model_id": kw["vision_model_id"], "model_version": "1",
         "description": "a dog on a beach", "tags": ["dog"]})
     assert runners.vision(acct, _job("vision", "ast_1")) is None
@@ -111,7 +111,7 @@ def test_a_description_is_saved_with_its_lineage(acct: FakeAccount, monkeypatch:
 def test_a_description_that_fails_goes_through_the_machines_guard(acct: FakeAccount,
                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     error = RuntimeError("machine gone")
-    monkeypatch.setattr("src.client.cli.ingest._backfill_one", MagicMock(side_effect=error))
+    monkeypatch.setattr("src.processing.ingest._backfill_one", MagicMock(side_effect=error))
     runners.vision(acct, _job("vision", "ast_1"))
     acct.vision_fail.assert_called_once_with("ast_1", error)
     acct.client.post.assert_not_called()
@@ -200,7 +200,7 @@ def test_a_transcript_is_saved_with_its_lineage(acct: FakeAccount, monkeypatch: 
 def test_the_machines_trouble_with_a_transcript_charges_no_clip_here(acct: FakeAccount,
                                                                      monkeypatch: pytest.MonkeyPatch,
                                                                      tmp_path: Path) -> None:
-    from src.client.workers.transcripts.base import TranscriptError
+    from src.processing.workers.transcripts.base import TranscriptError
 
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     error = TranscriptError("speaches broke off", endpoint_fault=True)
@@ -223,7 +223,7 @@ def test_a_transcript_that_could_not_be_tried_is_a_failure(acct: FakeAccount, mo
 def test_scenes_are_found_from_the_analysis_copy(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
                                                  tmp_path: Path) -> None:
     index = MagicMock(return_value=(1, 0))
-    monkeypatch.setattr("src.client.cli.video_index.run_video_index", index)
+    monkeypatch.setattr("src.processing.video_index.run_video_index", index)
     runners.scenes(acct, _job("scenes", "ast_1", duration_sec=30.0))
     [video] = index.call_args.kwargs["videos"]
     assert video["asset_id"] == "ast_1" and video["duration_sec"] == 30.0
@@ -233,7 +233,7 @@ def test_scenes_are_found_from_the_analysis_copy(acct: FakeAccount, monkeypatch:
 @pytest.mark.fast
 def test_scene_descriptions_go_one_at_a_time_per_job(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
     enrich = MagicMock(return_value=(1, 0))
-    monkeypatch.setattr("src.client.cli.video_index.run_video_enrich", enrich)
+    monkeypatch.setattr("src.processing.video_index.run_video_enrich", enrich)
     runners.scene_vision(acct, _job("scene_vision", "ast_1"))
     assert enrich.call_args.kwargs["concurrency"] == 1
     assert enrich.call_args.kwargs["vision_model_id"] == acct.vision.model
@@ -397,7 +397,7 @@ def test_once_stopping_nothing_more_is_saved(acct: FakeAccount, monkeypatch: pyt
                                              tmp_path: Path) -> None:
     # A stop (an update, a reboot) kills ffmpeg mid-clip; what a job made of
     # that mustn't be saved as the clip's (an empty transcript, for good).
-    monkeypatch.setattr("src.client.cli.ingest._backfill_one", lambda **kw: {
+    monkeypatch.setattr("src.processing.ingest._backfill_one", lambda **kw: {
         "asset_id": kw["asset_id"], "model_id": "m", "model_version": "1", "description": "x", "tags": []})
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     monkeypatch.setattr("src.client.cli.repair._transcribe_one", lambda *a: ("", ""))
@@ -445,7 +445,7 @@ def test_a_clip_the_gpu_had_no_memory_for_waits_uncharged(acct: FakeAccount,
 
 @pytest.mark.fast
 def test_a_description_the_guard_didnt_charge_waits(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.client.cli.ingest._backfill_one", MagicMock(side_effect=RuntimeError("503")))
+    monkeypatch.setattr("src.processing.ingest._backfill_one", MagicMock(side_effect=RuntimeError("503")))
     acct.vision_fail.return_value = False  # the machines' trouble
     assert runners.vision(acct, _job("vision", "ast_1")) == ["ast_1"]
     acct.vision_fail.return_value = True  # the clip's: reported
@@ -458,7 +458,7 @@ def test_a_description_the_guard_didnt_charge_waits(acct: FakeAccount, monkeypat
 @pytest.mark.fast
 def test_a_transcript_the_guard_didnt_charge_waits(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch,
                                                    tmp_path: Path) -> None:
-    from src.client.workers.transcripts.base import TranscriptError
+    from src.processing.workers.transcripts.base import TranscriptError
 
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     monkeypatch.setattr("src.client.cli.repair._transcribe_one",
@@ -497,7 +497,7 @@ def test_scenes_reported_as_failing_dont_wait(acct: FakeAccount, monkeypatch: py
         kw["on_fail"]("ast_2", "no scenes found")
         return (1, 1)
 
-    monkeypatch.setattr("src.client.cli.video_index.run_video_index", index)
+    monkeypatch.setattr("src.processing.video_index.run_video_index", index)
     acct.failures.for_artifact.return_value = MagicMock(return_value=None)
     # Made scenes aren't seen here: those the server stops listing.
     assert runners.scenes(acct, _job("scenes", "ast_1", "ast_2", duration_sec=30.0)) == ["ast_1"]
@@ -581,7 +581,7 @@ def test_scene_descriptions_say_which_videos_wait(acct: FakeAccount, monkeypatch
         kw["on_fail"]("ast_2", "no description")
         return (1, 1)
 
-    monkeypatch.setattr("src.client.cli.video_index.run_video_enrich", enrich)
+    monkeypatch.setattr("src.processing.video_index.run_video_enrich", enrich)
     acct.vision_fail.return_value = True
     assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_1"]
     acct.vision_fail.return_value = False  # the machines' trouble: it waits too
@@ -595,7 +595,7 @@ def test_scenes_say_which_clips_they_made_so_only_the_rest_wait(acct: FakeAccoun
         kw["on_done"]("ast_1")
         kw["on_fail"]("ast_2", RuntimeError("bad"))
         return 1, 1
-    monkeypatch.setattr("src.client.cli.video_index.run_video_index", index)
+    monkeypatch.setattr("src.processing.video_index.run_video_index", index)
     job = _job("scenes", "ast_1", "ast_2", "ast_3", duration_sec=30.0)
     assert runners.scenes(acct, job) == ["ast_3"]  # made, reported, and one neither
 
@@ -605,7 +605,7 @@ def test_scene_descriptions_say_which_clips_they_made(acct: FakeAccount, monkeyp
     def enrich(**kw):
         kw["on_done"]("ast_1")
         return 1, 0
-    monkeypatch.setattr("src.client.cli.video_index.run_video_enrich", enrich)
+    monkeypatch.setattr("src.processing.video_index.run_video_enrich", enrich)
     assert runners.scene_vision(acct, _job("scene_vision", "ast_1", "ast_2")) == ["ast_2"]
 
 
@@ -634,14 +634,14 @@ def test_this_machines_trouble_saving_isnt_the_clips(acct: FakeAccount) -> None:
 
 
 def _scenes_with(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch, index) -> object:
-    monkeypatch.setattr("src.client.cli.video_index.index_video_scenes", index)
+    monkeypatch.setattr("src.processing.video_index.index_video_scenes", index)
     acct.analysis_cache.get.return_value = MagicMock(is_file=lambda: True)
     return runners.scenes(acct, _job("scenes", "ast_1", duration_sec=30.0))
 
 
 @pytest.mark.fast
 def test_a_failed_chunk_charges_the_clips_scenes(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cli.video_index import ChunkFailed
+    from src.processing.video_index import ChunkFailed
 
     def index(**kw):
         raise ChunkFailed("chunk 3 failed: FFmpeg hung")
@@ -666,7 +666,7 @@ def test_scenes_that_cant_be_saved_for_now_charge_nothing(acct: FakeAccount,
 
 @pytest.mark.fast
 def test_scenes_stopped_mid_clip_are_not_tried(acct: FakeAccount, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cli.video_index import Stopped
+    from src.processing.video_index import Stopped
 
     def index(**kw):
         assert kw["stopping"] is acct.stopping
