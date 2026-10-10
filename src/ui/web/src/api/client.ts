@@ -143,6 +143,8 @@ export async function authFetch(path: string, init: AuthFetchInit = {}): Promise
     fetch(`/v1${path}`, { ...init, headers: { ...authHeaders(), ...init.headers } });
   let res = await send();
   if (res.status !== 401) return res;
+  // No stored token: nothing to refresh, and nobody to sign out.
+  if (!getApiKey()) return res;
   if (await tryRefresh()) {
     res = await send();
     if (res.status !== 401) return res;

@@ -26,13 +26,19 @@ function stubServer(statuses: number[], refreshStatus = 200) {
   return calls;
 }
 
+const realCreateObjectURL = URL.createObjectURL;
+const realRevokeObjectURL = URL.revokeObjectURL;
+
 beforeEach(() => {
   setApiKey("old-token");
-  vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: vi.fn(() => "blob:crop"), revokeObjectURL: vi.fn() }));
+  URL.createObjectURL = vi.fn(() => "blob:crop");
+  URL.revokeObjectURL = vi.fn();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
   localStorage.clear();
 });
 

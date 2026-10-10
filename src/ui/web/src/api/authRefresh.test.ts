@@ -80,6 +80,14 @@ describe("apiFetch after a 401", () => {
     expect(localStorage.getItem(API_KEY_STORAGE_KEY)).toBeNull();
   });
 
+  it("doesn't try a refresh without a stored token", async () => {
+    localStorage.clear();
+    const calls = stubServer([{ status: 401 }]);
+    const err = await deleteLibrary("lib_1").catch((e: unknown) => e);
+    expect((err as ApiError).status).toBe(401);
+    expect(calls.map((c) => c.url)).toEqual(["/v1/libraries/lib_1"]);
+  });
+
   it("signs out when the retry is 401 again", async () => {
     stubServer([{ status: 401 }, { status: 401 }]);
     const err = await deleteLibrary("lib_1").catch((e: unknown) => e);
