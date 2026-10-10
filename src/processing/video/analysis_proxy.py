@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from src.processing.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_filter
+from src.processing.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_and_tracks_filter
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,11 @@ def _video_codec_args(settings: AnalysisProxySettings) -> list[str]:
 
 
 def _audio_args(tracks: list[AudioTrack], settings: AnalysisProxySettings) -> list[str]:
-    """A mix first when there are several tracks, then every track in order, each at most stereo."""
+    """A mix first when there are several tracks, then every track in order, each at most stereo.
+
+    With several, every audio output comes from one filtergraph
+    (mix_and_tracks_filter): mapping the tracks straight from the input
+    beside a graph mixing them stalls ffmpeg 9 now and then."""
     if not tracks:
         return []
     kbps = settings.audio_kbps_per_channel
@@ -150,13 +154,16 @@ def _audio_args(tracks: list[AudioTrack], settings: AnalysisProxySettings) -> li
     per_track: list[str] = []
     out = 0
     if len(tracks) > 1:
-        graph = ["-filter_complex", mix_filter(tracks, "mix")]
+        filtergraph, track_outs = mix_and_tracks_filter(tracks, "mix")
+        graph = ["-filter_complex", filtergraph]
         maps += ["-map", "[mix]"]
         per_track += ["-ac:a:0", "2", "-b:a:0", f"{kbps * 2}k", "-metadata:s:a:0", f"handler_name={MIX_HANDLER}"]
         out = 1
-    for t in tracks:
+    else:
+        track_outs = [f"0:a:{tracks[0].index}"]
+    for t, source in zip(tracks, track_outs):
         ch = min(t.channels, 2)
-        maps += ["-map", f"0:a:{t.index}"]
+        maps += ["-map", source]
         per_track += [f"-ac:a:{out}", str(ch), f"-b:a:{out}", f"{kbps * ch}k"]
         out += 1
     return [*graph, *maps, "-c:a", "aac", "-ar", "48000", *per_track]

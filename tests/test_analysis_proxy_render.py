@@ -23,7 +23,7 @@ from src.processing.video.analysis_proxy import (
     build_command,
     render_analysis_proxy,
 )
-from src.processing.video.audio import MIX_HANDLER, audio_tracks, speech_wav_command
+from src.processing.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, speech_wav_command
 
 
 def _make(path: Path, *, size: str = "1280x720", rate: int = 30, seconds: float = 2.0,
@@ -187,6 +187,26 @@ def test_the_mix_keeps_each_track_at_its_time(tmp_path: Path, gap: bool) -> None
     render_analysis_proxy(src, out)
     assert _mean_volume(out, 0, (0, 2)) < -80
     assert _mean_volume(out, 0, (3, 5)) > -40
+    # The track on its own too (out: the mix, then track 1, then the late one).
+    assert _mean_volume(out, 2, (0, 2)) < -80
+    assert _mean_volume(out, 2, (3, 5)) > -40
+
+
+@pytest.mark.fast
+def test_with_several_tracks_every_audio_output_comes_from_the_mix_graph() -> None:
+    # Mapping the tracks straight from the input beside a graph mixing them
+    # (with the video in the file) stalls ffmpeg 9 now and then: about half
+    # the renders of a late-starting lav under load sat idle until killed.
+    tracks = [AudioTrack(0, 2, "aac"), AudioTrack(2, 1, "aac")]
+    cmd = build_command(Path("/in.mov"), Path("/out.mp4"), tracks=tracks)
+    audio_maps = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map" and cmd[i + 1] != "0:V:0"]
+    assert audio_maps == ["[mix]", "[t0]", "[t1]"]
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "[0:a:0]aresample=async=1:first_pts=0,asplit=2[s0][t0]" in graph
+    assert "[0:a:2]aresample=async=1:first_pts=0,asplit=2[s1][t1]" in graph
+    # One track: no graph, mapped as it is.
+    one = build_command(Path("/in.mov"), Path("/out.mp4"), tracks=[AudioTrack(1, 2, "aac")])
+    assert "-filter_complex" not in one and "0:a:1" in one
 
 
 @pytest.mark.fast
