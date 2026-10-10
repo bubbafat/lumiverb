@@ -1468,7 +1468,7 @@ def submit_transcript(
         session.add(asset)
         session.commit()
         lineage.record(session, asset_id, "transcript", **made, outcome="empty")
-        _transcript_searched(session, request, asset, None)
+        _transcript_searched(session, request, asset)
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
     if not validate_srt(body.srt):
@@ -1486,11 +1486,11 @@ def submit_transcript(
     session.add(asset)
     session.commit()
     lineage.record(session, asset_id, "transcript", **made, outcome="ok" if asset.has_transcript else "empty")
-    _transcript_searched(session, request, asset, body.srt)
+    _transcript_searched(session, request, asset)
     return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
 
 
-def _transcript_searched(session: Session, request: Request, asset: Asset, srt: str | None) -> None:
+def _transcript_searched(session: Session, request: Request, asset: Asset) -> None:
     """Search has the clip's transcript as it is now (segments replaced), and its library changed."""
     from src.server.search.sync import index_transcript_segments, try_sync_asset
 
@@ -1503,11 +1503,7 @@ def _transcript_searched(session: Session, request: Request, asset: Asset, srt: 
     tid = getattr(request.state, "tenant_id", None)
     if tid:
         try:
-            from src.server.search.quickwit_client import QuickwitClient
-
-            QuickwitClient().delete_tenant_transcript_documents(tid, asset.asset_id)
-            if srt:
-                index_transcript_segments(session, tid, asset, srt)
+            index_transcript_segments(session, tid, asset)  # the transcript as committed, or none
         except Exception as exc:  # noqa: BLE001 — search catches up on its own
             logger.warning("Transcript segment re-index failed for %s: %s", asset.asset_id, exc)
     LibraryRepository(session).bump_revision(asset.library_id)
@@ -1559,7 +1555,7 @@ def delete_transcript(
         # A person removed the machine's: their choice stands, nothing makes it again.
         lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty", commit=False)
     session.commit()
-    _transcript_searched(session, request, asset, None)
+    _transcript_searched(session, request, asset)
 
 
 class NoteUpdateRequest(BaseModel):

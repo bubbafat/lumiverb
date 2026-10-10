@@ -1230,7 +1230,8 @@ class AssetRepository:
     def has_human_data(self, asset_id: str) -> bool:
         """Whether a person has worked on this asset: a note, a transcript they
         wrote or pasted, a correction, a rating, a project, a confirmed or
-        rejected person."""
+        rejected person, a location they set, or anything else made by a
+        person (their lineage, e.g. the machine's transcript removed for good)."""
         return bool(self._session.execute(
             text(
                 "SELECT EXISTS (SELECT 1 FROM assets WHERE asset_id = :a"
@@ -1242,6 +1243,8 @@ class AssetRepository:
                 "            WHERE f.asset_id = :a AND m.confirmed)"
                 " OR EXISTS (SELECT 1 FROM faces f JOIN face_person_rejections x ON x.face_id = f.face_id"
                 "            WHERE f.asset_id = :a)"
+                " OR EXISTS (SELECT 1 FROM asset_location WHERE asset_id = :a AND source = 'person')"
+                " OR EXISTS (SELECT 1 FROM artifact_lineage WHERE asset_id = :a AND producer = 'person')"
             ),
             {"a": asset_id},
         ).scalar())
@@ -2075,6 +2078,7 @@ class VideoSceneRepository:
         scene.description = description
         scene.tags = tags
         scene.lineage = lineage
+        scene.search_synced_at = None  # stale until search has it (the sweep, if the inline sync fails)
         self._session.add(scene)
         self._session.commit()
 
@@ -3308,6 +3312,29 @@ class SavedViewRepository:
         return result.rowcount  # type: ignore[return-value]
 
 
+def _lock_faces(session: Session, face_ids: list[str]) -> None:
+    """Lock these faces until the transaction ends, in face_id order.
+
+    The lock order for whatever finds or names faces: a clip (assets)
+    first, then faces in face_id order, before writing any face, name,
+    rejection or person (the first write to a face or a name also takes
+    the face clusters version row, migration d7f2a3b4c5e6). Re-detection
+    (submit_faces), the people routes and upkeep keep to it, so none
+    deadlocks another, and a person's word written meanwhile is waited
+    for and seen, never lost."""
+    if face_ids:
+        session.execute(text("SELECT 1 FROM faces WHERE face_id = ANY(:fids) ORDER BY face_id FOR UPDATE"),
+                        {"fids": list(face_ids)})
+
+
+def _lock_faces_of_people(session: Session, person_ids: list[str]) -> None:
+    """Lock every face named, rejected for, or shown as these people (_lock_faces)."""
+    _lock_faces(session, list(session.execute(text(
+        "SELECT face_id FROM face_person_matches WHERE person_id = ANY(:p)"
+        " UNION SELECT face_id FROM face_person_rejections WHERE person_id = ANY(:p)"
+        " UNION SELECT face_id FROM faces WHERE person_id = ANY(:p)"), {"p": person_ids}).scalars()))
+
+
 def _mark_clusters_dirty(session: Session) -> None:
     """Say the face clusters changed (the cache is computed again on the next
     load). Triggers already say so for every change to which faces are
@@ -3657,6 +3684,12 @@ class FaceRepository:
         """
         from sqlalchemy import delete as sa_delete
 
+        # The clip, then its faces (_lock_faces), before reading which a
+        # person named or dismissed: one naming, dismissing or un-assigning
+        # a face meanwhile is waited for and seen, not deleted with the face.
+        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
+        _lock_faces(self._session, list(self._session.execute(
+            text("SELECT face_id FROM faces WHERE asset_id = :a"), {"a": asset_id}).scalars()))
         old_rows = self._session.execute(
             text(
                 "SELECT f.face_id, f.bounding_box_json, f.embedding_vector::text AS emb, f.embedding_model,"
@@ -4078,7 +4111,7 @@ class FaceRepository:
         person_index = {pid: i for i, pid in enumerate(person_ids)}
         rejections = self._rejections_for([r[0] for r in rows])
 
-        assigned = 0
+        picks: dict[str, tuple[str, float]] = {}
         for face_id, emb_text in rows:
             vec = np.array([float(x) for x in emb_text.strip("[]").split(",")], dtype=np.float32)
             norm = np.linalg.norm(vec)
@@ -4093,10 +4126,22 @@ class FaceRepository:
             best_dist = float(distances[best_idx])
 
             if best_dist < self.AUTO_ASSIGN_THRESHOLD:
-                best_person_id = person_ids[best_idx]
-                match_id = "fpm_" + str(ULID())
+                picks[face_id] = (person_ids[best_idx], best_dist)
+
+        # The faces first (_lock_faces); then only those still there and
+        # unnamed, and not since rejected for their pick: a person's word wins.
+        _lock_faces(self._session, list(picks))
+        free = set(self._session.execute(
+            text("SELECT f.face_id FROM faces f WHERE f.face_id = ANY(:fids)"
+                 " AND NOT EXISTS (SELECT 1 FROM face_person_matches m WHERE m.face_id = f.face_id)"),
+            {"fids": list(picks)},
+        ).scalars()) if picks else set()
+        rejections = self._rejections_for(list(free))
+        assigned = 0
+        for face_id, (best_person_id, best_dist) in picks.items():
+            if face_id in free and best_person_id not in rejections.get(face_id, ()):
                 self._session.add(FacePersonMatch(
-                    match_id=match_id,
+                    match_id="fpm_" + str(ULID()),
                     face_id=face_id,
                     person_id=best_person_id,
                     confidence=1.0 - best_dist,
@@ -4110,7 +4155,7 @@ class FaceRepository:
 
         if assigned > 0:
             _mark_clusters_dirty(self._session)
-            self._session.commit()
+        self._session.commit()  # and the locks go
 
         return {"assigned": assigned, "scanned": len(rows)}
 
@@ -4555,6 +4600,7 @@ class PersonRepository:
         person = self.get_by_id(person_id)
         if person is None:
             return False
+        _lock_faces_of_people(self._session, [person_id])
         # Clear denormalized faces.person_id
         self._session.execute(
             text("UPDATE faces SET person_id = NULL WHERE person_id = :pid"),
@@ -4613,6 +4659,7 @@ class PersonRepository:
 
         An explicit assignment overrides an earlier rejection of the same pair.
         """
+        _lock_faces(self._session, [face_id])
         self._session.execute(
             text("DELETE FROM face_person_rejections WHERE face_id = :fid AND person_id = :pid"),
             {"fid": face_id, "pid": person_id},
@@ -4644,6 +4691,7 @@ class PersonRepository:
         Records a rejection ("this face is not this person") so neither
         auto-assignment nor the upkeep sweep puts it back.
         """
+        _lock_faces(self._session, [face_id])
         # Get the person_id before deleting (for centroid recomputation)
         old_pid = self._session.execute(
             text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
@@ -4705,6 +4753,7 @@ class PersonRepository:
         user already rejected for this person are skipped: a bulk action
         doesn't override a per-face decision.
         """
+        _lock_faces(self._session, face_ids)
         rejected = {
             row[0]
             for row in self._session.execute(
@@ -4781,6 +4830,7 @@ class PersonRepository:
         recompute centroid, pick best representative, delete source.
         Uses SELECT ... FOR UPDATE on source to serialize concurrent merges.
         """
+        _lock_faces_of_people(self._session, [target_person_id, source_person_id])
         # Lock source to serialize concurrent merges
         source = self._session.execute(
             text("SELECT person_id FROM people WHERE person_id = :pid FOR UPDATE"),
