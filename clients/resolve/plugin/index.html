@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:">
+    <title>Lumiverb</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <section id="signin" hidden>
+        <h1>Lumiverb</h1>
+        <form id="signin-form">
+            <label>Server <input id="server" placeholder="http://media" required></label>
+            <label>Email <input id="email" type="email" autocomplete="username" required></label>
+            <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+            <button type="submit" id="signin-button">Sign in</button>
+            <p class="status" id="signin-status" role="status"></p>
+        </form>
+    </section>
+
+    <section id="search" hidden>
+        <header>
+            <span id="who"></span>
+            <button type="button" class="link" id="signout">Sign out</button>
+        </header>
+        <form id="search-form">
+            <input id="query" type="search" placeholder="Search" required>
+            <button type="submit">Search</button>
+        </form>
+        <div class="options">
+            <select id="media" aria-label="Type">
+                <option value="video" selected>Video</option>
+                <option value="image">Images</option>
+                <option value="all">All</option>
+            </select>
+            <label class="check"><input type="checkbox" id="hide-in-project"> Hide clips already in the project</label>
+        </div>
+        <ol id="results"></ol>
+        <nav id="pager" hidden>
+            <button type="button" id="prev">Previous</button>
+            <span id="page"></span>
+            <button type="button" id="next">Next</button>
+        </nav>
+        <p class="status" id="status" role="status"></p>
+    </section>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

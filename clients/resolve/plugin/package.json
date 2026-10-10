@@ -1,0 +1,8 @@
+{
+    "name": "lumiverb-resolve",
+    "productName": "Lumiverb",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Lumiverb search inside DaVinci Resolve Studio",
+    "main": "main.js"
+}
