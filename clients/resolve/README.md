@@ -44,6 +44,12 @@ password.
   another clip.
 - **Also add to project** (on by default) adds the clip to the chosen project
   too, after Resolve. Off for a shared project: only its owner can add clips.
+- How an add went shows on the clip's row, with the message inside it: a
+  green border when it worked, red when it didn't, amber when the clip is in
+  Resolve but adding it to the project failed.
+- Files are imported by plain path. Resolve 21.1.0 refuses the docs'
+  `ImportMedia([{ FilePath }])` for an ordinary file ("Invalid 'StartIndex' or
+  'EndIndex' input specified"): it reads it as an image sequence.
 
 ## How it works
 

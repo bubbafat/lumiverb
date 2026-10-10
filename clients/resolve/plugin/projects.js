@@ -69,14 +69,15 @@ async function newProjectFromResolve({ resolve, client, realpath = fs.realpathSy
 
 // After a clip is added in Resolve (`message` says how), adds it to the
 // Lumiverb project too when one is given. What happened in Resolve stands
-// whatever the project add does.
+// whatever the project add does: `{ message, warning }`, warning when only
+// the project add failed.
 async function alsoAddToProject({ client, message, projectId, assetId }) {
-    if (!projectId) return message;
+    if (!projectId) return { message, warning: false };
     try {
         const added = await client.addToProject(projectId, [assetId]);
-        return `${message} ${added ? 'Added to the project.' : 'Already in the project.'}`;
+        return { message: `${message} ${added ? 'Added to the project.' : 'Already in the project.'}`, warning: false };
     } catch (error) {
-        return `${message} Couldn't add it to the project: ${error.message}`;
+        return { message: `${message} Couldn't add it to the project: ${error.message}`, warning: true };
     }
 }
 

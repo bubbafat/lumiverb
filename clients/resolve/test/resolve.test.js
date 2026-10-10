@@ -46,9 +46,16 @@ function fakeResolve({ binClips = [], root = null, timeline = null } = {}) {
     const mediaPool = {
         GetRootFolder: async () => fakeBin(root || {}),
         GetCurrentFolder: async () => bin,
-        ImportMedia: async (infos) => {
-            calls.imported.push(...infos);
-            return infos.map((info) => clip(info.FilePath, timeline && timeline.clip));
+        // Like Resolve 21.1.0: an object is an image sequence, refused
+        // without StartIndex and EndIndex; a path string imports the file.
+        ImportMedia: async (items) => {
+            for (const item of items) {
+                if (typeof item !== 'string' && (item.StartIndex === undefined || item.EndIndex === undefined)) {
+                    throw new Error("Execute: ImportMedia: Error response (errorStr:Invalid 'StartIndex' or 'EndIndex' input specified.) (errorCode:2)");
+                }
+            }
+            calls.imported.push(...items);
+            return items.map((filePath) => clip(filePath, timeline && timeline.clip));
         },
         AppendToTimeline: async (infos) => {
             calls.appended.push(...infos);
@@ -106,7 +113,7 @@ test('pickTrack takes the first track free for the whole clip', () => {
 test('addToBin imports the original into the current bin', async () => {
     const { resolve, calls } = fakeResolve();
     assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov', asGiven), 'Added to Master.');
-    assert.deepEqual(calls.imported, [{ FilePath: '/Volumes/media-01/Media/a.mov' }]);
+    assert.deepEqual(calls.imported, ['/Volumes/media-01/Media/a.mov'], 'a path string: Resolve refuses { FilePath } for a file');
 });
 
 test("addToBin doesn't import a file the bin already has", async () => {

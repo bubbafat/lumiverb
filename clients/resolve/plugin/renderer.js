@@ -145,15 +145,24 @@ function addTarget() {
     return project && project.own && $('also-add').checked ? project.projectId : null;
 }
 
-async function add(method, clip, buttons) {
+// How an add went, on the clip's own row: its border and the message inside
+// it. 'working', 'ok' (green), 'warn' (amber: in Resolve, but the project add
+// failed) or 'failed' (red).
+function showOutcome(item, state, message) {
+    item.classList.remove('working', 'ok', 'warn', 'failed');
+    item.classList.add(state);
+    item.querySelector('.outcome').textContent = message;
+}
+
+async function add(method, clip, item, buttons) {
     buttons.forEach((button) => { button.disabled = true; });
-    busy(`Adding ${clip.name}…`);
+    showOutcome(item, 'working', 'Adding…');
     try {
-        $('status').textContent = await call(method, clip.assetId, addTarget());
+        const { message, warning } = await call(method, clip.assetId, addTarget());
+        showOutcome(item, warning ? 'warn' : 'ok', message);
     } catch (error) {
-        $('status').textContent = error.message;
+        showOutcome(item, 'failed', error.message);
     } finally {
-        busy('');
         buttons.forEach((button) => { button.disabled = false; });
     }
 }
@@ -180,10 +189,10 @@ function row(clip) {
         const buttons = [toBin, atPlayhead];
         toBin.type = 'button';
         atPlayhead.type = 'button';
-        toBin.addEventListener('click', () => add('addToBin', clip, buttons));
-        atPlayhead.addEventListener('click', () => add('addAtPlayhead', clip, buttons));
+        toBin.addEventListener('click', () => add('addToBin', clip, item, buttons));
+        atPlayhead.addEventListener('click', () => add('addAtPlayhead', clip, item, buttons));
         actions.append(toBin, atPlayhead);
-        info.append(actions);
+        info.append(actions, element('div', 'outcome'));
     } else {
         info.append(element('div', 'missing', 'Not on this Mac'));
     }

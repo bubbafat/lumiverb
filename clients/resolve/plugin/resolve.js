@@ -106,7 +106,10 @@ async function clipInCurrentBin(mediaPool, filePath, realpath) {
     for (const clip of (await bin.GetClipList()) || []) {
         if ((await clipFileKey(clip, realpath)) === wanted) return { clip, bin, added: false };
     }
-    const imported = await mediaPool.ImportMedia([{ FilePath: filePath }]);
+    // Plain paths. The 21.1 docs' [{ FilePath }] form is taken as an image
+    // sequence and refused for an ordinary file: "Invalid 'StartIndex' or
+    // 'EndIndex' input specified" (Resolve 21.1.0).
+    const imported = await mediaPool.ImportMedia([filePath]);
     if (!imported || imported.length === 0) throw new Error("Resolve couldn't import the file.");
     return { clip: imported[0], bin, added: true };
 }

@@ -19,7 +19,8 @@ contextBridge.exposeInMainWorld('lumiverb', {
         ipcRenderer.on('lumiverb:progress', listener);
         return () => ipcRenderer.removeListener('lumiverb:progress', listener);
     },
-    // projectId: also add the clip to that Lumiverb project, or null.
+    // projectId: also add the clip to that Lumiverb project, or null. Answers
+    // { message, warning }: warning when only the project add failed.
     addToBin: (assetId, projectId) => ipcRenderer.invoke('resolve:addToBin', assetId, projectId || null),
     addAtPlayhead: (assetId, projectId) => ipcRenderer.invoke('resolve:addAtPlayhead', assetId, projectId || null),
 });
