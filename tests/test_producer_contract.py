@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 def test_every_producer_declares_what_the_rest_needs():
     producers = registry()
     assert list(producers) == ["probe", "capture", "proxy", "video_preview", "analysis_proxy", "scenes", "scene_vision",
-                               "vision", "ocr", "clip", "faces", "transcript"]
+                               "vision", "ocr", "clip", "faces", "transcript", "location"]
     for p in producers.values():
         assert isinstance(p, ProducerSpec) and p.applies and p.made
         assert all(n in producers for n in p.needs), (p.artifact, p.needs)
@@ -41,6 +41,8 @@ def test_every_producer_declares_what_the_rest_needs():
         # A setting that doesn't remake is outside lineage: something must act when it changes.
         if any(not s.remakes for s in p.settings):
             assert callable(load(p.regroup)), p.artifact
+        if p.on_settings:
+            assert callable(load(p.on_settings)), p.artifact
     flags = [p.flag for p in producers.values() if p.flag]
     assert len(set(flags)) == len(flags)
 

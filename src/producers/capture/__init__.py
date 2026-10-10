@@ -21,6 +21,8 @@ PRODUCER = ProducerSpec(
     # Made once its lineage says so: the facts themselves can be empty (a PNG says nothing).
     made=("EXISTS (SELECT 1 FROM artifact_lineage cl WHERE cl.asset_id = a.asset_id"
           " AND cl.artifact = 'capture' AND cl.producer <> '')"),
+    # Its time read again, the clip's guess is made again with it.
+    redo_also=("location",),
     kind="capture", flag="missing_capture", run="src.producers.capture.work:Capture", tier=PREPARE, pool=EXIF,
     batch=50, storage=True,
 )

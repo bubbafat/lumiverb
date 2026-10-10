@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 and 2 built.
+Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 to 3 built.
 
 ## Progress
 
@@ -10,7 +10,7 @@ Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 and 2 built.
 |-------|-------------|--------|
 | 1 | Groundwork: better EXIF, the `asset_location` table, the effective location in filters, nothing on public pages | Built. New and changed files only: backfilling clips already ingested moves to phase 3 |
 | 2 | A person's location: set it for explicit clips; Lightbox row | Built |
-| 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | In progress: the capture facts (one `taken_at` meaning on every scanner, and the `capture` producer that reads them again) built |
+| 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | Built |
 | 4 | Offline place names and suggestions from text in the image | Not started |
 | 5 | Landmark suggestions through the vision job | Not started |
 
@@ -229,6 +229,16 @@ Requirements as in the ADR template: the full suite passes, tsc and vite build a
 - Device keys, clock correction, matching, radius, the speed check.
 - The re-run step when a fix changes; a person's location acts as a fix.
 - The "Includes guesses" toggle in the filter bar shows by itself once guesses exist (built in phase 2: `guess_count` in the facets).
+
+**As built** (where it differs from the design above, or settles what it left open):
+- **Capture facts are a producer of their own** (`capture`, exiftool, its own pool, tier 2, reads the originals), not part of probe: probe is video only and one ffprobe pass; these are every clip's EXIF. The Python scan sends them and says so (`capture` lineage on the ingest); an ingest that doesn't (the macOS app) leaves them for the producer, which also reads that clip's `taken_at` again in the one meaning. `location` needs `capture`, so a clip is guessed only once its own time is read the one way.
+- **Fixes come from the clip's library.** Matching isn't limited to a folder; it is limited to the library, as the re-run step is.
+- **Re-running when a fix changes** reaches further than "the same day within `inference_minutes`": every clip in the library within `inference_minutes` + 14 h of the fix (the clock correction can move a camera clip that far), the fix itself, and any guess whose `basis` names it. The guess rows and their lineage go (`lineage.start_over`), so they are missing and made again ahead of stale work. Triggers: a scan's `update_exif`, the capture facts read again, a person setting, clearing or accepting a location. Not yet: a fix trashed or restored (its guesses stay until something else near it changes).
+- **Clock pairs** are each camera clip's single most alike fix from another device (one vote per clip), at CLIP cosine similarity ≥ 0.9, at most 300 of the device's clips a day. Only photos have CLIP vectors, so a camera that shoots only video gets no votes: its offset is the recorded zones' difference, or none.
+- **Gaps** are between real instants when both clips record a zone, otherwise between wall clocks as written (the ADR's offset 0); the clock offset applies only to fixes from another device.
+- **Radius** adds the larger GPS accuracy (`gps_accuracy_m`) of the fixes used.
+- **A guess is never written over a suggestion** (phase 4), as it isn't over a person's or the file's.
+- **Turning Infer location off** asks first (409 `redo_on_change`, "New settings remove location guesses from N clips"), then removes every guess and the producer's lineage; a person's location stays. It's the spec's `on_settings`, a new field of the producer contract.
 
 ### Phase 4: Place names
 - GeoNames offline on the brain.

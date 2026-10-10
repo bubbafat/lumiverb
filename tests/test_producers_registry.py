@@ -13,7 +13,7 @@ pytestmark = pytest.mark.fast
 def test_one_producer_per_artifact_and_each_artifact_once():
     assert set(P.ARTIFACTS) == {
         "probe", "capture", "proxy", "video_preview", "analysis_proxy", "scenes", "scene_vision",
-        "vision", "ocr", "clip", "faces", "transcript",
+        "vision", "ocr", "clip", "faces", "transcript", "location",
     }
     assert len({p.producer for p in P.PRODUCERS.values()}) == len(P.PRODUCERS)
 

@@ -1,8 +1,13 @@
-"""A person's location for clips (ADR-017 phase 2).
+"""Locations for clips (ADR-017 phases 2 and 3): a person's, and the producer's guesses.
 
 PUT    /v1/assets/locations         set it: {lat, lon} or {same_as}
 DELETE /v1/assets/locations         clear a person's location
 POST   /v1/assets/locations/accept  a suggestion becomes a person's location
+
+The location producer's (phase 3): admins only, as the scheduler's key is (editors 403):
+POST   /v1/assets/locations/clocks          scene pairs a device's clock offset is voted from
+GET    /v1/assets/locations/context/{id}    a clip's nearest fixes before and after it
+PUT    /v1/assets/locations/guess/{id}      its guess, or that it found none
 
 Editor or above. Every request names its clips: asset_ids is required and
 non-empty (a missing or empty list is a 400, never "all"). Replacing a
@@ -15,13 +20,18 @@ otherwise take "locations" for a clip id.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_tenant_admin,
+)
 from src.server.api.errors import ApiError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS
 from src.server.repository import locations
@@ -174,3 +184,85 @@ def accept_locations(
     session.commit()
     _refresh(session, accepted)
     return AcceptLocationResponse(accepted=accepted, skipped=[i for i in ids if i not in set(accepted)])
+
+
+# ---------------------------------------------------------------------------
+# The location producer's (phase 3): what it reads to guess, and its guesses
+# ---------------------------------------------------------------------------
+
+
+class ClocksRequest(BaseModel):
+    asset_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    min_similarity: float = Field(default=0.9, ge=0, le=1)
+    window_min: int = Field(default=14 * 60, ge=1, le=48 * 60)
+
+
+@router.post("/clocks", dependencies=[Depends(require_tenant_admin)])
+def location_clocks(
+    session: Annotated[Session, Depends(get_tenant_session)],
+    body: Annotated[ClocksRequest | None, Body()] = None,
+) -> dict:
+    """For the named clips: each one's device and day, and that day's scene
+    pairs (a clip of the device with no fix, and the most alike fix from
+    another device), which the producer votes the device's clock offset from."""
+    ids = _ids(body)
+    assert body is not None
+    return locations.clocks(session, ids, min_similarity=body.min_similarity, window_min=body.window_min)
+
+
+@router.get("/context/{asset_id}", dependencies=[Depends(require_tenant_admin)])
+def location_context(
+    asset_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    minutes: Annotated[int, Query(ge=1, le=1440)] = 360,
+    clock_offset_min: Annotated[float, Query(ge=-48 * 60, le=48 * 60, allow_inf_nan=False)] = 0.0,
+) -> dict:
+    """A clip's time and device, and the nearest fix before and after it in
+    its library (the file's GPS or a person's location; never a guess)
+    within minutes, with its device's clock offset applied."""
+    found = locations.context(session, asset_id, minutes=minutes, clock_offset_min=clock_offset_min)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return found
+
+
+class GuessIn(BaseModel):
+    lat: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    lon: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    radius_m: int = Field(ge=0, le=20_100_000)
+    basis: dict = Field(default_factory=dict)
+
+
+class GuessRequest(BaseModel):
+    guess: GuessIn | None = None  # None: nothing within the window
+    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
+
+
+class GuessResponse(BaseModel):
+    # stored | empty (none found: the clip's guess goes) | kept (a person's
+    # location or the file's GPS: nothing written) | gone (not in sight)
+    result: str
+
+
+@router.put("/guess/{asset_id}", response_model=GuessResponse, dependencies=[Depends(require_tenant_admin)])
+def save_location_guess(
+    asset_id: str,
+    body: GuessRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> GuessResponse:
+    """The location producer's guess for a clip, or that it found none. A
+    person's location and the file's GPS are never written over."""
+    import json
+
+    from src.server.api.routers.producers import require_lineage
+
+    made = require_lineage(body.lineage, "location")  # before anything is saved
+    guess = body.guess.model_dump() if body.guess is not None else None
+    if guess is not None:
+        if not is_fix(guess["lat"], guess["lon"]):
+            raise ApiError(422, "invalid_location", "lat and lon must be a real place: not 0, 0")
+        if len(json.dumps(guess["basis"])) > 16_000:
+            raise ApiError(422, "basis_too_big", "basis is at most 16,000 characters of JSON")
+    result = locations.save_guess(session, asset_id, guess, made)
+    session.commit()
+    return GuessResponse(result=result)

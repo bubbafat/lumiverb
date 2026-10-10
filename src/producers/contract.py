@@ -185,6 +185,12 @@ class ProducerSpec:
     # "module:function", called with (session) when a setting that doesn't
     # remake changes (faces: the face groups are worked out again).
     regroup: str = ""
+    # "module:function", called with (session, before, after, *, apply) when
+    # its output-affecting settings change from before to after: what it
+    # drops that a redo wouldn't (location guesses once inferring is off),
+    # counted (apply False) or done (apply True), as how many clips. The 409
+    # before new settings counts them.
+    on_settings: str = ""
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)

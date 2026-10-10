@@ -611,6 +611,35 @@ def test_public_detail_shows_no_location_of_any_kind(public_lib_client, located)
 
 
 @pytest.mark.slow
+def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(public_lib_client):
+    """A location guess (ADR-017 phase 3) is no more public than the file's GPS."""
+    import json as _json
+
+    from tests.machine_lineage import made
+
+    client, api_key, library_id, _ = public_lib_client
+    auth = {"Authorization": f"Bearer {api_key}"}
+    guessed = _ingest(client, api_key, library_id, "trips/guessed.jpg", media_type="image")
+    guess = {"lat": 3.5, "lon": 4.5, "radius_m": 900, "basis": {"summary": "From iPhone photos at 14:02"}}
+    r = client.put(f"/v1/assets/locations/guess/{guessed}", json={"guess": guess, "lineage": made("location")},
+                   headers=auth)
+    assert r.json() == {"result": "stored"}, r.text
+    public = client.get(f"/v1/assets/{guessed}", params={"public_library_id": library_id}).json()
+    for field in ("location", "gps_lat", "gps_lon", "gps_accuracy_m"):
+        assert public.get(field) is None, (field, public)
+    assert "3.5" not in _json.dumps(public) and "iPhone" not in _json.dumps(public)
+    facets = client.get("/v1/assets/facets", params=[("f", f"library:{library_id}")]).json()
+    assert facets["guess_count"] == 0
+    assert client.get(f"/v1/assets/{guessed}", headers=auth).json()["location"]["source"] == "time"
+    visitor = {"public_library_id": library_id}
+    assert client.get(f"/v1/assets/locations/context/{guessed}", params=visitor).status_code in (401, 403)
+    assert client.post("/v1/assets/locations/clocks", params=visitor,
+                       json={"asset_ids": [guessed]}).status_code in (401, 403)
+    assert client.put(f"/v1/assets/locations/guess/{guessed}", params=visitor,
+                      json={"guess": None, "lineage": made("location")}).status_code in (401, 403)
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("location_params", [{"has_gps": "true"}, {"near_lat": "48.8584", "near_lon": "2.2945"}])
 def test_public_page_cant_filter_by_location(public_lib_client, located, location_params):
     client, _, library_id, _ = public_lib_client
