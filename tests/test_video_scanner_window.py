@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from src.processing.video.video_scanner import VideoScanner
+from src.processing.video.video_scanner import SyncError, VideoScanner
 
 
 def _clip(path: Path, *, seconds: int, gop: int, ts_offset: float = 0.0) -> Path:
@@ -83,3 +83,23 @@ def test_only_keyframes_are_decoded_with_b_frames_between(tmp_path: Path) -> Non
                     "-c:v", "libx264", "-preset", "medium", "-bf", "3", "-pix_fmt", "yuv420p",
                     "-g", "45", "-keyint_min", "45", "-sc_threshold", "0", str(clip)], check=True)
     assert _scan(clip, 0.0, 20.0) == pytest.approx(_keyframes(clip), abs=1e-3)
+
+
+@pytest.mark.fast
+def test_ffmpeg_failing_is_an_error_not_a_video_without_keyframes(tmp_path: Path) -> None:
+    # ffmpeg 9 refusing the old -vsync option ended the output at once, and
+    # the scan came back empty as if the video had no keyframes left.
+    clip = _clip(tmp_path / "clip.mp4", seconds=4, gop=30)
+    scanner = VideoScanner(clip)  # sized from the real clip
+    clip.write_bytes(b"not a video any more")
+    with pytest.raises(SyncError, match=r"FFmpeg exited with code [1-9]\d*: .+"):
+        list(scanner.scan(0.0, 4.0))
+
+
+@pytest.mark.fast
+def test_stopping_at_the_windows_end_is_not_a_failure(tmp_path: Path) -> None:
+    # The scan stops FFmpeg itself once a frame reaches the window's end:
+    # that's not FFmpeg failing.
+    clip = _clip(tmp_path / "clip.mp4", seconds=20, gop=30)
+    got = _scan(clip, 0.0, 5.0)
+    assert got == pytest.approx(_between(_keyframes(clip), 0.0, 5.0), abs=1e-3)

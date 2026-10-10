@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -24,10 +25,12 @@ logger = _log
 OUT_WIDTH = 480
 PTS_QUEUE_TIMEOUT = 10.0
 PTS_QUEUE_POLL_INTERVAL = 0.5
+# FFmpeg's last stderr lines (not the per-frame ones) that a failure quotes.
+STDERR_TAIL_LINES = 5
 
 
 class SyncError(Exception):
-    """Raised when PTS does not arrive within timeout (FFmpeg hung)."""
+    """FFmpeg hung (PTS didn't arrive in time) or failed."""
 
 
 @dataclass
@@ -124,10 +127,13 @@ class VideoScanner:
         faster on analysis proxies, and faster than GPU decoding, which copies
         every frame back.
 
-        Raises SyncError if PTS does not arrive within PTS_QUEUE_TIMEOUT.
+        Raises SyncError if PTS does not arrive within PTS_QUEUE_TIMEOUT, or
+        if FFmpeg fails: an output that ends with FFmpeg's error is a failure,
+        not a video with no keyframes left.
         """
         frame_size = self._width * self._height * 3
         pts_queue: Queue[float] = Queue()
+        stderr_tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
 
         def consume_stderr(pipe) -> None:
             pts_re = re.compile(r"pts_time:([\d.]+)")
@@ -142,6 +148,8 @@ class VideoScanner:
                         pts_queue.put(float(m.group(1)))
                     except ValueError:
                         pass
+                elif line.strip():
+                    stderr_tail.append(line.strip())
 
         cmd = [
             "ffmpeg",
@@ -158,8 +166,10 @@ class VideoScanner:
             "select='eq(pict_type\\,I)'"
             + (f",scale={self._width}:{self._height}" if self._scale else "")
             + ",showinfo",
-            "-vsync",
-            "0",
+            # Every selected frame as it is. ffmpeg 9 removed -vsync (and
+            # stops at once on it); -fps_mode is there since 5.1.
+            "-fps_mode",
+            "passthrough",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -188,6 +198,17 @@ class VideoScanner:
                             len(chunk),
                             frame_size,
                         )
+                    # The output ended on its own (stopping at the window's
+                    # end kills FFmpeg below, after this): anything but a
+                    # clean exit is FFmpeg's failure.
+                    try:
+                        returncode = proc.wait(timeout=PTS_QUEUE_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        raise SyncError("FFmpeg closed its output but didn't exit") from None
+                    if returncode != 0:
+                        stderr_thread.join(timeout=1.0)
+                        said = " | ".join(stderr_tail) or "nothing on stderr"
+                        raise SyncError(f"FFmpeg exited with code {returncode}: {said}")
                     break
                 deadline = time.monotonic() + PTS_QUEUE_TIMEOUT
                 pts = None
