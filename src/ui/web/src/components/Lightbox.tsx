@@ -840,6 +840,12 @@ export function Lightbox({
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
+                        // Tagging faces needs an editor, as on the server: a
+                        // viewer's click only opens the person, if there is one.
+                        if (!canCorrect) {
+                          if (isNamed) navigate(`/people/${face.person!.person_id}`);
+                          return;
+                        }
                         setAssignFaceId(isPopoverTarget ? null : face.face_id);
                         setAssignMode("pick");
                         setNewPersonName("");

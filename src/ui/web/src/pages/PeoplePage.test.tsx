@@ -109,3 +109,31 @@ describe("PeoplePage cluster order", () => {
     expect(clusterUrls()[0].searchParams.get("sort")).toBe("size_desc");
   });
 });
+
+describe("PeoplePage cluster actions", () => {
+  function as(role: string) {
+    fetchMock.mockImplementation(async (url: string) => {
+      const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
+      if (path === "/me") return new Response(JSON.stringify({ user_id: "u", email: "e", role }));
+      if (path === "/people") return new Response(JSON.stringify({ items: [], next_cursor: null }));
+      if (path === "/faces/clusters") return new Response(JSON.stringify(clusters));
+      return new Response("{}", { status: 404 });
+    });
+  }
+
+  it("shows naming and dismissing to an editor", async () => {
+    as("editor");
+    renderPage();
+    expect(await screen.findByText("Name all 5")).toBeTruthy();
+    expect(screen.getAllByText("Dismiss").length).toBeGreaterThan(0);
+  });
+
+  it("hides them from a viewer: the server would refuse", async () => {
+    as("viewer");
+    renderPage();
+    await screen.findByLabelText("Min faces");
+    await new Promise((r) => setTimeout(r, 50)); // the role has arrived by now
+    expect(screen.queryByText("Name all 5")).toBeNull();
+    expect(screen.queryByText("Dismiss")).toBeNull();
+  });
+});

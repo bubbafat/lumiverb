@@ -34,7 +34,7 @@ from rich.console import Console
 
 from src.client.cache_dir import cache_dir
 from src.client.cli.roots import reachable_root
-from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
+from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
 if TYPE_CHECKING:
     from src.client.cli.scan import ScanStats
@@ -168,7 +168,7 @@ def _is_dir(root: Path, rel: str) -> bool:
     """False when it can't be checked: its parent's scan covers it either way."""
     try:
         st = stat_if_present(resolve_source_path(root, rel))
-    except OSError:
+    except (OSError, UnsafeRelPathError):  # a path that leaves the root is no folder of it
         return False
     return st is not None and S_ISDIR(st.st_mode)
 

@@ -6,6 +6,7 @@ import type { PersonFaceItem, PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { Lightbox } from "../components/Lightbox";
+import { useCanEdit } from "../lib/useCanEdit";
 
 function FaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick: () => void }) {
   const { url, isLoading } = useAuthenticatedImage(face.asset_id, "thumbnail");
@@ -66,6 +67,8 @@ export default function PersonDetailPage() {
   const { personId } = useParams<{ personId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // Renaming, merging and deleting people need an editor, as on the server.
+  const canEdit = useCanEdit();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -243,9 +246,9 @@ export default function PersonDetailPage() {
           </form>
         ) : (
           <h1
-            className="cursor-pointer text-2xl font-bold text-white hover:text-indigo-400"
-            onClick={startEditing}
-            title="Click to rename"
+            className={canEdit ? "cursor-pointer text-2xl font-bold text-white hover:text-indigo-400" : "text-2xl font-bold text-white"}
+            onClick={canEdit ? startEditing : undefined}
+            title={canEdit ? "Click to rename" : undefined}
           >
             {person.display_name}
           </h1>
@@ -255,6 +258,7 @@ export default function PersonDetailPage() {
           {person.face_count} {person.face_count === 1 ? "photo" : "photos"}
         </span>
 
+        {canEdit && (
         <div className="ml-auto flex items-center gap-3">
           {mergeMode ? (
             <div className="flex items-center gap-2 flex-wrap">
@@ -340,6 +344,7 @@ export default function PersonDetailPage() {
             Delete person
           </button>
         </div>
+        )}
       </div>
 
       {/* Photo grid */}

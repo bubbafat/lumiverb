@@ -1015,6 +1015,16 @@ def scan(
         console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
         raise typer.Exit(1)
 
+    if path_prefix:
+        from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+
+        try:  # a folder inside the library: relative, no ".."
+            check_rel_path(path_prefix.rstrip("/"))
+        except UnsafeRelPathError:
+            console.print(f"[red]Invalid --path-prefix: {path_prefix}. Give a folder inside the library "
+                          "(relative, no '..').[/red]")
+            raise typer.Exit(1) from None
+
     client = LumiverbClient()
     libraries = client.get("/v1/libraries").json()
     match = next((lib for lib in libraries if lib["name"] == library), None)

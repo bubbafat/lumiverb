@@ -50,7 +50,7 @@ from src.client.cli.ingest import (
 from src.client.proxy.proxy_cache import ProxyCache
 from src.client.workers.exif_extract import compute_sha256
 from src.client.video.probe import probe_video
-from src.shared.io_utils import is_within, resolve_source_path, stat_if_present
+from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 from src.shared.producers import effective_settings, lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
@@ -768,6 +768,10 @@ def run_scan(
     if path_prefix:
         try:
             found = _existing_folder(root_path, path_prefix)
+        except UnsafeRelPathError:
+            console.print(f"[red]Invalid path prefix {path_prefix}: it must be a folder inside the library[/red]")
+            stats.unlisted.append(path_prefix)  # nothing is removed
+            return stats
         except OSError as exc:
             console.print(f"[yellow]Can't check {path_prefix} ({exc}), so this scan doesn't remove anything[/yellow]")
             stats.unlisted.append(path_prefix)
