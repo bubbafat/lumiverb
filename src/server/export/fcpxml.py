@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead
+from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead, to_xml
 
 
 def _seconds(frames: int, clip: ExportClip) -> str:
@@ -129,6 +129,4 @@ class FcpxmlProvider:
                 position += length
             sequence.set("duration", f"{position * den}/{num}s")
 
-        ET.indent(root)
-        body = ET.tostring(root, encoding="unicode")
-        return ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE fcpxml>\n' + body + "\n").encode()
+        return to_xml(root, "fcpxml")

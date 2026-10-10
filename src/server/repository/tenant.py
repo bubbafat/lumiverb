@@ -15,7 +15,7 @@ from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
 from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
-from src.shared.utils import utcnow
+from src.shared.utils import escape_like, utcnow
 from src.server.repository import corrections as _corr
 from src.shared import asset_status
 from src.server.models.similarity import SimilarityScope
@@ -498,7 +498,7 @@ def _under(folder: str | None) -> str | None:
     folder = normalize_path_prefix(folder)
     if folder is None:
         return None
-    return folder.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+    return escape_like(folder) + "/%"
 
 
 def _split(asked: list[str], changed: set[str]) -> tuple[list[str], list[str]]:
@@ -670,10 +670,10 @@ class AssetRepository:
         # --- Path prefix ---
         if path_prefix:
             conditions.append(
-                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
+                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like ESCAPE '\\')"
             )
             params["path_prefix"] = path_prefix
-            params["path_prefix_like"] = path_prefix + "/%"
+            params["path_prefix_like"] = escape_like(path_prefix) + "/%"
 
         # --- Composite cursor ---
         if after is not None:
@@ -2986,10 +2986,10 @@ class UnifiedBrowseRepository:
         # --- Path prefix (requires library_ids) ---
         if filters.path_prefix:
             conditions.append(
-                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like)"
+                "(a.rel_path = :path_prefix OR a.rel_path LIKE :path_prefix_like ESCAPE '\\')"
             )
             params["path_prefix"] = filters.path_prefix
-            params["path_prefix_like"] = filters.path_prefix + "/%"
+            params["path_prefix_like"] = escape_like(filters.path_prefix) + "/%"
 
         # --- Composite cursor ---
         if after is not None:
@@ -4423,9 +4423,9 @@ class PersonRepository:
 
         if q:
             having_conditions.append(
-                "LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%'"
+                "LOWER(p.display_name) LIKE '%' || LOWER(:q) || '%' ESCAPE '\\'"
             )
-            params["q"] = q
+            params["q"] = escape_like(q)
 
         if after:
             try:

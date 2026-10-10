@@ -438,3 +438,15 @@ def test_export_filename_drops_control_characters() -> None:
     from src.server.api.routers.projects import _export_filename
 
     assert _export_filename("a\x7fb\x01c", ".xml") == "a_b_c.xml"
+
+
+@pytest.mark.parametrize("provider_id", ["fcp7", "fcpxml"])
+def test_characters_xml_forbids_are_left_out(provider_id):
+    from dataclasses import replace
+
+    clip = replace(IPHONE, name="a\x00b\x07c\x1bd\x0be\tf.mov", path="/Volumes/DAS/x\x01y\n.mov")
+    xml = EXPORT_PROVIDERS[provider_id].render(ExportBin(name="Bin\x0c\x1f", clips=[clip, UNPROBED]))
+    root = ET.fromstring(xml)  # well-formed
+    names = {el.text for el in root.iter("name")} | {el.get("name") for el in root.iter() if el.get("name")}
+    assert "abcde\tf.mov" in names and "Bin" in names
+    assert not any(ch in xml.decode() for ch in "\x00\x01\x07\x0b\x0c\x1b\x1f")

@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.repository.corrections import tags_join
+from src.shared.utils import escape_like
 
 
 def search_assets(
@@ -50,24 +51,26 @@ def search_assets(
     # matched when the words appeared contiguously. Per-term groups
     # actually loosen that for unquoted input.
     # A capped public page doesn't show the whole transcript, so its search doesn't read it.
-    transcript_or = "OR a.transcript_text ILIKE :{name}" if include_transcripts else ""
-    note_or = "OR a.note ILIKE :{name}" if include_notes else ""
+    transcript_or = "OR a.transcript_text ILIKE :{name} ESCAPE '\\'" if include_transcripts else ""
+    note_or = "OR a.note ILIKE :{name} ESCAPE '\\'" if include_notes else ""
     # A public page shows neither the file's path nor its camera, so its search doesn't read them.
-    file_or = ("OR a.rel_path ILIKE :{name} OR a.camera_make ILIKE :{name} OR a.camera_model ILIKE :{name}"
+    file_or = ("OR a.rel_path ILIKE :{name} ESCAPE '\\' "
+               "OR a.camera_make ILIKE :{name} ESCAPE '\\' "
+               "OR a.camera_model ILIKE :{name} ESCAPE '\\'"
                if include_file_details else "")
     terms = parse_query(query)
     term_patterns: list[tuple[str, str]] = []  # (bind_name, ilike_value)
     for i, term in enumerate(terms):
-        term_patterns.append((f"like_{i}", f"%{term.text}%"))
+        term_patterns.append((f"like_{i}", f"%{escape_like(term.text)}%"))
 
     if term_patterns:
         groups = " AND ".join(
             f"""(
-                  a.asset_id       ILIKE :{name}
+                  a.asset_id       ILIKE :{name} ESCAPE '\\'
                {file_or.format(name=name)}
-               OR COALESCE(c.description, m.data->>'description') ILIKE :{name}
-               OR CAST(et.tags AS TEXT) ILIKE :{name}
-               OR COALESCE(c.ocr_text, o.text) ILIKE :{name}
+               OR COALESCE(c.description, m.data->>'description') ILIKE :{name} ESCAPE '\\'
+               OR CAST(et.tags AS TEXT) ILIKE :{name} ESCAPE '\\'
+               OR COALESCE(c.ocr_text, o.text) ILIKE :{name} ESCAPE '\\'
                {note_or.format(name=name)}
                {transcript_or.format(name=name)}
               )"""
@@ -78,15 +81,15 @@ def search_assets(
         # so callers that pass opaque text (e.g. exact asset IDs) still
         # work.
         groups = f"""(
-              a.asset_id       ILIKE :like_0
+              a.asset_id       ILIKE :like_0 ESCAPE '\\'
            {file_or.format(name='like_0')}
-           OR COALESCE(c.description, m.data->>'description') ILIKE :like_0
-           OR CAST(et.tags AS TEXT) ILIKE :like_0
-           OR COALESCE(c.ocr_text, o.text) ILIKE :like_0
+           OR COALESCE(c.description, m.data->>'description') ILIKE :like_0 ESCAPE '\\'
+           OR CAST(et.tags AS TEXT) ILIKE :like_0 ESCAPE '\\'
+           OR COALESCE(c.ocr_text, o.text) ILIKE :like_0 ESCAPE '\\'
            {note_or.format(name='like_0')}
            {transcript_or.format(name='like_0')}
           )"""
-        term_patterns = [("like_0", f"%{query}%")]
+        term_patterns = [("like_0", f"%{escape_like(query)}%")]
 
     sql = text(
         f"""
