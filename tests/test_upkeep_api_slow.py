@@ -235,11 +235,9 @@ def test_upkeep_for_every_account_reaches_the_account(env) -> None:
 
 
 def _old(path) -> None:
-    """An old file in old folders: lib/proxies/00/file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x")
-    for p in [path, *path.parents[:3]]:
-        os.utime(p, (1, 1))
+    os.utime(path, (1, 1))
 
 
 @pytest.mark.slow
@@ -257,9 +255,64 @@ def test_cleanup_of_one_library_leaves_the_rest_of_the_account(env) -> None:
 
     assert one.status_code == 200, one.text
     # The library's one stray file is all of it: held back by the 25% guard, but looked at.
-    assert (one.json()["orphan_libraries"], one.json()["skipped_libraries"]) == (0, 1)
-    assert (whole.json()["orphan_libraries"], whole.json()["skipped_libraries"]) == (1, 1)
+    assert (one.json()["orphan_folders"], one.json()["skipped_libraries"]) == ([], 1)
+    assert [f["folder_id"] for f in whole.json()["orphan_folders"]] == ["lib_gone"]
+    assert whole.json()["skipped_libraries"] == 1
     assert (data_dir / tenant_id / "lib_gone").exists()  # dry runs both
+
+
+@pytest.mark.slow
+def test_cleanup_never_removes_a_folder_the_db_doesnt_list(env) -> None:
+    """A database restored from an older backup misses newer libraries: their
+    folders are reported, and only an admin naming them removes them (Robert)."""
+    client, api_key, tenant_id, data_dir = env
+    headers = {"Authorization": f"Bearer {api_key}"}
+    _old(data_dir / tenant_id / "lib_newer" / "proxies" / "00" / "p.webp")
+
+    r = client.post("/v1/upkeep/cleanup", params={"all": "true", "dry_run": "false"}, headers=headers)
+
+    assert r.status_code == 200, r.text
+    [folder] = [f for f in r.json()["orphan_folders"] if f["folder_id"] == "lib_newer"]
+    assert folder["path"] == f"{tenant_id}/lib_newer" and folder["bytes"] == 1 and folder["newest_mtime"]
+    assert (data_dir / tenant_id / "lib_newer").exists()
+
+
+@pytest.mark.slow
+def test_removing_orphan_folders_needs_ids_or_all_and_an_admin(env) -> None:
+    client, api_key, *_ = env
+    headers = {"Authorization": f"Bearer {api_key}"}
+    for body in ({}, {"folder_ids": ["lib_x"], "all": True}):
+        r = client.post("/v1/upkeep/remove-orphan-folders", json=body, headers=headers)
+        assert r.status_code == 400 and r.json()["error"]["code"] == "scope_required", r.text
+    _, key = _new_key(client, api_key, "editor")
+    r = client.post("/v1/upkeep/remove-orphan-folders", json={"all": True}, headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.slow
+def test_removing_orphan_folders_takes_only_unlisted_ones(env) -> None:
+    client, api_key, tenant_id, data_dir = env
+    headers = {"Authorization": f"Bearer {api_key}"}
+    r = client.post("/v1/libraries", json={"name": "Listed", "root_path": "/tmp/listed"}, headers=headers)
+    listed = r.json()["library_id"]
+    _old(data_dir / tenant_id / listed / "proxies" / "00" / "p.webp")
+    _old(data_dir / tenant_id / "lib_orphan" / "proxies" / "00" / "p.webp")
+    body = {"folder_ids": ["lib_orphan", listed]}
+
+    dry = client.post("/v1/upkeep/remove-orphan-folders", json={**body, "dry_run": True}, headers=headers)
+    assert dry.status_code == 200, dry.text
+    assert [f["folder_id"] for f in dry.json()["removed"]] == ["lib_orphan"]
+    assert (data_dir / tenant_id / "lib_orphan").exists()
+
+    r = client.post("/v1/upkeep/remove-orphan-folders", json=body, headers=headers)
+    assert r.status_code == 200, r.text
+    assert [f["folder_id"] for f in r.json()["removed"]] == ["lib_orphan"] and r.json()["not_found"] == [listed]
+    assert not (data_dir / tenant_id / "lib_orphan").exists()
+    assert (data_dir / tenant_id / listed).exists()
+
+    r = client.post("/v1/upkeep/remove-orphan-folders", params={"tenants": "all"}, json={"all": True, "dry_run": True},
+                    headers=ADMIN)
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.slow

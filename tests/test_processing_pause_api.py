@@ -12,8 +12,6 @@ is still made.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
@@ -290,21 +288,19 @@ def test_while_upkeep_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_repo
     stray = tmp_path / tenant_id / "lib_gone" / "x.jpg"  # a library no longer in the database
     stray.parent.mkdir(parents=True)
     stray.write_bytes(b"x")
-    for p in (stray, stray.parent):  # older than cleanup's hour
-        os.utime(p, (1, 1))
     try:
         assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
         with _db(env) as session:
             skipped = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-            assert skipped.orphan_libraries == 0 and skipped.paused is True
+            assert skipped.orphan_folders == [] and skipped.paused is True
             assert stray.exists()
             dry = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
-            assert dry.orphan_libraries == 1 and dry.paused is False
+            assert [f["folder_id"] for f in dry.orphan_folders] == ["lib_gone"] and dry.paused is False
     finally:
         assert client.post("/v1/producers/upkeep/resume", json={"scope": "work"}, headers=headers).status_code == 204
-    with _db(env) as session:
-        assert run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_libraries == 1
-    assert not stray.exists()
+    with _db(env) as session:  # reported, never removed by cleanup
+        assert len(run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_folders) == 1
+    assert stray.exists()
 
 
 def test_while_upkeep_is_paused_the_trash_days_question_says_the_purge_waits(env):

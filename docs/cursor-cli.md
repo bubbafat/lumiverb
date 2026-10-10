@@ -120,7 +120,8 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb admin vision-test --path <dir> [--url <url>] [--api-key <key>] [--model <id>] [--output <file>]` — Test vision API against images.
 
 #### Maintenance
-- `lumiverb maintenance cleanup (--library <name|id> | --all) [--execute]` — Remove orphaned files left after the trash is emptied: only that library, or the whole account; exactly one of `--library` or `--all`. Dry run unless `--execute`. Admins only. While the Upkeep switch is paused, `--execute` deletes nothing and says it was skipped.
+- `lumiverb maintenance cleanup (--library <name|id> | --all) [--execute]` — Remove orphaned files left after the trash is emptied: only that library, or the whole account; exactly one of `--library` or `--all`. Dry run unless `--execute`. Admins only. While the Upkeep switch is paused, `--execute` deletes nothing and says it was skipped. Library folders the database doesn't list are listed (id, size, newest change), never removed.
+- `lumiverb maintenance remove-orphan-folders (<folder id>... | --all) [--dry-run]` — Remove library folders the database doesn't list, as `cleanup` lists them: the ones named, or all of them; exactly one of ids or `--all`. Each is checked against the database again just before it goes. Admins only.
 - `lumiverb maintenance search-sync --all [--force]` — Push stale assets to the search index. `--all` is required (the index is the account's; there is no `--library`). `--force` clears the sync timestamps and reindexes everything. Admins only.
 - `lumiverb maintenance cleanup-dismissed --all` — Delete dismissed people with zero face matches, in the caller's account only. Admins only.
 - `lumiverb maintenance upgrade [--dry-run] [--max-steps N] [--step <step_id>] [--force]` — Run tenant-level upgrade steps idempotently.
