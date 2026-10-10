@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { AssetLocation } from "../api/types";
 
 /** Where a clip was shot (ADR-017): a person's, else the file's, else a
@@ -45,6 +45,7 @@ export interface LocationRowProps {
 export function LocationRow({
   gpsLat, gpsLon, location, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
 }: LocationRowProps) {
+  const [showBasis, setShowBasis] = useState(false);
   const file = gpsLat != null && gpsLon != null ? { lat: gpsLat, lon: gpsLon } : null;
   const person = location && location.source === "person" ? location : null;
   const guess = location && location.status === "applied" && location.source !== "person" ? location : null;
@@ -75,15 +76,25 @@ export function LocationRow({
           )}
           {!person && file && <div><MapLink lat={file.lat} lon={file.lon} /></div>}
           {!person && !file && guess && (
-            <div className="flex items-center gap-2">
-              <MapLink lat={guess.lat} lon={guess.lon}>{about(guess.radius_m)}</MapLink>
-              <span
-                title={guess.basis_summary ?? undefined}
-                className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300"
-              >
-                Guess
-              </span>
-            </div>
+            <>
+              <div className="flex items-center gap-2">
+                <MapLink lat={guess.lat} lon={guess.lon} />
+                <button
+                  type="button"
+                  aria-expanded={showBasis}
+                  onClick={() => setShowBasis((v) => !v)}
+                  className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300 hover:bg-amber-900/80"
+                >
+                  Guess
+                </button>
+              </div>
+              {showBasis && (
+                <div className="text-xs text-gray-400">
+                  {about(guess.radius_m)}
+                  {guess.basis_summary ? ` · ${guess.basis_summary}` : ""}
+                </div>
+              )}
+            </>
           )}
           {!person && suggestion && (
             <div className="text-xs text-gray-300">
