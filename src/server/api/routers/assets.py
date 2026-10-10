@@ -172,12 +172,58 @@ class BatchTrashRequest(BaseModel):
     asset_ids: list[str]
     # "user": a person trashed them; deleted for good after the trash days,
     # and scans leave them trashed. "missing": the scanner no longer finds the
-    # files (archived; restored when they reappear). Omitted = "missing": what
-    # scanners sent before reasons existed (the Mac app still does).
-    reason: Literal["user", "missing"] | None = None
+    # files (archived; restored when they reappear). Required: a scanner and
+    # a person mean different things.
+    reason: Literal["user", "missing"]
     # A person's trash: required when any of the clips are in projects. In the
     # trash they're hidden there, and deleted for good they leave them.
     remove_from_projects: bool = False
+    # "missing" for more than MASS_MISSING_MIN_FILES clips and more than half
+    # of a library's clips in sight: the count of clips the 409 mass_missing
+    # named, to say the files really are gone (not a half-mounted volume).
+    confirm_missing: int | None = None
+
+
+# Marking files missing in bulk looks exactly like a half-mounted volume:
+# more than 50 clips and more than half of a library's clips in sight asks
+# first (409 mass_missing). Half, not 5% (Robert, Oct 9): missing clips are
+# archived, not deleted, and come back by themselves when the files do.
+MASS_MISSING_MIN_FILES = 50
+MASS_MISSING_MIN_FRACTION = 0.5
+
+
+def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: int | None) -> None:
+    """409 mass_missing when marking these missing would take more than
+    MASS_MISSING_MIN_FILES clips and more than half of any library's clips in
+    sight, unless confirmed is the number of clips it would take. Clients
+    send a scan's missing clips in one request, so the rule sees them all."""
+    from sqlalchemy import text as sa_text
+
+    rows = session.execute(sa_text(
+        """
+        SELECT a.library_id,
+               COUNT(*) FILTER (WHERE a.asset_id = ANY(:ids))::int AS going,
+               COUNT(*)::int AS in_sight
+        FROM assets a
+        WHERE a.deleted_at IS NULL
+          AND a.library_id IN (SELECT library_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL)
+        GROUP BY a.library_id
+        """
+    ), {"ids": asset_ids}).all()
+    going = sum(r.going for r in rows)
+    tripped = [r for r in rows
+               if r.going > MASS_MISSING_MIN_FILES and r.going > MASS_MISSING_MIN_FRACTION * r.in_sight]
+    if not tripped or confirmed == going:
+        return
+    worst = max(tripped, key=lambda r: r.going / r.in_sight)
+    raise DecisionRequiredError(
+        "mass_missing",
+        f"{going} clips would be archived as missing, {round(100 * worst.going / worst.in_sight)}% of a "
+        "library's clips: that usually means its storage isn't fully mounted. If the files really are gone, "
+        f"send confirm_missing: {going}.",
+        {"count": going, "libraries": [{"library_id": r.library_id, "missing": r.going, "in_sight": r.in_sight}
+                                       for r in tripped]},
+    )
 
 
 class PickClipsRequest(BaseModel):
@@ -1071,18 +1117,20 @@ def batch_trash_assets(
 ) -> BatchTrashResponse:
     """Take clips out of sight: a person's trash ("user"), or files a scan no longer finds ("missing").
 
-    A person's trash needs an editor, takes archived clips too (deleting an
+    Needs an editor. A person's trash takes archived clips too (deleting an
     archived clip moves it to the trash), and asks first about clips that
-    projects use (409 in_projects). Marking files missing stays open to
-    whoever can scan, and hands each over to an empty copy of its file when
-    there is one (follow moves).
+    projects use (409 in_projects). Marking files missing asks first when it
+    would take most of a library (409 mass_missing), and hands each over to
+    an empty copy of its file when there is one (follow moves).
     """
-    reason = body.reason or "missing"
+    reason = body.reason
     asset_repo = AssetRepository(session)
     if reason == "user":
         if not body.remove_from_projects:
             # Only about clips this would trash: one already in the trash needs no answer.
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
+    else:
+        _ask_about_mass_missing(session, body.asset_ids, body.confirm_missing)
     trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
     handed_over: list[str] = []
     if trashed_ids and reason == "missing":

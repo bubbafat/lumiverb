@@ -829,15 +829,12 @@ def test_user_trash_survives_rescan(env) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("reason", ["missing", None])
-def test_missing_file_is_restored_when_it_reappears(env, reason) -> None:
+def test_missing_file_is_restored_when_it_reappears(env) -> None:
     client, headers, library_id, _ = env
-    rel_path = f"trash/missing-{reason}.jpg"
+    rel_path = "trash/missing-missing.jpg"
     asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
 
-    body: dict = {"asset_ids": [asset_id]}
-    if reason:
-        body["reason"] = reason
+    body: dict = {"asset_ids": [asset_id], "reason": "missing"}
     r = client.request("DELETE", "/v1/assets", json=body, headers=headers)
     assert r.json()["trashed"] == [asset_id]
     assert rel_path not in _ignored(client, headers, library_id)

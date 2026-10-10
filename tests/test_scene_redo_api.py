@@ -9,8 +9,6 @@ entries, so new ones are found and described. Scenes hold no human data.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from sqlalchemy import text
 

@@ -781,7 +781,7 @@ final class APIClientNetworkTests: XCTestCase {
         let client = makeClient()
         let result: BatchDeleteResponse = try await client.deleteWithBody(
             "/v1/assets/batch-delete",
-            body: BatchDeleteRequest(assetIds: ["a1", "a2"])
+            body: BatchDeleteRequest(assetIds: ["a1", "a2"], reason: .missing)
         )
         XCTAssertEqual(result.trashed.count, 2)
     }

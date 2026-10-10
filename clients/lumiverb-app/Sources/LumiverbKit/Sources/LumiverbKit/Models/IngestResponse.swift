@@ -15,10 +15,24 @@ public struct IngestResponse: Decodable, Sendable {
 
 /// Request body for `DELETE /v1/assets` (batch soft-delete).
 public struct BatchDeleteRequest: Encodable, Sendable {
-    public let assetIds: [String]
+    /// Why the clips go: the server requires it.
+    public enum Reason: String, Encodable, Sendable {
+        /// A person's trash: deleted for good after the trash days.
+        case user
+        /// A scan no longer finds the files: archived, back when they are.
+        case missing
+    }
 
-    public init(assetIds: [String]) {
+    public let assetIds: [String]
+    public let reason: Reason
+    /// For `missing`: the count a 409 `mass_missing` named, to say the files
+    /// really are gone (not a volume half mounted). Omitted when nil.
+    public let confirmMissing: Int?
+
+    public init(assetIds: [String], reason: Reason, confirmMissing: Int? = nil) {
         self.assetIds = assetIds
+        self.reason = reason
+        self.confirmMissing = confirmMissing
     }
 }
 
