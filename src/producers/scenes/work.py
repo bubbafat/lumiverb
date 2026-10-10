@@ -60,8 +60,8 @@ def index_video_scenes(*, client: Any, source_path: Path, asset_id: str, duratio
         work = claim.json()
         chunk_id, worker_id = work["chunk_id"], work["worker_id"]
         try:
-            # Scanned with overlap, for the anchor's continuity.
-            frames = scanner.scan(max(0.0, work["start_ts"] - work.get("overlap_sec", 2.0)), work["end_ts"])
+            # Just the chunk's own time: chunks meet end to start, so no keyframe is in two.
+            frames = scanner.scan(work["start_ts"], work["end_ts"])
             segmenter = SceneSegmenter(frames, anchor_phash=work.get("anchor_phash"),
                                        scene_start_ts=work.get("scene_start_ts"), settings=found_with)
             scenes = segmenter.segment()

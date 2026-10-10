@@ -5,8 +5,10 @@ descriptions (POST /v1/video/{id}/chunks with redo)."""
 from src.producers.contract import VIDEO, ProducerSpec, Setting
 from src.producers.pools import SCENES
 
+# Version 2: scenes at the video's own time. 1 timed each 30 s chunk from where it
+# was scanned, and scanned every chunk to the clip's end.
 PRODUCER = ProducerSpec(
-    artifact="scenes", producer="scene-detect", version="1", media=VIDEO, unit="second", title="Scenes", order=50,
+    artifact="scenes", producer="scene-detect", version="2", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.video_indexed",
