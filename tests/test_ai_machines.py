@@ -136,21 +136,30 @@ def test_connect_lists_what_a_machine_offers(env, none):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(("answer", "says"), [
-    (requests.ConnectionError("refused"), "Couldn't reach"),
-    (requests.Timeout(), "didn't answer"),
-    (401, "refused the key"),
-    (404, "is the URL right"),
-    ((), "lists no models"),
-])
-def test_connect_says_plainly_why_it_cant(env, none, answer, says):
+@pytest.mark.parametrize("answer", [requests.ConnectionError("refused"), requests.Timeout(), 401, 404, ()])
+def test_connect_says_the_same_whatever_went_wrong(env, none, answer, caplog):
+    """One message for every failure, so Connect can't map a network; why is logged."""
     client, headers, *_ = env
     fake, _ = _machines({BRAIN: answer})
-    with fake:
+    with fake, caplog.at_level("WARNING", logger="src.shared.vision_endpoint"):
         r = client.post("/v1/ai/connect", json={"api_url": BRAIN}, headers=headers)
     assert r.status_code == 502, r.text
     error = r.json()["error"]
-    assert error["code"] == "machine_unreachable" and says in error["message"]
+    assert (error["code"], error["message"]) == ("machine_unreachable", "Couldn't reach the AI machine.")
+    assert BRAIN in caplog.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("url", ["http://172.18.0.6:11434/v1?x=1", "http://172.18.0.6:11434/v1#x",
+                                 "http://user:pw@172.18.0.6:11434/v1", "ftp://172.18.0.6/v1"])
+def test_a_machine_url_is_plain_http(env, none, url):
+    client, headers, *_ = env
+    fake, seen = _machines({})
+    with fake:
+        r = client.post("/v1/ai/connect", json={"api_url": url}, headers=headers)
+        assert _add(env, name="X", api_url=url).status_code == 422
+    assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_url", r.text
+    assert not seen
 
 
 @pytest.mark.slow

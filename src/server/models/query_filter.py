@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import ClassVar
 
+from src.shared.utils import escape_like
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -355,8 +356,8 @@ class PathPrefix(LeafFilter):
         p_exact = self._param_name("path_prefix", counter)
         p_like = self._param_name("path_prefix_like", counter)
         params[p_exact] = self.path
-        params[p_like] = self.path + "/%"
-        return f"(a.rel_path = :{p_exact} OR a.rel_path LIKE :{p_like})"
+        params[p_like] = escape_like(self.path) + "/%"
+        return f"(a.rel_path = :{p_exact} OR a.rel_path LIKE :{p_like} ESCAPE '\\')"
 
     def to_url_value(self) -> str:
         return self.path

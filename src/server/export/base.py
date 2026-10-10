@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Protocol
@@ -27,6 +28,9 @@ STANDARD_RATES = [
 SNAP_TOLERANCE = 0.01
 
 TIMECODE = re.compile(r"^\d{2}:[0-5]\d:[0-5]\d[:;]\d{2}$")
+
+# Characters XML 1.0 forbids; a file or project name can hold them.
+NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
 @dataclass(frozen=True)
@@ -149,3 +153,15 @@ def still(asset_id: str, name: str, path: str, width: int | None, height: int | 
     return ExportClip(asset_id=asset_id, name=name, path=path, duration_sec=STILL_SEC, frame_rate_num=None,
                       frame_rate_den=None, width=width, height=height, start_timecode=None, drop_frame=None,
                       audio_channels=None, audio_sample_rate=None, still=True)
+
+
+def to_xml(root: ET.Element, doctype: str) -> bytes:
+    """The document, with what XML 1.0 forbids stripped from every text and attribute."""
+    for el in root.iter():
+        if el.text:
+            el.text = NOT_XML.sub("", el.text)
+        for key, value in list(el.attrib.items()):
+            el.set(key, NOT_XML.sub("", value))
+    ET.indent(root)
+    body = ET.tostring(root, encoding="unicode")
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE {doctype}>\n{body}\n'.encode()

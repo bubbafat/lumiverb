@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead
+from src.server.export.base import ExportBin, ExportClip, timeline_frames, timeline_lead, to_xml
 
 
 def _sub(parent: ET.Element, tag: str, text: object | None = None, **attrs: str) -> ET.Element:
@@ -139,6 +139,4 @@ class Fcp7XmlProvider:
             _sequence(children, bin_)
         for index, clip in enumerate(bin_.clips, start=1):
             _master_clip(children, clip, index)
-        ET.indent(root)
-        body = ET.tostring(root, encoding="unicode")
-        return ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n' + body + "\n").encode()
+        return to_xml(root, "xmeml")

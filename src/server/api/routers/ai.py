@@ -35,13 +35,18 @@ from src.server.api.dependencies import (
     require_signed_in,
     require_tenant_admin,
 )
-from src.server.api.errors import ConflictError, DecisionRequiredError, UpstreamError
+from src.server.api.errors import (
+    ConflictError,
+    DecisionRequiredError,
+    InvalidChoiceError,
+    UpstreamError,
+)
 from src.server.models.control_plane import AiMachine, Tenant
 from src.server.repository.ai_machines import first_vision_machine, job_model, machines
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
-from src.shared.vision_endpoint import VisionEndpointError, list_models
+from src.shared.vision_endpoint import VisionEndpointError, check_url, list_models
 from src.shared.whisper_models import BUILT_IN_MODELS, canonical, canonical_models
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
@@ -180,7 +185,11 @@ class WorkerJob(BaseModel):
 
 
 def _url(api_url: str) -> str:
-    return api_url.strip().rstrip("/")
+    """The URL, trimmed; 422 invalid_url when it isn't a plain http(s) URL."""
+    try:
+        return check_url(api_url)
+    except VisionEndpointError as e:
+        raise InvalidChoiceError("invalid_url", str(e), {"api_url": api_url}) from None
 
 
 def _job_model(tenant: Tenant | None, job: str) -> str:
@@ -287,9 +296,9 @@ def get_ai(request: Request) -> AiSettings:
 
 @router.post("/connect", response_model=Models, dependencies=[Depends(require_tenant_admin)])
 def connect(body: ConnectIn, request: Request) -> Models:
-    """Ask a machine which models it offers. 502 machine_unreachable with why
-    when it can't say (unreachable, refused the key, not OpenAI-compatible,
-    no models)."""
+    """Ask a machine which models it offers. 502 machine_unreachable when it
+    can't say (why is only logged); 422 invalid_url for a URL that isn't
+    plain http(s)."""
     api_url = _url(body.api_url)
     key = body.api_key
     if key is None and body.machine_id:
