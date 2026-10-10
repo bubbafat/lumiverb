@@ -30,7 +30,8 @@ def _alembic(url: str, *args: str) -> None:
 def test_the_frozen_v1_hashes_are_the_registry_s():
     """The migration keeps its own copy (it must never change); on Oct 8 they agreed.
     It records what it backfills as version 1: a producer since moved past it
-    (scenes, version 2) finds those clips stale, as it should."""
+    (scenes, version 3) finds those clips stale, as it should, whatever its
+    settings are now (scenes' knobs gave way to Detail, out of the hash)."""
     import importlib.util
 
     from src.shared.producers import PRODUCERS, effective_settings, settings_hash
@@ -41,7 +42,8 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
     spec.loader.exec_module(m)
     for artifact, (producer, h) in m.V1.items():
         assert PRODUCERS[artifact].producer == producer
-        assert settings_hash(effective_settings(artifact)) == h, artifact
+        if PRODUCERS[artifact].version == "1":
+            assert settings_hash(effective_settings(artifact)) == h, artifact
     assert m._vision_hash("qwen3-vl:8b") == settings_hash(effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
     assert m._vision_hash("qwen3-vl:8b", m._OCR_PROMPT) == settings_hash(
         effective_settings("ocr", account={"vision": "qwen3-vl:8b"}))

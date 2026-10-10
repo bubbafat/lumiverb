@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.shared.producers import PRODUCERS, effective_settings, lineage, use_settings
+from src.shared.producers import PRODUCERS, effective_settings, level_of, lineage, use_settings
 
 logger = logging.getLogger(__name__)
 
@@ -67,5 +67,6 @@ class ProducerSettings:
     def lineage(self, artifact: str, source_sha256: str | None, used: dict[str, Any] | None = None) -> dict:
         """What a write records: this producer, its version, the hash of the
         settings actually used (the server's unless `used` says otherwise),
-        and the source file's SHA-256."""
-        return lineage(artifact, self.settings(artifact) if used is None else used, source_sha256)
+        and the source file's SHA-256 (and the level now, for a producer with one)."""
+        return lineage(artifact, self.settings(artifact) if used is None else used, source_sha256,
+                       level_of(artifact, self.uses(artifact)))

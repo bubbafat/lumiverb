@@ -100,7 +100,7 @@ def video_api_client() -> tuple[TestClient, str, str, str, str]:
 
                 r_init = client.post(
                     f"/v1/video/{asset_id}/chunks",
-                    json={"duration_sec": 100.0},
+                    json={"duration_sec": 100.0, "scene_sec": 30.0},
                     headers=auth,
                 )
                 assert r_init.status_code == 200
@@ -120,7 +120,7 @@ def test_init_chunks(video_api_client: tuple[TestClient, str, str, str, str]) ->
     # Init again is idempotent - already_initialized will be True
     r = client.post(
         f"/v1/video/{asset_id}/chunks",
-        json={"duration_sec": 100.0},
+        json={"duration_sec": 100.0, "scene_sec": 30.0},
         headers=auth,
     )
     assert r.status_code == 200
@@ -181,8 +181,6 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
                     "rep_frame_sha256": rep_frame_sha256,
                 }
             ],
-            "next_anchor_phash": "abc123",
-            "next_scene_start_ms": 5000,
             "lineage": made("scenes"),
         },
         headers=auth,
@@ -295,7 +293,7 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
 
     client.post(
         f"/v1/video/{aid}/chunks",
-        json={"duration_sec": 60.0},
+        json={"duration_sec": 60.0, "scene_sec": 30.0},
         headers=auth,
     )
     r_claim = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
@@ -315,8 +313,6 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
                     "tags": ["outdoor"],
                 }
             ],
-            "next_anchor_phash": None,
-            "next_scene_start_ms": None,
             "lineage": made("scenes"),
         },
         headers=auth,
@@ -358,7 +354,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
             headers=auth,
         )
         aid = r_asset.json()["asset_id"]
-        client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0}, headers=auth)
+        client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0, "scene_sec": 30.0}, headers=auth)
         r_claim = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
         if r_claim.status_code == 204:
             pytest.skip("No chunks to claim")
@@ -377,8 +373,6 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
                         "tags": [],
                     }
                 ],
-                "next_anchor_phash": None,
-                "next_scene_start_ms": None,
                 "lineage": made("scenes"),
             },
             headers=auth,
@@ -401,8 +395,6 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
                         "tags": [],
                     }
                 ],
-                "next_anchor_phash": None,
-                "next_scene_start_ms": None,
                 "lineage": made("scenes"),
             },
             headers=auth,
@@ -446,7 +438,7 @@ def _video(client: TestClient, auth: dict, library_id: str, rel_path: str, durat
                 headers=auth)
     aid = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path},
                      headers=auth).json()["asset_id"]
-    assert client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": duration_sec}, headers=auth).status_code == 200
+    assert client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": duration_sec, "scene_sec": 30.0}, headers=auth).status_code == 200
     return aid
 
 
@@ -455,7 +447,7 @@ def _complete(client: TestClient, auth: dict, work: dict, starts: list[int]) -> 
         "worker_id": work["worker_id"],
         # A client that numbered them itself sent 0, 1, ... again on resume: ignored.
         "scenes": [{"scene_index": 0, "start_ms": s, "end_ms": s + 1000, "rep_frame_ms": s} for s in starts],
-        "next_anchor_phash": None, "next_scene_start_ms": None, "lineage": made("scenes")})
+        "lineage": made("scenes")})
     assert r.status_code == 200, r.text
 
 
@@ -477,7 +469,7 @@ def test_a_failed_chunk_stays_failed_until_the_next_run(video_api_client) -> Non
     assert busy.status_code == 409 and busy.json()["error"]["code"] == "chunks_busy"
 
     # The next run (the scheduler's back-off decides when) starts it again.
-    client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0}, headers=auth)
+    client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0, "scene_sec": 30.0}, headers=auth)
     again = client.post(f"/v1/video/{aid}/chunks/next", headers=auth).json()
     assert again["chunk_index"] == 0
 
@@ -507,7 +499,7 @@ def test_a_completed_chunk_cant_be_failed(video_api_client) -> None:
     r = client.post(f"/v1/video/chunks/{work['chunk_id']}/fail", headers=auth,
                     json={"worker_id": work["worker_id"], "error_message": "timed out"})
     assert r.status_code == 409
-    client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 30.0}, headers=auth)  # a new run
+    client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 30.0, "scene_sec": 30.0}, headers=auth)  # a new run
     assert client.post(f"/v1/video/{aid}/chunks/next", headers=auth).status_code == 204
 
 

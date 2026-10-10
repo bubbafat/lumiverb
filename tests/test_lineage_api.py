@@ -49,7 +49,7 @@ def _want(env, artifact: str, sha: str | None) -> dict:
     """Lineage as a current worker would send it."""
     p = _producers(env, counts="false")[artifact]
     return {"producer": p["producer"], "version": p["version"], "settings_hash": p["settings_hash"],
-            "source_sha256": sha}
+            "source_sha256": sha, **({"level": p["level"]} if p.get("level") is not None else {})}
 
 
 def _row(env, asset_id: str, artifact: str):
@@ -148,7 +148,8 @@ def test_every_producer_with_its_settings_and_counts(env):
     t = producers["transcript"]
     assert (t["producer"], t["version"], t["settings"]["model"]) == ("whisper", "1", "small")
     assert t["settings_hash"] == P.settings_hash(t["settings"])
-    assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "failing", "given_up"}
+    assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "below", "failing",
+                                "given_up"}
     assert producers["clip"]["uniform"] is True and producers["transcript"]["uniform"] is False
     assert _producers(env, counts="false")["vision"]["counts"] is None
 
@@ -489,7 +490,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
                        " created_at) VALUES (:i, :a, 0, 0, 999, 0, now())"), {"i": f"scn_{vid}_0", "a": vid})
         s.commit()
-    assert client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30}, headers=headers).status_code == 200
+    assert client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30, "scene_sec": 30.0}, headers=headers).status_code == 200
     chunk = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
 
     def mp4() -> tuple:
@@ -549,8 +550,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         ("probe", vid, lambda: _ingest_post(env, "lin/refused.mov", sha, {"proxy": _want(env, "proxy", sha)},
                                             media_type="video", video_facet=json.dumps({"duration_sec": 12.0}))),
         ("scenes", vid, lambda: client.post(f"/v1/video/chunks/{chunk['chunk_id']}/complete", json={
-            "worker_id": chunk["worker_id"], "scenes": [scene], "next_anchor_phash": None,
-            "next_scene_start_ms": None}, headers=headers)),
+            "worker_id": chunk["worker_id"], "scenes": [scene]}, headers=headers)),
         ("scene_vision", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
             "model_id": "m", "model_version": "1", "description": "a beach", "tags": []}, headers=headers)),
         # Review: a thumbnail is the proxy producer's, however it arrives.

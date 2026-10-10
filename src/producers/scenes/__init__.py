@@ -1,36 +1,32 @@
 """A video's scenes, found from its analysis copy (src/processing/video/scene_segmenter.py,
-run by work.py). Found again, a clip's old scenes go with their
-descriptions (POST /v1/video/{id}/chunks with redo)."""
+run by work.py), merged where they look alike once the whole video is found
+(the server, as the last chunk completes), then described one by one
+(scene_vision). People see the two as one: Scene descriptions, with one
+setting, Detail (src/producers/scenes/detail.py). Found again, a clip's old
+scenes go with their descriptions (POST /v1/video/{id}/chunks with redo)."""
 
 from src.producers.contract import VIDEO, ProducerSpec, Setting
 from src.producers.pools import SCENES
+from src.producers.scenes.detail import DEFAULT, DETAILS
 
-# Version 2: scenes at the video's own time. 1 timed each 30 s chunk from where it
-# was scanned, and scanned every chunk to the clip's end.
+# Version 3: scenes by Detail (windows scaled to the video's length, cuts
+# within them, alike neighbours merged). 2: scenes at the video's own time.
+# 1 timed each 30 s chunk from where it was scanned, and scanned every chunk
+# to the clip's end.
 PRODUCER = ProducerSpec(
-    artifact="scenes", producer="scene-detect", version="2", media=VIDEO, unit="second", title="Scenes", order=50,
+    artifact="scenes", producer="scene-detect", version="3", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.video_indexed",
     settings=(
-        Setting("frame_width", 480, "Frame width", minimum=160, maximum=1920, unit="px", advanced=True),
-        Setting("frames", "keyframes", "Frames looked at", kind="text",
-                fixed="Keyframes are the only frames it looks at."),
-        # Bits of the 16 × 16 hash that must differ from the scene's first frame.
-        Setting("phash_threshold", 51, "Change needed for a new scene", minimum=1, maximum=255, unit="of 256"),
-        Setting("phash_hash_size", 16, "Hash size", advanced=True,
-                fixed="The change needed counts its bits, so it stays 16 × 16."),
-        # Videos are looked at 30 seconds at a time (CHUNK_DURATION_SEC), and each
-        # chunk closes its last scene: a scene is never longer, so the longest
-        # goes to 30 s. The shortest stays under the least of it, or a change
-        # could never start a scene.
-        Setting("temporal_ceiling_sec", 30.0, "Longest scene", kind="float", minimum=10, maximum=30, unit="s"),
-        Setting("debounce_sec", 3.0, "Shortest scene", kind="float", minimum=0, maximum=9, unit="s",
-                advanced=True),
+        # A level, not in the hash: scenes made at a lower detail than now are
+        # "below" (counted, made again when asked); at it or above, current.
+        Setting("detail", DEFAULT, "Detail", kind="level", choices=DETAILS, remakes=False),
     ),
     needs=("analysis_proxy",),
     # Found again, a clip's scenes are new ones: their descriptions go with the old.
     redo_also=("scene_vision",),
     redo_on_source_change=False,
+    part_of="scene_vision",
     kind="scenes", flag="missing_video_scenes", run="src.producers.scenes.work:Scenes", pool=SCENES,
 )

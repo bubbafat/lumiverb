@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, JSON, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, JSON, SmallInteger, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -273,8 +273,6 @@ class VideoIndexChunk(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     error_message: str | None = Field(default=None, nullable=True)
-    anchor_phash: str | None = Field(default=None, nullable=True)
-    scene_start_ms: int | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -553,7 +551,11 @@ class ArtifactLineage(SQLModel, table=True):
     stale. Faces and scenes count as one set per clip.
 
     outcome: "ok"; "empty" (made, and there was nothing: no audio, no faces,
-    no text); "failed" (tried and failed: error, attempts, retry_at)."""
+    no text); "failed" (tried and failed: error, attempts, retry_at).
+
+    level: for a producer with a level setting (scenes' Detail), the level
+    it was made at (its index, lowest 0), kept apart from the settings hash:
+    made below the level now is out of date ("below"), at or above it current."""
 
     __tablename__ = "artifact_lineage"
 
@@ -574,6 +576,7 @@ class ArtifactLineage(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
+    level: int | None = Field(default=None, sa_column=Column(SmallInteger, nullable=True))
 
 
 class AssetLocation(SQLModel, table=True):

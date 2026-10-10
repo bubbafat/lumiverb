@@ -65,6 +65,9 @@ class LineageIn(BaseModel):
     version: str = Field(min_length=1, max_length=50)
     settings_hash: str = Field(min_length=1, max_length=64)
     source_sha256: str | None = Field(default=None, max_length=128)
+    # The level it was made at (its index, lowest 0), for a producer with a
+    # level setting (scenes' Detail): kept apart from the settings hash.
+    level: int | None = Field(default=None, ge=0, le=31)
 
 
 def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None = None) -> dict | None:
@@ -89,6 +92,8 @@ def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None
     if not isinstance(value, LineageIn):
         return None
     out = value.model_dump()
+    if out.get("level") is None:
+        out.pop("level", None)
     if source_sha256:
         out["source_sha256"] = source_sha256
     return out
@@ -120,6 +125,13 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict
             "lineage_wrong_producer",
             f"{made['producer']} isn't the producer of {producer.title.lower()}: {producer.producer} is.",
             {"artifact": artifact, "sent": made["producer"], "expected": producer.producer})
+    if producer.level is not None and not (isinstance(made.get("level"), int)
+                                           and made["level"] < len(producer.level.choices)):
+        raise InvalidChoiceError(
+            "lineage_required",
+            f"A machine write of {producer.title.lower()} must say the {producer.level.label.lower()} it was"
+            f" made at: lineage level, the index of one of {', '.join(producer.level.choices)}.",
+            {"artifact": artifact, "expected": producer.producer})
     return made
 
 
@@ -129,6 +141,9 @@ class ProducerCounts(BaseModel):
     stale: int  # made with another producer, version, settings or source
     missing: int  # not made yet (or only failed so far)
     rechecking: int = 0  # made, and due to be checked again (location guesses)
+    # Made below the producer's level now (scenes' Detail raised since):
+    # not stale and not current; made again only when asked (POST .../below/redo).
+    below: int = 0
     failing: int  # the last try failed (whether or not an older artifact exists)
     given_up: int = 0  # failing, and no longer tried (after 10 tries) until someone asks
 
@@ -139,7 +154,7 @@ class SettingField(BaseModel):
 
     key: str
     label: str
-    kind: str  # "int" | "float" | "text" | "bool"
+    kind: str  # "int" | "float" | "text" | "bool" | "level"
     value: Any
     default: Any
     minimum: float | None = None
@@ -150,6 +165,9 @@ class SettingField(BaseModel):
     # Changing it makes the artifact again. False: it changes only what's
     # done with what's made (how faces are grouped); it isn't in settings.
     remakes: bool = True
+    # kind "level": its values, lowest first. Raising it makes nothing
+    # again: what was made lower counts as below (counts.below) until a redo is asked.
+    choices: list[str] = []
 
 
 class ProducerItem(BaseModel):
@@ -184,6 +202,10 @@ class ProducerItem(BaseModel):
     waiting: str | None = None
     # What its work grows with: "second" (of video) or "clip"; time left is reckoned in it.
     unit: str = "clip"
+    # Its level now (its level setting's index, lowest 0); None without one.
+    level: int | None = None
+    # Shown as a part of another producer (its artifact): scenes are part of scene descriptions.
+    part_of: str | None = None
 
 
 class ProducerList(BaseModel):
@@ -257,10 +279,12 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None], use
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
         fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=values.get(s.key, s.default),
                              default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
-                             advanced=s.advanced, fixed=s.fixed or None, remakes=s.remakes)
+                             advanced=s.advanced, fixed=s.fixed or None, remakes=s.remakes,
+                             choices=list(s.choices))
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
-        waiting=waits.get(p.job) if p.job else None, unit=p.unit,
+        waiting=waits.get(p.job) if p.job else None, unit=p.unit, level=want.get("level"),
+        part_of=p.part_of or None,
     )
 
 
@@ -759,6 +783,48 @@ def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(g
     lineage.nudge(session)
     session.commit()
     return RunOut(producers=out)
+
+
+class BelowIn(BaseModel):
+    """Clips made below the producer's level now to make again: these
+    (asset_ids; any not below are left as they are), or every one (all:
+    true), in one library alone when given."""
+
+    asset_ids: list[str] | None = Field(default=None, min_length=1, max_length=MAX_IDS)
+    all: bool = False
+    library_id: str | None = Field(default=None, max_length=64)
+
+
+class BelowOut(BaseModel):
+    redo: int  # clips to be made again, after anything missing
+    paused: bool = False  # its switch is paused: nothing starts until it's resumed
+    redo_stopped: bool = False  # its redo is stopped: they wait until it's resumed
+
+
+@router.post("/{artifact}/below/redo", response_model=BelowOut, dependencies=[Depends(require_tenant_admin)])
+def redo_below(artifact: str, body: BelowIn, request: Request,
+               session: Annotated[Session, Depends(get_tenant_session)]) -> BelowOut:
+    """Make again what a producer made below its level now (admins): raising
+    a level (scenes' Detail) makes nothing again by itself; this is how it's
+    asked, for clips named (asset_ids) or all: true; neither or both is a
+    400 scope_required. 409 no_level for a producer without a level setting.
+    They're redone as any redo is: after anything missing, at the level
+    then, held while its redo is stopped or it's paused (each said)."""
+    from src.server.api.limits import require_scope
+
+    p = producer_or_404(artifact)
+    require_scope(body.asset_ids is not None, body.all, "asset_ids")
+    if p.level is None or not lineage.redoable(artifact):
+        raise ConflictError("no_level", f"{p.title} has no level to redo below.", {"artifact": artifact})
+    models, _ = tenant_ai(request)
+    want = lineage.desired(session, artifact, models)
+    n = lineage.redo_below(session, artifact, want, library_id=body.library_id,
+                           asset_ids=list(dict.fromkeys(body.asset_ids)) if body.asset_ids else None)
+    if n:
+        lineage.nudge(session)
+    paused = lineage.pauses(session)
+    session.commit()
+    return BelowOut(redo=n, paused=artifact in paused.work, redo_stopped=artifact in paused.redo)
 
 
 def producer_or_404(artifact: str):

@@ -45,7 +45,7 @@ def test_each_setting_comes_with_its_bounds_and_whether_it_can_change(env):
     assert fields["vad_min_silence_ms"] == {
         "key": "vad_min_silence_ms", "label": "Shortest silence skipped", "kind": "int", "value": 500,
         "default": 500, "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None,
-        "remakes": True}
+        "remakes": True, "choices": []}
     assert "Settings → AI" in fields["model"]["fixed"]
     clip = {f["key"]: f for f in _producer(env, "clip")["fields"]}
     assert all(f["fixed"] for f in clip.values())  # CLIP doesn't read them yet
@@ -293,7 +293,7 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     assert fields["merge_close_clusters"] == {
         "key": "merge_close_clusters", "label": "Merge close groups", "kind": "bool", "value": True,
         "default": True, "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None,
-        "remakes": False}
+        "remakes": False, "choices": []}
     assert fields["merge_distance"]["advanced"] and not fields["merge_distance"]["remakes"]
     assert fields["merge_distance"]["value"] == distance
     assert fields["min_confidence"]["remakes"]

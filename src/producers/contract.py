@@ -57,7 +57,7 @@ class Setting:
     key: str
     default: Any
     label: str
-    kind: str = "int"  # "int" | "float" | "text" | "bool"
+    kind: str = "int"  # "int" | "float" | "text" | "bool" | "level"
     minimum: float | None = None
     maximum: float | None = None
     unit: str = ""
@@ -68,9 +68,19 @@ class Setting:
     # Changing it makes the artifact again (it's in lineage). False: it
     # changes only what's done with what's made; nothing is made again.
     remakes: bool = True
+    # kind "level": its values, lowest first. A level isn't in the lineage
+    # hash (remakes False): lineage records the level an artifact was made
+    # at apart from it, and one made below the level now is out of date
+    # ("below"), counted apart and made again only when asked; one made at
+    # or above it is current (lineage.counts, lineage.redo_below).
+    choices: tuple[str, ...] = ()
 
     def check(self, value: Any) -> Any:
         """The value as stored, or ValueError saying what's wrong with it."""
+        if self.kind == "level":
+            if value not in self.choices:
+                raise ValueError(f"{self.label} is one of {', '.join(self.choices)}")
+            return value
         if self.kind == "bool":
             if not isinstance(value, bool):
                 raise ValueError(f"{self.label} is yes or no (true or false)")
@@ -195,6 +205,9 @@ class ProducerSpec:
     # counted (apply False) or done (apply True), as how many clips. The 409
     # before new settings counts them.
     on_settings: str = ""
+    # Shown as a part of another producer (its artifact), not on its own:
+    # Settings → Processing folds it into that producer's row.
+    part_of: str = ""
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)
@@ -230,3 +243,8 @@ class ProducerSpec:
 
     def setting(self, key: str) -> Setting | None:
         return next((s for s in self.settings if s.key == key), None)
+
+    @property
+    def level(self) -> Setting | None:
+        """Its level setting (kind "level"), if it has one: at most one."""
+        return next((s for s in self.settings if s.kind == "level"), None)

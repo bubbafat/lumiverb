@@ -887,6 +887,9 @@ export interface ProducerCounts {
   missing: number;
   /** Made, and due to be checked again (location guesses): not missing. */
   rechecking?: number;
+  /** Made below the producer's level now (scenes' Detail raised since): not current, not stale;
+   * made again only when asked (redoBelow). */
+  below?: number;
   /** The last try failed. */
   failing: number;
   /** Failing, and no longer tried (after 10 tries) until someone asks. */
@@ -898,7 +901,7 @@ export interface ProducerCounts {
 export interface SettingField {
   key: string;
   label: string;
-  kind: "int" | "float" | "text" | "bool";
+  kind: "int" | "float" | "text" | "bool" | "level";
   value: unknown;
   default: unknown;
   minimum: number | null;
@@ -909,6 +912,8 @@ export interface SettingField {
   /** Changing it makes the artifact again; false: it changes only what's done with what's made
    * (how faces are grouped). Absent: true. */
   remakes?: boolean;
+  /** kind "level": its values, lowest first. Raising it makes nothing again by itself. */
+  choices?: string[];
 }
 
 export interface Producer {
@@ -943,6 +948,19 @@ export interface Producer {
   waiting: string | null;
   /** What its work grows with: seconds of video, or clips. */
   unit?: "second" | "clip";
+  /** Its level now (its level setting's index, lowest 0); null without one. */
+  level?: number | null;
+  /** Shown as a part of another producer (its artifact): scenes are part of scene descriptions. */
+  part_of?: string | null;
+}
+
+/** Make again what a producer made below its level now (admins): these clips (asset_ids) or every one
+ * (all: true), one library's alone when given. 400 scope_required otherwise; 409 no_level. */
+export async function redoBelow(
+  artifact: string,
+  body: { asset_ids?: string[]; all?: true; library_id?: string },
+): Promise<{ redo: number; paused: boolean; redo_stopped: boolean }> {
+  return apiFetch(`/producers/${artifact}/below/redo`, { method: "POST", body });
 }
 
 /** Change a producer's settings (admins): null puts one back to its default.

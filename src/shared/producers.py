@@ -111,12 +111,29 @@ def use_settings(artifact: str, overrides: Mapping[str, Any] | None = None) -> d
     return out
 
 
-def lineage(artifact: str, settings: Mapping[str, Any], source_sha256: str | None) -> dict[str, Any]:
-    """What a write records about how the artifact was made."""
+def level_of(artifact: str, uses: Mapping[str, Any] | None = None) -> int | None:
+    """The producer's level now (its level setting's value, from uses: its
+    settings that don't remake), as its index among the choices, lowest 0;
+    None when it has no level setting. A value it doesn't know is the default's."""
+    setting = PRODUCERS[artifact].level
+    if setting is None:
+        return None
+    value = (uses or {}).get(setting.key, setting.default)
+    return setting.choices.index(value if value in setting.choices else setting.default)
+
+
+def lineage(artifact: str, settings: Mapping[str, Any], source_sha256: str | None,
+            level: int | None = None) -> dict[str, Any]:
+    """What a write records about how the artifact was made. level: the
+    level it was made at, for a producer with a level setting (its default's
+    when not given); kept apart from the settings hash."""
     p = PRODUCERS[artifact]
-    return {
+    out = {
         "producer": p.producer,
         "version": p.version,
         "settings_hash": settings_hash(settings),
         "source_sha256": source_sha256,
     }
+    if p.level is not None:
+        out["level"] = level_of(artifact) if level is None else level
+    return out
