@@ -2142,7 +2142,6 @@ class VideoIndexChunkRepository:
     """Repository for video_index_chunks and chunk completion (scenes)."""
 
     CHUNK_DURATION_SEC: float = 30.0
-    OVERLAP_SEC: float = 2.0
     LEASE_MINUTES: int = 5
 
     def __init__(self, session: Session) -> None:

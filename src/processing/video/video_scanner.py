@@ -112,7 +112,14 @@ class VideoScanner:
         hwaccel: bool = True,
     ) -> Iterator[RawFrame]:
         """
-        Decode from start_ts to end_ts, yielding RawFrame for each decoded keyframe.
+        Decode the keyframes in [start_ts, end_ts), yielding a RawFrame for each,
+        its pts in seconds from the start of the video.
+
+        FFmpeg seeks to start_ts (-ss before -i) and its showinfo pts then count
+        from there, so start_ts is added back. (-copyts would keep the stream's
+        own timestamps instead, which a file whose first frame isn't at 0, an
+        MPEG-TS say, starts later than its playback time.) The end is left out
+        so a keyframe exactly on a boundary belongs to one window, not two.
 
         Raises SyncError if PTS does not arrive within PTS_QUEUE_TIMEOUT.
         """
@@ -198,7 +205,8 @@ class VideoScanner:
                             raise SyncError(
                                 f"FFmpeg exited with code {exit_code} before PTS arrived"
                             )
-                if pts > end_ts:
+                pts += start_ts  # from the seek point to the video's time
+                if pts >= end_ts:
                     break
                 yield RawFrame(
                     bytes=chunk,

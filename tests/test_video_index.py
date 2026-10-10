@@ -79,7 +79,6 @@ def test_index_video_scenes_single_chunk(mock_segmenter_cls, mock_scanner_cls):
         "chunk_index": 0,
         "start_ts": 0.0,
         "end_ts": 30.0,
-        "overlap_sec": 2.0,
         "anchor_phash": None,
         "scene_start_ts": None,
     })
@@ -166,7 +165,6 @@ def test_index_video_scenes_chunk_failure(mock_segmenter_cls, mock_scanner_cls):
         "chunk_index": 0,
         "start_ts": 0.0,
         "end_ts": 30.0,
-        "overlap_sec": 2.0,
     })
     done_resp = _FakeResponse(204)
     _claims(client, [work_order, done_resp])
@@ -202,12 +200,12 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
 
     chunk0 = _FakeResponse(200, {
         "chunk_id": "chunk_0", "worker_id": "vid_w", "chunk_index": 0,
-        "start_ts": 0.0, "end_ts": 30.0, "overlap_sec": 2.0,
+        "start_ts": 0.0, "end_ts": 30.0,
         "anchor_phash": None, "scene_start_ts": None,
     })
     chunk1 = _FakeResponse(200, {
         "chunk_id": "chunk_1", "worker_id": "vid_w", "chunk_index": 1,
-        "start_ts": 30.0, "end_ts": 60.0, "overlap_sec": 2.0,
+        "start_ts": 30.0, "end_ts": 60.0,
         "anchor_phash": "prev_hash", "scene_start_ts": None,
     })
     done_resp = _FakeResponse(204)
@@ -247,14 +245,14 @@ def test_index_video_scenes_multi_chunk(mock_segmenter_cls, mock_scanner_cls):
 
 @patch("src.producers.scenes.work.VideoScanner")
 @patch("src.producers.scenes.work.SceneSegmenter")
-def test_index_video_scenes_overlap_calculation(mock_segmenter_cls, mock_scanner_cls):
-    """Scanner is called with start_ts - overlap for anchor continuity."""
+def test_index_video_scenes_scans_chunk_window(mock_segmenter_cls, mock_scanner_cls):
+    """The scanner is given just the chunk's own window: chunks meet end to start."""
     client = MagicMock()
     client.post.return_value = _FakeResponse(data={"chunk_count": 1, "already_initialized": False})
 
     work = _FakeResponse(200, {
         "chunk_id": "c1", "worker_id": "w1", "chunk_index": 1,
-        "start_ts": 30.0, "end_ts": 60.0, "overlap_sec": 2.0,
+        "start_ts": 30.0, "end_ts": 60.0,
         "anchor_phash": "abc", "scene_start_ts": None,
     })
     _claims(client, [work, _FakeResponse(204)])
@@ -271,8 +269,7 @@ def test_index_video_scenes_overlap_calculation(mock_segmenter_cls, mock_scanner
         settings=SETTINGS,
     )
 
-    # Scanner should be called with start_ts=28.0 (30.0 - 2.0), end_ts=60.0
-    mock_scanner_cls.return_value.scan.assert_called_once_with(28.0, 60.0)
+    mock_scanner_cls.return_value.scan.assert_called_once_with(30.0, 60.0)
 
     # Segmenter should receive the anchor_phash from work order
     mock_segmenter_cls.assert_called_once()
@@ -289,7 +286,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
 
     work = _FakeResponse(200, {
         "chunk_id": "c1", "worker_id": "w1", "chunk_index": 0,
-        "start_ts": 0.0, "end_ts": 30.0, "overlap_sec": 2.0,
+        "start_ts": 0.0, "end_ts": 30.0,
     })
     _claims(client, [work, _FakeResponse(204)])
     mock_scanner_cls.return_value.scan.return_value = iter([])
@@ -323,7 +320,7 @@ def test_index_video_scenes_scene_fields_complete(mock_segmenter_cls, mock_scann
 
 def _work(index: int) -> _FakeResponse:
     return _FakeResponse(200, {"chunk_id": f"chunk_{index}", "worker_id": "vid_w", "chunk_index": index,
-                               "start_ts": 30.0 * index, "end_ts": 30.0 * (index + 1), "overlap_sec": 2.0})
+                               "start_ts": 30.0 * index, "end_ts": 30.0 * (index + 1)})
 
 
 def _claimed(client: MagicMock) -> int:

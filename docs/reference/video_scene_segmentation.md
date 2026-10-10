@@ -18,6 +18,7 @@ A single, long-running FFmpeg process is opened to avoid process-spawn overhead.
 - FFmpeg outputs **raw RGB24 frames at 1 FPS** scaled to **480px width** (even height, aspect-preserving) on `stdout`
 - FFmpeg outputs `showinfo` filter metadata on `stderr` asynchronously
 - A dedicated `stderr` thread parses `pts_time:` values via regex and puts them on a `Queue`
+- With `-ss` before `-i`, `showinfo`'s `pts_time` counts from the seek point, so the scanner adds `start_ts` back: every frame's `pts` is video time. A scan covers `[start_ts, end_ts)`.
 - For each frame read from `stdout`, the main thread calls `pts_queue.get(timeout=10.0)` — if no PTS arrives within 10 seconds, `SyncError` is raised (FFmpeg hung)
 - Frame byte size = `480 * out_height * 3` — computed exactly from source dimensions via `ffprobe` so Python and FFmpeg always agree
 

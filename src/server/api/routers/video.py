@@ -138,7 +138,6 @@ class ChunkWorkOrder(BaseModel):
     chunk_index: int
     start_ts: float
     end_ts: float
-    overlap_sec: float
     anchor_phash: str | None
     scene_start_ts: float | None
     video_duration_sec: float
@@ -172,7 +171,6 @@ def claim_next_chunk(
         chunk_index=chunk.chunk_index,
         start_ts=chunk.start_ms / 1000.0,
         end_ts=chunk.end_ms / 1000.0,
-        overlap_sec=VideoIndexChunkRepository.OVERLAP_SEC,
         anchor_phash=chunk.anchor_phash,
         scene_start_ts=chunk.scene_start_ms / 1000.0 if chunk.scene_start_ms is not None else None,
         video_duration_sec=video_duration_sec,
