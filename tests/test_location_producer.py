@@ -396,3 +396,24 @@ def test_the_guess_route_takes_only_what_a_machine_says_it_made(env) -> None:
     assert r.json() == {"result": "gone"}
     r = client.post("/v1/assets/locations/clocks", json={}, headers=headers)
     assert r.status_code == 400  # named clips only, never "all"
+
+
+def test_only_the_scheduler_reads_for_guesses_or_saves_them(env) -> None:
+    """Machine data: admins only (the scheduler's key is an admin's), as #80 made its other routes."""
+    from tests.test_archive_trash_safety import _key_with_role
+
+    _settings(env)
+    client, *_ = env
+    lib = _library(env, "who")
+    _clip(env, lib, "Phone/p.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+    c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
+    guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "lineage": made("location")}
+    for role in ("viewer", "editor"):
+        key = _key_with_role(env, role)
+        assert client.post("/v1/assets/locations/clocks", json={"asset_ids": [c]}, headers=key).status_code == 403
+        assert client.get(f"/v1/assets/locations/context/{c}", headers=key).status_code == 403
+        assert client.put(f"/v1/assets/locations/guess/{c}", json=guess, headers=key).status_code == 403, role
+    assert _location(env, c) is None and _lineage(env, c) is None
+    admin = _key_with_role(env, "admin")
+    assert client.get(f"/v1/assets/locations/context/{c}", headers=admin).status_code == 200
+    assert client.put(f"/v1/assets/locations/guess/{c}", json=guess, headers=admin).json() == {"result": "stored"}

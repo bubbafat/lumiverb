@@ -4,7 +4,7 @@ PUT    /v1/assets/locations         set it: {lat, lon} or {same_as}
 DELETE /v1/assets/locations         clear a person's location
 POST   /v1/assets/locations/accept  a suggestion becomes a person's location
 
-The location producer's (phase 3; the scheduler's key, editor or above):
+The location producer's (phase 3): admins only, as the scheduler's key is (editors 403):
 POST   /v1/assets/locations/clocks          scene pairs a device's clock offset is voted from
 GET    /v1/assets/locations/context/{id}    a clip's nearest fixes before and after it
 PUT    /v1/assets/locations/guess/{id}      its guess, or that it found none
@@ -26,7 +26,12 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_tenant_admin,
+)
 from src.server.api.errors import ApiError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS
 from src.server.repository import locations
@@ -192,7 +197,7 @@ class ClocksRequest(BaseModel):
     window_min: int = Field(default=14 * 60, ge=1, le=48 * 60)
 
 
-@router.post("/clocks", dependencies=[Depends(require_editor)])
+@router.post("/clocks", dependencies=[Depends(require_tenant_admin)])
 def location_clocks(
     session: Annotated[Session, Depends(get_tenant_session)],
     body: Annotated[ClocksRequest | None, Body()] = None,
@@ -205,7 +210,7 @@ def location_clocks(
     return locations.clocks(session, ids, min_similarity=body.min_similarity, window_min=body.window_min)
 
 
-@router.get("/context/{asset_id}", dependencies=[Depends(require_editor)])
+@router.get("/context/{asset_id}", dependencies=[Depends(require_tenant_admin)])
 def location_context(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -239,7 +244,7 @@ class GuessResponse(BaseModel):
     result: str
 
 
-@router.put("/guess/{asset_id}", response_model=GuessResponse, dependencies=[Depends(require_editor)])
+@router.put("/guess/{asset_id}", response_model=GuessResponse, dependencies=[Depends(require_tenant_admin)])
 def save_location_guess(
     asset_id: str,
     body: GuessRequest,
