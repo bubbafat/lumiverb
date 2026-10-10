@@ -594,14 +594,12 @@ def name_cluster(
             person_repo._recompute_centroid(body.person_id)
             from src.server.repository.tenant import _mark_clusters_dirty
             _mark_clusters_dirty(session)
-            _drop_cached_cluster(session, cluster_id)
             session.commit()
     else:
         # Create new person with all cluster faces. has_name guarantees
         # display_name is non-None and non-empty here.
         assert body.display_name is not None
         person = person_repo.create(body.display_name.strip(), face_ids=face_ids)
-        _drop_cached_cluster(session, cluster_id)
 
     face_count = person_repo.get_face_count(person.person_id)
 
@@ -644,7 +642,6 @@ def dismiss_cluster(
     person_repo = PersonRepository(session)
     person = person_repo.create_dismissed(face_ids=face_ids)
     _mark_clusters_dirty(session)
-    _drop_cached_cluster(session, cluster_id)
     session.commit()
     return DismissResult(person_id=person.person_id)
 
@@ -1052,10 +1049,13 @@ def find_cluster(session: Session, cluster_id: str) -> dict:
 
 def _unassigned_cluster_faces(session: Session, cluster_id: str) -> list[str]:
     """The cluster's face ids, none named or dismissed since it was computed;
-    409 cluster_changed otherwise."""
+    409 cluster_changed otherwise. The faces are locked first, so of two
+    requests for one cluster the second waits and then gets the 409."""
     from sqlalchemy import text as sa_text
 
     face_ids = find_cluster(session, cluster_id).get("face_ids") or []
+    session.execute(sa_text("SELECT 1 FROM faces WHERE face_id = ANY(:fids) ORDER BY face_id FOR UPDATE"),
+                    {"fids": face_ids})
     taken = session.execute(
         sa_text("SELECT count(*) FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": face_ids},
     ).scalar()
@@ -1064,16 +1064,20 @@ def _unassigned_cluster_faces(session: Session, cluster_id: str) -> list[str]:
     return face_ids
 
 
-def _drop_cached_cluster(session: Session, cluster_id: str) -> None:
-    """Take a named or dismissed cluster out of the cache, so the next load
-    doesn't show it before upkeep computes them again."""
-    from src.server.repository.system_metadata import SystemMetadataRepository
+def _without_assigned(session: Session, clusters: list[dict]) -> list[dict]:
+    """The clusters none of whose faces were named or dismissed since they
+    were computed: a cluster just named doesn't show before upkeep computes
+    them again, and one whose dismissal was undone shows again."""
+    from sqlalchemy import text as sa_text
 
-    data = cached_clusters(session)
-    if data is None:
-        return
-    data["clusters"] = [c for c in data.get("clusters", []) if cluster_id_of(c.get("face_ids") or []) != cluster_id]
-    SystemMetadataRepository(session).set_value("face_clusters_cache", json.dumps(data))
+    ids = [fid for c in clusters for fid in (c.get("face_ids") or [])]
+    if not ids:
+        return clusters
+    taken = set(session.execute(
+        sa_text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": ids}).scalars())
+    if not taken:
+        return clusters
+    return [c for c in clusters if not taken.intersection(c.get("face_ids") or [])]
 
 
 @faces_router.get("/clusters", response_model=ClustersResponse)
@@ -1089,7 +1093,7 @@ def get_clusters(
     Reading them computes nothing: computed_at says when, and pending that
     faces changed since (upkeep computes them again within 5 minutes)."""
     data = cached_clusters(session)
-    all_clusters = (data or {}).get("clusters", [])
+    all_clusters = _without_assigned(session, (data or {}).get("clusters", []))
     max_size = max((c["size"] for c in all_clusters), default=0)
     shown = order_clusters([c for c in all_clusters if c["size"] >= min_cluster_size], sort)[:limit]
     return ClustersResponse(

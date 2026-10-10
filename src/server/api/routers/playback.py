@@ -184,25 +184,39 @@ def _duration(path: Path) -> float | None:
         return None
 
 
-# The served file's own length, per version of it, once probed (None: unreadable).
-_durations: dict[tuple[str, str], float | None] = {}
-_DURATIONS_KEPT = 8192
-
-
-def _known_duration(path: Path, version: str) -> tuple[bool, float | None]:
-    """(probed yet, its length). Never probes: probing is the cut job's."""
-    key = (str(path), version)
-    return key in _durations, _durations.get(key)
-
-
-def _probe(path: Path, version: str) -> None:
-    if len(_durations) >= _DURATIONS_KEPT:
-        _durations.clear()
-    _durations[(str(path), version)] = _duration(path)
-
-
 def _playback_dir(storage: LocalStorage, tenant_id: str) -> Path:
     return storage.abs_path(f"{tenant_id}/playback")
+
+
+def _duration_file(ask: "_Ask") -> Path:
+    """Where the served file's probed length is kept, beside its cuts: on
+    disk, so every API worker knows it (a cut that isn't needed leaves no
+    file of its own). Cleared with the cuts."""
+    return _playback_dir(ask.storage, ask.tenant_id) / f"{ask.asset_id}_{ask.source}_{ask.version}.duration"
+
+
+def _known_duration(ask: "_Ask") -> tuple[bool, float | None]:
+    """(probed yet, its length; None when unreadable). Never probes: probing is the cut job's."""
+    try:
+        text = _duration_file(ask).read_text().strip()
+    except OSError:
+        return False, None
+    try:
+        return True, float(text) if text else None
+    except ValueError:
+        return False, None
+
+
+def _probe(ask: "_Ask") -> None:
+    duration = _duration(ask.path)
+    target = _duration_file(ask)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_text("" if duration is None else repr(duration))
+    tmp.replace(target)
+    for old in target.parent.glob(f"{ask.asset_id}_{ask.source}_*.duration"):
+        if old != target:
+            old.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -226,7 +240,7 @@ def _cut_for(ask: _Ask) -> tuple[Path, int | None, str] | None:
     strip = ask.strip and ask.source == "preview"
     max_seconds = ask.max_seconds
     if max_seconds is not None:
-        probed, duration = _known_duration(ask.path, ask.version)
+        probed, duration = _known_duration(ask)
         if probed and duration is not None and duration <= max_seconds + _CAP_SLACK_SEC:
             max_seconds = None
     if max_seconds is None and not strip:
@@ -260,8 +274,8 @@ def _make_cut(ask: _Ask) -> None:
     Cuts are made with stream copy (no re-encoding, every track kept),
     without the file's metadata, and stored under {tenant}/playback,
     outside the library folders cleanup walks."""
-    if ask.max_seconds is not None and not _known_duration(ask.path, ask.version)[0]:
-        _probe(ask.path, ask.version)
+    if ask.max_seconds is not None and not _known_duration(ask)[0]:
+        _probe(ask)
     planned = _cut_for(ask)
     if planned is None or planned[0].is_file():
         return

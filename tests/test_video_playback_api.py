@@ -580,7 +580,9 @@ def test_a_cut_that_cant_be_made_is_a_503(env, media, monkeypatch):
     r = _fetch(client, url)
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "playback_cut_failed"
-    assert not any(n.startswith(asset_id) or n.startswith(f".{asset_id}") for n in _cuts(env))
+    # No cut or half-written temp file left behind (the probe's .duration stays).
+    assert not any((n.startswith(asset_id) or n.startswith(f".{asset_id}")) and not n.endswith(".duration")
+                   for n in _cuts(env))
 
 
 # ---------------------------------------------------------------------------
@@ -866,3 +868,17 @@ def test_the_old_preview_route_is_gone(env, media):
     client, admin, *_ = env
     asset_id = _video(env, media, "no_preview_route", proxy=False)
     assert client.get(f"/v1/assets/{asset_id}/preview", headers=admin).status_code == 404
+
+
+@pytest.mark.slow
+def test_whether_a_cut_is_needed_is_kept_on_disk_for_every_worker(env, media):
+    """A video no longer than the cap needs no cut; the probe that says so is
+    kept beside the cuts, so another API worker (no memory of it) serves it whole."""
+    client, admin, *_ = env
+    asset_id = _video(env, media, "fits")
+    client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 600}, headers=admin)
+    url = _path(_playback(env, asset_id).json()["url"])
+    assert _fetch(client, url).content == media["proxy"]
+    assert any(n.startswith(asset_id) and n.endswith(".duration") for n in _cuts(env))
+    assert _playback(env, asset_id).json()["ready"] is True
+    assert client.get(url).content == media["proxy"]  # straight away, no 503

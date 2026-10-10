@@ -55,7 +55,9 @@ export function usePlayback(
     // A new link would restart a playing video; failures renew instead.
     refetchOnWindowFocus: false,
     refetchInterval: (query) =>
-      query.state.data && !query.state.data.ready
+      query.state.status === "error"
+        ? false
+        : query.state.data && !query.state.data.ready
         ? preparingMs
         : query.state.data?.source === "preview"
           ? pollMs
@@ -76,10 +78,14 @@ export function usePlayback(
 
   const failed = playback.isRefetchError;
   if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew, failed: false };
-  if (playback.data && !playback.data.ready) {
+  if (playback.data && !playback.data.ready && !playback.isError) {
+    // A link already playing keeps playing until the new one is ready.
+    if (kept.current?.assetId === assetId) {
+      return { src: kept.current.url, source: kept.current.source, maxSeconds: null, isLoading: false, renew, failed };
+    }
     return { src: null, source: null, maxSeconds: null, isLoading: true, renew, failed: false };
   }
-  if (playback.data) {
+  if (playback.data && playback.data.ready) {
     const { source, url, max_seconds } = playback.data;
     const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
     if (stale || (renewing.current && kept.current?.url !== url)) {

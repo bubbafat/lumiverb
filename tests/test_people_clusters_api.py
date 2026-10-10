@@ -543,3 +543,27 @@ def test_get_face_crop_404_when_no_proxy_for_generation(clusters_client) -> None
     )
     r = auth_client.get(f"/v1/faces/{face_ids[0]}/crop")
     assert r.status_code == 404
+
+
+@pytest.mark.slow
+def test_an_undone_dismissal_brings_the_cluster_back_usable(clusters_client) -> None:
+    """Undo (deleting the dismissed person) shows the cluster again under its
+    id, and it can be named, without waiting for upkeep."""
+    auth_client, library_id = clusters_client
+    _, face_ids = _create_asset_with_faces(auth_client, library_id, "undo_dismiss", "undo_dismiss", n_faces=3)
+    params = {"limit": 50, "faces_per_cluster": 20}
+    mine = [c["cluster_id"] for c in _clusters(auth_client, **params)
+            if {f["face_id"] for f in c["faces"]} & set(face_ids)]
+    assert mine
+    cluster_id = mine[0]
+
+    r = auth_client.post(f"/v1/faces/clusters/{cluster_id}/dismiss", json={})
+    assert r.status_code == 200, r.text
+    shown = auth_client.get("/v1/faces/clusters", params=params).json()["clusters"]
+    assert cluster_id not in [c["cluster_id"] for c in shown]
+
+    assert auth_client.delete(f"/v1/people/{r.json()['person_id']}").status_code == 204
+    shown = auth_client.get("/v1/faces/clusters", params=params).json()["clusters"]
+    assert cluster_id in [c["cluster_id"] for c in shown]
+    r = auth_client.post(f"/v1/faces/clusters/{cluster_id}/name", json={"display_name": "Undone"})
+    assert r.status_code == 201, r.text

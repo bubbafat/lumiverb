@@ -165,8 +165,8 @@ public final class ClusterReviewState: ObservableObject {
         cancelUndoWindow()
         do {
             try await client.delete("/v1/people/\(personId)")
-            // Reload — the faces come back as a cluster once upkeep
-            // computes them again.
+            // Reload — the cluster shows again under its id (the server
+            // hides only clusters with named or dismissed faces).
             await loadClusters()
         } catch {
             if Self.isCancellation(error) { return }

@@ -43,6 +43,23 @@ describe("usePlayback", () => {
     expect(result.current.maxSeconds).toBe(10);
   });
 
+  it("stops waiting and falls back to the preview when the cut fails", async () => {
+    let n = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!url.includes("/playback")) return new Response(new Blob(["mp4"]), { status: 200 });
+      return ++n === 1
+        ? new Response(JSON.stringify({ url: "/v1/stream/x", expires_at: "x", source: "analysis_proxy",
+                                        max_seconds: 10, ready: false }), { status: 200 })
+        : new Response(JSON.stringify({ error: { code: "playback_cut_failed", message: "no", details: {} } }),
+                       { status: 503 });
+    });
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, preparingMs: 20 }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("blob:preview"));
+    const calls = fetchMock.mock.calls.filter(([u]) => String(u).includes("/playback")).length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/playback")).length).toBe(calls);
+  });
+
   it("plays the signed full-length link", async () => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes("/playback")

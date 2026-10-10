@@ -414,7 +414,7 @@ final class APIClientNetworkTests: XCTestCase {
         }
 
         let client = makeClient()
-        let data = try await client.getData("/v1/assets/ast_1/proxy")
+        let data = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
         XCTAssertEqual(data, imageData)
     }
 
@@ -424,14 +424,14 @@ final class APIClientNetworkTests: XCTestCase {
         }
 
         let client = makeClient()
-        let data = try await client.getData("/v1/assets/ast_1/proxy")
+        let data = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
         XCTAssertNil(data)
     }
 
     func testGetDataThrowsNoTokenWhenNotSet() async {
         let client = makeClient(token: nil)
         do {
-            _ = try await client.getData("/v1/assets/ast_1/proxy")
+            _ = try await client.getData("/v1/assets/ast_1/artifacts/proxy")
             XCTFail("Expected APIError.noToken")
         } catch let error as APIError {
             XCTAssertEqual(error, .noToken)
@@ -463,7 +463,7 @@ final class APIClientNetworkTests: XCTestCase {
             return true
         }
 
-        let data = try await client.getData("/v1/assets/ast_1/thumbnail")
+        let data = try await client.getData("/v1/assets/ast_1/artifacts/thumbnail")
         XCTAssertEqual(data, imageData)
         XCTAssertEqual(callCount, 2)
     }
