@@ -6,6 +6,7 @@ import os
 import time
 
 import hashlib
+import logging
 import uuid
 
 import bcrypt
@@ -232,6 +233,42 @@ def test_tampered_jwt_returns_401(hybrid_env: TestClient) -> None:
 def test_api_key_still_works(hybrid_env: TestClient) -> None:
     r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {TEST_API_KEY}"})
     assert r.status_code == 200
+
+
+_MIDDLEWARE_LOGGER = "src.server.api.middleware"
+
+
+def _jwt_decode_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == _MIDDLEWARE_LOGGER and "JWT decode failed" in r.getMessage()]
+
+
+@pytest.mark.slow
+def test_api_key_skips_jwt_decode(hybrid_env: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    """A real (lv_-prefixed) API key is never tried as a JWT, so nothing is logged."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository
+
+    with get_control_session() as session:
+        _, plaintext = ApiKeyRepository(session).create(TENANT_ID, "no-jwt-log")
+    assert plaintext.startswith("lv_")
+
+    caplog.set_level(logging.DEBUG, logger=_MIDDLEWARE_LOGGER)
+    r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {plaintext}"})
+    assert r.status_code == 200
+    assert _jwt_decode_records(caplog) == []
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("kind", ["expired", "tampered"])
+def test_bad_jwt_falls_through_quietly(hybrid_env: TestClient, caplog: pytest.LogCaptureFixture, kind: str) -> None:
+    """A JWT-shaped token that fails to decode still gets the same 401, logged at DEBUG only."""
+    token = _make_jwt(USR_ADMIN, "admin", expired=kind == "expired", tampered=kind == "tampered")
+    caplog.set_level(logging.DEBUG, logger=_MIDDLEWARE_LOGGER)
+    r = hybrid_env.get("/v1/libraries", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "unauthorized"
+    records = _jwt_decode_records(caplog)
+    assert records and all(rec.levelno == logging.DEBUG for rec in records)
 
 
 # --- Role enforcement ---
