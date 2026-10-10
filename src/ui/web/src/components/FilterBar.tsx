@@ -473,7 +473,7 @@ export function FilterBar({
             onChange={(e) => onSetSort(e.target.value, dir)}
             className={selectCls}
           >
-            {SORT_OPTIONS.map((o) => (
+            {(isPublic ? SORT_OPTIONS.filter((o) => o.value === "taken_at") : SORT_OPTIONS).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>

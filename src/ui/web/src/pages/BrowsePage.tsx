@@ -331,7 +331,7 @@ export default function BrowsePage() {
     queryKey: ["unified-query", filtersWithPath, browseSort, browseDir],
     queryFn: ({ pageParam }) =>
       queryAssets(filtersWithPath, {
-        sort: browseSort,
+        sort: isPublicMode ? "taken_at" : browseSort, // a visitor's cursor can't carry names or EXIF
         dir: browseDir,
         after: pageParam,
         limit: PAGE_SIZE,

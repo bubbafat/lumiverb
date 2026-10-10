@@ -178,8 +178,7 @@ def test_a_public_librarys_page_shows_only_what_a_person_sees(env):
     library_id = lib[2]
     assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=headers).status_code == 200
     try:
-        pages = [client.get(f"/v1/assets/{vid}", params={"public_library_id": library_id}),
-                 client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": "a.mov"})]
+        pages = [client.get(f"/v1/assets/{vid}", params={"public_library_id": library_id})]  # by-path isn't public
     finally:
         client.patch(f"/v1/libraries/{library_id}", json={"is_public": False}, headers=headers)
     for r in pages:

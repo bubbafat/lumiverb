@@ -105,6 +105,7 @@ class ApiKeyRepository:
         tenant_id: str,
         label: str | None,
         role: str = "admin",
+        created_by_user_id: str | None = None,
     ) -> tuple[ApiKey, str]:
         """
         Create a new API key for a tenant.
@@ -123,6 +124,7 @@ class ApiKeyRepository:
             label=label,
             scopes=["read", "write"],
             role=role,
+            created_by_user_id=created_by_user_id,
         )
         self._session.add(api_key)
         self._session.commit()
@@ -159,6 +161,24 @@ class ApiKeyRepository:
         self._session.commit()
         self._session.refresh(api_key)
         return True
+
+    def revoke_created_by(self, tenant_id: str, user_id: str, roles: set[str] | None = None) -> int:
+        """Revoke the live keys a user minted (only those with one of
+        ``roles``, if given). Uncommitted: it goes with the caller's change
+        to the user. Returns how many."""
+        stmt = (
+            select(ApiKey)
+            .where(ApiKey.tenant_id == tenant_id)
+            .where(ApiKey.created_by_user_id == user_id)
+            .where(ApiKey.revoked_at.is_(None))
+        )
+        if roles is not None:
+            stmt = stmt.where(ApiKey.role.in_(roles))
+        keys = list(self._session.exec(stmt).all())
+        for api_key in keys:
+            api_key.revoked_at = utcnow()
+            self._session.add(api_key)
+        return len(keys)
 
     def touch_last_used(self, key_id: str) -> None:
         """Update last_used_at. Best-effort; do not raise on failure."""

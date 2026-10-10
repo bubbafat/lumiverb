@@ -211,6 +211,7 @@ class LibraryRepository:
             {"library_id": library_id, "now": utcnow()},
         )
         library.status = "trashed"
+        library.is_public = False
         library.trashed_at = library.updated_at = utcnow()
         self._session.add(library)
         self._session.commit()

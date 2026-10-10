@@ -28,6 +28,26 @@ class KeyListResponse(BaseModel):
 _ROLE_RANK = {"admin": 2, "editor": 1, "viewer": 0}
 
 
+def _caller_user_id(request: Request, session) -> str | None:
+    """The user behind the request: the signed-in one, or the one who minted the calling key."""
+    user_id = getattr(request.state, "user_id", None)
+    key_id = getattr(request.state, "key_id", None)
+    if user_id or not key_id:
+        return user_id
+    from src.server.models.control_plane import ApiKey
+
+    key = session.get(ApiKey, key_id)
+    return key.created_by_user_id if key is not None else None
+
+
+def _is_own(request: Request, session, key) -> bool:
+    """Admins manage every key; anyone else only the keys they minted."""
+    if getattr(request.state, "role", None) == "admin":
+        return True
+    owner = _caller_user_id(request, session)
+    return owner is not None and key.created_by_user_id == owner
+
+
 class CreateKeyRequest(BaseModel):
     label: str | None = None
     role: str | None = None
@@ -46,14 +66,14 @@ def list_keys(
     request: Request,
     _: Annotated[None, Depends(require_editor)],
 ) -> KeyListResponse:
-    """Return all non-revoked keys for the current tenant. Never includes plaintext."""
+    """Return the tenant's non-revoked keys (an editor's own only). Never includes plaintext."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
-        keys = repo.list_by_tenant(tenant_id)
+        keys = [k for k in repo.list_by_tenant(tenant_id) if _is_own(request, session, k)]
 
     def _iso(dt: datetime | None) -> str | None:
         return dt.isoformat() if dt is not None else None
@@ -97,6 +117,7 @@ def create_key(
             tenant_id=tenant_id,
             label=body.label,
             role=requested_role,
+            created_by_user_id=_caller_user_id(request, session),
         )
 
     created_at = api_key.created_at.isoformat()
@@ -118,7 +139,7 @@ def revoke_key(
     Revoke a key for the current tenant.
 
     Rules:
-    1. Editors and admins only (403).
+    1. Editors and admins only (403). An editor only their own keys (404).
     2. Only keys at or below the caller's own role, as with creating one
        (403 role_escalation): an editor can't revoke an admin key.
     3. The last admin key cannot be revoked (409, code=last_admin_key).
@@ -146,6 +167,8 @@ def revoke_key(
         target_role = getattr(target, "role", "viewer")
         if _ROLE_RANK.get(target_role, _ROLE_RANK["admin"]) > _ROLE_RANK.get(caller_role or "", -1):
             return _error_response(403, "role_escalation", "Cannot revoke a key with higher privileges than your own")
+        if not _is_own(request, session, target):
+            raise HTTPException(status_code=404, detail="Key not found")
 
         if target_role == "admin":
             admin_count = repo.count_admin_keys(tenant_id)

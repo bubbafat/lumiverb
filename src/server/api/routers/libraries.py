@@ -271,16 +271,16 @@ def delete_libraries_for_good(
     repo = LibraryRepository(session)
     deleted = 0
     # Read before anything commits or rolls back (both expire the objects).
-    for library_id, was_public in [(lib.library_id, lib.is_public) for lib in libraries]:
+    for library_id in [lib.library_id for lib in libraries]:
         if not repo.lock_trashed(library_id, before):
             session.rollback()
             continue
         repo.hard_delete(library_id)  # commits, releasing the lock
         deleted += 1
         purge_library_from_quickwit(library_id, tenant_id=tenant_id)
-        if was_public:
-            with get_control_session() as ctrl_session:
-                PublicLibraryRepository(ctrl_session).delete(library_id)
+        # Trash cleared is_public, so any public row left behind goes regardless.
+        with get_control_session() as ctrl_session:
+            PublicLibraryRepository(ctrl_session).delete(library_id)
     return deleted
 
 
