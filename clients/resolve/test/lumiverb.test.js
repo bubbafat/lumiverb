@@ -6,6 +6,7 @@ const { test } = require('node:test');
 
 const {
     LumiverbClient,
+    MAX_IDS,
     SignedOutError,
     createSessionStore,
     localPath,
@@ -108,6 +109,72 @@ test('search filters by type: images, or nothing for all', async () => {
     assert.deepEqual(new URL(fetch.calls[1].url).searchParams.getAll('f'), ['query:x']);
     await assert.rejects(client.search('x', { media: 'audio' }), /Unknown type: audio\./);
     assert.equal(fetch.calls.length, 2, 'an unknown type never reaches the server');
+});
+
+test('search in a project, or everything but it', async () => {
+    const fetch = fakeFetch(() => reply(200, { items: [], next_cursor: null }));
+    const { client } = signedInClient(fetch, 'jwt');
+
+    await client.search('x', { scope: 'in', project: 'prj_1' });
+    await client.search('x', { scope: 'out', project: 'prj_1' });
+    await client.search('x', { scope: 'all', project: 'prj_1' });
+
+    const filters = fetch.calls.map((call) => new URL(call.url).searchParams.getAll('f'));
+    assert.deepEqual(filters, [['query:x', 'project:prj_1'], ['query:x', 'not_project:prj_1'], ['query:x']]);
+    await assert.rejects(client.search('x', { scope: 'out' }), /Choose a project first\./);
+    await assert.rejects(client.search('x', { scope: 'near', project: 'prj_1' }), /Unknown scope: near\./);
+    assert.equal(fetch.calls.length, 3, 'neither reaches the server');
+});
+
+test('projects lists yours and shared ones', async () => {
+    const fetch = fakeFetch(() => reply(200, { items: [
+        { project_id: 'prj_1', name: 'NCL Jewel Walkthrough', ownership: 'own', asset_count: 340, updated_at: '2026-10-10T20:00:00Z' },
+        { project_id: 'prj_2', name: 'Shared', ownership: 'shared', asset_count: 2, updated_at: '2026-10-01T00:00:00Z' },
+    ] }));
+    const { client } = signedInClient(fetch, 'jwt');
+
+    assert.deepEqual(await client.projects(), [
+        { projectId: 'prj_1', name: 'NCL Jewel Walkthrough', own: true, assetCount: 340, updatedAt: '2026-10-10T20:00:00Z' },
+        { projectId: 'prj_2', name: 'Shared', own: false, assetCount: 2, updatedAt: '2026-10-01T00:00:00Z' },
+    ]);
+    assert.equal(fetch.calls[0].url, 'http://media/v1/projects');
+});
+
+test('createProject sends the clips in order, past the server limit in a second request', async () => {
+    const ids = Array.from({ length: MAX_IDS + 1 }, (_, i) => `a${i}`);
+    const fetch = fakeFetch((url, init) => (url.endsWith('/v1/projects')
+        ? reply(201, { project_id: 'prj_new', name: 'Trip' })
+        : reply(200, { added: JSON.parse(init.body).asset_ids.length })));
+    const { client } = signedInClient(fetch, 'jwt');
+
+    assert.deepEqual(await client.createProject('Trip', ids), { projectId: 'prj_new', name: 'Trip', own: true });
+
+    const [create, add] = fetch.calls;
+    assert.equal(create.init.method, 'POST');
+    assert.equal(create.init.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(create.init.body), { name: 'Trip', asset_ids: ids.slice(0, MAX_IDS) });
+    assert.equal(add.url, 'http://media/v1/projects/prj_new/assets');
+    assert.deepEqual(JSON.parse(add.init.body), { asset_ids: [ids[MAX_IDS]] });
+});
+
+test('addToProject says how many were new to the project', async () => {
+    const fetch = fakeFetch(() => reply(200, { added: 0 }));
+    const { client } = signedInClient(fetch, 'jwt');
+    assert.equal(await client.addToProject('prj_1', ['a1']), 0);
+    assert.deepEqual(JSON.parse(fetch.calls[0].init.body), { asset_ids: ['a1'] });
+});
+
+test('assetIdAt finds a clip by its library and path, or null', async () => {
+    const fetch = fakeFetch((url) => (url.includes('rel_path=2026%2Fa.mov')
+        ? reply(200, { asset_id: 'a1' })
+        : reply(404, { error: { code: 'not_found', message: 'Asset not found' } })));
+    const { client } = signedInClient(fetch, 'jwt');
+
+    assert.equal(await client.assetIdAt('lib1', '2026/a.mov'), 'a1');
+    assert.equal(await client.assetIdAt('lib1', '2026/gone.mov'), null);
+    const url = new URL(fetch.calls[0].url);
+    assert.equal(url.pathname, '/v1/assets/by-path');
+    assert.equal(url.searchParams.get('library_id'), 'lib1');
 });
 
 test('a 401 refreshes the token once and retries with the new one', async () => {
