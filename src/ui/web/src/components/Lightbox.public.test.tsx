@@ -111,6 +111,14 @@ describe("Lightbox on a public page", () => {
 });
 
 describe("Lightbox signed in", () => {
+  it("shows a video's still before it plays", async () => {
+    const { container } = renderLightbox(false);
+    await screen.findByText(/Dimensions/);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.getAttribute("poster")).toBe("blob:x");
+    expect(video.getAttribute("src")).toBe("/v1/stream/t");
+  });
+
   it("archives or trashes the clip it shows", async () => {
     renderLightbox(false);
     fireEvent.click(await screen.findByRole("button", { name: "Archive" }));

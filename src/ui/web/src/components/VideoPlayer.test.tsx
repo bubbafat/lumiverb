@@ -52,7 +52,7 @@ describe("VideoPlayer", () => {
     fireEvent.timeUpdate(video);
 
     rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} />);
-    expect(video.getAttribute("src")).toBe("/v1/stream/full");
+    expect(video.getAttribute("src")).toBe("/v1/stream/full#t=0.001");
     // Loading a new source resets the position to 0 and says so.
     Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
     fireEvent.timeUpdate(video);
@@ -114,6 +114,36 @@ describe("VideoPlayer", () => {
     Object.defineProperty(video, "duration", { value: 6.2, configurable: true });
     fireEvent.loadedMetadata(video);
     screen.getByText(/Short preview: first 6 seconds/);
+  });
+
+  it("shows the clip's still before it plays", () => {
+    const { container } = render(
+      <VideoPlayer src="/v1/stream/p" poster="blob:still" source="analysis_proxy" maxSeconds={null} />,
+    );
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.getAttribute("poster")).toBe("blob:still");
+    expect(video.getAttribute("src")).toBe("/v1/stream/p");
+  });
+
+  it("without a still, asks for the first frame", () => {
+    const { container } = render(<VideoPlayer src="/v1/stream/q" source="preview" maxSeconds={null} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    expect(video.hasAttribute("poster")).toBe(false);
+    expect(video.getAttribute("src")).toBe("/v1/stream/q#t=0.001");
+  });
+
+  it("with a still, carries on from the same moment when the whole video arrives", () => {
+    const { rerender, container } = render(
+      <VideoPlayer src="/v1/stream/short" poster="blob:still" source="preview" maxSeconds={null} />,
+    );
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { value: 4, writable: true, configurable: true });
+    fireEvent.timeUpdate(video);
+    rerender(<VideoPlayer src="/v1/stream/full" poster="blob:still" source="analysis_proxy" maxSeconds={null} />);
+    expect(video.getAttribute("src")).toBe("/v1/stream/full");
+    Object.defineProperty(video, "duration", { value: 25, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(4);
   });
 
   it("doesn't start playing a paused video when it switches", () => {
