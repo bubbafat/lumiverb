@@ -61,7 +61,7 @@ public struct CollectionDetailView: View {
             if let col = collectionsState.openCollection {
                 RenameCollectionSheet(
                     collectionsState: collectionsState,
-                    collectionId: col.collectionId,
+                    collectionId: col.projectId,
                     currentName: col.name
                 )
             }
@@ -72,7 +72,7 @@ public struct CollectionDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete", role: .destructive) {
-                if let id = collectionsState.openCollection?.collectionId {
+                if let id = collectionsState.openCollection?.projectId {
                     Task { await collectionsState.deleteCollection(id: id) }
                 }
             }
@@ -82,25 +82,15 @@ public struct CollectionDetailView: View {
     }
 
     @ViewBuilder
-    private func collectionHeader(_ col: AssetCollection) -> some View {
+    private func collectionHeader(_ col: Project) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(col.name)
                     .font(.title3)
                     .fontWeight(.semibold)
-                HStack(spacing: 4) {
-                    if col.isSmart {
-                        Image(systemName: "wand.and.stars")
-                            .font(.caption)
-                            .foregroundColor(.purple)
-                    }
-                    Text("\(col.assetCount) item\(col.assetCount == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                if col.isSmart, let sq = col.savedQuery {
-                    smartQuerySummary(sq)
-                }
+                Text("\(col.assetCount) item\(col.assetCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Spacer()
@@ -124,59 +114,6 @@ public struct CollectionDetailView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
-    }
-
-    @ViewBuilder
-    private func smartQuerySummary(_ sq: SavedQuery) -> some View {
-        let labels = Self.formatSavedQuery(sq)
-        if !labels.isEmpty {
-            HStack(spacing: 4) {
-                ForEach(labels, id: \.self) { label in
-                    Text(label)
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.purple.opacity(0.15))
-                        .cornerRadius(8)
-                        .foregroundColor(.purple)
-                }
-            }
-        }
-    }
-
-    static func formatSavedQuery(_ sq: SavedQuery) -> [String] {
-        var labels: [String] = []
-        if let q = sq.q, !q.isEmpty {
-            labels.append("Search: \(q)")
-        }
-        for (key, wrapped) in sq.filters {
-            let val = wrapped.value
-            switch key {
-            case "camera_make": labels.append("Camera: \(val)")
-            case "camera_model": labels.append("Model: \(val)")
-            case "lens_model": labels.append("Lens: \(val)")
-            case "media_type":
-                if "\(val)" == "image" { labels.append("Photos") }
-                else if "\(val)" == "video" { labels.append("Videos") }
-            case "favorite":
-                if "\(val)" == "true" || "\(val)" == "1" { labels.append("Favorites") }
-            case "star_min": labels.append("\(val)+ stars")
-            case "color": labels.append("Color: \(val)")
-            case "tag": labels.append("Tag: \(val)")
-            case "has_gps":
-                if "\(val)" == "true" || "\(val)" == "1" { labels.append("Has GPS") }
-            case "has_faces":
-                if "\(val)" == "true" || "\(val)" == "1" { labels.append("Has faces") }
-            case "has_rating":
-                if "\(val)" == "true" || "\(val)" == "1" { labels.append("Has rating") }
-            case "has_color":
-                if "\(val)" == "true" || "\(val)" == "1" { labels.append("Has color") }
-            case "iso_min": labels.append("ISO \(val)+")
-            case "person_id": labels.append("Person filter")
-            default: break
-            }
-        }
-        return labels
     }
 
     @ViewBuilder
@@ -232,7 +169,7 @@ public struct CollectionDetailView: View {
     /// Thin wrapper over the shared `AssetGridCell`.
     @ViewBuilder
     private func iosCollectionCell(
-        asset: CollectionAsset,
+        asset: ProjectAsset,
         isSelected: Bool
     ) -> some View {
         AssetGridCell(
@@ -267,7 +204,7 @@ public struct CollectionDetailView: View {
                             Button("Remove from Collection", role: .destructive) {
                                 Task {
                                     _ = await collectionsState.removeAssets(
-                                        collectionId: col.collectionId,
+                                        collectionId: col.projectId,
                                         assetIds: [asset.assetId]
                                     )
                                 }
@@ -291,7 +228,7 @@ public struct CollectionDetailView: View {
     /// clipped when the image's `.aspectRatio(.fill)` overflows.
     @ViewBuilder
     private func collectionAssetCell(
-        asset: CollectionAsset,
+        asset: ProjectAsset,
         isSelected: Bool,
         size: CGSize
     ) -> some View {

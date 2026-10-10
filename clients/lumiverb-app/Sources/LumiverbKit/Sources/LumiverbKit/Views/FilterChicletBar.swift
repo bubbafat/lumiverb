@@ -3,7 +3,7 @@ import SwiftUI
 /// Horizontal bar of filter chiclets shown above the grid when any
 /// browse filter is active. Each chiclet shows the filter label and
 /// an X button to clear it. A "..." menu offers "Clear all" and
-/// "Save as Smart Collection".
+/// "Save Search as Collection".
 public struct FilterChicletBar: View {
     @ObservedObject public var browseState: BrowseState
     public var onSaveSmartCollection: (() -> Void)?
@@ -50,7 +50,7 @@ public struct FilterChicletBar: View {
                             Button {
                                 onSaveSmartCollection?()
                             } label: {
-                                Label("Save as Smart Collection", systemImage: "wand.and.stars")
+                                Label("Save Search as Collection", systemImage: "wand.and.stars")
                             }
                             Divider()
                         }

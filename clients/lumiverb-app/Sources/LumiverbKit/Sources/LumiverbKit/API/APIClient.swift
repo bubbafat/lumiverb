@@ -616,67 +616,67 @@ extension APIClient {
     }
 }
 
-// MARK: - Collections
+// MARK: - Projects
 
 extension APIClient {
-    /// `GET /v1/collections`
-    public func listCollections() async throws -> [AssetCollection] {
-        let response: CollectionListResponse = try await get("/v1/collections")
+    /// `GET /v1/projects` — the caller's active projects and the ones shared with them.
+    public func listProjects() async throws -> [Project] {
+        let response: ProjectListResponse = try await get("/v1/projects")
         return response.items
     }
 
-    /// `GET /v1/collections/{id}`
-    public func getCollection(id: String) async throws -> AssetCollection {
-        try await get("/v1/collections/\(id)")
+    /// `GET /v1/projects/{id}`
+    public func getProject(id: String) async throws -> Project {
+        try await get("/v1/projects/\(id)")
     }
 
-    /// `POST /v1/collections`
-    public func createCollection(body: CreateCollectionRequest) async throws -> AssetCollection {
-        try await post("/v1/collections", body: body)
+    /// `POST /v1/projects`
+    public func createProject(body: CreateProjectRequest) async throws -> Project {
+        try await post("/v1/projects", body: body)
     }
 
-    /// `PATCH /v1/collections/{id}`
-    public func updateCollection(id: String, body: UpdateCollectionRequest) async throws -> AssetCollection {
-        try await patch("/v1/collections/\(id)", body: body)
+    /// `PATCH /v1/projects/{id}`
+    public func updateProject(id: String, body: UpdateProjectRequest) async throws -> Project {
+        try await patch("/v1/projects/\(id)", body: body)
     }
 
-    /// `DELETE /v1/collections/{id}`
-    public func deleteCollection(id: String) async throws {
-        try await delete("/v1/collections/\(id)")
+    /// `DELETE /v1/projects/{id}` — moves the project to the trash (owner only).
+    public func deleteProject(id: String) async throws {
+        try await delete("/v1/projects/\(id)")
     }
 
-    /// `POST /v1/collections/{id}/assets`
-    public func addAssetsToCollection(id: String, assetIds: [String]) async throws -> Int {
+    /// `POST /v1/projects/{id}/assets`
+    public func addAssetsToProject(id: String, assetIds: [String]) async throws -> Int {
         let response: BatchAddResponse = try await post(
-            "/v1/collections/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
+            "/v1/projects/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
         )
         return response.added
     }
 
-    /// `DELETE /v1/collections/{id}/assets`
-    public func removeAssetsFromCollection(id: String, assetIds: [String]) async throws -> Int {
+    /// `DELETE /v1/projects/{id}/assets`
+    public func removeAssetsFromProject(id: String, assetIds: [String]) async throws -> Int {
         let response: BatchRemoveResponse = try await deleteWithBody(
-            "/v1/collections/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
+            "/v1/projects/\(id)/assets", body: AssetIdsRequest(assetIds: assetIds)
         )
         return response.removed
     }
 
-    /// `GET /v1/collections/{id}/assets`
-    public func listCollectionAssets(
+    /// `GET /v1/projects/{id}/assets`
+    public func listProjectAssets(
         id: String,
         after: String? = nil,
         limit: Int = 200
-    ) async throws -> CollectionAssetsResponse {
+    ) async throws -> ProjectAssetsResponse {
         var query: [String: String] = ["limit": "\(limit)"]
         if let after { query["after"] = after }
-        return try await get("/v1/collections/\(id)/assets", query: query)
+        return try await get("/v1/projects/\(id)/assets", query: query)
     }
 
-    /// `PATCH /v1/collections/{id}/reorder`
-    public func reorderCollection(id: String, assetIds: [String]) async throws {
+    /// `PATCH /v1/projects/{id}/reorder`
+    public func reorderProject(id: String, assetIds: [String]) async throws {
         struct OkResponse: Decodable { let ok: Bool }
         let _: OkResponse = try await patch(
-            "/v1/collections/\(id)/reorder", body: AssetIdsRequest(assetIds: assetIds)
+            "/v1/projects/\(id)/reorder", body: AssetIdsRequest(assetIds: assetIds)
         )
     }
 }

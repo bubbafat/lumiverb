@@ -1,45 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listDismissedPeople, undismissPerson, getNearestPeopleForPerson, searchPeople, mergePerson, getApiKey } from "../api/client";
+import { listDismissedPeople, undismissPerson, getNearestPeopleForPerson, searchPeople, mergePerson } from "../api/client";
 import type { PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { useFaceCrop } from "../api/useFaceCrop";
 import { Lightbox } from "../components/Lightbox";
-
-function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
-  const [url, setUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!faceId) { setIsLoading(false); return; }
-    setIsLoading(true);
-    let objectUrl: string | null = null;
-    let cancelled = false;
-
-    const key = getApiKey();
-    const headers: HeadersInit = key ? { Authorization: `Bearer ${key}` } : {};
-
-    fetch(`/v1/faces/${faceId}/crop`, { headers })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) return;
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setUrl(null);
-    };
-  }, [faceId]);
-
-  return { url, isLoading };
-}
 
 function DismissedPersonCard({
   person,

@@ -153,12 +153,12 @@ private struct CollectionDetailDestinationView: View {
             // sidebar tap — load the collection's assets when the
             // detail screen first appears.
             if let col = collectionsState.collections.first(
-                where: { $0.collectionId == route.collectionId }
+                where: { $0.projectId == route.collectionId }
             ) {
                 await collectionsState.openCollectionDetail(col)
             }
         }
-        .onChange(of: collectionsState.openCollection?.collectionId) { _, newId in
+        .onChange(of: collectionsState.openCollection?.projectId) { _, newId in
             // Delete cleared the open collection — pop back to the list.
             if newId == nil {
                 dismiss()

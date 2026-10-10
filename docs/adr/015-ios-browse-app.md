@@ -1,6 +1,6 @@
 # ADR-015: iOS Browse App + Ratings & Collections
 
-> **Note (2026-10-07):** ADR-016 renamed collections to projects on the server and web (`/v1/projects`, `/v1/public/projects`, `project_id`). The Swift code below still uses `/v1/collections` and `collection_id`, which the server keeps serving as a deprecated alias until the apps are updated.
+> **Note (2026-10-09):** ADR-016 renamed collections to projects (`/v1/projects`, `/v1/public/projects`, `project_id`), and `/v1/collections` is gone with no alias. The Swift apps call `/v1/projects` (`APIClient` "Projects", `Models/Project.swift`); their screens still say "Collections". Smart collections are gone too: saving a search makes a project of the clips it matches then (`from_search`). The collection endpoints and shapes below are history.
 
 ## Status
 

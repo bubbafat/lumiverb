@@ -12,11 +12,11 @@ import {
   deletePerson,
   getNearestPeople,
   searchPeople,
-  getApiKey,
   CLUSTER_SORTS,
 } from "../api/client";
 import type { PersonItem, ClusterItem, ClusterSort, PersonFaceItem } from "../api/client";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { useFaceCrop } from "../api/useFaceCrop";
 import { useLocalStorage } from "../lib/useLocalStorage";
 
 const SORT_LABELS: Record<ClusterSort, string> = {
@@ -61,41 +61,6 @@ function InfiniteScrollSentinel({
       )}
     </div>
   );
-}
-
-/** Fetch a face crop thumbnail with auth. Falls back to null if no crop available. */
-function useFaceCrop(faceId: string): { url: string | null; isLoading: boolean } {
-  const [url, setUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (!faceId) { setIsLoading(false); return; }
-    setIsLoading(true);
-    let objectUrl: string | null = null;
-    let cancelled = false;
-
-    const key = getApiKey();
-    const headers: HeadersInit = key ? { Authorization: `Bearer ${key}` } : {};
-
-    fetch(`/v1/faces/${faceId}/crop`, { headers })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) return; // no crop available — stay null
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setUrl(null);
-    };
-  }, [faceId]);
-
-  return { url, isLoading };
 }
 
 function PersonCard({ person }: { person: PersonItem }) {
