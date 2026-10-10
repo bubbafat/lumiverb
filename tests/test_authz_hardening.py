@@ -115,7 +115,8 @@ def test_by_path_isnt_public(public_lib_client, located):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("term", ["secret", "beach", "Acme", "X1"])
+# The model "XU1" holds a U, which no asset id (Crockford base32) can: "X1" matched random ids.
+@pytest.mark.parametrize("term", ["secret", "beach", "Acme", "XU1"])
 def test_public_search_doesnt_read_paths_or_cameras(public_lib_client, located, term):
     """Quickwit is off in tests: this is the Postgres fallback."""
     client, api_key, library_id, _ = public_lib_client

@@ -542,7 +542,7 @@ def located(public_lib_client):
         url = TenantDbRoutingRepository(control).get_by_tenant_id(tenant_id).connection_string
     with Session(get_engine_for_url(url)) as session:
         session.execute(text(
-            "UPDATE assets SET gps_lat = 48.8584, gps_lon = 2.2945, camera_make = 'Acme', camera_model = 'X1',"
+            "UPDATE assets SET gps_lat = 48.8584, gps_lon = 2.2945, camera_make = 'Acme', camera_model = 'XU1',"
             " lens_model = 'L', iso = 200, aperture = 2.8, focal_length = 35 WHERE asset_id = :a"), {"a": asset_id})
         session.commit()
     return asset_id
