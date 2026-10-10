@@ -2077,6 +2077,7 @@ class VideoSceneRepository:
         scene.description = description
         scene.tags = tags
         scene.lineage = lineage
+        scene.search_synced_at = None  # stale until search has it (the sweep, if the inline sync fails)
         self._session.add(scene)
         self._session.commit()
 
