@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -91,6 +92,33 @@ async def _request_validation_error(request: Request, exc: RequestValidationErro
         return value
 
     return JSONResponse(status_code=422, content={"detail": finite(jsonable_encoder(exc.errors()))})
+
+
+def _unavailable(exc: Exception) -> bool:
+    """A database error that passes: a lost or refused connection (SQLSTATE
+    class 08, 57P01-57P03), a deadlock or serialization failure, too many
+    connections, or no SQLSTATE at all (the server couldn't be reached)."""
+    if getattr(exc, "connection_invalidated", False) or isinstance(exc, InterfaceError):
+        return True
+    code = getattr(getattr(exc, "orig", None), "pgcode", None)
+    return code is None or code.startswith("08") or code in {"57P01", "57P02", "57P03", "40P01", "40001", "53300"}
+
+
+@app.exception_handler(OperationalError)
+@app.exception_handler(InterfaceError)
+async def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """The database away, a lost connection, a deadlock, too many
+    connections: the request's trouble for now, not what it carried (a 503
+    the scheduler charges no clip for). Any other database error (a value
+    too long, a statement timeout, a full disk) recurs: a 500, which the
+    scheduler counts as a crash."""
+    import logging
+
+    if not _unavailable(exc):
+        raise exc
+    logging.getLogger(__name__).warning("database unavailable for %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=503, content={"error": {
+        "code": "database_unavailable", "message": "The database is unavailable; try again shortly.", "details": {}}})
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)

@@ -11,7 +11,15 @@ the AI machines, or the GPU running out of memory, charges no clip.
 
 A runner returns NOT_TRIED when it couldn't try at all (the storage went
 away, the scheduler is stopping): its clips aren't held back afterwards.
-Once the scheduler is stopping, nothing more is saved.
+Once the scheduler is stopping, nothing more is saved: probe, render and
+scenes save through _Saves (Stopped); the others look before each save.
+(Scene descriptions finish the scene under way.)
+
+Saving: every runner lets an error saving a clip escape, and the service
+judges it by whose() it is (one job is one clip, but faces): the clip's
+(the API refused what was made) is charged; trouble reaching the API or its
+database charges nothing; anything else is a crash, charged once the clip
+has crashed CRASHES_BEFORE_CHARGE times in a row (repository/lineage.py).
 """
 
 from __future__ import annotations
@@ -41,6 +49,93 @@ FACE_BATCH_TIMEOUT_SEC = 900.0
 # How often a face batch looks up from its wait (its process let go of: a
 # stop, the account gone).
 FACE_POLL_SEC = 1.0
+
+
+# A save the API refused for what's in it: the clip's failure, charged now.
+REFUSED = frozenset({400, 413, 422})
+# Not the clip's: who asked, the API or its database busy or away. Nothing
+# is charged. (A 404 or 409 that keeps coming is counted, as a crash.)
+NOT_THE_CLIPS = frozenset({401, 403, 408, 429, 502, 503, 504})
+
+
+class Stopped(Exception):
+    """The scheduler is stopping: nothing more is saved, and the job counts as not tried."""
+
+
+class Crashed(Exception):
+    """Some of a job's clips crashed (their face detection process died, say):
+    they're counted towards a charge; waiting aren't."""
+
+    def __init__(self, asset_ids: list[str], error: object, waiting: list[str] | None = None) -> None:
+        super().__init__(str(error))
+        self.asset_ids = list(asset_ids)
+        self.error = error
+        self.waiting = list(waiting or [])
+
+
+def whose(error: object) -> str:
+    """Whose an error that escaped a runner is: "clip" (charged now),
+    "transient" (the API or its database: nothing charged) or "crash"
+    (nothing charged, but counted: see the module's docstring)."""
+    import httpx
+
+    status = getattr(error, "status_code", None)
+    if status in REFUSED:
+        return "clip"
+    if status in NOT_THE_CLIPS or isinstance(error, httpx.TransportError):
+        return "transient"
+    return "crash"
+
+
+def _api_error(error: object) -> bool:
+    import httpx
+
+    from src.client.cli.client import LumiverbAPIError
+
+    return isinstance(error, (LumiverbAPIError, httpx.HTTPError))
+
+
+def _saving(fail: Callable[[str, object], Any]) -> Callable[[str, object], Any]:
+    """on_fail for a step that saves itself (probe, render, scenes): its
+    errors saving go to the service like every runner's (raised from here,
+    so they escape the step) unless they're the clip's; the step's own
+    failures (ffprobe, the render, the frames) are the clip's; this
+    machine's (OSError: a full disk, the cache) go to the service too."""
+    def on_fail(asset_id: str, error: object) -> Any:
+        if (isinstance(error, (Stopped, OSError))
+                or (_api_error(error) and whose(error) != "clip")):
+            raise error  # type: ignore[misc]
+        return fail(asset_id, error)
+    return on_fail
+
+
+class _Saves:
+    """The account's client for a step that saves itself: once the scheduler
+    is stopping, a save raises Stopped instead."""
+
+    def __init__(self, acct: Account) -> None:
+        self._acct = acct
+        self._client = acct.client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def _write(self, method: str, path: str, **kwargs: Any) -> Any:
+        if self._acct.stopping.is_set():
+            raise Stopped(path)
+        return getattr(self._client, method)(path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> Any:
+        return self._write("post", path, **kwargs)
+
+    def put(self, path: str, **kwargs: Any) -> Any:
+        return self._write("put", path, **kwargs)
+
+    def patch(self, path: str, **kwargs: Any) -> Any:
+        return self._write("patch", path, **kwargs)
+
+    def delete(self, path: str, **kwargs: Any) -> Any:
+        return self._write("delete", path, **kwargs)
 
 
 def _out_of_memory(error: object) -> bool:
@@ -89,8 +184,9 @@ def _on_storage(acct: Account, job: Job, step: Callable[[Any, dict], str]) -> Ou
 def probe(acct: Account, job: Job) -> Outcome:
     from src.client.cli.repair import _probe_one
 
-    fail = acct.failures.for_artifact("probe")
-    return _on_storage(acct, job, lambda root, a: _probe_one(acct.client, root, a, acct.producers, fail=fail))
+    fail = _saving(acct.failures.for_artifact("probe"))
+    client = _Saves(acct)
+    return _on_storage(acct, job, lambda root, a: _probe_one(client, root, a, acct.producers, fail=fail))
 
 
 def render(acct: Account, job: Job) -> Outcome:
@@ -101,8 +197,9 @@ def render(acct: Account, job: Job) -> Outcome:
     settings = AnalysisProxySettings.for_producer(acct.producers.settings("analysis_proxy"),
                                                   cfg.analysis_proxy_encoder, cfg.analysis_proxy_decoder,
                                                   cfg.gpu_decodes)
-    fail = acct.failures.for_artifact("analysis_proxy")
-    return _on_storage(acct, job, lambda root, a: _render_one(acct.client, root, a, settings, acct.analysis_cache,
+    fail = _saving(acct.failures.for_artifact("analysis_proxy"))
+    client = _Saves(acct)
+    return _on_storage(acct, job, lambda root, a: _render_one(client, root, a, settings, acct.analysis_cache,
                                                               acct.producers, fail=fail))
 
 
@@ -245,11 +342,13 @@ def scenes(acct: Account, job: Job) -> Outcome:
     used = acct.producers.settings("scenes")
     videos = [{"asset_id": a["asset_id"], "rel_path": a["rel_path"], "duration_sec": a.get("duration_sec"),
                "sha256": a.get("sha256"), "redo": bool(a.get("redo"))} for a in job.items if a.get("duration_sec")]
-    run_video_index(client=acct.client, source_for=lambda v: acct.analysis_cache.get(v["asset_id"]),
+    run_video_index(client=_Saves(acct), source_for=lambda v: acct.analysis_cache.get(v["asset_id"]),
                     videos=videos, console=_QUIET, progress=_Progress(), task_id=None,
                     lineage_for=lambda v: acct.producers.lineage("scenes", v.get("sha256"), used=used),
-                    on_fail=_noting(acct.failures.for_artifact("scenes"), reported), settings=used,
-                    on_done=reported.add)
+                    on_fail=_saving(_noting(acct.failures.for_artifact("scenes"), reported)), settings=used,
+                    on_done=reported.add, stopping=acct.stopping)
+    if acct.stopping.is_set():
+        return NOT_TRIED
     return [i for i in job.asset_ids if i not in reported] or None
 
 
@@ -271,7 +370,7 @@ def scene_vision(acct: Account, job: Job) -> Outcome:
                      vision_provider=scene_provider, vision_model_id=model, console=_QUIET,
                      progress=_Progress(), task_id=None,
                      lineage_for=lambda v: acct.producers.lineage("scene_vision", v.get("sha256"), used=used),
-                     on_fail=_noting(acct.vision.on_fail("scene_vision"), reported), on_done=reported.add)
+                     on_fail=_saving(_noting(acct.vision.on_fail("scene_vision"), reported)), on_done=reported.add)
     return [i for i in job.asset_ids if i not in reported] or None
 
 
@@ -279,6 +378,10 @@ def faces(acct: Account, job: Job) -> Outcome:
     if acct.stopping.is_set():
         return NOT_TRIED
     return acct.faces().run(acct, job)
+
+
+_DIED = object()  # a face batch's process died or hung
+_LET_GO = object()  # the face process was let go of (a stop, the account gone)
 
 
 class FaceRunner:
@@ -318,7 +421,7 @@ class FaceRunner:
                 self._running -= 1
 
     def _run(self, acct: Account, job: Job) -> Outcome:
-        from src.client.cli.repair import _face_batch_worker, _generate_proxy_for_item
+        from src.client.cli.repair import _generate_proxy_for_item
 
         ready, waiting, cache_path = [], [], None
         for a in job.items:
@@ -333,43 +436,90 @@ class FaceRunner:
             return waiting or None
         if acct.stopping.is_set():  # no new process for an account let go of meanwhile
             return NOT_TRIED
+        used = acct.producers.settings("faces")  # one read: what's found and its lineage agree
+        lineage = acct.producers.lineage("faces", None, used=used)
+        result = self._batch(ready, cache_path, lineage, used)
+        if result is _LET_GO:
+            return NOT_TRIED
+        results, crashed = [], []
+        if result is not _DIED:
+            results.append(result)
+        elif len(ready) == 1:
+            crashed.append(ready[0]["asset_id"])
+        else:
+            # One bad photo mustn't hold the rest back: each is tried alone,
+            # and only those whose process dies again count as crashed. Two
+            # in a row dying is the machine's trouble (a hung GPU): the rest wait.
+            logger.warning("scheduler: trying the %d clips of a face batch whose process died one at a time", len(ready))
+            stopped = False
+            for n, item in enumerate(ready):
+                if acct.stopping.is_set():
+                    stopped = True
+                    break
+                one = self._batch([item], cache_path, lineage, used)
+                if one is _LET_GO:
+                    stopped = True
+                    break
+                if one is not _DIED:
+                    results.append(one)
+                    continue
+                crashed.append(item["asset_id"])
+                if len(crashed) >= 2 and crashed[-2] == ready[n - 1]["asset_id"]:
+                    logger.warning("scheduler: face detection keeps dying; the rest of the batch waits")
+                    waiting.extend(i["asset_id"] for i in ready[n + 1:])
+                    break
+            if stopped:  # what was found meanwhile is still reported
+                self._report(acct, results, waiting)
+                return NOT_TRIED
+        self._report(acct, results, waiting)
+        if crashed:
+            # The machine's trouble or the photo's: nothing is charged now, but
+            # each clip's crashes are counted (the service, CRASHES_BEFORE_CHARGE).
+            raise Crashed(crashed, "face detection's process died or hung", waiting=waiting)
+        return waiting or None
+
+    @staticmethod
+    def _report(acct: Account, results: list[dict], waiting: list[str]) -> None:
+        """Each batch's clips that failed: charged, but the GPU running out of memory (they wait)."""
+        for r in results:
+            for err in r.get("errors", []):
+                if not err.get("asset_id"):
+                    continue
+                if _out_of_memory(err.get("error", "")):
+                    waiting.append(err["asset_id"])
+                else:
+                    acct.failures.add("faces", err["asset_id"], err["error"])
+
+    def _batch(self, items: list[dict], cache_path: str | None, lineage: dict, used: dict) -> Any:
+        """One batch in the process: its result; _DIED when the process died
+        or hung (it's replaced); _LET_GO when it was let go of meanwhile."""
+        from src.client.cli.repair import _face_batch_worker
+
         with self._lock:
             if self._pool is None:
                 self._pool = self._pool_factory()
             pool = self._pool
         try:
-            used = acct.producers.settings("faces")  # one read: what's found and its lineage agree
-            pending = pool.apply_async(_face_batch_worker, (self._client.base_url, self._client.token, ready, cache_path,
-                                                            acct.producers.lineage("faces", None, used=used), used))
+            pending = pool.apply_async(_face_batch_worker, (self._client.base_url, self._client.token, items,
+                                                            cache_path, lineage, used))
             # A process killed mid-batch (out of memory, a segfault) never
             # answers: give up on the batch rather than wait forever.
             deadline = self._clock() + FACE_BATCH_TIMEOUT_SEC
             while True:
                 try:
-                    result = pending.get(timeout=self._poll_sec)
-                    break
+                    return pending.get(timeout=self._poll_sec)
                 except mp.TimeoutError:
                     if self._pool is not pool:  # let go of (a stop, the account gone)
-                        return NOT_TRIED
+                        return _LET_GO
                     if self._clock() >= deadline:
                         raise
         except Exception:  # noqa: BLE001
             if self._pool is not pool:  # let go of before it could start
-                return NOT_TRIED
-            # The batch's process died or hung (the GPU, ONNX, memory): this
-            # machine's problem, not the clips', so none is charged; they're
-            # tried again later, by a new process.
-            logger.exception("scheduler: face detection's process died or hung; a new one takes the next batch")
+                return _LET_GO
+            logger.exception("scheduler: face detection's process died or hung (%d clips); a new one takes over",
+                             len(items))
             self._close(pool)
-            return list(job.asset_ids)
-        for err in result.get("errors", []):
-            if not err.get("asset_id"):
-                continue
-            if _out_of_memory(err.get("error", "")):
-                waiting.append(err["asset_id"])
-            else:
-                acct.failures.add("faces", err["asset_id"], err["error"])
-        return waiting or None
+            return _DIED
 
     def close(self) -> bool:
         """Let go of the process (a batch under way ends uncharged). True when there was one."""

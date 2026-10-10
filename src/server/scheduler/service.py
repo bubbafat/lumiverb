@@ -53,9 +53,6 @@ HOLD_EVERY_SEC = 1.0
 LOCK_ID = 0x6C756D76
 LOCK_CHECK_SEC = 60.0
 
-# A save the API refused for what's in it (not who asked, or a clip gone meanwhile).
-_REFUSED = {400, 413, 422}
-
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
 
@@ -100,6 +97,7 @@ class Scheduler:
         gpu_decodes: int = 0,
         write_status: Callable[[str, dict], None] | None = None,
         last_status: Callable[[str], dict | None] | None = None,
+        crashed: Callable[[str, str, list[str], str], list[str]] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -108,6 +106,8 @@ class Scheduler:
         self._paused = paused or _paused_in_database
         self._on_hold = on_hold or _on_hold_in_database
         self._retry_requested = retry_requested or _retry_requested_in_database
+        # Counts each clip's crashes in a row; returns those to charge now.
+        self._crashed = crashed or _crashed_in_database
         self._retry_seen: dict[str, str | None] = {}
         # Each account's last status, read once: its paces start there.
         self._last_status = last_status or _status_from_database
@@ -329,21 +329,59 @@ class Scheduler:
             return outcome, set()
 
     def _run(self, acct: Any, job: Job) -> Outcome:
+        """The job's outcome. What escapes a runner is judged by whose it is
+        (runners.whose): the clip's (the API refused what was made) is
+        charged now; trouble reaching the API or its database charges
+        nothing; anything else (a crash) charges nothing either, but each
+        clip's crashes in a row are counted, and the CRASHES_BEFORE_CHARGE-th
+        is charged, so the back-off and giving up apply."""
+        from src.server.scheduler.runners import NOT_TRIED, Crashed, Stopped, whose
+
+        kind = KINDS[job.kind]
         try:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
                 return None
-            return self._runners[KINDS[job.kind].base](acct, job)
+            return self._runners[kind.base](acct, job)
+        except Stopped:
+            return NOT_TRIED
         except Exception as e:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
-            if getattr(e, "status_code", None) in _REFUSED and KINDS[job.kind].flag:  # a clip's (not a scan's)
+            if not kind.flag:  # a scan's
+                logger.exception("scheduler: %s for %s failed", job.kind, job.tenant_id)
+                return list(job.asset_ids)
+            crashed, others = (list(e.asset_ids), list(e.waiting)) if isinstance(e, Crashed) else (list(job.asset_ids), [])
+            cause = e.error if isinstance(e, Crashed) else e
+            names = ", ".join(crashed[:3])
+            verdict = whose(cause)
+            if verdict == "clip":
                 # The API can't take what was made: the clip's failure, reported
                 # (the server says when to try again), not made again every hour.
-                logger.warning("scheduler: the server refused %s for %s: %s", job.kind, ", ".join(job.asset_ids[:3]), e)
-                for asset_id in job.asset_ids:
-                    acct.failures.add(KINDS[job.kind].artifact, asset_id, f"The server refused it: {e}")
-                return None
-            logger.exception("scheduler: %s for %s failed", job.kind, ", ".join(job.asset_ids[:3]))
-            return list(job.asset_ids)  # none saved or reported: each waits the long while
+                logger.warning("scheduler: the server refused %s for %s: %s", job.kind, names, cause)
+                for asset_id in crashed:
+                    acct.failures.add(kind.artifact, asset_id, f"The server refused it: {cause}")
+                return others or None
+            if verdict == "transient":
+                logger.warning("scheduler: %s for %s couldn't reach the server: %s", job.kind, names, cause)
+                return crashed + others  # none charged: each waits the long while
+            logger.error("scheduler: %s for %s crashed", job.kind, names, exc_info=cause)
+            charged = self._charge_crashes(acct, job, crashed, cause)
+            return [i for i in crashed + others if i not in charged] or None
+
+    def _charge_crashes(self, acct: Any, job: Job, asset_ids: list[str], cause: object) -> set[str]:
+        """Count one more crash in a row for each clip; charge a failure to
+        those that reached CRASHES_BEFORE_CHARGE. Returns those charged."""
+        from src.server.repository.lineage import CRASHES_BEFORE_CHARGE
+
+        artifact = KINDS[job.kind].artifact
+        error = str(cause).strip() or type(cause).__name__
+        try:
+            reached = self._crashed(job.tenant_id, artifact, asset_ids, error)
+        except Exception:  # noqa: BLE001 — counted next time
+            logger.exception("scheduler: counting %s's crashes for %s failed", job.kind, job.tenant_id)
+            return set()
+        for asset_id in reached:
+            acct.failures.add(artifact, asset_id, f"Crashed {CRASHES_BEFORE_CHARGE} times in a row: {error}")
+        return set(reached)
 
     def collect(self, timeout: float | None = 0) -> None:
         """Free the slots of finished jobs (waiting up to timeout for one)."""
@@ -411,7 +449,8 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
             return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
-        if kind.artifact in lineage.paused(session):
+        # A new producer version stops its redo until an admin resumes it.
+        if lineage.hold_new_version(session, kind.artifact) or kind.artifact in lineage.paused(session):
             return None
         return candidates(session, kind, libraries, skip=skip,
                           want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
@@ -433,6 +472,17 @@ def _retry_requested_in_database(tenant_id: str) -> str | None:
 
     with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
         return session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.retry_at'")).scalar()
+
+
+def _crashed_in_database(tenant_id: str, artifact: str, asset_ids: list[str], error: str) -> list[str]:
+    """lineage.note_crashes in the account's database."""
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        return lineage.note_crashes(session, artifact, asset_ids, error)
 
 
 def _status_to_database(tenant_id: str, status: dict) -> None:
@@ -525,6 +575,23 @@ def scheduler_key(tenant_id: str) -> str:
     return plaintext
 
 
+def strip_nul(value: Any) -> Any:
+    """value with every NUL taken out of its strings (keys too), however deep."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {strip_nul(k): strip_nul(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [strip_nul(v) for v in value]
+    return value
+
+
+def _without_nul(kwargs: dict) -> dict:
+    if "json" in kwargs:
+        return {**kwargs, "json": strip_nul(kwargs["json"])}
+    return kwargs
+
+
 def scheduler_client(url: str, key: str) -> Any:
     """An API client that notes when its key stops working (someone revoked
     it), so the account gets a new one."""
@@ -537,6 +604,17 @@ def scheduler_client(url: str, key: str) -> Any:
             if response.status_code == 401:
                 self.unauthorized = True
             return super()._handle_response(response)
+
+        # Everything the scheduler saves goes through here: Postgres takes no
+        # NUL in text (a model's output can have one), so none is sent.
+        def post(self, path, **kwargs):  # type: ignore[no-untyped-def]
+            return super().post(path, **_without_nul(kwargs))
+
+        def put(self, path, **kwargs):  # type: ignore[no-untyped-def]
+            return super().put(path, **_without_nul(kwargs))
+
+        def patch(self, path, **kwargs):  # type: ignore[no-untyped-def]
+            return super().patch(path, **_without_nul(kwargs))
 
     return SchedulerClient(base_url=url, token=key)
 

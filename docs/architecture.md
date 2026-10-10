@@ -108,7 +108,8 @@ system_metadata   — key, value, updated_at
 - `active_assets` — non-trashed assets (deleted_at IS NULL). All pipeline queries use this view. Trashing a library sets deleted_at on all its assets, removing them from this view immediately.
 
 **Key constraints:**
-- `video_index_chunks`: failed chunks are automatically reset to `pending` on the next `claim_next_chunk` call for the same asset, preventing permanent pipeline stalls after transient errors.
+- `video_index_chunks`: a failed chunk stays failed for the rest of its run (the client ends the run at it, and the clip's scenes job is charged a failure); the next run's `POST /v1/video/{asset_id}/chunks` puts it back to `pending`, under the scheduler's back-off.
+- `video_scenes`: unique on `(asset_id, scene_index)`; the server numbers a clip's scenes as each chunk completes, after those stored.
 - `assets`: unique constraint on `(library_id, rel_path)` — ingest upserts by this key.
 
 **Artifact lifecycle:**
@@ -197,7 +198,7 @@ The CLI scans the filesystem, then for each image:
 **Video scene indexing (server-coordinated):**
 After video ingest, the CLI uses the video chunk API to process scenes:
 1. `POST /v1/video/{asset_id}/chunks` — initialize 30-second chunks
-2. `GET /v1/video/{asset_id}/chunks/next` — claim next chunk
+2. `POST /v1/video/{asset_id}/chunks/next` — claim next chunk
 3. Client segments scenes, extracts rep frames, uploads via artifact API
 4. `POST /v1/video/chunks/{chunk_id}/complete` — submit scene metadata
 5. When all chunks complete, server marks asset as `video_indexed`

@@ -19,6 +19,7 @@ from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
 from src.server.repository.tenant import (
     AssetMetadataRepository,
+    ChunksBusy,
     AssetRepository,
     VideoIndexChunkRepository,
     VideoSceneRepository,
@@ -68,6 +69,9 @@ def init_chunks(
         _start_over(request, session, asset_id, made)
     chunk_repo = VideoIndexChunkRepository(session)
     created = chunk_repo.create_chunks_for_asset(asset_id, body.duration_sec)
+    # A new run: chunks that failed in an earlier one are tried again (within
+    # a run a failed chunk stays failed, so one bad chunk can't loop it).
+    chunk_repo.retry_failed(asset_id)
     total = chunk_repo.chunk_count(asset_id)
     return InitChunksResponse(
         chunk_count=total,
@@ -144,7 +148,7 @@ class ChunkWorkOrder(BaseModel):
     is_last: bool
 
 
-@router.get("/{asset_id}/chunks/next", response_model=None)
+@router.post("/{asset_id}/chunks/next", response_model=None)
 def claim_next_chunk(
     asset_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -154,7 +158,10 @@ def claim_next_chunk(
     chunk_repo = VideoIndexChunkRepository(session)
     asset_repo = AssetRepository(session)
 
-    chunk = chunk_repo.claim_next_chunk(asset_id, worker_id)
+    try:
+        chunk = chunk_repo.claim_next_chunk(asset_id, worker_id)
+    except ChunksBusy as e:
+        raise ConflictError("chunks_busy", f"Another chunk of this clip is under way or failed ({e}).") from e
     if chunk is None:
         return Response(status_code=204)
 
@@ -182,7 +189,7 @@ def claim_next_chunk(
 
 
 class SceneResult(BaseModel):
-    scene_index: int
+    # The server numbers them (scene_index), after the clip's scenes already stored.
     start_ms: int
     end_ms: int
     rep_frame_ms: int
