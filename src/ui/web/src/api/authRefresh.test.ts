@@ -94,6 +94,27 @@ describe("apiFetch after a 401", () => {
     expect((err as ApiError).status).toBe(401);
     expect(localStorage.getItem(API_KEY_STORAGE_KEY)).toBeNull();
   });
+
+  it("retries with another tab's token when its own refresh fails", async () => {
+    const calls: { url: string; auth?: string }[] = [];
+    const queue = [json(401), json(200, { person_id: "p_1" })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, auth: ((init?.headers ?? {}) as Record<string, string>).Authorization });
+        if (url === "/v1/auth/refresh") {
+          setApiKey("other-tab-token"); // the other tab refreshed first
+          return json(401);
+        }
+        return queue.shift()!;
+      }),
+    );
+
+    await expect(dismissCluster("fc_3")).resolves.toEqual({ person_id: "p_1" });
+
+    expect(getApiKey()).toBe("other-tab-token");
+    expect(calls.map((c) => c.auth)).toEqual(["Bearer old-token", "Bearer old-token", "Bearer other-tab-token"]);
+  });
 });
 
 describe("dismissCluster", () => {

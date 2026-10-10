@@ -211,10 +211,9 @@ final class VideoPlayerViewModel: ObservableObject {
         // nil for `selectedLibraryRootPath`, so this branch is dead on
         // iOS even without the explicit gate.
         #if os(macOS)
-        if let rootPath = libraryRootPath {
-            let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
-            if FileManager.default.fileExists(atPath: fullPath) {
-                let url = URL(fileURLWithPath: fullPath)
+        if let rootPath = libraryRootPath,
+           let url = LibraryPath.fileURL(root: rootPath, relPath: detail.relPath) {
+            if FileManager.default.fileExists(atPath: url.path) {
                 player = AVPlayer(url: url)
                 source = .local
                 return
@@ -223,13 +222,13 @@ final class VideoPlayerViewModel: ObservableObject {
         #endif
 
         // 2. Try server preview
-        if detail.videoPreviewKey != nil, let client {
+        let previewDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lumiverb-previews")
+        if detail.videoPreviewKey != nil, let client,
+           let fileURL = cacheEntryURL(previewDir, detail.assetId, suffix: ".mp4") {
             do {
                 if let data = try await Self.previewData(client, assetId: detail.assetId) {
-                    let dir = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("lumiverb-previews")
-                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    let fileURL = dir.appendingPathComponent("\(detail.assetId).mp4")
+                    try? FileManager.default.createDirectory(at: previewDir, withIntermediateDirectories: true)
                     try data.write(to: fileURL)
                     self.tempFileURL = fileURL
                     player = AVPlayer(url: fileURL)

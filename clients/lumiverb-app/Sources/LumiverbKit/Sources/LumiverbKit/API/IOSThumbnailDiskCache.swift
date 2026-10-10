@@ -54,8 +54,8 @@ public final class IOSThumbnailDiskCache: @unchecked Sendable, ThumbnailCache {
     // MARK: - ThumbnailCache
 
     public func get(assetId: String) -> Data? {
-        let url = thumbnailURL(assetId)
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let url = thumbnailURL(assetId),
+              let data = try? Data(contentsOf: url) else { return nil }
         // Touch mtime to approximate LRU. Best-effort: a failure here just
         // means this entry is more likely to be evicted than its real
         // access pattern would suggest. Acceptable.
@@ -67,7 +67,7 @@ public final class IOSThumbnailDiskCache: @unchecked Sendable, ThumbnailCache {
     }
 
     public func put(assetId: String, data: Data) {
-        let url = thumbnailURL(assetId)
+        guard let url = thumbnailURL(assetId) else { return }
         try? data.write(to: url, options: .atomic)
         // Eviction is best-effort and runs off-caller-thread so a `put`
         // burst during scrolling doesn't stall the UI on a directory
@@ -79,11 +79,12 @@ public final class IOSThumbnailDiskCache: @unchecked Sendable, ThumbnailCache {
     }
 
     public func has(assetId: String) -> Bool {
-        FileManager.default.fileExists(atPath: thumbnailURL(assetId).path)
+        thumbnailURL(assetId).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     public func remove(assetId: String) {
-        try? FileManager.default.removeItem(at: thumbnailURL(assetId))
+        guard let url = thumbnailURL(assetId) else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     public func removeAll() {
@@ -138,8 +139,8 @@ public final class IOSThumbnailDiskCache: @unchecked Sendable, ThumbnailCache {
 
     // MARK: - Paths
 
-    private func thumbnailURL(_ assetId: String) -> URL {
-        cacheDir.appendingPathComponent(assetId)
+    private func thumbnailURL(_ assetId: String) -> URL? {
+        cacheEntryURL(cacheDir, assetId)
     }
 }
 #endif

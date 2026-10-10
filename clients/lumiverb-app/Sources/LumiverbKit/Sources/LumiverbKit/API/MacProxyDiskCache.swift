@@ -40,14 +40,15 @@ public final class MacProxyDiskCache: @unchecked Sendable {
     /// Store a proxy image and SHA sidecar from scan.
     /// Writes are atomic (temp + rename) so concurrent readers never see partial files.
     public func putScan(assetId: String, jpegData: Data, sourceSHA256: String) {
-        atomicWrite(data: jpegData, to: proxyURL(assetId))
-        atomicWrite(data: Data(sourceSHA256.utf8), to: shaURL(assetId))
+        guard let proxy = proxyURL(assetId), let sha = shaURL(assetId) else { return }
+        atomicWrite(data: jpegData, to: proxy)
+        atomicWrite(data: Data(sourceSHA256.utf8), to: sha)
     }
 
     /// Read the SHA-256 sidecar for an asset. Returns nil if missing.
     public func getSHA(assetId: String) -> String? {
-        let url = shaURL(assetId)
-        guard let data = try? Data(contentsOf: url),
+        guard let url = shaURL(assetId),
+              let data = try? Data(contentsOf: url),
               let sha = String(data: data, encoding: .utf8) else {
             return nil
         }
@@ -60,43 +61,45 @@ public final class MacProxyDiskCache: @unchecked Sendable {
         guard let cachedSHA = getSHA(assetId: assetId) else { return false }
         guard cachedSHA == sourceSHA256 else { return false }
         // Also verify the proxy file exists (sidecar without proxy = incomplete)
-        return FileManager.default.fileExists(atPath: proxyURL(assetId).path)
+        return has(assetId: assetId)
     }
 
     // MARK: - Browse operations
 
     /// Get cached proxy bytes for display. Returns nil if not cached.
     public func get(assetId: String) -> Data? {
-        let url = proxyURL(assetId)
+        guard let url = proxyURL(assetId) else { return nil }
         return try? Data(contentsOf: url)
     }
 
     /// Cache proxy bytes downloaded from the server for future display.
     public func put(assetId: String, data: Data) {
-        atomicWrite(data: data, to: proxyURL(assetId))
+        guard let url = proxyURL(assetId) else { return }
+        atomicWrite(data: data, to: url)
     }
 
     /// Check if a proxy exists in the cache.
     public func has(assetId: String) -> Bool {
-        FileManager.default.fileExists(atPath: proxyURL(assetId).path)
+        proxyURL(assetId).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     // MARK: - Maintenance
 
     /// Remove a single entry and its SHA sidecar.
     public func remove(assetId: String) {
-        try? FileManager.default.removeItem(at: proxyURL(assetId))
-        try? FileManager.default.removeItem(at: shaURL(assetId))
+        guard let proxy = proxyURL(assetId), let sha = shaURL(assetId) else { return }
+        try? FileManager.default.removeItem(at: proxy)
+        try? FileManager.default.removeItem(at: sha)
     }
 
     // MARK: - Paths
 
-    private func proxyURL(_ assetId: String) -> URL {
-        cacheDir.appendingPathComponent(assetId)
+    private func proxyURL(_ assetId: String) -> URL? {
+        cacheEntryURL(cacheDir, assetId)
     }
 
-    private func shaURL(_ assetId: String) -> URL {
-        cacheDir.appendingPathComponent("\(assetId).sha")
+    private func shaURL(_ assetId: String) -> URL? {
+        cacheEntryURL(cacheDir, assetId, suffix: ".sha")
     }
 
     // MARK: - Atomic write

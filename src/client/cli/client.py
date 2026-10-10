@@ -33,6 +33,29 @@ def _print_and_raise(response: httpx.Response) -> None:
     raise LumiverbAPIError(code, message, response.status_code)
 
 
+_warned_plain_http = False
+
+
+def warn_if_plain_http(url: str) -> None:
+    """One line on stderr, once per process, when keys would cross the network
+    unencrypted: http:// to anything but this machine."""
+    global _warned_plain_http
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if _warned_plain_http or parts.scheme != "http":
+        return
+    host = parts.hostname or ""
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        _warned_plain_http = True
+        print(f"Warning: {host} is plain http; your key is sent unencrypted.", file=sys.stderr)
+
+
 class LumiverbClient:
     """HTTP client that uses CLI config for base_url and Authorization header.
 
@@ -42,6 +65,7 @@ class LumiverbClient:
 
     def __init__(self, api_key_override: str | None = None, *, base_url: str | None = None, token: str | None = None) -> None:
         self._base_url = (base_url or get_api_url()).rstrip("/")
+        warn_if_plain_http(self._base_url)
         self._api_key = token or api_key_override if (token or api_key_override) is not None else get_api_key()
         headers: dict[str, str] = {}
         if self._api_key:

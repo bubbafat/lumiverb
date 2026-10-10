@@ -497,6 +497,8 @@ def _face_batch_worker(
 
     from PIL import Image as PILImage
 
+    from src.client.cache_dir import cache_entry
+
     cache_path = Path(cache_dir) if cache_dir else None
 
     import time as _time
@@ -518,7 +520,7 @@ def _face_batch_worker(
             # Try cache first, then fall back to server download
             image_bytes = None
             if cache_path is not None:
-                cached = cache_path / asset_id
+                cached = cache_entry(cache_path, asset_id)
                 if cached.exists():
                     image_bytes = cached.read_bytes()
                     _cache_hits += 1
@@ -686,7 +688,7 @@ def _generate_proxy_for_item(
 
     # Check persistent cache: proxy exists AND source hash matches
     if proxy_cache.has(asset_id):
-        sha_file = proxy_cache.path / f"{asset_id}.sha"
+        sha_file = proxy_cache.sha_path(asset_id)
         if expected_hash and sha_file.exists():
             cached_hash = sha_file.read_text().strip()
             if cached_hash == expected_hash:
@@ -709,7 +711,7 @@ def _generate_proxy_for_item(
                 jpeg_bytes = generate_face_proxy(source)
                 proxy_cache.put(asset_id, jpeg_bytes)
                 if expected_hash:
-                    (proxy_cache.path / f"{asset_id}.sha").write_text(expected_hash)
+                    proxy_cache.sha_path(asset_id).write_text(expected_hash)
                 del jpeg_bytes
             except Exception:
                 pass  # fall back to server download in worker

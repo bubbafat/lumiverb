@@ -115,6 +115,68 @@ def test_a_symlinked_config_stays_a_symlink(config_file: Path, tmp_path: Path) -
     assert json.loads(real.read_text())["api_key"] == "lv_linked"
 
 
+def test_load_makes_a_readable_config_owner_only(config_file: Path) -> None:
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text('{"api_key": "lv_secret"}')
+    os.chmod(config_file, 0o644)
+
+    assert load_config().api_key == "lv_secret"
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+
+
+def test_save_makes_the_folder_owner_only(config_file: Path) -> None:
+    save_config(CLIConfig())
+
+    assert stat.S_IMODE(config_file.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("flag", ["--api-key", "--admin-key"])
+def test_config_set_reads_a_key_from_stdin(config_file: Path, flag: str) -> None:
+    result = runner.invoke(app, ["config", "set", flag, "-"], input="lv_from_stdin\n")
+
+    assert result.exit_code == 0, result.output
+    field = flag.removeprefix("--").replace("-", "_")
+    assert json.loads(config_file.read_text())[field] == "lv_from_stdin"
+
+
+def test_config_set_still_takes_a_key_in_argv(config_file: Path) -> None:
+    assert runner.invoke(app, ["config", "set", "--api-key", "lv_argv"]).exit_code == 0
+    assert json.loads(config_file.read_text())["api_key"] == "lv_argv"
+
+
+@pytest.mark.parametrize(
+    ("args", "stdin"),
+    [(["--api-key", "-"], ""), (["--api-key", "-", "--admin-key", "-"], "lv_x\n")],
+)
+def test_config_set_refuses_a_bad_stdin_key(config_file: Path, args: list[str], stdin: str) -> None:
+    result = runner.invoke(app, ["config", "set", *args], input=stdin)
+
+    assert result.exit_code == 1
+    assert not config_file.exists()
+
+
+@pytest.mark.parametrize(
+    ("url", "warned"),
+    [
+        ("http://192.168.1.5:8000", True),
+        ("http://lumiverb.example:8000", True),
+        ("https://lumiverb.example", False),
+        ("http://localhost:8000", False),
+        ("http://127.0.0.1:8000", False),
+        ("http://[::1]:8000", False),
+    ],
+)
+def test_plain_http_off_this_machine_warns_once(monkeypatch, capsys, url: str, warned: bool) -> None:
+    from src.client.cli import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_warned_plain_http", False)
+    client_mod.LumiverbClient(base_url=url, token="t").close()
+    client_mod.LumiverbClient(base_url=url, token="t").close()
+
+    err = capsys.readouterr().err
+    assert err.count("plain http") == (1 if warned else 0)
+
+
 # ---------------------------------------------------------------------------
 # admin key
 # ---------------------------------------------------------------------------

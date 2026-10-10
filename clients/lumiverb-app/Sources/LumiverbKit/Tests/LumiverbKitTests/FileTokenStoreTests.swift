@@ -121,11 +121,21 @@ final class FileTokenStoreTests: XCTestCase {
                        "Credentials directory must be owner-only")
     }
 
+    func testAnExistingOpenFolderIsMade0700OnSave() throws {
+        try FileManager.default.createDirectory(
+            at: tempDir, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+        try store.save(key: "accessToken", value: "abc")
+        let attrs = try FileManager.default.attributesOfItem(atPath: tempDir.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.int16Value, 0o700)
+        // Only the credentials file is left: no temp file behind.
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tempDir.path), ["credentials.json"])
+    }
+
     func testFilePermissionsStickAcrossOverwrites() throws {
-        // .atomic write recreates the file with whatever umask gives,
-        // so we re-chmod every save. Verify that an overwrite still
-        // ends in 0600 (regression guard against forgetting the chmod
-        // on a code path that touches save).
+        // Every save writes a new file (temp + rename); an overwrite
+        // still ends in 0600.
         try store.save(key: "accessToken", value: "v1")
         try store.save(key: "accessToken", value: "v2")
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)

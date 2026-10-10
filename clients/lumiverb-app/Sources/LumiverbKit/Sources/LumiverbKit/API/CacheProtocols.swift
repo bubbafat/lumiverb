@@ -56,3 +56,17 @@ public struct CacheBundle: Sendable {
         self.thumbnails = thumbnails
     }
 }
+
+/// `dir/<assetId><suffix>`, or nil when the id isn't a plain name
+/// (`[A-Za-z0-9_-]+`). Asset ids come from the server, so one like ".." or
+/// "a/b" never becomes a path out of the cache.
+func cacheEntryURL(_ dir: URL, _ assetId: String, suffix: String = "") -> URL? {
+    guard !assetId.isEmpty, assetId.unicodeScalars.allSatisfy({ assetIdScalars.contains($0) }) else {
+        return nil
+    }
+    return dir.appendingPathComponent(assetId + suffix)
+}
+
+private let assetIdScalars = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)

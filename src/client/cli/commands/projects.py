@@ -344,12 +344,12 @@ def project_export(
         disposition = resp.headers.get("content-disposition", "")
         utf8 = re.search(r"filename\*=UTF-8''([^;]+)", disposition)
         plain = re.search(r'filename="([^"]+)"', disposition)
-        if utf8:
-            output = unquote(utf8.group(1))
-        elif plain:
-            output = plain.group(1)
-        else:
-            output = f"{project_id}.{'xml' if format == 'fcp7' else 'fcpxml'}"
+        name = unquote(utf8.group(1)) if utf8 else plain.group(1) if plain else ""
+        # The server names the file, never where it goes: the current directory.
+        name = Path(name).name
+        if name in ("", ".", ".."):
+            name = f"{project_id}.{'xml' if format == 'fcp7' else 'fcpxml'}"
+        output = name
     path = Path(output)
     path.write_bytes(resp.content)
     console.print(f"[green]Exported to {path}[/green]")

@@ -606,7 +606,8 @@ def _deploy_web_site(tmp_path: Path, upstream: str = "http://127.0.0.1:8100") ->
     start = text.index("cat > /etc/nginx/sites-available/lumiverb <<NGINX")
     end = text.index("\nNGINX\n", start) + len("\nNGINX\n")
     site = tmp_path / "fresh-site"
-    script = (f'API_UPSTREAM={upstream}; LISTEN="listen 80 default_server;"; DOMAIN=_; APP_DIR=/opt/lumiverb\n'
+    csp = next(line for line in text.splitlines() if line.startswith("CSP="))
+    script = (f'API_UPSTREAM={upstream}; LISTEN="listen 80 default_server;"; DOMAIN=_; APP_DIR=/opt/lumiverb\n{csp}\n'
               + text[start:end].replace("/etc/nginx/sites-available/lumiverb", str(site)))
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
@@ -681,6 +682,62 @@ def test_update_gives_an_existing_site_the_playback_location_once(tmp_path):
     _update_web_site(site)
     _update_web_site(site)  # reruns change nothing
     assert site.read_text() == _deploy_web_site(tmp_path)
+
+
+def _csp(script: Path) -> str:
+    return next(line for line in script.read_text().splitlines() if line.startswith("CSP="))
+
+
+def test_every_response_of_the_page_has_the_csp(tmp_path):
+    # A location's add_header drops the server's: the page and the built
+    # files carry it too. Same policy from deploy and update.
+    site = _deploy_web_site(tmp_path)
+    assert _csp(DEPLOY_WEB) == _csp(UPDATE_WEB)
+    assert "unsafe" not in _csp(DEPLOY_WEB)
+    for block in (site.split("    location ", 1)[0], *(_location(site, p) for p in ("/assets/", "= /index.html"))):
+        assert "Content-Security-Policy" in str(block)
+
+
+def _certbot(site: str) -> str:
+    """What certbot --nginx --redirect makes of the site: 443 in the block, a port-80 redirect after it."""
+    site = site.replace("    listen 80 default_server;\n", "", 1)
+    head, tail = site.rsplit("}\n", 1)
+    return (head + "    listen 443 ssl; # managed by Certbot\n    listen [::]:443 ssl; # managed by Certbot\n}\n" + tail
+            + "\nserver {\n    if ($host = x) {\n        return 301 https://$host$request_uri;\n    }\n"
+            "    listen 80;\n    return 404; # managed by Certbot\n}\n")
+
+
+def _add_hsts(site: Path) -> None:
+    text = DEPLOY_WEB.read_text()
+    fn = text[text.index("add_hsts() {"):text.index("\n}\n", text.index("add_hsts() {")) + 3]
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", f"{fn}\nadd_hsts {site}\nadd_hsts {site}"],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+
+
+def test_hsts_goes_on_https_blocks_only(tmp_path):
+    https = tmp_path / "https"
+    https.write_text(_certbot(_deploy_web_site(tmp_path)))
+    _add_hsts(https)
+    tls, redirect = https.read_text().split("\nserver {", 1)
+    assert tls.count('add_header Strict-Transport-Security "max-age=31536000" always;') == 3
+    assert "Strict-Transport-Security" not in redirect
+
+    http = tmp_path / "http"
+    http.write_text(_deploy_web_site(tmp_path))
+    _add_hsts(http)
+    assert "Strict-Transport-Security" not in http.read_text()
+
+
+def test_update_gives_an_https_site_what_deploy_does(tmp_path):
+    site = tmp_path / "lumiverb"
+    site.write_text(_certbot(OLD_SITE))
+    _update_web_site(site)
+    _update_web_site(site)
+    deployed = tmp_path / "deployed"
+    deployed.write_text(_certbot(_deploy_web_site(tmp_path)))
+    _add_hsts(deployed)
+    assert site.read_text() == deployed.read_text()
 
 
 def test_update_leaves_a_site_without_the_api_location_alone(tmp_path):

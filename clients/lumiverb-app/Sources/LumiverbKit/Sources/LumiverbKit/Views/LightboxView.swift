@@ -118,19 +118,16 @@ public struct LightboxView: View {
                     },
                     onRevealInFinder: {
                         #if os(macOS)
-                        if let rootPath = browseState.selectedLibraryRootPath {
-                            let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
-                            NSWorkspace.shared.activateFileViewerSelecting(
-                                [URL(fileURLWithPath: fullPath)]
-                            )
+                        if let rootPath = browseState.selectedLibraryRootPath,
+                           let url = LibraryPath.fileURL(root: rootPath, relPath: detail.relPath) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
                         }
                         #endif
                     },
                     onOpenInPlayer: detail.isVideo ? {
                         #if os(macOS)
-                        if let rootPath = browseState.selectedLibraryRootPath {
-                            let fullPath = (rootPath as NSString).appendingPathComponent(detail.relPath)
-                            let url = URL(fileURLWithPath: fullPath)
+                        if let rootPath = browseState.selectedLibraryRootPath,
+                           let url = LibraryPath.fileURL(root: rootPath, relPath: detail.relPath) {
                             NSWorkspace.shared.open(url)
                         }
                         #endif

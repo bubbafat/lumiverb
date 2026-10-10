@@ -335,6 +335,21 @@ public actor APIClient {
 
     // MARK: - Core request
 
+    /// `URLComponents.queryItems` leaves "+" as is, and the server reads it
+    /// as a space ("iso:400+" would arrive as "iso:400 "), so it is encoded.
+    static func requestURL(baseURL: URL, path: String, queryItems: [URLQueryItem]) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent(path),
+            resolvingAgainstBaseURL: false
+        )!
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+            components.percentEncodedQuery = components.percentEncodedQuery?
+                .replacingOccurrences(of: "+", with: "%2B")
+        }
+        return components.url!
+    }
+
     private func request<T: Decodable>(
         _ method: String,
         path: String,
@@ -347,15 +362,8 @@ public actor APIClient {
             throw APIError.noToken
         }
 
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent(path),
-            resolvingAgainstBaseURL: false
-        )!
-        if let query, !query.isEmpty {
-            components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        }
-
-        var urlRequest = URLRequest(url: components.url!)
+        let items = (query ?? [:]).map { URLQueryItem(name: $0.key, value: $0.value) }
+        var urlRequest = URLRequest(url: Self.requestURL(baseURL: baseURL, path: path, queryItems: items))
         urlRequest.httpMethod = method
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let token = accessToken {
@@ -387,9 +395,7 @@ public actor APIClient {
             let tokenUsed = urlRequest.value(forHTTPHeaderField: "Authorization")
             let currentAuth = accessToken.map { "Bearer \($0)" }
             let bodyPreview = String(data: data.prefix(200), encoding: .utf8) ?? "(empty)"
-            let tokenSuffix = tokenUsed.map { String($0.suffix(12)) } ?? "nil"
-            let currentSuffix = currentAuth.map { String($0.suffix(12)) } ?? "nil"
-            logger.warning("\(method, privacy: .public) \(path, privacy: .public) — 401: \(bodyPreview, privacy: .public) | token sent: …\(tokenSuffix, privacy: .public) | current: …\(currentSuffix, privacy: .public) | skipRefresh: \(skipRefresh, privacy: .public)")
+            logger.warning("\(method, privacy: .public) \(path, privacy: .public) — 401: \(bodyPreview, privacy: .public) | token changed: \(tokenUsed != currentAuth, privacy: .public)")
 
             if tokenUsed != currentAuth {
                 // Token changed while we were in flight — retry with current token
@@ -462,15 +468,7 @@ public actor APIClient {
             throw APIError.noToken
         }
 
-        var components = URLComponents(
-            url: baseURL.appendingPathComponent(path),
-            resolvingAgainstBaseURL: false
-        )!
-        if !queryItems.isEmpty {
-            components.queryItems = queryItems
-        }
-
-        var urlRequest = URLRequest(url: components.url!)
+        var urlRequest = URLRequest(url: Self.requestURL(baseURL: baseURL, path: path, queryItems: queryItems))
         urlRequest.httpMethod = method
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authenticated, let token = accessToken {

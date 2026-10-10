@@ -191,6 +191,10 @@ step "Configuring nginx"
 # Strip trailing slash from upstream URL
 API_UPSTREAM="${API_UPSTREAM%/}"
 
+# The built app loads only its own files and calls only its own /v1/: no
+# inline script or style, images shown from blob: URLs, video from /v1/stream/.
+CSP="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
 if [[ "$ANY_HOST" == "true" ]]; then
   LISTEN="listen 80 default_server;"
 else
@@ -206,6 +210,7 @@ server {
     index index.html;
 
     add_header X-Content-Type-Options nosniff always;
+    add_header Content-Security-Policy "${CSP}" always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer-when-downgrade always;
 
@@ -244,6 +249,7 @@ server {
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "${CSP}" always;
         add_header X-Frame-Options DENY always;
         add_header Referrer-Policy no-referrer-when-downgrade always;
     }
@@ -253,6 +259,7 @@ server {
     location = /index.html {
         add_header Cache-Control "no-cache";
         add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "${CSP}" always;
         add_header X-Frame-Options DENY always;
         add_header Referrer-Policy no-referrer-when-downgrade always;
     }
@@ -273,6 +280,30 @@ ok "nginx configured: ${DOMAIN} -> API at ${API_UPSTREAM}"
 # 6. TLS certificate
 # ---------------------------------------------------------------------------
 TLS_ACTIVE=false
+
+# HSTS on HTTPS server blocks only: beside each nosniff header in a block
+# that listens on 443 (certbot's port-80 redirect block has none).
+add_hsts() {
+  local site="$1"
+  grep -q "Strict-Transport-Security" "$site" && return 0
+  awk '
+    function flush(   i, pad) {
+      for (i = 1; i <= n; i++) {
+        print buf[i]
+        if (tls && buf[i] ~ /add_header X-Content-Type-Options/) {
+          pad = buf[i]; sub(/add_header.*/, "", pad)
+          print pad "add_header Strict-Transport-Security \"max-age=31536000\" always;"
+        }
+      }
+      n = 0; tls = 0
+    }
+    /^server[[:space:]]*\{/ { flush(); inblock = 1 }
+    { if (inblock) { buf[++n] = $0; if ($1 == "listen" && $2 ~ /(^|:)443;?$/) tls = 1 } else print }
+    /^\}/ && inblock { flush(); inblock = 0 }
+    END { flush() }
+  ' "$site" > "${site}.new"
+  mv "${site}.new" "$site"
+}
 
 if [[ -n "$CERTIFICATE_ARCHIVE" ]]; then
   step "Restoring TLS certificate from archive"
@@ -300,6 +331,13 @@ elif [[ "$SKIP_CERTBOT" == "false" ]]; then
   fi
 else
   warn "Skipping certbot (--skip-certbot)"
+fi
+
+if [[ "$TLS_ACTIVE" == "true" ]]; then
+  add_hsts /etc/nginx/sites-available/lumiverb
+  nginx -t
+  systemctl reload nginx
+  ok "HSTS on"
 fi
 
 # ---------------------------------------------------------------------------
