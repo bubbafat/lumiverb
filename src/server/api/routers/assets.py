@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
@@ -1878,6 +1878,8 @@ def submit_batch_moves(
     409 moves_off when the account doesn't follow moves."""
     from src.server.tenant_settings import get_follow_moves
 
+    # Every path checked before any move is made.
+    moved_to = {item.asset_id: checked_rel_path(item.rel_path) for item in body.items}
     if not get_follow_moves(session):
         raise DecisionRequiredError(
             "moves_off",
@@ -1894,7 +1896,7 @@ def submit_batch_moves(
         if asset is None or asset.deleted_at is not None:
             skipped += 1
             continue
-        asset.rel_path = normalize_rel_path(item.rel_path)
+        asset.rel_path = moved_to[item.asset_id]
         asset.search_synced_at = None
         asset.updated_at = utcnow()
         session.add(asset)
@@ -1976,7 +1978,7 @@ def upsert_asset(
             raise HTTPException(status_code=400, detail="Invalid file_mtime format")
 
     asset_repo = AssetRepository(session)
-    rel_path = normalize_rel_path(body.rel_path)
+    rel_path = checked_rel_path(body.rel_path)
     existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
 
     if existing is None:

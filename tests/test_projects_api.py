@@ -1613,3 +1613,20 @@ def test_trashing_a_project_updates_it(projects_env):
     trashed = _trashed(client, api_key)[project_id]
     assert trashed["updated_at"] > before
     assert trashed["deleted_at"] >= trashed["updated_at"][:19]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../outside.jpg", "a/../../outside.jpg"])
+def test_writes_refuse_rel_paths_outside_the_library(projects_env, bad):
+    """upsert, batch-moves and ingest share one rule: relative, no "..", no leading "/"."""
+    client, api_key, library_id = projects_env
+    h = _headers(api_key)
+    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": bad, "file_size": 1,
+                                               "file_mtime": None, "media_type": "image"}, headers=h)
+    assert r.status_code == 400, r.text
+    clip = _ingest_asset(client, api_key, library_id, f"relpath/{len(bad)}-{bad.count('/')}.jpg")
+    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": clip, "rel_path": bad}]}, headers=h)
+    assert r.status_code == 400, r.text
+    assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("relpath/")
+    with pytest.raises(AssertionError, match="400"):
+        _ingest_asset(client, api_key, library_id, bad)

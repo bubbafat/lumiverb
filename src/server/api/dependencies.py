@@ -92,3 +92,15 @@ def get_current_user_id(request: Request) -> str:
     return user_id
 
 
+
+
+def checked_rel_path(rel_path: str) -> str:
+    """A rel_path a request sent, as stored (NFC); 400 unless it stays inside
+    its library (relative, no "..", no leading "/"). Every write that takes a
+    rel_path goes through here."""
+    from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+
+    try:
+        return check_rel_path(rel_path)
+    except UnsafeRelPathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid rel_path: {exc}") from None

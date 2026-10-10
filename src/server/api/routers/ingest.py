@@ -21,8 +21,7 @@ from pydantic import BaseModel
 from PIL import Image
 from sqlmodel import Session
 
-from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.shared import asset_status
 from src.shared.path_filter import PathFilter, is_path_included_merged
 from src.server.repository.tenant import (
@@ -378,8 +377,7 @@ async def create_and_ingest(
     """
     if media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="media_type must be 'image' or 'video'")
-    if not rel_path or ".." in rel_path.split("/"):
-        raise HTTPException(status_code=400, detail="Invalid rel_path")
+    rel_path = checked_rel_path(rel_path)
     if width is not None and (width < 1 or width > 100_000):
         raise HTTPException(status_code=400, detail="width out of range")
     if height is not None and (height < 1 or height > 100_000):
@@ -394,7 +392,6 @@ async def create_and_ingest(
         raise HTTPException(status_code=400, detail="Proxy file is empty")
 
     tenant_id: str = request.state.tenant_id
-    rel_path = normalize_rel_path(rel_path)
 
     # Validate library
     lib_repo = LibraryRepository(session)
