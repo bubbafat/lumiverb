@@ -46,10 +46,10 @@ def test_models_unused_for_a_while_are_let_go_of() -> None:
     models.faces()
     now[0] = IDLE_SEC - 1
     models.let_go_of_idle()
-    faces.close.assert_not_called()
+    faces.close_if_idle.assert_not_called()
     now[0] = IDLE_SEC + 1
     models.let_go_of_idle()
-    faces.close.assert_called_once()
+    faces.close_if_idle.assert_called_once()
     assert models.clip("ViT-B-32", "openai") is not clip  # loaded again when next asked for
 
 
@@ -67,14 +67,52 @@ def test_letting_go_of_the_face_process_is_said_once(caplog) -> None:
     assert sum("face detection process" in r.getMessage() for r in caplog.records) == 1
 
 
-def test_a_face_process_in_the_middle_of_a_job_isnt_let_go_of() -> None:
+def test_a_face_process_in_the_middle_of_a_call_isnt_let_go_of() -> None:
     now = [0.0]
-    faces = MagicMock(idle=False)
-    models = Models(face_factory=lambda: faces, clock=lambda: now[0])
+    pool = MagicMock()
+    detector = FaceDetector(500, pool_factory=lambda: pool)
+    detector._pool, detector._running = pool, 1  # a photo under way
+    models = Models(face_factory=lambda: detector, clock=lambda: now[0])
     models.faces()
     now[0] += IDLE_SEC + 1
     models.let_go_of_idle()
-    faces.close.assert_not_called()
+    pool.terminate.assert_not_called()
+
+
+def test_a_face_model_that_wont_load_is_the_machines_never_a_photos(monkeypatch) -> None:
+    """Review: a missing extra or a CUDA mismatch charged every photo."""
+    import io
+
+    from PIL import Image
+
+    from src.producers.faces import detect
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(buf, format="JPEG")
+    monkeypatch.setattr(detect, "_provider", MagicMock(side_effect=RuntimeError("CUDA driver mismatch")))
+    with pytest.raises(RuntimeError):  # the parent sees the call fail: Died, uncharged
+        detect.detect_in_child(buf.getvalue(), {})
+
+
+def test_clip_loads_without_holding_up_the_dispatching_thread() -> None:
+    import threading
+
+    loading, release = threading.Event(), threading.Event()
+
+    def slow(model, pretrained):
+        loading.set()
+        release.wait(5)
+        return object()
+
+    models = Models(clip_factory=slow)
+    t = threading.Thread(target=models.clip, args=("ViT-B-32", "openai"), daemon=True)
+    t.start()
+    assert loading.wait(5)
+    done = threading.Event()
+    threading.Thread(target=lambda: (models.let_go_of_idle(), done.set()), daemon=True).start()
+    assert done.wait(1)  # the tick's look isn't held up by the load
+    release.set()
+    t.join(5)
 
 
 def test_the_face_process_does_so_many_jobs_photos_before_a_fresh_one() -> None:

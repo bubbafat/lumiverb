@@ -37,6 +37,9 @@ class Models:
         self._face_factory = face_factory or self._face_detector
         self._clock = clock
         self._lock = threading.Lock()
+        # Loading takes seconds (minutes, downloading weights): never under _lock,
+        # which the dispatching thread takes every tick.
+        self._loading = threading.Lock()
         self._clip: tuple[tuple[str, str], Any] | None = None
         self._faces: Any = None
         self._used: dict[str, float] = {}
@@ -49,13 +52,23 @@ class Models:
     def clip(self, model: str, pretrained: str) -> Any:
         """CLIP loaded with these settings (loaded again only when they change)."""
         key = (model, pretrained)
-        with self._lock:
-            if self._clip is None or self._clip[0] != key:
-                if self._clip is not None:
-                    logger.info("scheduler: CLIP's settings changed; loading %s/%s", model, pretrained)
-                self._clip = (key, self._clip_factory(model, pretrained))
-            self._used["clip"] = self._clock()
-            return self._clip[1]
+        with self._loading:
+            with self._lock:
+                current = self._clip
+                self._used["clip"] = self._clock()
+            if current is not None and current[0] == key:
+                return current[1]
+            if current is not None:
+                logger.info("scheduler: CLIP's settings changed; loading %s/%s", model, pretrained)
+                with self._lock:
+                    self._clip = None
+                del current
+                _free_gpu_memory()  # the old model's memory before the new one's
+            loaded = (key, self._clip_factory(model, pretrained))
+            with self._lock:
+                self._clip = loaded
+                self._used["clip"] = self._clock()
+            return loaded[1]
 
     def faces(self) -> Any:
         """The face detection process (src/producers/faces/detect.py)."""
@@ -73,12 +86,12 @@ class Models:
             if clip is not None:
                 self._clip = None
             faces = self._faces
-            idle_faces = faces is not None and now - self._used.get("faces", now) >= IDLE_SEC and faces.idle
+            idle_faces = faces is not None and now - self._used.get("faces", now) >= IDLE_SEC
         if clip is not None:
             del clip
             _free_gpu_memory()
             logger.info("scheduler: let go of the CLIP model (unused)")
-        if idle_faces and faces.close():
+        if idle_faces and faces.close_if_idle():
             logger.info("scheduler: let go of the face detection process (unused)")
 
     def close(self) -> None:

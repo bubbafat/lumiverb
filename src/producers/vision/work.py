@@ -37,7 +37,14 @@ def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, proxy_c
     t0 = time.perf_counter()
     proxy_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
     if proxy_bytes is None and client is not None:
-        proxy_bytes = client.get(f"/v1/assets/{asset_id}/artifacts/proxy").content
+        from src.processing.api import LumiverbAPIError
+
+        try:
+            proxy_bytes = client.get(f"/v1/assets/{asset_id}/artifacts/proxy").content
+        except LumiverbAPIError as e:
+            if e.status_code != 404:
+                raise  # whose() says (the API away: nobody's)
+            proxy_bytes = None  # no proxy: nothing to describe
     t_proxy = time.perf_counter() - t0
     if proxy_bytes is None:
         return None

@@ -413,6 +413,8 @@ def resume_switch(target: str, body: PauseIn, session: Annotated[Session, Depend
     """Resume one switch (admins), or "all", in that scope, whatever the others are."""
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.resume_everything(session)  # a row for what's no longer a switch goes too
+    elif body.scope == lineage.REDO and target != PAUSE_ALL and target in PRODUCERS:
+        lineage.resume(session, [target], body.scope)  # always: a leftover stop is never stuck
     else:
         lineage.resume(session, _targets(target, body.scope), body.scope)
     session.commit()

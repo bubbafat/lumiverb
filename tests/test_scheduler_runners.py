@@ -165,6 +165,13 @@ def test_a_clip_embedding_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     acct.models.clip.assert_called_once_with("ViT-B-32", "openai")
 
 
+def test_a_proxy_that_cant_be_read_is_the_clips(acct) -> None:
+    acct.cache.get.return_value = b"not a jpeg"
+    acct.models.clip.return_value = MagicMock(model_id="clip", model_version="v")
+    assert _run(acct, "clip", "ast_1") is None
+    assert _charged(acct) == [("clip", "ast_1")]
+
+
 def test_an_embedding_that_cannot_be_made_is_a_failure(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.clip.work.embed", lambda **kw: None)
     _run(acct, "clip", "ast_1")

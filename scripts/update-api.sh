@@ -124,6 +124,13 @@ ok "Python venv synced (${EXTRAS[*]})"
 
 # ---------------------------------------------------------------------------
 step "Running migrations"
+# The scheduler stops first: a migration may drop what its old code reads
+# (it would count crashes against clips while the API answers 500s). It
+# starts again last, once the API answers.
+if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1; then
+  systemctl stop lumiverb-scheduler
+  ok "Scheduler stopped for the migrations"
+fi
 
 DB_URL="$(grep '^CONTROL_PLANE_DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
 [[ -n "$DB_URL" ]] || fail "CONTROL_PLANE_DATABASE_URL not found in ${ENV_FILE}"

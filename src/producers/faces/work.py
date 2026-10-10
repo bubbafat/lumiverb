@@ -52,7 +52,6 @@ class Faces(Work):
         super().__init__(acct, job)
         # One read: what's found and its lineage agree.
         self.used = acct.producers.settings(self.artifact)
-        self.detector = acct.models.faces()
 
     def make(self, clip: dict) -> dict:
         from src.producers.runner import out_of_memory
@@ -63,7 +62,7 @@ class Faces(Work):
         image = cache.get(clip["asset_id"], clip.get("rel_path"))
         if image is None:
             raise Failed("no proxy")
-        found = self.detector.detect(image, self.used)
+        found = self.acct.models.faces().detect(image, self.used)  # in use: not let go of meanwhile
         if "error" in found:
             if out_of_memory(found["error"]):  # the GPU's trouble, not the photo's
                 raise Waits(found["error"])

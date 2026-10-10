@@ -64,7 +64,9 @@ def _provider(settings: dict) -> Any:
 def detect_in_child(image: bytes, settings: dict) -> dict:
     """In the child: the faces found in an image, as the server takes them, and
     the models that found them; {"error"} when the image couldn't be looked at
-    (the photo's trouble, or the GPU's: the parent says whose)."""
+    (the photo's trouble, or the GPU's: the parent says whose). The model not
+    loading raises: it's this machine's trouble (a crash in the parent), never
+    a photo's."""
     import warnings
 
     from PIL import Image as PILImage
@@ -72,13 +74,16 @@ def detect_in_child(image: bytes, settings: dict) -> dict:
     warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
     try:
         img = PILImage.open(io.BytesIO(image)).convert("RGB")  # a photo that can't be read: no model needed
-        provider = _provider(settings)
+    except Exception as e:  # noqa: BLE001 — the photo's
+        return {"error": str(e) or type(e).__name__}
+    try:
+        provider = _provider(settings)  # raises: the parent's Died, uncharged
         try:
             found = provider.detect_faces(img)
-        finally:
-            img.close()
-    except Exception as e:  # noqa: BLE001 — sent back, whose it is decided there
-        return {"error": str(e) or type(e).__name__}
+        except Exception as e:  # noqa: BLE001 — sent back, whose it is decided there (the GPU's memory, say)
+            return {"error": str(e) or type(e).__name__}
+    finally:
+        img.close()
     return {
         "detection_model": provider.model_id,
         "detection_model_version": provider.model_version,
@@ -111,6 +116,20 @@ class FaceDetector:
     @property
     def idle(self) -> bool:
         return self._running == 0
+
+    def close_if_idle(self) -> bool:
+        """Let go of the process unless a call is under way (checked and done
+        under one lock, so none can start in between). True when let go of."""
+        with self._lock:
+            if self._running or self._pool is None:
+                return False
+            pool, self._pool = self._pool, None
+        try:
+            pool.terminate()
+            pool.join()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
 
     def detect(self, image: bytes, settings: dict) -> dict:
         """What detect_in_child found. Died when the process died or hung (it's

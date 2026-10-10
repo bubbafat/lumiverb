@@ -24,7 +24,10 @@ def embed(*, asset_id: str, rel_path: str, clip_provider, proxy_cache) -> dict |
         logger.warning("No proxy for %s", rel_path)
         return None
     t1 = time.perf_counter()
-    img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    try:
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as e:  # noqa: BLE001 — a proxy that can't be read is the clip's (PIL's errors are OSErrors)
+        raise Failed(f"its proxy can't be read: {e}") from e
     del image_bytes
     try:
         vector = clip_provider.embed_image(img)
