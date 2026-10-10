@@ -142,15 +142,19 @@ def _per_kind(raw: str | None) -> dict:
 
 
 def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data: list[dict] | None,
-                      facet_data: dict | None = None) -> dict[str, dict]:
+                      facet_data: dict | None = None, exif_data: dict | None = None) -> dict[str, dict]:
     """The lineage of each kind the ingest stores, which it must give
     (422 lineage_required, before anything is saved): the proxy always, a
-    description with a model, CLIP's vectors, a probe."""
+    description with a model, CLIP's vectors, a probe. The capture facts
+    sent with the EXIF count as made only when it says how (the Python
+    scan does); otherwise the capture producer reads them again."""
     from src.server.api.routers.producers import require_lineage
     from src.shared.producers import CLIP_MODEL_ID
 
     by_kind = _per_kind(raw)
     kinds = ["proxy"]
+    if exif_data is not None and by_kind.get("capture") is not None:
+        kinds.append("capture")
     if vision_data is not None and vision_data.get("model_id"):
         kinds.append("vision")
     if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
@@ -290,6 +294,15 @@ def _do_ingest(
     LibraryRepository(session).bump_revision(library_id)
 
     record_lineage(session, asset_id, "proxy", lineage_by_kind.get("proxy"), commit=False)
+    if exif_data is not None:
+        if "capture" in lineage_by_kind:
+            record_lineage(session, asset_id, "capture", lineage_by_kind["capture"], commit=False)
+        else:
+            # EXIF from a scanner that doesn't say how it read the capture facts
+            # (the macOS app): the capture producer reads them again.
+            from src.server.repository.lineage import forget
+
+            forget(session, [asset_id], "capture", commit=False)
     # Only what was stored: a description with no model is dropped above,
     # and only the CLIP producer's vectors are its artifact.
     if vision_data is not None and vision_data.get("model_id"):
@@ -426,7 +439,7 @@ async def create_and_ingest(
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
     facet_data = _parse_video_facet(video_facet, media_type)
-    made = _required_lineage(lineage, vision_data, embeddings_data, facet_data)
+    made = _required_lineage(lineage, vision_data, embeddings_data, facet_data, exif_data)
 
     # Parse mtime
     file_mtime_dt: datetime | None = None
@@ -631,7 +644,7 @@ async def ingest_asset(
     exif_data = _parse_optional_json(exif, "exif")
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
-    made = _required_lineage(lineage, vision_data, embeddings_data)
+    made = _required_lineage(lineage, vision_data, embeddings_data, exif_data=exif_data)
     # A different file is a new clip (POST /v1/ingest makes it and archives
     # this one); this clip keeps the content its analysis was made from.
     sha = (exif_data or {}).get("sha256")

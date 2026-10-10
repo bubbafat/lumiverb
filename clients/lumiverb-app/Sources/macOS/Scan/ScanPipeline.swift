@@ -467,16 +467,10 @@ actor ScanPipeline {
         }
 
         // Date
-        if let dateStr = exif?["DateTimeOriginal"] as? String {
-            // Convert EXIF date (2024:06:15 10:30:00) to ISO8601
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-            formatter.timeZone = TimeZone.current
-            if let date = formatter.date(from: dateStr) {
-                let iso = ISO8601DateFormatter()
-                iso.formatOptions = [.withInternetDateTime]
-                payload["taken_at"] = iso.string(from: date)
-            }
+        // The camera's wall clock, as the Python scan stores it; not this Mac's zone (ADR-017).
+        if let dateStr = exif?["DateTimeOriginal"] as? String,
+           let takenAt = ExifLocation.wallClockTakenAt(dateStr) {
+            payload["taken_at"] = takenAt
         }
 
         // Time zone the camera recorded (ADR-017), minutes east of UTC.

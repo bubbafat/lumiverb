@@ -136,7 +136,8 @@ def test_a_scanned_image_says_how_its_proxy_was_made(tmp_path):
         scan._scan_one(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
     assert json.loads(call.kwargs["data"]["lineage"]) == {
-        "proxy": P.lineage("proxy", P.effective_settings("proxy"), SHA)}
+        "proxy": P.lineage("proxy", P.effective_settings("proxy"), SHA),
+        "capture": P.lineage("capture", {}, SHA)}
 
 
 def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path):
@@ -159,6 +160,7 @@ def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path
     posts = {c.args[0]: c for c in args["client"].post.call_args_list}
     assert json.loads(posts["/v1/ingest"].kwargs["data"]["lineage"]) == {
         "proxy": P.lineage("proxy", P.effective_settings("proxy"), SHA),
+        "capture": P.lineage("capture", {}, SHA),
         "probe": P.lineage("probe", {}, SHA)}
     assert json.loads(posts["/v1/assets/ast_a/artifacts/video_preview"].kwargs["data"]["lineage"]) == P.lineage(
         "video_preview", P.effective_settings("video_preview"), SHA)
@@ -180,7 +182,7 @@ def test_a_failed_probe_isnt_claimed(tmp_path):
     ):
         scan._scan_one_video(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
-    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"proxy"}
+    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"proxy", "capture"}
 
 
 def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():

@@ -20,6 +20,17 @@ final class ExifLocationTests: XCTestCase {
         XCTAssertNil(ExifLocation.offsetMinutes([:]))
     }
 
+    func testTakenAtIsTheWallClockWhateverThisMacsZone() {
+        let saved = NSTimeZone.default
+        defer { NSTimeZone.default = saved }
+        for zone in ["America/New_York", "Asia/Kathmandu", "UTC"] {
+            NSTimeZone.default = TimeZone(identifier: zone)!
+            XCTAssertEqual(ExifLocation.wallClockTakenAt("2024:06:15 10:30:00"), "2024-06-15T10:30:00Z")
+        }
+        XCTAssertEqual(ExifLocation.wallClockTakenAt("2024:03:10 02:30:00.25"), "2024-03-10T02:30:00Z")
+        XCTAssertNil(ExifLocation.wallClockTakenAt("junk"))
+    }
+
     func testAccuracy() {
         XCTAssertEqual(ExifLocation.accuracyMeters(["HPositioningError": 4.7]), 4.7)
         XCTAssertNil(ExifLocation.accuracyMeters(["HPositioningError": -1.0]))

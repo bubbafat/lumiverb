@@ -29,6 +29,23 @@ public enum ExifLocation {
         return value
     }
 
+    /// EXIF `DateTimeOriginal` ("2024:06:15 10:30:00") as the camera's wall
+    /// clock, written as if it were UTC ("2024-06-15T10:30:00Z"), the way
+    /// the Python scan stores `taken_at`. The zone is `taken_at_offset_min`,
+    /// never this Mac's time zone (ADR-017).
+    public static func wallClockTakenAt(_ raw: String) -> String? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard let date = formatter.date(from: String(trimmed.prefix(19))) else { return nil }
+        let iso = ISO8601DateFormatter()
+        iso.timeZone = TimeZone(identifier: "UTC")
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.string(from: date)
+    }
+
     /// `OffsetTimeOriginal` (or `OffsetTime`), e.g. "+02:00", as minutes
     /// east of UTC; nil when the file doesn't say.
     public static func offsetMinutes(_ exif: [String: Any]?) -> Int? {

@@ -1792,6 +1792,28 @@ class AssetRepository:
         )
         self._session.commit()
 
+    def set_capture(self, asset_id: str, taken_at: datetime | None, taken_at_offset_min: int | None,
+                    gps_accuracy_m: float | None) -> tuple[dict, dict] | None:
+        """The capture facts read again from a clip's file (the capture
+        producer): its taken_at (kept when the file gives none now), the zone
+        and the GPS accuracy (only with the file's GPS). Returns (before,
+        after) as {taken_at, taken_at_offset_min, gps_lat, gps_lon}, or None
+        for a clip not in sight. Doesn't commit."""
+        cols = "taken_at, taken_at_offset_min, gps_lat, gps_lon"
+        before = self._session.execute(text(
+            f"SELECT {cols} FROM active_assets WHERE asset_id = :a"), {"a": asset_id}).mappings().first()
+        if before is None:
+            return None
+        after = self._session.execute(text(
+            "UPDATE assets SET taken_at = COALESCE(CAST(:taken_at AS timestamptz), taken_at),"
+            "  taken_at_offset_min = CAST(:offset AS integer),"
+            "  gps_accuracy_m = CASE WHEN gps_lat IS NOT NULL AND gps_lon IS NOT NULL"
+            "    THEN CAST(:accuracy AS double precision) END"
+            f" WHERE asset_id = :a RETURNING {cols}"
+        ), {"a": asset_id, "taken_at": taken_at, "offset": taken_at_offset_min,
+            "accuracy": gps_accuracy_m}).mappings().one()
+        return dict(before), dict(after)
+
     def get_by_ids(self, asset_ids: list[str]) -> list[Asset]:
         """Return active (non-trashed) assets for a list of asset_ids. Order not guaranteed."""
         if not asset_ids:
