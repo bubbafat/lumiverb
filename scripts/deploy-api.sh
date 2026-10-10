@@ -486,6 +486,13 @@ ok "Python venv ready (${EXTRAS[*]})"
 # ---------------------------------------------------------------------------
 step "Running database migrations"
 
+# The scheduler stops first, as in update-api.sh: a migration may drop what
+# its old code reads. "Starting the scheduler" starts it again.
+if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1; then
+  systemctl stop lumiverb-scheduler
+  ok "Scheduler stopped for the migrations"
+fi
+
 export ALEMBIC_CONTROL_URL="${DB_URL}/${PG_DB}"
 sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
   "$APP_DIR/.venv/bin/python" -m alembic -c alembic-control.ini upgrade head
