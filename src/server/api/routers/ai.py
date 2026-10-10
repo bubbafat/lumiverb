@@ -488,7 +488,7 @@ def job_machines(job: str, request: Request) -> WorkerJob:
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 
 
-@router.post("/machines/{machine_id}/status", status_code=204, dependencies=[Depends(require_editor)])
+@router.post("/machines/{machine_id}/status", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def report_status(machine_id: str, body: StatusIn, request: Request) -> Response:
     """The worker's check of a machine: online with its models, or why not.
     Not a failure of any clip."""

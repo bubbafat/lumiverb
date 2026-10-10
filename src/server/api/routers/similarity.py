@@ -171,6 +171,9 @@ def find_similar(
         lib = lib_repo.get_by_id(library_id)
         if lib is None or not lib.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+        # The visitor view hides the camera, so a filter mustn't reveal it.
+        if camera_make or camera_model:
+            raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
 
     source = asset_repo.get_by_id(asset_id)
     if source is None:

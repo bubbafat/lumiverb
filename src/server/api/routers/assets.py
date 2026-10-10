@@ -369,6 +369,12 @@ def page_assets(
                   aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure)
         if any(v is not None for v in camera):
             raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
+        from src.server.api.routers.query import PUBLIC_SORTS, require_public_folder
+
+        if sort not in PUBLIC_SORTS:
+            raise HTTPException(status_code=403, detail="That sort isn't available on public pages")
+        if public_folder := normalize_path_prefix(path_prefix):
+            require_public_folder(session, [library_id], public_folder)
 
     sort_col = sort if sort in SORT_COLUMNS else "taken_at"
     direction = dir if dir in ("asc", "desc") else "desc"
@@ -767,17 +773,14 @@ def get_asset_by_path(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> AssetResponse:
     """Return a single asset by library_id + rel_path. 404 if not found or trashed."""
-    rel_path = normalize_rel_path(rel_path)
     if getattr(request.state, "is_public_request", False):
-        lib = LibraryRepository(session).get_by_id(library_id)
-        if lib is None or not lib.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=403, detail="Not available on public pages")  # a file-name probe
+    rel_path = normalize_rel_path(rel_path)
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Asset not found: {rel_path}")
-    response = _asset_detail(session, request, asset)
-    return _project_visitor_view(response) if getattr(request.state, "is_public_request", False) else response
+    return _asset_detail(session, request, asset)
 
 
 class ProjectUsageRequest(BaseModel):

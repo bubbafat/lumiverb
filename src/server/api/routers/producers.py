@@ -430,7 +430,7 @@ class FailuresIn(BaseModel):
     items: list[Failure] = Field(max_length=500)
 
 
-@router.post("/failures", dependencies=[Depends(require_editor)])
+@router.post("/failures", dependencies=[Depends(require_tenant_admin)])  # the scheduler's
 def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """The scheduler couldn't make these: each is kept with its error and not
     handed out again for 5 minutes, then 10, 20 and so on up to a day, and

@@ -6,10 +6,18 @@ evicts expired entries to prevent unbounded memory growth.
 
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 
 from fastapi import HTTPException, Request
+
+
+def _is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class RateLimiter:
@@ -22,14 +30,18 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def _client_ip(self, request: Request) -> str:
+        peer = request.client.host if request.client else "unknown"
         forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        # Only our own proxy's header counts: nginx appends the address it saw
+        # ($proxy_add_x_forwarded_for), so the right-most entry is the real one
+        # and anything left of it is whatever the client sent.
+        if forwarded and _is_loopback(peer):
+            return forwarded.split(",")[-1].strip() or peer
+        return peer
 
-    def check(self, request: Request) -> None:
-        """Raise 429 if the caller has exceeded the rate limit."""
-        ip = self._client_ip(request)
+    def check(self, request: Request, key: str | None = None) -> None:
+        """Raise 429 if the caller (or ``key``, e.g. an email) has exceeded the rate limit."""
+        ip = key if key is not None else self._client_ip(request)
         now = time.monotonic()
         cutoff = now - self.window
 

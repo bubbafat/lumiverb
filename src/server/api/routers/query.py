@@ -32,6 +32,7 @@ from src.server.models.query_filter import (
     LOCATION_FILTERS,
     GroupFilter,
     LibraryScope,
+    PathPrefix,
     PersonFilter,
     SearchTerm,
 )
@@ -46,6 +47,8 @@ SORT_COLUMNS = {
     "taken_at", "created_at", "file_size", "iso",
     "exposure_time_us", "aperture", "focal_length", "rel_path", "asset_id",
 }
+# A cursor carries the last row's sort value: a visitor's mustn't carry a file name or EXIF.
+PUBLIC_SORTS = {"taken_at", "asset_id"}
 
 MAX_CANDIDATE_IDS = 5000
 
@@ -184,7 +187,7 @@ def _run_quickwit_search(
             return ""
         return " AND ".join(f"({q})" for q in per_term)
 
-    hidden = ({"note"} if public else set()) | ({"transcript_text"} if public_cap_ms is not None else set())
+    hidden = ({"note", "path_tokens"} if public else set()) | ({"transcript_text"} if public_cap_ms is not None else set())
     asset_fields = [f for f in ASSET_FIELDS if f not in hidden]
     asset_phrase_fields = [f for f in ASSET_PHRASE_FIELDS if f not in hidden]
 
@@ -445,13 +448,14 @@ def _run_postgres_fallback(
     limit: int,
     include_transcripts: bool = True,
     include_notes: bool = True,
+    include_file_details: bool = True,
 ) -> tuple[dict[str, float], dict[str, SearchContext]]:
     """Postgres ILIKE fallback when Quickwit is unavailable."""
     from src.server.search.postgres_search import search_assets
 
     lib_id = library_ids[0] if library_ids and len(library_ids) == 1 else None
     hits = search_assets(session, lib_id, combined_query, limit=limit, include_transcripts=include_transcripts,
-                         include_notes=include_notes)
+                         include_notes=include_notes, include_file_details=include_file_details)
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
     for hit in hits:
@@ -468,6 +472,20 @@ def _run_postgres_fallback(
 
 _CAMERA_FILTERS = (CameraMake, CameraModel, LensModel, IsoRange, ApertureRange, FocalLengthRange,
                    ExposureRange, HasExposure)
+
+
+def require_public_folder(session: Session, library_ids, path: str) -> None:
+    """A visitor may narrow to a folder (folders are public, /directories
+    lists them) but not to a file: probing names would find them."""
+    from sqlalchemy import text
+
+    found = session.execute(
+        text("SELECT 1 FROM active_assets WHERE library_id = ANY(:libs)"
+             " AND starts_with(rel_path, :dir) LIMIT 1"),
+        {"libs": list(library_ids), "dir": path.strip("/") + "/"},
+    ).first()
+    if found is None:
+        raise HTTPException(status_code=403, detail="Not a folder")
 
 
 def guard_public_spec(request: Request, session: Session, spec) -> int | None:
@@ -495,6 +513,8 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
     # Nor camera or exposure: the visitor view hides them, so filters mustn't reveal them.
     if any(isinstance(leaf, _CAMERA_FILTERS) for leaf in spec.leaves):
         raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
+    if spec.sort not in PUBLIC_SORTS:
+        raise HTTPException(status_code=403, detail="That sort isn't available on public pages")
     scoped_lib_ids: set[str] = set()
     for leaf in spec.leaves:
         if isinstance(leaf, LibraryScope):
@@ -506,6 +526,9 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
         lib = lib_repo.get_by_id(lid)
         if lib is None or not lib.is_public:
             raise HTTPException(status_code=404, detail="Not found")
+    for leaf in spec.leaves:
+        if isinstance(leaf, PathPrefix):
+            require_public_folder(session, scoped_lib_ids, leaf.path)
     from src.server.tenant_settings import playback_cap
 
     cap = playback_cap(session, public=True)
@@ -606,6 +629,7 @@ def unified_query(
                     session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
                     include_transcripts=public_cap_ms is None,
                     include_notes=not getattr(request.state, "is_public_request", False),
+                    include_file_details=not getattr(request.state, "is_public_request", False),
                 )
             except Exception as exc:
                 search_health.note(session, search_health.FAILURE, f"The Postgres search failed ({type(exc).__name__})")

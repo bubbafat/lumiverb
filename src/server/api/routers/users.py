@@ -12,7 +12,9 @@ from pydantic import BaseModel
 from src.server.api.dependencies import require_tenant_admin
 from src.server.api.middleware import _error_response
 from src.server.database import get_control_session, get_engine_for_url
-from src.server.repository.control_plane import UserRepository
+from src.server.api.routers.auth import MAX_PASSWORD_BYTES
+from src.server.api.routers.keys import _ROLE_RANK as ROLE_RANK
+from src.server.repository.control_plane import ApiKeyRepository, UserRepository
 from src.server.repository.tenant import RatingRepository, SavedViewRepository
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
@@ -86,6 +88,8 @@ def create_user(
 
     if len(body.password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(body.password.encode()) > MAX_PASSWORD_BYTES:
+        raise HTTPException(status_code=400, detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
 
     password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
@@ -129,6 +133,9 @@ def update_user_role(
             if repo.count_admins_locked(tenant_id) <= 1:
                 return _error_response(409, "last_admin", "Cannot demote the last admin")
 
+        # Their keys mustn't keep the role they lose.
+        above = {r for r, rank in ROLE_RANK.items() if rank > ROLE_RANK[body.role]}
+        ApiKeyRepository(session).revoke_created_by(tenant_id, user_id, roles=above)
         updated = repo.update_role(user_id, body.role)
 
     return _user_item(updated)
@@ -159,6 +166,7 @@ def delete_user(
             if repo.count_admins_locked(tenant_id) <= 1:
                 return _error_response(409, "last_admin", "Cannot remove the last admin")
 
+        ApiKeyRepository(session).revoke_created_by(tenant_id, user_id)
         repo.delete(user_id)
 
     # Clean up user's ratings in tenant DB

@@ -72,6 +72,8 @@ class ApiKey(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False),
     )
     role: str = Field(default="admin", nullable=False)
+    # The user who minted it (None: an admin or operator key, like the scheduler's).
+    created_by_user_id: str | None = Field(default=None, nullable=True, index=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

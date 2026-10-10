@@ -16,6 +16,7 @@ def search_assets(
     offset: int = 0,
     include_transcripts: bool = True,
     include_notes: bool = True,
+    include_file_details: bool = True,
 ) -> list[dict]:
     """
     Simple Postgres fallback search using ILIKE across:
@@ -51,6 +52,9 @@ def search_assets(
     # A capped public page doesn't show the whole transcript, so its search doesn't read it.
     transcript_or = "OR a.transcript_text ILIKE :{name}" if include_transcripts else ""
     note_or = "OR a.note ILIKE :{name}" if include_notes else ""
+    # A public page shows neither the file's path nor its camera, so its search doesn't read them.
+    file_or = ("OR a.rel_path ILIKE :{name} OR a.camera_make ILIKE :{name} OR a.camera_model ILIKE :{name}"
+               if include_file_details else "")
     terms = parse_query(query)
     term_patterns: list[tuple[str, str]] = []  # (bind_name, ilike_value)
     for i, term in enumerate(terms):
@@ -60,9 +64,7 @@ def search_assets(
         groups = " AND ".join(
             f"""(
                   a.asset_id       ILIKE :{name}
-               OR a.rel_path       ILIKE :{name}
-               OR a.camera_make    ILIKE :{name}
-               OR a.camera_model   ILIKE :{name}
+               {file_or.format(name=name)}
                OR COALESCE(c.description, m.data->>'description') ILIKE :{name}
                OR CAST(et.tags AS TEXT) ILIKE :{name}
                OR COALESCE(c.ocr_text, o.text) ILIKE :{name}
@@ -77,9 +79,7 @@ def search_assets(
         # work.
         groups = f"""(
               a.asset_id       ILIKE :like_0
-           OR a.rel_path       ILIKE :like_0
-           OR a.camera_make    ILIKE :like_0
-           OR a.camera_model   ILIKE :like_0
+           {file_or.format(name='like_0')}
            OR COALESCE(c.description, m.data->>'description') ILIKE :like_0
            OR CAST(et.tags AS TEXT) ILIKE :like_0
            OR COALESCE(c.ocr_text, o.text) ILIKE :like_0

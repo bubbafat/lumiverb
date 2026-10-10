@@ -249,15 +249,16 @@ def test_a_failure_waits_then_is_handed_out_again(env):
 
 
 @pytest.mark.slow
-def test_reporting_failures_needs_an_editor(env):
+def test_reporting_failures_is_the_schedulers(env):
     from tests.test_archive_trash_safety import _key_with_role
 
     lib = _library(env, "RecFailRole")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    viewer = _key_with_role(env, "viewer")
-    assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=viewer).status_code == 403
-    editor = _key_with_role(env, "editor")
-    assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=editor).status_code == 200
+    for role in ("viewer", "editor"):
+        key = _key_with_role(env, role)
+        assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=key).status_code == 403
+    admin = _key_with_role(env, "admin")
+    assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=admin).status_code == 200
 
 
 @pytest.mark.slow
