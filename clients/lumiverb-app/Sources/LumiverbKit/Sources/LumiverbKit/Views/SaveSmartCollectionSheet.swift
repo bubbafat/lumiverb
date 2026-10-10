@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Sheet for naming and saving a smart collection from the current
-/// browse filters and search query.
+/// Sheet for naming and saving the current browse filters and search as a
+/// project (`from_search`): it holds the clips that match when saved and
+/// doesn't follow the search afterwards.
 public struct SaveSmartCollectionSheet: View {
     @ObservedObject public var browseState: BrowseState
     @ObservedObject public var collectionsState: CollectionsState
@@ -18,10 +19,10 @@ public struct SaveSmartCollectionSheet: View {
 
     public var body: some View {
         VStack(spacing: 16) {
-            Text("Save as Smart Collection")
+            Text("Save Search as Collection")
                 .font(.headline)
 
-            Text("This collection updates automatically as matching photos change.")
+            Text("Holds the photos that match now.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -60,21 +61,16 @@ public struct SaveSmartCollectionSheet: View {
             pathPrefix: browseState.selectedPath,
             searchQuery: browseState.mode == .search ? browseState.committedSearchQuery : nil
         )
-        let savedQuery = SavedQueryV2(
+        let search = SavedQueryV2(
             filters: leafFilters,
             sort: browseState.filters.sortField,
             direction: browseState.filters.sortDirection
         )
-
-        let request = CreateCollectionRequest(
-            name: name.trimmingCharacters(in: .whitespaces),
-            type: .smart,
-            savedQuery: savedQuery
-        )
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
 
         Task {
             do {
-                _ = try await collectionsState.createSmartCollection(request: request)
+                _ = try await collectionsState.createFromSearch(name: trimmedName, search: search)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

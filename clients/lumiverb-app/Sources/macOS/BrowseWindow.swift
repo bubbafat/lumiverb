@@ -217,7 +217,7 @@ struct BrowseWindow: View {
             guard newValue != oldValue else { return }
             browseState.handleSelectedLibraryChange()
         }
-        .onChange(of: collectionsState.openCollection?.collectionId) { _, newValue in
+        .onChange(of: collectionsState.openCollection?.projectId) { _, newValue in
             if newValue != nil {
                 section = .collectionDetail
             } else if section == .collectionDetail {

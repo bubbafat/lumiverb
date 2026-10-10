@@ -35,7 +35,7 @@ public struct FilterCapability: Codable, Equatable, Sendable {
     }
 }
 
-/// Saved query format for smart collections (new filter algebra).
+/// A search as filter algebra: what `POST /v1/projects` takes as `from_search`.
 public struct SavedQueryV2: Codable, Equatable, Sendable {
     public let filters: [LeafFilter]
     public let sort: String?
