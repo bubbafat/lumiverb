@@ -9,13 +9,17 @@
 const fs = require('fs');
 const path = require('path');
 const { PAGE_SIZE, localPath } = require('./lumiverb');
+const { onDisk } = require('./paths');
 
 // Requests per page at most, for a search whose clips are nearly all in the
 // project already.
 const MAX_REQUESTS = 10;
 
-function toClip(item, roots, exists) {
+// `localPath` is the file's real path when it's on this Mac: what's imported,
+// and what's compared with the project's files.
+function toClip(item, roots, realpath) {
     const filePath = localPath(roots.get(item.library_id), item.rel_path);
+    const real = onDisk(filePath, realpath);
     const context = item.search_context || {};
     return {
         assetId: item.asset_id,
@@ -27,14 +31,14 @@ function toClip(item, roots, exists) {
         snippet: context.snippet || '',
         hitType: context.hit_type || null,
         relPath: item.rel_path,
-        localPath: filePath,
-        onThisMac: Boolean(filePath && exists(filePath)),
+        localPath: real || filePath,
+        onThisMac: Boolean(real),
     };
 }
 
-// `media`: 'video', 'image' or 'all'. `inProject`: a Set of NFC paths to
-// leave out, or null to show everything.
-async function searchPage({ client, text, media, after = null, inProject = null, exists = fs.existsSync }) {
+// `media`: 'video', 'image' or 'all'. `inProject`: a Set of the project's
+// files by pathKey (paths.js) to leave out, or null to show everything.
+async function searchPage({ client, text, media, after = null, inProject = null, realpath = fs.realpathSync.native }) {
     const roots = await client.libraryRoots();
     const items = [];
     let cursor = after;
@@ -45,7 +49,7 @@ async function searchPage({ client, text, media, after = null, inProject = null,
         cursor = page.nextCursor;
         if (totalEstimate === null) totalEstimate = page.totalEstimate;
         for (const item of page.items) {
-            const clip = toClip(item, roots, exists);
+            const clip = toClip(item, roots, realpath);
             if (inProject && clip.localPath && inProject.has(clip.localPath.normalize('NFC'))) {
                 hidden += 1;
             } else {

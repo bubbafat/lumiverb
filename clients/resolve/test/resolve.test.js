@@ -3,6 +3,10 @@ const { test } = require('node:test');
 
 const { addAtPlayhead, addToBin, pickTrack, projectFilePaths, timecodeToFrame, timelineFrames } = require('../plugin/resolve');
 
+// A fake realpath: every file is there, spelled as given. Keeps the tests
+// independent of what this machine has mounted.
+const asGiven = (p) => p;
+
 // A fake of the slice of Resolve's scripting API the plugin uses. Like
 // Resolve, AppendToTimeline drops a clip that would land on another one.
 function fakeClip(filePath, properties = {}) {
@@ -101,20 +105,42 @@ test('pickTrack takes the first track free for the whole clip', () => {
 
 test('addToBin imports the original into the current bin', async () => {
     const { resolve, calls } = fakeResolve();
-    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov'), 'Added to Master.');
+    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov', asGiven), 'Added to Master.');
     assert.deepEqual(calls.imported, [{ FilePath: '/Volumes/media-01/Media/a.mov' }]);
 });
 
 test("addToBin doesn't import a file the bin already has", async () => {
     const { resolve, calls } = fakeResolve({ binClips: ['/Volumes/media-01/Media/a.mov'] });
-    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov'), 'Already in Master.');
+    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/a.mov', asGiven), 'Already in Master.');
     assert.deepEqual(calls.imported, []);
 });
 
 test('addToBin matches a file the bin has under the other Unicode form', async () => {
     const { resolve, calls } = fakeResolve({ binClips: ['/Volumes/media-01/Media/Café.mov'] });
-    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/Café.mov'), 'Already in Master.');
+    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/Café.mov', asGiven), 'Already in Master.');
     assert.deepEqual(calls.imported, []);
+});
+
+test('a clip the bin has is found however the volume is spelled', async () => {
+    // Resolve stores the mount's spelling; Lumiverb's root may differ in case.
+    const disk = (p) => p.replace('/Volumes/media-01/', '/Volumes/MEDIA-01/');
+    const { resolve, calls } = fakeResolve({ binClips: ['/Volumes/MEDIA-01/Media/IMG_8223.MOV'] });
+    assert.equal(await addToBin(resolve, '/Volumes/media-01/Media/IMG_8223.MOV', disk), 'Already in Master.');
+    assert.deepEqual(calls.imported, []);
+});
+
+test("projectFilePaths keys each clip by the disk's spelling, and offline ones as stored", async () => {
+    const disk = (p) => {
+        if (p.startsWith('/Volumes/OFFLINE/')) throw new Error('ENOENT');
+        return p.replace('/Volumes/media-01/', '/Volumes/MEDIA-01/');
+    };
+    const { resolve } = fakeResolve({
+        root: { clips: ['/Volumes/media-01/Media/a.mov', '/Volumes/OFFLINE/Café.mov'] },
+    });
+
+    const paths = await projectFilePaths(resolve, disk);
+
+    assert.deepEqual([...paths].sort(), ['/Volumes/MEDIA-01/Media/a.mov', '/Volumes/OFFLINE/Café.mov']);
 });
 
 test('projectFilePaths lists every clip in every bin, in NFC', async () => {
@@ -129,7 +155,7 @@ test('projectFilePaths lists every clip in every bin, in NFC', async () => {
         },
     });
 
-    const paths = await projectFilePaths(resolve);
+    const paths = await projectFilePaths(resolve, asGiven);
 
     assert.deepEqual([...paths].sort(), [
         '/Users/robert/Music/track.wav',
@@ -144,7 +170,7 @@ test('addAtPlayhead puts the clip at the playhead on the first free track', asyn
         timeline: { fps: 24, timecode: '01:00:10:00', video: [[[86400, 87000]]], audio: [[[86400, 87000]]] },
     });
 
-    const message = await addAtPlayhead(resolve, '/Volumes/media-01/Media/a.mov', 'video');
+    const message = await addAtPlayhead(resolve, '/Volumes/media-01/Media/a.mov', 'video', asGiven);
 
     assert.equal(message, 'Added at 01:00:10:00 on V2.');
     assert.deepEqual(calls.addedTracks, ['video', 'audio:stereo']);
@@ -158,7 +184,7 @@ test('addAtPlayhead uses a free existing track without adding one', async () => 
     const { resolve, calls } = fakeResolve({
         timeline: { fps: 24, timecode: '01:00:10:00', video: [[[86400, 87000]], []], audio: [[[86400, 87000]], []] },
     });
-    assert.equal(await addAtPlayhead(resolve, '/x/a.mov', 'video'), 'Added at 01:00:10:00 on V2.');
+    assert.equal(await addAtPlayhead(resolve, '/x/a.mov', 'video', asGiven), 'Added at 01:00:10:00 on V2.');
     assert.deepEqual(calls.addedTracks, []);
 });
 
@@ -166,7 +192,7 @@ test('addAtPlayhead skips a locked track', async () => {
     const { resolve, calls } = fakeResolve({
         timeline: { fps: 24, timecode: '01:00:00:00', video: [[], []], audio: [[], []], locked: ['video1'] },
     });
-    await addAtPlayhead(resolve, '/x/a.mov', 'video');
+    await addAtPlayhead(resolve, '/x/a.mov', 'video', asGiven);
     assert.equal(calls.appended[0].trackIndex, 2);
 });
 
@@ -174,10 +200,10 @@ test('addAtPlayhead reports a clip Resolve dropped', async () => {
     const { resolve } = fakeResolve({
         timeline: { fps: 24, timecode: '01:00:00:00', video: [[]], audio: [[]], dropEverything: true },
     });
-    await assert.rejects(addAtPlayhead(resolve, '/x/a.mov', 'video'), /Resolve didn't place the clip on V1\./);
+    await assert.rejects(addAtPlayhead(resolve, '/x/a.mov', 'video', asGiven), /Resolve didn't place the clip on V1\./);
 });
 
 test('addAtPlayhead needs an open timeline', async () => {
     const { resolve } = fakeResolve();
-    await assert.rejects(addAtPlayhead(resolve, '/x/a.mov', 'video'), /Open a timeline first\./);
+    await assert.rejects(addAtPlayhead(resolve, '/x/a.mov', 'video', asGiven), /Open a timeline first\./);
 });

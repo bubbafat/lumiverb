@@ -25,10 +25,9 @@ password.
   (`f=media:video` / `f=media:image`; nothing for All), so changing it
   searches again from the first page.
 - **Hide clips already in the project** leaves out results whose original is
-  already in the project's Media Pool, in any bin. It matches by file path
-  (Unicode-normalized, since macOS may store an accented name either way), so a
-  clip imported from another copy or another mount of the file isn't
-  recognized. Hidden results are made up for with more requests, so a page
+  already in the project's Media Pool, in any bin. It matches by the file's
+  real path on disk (below), so a clip imported from another copy of the file
+  isn't recognized. Hidden results are made up for with more requests, so a page
   still shows up to 10 without skipping any; a search that's nearly all in the
   project stops after 10 requests and says how many it hid.
 - **Add to bin** imports the original into the Media Pool's current bin. A clip
@@ -46,6 +45,14 @@ password.
 - **Paths.** Libraries store their root as the Mac sees it
   (`/Volumes/media-01/Media`), so a clip's original is the root plus its
   `rel_path`. A result whose file isn't there says "Not on this Mac".
+- **Matching the project's files** (`plugin/paths.js`). A root can be spelled
+  differently from the mount it names: the brain's library says
+  `/Volumes/media-01`, the disk is mounted as `/Volumes/MEDIA-01`, and the Mac
+  treats them as one folder. Resolve stores the mount's spelling. So both
+  sides are compared by the file's real path as the disk spells it
+  (`fs.realpathSync.native`; Node's plain `realpathSync` keeps the case it's
+  given), in NFC; offline media by its path as stored. Clips are imported by
+  that real path too, so they match ones imported from Finder.
 - **Sign-in.** `POST /v1/auth/login`, then the JWT is refreshed on a 401
   (`POST /v1/auth/refresh`); the sign-in lasts 7 days from login. Server, email
   and token are kept in

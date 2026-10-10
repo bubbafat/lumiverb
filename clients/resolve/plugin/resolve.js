@@ -5,6 +5,9 @@
 // so tests drive them with a fake. Targets the Resolve 21.1 scripting API
 // (GetSettings / GetClipProperty() dicts, clipInfo lists).
 
+const fs = require('fs');
+const { pathKey } = require('./paths');
+
 // The frame number of a timecode on a timeline at `fps`, counted the way
 // Resolve numbers timeline frames (01:00:00:00 at 24 fps is 86400). Drop-frame
 // (29.97, 59.94) skips the first 2 or 4 frame numbers of each minute but
@@ -58,16 +61,18 @@ async function currentProject(resolve) {
     return project;
 }
 
-// A clip's original, in NFC: Lumiverb's paths are NFC, and macOS may hand
-// Resolve either form of an accented name.
-async function clipFilePath(clip) {
+// A clip's original by pathKey (paths.js), so it matches Lumiverb's path for
+// the same file however each spells it. Null for a clip with no file (a
+// timeline).
+async function clipFileKey(clip, realpath) {
     const properties = await clip.GetClipProperty();
     const filePath = properties && properties['File Path'];
-    return filePath ? filePath.normalize('NFC') : null;
+    return filePath ? pathKey(filePath, realpath) : null;
 }
 
-// The originals of every clip in the current project's Media Pool, every bin.
-async function projectFilePaths(resolve) {
+// The originals of every clip in the current project's Media Pool, every
+// bin, by pathKey.
+async function projectFilePaths(resolve, realpath = fs.realpathSync.native) {
     const project = await currentProject(resolve);
     const mediaPool = await project.GetMediaPool();
     const paths = new Set();
@@ -75,8 +80,8 @@ async function projectFilePaths(resolve) {
     while (folders.length > 0) {
         const folder = folders.pop();
         for (const clip of (await folder.GetClipList()) || []) {
-            const filePath = await clipFilePath(clip);
-            if (filePath) paths.add(filePath);
+            const key = await clipFileKey(clip, realpath);
+            if (key) paths.add(key);
         }
         folders.push(...((await folder.GetSubFolderList()) || []));
     }
@@ -84,21 +89,21 @@ async function projectFilePaths(resolve) {
 }
 
 // The file's clip in the current bin: the one already there, or imported now.
-async function clipInCurrentBin(mediaPool, filePath) {
+async function clipInCurrentBin(mediaPool, filePath, realpath) {
     const bin = await mediaPool.GetCurrentFolder();
     if (!bin) throw new Error('Select a bin in the Media Pool first.');
-    const wanted = filePath.normalize('NFC');
+    const wanted = pathKey(filePath, realpath);
     for (const clip of (await bin.GetClipList()) || []) {
-        if ((await clipFilePath(clip)) === wanted) return { clip, bin, added: false };
+        if ((await clipFileKey(clip, realpath)) === wanted) return { clip, bin, added: false };
     }
     const imported = await mediaPool.ImportMedia([{ FilePath: filePath }]);
     if (!imported || imported.length === 0) throw new Error("Resolve couldn't import the file.");
     return { clip: imported[0], bin, added: true };
 }
 
-async function addToBin(resolve, filePath) {
+async function addToBin(resolve, filePath, realpath = fs.realpathSync.native) {
     const project = await currentProject(resolve);
-    const { bin, added } = await clipInCurrentBin(await project.GetMediaPool(), filePath);
+    const { bin, added } = await clipInCurrentBin(await project.GetMediaPool(), filePath, realpath);
     const name = await bin.GetName();
     return added ? `Added to ${name}.` : `Already in ${name}.`;
 }
@@ -132,12 +137,12 @@ async function itemStartingAt(timeline, type, index, frame) {
 // free there (adding one when none is). Stills take the project's still
 // length, which the clip doesn't say, so they need a track clear from the
 // playhead on.
-async function addAtPlayhead(resolve, filePath, mediaType) {
+async function addAtPlayhead(resolve, filePath, mediaType, realpath = fs.realpathSync.native) {
     const project = await currentProject(resolve);
     const timeline = await project.GetCurrentTimeline();
     if (!timeline) throw new Error('Open a timeline first.');
     const mediaPool = await project.GetMediaPool();
-    const { clip } = await clipInCurrentBin(mediaPool, filePath);
+    const { clip } = await clipInCurrentBin(mediaPool, filePath, realpath);
 
     const settings = (await timeline.GetSettings()) || {};
     const fps = Number(settings.timelineFrameRate);
