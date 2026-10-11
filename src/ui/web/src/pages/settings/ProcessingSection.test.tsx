@@ -795,6 +795,58 @@ describe("Scene descriptions' Detail", () => {
   });
 });
 
+describe("Face detection's levels", () => {
+  const level = (label: string, value: string, fallback: string) => ({ key: "detail", label, kind: "level" as const,
+    value, default: fallback, minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false,
+    choices: ["off", "low", "normal", "high"] });
+  const faceProducers = (photos: string, videos: string, photosBelow = 0) => [
+    producer({ artifact: "faces", title: "Faces", media: ["image"], level: 2, fields: [level("Photos", photos, "normal")],
+               counts: photos === "off" ? { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0, below: 0 }
+                 : { applicable: 10, current: 10 - photosBelow, stale: 0, missing: 0, failing: 0, below: photosBelow } }),
+    producer({ artifact: "video_faces", title: "Faces in videos", media: ["video"], part_of: "faces", level: 1,
+               fields: [level("Videos", videos, "low")],
+               counts: videos === "off" ? { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0, below: 0 }
+                 : { applicable: 4, current: 4, stale: 0, missing: 0, failing: 0, below: 0 } }),
+  ];
+
+  it("shows Photos then Videos in the Faces row, each Off, Low, Normal or High", async () => {
+    producers = faceProducers("normal", "low");
+    renderSection();
+    const li = await row("Faces");
+    const groups = within(li).getAllByRole("radiogroup");
+    expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual(["faces-level", "video_faces-level"]);
+    const photos = within(li).getByRole("radiogroup", { name: "Photos" });
+    expect(within(photos).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Off", "Low", "Normal", "High"]);
+    expect(within(photos).getByRole("radio", { name: "Normal" }).getAttribute("aria-checked")).toBe("true");
+    const videos = within(li).getByRole("radiogroup", { name: "Videos" });
+    expect(within(videos).getByRole("radio", { name: "Low" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("saves Off for videos alone", async () => {
+    producers = faceProducers("normal", "low");
+    renderSection();
+    const videos = within(await row("Faces")).getByRole("radiogroup", { name: "Videos" });
+    fireEvent.click(within(videos).getByRole("radio", { name: "Off" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    expect(sent.find((r) => r.method === "PUT")).toMatchObject(
+      { url: expect.stringContaining("/producers/video_faces/settings"), body: { settings: { detail: "off" } } });
+  });
+
+  it("says Off plainly, not that there's nothing to make", async () => {
+    producers = faceProducers("off", "off");
+    renderSection();
+    const li = await row("Faces");
+    expect(within(li).getAllByText("Off: nothing new is found. What's found stays.")).toHaveLength(2);
+    expect(within(li).queryByText("Nothing to make yet.")).toBeNull();
+  });
+
+  it("counts photos below this, as photos", async () => {
+    producers = faceProducers("high", "low", 7);
+    renderSection();
+    expect(await screen.findByText("7 photos below this")).toBeTruthy();
+  });
+});
+
 describe("duration", () => {
   it("says a span of time roughly, as people would", () => {
     expect([30, 90, 3600, 7500, 36000, 3 * 86400, 200000].map(duration)).toEqual(

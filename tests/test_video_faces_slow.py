@@ -133,6 +133,7 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
     assert r.status_code == 200, r.text
     assert r.json()["face_count"] == 2
     a_id, b_id = r.json()["face_ids"]
+    assert client.get(f"/v1/assets/{asset_id}", headers=auth).json()["face_count"] == 2  # the people seen
 
     faces = {f["face_id"]: f for f in client.get(f"/v1/assets/{asset_id}/faces", headers=auth).json()["faces"]}
     assert faces[a_id]["frame_ms"] == 4000 and faces[a_id]["seen_ms"] == [1000, 4000, 9000]

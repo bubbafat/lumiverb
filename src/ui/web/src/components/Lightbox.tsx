@@ -11,7 +11,9 @@ import VideoPlayer from "./VideoPlayer";
 import { useLocalStorage } from "../lib/useLocalStorage";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { usePlayback } from "../api/usePlayback";
-import type { AssetPageItem, AssetRating, RatingColor, SimilarHit } from "../api/types";
+import type { AssetPageItem, AssetRating, FaceItem, RatingColor, SimilarHit } from "../api/types";
+import { FaceCropImage } from "./FaceCropImage";
+import { momentLabel, moments } from "../lib/faceMoments";
 import { HeartButton, StarPicker, ColorPicker } from "./RatingControls";
 import { basename, formatFileSize, formatDate, formatExposure } from "../lib/format";
 
@@ -41,6 +43,8 @@ interface LightboxProps {
   publicProjectId?: string;
   /** Highlight a specific face with a red border (e.g. the clustered face). */
   highlightFaceId?: string;
+  /** A video: the seconds to open it at (a person's moment). */
+  startAt?: number;
 }
 
 function SimilarThumbnail({
@@ -263,6 +267,7 @@ export function Lightbox({
   publicLibraryId,
   publicProjectId,
   highlightFaceId,
+  startAt,
 }: LightboxProps) {
   // A visitor can't rate, collect or edit: those are a signed-in person's.
   const onRatingChange = isPublic ? undefined : onRatingChangeProp;
@@ -406,15 +411,19 @@ export function Lightbox({
   });
 
   const isImage = !isVideo;
+  // How many faces it has: what the page listing it said, else its details.
+  const faceCount = asset.face_count ?? detail?.face_count ?? 0;
   // Who's in a photo is for signed-in people: no faces button, key or overlay for visitors.
-  const hasFaces = !isPublic && isImage && (asset.face_count ?? 0) > 0;
+  const hasFaces = !isPublic && isImage && faceCount > 0;
+  // A video's are listed under People, with when they're seen (no boxes: they're from other frames).
+  const hasVideoFaces = !isPublic && isVideo && faceCount > 0;
 
   const queryClient = useQueryClient();
 
   const { data: facesData } = useQuery({
     queryKey: ["faces", asset.asset_id],
     queryFn: () => listFaces(asset.asset_id),
-    enabled: showFaces && hasFaces,
+    enabled: (showFaces && hasFaces) || hasVideoFaces,
   });
 
   // Face assignment popover state
@@ -595,6 +604,193 @@ export function Lightbox({
       queryClient.invalidateQueries({ queryKey: ["face-clusters"] });
     },
   });
+
+  // What a face's popover says: who it is (view, remove, change) or who it might be (pick, search,
+  // new person). A photo's face opens it from its box; a video's from its row under People.
+  const facePopoverBody = (face: FaceItem, isNamed: boolean) => (
+    <>
+      {isNamed && assignMode === "pick" ? (
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-white">{face.person!.display_name}</p>
+          <button
+            type="button"
+            onClick={() => { setAssignFaceId(null); navigate(`/people/${face.person!.person_id}`); }}
+            className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+          >
+            View person
+          </button>
+          <button
+            type="button"
+            onClick={() => unassignMutation.mutate(face.face_id)}
+            disabled={unassignMutation.isPending}
+            className="w-full rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-gray-700"
+          >
+            {unassignMutation.isPending ? "Removing..." : "Remove tag"}
+          </button>
+          <hr className="border-gray-700" />
+          <p className="text-xs text-gray-500">Change to:</p>
+          {candidatePeople.filter((p) => p.person_id !== face.person!.person_id).length > 0 && (
+            <div className="max-h-24 space-y-1 overflow-y-auto">
+              {candidatePeople
+                .filter((p) => p.person_id !== face.person!.person_id)
+                .map((p) => (
+                  <button
+                    key={p.person_id}
+                    type="button"
+                    onClick={async () => {
+                      await unassignFace(face.face_id);
+                      assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
+                    }}
+                    disabled={assignMutation.isPending}
+                    className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                  >
+                    {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                  </button>
+                ))}
+            </div>
+          )}
+          {/* Search the full people list — nearest-by-
+              embedding only surfaces the top 8, so we
+              need a way to reach everyone else. */}
+          <div className="relative">
+            <input
+              type="text"
+              value={assignSearch}
+              onChange={(e) => setAssignSearch(e.target.value)}
+              placeholder="Search by name..."
+              className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            />
+            {assignSearch.trim() && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+                {searchResults
+                  .filter((p) => p.person_id !== face.person!.person_id)
+                  .map((p) => (
+                    <button
+                      key={p.person_id}
+                      type="button"
+                      onClick={async () => {
+                        await unassignFace(face.face_id);
+                        assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
+                      }}
+                      disabled={assignMutation.isPending}
+                      className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                    >
+                      {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+            {assignSearch.trim() && searching && (
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+              </div>
+            )}
+          </div>
+          {unassignMutation.isError && (
+            <p className="mt-1 text-xs text-red-400">{unassignMutation.error?.message ?? "Failed"}</p>
+          )}
+        </div>
+      ) : assignMode === "pick" ? (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-gray-300">Who is this?</p>
+          {candidatePeople.length > 0 && (
+            <div className="max-h-32 space-y-1 overflow-y-auto">
+              {candidatePeople.map((p) => (
+                <button
+                  key={p.person_id}
+                  type="button"
+                  onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
+                  disabled={assignMutation.isPending}
+                  className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                >
+                  {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Search the full people list — the
+              nearest ranking only surfaces the top 8,
+              so partial profiles / occluded faces
+              need a name escape hatch. */}
+          <div className="relative">
+            <input
+              type="text"
+              value={assignSearch}
+              onChange={(e) => setAssignSearch(e.target.value)}
+              placeholder="Search by name..."
+              className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            />
+            {assignSearch.trim() && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+                {searchResults.map((p) => (
+                  <button
+                    key={p.person_id}
+                    type="button"
+                    onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
+                    disabled={assignMutation.isPending}
+                    className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
+                  >
+                    {p.display_name} <span className="text-gray-500">({p.face_count})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {assignSearch.trim() && searching && (
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setAssignMode("name")}
+            className="w-full rounded-lg border border-dashed border-gray-600 px-2 py-1.5 text-xs text-indigo-400 hover:border-indigo-500 hover:text-indigo-300"
+          >
+            + New person
+          </button>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newPersonName.trim()) {
+              assignMutation.mutate({ faceId: face.face_id, newPersonName: newPersonName.trim() });
+            }
+          }}
+          className="space-y-2"
+        >
+          <p className="text-xs font-medium text-gray-300">New person name</p>
+          <input
+            type="text"
+            value={newPersonName}
+            onChange={(e) => setNewPersonName(e.target.value)}
+            placeholder="Enter name..."
+            className="w-full rounded-lg border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={assignMutation.isPending || !newPersonName.trim()}
+              className="flex-1 rounded-lg bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {assignMutation.isPending ? "..." : "Create"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAssignMode("pick")}
+              className="rounded-lg border border-gray-600 px-2 py-1 text-xs text-gray-400 hover:text-white"
+            >
+              Back
+            </button>
+          </div>
+        </form>
+      )}
+      {assignMutation.isError && (
+        <p className="mt-1 text-xs text-red-400">{assignMutation.error?.message ?? "Failed"}</p>
+      )}
+    </>
+  );
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -804,6 +1000,7 @@ export function Lightbox({
                 onRenew={playback.renew}
                 failed={playback.failed}
                 fill={isFullscreen}
+                startAt={startAt}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">
@@ -879,186 +1076,7 @@ export function Lightbox({
                           className={`absolute z-50 w-64 max-h-[80vh] overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl ${popoverAnchorClass}`}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {isNamed && assignMode === "pick" ? (
-                            <div className="space-y-2">
-                              <p className="text-xs font-bold text-white">{face.person!.display_name}</p>
-                              <button
-                                type="button"
-                                onClick={() => { setAssignFaceId(null); navigate(`/people/${face.person!.person_id}`); }}
-                                className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
-                              >
-                                View person
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => unassignMutation.mutate(face.face_id)}
-                                disabled={unassignMutation.isPending}
-                                className="w-full rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-gray-700"
-                              >
-                                {unassignMutation.isPending ? "Removing..." : "Remove tag"}
-                              </button>
-                              <hr className="border-gray-700" />
-                              <p className="text-xs text-gray-500">Change to:</p>
-                              {candidatePeople.filter((p) => p.person_id !== face.person!.person_id).length > 0 && (
-                                <div className="max-h-24 space-y-1 overflow-y-auto">
-                                  {candidatePeople
-                                    .filter((p) => p.person_id !== face.person!.person_id)
-                                    .map((p) => (
-                                      <button
-                                        key={p.person_id}
-                                        type="button"
-                                        onClick={async () => {
-                                          await unassignFace(face.face_id);
-                                          assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
-                                        }}
-                                        disabled={assignMutation.isPending}
-                                        className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
-                                      >
-                                        {p.display_name} <span className="text-gray-500">({p.face_count})</span>
-                                      </button>
-                                    ))}
-                                </div>
-                              )}
-                              {/* Search the full people list — nearest-by-
-                                  embedding only surfaces the top 8, so we
-                                  need a way to reach everyone else. */}
-                              <div className="relative">
-                                <input
-                                  type="text"
-                                  value={assignSearch}
-                                  onChange={(e) => setAssignSearch(e.target.value)}
-                                  placeholder="Search by name..."
-                                  className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
-                                />
-                                {assignSearch.trim() && searchResults.length > 0 && (
-                                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
-                                    {searchResults
-                                      .filter((p) => p.person_id !== face.person!.person_id)
-                                      .map((p) => (
-                                        <button
-                                          key={p.person_id}
-                                          type="button"
-                                          onClick={async () => {
-                                            await unassignFace(face.face_id);
-                                            assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
-                                          }}
-                                          disabled={assignMutation.isPending}
-                                          className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
-                                        >
-                                          {p.display_name} <span className="text-gray-500">({p.face_count})</span>
-                                        </button>
-                                      ))}
-                                  </div>
-                                )}
-                                {assignSearch.trim() && searching && (
-                                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                                    <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
-                                  </div>
-                                )}
-                              </div>
-                              {unassignMutation.isError && (
-                                <p className="mt-1 text-xs text-red-400">{unassignMutation.error?.message ?? "Failed"}</p>
-                              )}
-                            </div>
-                          ) : assignMode === "pick" ? (
-                            <div className="space-y-2">
-                              <p className="text-xs font-medium text-gray-300">Who is this?</p>
-                              {candidatePeople.length > 0 && (
-                                <div className="max-h-32 space-y-1 overflow-y-auto">
-                                  {candidatePeople.map((p) => (
-                                    <button
-                                      key={p.person_id}
-                                      type="button"
-                                      onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
-                                      disabled={assignMutation.isPending}
-                                      className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
-                                    >
-                                      {p.display_name} <span className="text-gray-500">({p.face_count})</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              {/* Search the full people list — the
-                                  nearest ranking only surfaces the top 8,
-                                  so partial profiles / occluded faces
-                                  need a name escape hatch. */}
-                              <div className="relative">
-                                <input
-                                  type="text"
-                                  value={assignSearch}
-                                  onChange={(e) => setAssignSearch(e.target.value)}
-                                  placeholder="Search by name..."
-                                  className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
-                                />
-                                {assignSearch.trim() && searchResults.length > 0 && (
-                                  <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
-                                    {searchResults.map((p) => (
-                                      <button
-                                        key={p.person_id}
-                                        type="button"
-                                        onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
-                                        disabled={assignMutation.isPending}
-                                        className="block w-full px-2 py-1 text-left text-xs text-gray-200 hover:bg-indigo-600 hover:text-white disabled:opacity-50"
-                                      >
-                                        {p.display_name} <span className="text-gray-500">({p.face_count})</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                                {assignSearch.trim() && searching && (
-                                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                                    <div className="h-3 w-3 animate-spin rounded-full border border-gray-600 border-t-white" />
-                                  </div>
-                                )}
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setAssignMode("name")}
-                                className="w-full rounded-lg border border-dashed border-gray-600 px-2 py-1.5 text-xs text-indigo-400 hover:border-indigo-500 hover:text-indigo-300"
-                              >
-                                + New person
-                              </button>
-                            </div>
-                          ) : (
-                            <form
-                              onSubmit={(e) => {
-                                e.preventDefault();
-                                if (newPersonName.trim()) {
-                                  assignMutation.mutate({ faceId: face.face_id, newPersonName: newPersonName.trim() });
-                                }
-                              }}
-                              className="space-y-2"
-                            >
-                              <p className="text-xs font-medium text-gray-300">New person name</p>
-                              <input
-                                type="text"
-                                value={newPersonName}
-                                onChange={(e) => setNewPersonName(e.target.value)}
-                                placeholder="Enter name..."
-                                className="w-full rounded-lg border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
-                                autoFocus
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  type="submit"
-                                  disabled={assignMutation.isPending || !newPersonName.trim()}
-                                  className="flex-1 rounded-lg bg-indigo-600 px-2 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
-                                >
-                                  {assignMutation.isPending ? "..." : "Create"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setAssignMode("pick")}
-                                  className="rounded-lg border border-gray-600 px-2 py-1 text-xs text-gray-400 hover:text-white"
-                                >
-                                  Back
-                                </button>
-                              </div>
-                            </form>
-                          )}
-                          {assignMutation.isError && (
-                            <p className="mt-1 text-xs text-red-400">{assignMutation.error?.message ?? "Failed"}</p>
-                          )}
+                          {facePopoverBody(face, isNamed)}
                         </div>
                       )}
                     </div>
@@ -1343,6 +1361,72 @@ export function Lightbox({
                         onChanged={() => queryClient.invalidateQueries({ queryKey: ["asset", asset.asset_id] })}
                       />
                     )}
+                  </div>
+                </>
+              )}
+
+              {/* Section: People in a video: who's seen, when (a moment plays there), naming them (editors) */}
+              {hasVideoFaces && (facesData?.faces.length ?? 0) > 0 && (
+                <>
+                  <hr className="border-gray-700" />
+                  <div>
+                    <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">People</div>
+                    <ul className="space-y-2" aria-label="People in this video">
+                      {facesData!.faces.map((face) => {
+                        const isDismissed = face.person?.dismissed === true;
+                        const isNamed = face.person != null && !isDismissed;
+                        const isPopoverTarget = assignFaceId === face.face_id;
+                        return (
+                          <li key={face.face_id} className="relative flex items-start gap-2">
+                            <FaceCropImage faceId={face.face_id} size={36} />
+                            <div className="min-w-0 flex-1 space-y-1">
+                              {canCorrect ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAssignFaceId(isPopoverTarget ? null : face.face_id);
+                                    setAssignMode("pick");
+                                    setNewPersonName("");
+                                  }}
+                                  className={`text-left text-sm ${isNamed ? "text-gray-100 hover:text-indigo-300" : "text-indigo-400 hover:text-indigo-300"}`}
+                                >
+                                  {isNamed ? face.person!.display_name : isDismissed ? "Not a person" : "Who is this?"}
+                                </button>
+                              ) : isNamed ? (
+                                <button type="button" onClick={() => navigate(`/people/${face.person!.person_id}`)}
+                                  className="text-left text-sm text-gray-100 hover:text-indigo-300">
+                                  {face.person!.display_name}
+                                </button>
+                              ) : (
+                                <span className="text-sm text-gray-500">Not named</span>
+                              )}
+                              <div className="flex flex-wrap gap-1">
+                                {moments(face.seen_ms).map((m) => (
+                                  <button
+                                    key={m.start}
+                                    type="button"
+                                    disabled={!seekVideo}
+                                    onClick={() => seekVideo?.(m.start / 1000)}
+                                    title={seekVideo ? undefined : "Plays once the whole video is ready"}
+                                    className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white disabled:opacity-50 disabled:hover:bg-gray-800"
+                                  >
+                                    {momentLabel(m)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            {isPopoverTarget && (
+                              <div
+                                className="absolute left-0 top-full z-50 mt-1 w-64 max-h-[60vh] overflow-y-auto rounded-lg border border-gray-600 bg-gray-800 p-3 shadow-xl"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {facePopoverBody(face, isNamed)}
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 </>
               )}

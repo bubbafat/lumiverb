@@ -7,6 +7,7 @@ import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { useFaceCrop } from "../api/useFaceCrop";
 import { Lightbox } from "../components/Lightbox";
+import { clipCount } from "../components/ProjectUsageList";
 import { useCanEdit } from "../lib/useCanEdit";
 
 function DismissedPersonCard({
@@ -132,7 +133,7 @@ function DismissedPersonCard({
 
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-400">
-          {person.face_count} {person.face_count === 1 ? "photo" : "photos"}
+          {clipCount(person.face_count)}
         </p>
       </div>
 

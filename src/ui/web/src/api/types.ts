@@ -79,6 +79,9 @@ export interface FaceItem {
   bounding_box: { x: number; y: number; w: number; h: number } | null;
   detection_confidence: number | null;
   person: { person_id: string; display_name: string; dismissed: boolean } | null;
+  /** A video's face: the moment its box is from, and every moment the person was seen at (ms). */
+  frame_ms?: number | null;
+  seen_ms?: number[] | null;
 }
 
 export interface FaceListResponse {
@@ -165,6 +168,8 @@ export interface AssetDetail {
   note_author?: string | null;
   note_updated_at?: string | null;
   gps_accuracy_m?: number | null;
+  /** Faces found in it (null: not looked for yet, or a public page's); a video's, the people seen. */
+  face_count?: number | null;
   /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
   location?: AssetLocation | null;
 }

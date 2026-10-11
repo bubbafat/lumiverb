@@ -8,6 +8,9 @@ import { useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
  *
  * iOS loads nothing until a tap, so the clip's still shows first; with no
  * still, a #t fragment makes it paint the first frame.
+ *
+ * startAt (a person's moment, from People) is where it opens: once a source
+ * reaches it, so past the short preview it waits for the whole video.
  */
 export default function VideoPlayer({
   src: link,
@@ -18,6 +21,7 @@ export default function VideoPlayer({
   onRenew,
   failed: renewFailed = false,
   fill = false,
+  startAt,
 }: {
   src: string;
   /** The clip's still, shown before it plays. */
@@ -31,6 +35,8 @@ export default function VideoPlayer({
   failed?: boolean;
   /** Fullscreen: as tall as the screen allows, on a phone too. */
   fill?: boolean;
+  /** Seconds in to open at. */
+  startAt?: number;
 }) {
   const src = poster || link.includes("#") ? link : `${link}#t=0.001`;
   const ownRef = useRef<HTMLVideoElement | null>(null);
@@ -42,6 +48,8 @@ export default function VideoPlayer({
   const renewing = useRef(false);
   const [failed, setFailed] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
+  // Where to open, until a source reaches it.
+  const start = useRef<number | null>(startAt ?? null);
 
   // Before the browser can load the new source: its metadata event must find this.
   useLayoutEffect(() => {
@@ -94,6 +102,13 @@ export default function VideoPlayer({
             renewing.current = false;
             setFailed(false);
             setDuration(Number.isFinite(video.duration) ? video.duration : null);
+            if (start.current !== null && Number.isFinite(video.duration) && start.current < video.duration) {
+              video.currentTime = start.current;
+              last.current.time = start.current;
+              start.current = null;
+              resumeOn.current = null;
+              return;
+            }
             if (resumeOn.current !== src) return;
             resumeOn.current = null;
             const length = Number.isFinite(video.duration) ? video.duration : last.current.time;

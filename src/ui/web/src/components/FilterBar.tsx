@@ -5,6 +5,7 @@ import { RATING_COLORS, COLOR_HEX } from "../api/types";
 // formatExposure available if exposure filter UI is restored
 import { searchPeople, getPerson } from "../api/client";
 import { FaceCropImage } from "./FaceCropImage";
+import { clipCount } from "./ProjectUsageList";
 import type { LeafFilter } from "../lib/queryFilter";
 import {
   getFilterValue,
@@ -436,7 +437,7 @@ export function FilterBar({
                   <span className="flex-1">
                     {p.display_name}
                     <span className="ml-1.5 text-xs text-gray-500">
-                      {p.face_count} {p.face_count === 1 ? "photo" : "photos"}
+                      {clipCount(p.face_count)}
                     </span>
                   </span>
                 </button>
