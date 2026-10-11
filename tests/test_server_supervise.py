@@ -258,3 +258,26 @@ def test_a_child_hears_its_own_stop_signal(tmp_path, stop_signal, main_only):
     stop.set()
     thread.join(10)
     assert log.read_text() == stop_signal.name
+
+
+def test_a_restart_asked_for_stops_it_as_a_stop_does_and_starts_it_at_once(tmp_path):
+    """nginx after Settings › Network changes its listen lines: only it restarts,
+    without a crash's delay."""
+    nginx_log, api_log = tmp_path / "nginx.log", tmp_path / "api.log"
+    nginx = _child(tmp_path, "nginx", _POLITE, str(nginx_log), restart_after=60)
+    api = _child(tmp_path, "api", _POLITE, str(api_log))
+    supervisor = Supervisor([nginx, api])
+    stop, thread = _running(supervisor)
+    try:
+        _until(lambda: nginx_log.exists() and api_log.exists())
+        time.sleep(0.2)
+        assert [line.split()[0] for line in nginx_log.read_text().splitlines()] == ["start"]
+        first = nginx.process.pid
+        supervisor.restart_soon("nginx")
+        _until(lambda: [line.split()[0] for line in nginx_log.read_text().splitlines()] == ["start", "term", "start"])
+        assert nginx.process.pid != first and not _alive(first)
+        assert [line.split()[0] for line in api_log.read_text().splitlines()] == ["start"], "the others keep running"
+    finally:
+        stop.set()
+        thread.join(10)
+    assert not thread.is_alive()

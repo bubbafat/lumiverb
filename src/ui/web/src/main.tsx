@@ -29,6 +29,7 @@ import PlaybackSection from "./pages/settings/PlaybackSection";
 import AiSection from "./pages/settings/AiSection";
 import ProcessingSection from "./pages/settings/ProcessingSection";
 import FilesSection from "./pages/settings/FilesSection";
+import NetworkSection from "./pages/settings/NetworkSection";
 import SecuritySection from "./pages/settings/SecuritySection";
 import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import { getApiKey } from "./api/client";
@@ -198,6 +199,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="ai" element={<AiSection />} />
               <Route path="processing" element={<ProcessingSection />} />
               <Route path="files" element={<FilesSection />} />
+              <Route path="network" element={<NetworkSection />} />
               <Route path="security" element={<SecuritySection />} />
               <Route path="keys" element={<ApiKeysSection />} />
             </Route>

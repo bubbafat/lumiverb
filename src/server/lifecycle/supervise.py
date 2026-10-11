@@ -85,6 +85,24 @@ class Supervisor:
         self.children = children
         self._clock = clock
         self._spawn = spawn
+        self._restarts: set[str] = set()
+        self._restarts_lock = threading.Lock()
+
+    def restart_soon(self, name: str) -> None:
+        """Restart a child at the loop's next turn: stopped as on a stop, then
+        started at once (its config changed, not a crash). From any thread."""
+        with self._restarts_lock:
+            self._restarts.add(name)
+
+    def _restart_asked(self) -> None:
+        with self._restarts_lock:
+            names, self._restarts = self._restarts, set()
+        for child in self.children:
+            if child.name in names and child.started:
+                logger.info("%s restarting", child.name)
+                self._stop(child)
+                child.delay = None
+                self._start(child)
 
     def _start(self, child: Child) -> None:
         if child.empty_first is not None:
@@ -135,6 +153,7 @@ class Supervisor:
                 self._start(child)
         try:
             while not stop.wait(poll_sec):
+                self._restart_asked()
                 for child in self.children:
                     self._watch(child)
         finally:

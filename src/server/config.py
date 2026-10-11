@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     clip_model_name: str = "ViT-B-32"
     clip_pretrained: str = "openai"
 
+    # A Mac's own nginx, which lumiverb-server run starts: where it listens is
+    # Settings › Network's (src/server/lifecycle/network.py)
+    nginx_config: str = ""
+    web_port: int = 0
+
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",

@@ -1,4 +1,6 @@
-"""System health for the Admin page (GET /v1/system/health).
+"""System health for the Admin page (GET /v1/system/health), and whether
+other devices on the network may use a Mac's Lumiverb (/v1/system/network,
+Settings › Network).
 
 Six rows (website, processing, AI machines, search, storage, disk), each
 green, yellow or red with a one-line reason and where to fix it; the rules
@@ -16,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
@@ -24,7 +27,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server import system_health as h
-from src.server.api.dependencies import get_tenant_session, require_signed_in
+from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
 from src.shared.producers import PAUSE_SCANS
 from src.shared.utils import utcnow
 
@@ -226,3 +229,55 @@ def _disk(now: datetime) -> h.Row:
         return h.disk_row(free=None, total=None, now=now, error=_short(exc))
     return h.disk_row(free=usage.free, total=usage.total, now=now)
 
+
+
+class Network(BaseModel):
+    # This install's own nginx (lumiverb-server run's): where it listens is
+    # changed here. An nginx set up otherwise (the brain's) isn't.
+    available: bool
+    other_devices: bool  # may use it, or this machine only
+    addresses: list[str]  # where other devices reach it
+
+
+class NetworkChange(BaseModel):
+    other_devices: bool
+
+
+NOT_HERE = "Lumiverb doesn't run this server's web server, so who can reach it is set up where it's installed."
+ELSEWHERE = "Change this on the computer Lumiverb is installed on."
+
+
+def _network() -> Network:
+    from src.server.config import get_settings
+    from src.server.lifecycle import network
+
+    settings = get_settings()
+    data = Path(settings.data_dir)
+    if settings.web_port <= 0 or not network.managed(data, settings.nginx_config):
+        return Network(available=False, other_devices=False, addresses=[])
+    return Network(available=True, other_devices=network.other_devices(data),
+                   addresses=network.addresses(settings.web_port))
+
+
+@router.get("/network", response_model=Network, dependencies=[Depends(require_signed_in)])
+def get_network() -> Network:
+    """Whether other devices on the network may use it, and where they reach it."""
+    return _network()
+
+
+@router.put("/network", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+def change_network(body: NetworkChange, request: Request) -> Network:
+    """An admin's choice, on the machine itself (as for choosing a library's
+    folder): run applies it in a few seconds, restarting nginx."""
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+    from src.server.lifecycle import network
+
+    if not _network().available:
+        raise ApiError(409, "network_not_here", NOT_HERE)
+    if not on_this_machine(request):
+        raise ApiError(403, "network_elsewhere", ELSEWHERE)
+    network.set_other_devices(Path(get_settings().data_dir), body.other_devices)
+    logger.info("Other devices on the network %s (an admin's choice)", "may use it" if body.other_devices else "can't use it")
+    return _network()

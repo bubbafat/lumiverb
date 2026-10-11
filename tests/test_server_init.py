@@ -107,9 +107,13 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     # A whole config of its own: in the foreground, errors to the service's log.
     assert conf.startswith("# Lumiverb's own nginx") and "\ndaemon off;\nerror_log stderr;\n" in conf
     assert "        application/javascript js mjs;\n" in conf and "\n    access_log off;\n" in conf
-    # This machine only, until someone opens it up: it's set up here first.
-    assert "        listen 127.0.0.1:6464 default_server;\n        listen [::1]:6464 default_server;\n" in conf
-    assert "listen 6464" not in conf, "not on every address"
+    # Where it listens is Settings › Network's: this machine only, until an admin
+    # opens it up (it's set up here first). run rewrites the lines it includes.
+    assert f"        include {tmp_path / 'var' / 'nginx' / 'listen.conf'};\n" in conf
+    assert "listen" not in conf.replace("listen.conf", ""), "nothing fixed here"
+    listen = (tmp_path / "var" / "nginx" / "listen.conf").read_text()
+    assert "listen 127.0.0.1:6464 default_server;\nlisten [::1]:6464 default_server;\n" in listen
+    assert "listen 6464" not in listen, "not on every address"
     assert "proxy_pass http://127.0.0.1:6465;" in conf
     assert f"root {tmp_path / 'web'};" in conf
 
@@ -145,7 +149,9 @@ def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
     assert env_file.read_text().startswith("DATA_DIR="), "kept as it was"
     assert "listen_port: 9200\ngrpc_listen_port: 9201\n" in paths["quickwit"].read_text()
     conf = paths["nginx"].read_text()
-    assert "listen 127.0.0.1:9300 default_server;" in conf and "proxy_pass http://127.0.0.1:9100;" in conf
+    assert f"include {tmp_path / 'elsewhere' / 'nginx' / 'listen.conf'};" in conf
+    assert "proxy_pass http://127.0.0.1:9100;" in conf
+    assert "listen 127.0.0.1:9300 default_server;" in (tmp_path / "elsewhere" / "nginx" / "listen.conf").read_text()
     assert (tmp_path / "elsewhere" / "worker-tmp").is_dir()
 
 
