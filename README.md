@@ -23,7 +23,7 @@ Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), a
 With [Homebrew](https://brew.sh):
 
 ```bash
-brew trust --tap bubbafat/lumiverb && brew install --HEAD bubbafat/lumiverb/lumiverb
+brew trust --tap bubbafat/lumiverb && brew install bubbafat/lumiverb/lumiverb
 brew services start lumiverb
 ```
 
@@ -41,10 +41,10 @@ Python 3.12. The web app is for that Mac only to begin with. Details, ports
 and the Terminal way to create the account: the
 [tap's README](https://github.com/bubbafat/homebrew-lumiverb).
 
-Update (`--fetch-HEAD` because it builds from `main`: there are no releases yet):
+Update (it restarts itself into the new version):
 
 ```bash
-brew upgrade --fetch-HEAD lumiverb && brew services restart lumiverb
+brew upgrade lumiverb
 ```
 
 ### On a Linux server
