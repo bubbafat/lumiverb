@@ -113,7 +113,8 @@ ollama pull qwen3-vl:8b-instruct
 (Or the app from [ollama.com/download](https://ollama.com/download), then the
 `ollama pull`.)
 
-On Linux:
+On Linux, install the NVIDIA driver first (`nvidia-smi` works): without it
+Ollama runs on the CPU, where a photo takes minutes. Then:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
@@ -122,6 +123,8 @@ curl -fsSL https://ollama.com/install.sh | sh
 ```bash
 ollama pull qwen3-vl:8b-instruct
 ```
+
+`ollama ps` shows whether the model runs on the GPU.
 
 Then, as an admin, in Lumiverb:
 
@@ -132,9 +135,19 @@ Then, as an admin, in Lumiverb:
 
 The URL is `http://localhost:11434/v1` when Ollama runs on the same computer
 as Lumiverb. On another computer it's that computer's address, such as
-`http://192.168.1.20:11434/v1`, and Ollama there must listen on the network
-(`OLLAMA_HOST=0.0.0.0`: [Ollama's FAQ](https://docs.ollama.com/faq)). Ollama
-has no password, so do that only on a network you trust.
+`http://192.168.1.20:11434/v1`, and Ollama there must listen on the network.
+Ollama has no password, so do that only on a network you trust. On Linux,
+add `Environment="OLLAMA_HOST=0.0.0.0"` under `[Service]`:
+
+```bash
+sudo systemctl edit ollama.service
+```
+
+```bash
+sudo systemctl restart ollama
+```
+
+On a Mac, see [Ollama's FAQ](https://docs.ollama.com/faq).
 
 **Requests at once** is how many photos it works on together. Leave it at 1 unless
 that Ollama runs several in parallel (`OLLAMA_NUM_PARALLEL`); each one takes
