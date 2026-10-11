@@ -32,6 +32,22 @@ def test_no_install_named_is_refused_not_guessed(capsys, monkeypatch):
     assert called == [], "nothing was migrated"
 
 
+def test_run_with_no_install_named_is_refused_and_starts_nothing(capsys, monkeypatch):
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(cli, "migrate_when_ready", lambda *a, **k: pytest.fail("nothing may migrate"))
+    assert cli.main(["run"]) == 1
+    assert _err(capsys).startswith("✗ Say which install:")
+
+
+def test_run_with_a_data_dir_that_isnt_a_full_path_is_refused_and_starts_nothing(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(cli, "migrate_when_ready", lambda *a, **k: pytest.fail("nothing may migrate"))
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://x\nDATA_DIR=data\n")
+    assert cli.main(["run", "--env", str(env_file)]) == 1
+    assert _err(capsys) == "✗ DATA_DIR must be a full path, not data"
+
+
 def test_the_environment_can_name_it(tmp_path, monkeypatch, capsys):
     called = []
     monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)
@@ -43,6 +59,17 @@ def test_the_environment_can_name_it(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://from-the-environment")
     assert cli.main(["migrate"]) == 0
     assert called == ["postgresql://from-the-file", "postgresql://from-the-environment"]
+
+
+@pytest.mark.parametrize("argv", [["--env", "{file}", "migrate"], ["migrate", "--env", "{file}"]],
+                         ids=["before the command", "after it"])
+def test_env_goes_before_or_after_the_command(argv, tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://from-the-file\n")
+    assert cli.main([part.format(file=env_file) for part in argv]) == 0
+    assert called == ["postgresql://from-the-file"]
 
 
 def test_a_named_file_that_isnt_there_is_refused(tmp_path, capsys):

@@ -6,6 +6,7 @@ that), as a function a service can run before it starts, on any platform.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -16,6 +17,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 # The checkout or install: where alembic-*.ini and migrations/ are.
 APP_DIR = Path(__file__).resolve().parents[3]
+
+# A traceback's exception line ("sqlalchemy.exc.OperationalError: ..."); what
+# follows it can be a hint or a link ("(Background on this error at: ...)").
+_EXCEPTION_LINE = re.compile(r"^\w[\w.]*(Error|Exception):")
 
 
 class MigrationError(RuntimeError):
@@ -33,6 +38,11 @@ def _upgrade(ini: str, variable: str, url: str, cwd: Path) -> list[str] | None:
         return None
     said = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
     return said.splitlines() or [f"alembic exited {result.returncode}"]
+
+
+def _cause(said: list[str]) -> str:
+    """The one line that says why: the last exception line, else the last line."""
+    return next((line for line in reversed(said) if _EXCEPTION_LINE.match(line)), said[-1])
 
 
 def _say_all(said: list[str], say: Callable[[str], None]) -> None:
@@ -64,9 +74,9 @@ def migrate(control_url: str, *, cwd: Path = APP_DIR, say: Callable[[str], None]
     say("Control plane")
     said = _upgrade("alembic-control.ini", "ALEMBIC_CONTROL_URL", control_url, cwd)
     if said:
-        say(f"  ✗ {said[-1]}")
+        say(f"  ✗ {_cause(said)}")
         _say_all(said, say)
-        raise MigrationError(f"The control plane's migration failed: {said[-1]}")
+        raise MigrationError(f"The control plane's migration failed: {_cause(said)}")
     say("  ✓ up to date")
 
     tenants = tenant_databases(control_url)
@@ -74,10 +84,10 @@ def migrate(control_url: str, *, cwd: Path = APP_DIR, say: Callable[[str], None]
     failed: list[str] = []
     for number, (tenant_id, url) in enumerate(tenants, 1):
         said = _upgrade("alembic-tenant.ini", "ALEMBIC_TENANT_URL", url, cwd)
-        say(f"  [{number}/{len(tenants)}] {tenant_id} {'✗ ' + said[-1] if said else '✓'}")
+        say(f"  [{number}/{len(tenants)}] {tenant_id} {'✗ ' + _cause(said) if said else '✓'}")
         if said:
             _say_all(said, say)
-            failed.append(f"{tenant_id}: {said[-1]}")
+            failed.append(f"{tenant_id}: {_cause(said)}")
     if failed:
         raise MigrationError(f"{len(failed)} of {len(tenants)} accounts' migrations failed: " + "; ".join(failed))
     return len(tenants)
