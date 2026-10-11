@@ -6,12 +6,17 @@ on 5432, a dev checkout's)."""
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
 import tempfile
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
-from sqlalchemy import make_url
+from sqlalchemy import create_engine, make_url, text
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class PostgresError(RuntimeError):
@@ -64,3 +69,50 @@ def postgres_argv(pg_bin: Path, data_dir: Path, url: str) -> list[str]:
     port = make_url(url).port or 5432
     return [str(pg_bin / "postgres"), "-D", str(cluster_dir(data_dir)), "-p", str(port),
             "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]
+
+
+def answers(url: str) -> bool:
+    """Whether the URL's server takes connections (its own `postgres` database)."""
+    engine = create_engine(make_url(url).set(database="postgres"))
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except SQLAlchemyError:
+        return False
+    finally:
+        engine.dispose()
+
+
+START_WAIT_SEC = 30.0
+
+
+@contextlib.contextmanager
+def up_while(pg_bin: Path | None, data_dir: Path, url: str, env: dict[str, str]) -> Iterator[None]:
+    """The install's PostgreSQL taking connections meanwhile: already up, or
+    (a Mac's own, with the service stopped) started for the while and
+    stopped after. Raises PostgresError when it can't be reached."""
+    if answers(url):
+        yield
+        return
+    if pg_bin is None or not (cluster_dir(data_dir) / "PG_VERSION").exists():
+        raise PostgresError("Can't reach the database. Is PostgreSQL running?")
+    process = subprocess.Popen(postgres_argv(pg_bin, data_dir, url), env=postgres_env(env),
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + START_WAIT_SEC
+        while not answers(url):
+            if process.poll() is not None:
+                said = (process.stderr.read() if process.stderr else "").strip().splitlines()
+                raise PostgresError(f"Lumiverb's PostgreSQL didn't start: {said[-1] if said else process.returncode}")
+            if time.monotonic() > deadline:
+                raise PostgresError("Lumiverb's PostgreSQL didn't start within 30 seconds")
+            time.sleep(0.5)
+        yield
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)  # a fast shutdown, as run stops it
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.kill()

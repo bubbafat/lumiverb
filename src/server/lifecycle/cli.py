@@ -6,6 +6,8 @@
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
     lumiverb-server reset-password --env FILE [--email EMAIL]
+    lumiverb-server backup --env FILE
+    lumiverb-server restore --env FILE BACKUP [--yes]
 
 init: the install's env file, Quickwit's config and nginx's, each written
 only if it isn't there (init.py), for Homebrew's post_install.
@@ -31,6 +33,17 @@ reset-password: someone's new password, asked for twice, signing them out
 everywhere: what Forgot password on a Mac itself does (no email needed), on
 any install. The env file is the operator's, so this needs no other proof.
 
+backup: every database backed up now, into the install's backups folder
+(src/server/backups.py), as Settings › Backups' Back up now does. Run as
+root (a Linux install's sudo), backup and restore go on as the data
+folder's owner, so what they write stays the API's.
+
+restore: every database put back from a backup (its folder, or its name in
+the backups folder), with Lumiverb stopped: after backing up what's there
+first, so it can be undone. Then migrated to this version; the search index
+is remade from it once Lumiverb runs. A Mac's own PostgreSQL is started for
+the while if the service is stopped.
+
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
 environment (a dev checkout). On Linux /etc/lumiverb/env is the live
@@ -54,6 +67,7 @@ from datetime import datetime
 from getpass import getpass
 from pathlib import Path
 
+from src.server import backups
 from src.server.lifecycle import network, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
@@ -62,12 +76,14 @@ from src.server.lifecycle.migrate import (
     MigrationError,
     create_database_if_missing,
     migrate,
+    pending,
 )
 from src.server.lifecycle.postgres import (
     PostgresError,
     make_cluster_if_missing,
     postgres_argv,
     postgres_env,
+    up_while,
 )
 from src.server.lifecycle.supervise import Child, Supervisor
 
@@ -117,12 +133,14 @@ def data_dir(env: dict[str, str]) -> Path:
 
 
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
-                    cwd: Path = APP_DIR, config_dir: Path | None = None) -> list[Child]:
+                    cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None) -> list[Child]:
     """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
     API and the scheduler (once `migrated`), with a Linux install's units'
     environment, restart delays and stop times (deploy-api.sh). They stop in
     reverse: the scheduler first, PostgreSQL last. The scheduler never reads
-    the install's own settings (config_dir: the env file's folder, its secrets)."""
+    the install's own settings (config_dir: the env file's folder, its secrets).
+    The API is told which env file is the install's (env_file), to say how to
+    restore a backup."""
     base = {**env, "PYTHONUNBUFFERED": "1"}
     data = data_dir(env)
     started_first: list[Child] = []
@@ -147,7 +165,7 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
          "--port", env.get("API_PORT") or DEFAULT_API_PORT,
          "--workers", env.get("LUMIVERB_API_WORKERS") or DEFAULT_API_WORKERS],
         # Large uploads (analysis proxies) are spooled on the data disk.
-        {**base, "TMPDIR": str(data / "tmp")}, cwd,
+        {**base, "TMPDIR": str(data / "tmp"), **({"LUMIVERB_ENV_FILE": str(env_file)} if env_file else {})}, cwd,
         restart_after=5, stop_within=90, empty_first=data / "tmp", start_after=migrated,
     )
     # Which library folders it reads is the env file's to say (LUMIVERB_ROOT_MAP),
@@ -249,11 +267,35 @@ def _migrate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _created_and_migrated(url: str) -> int:
-    """Its control database made if missing, then migrated. Said through the
-    log: print()'s lines wait in a buffer when the log is a file (launchd's)."""
+def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
+    """A backup before migrations this version brings (an upgrade's), into
+    the backups folder, else DATA_DIR/backups (the chosen one may be a drive
+    that isn't plugged in). One that can't be made is logged, and the
+    upgrade goes on: the nightly ones are there, and a service that won't
+    start after an upgrade is worse. None when nothing needs migrating."""
+    if not pending(url):
+        return None
+    data, pg_bin = data_dir(env), env.get("PG_BIN") or None
+    tried = []
+    for dest in dict.fromkeys([backups.folder(data), backups.default_folder(data)]):
+        try:
+            backup = backups.back_up(data, url, "before-upgrade", pg_bin=pg_bin, dest=dest)
+            logger.info("Backed up before migrating: %s", backup.path)
+            return backup
+        except backups.BackupError as exc:
+            tried.append(f"{dest}: {exc}")
+    logger.error("No backup before migrating (%s); migrating anyway", "; ".join(tried))
+    return None
+
+
+def _created_and_migrated(url: str, env: dict[str, str] | None = None) -> int:
+    """Its control database made if missing, backed up if an upgrade's
+    migrations are waiting, then migrated. Said through the log: print()'s
+    lines wait in a buffer when the log is a file (launchd's)."""
     if create_database_if_missing(url):
         logger.info("Created the control database")
+    if env is not None:
+        backed_up_before_upgrade(env, url)
     return migrate(url, say=logger.info)
 
 
@@ -261,7 +303,7 @@ def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrate
     """Migrations (waiting for PostgreSQL), then the API and the scheduler may
     start, and upkeep runs."""
     first_wait = 1.0 if env.get("PG_BIN") else 5.0  # ours is up in a second or two
-    if not migrate_when_ready(url, stop, migrate_fn=_created_and_migrated, first_wait=first_wait):
+    if not migrate_when_ready(url, stop, migrate_fn=lambda u: _created_and_migrated(u, env), first_wait=first_wait):
         return
     migrated.set()
     base_url = f"http://127.0.0.1:{env.get('API_PORT') or DEFAULT_API_PORT}"
@@ -312,7 +354,8 @@ def _run(args: argparse.Namespace) -> int:
     migrated = threading.Event()
     named = _named_env_file(args.env)
     # Built first: a setting it can't use stops it before anything starts.
-    children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None)
+    children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None,
+                               env_file=named.absolute() if named else None)
     logging.basicConfig(level=logging.INFO, format="lumiverb-server: %(message)s")
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -427,6 +470,111 @@ def _reset_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _size(n: int) -> str:
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def as_data_owner(data: Path) -> None:
+    """Run on as whoever owns the data folder, when started as root (sudo, to
+    read a Linux install's env file): what's written there (backups, their
+    state) stays the API's to read, prune and update."""
+    if os.geteuid() != 0:
+        return
+    try:
+        owner = data.stat()
+    except OSError:
+        return
+    if owner.st_uid == 0:
+        return
+    os.setgroups([])
+    os.setgid(owner.st_gid)
+    os.setuid(owner.st_uid)
+
+
+def _backup(args: argparse.Namespace) -> int:
+    env, url = _env_and_url(args)
+    data = data_dir(env)
+    as_data_owner(data)
+    try:
+        with up_while(Path(env["PG_BIN"]) if env.get("PG_BIN") else None, data, url, env):
+            backup = backups.back_up(data, url, "now", pg_bin=env.get("PG_BIN") or None)
+    except (backups.BackupError, PostgresError) as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    print(f"✓ Backed up {len(backup.databases)} database(s), {_size(backup.bytes)}: {backup.path}")
+    return 0
+
+
+def _which_backup(name: str, data: Path) -> backups.Backup:
+    """A backup by its folder, or its name in the backups folder."""
+    path = Path(name).expanduser()
+    if not path.is_absolute() and not path.exists():
+        path = backups.folder(data) / name
+    return backups.read(path.absolute())
+
+
+def _restore(args: argparse.Namespace) -> int:
+    env, url = _env_and_url(args)
+    data = data_dir(env)
+    as_data_owner(data)
+    pg_bin = env.get("PG_BIN") or None
+    try:
+        backup = _which_backup(args.backup, data)
+        backups.verify(backup)
+    except backups.BackupError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    made = backup.made_at.astimezone().strftime("%b %-d %Y, %H:%M")
+    kind = {"now": "made by hand", "before-upgrade": "made before an upgrade",
+            "before-restore": "made before a restore"}.get(backup.kind, backup.kind)
+    print(f"The backup from {made} ({kind}): the control plane and {backup.accounts} account(s).")
+    print("Everything since then is replaced. What's here now is backed up first, so this can be undone.")
+    if not args.yes and input("Type restore to go on: ").strip() != "restore":
+        print("✗ Nothing was changed", file=sys.stderr)
+        return 1
+    try:
+        with up_while(Path(pg_bin) if pg_bin else None, data, url, env):
+            try:
+                first = backups.back_up(data, url, "before-restore", pg_bin=pg_bin)
+                print(f"✓ What was here: {first.path}")
+            except backups.BackupError as exc:
+                if not _has_database(url):
+                    print("  Nothing here to back up first (a new install)")
+                else:
+                    raise backups.BackupError(f"Couldn't back up what's here first, so nothing was changed: {exc}") from None
+            print("Putting back")
+            left = backups.restore(backup, url, tenant_url_template=env.get("TENANT_DATABASE_URL_TEMPLATE") or None,
+                                   pg_bin=pg_bin)
+            print("Migrating to this version")
+            migrate(url, say=lambda line: print(f"  {line}"))
+    except (backups.BackupError, PostgresError, MigrationError) as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    for name in left:
+        print(f"  ! {name} isn't in the backup: left as it was, no account lists it now")
+    print(f"✓ Restored the backup from {made}. Start Lumiverb again; search is remade from it in a few minutes.")
+    return 0
+
+
+def _has_database(url: str) -> bool:
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except SQLAlchemyError:
+        return False
+    finally:
+        engine.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lumiverb-server", description="Look after this machine's Lumiverb server.")
     _env_option(parser, None)
@@ -464,10 +612,17 @@ def main(argv: list[str] | None = None) -> int:
         "reset-password", help="set someone's new password, signing them out everywhere (no email needed)")
     _env_option(reset_command, argparse.SUPPRESS)
     reset_command.add_argument("--email", help="theirs (asked if not given)")
+    _env_option(commands.add_parser("backup", help="back up every database now, into the backups folder"),
+                argparse.SUPPRESS)
+    restore_command = commands.add_parser(
+        "restore", help="put every database back from a backup, with Lumiverb stopped (what's there is backed up first)")
+    _env_option(restore_command, argparse.SUPPRESS)
+    restore_command.add_argument("backup", help="the backup's folder, or its name in the backups folder")
+    restore_command.add_argument("--yes", action="store_true", help="don't ask first")
     args = parser.parse_args(argv)
     try:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
-                "reset-password": _reset_password}[args.command](args)
+                "reset-password": _reset_password, "backup": _backup, "restore": _restore}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1

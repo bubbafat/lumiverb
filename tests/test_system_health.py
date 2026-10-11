@@ -1,4 +1,4 @@
-"""The Admin page's system health: six rows, each green, yellow or red with
+"""The Admin page's system health: seven rows, each green, yellow or red with
 a one-line reason and where to fix it (src/server/system_health.py).
 
 These are the rules alone, on plain inputs; tests/test_system_health_api.py

@@ -7,7 +7,7 @@ must say so with ?tenants=all; without it the call is a 400, never
 
 POST /v1/upkeep                    — search sync, face names, expired trash, missing artifact files,
                                      empty dismissed people, face clusters when faces changed
-                                     (and, all accounts, old revoked tokens)
+                                     (and, all accounts, old revoked tokens and the nightly backup)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true);
                                      folders the database doesn't list are only reported
@@ -132,6 +132,9 @@ class UpkeepResult(BaseModel):
     missing_files: MissingFilesResult = MissingFilesResult()
     dismissed_people: DismissedPeopleResult = DismissedPeopleResult()
     face_clusters: FaceClustersResult = FaceClustersResult()
+    # The admin key with tenants=all: the nightly backup "started", "running" or
+    # "not due" (src/server/backups.py); None for one account.
+    backup: str | None = None
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -437,8 +440,10 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     people, and computing the face clusters again when faces changed since they were.
 
     An account admin's key: that account. The admin key with tenants=all:
-    every account, and old revoked tokens are dropped.
+    every account, old revoked tokens are dropped, and the nightly backup
+    starts when it's due (none since the latest 03:00 here).
     """
+    backup = _nightly_backup() if scope.all_tenants else None
     if scope.all_tenants:
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
@@ -459,7 +464,24 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         missing_files=MissingFilesResult(**missing),
         dismissed_people=DismissedPeopleResult(**dismissed),
         face_clusters=FaceClustersResult(**clusters),
+        backup=backup,
     )
+
+
+def _nightly_backup() -> str:
+    """The nightly backup started in the background when due. Never fails upkeep."""
+    import os
+    from pathlib import Path
+
+    from src.server import backups
+
+    settings = get_settings()
+    try:
+        return backups.start_nightly_if_due(Path(settings.data_dir), settings.control_plane_database_url,
+                                            pg_bin=os.environ.get("PG_BIN") or None)
+    except Exception as exc:  # noqa: BLE001 — said in the log and on the Admin page, not here
+        logger.warning("The nightly backup didn't start: %s", exc)
+        return "not started"
 
 
 @router.post("/search-sync", response_model=SearchSyncResult)

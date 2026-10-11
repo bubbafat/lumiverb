@@ -88,3 +88,46 @@ def test_a_scene_described_again_is_stale_until_search_has_it(env):
         VideoSceneRepository(s).update_vision(scene_id, "m2", "1", "a brand new description", [])
         assert s.execute(text("SELECT search_synced_at IS NULL FROM video_scenes WHERE scene_id = :s"),
                          {"s": scene_id}).scalar()
+
+
+@pytest.mark.slow
+def test_after_a_restore_the_sweep_remakes_the_indexes_then_reindexes_everything(env):
+    """A restored database (src/server/backups.py) is marked: the next sweep
+    empties the account's indexes and puts every clip back."""
+    from src.server.search.sync import mark_recreate, run_search_sync_sweep
+
+    lib = _library(env, "Restored")
+    clip = _ingest_with(lib, "restored.jpg", _sha(), None)
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = now()"))
+        mark_recreate(s)
+        s.commit()
+        qw = MagicMock()
+        qw.ensure_tenant_index.return_value = False
+        qw.ensure_tenant_scene_index.return_value = False
+        qw.ensure_tenant_transcript_index.return_value = False
+        with patch("src.server.search.sync._get_quickwit", return_value=qw):
+            run_search_sync_sweep(s, tenant_id=env[4])
+        qw.recreate_tenant_indexes.assert_called_once_with(env[4])
+        assert not s.execute(text("SELECT 1 FROM system_metadata WHERE key = 'search.recreate'")).scalar()
+        ingested = {d["asset_id"] for call in qw.ingest_tenant_documents.call_args_list for d in call.args[1]}
+        assert clip in ingested, "every clip goes back in, synced or not before"
+        with patch("src.server.search.sync._get_quickwit", return_value=qw):
+            run_search_sync_sweep(s, tenant_id=env[4])
+        qw.recreate_tenant_indexes.assert_called_once()  # once: the mark is gone
+
+
+@pytest.mark.slow
+def test_a_restore_mark_waits_while_quickwit_is_down(env):
+    from src.server.search.sync import mark_recreate, run_search_sync_sweep
+
+    with _db(env) as s:
+        mark_recreate(s)
+        s.commit()
+        qw = MagicMock()
+        qw.recreate_tenant_indexes.side_effect = ConnectionError("Quickwit isn't answering")
+        with patch("src.server.search.sync._get_quickwit", return_value=qw):
+            run_search_sync_sweep(s, tenant_id=env[4])
+        assert s.execute(text("SELECT 1 FROM system_metadata WHERE key = 'search.recreate'")).scalar()
+        s.execute(text("DELETE FROM system_metadata WHERE key = 'search.recreate'"))
+        s.commit()

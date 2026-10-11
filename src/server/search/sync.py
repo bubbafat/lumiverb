@@ -50,6 +50,30 @@ def mark_reindex(session: Session, kinds: list[str]) -> None:
     session.commit()
 
 
+_RECREATE_KEY = "search.recreate"
+
+
+def mark_recreate(conn) -> None:
+    """Record that the account's indexes must be remade, empty, and filled
+    again: a restore put back a database the index no longer matches. The
+    next sweep does it. In the caller's transaction (a Session or a Connection)."""
+    conn.execute(text(
+        "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, 'needed', now())"
+        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"k": _RECREATE_KEY})
+
+
+def recreate_marked(session: Session, qw: QuickwitClient, tenant_id: str) -> bool:
+    """Remakes the account's indexes when marked (mark_recreate), and marks
+    everything for a reindex. True if it did. Commits."""
+    if not session.execute(text("SELECT 1 FROM system_metadata WHERE key = :k"), {"k": _RECREATE_KEY}).scalar():
+        return False
+    qw.recreate_tenant_indexes(tenant_id)
+    session.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": _RECREATE_KEY})
+    mark_reindex(session, list(REINDEX_RESETS))  # commits both
+    logger.info("Search indexes remade for %s (a restore): reindexing all of it", tenant_id)
+    return True
+
+
 def reset_marked(session: Session) -> list[str]:
     """Clear the sync times of the indexes marked for a reindex, and the
     marks, in one transaction. Returns the kinds reset."""
@@ -328,6 +352,11 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
 
     from src.server.repository.tenant import AssetMetadataRepository
 
+    try:
+        recreate_marked(session, qw, tenant_id)
+    except Exception as exc:  # noqa: BLE001 — Quickwit down: the mark stays, tried next sweep
+        session.rollback()
+        logger.warning("Cannot remake %s's search indexes after a restore: %s", tenant_id, exc)
     # Every index is made here even with nothing to put in it yet (searches
     # on a missing transcript index fail).
     ready: set[str] = set()
