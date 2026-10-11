@@ -12,6 +12,7 @@ import type {
   EmptyTrashResponse,
   FaceListResponse,
   FacetsResponse,
+  InviteLink,
   LibraryHealthItem,
   LibraryListItem,
   LibraryResponse,
@@ -1219,15 +1220,17 @@ export async function listUsers(): Promise<UserItem[]> {
   return apiFetch<UserItem[]>("/users");
 }
 
-export async function createUser(
-  email: string,
-  password: string,
-  role: string,
-): Promise<UserItem> {
+/** Invite someone: they get a link (invite_urls) to choose their own password. */
+export async function inviteUser(email: string, role: string): Promise<UserItem> {
   return apiFetch<UserItem>("/users", {
     method: "POST",
-    body: { email, password, role },
+    body: { email, role },
   });
+}
+
+/** A new link for someone who hasn't signed in yet; the old one stops working (409 already_joined otherwise). */
+export async function newInviteLink(userId: string): Promise<InviteLink> {
+  return apiFetch<InviteLink>(`/users/${encodeURIComponent(userId)}/invite`, { method: "POST" });
 }
 
 export async function updateUserRole(

@@ -16,6 +16,7 @@ import LibrariesPage from "./pages/LibrariesPage";
 import LibrarySettingsPage from "./pages/LibrarySettingsPage";
 import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import JoinPage from "./pages/JoinPage";
 import SetupPage from "./pages/SetupPage";
 import DismissedPeoplePage from "./pages/DismissedPeoplePage";
 import PeoplePage from "./pages/PeoplePage";
@@ -81,6 +82,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/setup" element={<SetupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/join" element={<JoinPage />} />
           <Route path="/" element={<AppShell />}>
             <Route path="libraries/:libraryId/browse" element={<BrowsePage />} />
             <Route

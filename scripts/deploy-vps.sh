@@ -13,8 +13,8 @@
 #
 # Idempotent: safe to run again to update an existing install.
 #
-# After completion, create the first admin user:
-#   sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb user create --email you@example.com --role admin
+# After completion, create the first admin (while nobody can log in):
+#   sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --email you@example.com
 #
 set -euo pipefail
 
