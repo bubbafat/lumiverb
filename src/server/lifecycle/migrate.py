@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
 # The checkout or install: where alembic-*.ini and migrations/ are.
@@ -48,6 +48,29 @@ def _cause(said: list[str]) -> str:
 def _say_all(said: list[str], say: Callable[[str], None]) -> None:
     for line in said:
         say(f"      {line}")
+
+
+def create_database_if_missing(url: str) -> bool:
+    """Creates the URL's database when its server doesn't have it (connecting
+    to the server's own `postgres` database); True if it did. For a Mac's
+    service, so there's no createdb to type; the brain's installer makes its
+    own. Raises MigrationError when the server can't be reached."""
+    target = make_url(url)
+    name = target.database
+    if not name:
+        raise MigrationError(f"No database named in {target.render_as_string(hide_password=True)}")
+    engine = create_engine(target.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            if conn.execute(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}).scalar():
+                return False
+            conn.execute(text(f'CREATE DATABASE "{name.replace(chr(34), chr(34) * 2)}"'))
+            return True
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        raise MigrationError(f"Can't create the database {name}: {first}") from exc
+    finally:
+        engine.dispose()
 
 
 def tenant_databases(control_url: str) -> list[tuple[str, str]]:

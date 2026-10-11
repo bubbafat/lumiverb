@@ -62,7 +62,10 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     assert "listen_port: 6466\ngrpc_listen_port: 6467\n" in paths["quickwit"].read_text()
     assert f"data_dir: {tmp_path / 'var' / 'quickwit'}\n" in paths["quickwit"].read_text()
     site = paths["nginx"].read_text()
-    assert "listen 6464 default_server;" in site and "proxy_pass http://127.0.0.1:6465;" in site
+    # This machine only, until someone opens it up: it's set up here first.
+    assert "    listen 127.0.0.1:6464 default_server;\n    listen [::1]:6464 default_server;\n" in site
+    assert "listen 6464" not in site, "not on every address"
+    assert "proxy_pass http://127.0.0.1:6465;" in site
     assert f"root {tmp_path / 'web'};" in site
 
     for folder in ("quickwit", "cache", "tmp", "worker-tmp"):
@@ -88,7 +91,7 @@ def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
     assert env_file.read_text().startswith("DATA_DIR="), "kept as it was"
     assert "listen_port: 9200\ngrpc_listen_port: 9201\n" in paths["quickwit"].read_text()
     site = paths["nginx"].read_text()
-    assert "listen 9300 default_server;" in site and "proxy_pass http://127.0.0.1:9100;" in site
+    assert "listen 127.0.0.1:9300 default_server;" in site and "proxy_pass http://127.0.0.1:9100;" in site
     assert (tmp_path / "elsewhere" / "worker-tmp").is_dir()
 
 
@@ -141,7 +144,7 @@ def test_the_nginx_site_is_deploy_web_s_to_the_byte():
     brain = _heredoc(SCRIPTS / "deploy-web.sh", "cat > /etc/nginx/sites-available/lumiverb <<NGINX",
                      {"LISTEN": "listen 6464 default_server;", "DOMAIN": "_", "APP_DIR": "/opt/lumiverb",
                       "API_UPSTREAM": "http://127.0.0.1:6465"}, also=("CSP=",))
-    assert nginx_site(listen="listen 6464 default_server;", server_name="_",
+    assert nginx_site(listen=("listen 6464 default_server;",), server_name="_",
                       root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465") == brain
 
 

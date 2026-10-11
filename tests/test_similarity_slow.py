@@ -49,7 +49,7 @@ def similarity_client() -> Tuple[_AuthClient, str, str]:
         _engines.clear()
 
         # Create tenant and API key via admin router
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.accounts.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",

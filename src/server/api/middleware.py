@@ -26,6 +26,8 @@ def _skip_tenant_middleware(path: str) -> bool:
         return True
     if path.startswith("/v1/auth/"):
         return True
+    if path == "/v1/setup":
+        return True  # before anyone can log in (routers/setup.py)
     if path.startswith("/v1/upkeep"):
         return True
     if path.startswith("/v1/filters/"):

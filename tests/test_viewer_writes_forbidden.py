@@ -43,8 +43,9 @@ WRITING_GETS: set[tuple[str, str]] = set()
 
 
 def _outside_tenant_auth(path: str) -> bool:
-    """Signing in, the operator's admin key, and upkeep (another PR) aren't tenant roles."""
-    return path.startswith(("/v1/auth/", "/v1/admin/", "/v1/upkeep"))
+    """Signing in, first-run setup (before anyone has a role), the operator's
+    admin key, and upkeep (another PR) aren't tenant roles."""
+    return path.startswith(("/v1/auth/", "/v1/setup", "/v1/admin/", "/v1/upkeep"))
 
 
 def _writes() -> list[tuple[str, str]]:
@@ -77,7 +78,7 @@ def viewer_client():
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.accounts.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post("/v1/admin/tenants", json={"name": "ViewerTenant", "plan": "free"},
                                 headers={"Authorization": "Bearer test-admin-secret"})

@@ -494,7 +494,7 @@ def test_a_tenant_made_with_a_vision_url_gets_its_first_machine(env, none):
     from src.server.database import get_control_session
 
     client, *_ = env
-    with patch("src.server.api.routers.admin.provision_tenant_database"):
+    with patch("src.server.accounts.provision_tenant_database"):
         r = client.post("/v1/admin/tenants", json={"name": "WithVision", "vision_api_url": BRAIN + "/",
                                                    "vision_api_key": "sk-v"},
                         headers={"Authorization": "Bearer test-admin-analysis"})
@@ -543,7 +543,7 @@ def test_a_new_account_gets_its_built_in_whisper(env, none):
     from src.server.repository.ai_machines import job_model, machines
 
     client, *_ = env
-    with patch("src.server.api.routers.admin.provision_tenant_database"):
+    with patch("src.server.accounts.provision_tenant_database"):
         r = client.post("/v1/admin/tenants", json={"name": "FreshWhisper"},
                         headers={"Authorization": "Bearer test-admin-analysis"})
     assert r.status_code == 200, r.text

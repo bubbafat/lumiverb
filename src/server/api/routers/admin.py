@@ -6,12 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.server.accounts import AccountError, create_account, remove_account
 from src.server.api.dependencies import get_db_session, require_admin
-from src.server.config import get_settings
-from src.server.database import deprovision_tenant_database, provision_tenant_database
 from src.server.repository.control_plane import (
     ApiKeyRepository,
-    TenantDbRoutingRepository,
     TenantRepository,
 )
 
@@ -77,49 +75,22 @@ def create_tenant(
     Create tenant, provision DB, add routing, create default API key.
     On failure, attempt cleanup and return 500.
     """
-    tenant_repo = TenantRepository(session)
-    routing_repo = TenantDbRoutingRepository(session)
-    key_repo = ApiKeyRepository(session)
-    settings = get_settings()
-
     try:
-        tenant = tenant_repo.create(
-            name=body.name,
-            plan=body.plan,
-            vision_api_url=body.vision_api_url,
-            vision_api_key=body.vision_api_key,
+        tenant_id = create_account(
+            session, body.name, plan=body.plan,
+            vision_api_url=body.vision_api_url, vision_api_key=body.vision_api_key,
         )
-        tenant_id = tenant.tenant_id
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create tenant: {e}") from e
+    except AccountError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     try:
-        provision_tenant_database(tenant_id)
-    except Exception as e:
-        _cleanup_tenant(tenant_id, tenant_repo, key_repo, routing_repo)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to provision tenant database: {e}",
-        ) from e
-
-    try:
-        connection_string = settings.tenant_database_url_template.format(tenant_id=tenant_id)
-        routing_repo.create(tenant_id=tenant_id, connection_string=connection_string)
-    except Exception as e:
-        _cleanup_tenant(tenant_id, tenant_repo, key_repo, routing_repo)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create routing: {e}",
-        ) from e
-
-    try:
-        api_key_row, plaintext_key = key_repo.create(
+        _, plaintext_key = ApiKeyRepository(session).create(
             tenant_id=tenant_id,
             label="default",
             role="admin",
         )
     except Exception as e:
-        _cleanup_tenant(tenant_id, tenant_repo, key_repo, routing_repo)
+        remove_account(session, tenant_id)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create API key: {e}",
@@ -130,31 +101,6 @@ def create_tenant(
         api_key=plaintext_key,
         database="provisioned",
     )
-
-
-def _cleanup_tenant(
-    tenant_id: str,
-    tenant_repo: TenantRepository,
-    key_repo: ApiKeyRepository,
-    routing_repo: TenantDbRoutingRepository,
-) -> None:
-    """Remove tenant and related rows (for rollback on provisioning failure)."""
-    try:
-        key_repo.delete_by_tenant_id(tenant_id)
-    except Exception:
-        pass
-    try:
-        routing_repo.delete_by_tenant_id(tenant_id)
-    except Exception:
-        pass
-    try:
-        tenant_repo.delete(tenant_id)
-    except Exception:
-        pass
-    try:
-        deprovision_tenant_database(tenant_id)
-    except Exception:
-        pass
 
 
 @router.get("/tenants", response_model=list[TenantListItem])

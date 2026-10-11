@@ -147,12 +147,12 @@ def _at(indent: int, lines: tuple[str, ...]) -> str:
     return ("\n" + " " * indent).join(lines)
 
 
-def nginx_site(*, listen: str, server_name: str, root: Path, upstream: str) -> str:
+def nginx_site(*, listen: tuple[str, ...], server_name: str, root: Path, upstream: str) -> str:
     """deploy-web.sh's site: the web build, with /v1/ (and playback, unbuffered)
     passed to the API."""
     return f"""\
 server {{
-    {listen}
+    {_at(4, listen)}
     server_name {server_name};
 
     root {root};
@@ -201,6 +201,12 @@ server {{
     }}
 }}
 """
+
+
+def this_machine_only(port: int) -> tuple[str, ...]:
+    """nginx on this machine's own addresses only: a new install is set up
+    there (routers/setup.py) before anyone opens it to other devices."""
+    return (f"listen 127.0.0.1:{port} default_server;", f"listen [::1]:{port} default_server;")
 
 
 def write_new(path: Path, text: str, mode: int) -> bool:
@@ -253,6 +259,6 @@ def init(env_file: Path, choices: Choices, *, quickwit_config: Path | None = Non
         text = quickwit_yaml(data, _port(env, "QUICKWIT_PORT", env_file))
         say(f"✓ {quickwit_config}" if write_new(quickwit_config, text, 0o644) else f"· {quickwit_config} kept")
     if nginx_site_file is not None:
-        text = nginx_site(listen=f"listen {_port(env, 'WEB_PORT', env_file)} default_server;", server_name="_",
+        text = nginx_site(listen=this_machine_only(_port(env, "WEB_PORT", env_file)), server_name="_",
                           root=web_root, upstream=f"http://127.0.0.1:{_port(env, 'API_PORT', env_file)}")
         say(f"✓ {nginx_site_file}" if write_new(nginx_site_file, text, 0o644) else f"· {nginx_site_file} kept")
