@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { FormEvent } from "react";
 import { setApiKey } from "../api/client";
+import { fetchSetupStatus } from "./SetupPage";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -12,6 +13,17 @@ export default function LoginPage() {
   const [searchParams] = useSearchParams();
 
   const next = searchParams.get("next");
+
+  // A new install has nobody to log in yet: its first admin is made on the setup page.
+  useEffect(() => {
+    let live = true;
+    void fetchSetupStatus().then((status) => {
+      if (live && status?.needed) navigate("/setup", { replace: true });
+    });
+    return () => {
+      live = false;
+    };
+  }, [navigate]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
