@@ -1,12 +1,14 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getAiSettings, getCurrentUser } from "../api/client";
+import { getAiSettings, getBackups, getCurrentUser } from "../api/client";
 import { AI_QUERY_KEY, aiHasProblem } from "./settings/AiSection";
+import { BACKUPS_QUERY_KEY, backupsHaveProblem } from "./settings/BackupsSection";
 
 interface NavItem {
   to: string;
   label: string;
   requireEditor?: boolean;
+  requireAdmin?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -17,6 +19,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/processing", label: "Processing" },
   { to: "/settings/files", label: "Files" },
   { to: "/settings/network", label: "Network" },
+  { to: "/settings/backups", label: "Backups", requireAdmin: true },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];
@@ -30,6 +33,9 @@ export default function SettingsPage() {
   // The worker couldn't use the vision model: flag the AI page until it's fixed.
   const { data: ai } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings });
   const aiProblem = aiHasProblem(ai);
+  const isAdmin = user?.role === "admin";
+  const { data: backups } = useQuery({ queryKey: BACKUPS_QUERY_KEY, queryFn: getBackups, enabled: isAdmin });
+  const backupsProblem = backupsHaveProblem(backups);
 
   // Don't hide editor-only items until we know the role (avoids flicker)
   const isEditorOrAbove =
@@ -42,6 +48,7 @@ export default function SettingsPage() {
         <nav className="flex shrink-0 flex-row flex-wrap gap-1 sm:w-48 sm:flex-col sm:flex-nowrap">
           {NAV_ITEMS.map((item) => {
             if (item.requireEditor && !isEditorOrAbove) return null;
+            if (item.requireAdmin && !isPending && !isAdmin) return null;
             return (
               <NavLink
                 key={item.to}
@@ -59,6 +66,13 @@ export default function SettingsPage() {
                   <span
                     role="img"
                     aria-label="Vision AI is paused"
+                    className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500 align-middle"
+                  />
+                )}
+                {item.to === "/settings/backups" && backupsProblem && (
+                  <span
+                    role="img"
+                    aria-label="Backups need a look"
                     className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500 align-middle"
                   />
                 )}

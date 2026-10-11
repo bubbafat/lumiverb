@@ -1,8 +1,9 @@
-"""System health for the Admin page (GET /v1/system/health), and whether
+"""System health for the Admin page (GET /v1/system/health), whether
 other devices on the network may use a Mac's Lumiverb (/v1/system/network,
-Settings › Network).
+Settings › Network), and the databases' backups (/v1/system/backups,
+Settings › Backups).
 
-Six rows (website, processing, AI machines, search, storage, disk), each
+Seven rows (website, processing, AI machines, search, storage, disk, backups), each
 green, yellow or red with a one-line reason and where to fix it; the rules
 are src/server/system_health.py. Admins see it (the Admin page, and its
 link's dot); nobody else, a public page's visitor least of all. The web page asks every 10 seconds, so what costs more
@@ -57,7 +58,7 @@ def _kept[T](tenant_id: str, name: str, every: float, find: Callable[[], T]) -> 
 
 
 class HealthRow(BaseModel):
-    key: str  # website | processing | ai | search | storage | disk
+    key: str  # website | processing | ai | search | storage | disk | backups
     title: str
     state: str  # green | yellow | red
     reason: str
@@ -125,6 +126,7 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
 
     rows.append(_row("storage", "Storage", storage, db_error, session))
     rows.append(_row("disk", "Disk", lambda: _disk(now)))
+    rows.append(_row("backups", "Backups", lambda: _backups_row(now)))
 
     return SystemHealth(
         state=h.overall(rows),
@@ -232,6 +234,20 @@ def _disk(now: datetime) -> h.Row:
 
 
 
+def _backups_row(now: datetime) -> h.Row:
+    from src.server import backups
+    from src.server.config import get_settings
+
+    data = Path(get_settings().data_dir)
+    made = backups.list_backups(backups.folder(data))
+    state = backups.read_state(data)
+    return h.backups_row(
+        newest=made[0].made_at if made else None, newest_bytes=made[0].bytes if made else 0,
+        last_error=state.get("last_error"), last_failed_at=backups.parse_time(state.get("last_failed_at")),
+        running=state.get("running") if backups.running(data) else None, now=now,
+    )
+
+
 class Network(BaseModel):
     # This install's own nginx (lumiverb-server run's): where it listens is
     # changed here. An nginx set up otherwise (a Linux install's) isn't.
@@ -282,3 +298,126 @@ def change_network(body: NetworkChange, request: Request) -> Network:
     network.set_other_devices(Path(get_settings().data_dir), body.other_devices)
     logger.info("Other devices on the network %s (an admin's choice)", "may use it" if body.other_devices else "can't use it")
     return _network()
+
+
+class BackupItem(BaseModel):
+    name: str
+    made_at: datetime
+    kind: str  # nightly | now | before-upgrade | before-restore
+    bytes: int
+    accounts: int
+    restore: list[str]  # the commands that put it back, in order, run on this machine
+
+
+class BackupRunning(BaseModel):
+    kind: str
+    started_at: datetime | None = None
+    done: int = 0
+    of: int = 0
+
+
+class Backups(BaseModel):
+    folder: str
+    default_folder: str
+    changeable_here: bool  # the folder is chosen on the machine itself
+    running: BackupRunning | None
+    last_error: str | None
+    last_failed_at: datetime | None
+    next_at: datetime  # when upkeep makes the nightly one next (now: within minutes)
+    backups: list[BackupItem]
+
+
+class BackupFolderChange(BaseModel):
+    folder: str | None  # None: back to the default
+
+
+BACKUPS_ELSEWHERE = "Choose the backups folder on the computer Lumiverb is installed on."
+
+
+def restore_commands(path: Path) -> list[str]:
+    """How to put a backup back: Lumiverb stopped, restore, started. A Mac's
+    service knows its env file (lumiverb-server run passes it); a Linux
+    install's is deploy-vps.sh's."""
+    import os
+    import shlex
+    import sys
+
+    env_file = os.environ.get("LUMIVERB_ENV_FILE")
+    if env_file:
+        return ["brew services stop lumiverb",
+                f"lumiverb-server restore --env {shlex.quote(env_file)} {shlex.quote(str(path))}",
+                "brew services start lumiverb"]
+    return ["sudo systemctl stop lumiverb-scheduler lumiverb-api",
+            f"sudo {shlex.quote(sys.prefix)}/bin/lumiverb-server restore --env /etc/lumiverb/env {shlex.quote(str(path))}",
+            "sudo systemctl start lumiverb-api lumiverb-scheduler"]
+
+
+def _backups(request: Request) -> Backups:
+    from src.server import backups
+    from src.server.api.client_address import on_this_machine
+    from src.server.config import get_settings
+
+    data = Path(get_settings().data_dir)
+    state = backups.read_state(data)
+    running = state.get("running") if backups.running(data) else None
+    made = backups.list_backups(backups.folder(data))
+    failed = backups.parse_time(state.get("last_failed_at"))
+    return Backups(
+        folder=str(backups.folder(data)), default_folder=str(backups.default_folder(data)),
+        changeable_here=on_this_machine(request),
+        running=BackupRunning(**running) if isinstance(running, dict) else None,
+        last_error=state.get("last_error"), last_failed_at=failed,
+        next_at=backups.next_at(made[0].made_at if made else None, utcnow(), failed),
+        backups=[BackupItem(name=b.name, made_at=b.made_at, kind=b.kind, bytes=b.bytes, accounts=b.accounts,
+                            restore=restore_commands(b.path))
+                 for b in made],
+    )
+
+
+@router.get("/backups", response_model=Backups, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def get_backups(request: Request) -> Backups:
+    """The backups made, where they go, and when the next one is."""
+    return _backups(request)
+
+
+@router.post("/backups", response_model=Backups, status_code=202,
+             dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def back_up_now(request: Request) -> Backups:
+    """Starts a backup now (Back up now); it runs in the background."""
+    import os
+
+    from src.server import backups
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+
+    settings = get_settings()
+    data = Path(settings.data_dir)
+    if backups.running(data):
+        raise ApiError(409, "backup_running", "A backup is being made already.")
+    backups.start(data, settings.control_plane_database_url, "now", pg_bin=os.environ.get("PG_BIN") or None)
+    logger.info("Backup started (an admin's Back up now)")
+    for _ in range(20):  # it says so once it has the lock: the answer shows it running
+        if backups.running(data):
+            break
+        time.sleep(0.05)
+    return _backups(request)
+
+
+@router.put("/backups/folder", response_model=Backups,
+            dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def change_backups_folder(body: BackupFolderChange, request: Request) -> Backups:
+    """An admin's choice, on the machine itself (as for a library's folder):
+    backups go there from now on; those made already stay where they are."""
+    from src.server import backups
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+
+    if not on_this_machine(request):
+        raise ApiError(403, "backups_elsewhere", BACKUPS_ELSEWHERE)
+    try:
+        chosen = backups.set_folder(Path(get_settings().data_dir), body.folder)
+    except backups.BackupError as exc:
+        raise ApiError(400, "folder_not_usable", str(exc)) from None
+    logger.info("Backups go to %s (an admin's choice)", chosen)
+    return _backups(request)

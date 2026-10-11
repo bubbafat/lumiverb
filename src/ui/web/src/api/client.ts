@@ -1083,6 +1083,46 @@ export async function setNetworkAccess(otherDevices: boolean): Promise<NetworkAc
   return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: { other_devices: otherDevices } });
 }
 
+/** A backup of every database (Settings → Backups). */
+export interface BackupItem {
+  name: string;
+  made_at: string;
+  /** nightly | now | before-upgrade | before-restore */
+  kind: string;
+  bytes: number;
+  accounts: number;
+  /** The commands that put it back, in order, on the machine Lumiverb runs on. */
+  restore: string[];
+}
+
+export interface Backups {
+  folder: string;
+  default_folder: string;
+  /** The folder is chosen on the machine itself. */
+  changeable_here: boolean;
+  running: { kind: string; started_at: string | null; done: number; of: number } | null;
+  last_error: string | null;
+  last_failed_at: string | null;
+  /** When the nightly one is made next (now or past: within minutes). */
+  next_at: string;
+  /** Newest first. */
+  backups: BackupItem[];
+}
+
+export async function getBackups(): Promise<Backups> {
+  return apiFetch<Backups>("/system/backups");
+}
+
+/** Starts one now (409 backup_running while one is being made). */
+export async function backUpNow(): Promise<Backups> {
+  return apiFetch<Backups>("/system/backups", { method: "POST" });
+}
+
+/** An admin's choice, on the machine itself; null: back to the default. */
+export async function setBackupsFolder(folder: string | null): Promise<Backups> {
+  return apiFetch<Backups>("/system/backups/folder", { method: "PUT", body: { folder } });
+}
+
 /** A clip whose last try failed (Settings → Processing). */
 export interface FailingClip {
   asset_id: string;

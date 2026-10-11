@@ -1,7 +1,7 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
-"""GET /v1/system/health: the Admin page's six rows, gathered from the
-scheduler's status, the AI machines, Quickwit, the libraries and the data
-disk (the rules alone: tests/test_system_health.py)."""
+"""GET /v1/system/health: the Admin page's seven rows, gathered from the
+scheduler's status, the AI machines, Quickwit, the libraries, the data
+disk and the backups (the rules alone: tests/test_system_health.py)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from tests.test_lineage_api import _db, _ingest_with, _sha
 
 pytestmark = pytest.mark.slow
 
-KEYS = ["website", "processing", "ai", "search", "storage", "disk"]
+KEYS = ["website", "processing", "ai", "search", "storage", "disk", "backups"]
 
 
 @pytest.fixture(autouse=True)
@@ -76,7 +76,7 @@ def quickwit_on(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_six_rows_in_order_with_the_worst_overall(env):
+def test_seven_rows_in_order_with_the_worst_overall(env):
     body = _health(env)
     assert [r["key"] for r in body["rows"]] == KEYS
     assert all(r["state"] in ("green", "yellow", "red") and r["reason"] for r in body["rows"])

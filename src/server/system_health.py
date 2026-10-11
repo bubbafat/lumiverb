@@ -1,4 +1,4 @@
-"""System health for the Admin page: six rows, each green, yellow or red
+"""System health for the Admin page: seven rows, each green, yellow or red
 with a one-line reason and where to fix it (GET /v1/system/health,
 routers/system.py gathers the inputs).
 
@@ -34,6 +34,8 @@ UNSYNCED_YELLOW = 100
 # Free space on the data disk, as a share of it. Proposed.
 DISK_YELLOW = 0.15
 DISK_RED = 0.05
+# No backup for this long is red (one is made every night). Proposed.
+BACKUP_RED = timedelta(days=2)
 
 
 @dataclass
@@ -324,4 +326,36 @@ def disk_row(*, free: int | None, total: int | None, now: datetime, error: str |
         row.state = RED
     elif share < DISK_YELLOW:
         row.state = YELLOW
+    return row
+
+
+# -- Backups ---------------------------------------------------------------------
+
+
+def backups_row(*, newest: datetime | None, newest_bytes: int = 0, last_error: str | None = None,
+                last_failed_at: datetime | None = None, running: Mapping[str, Any] | None = None,
+                now: datetime) -> Row:
+    """The databases' backups (src/server/backups.py): red with none for 2
+    days, yellow when the last one failed or none is made yet."""
+    row = Row("backups", "Backups", GREEN, "", link="/settings/backups", checked_at=now)
+    failed = bool(last_error) and last_failed_at is not None and (newest is None or last_failed_at > newest)
+    doing = ""
+    if running:
+        of = int(running.get("of") or 0)
+        doing = f" Backing up now ({int(running.get('done') or 0) + 1} of {of})." if of else " Backing up now."
+    if newest is None:
+        if failed:
+            row.state, row.reason = RED, f"No backup yet: {last_error}"
+        else:
+            row.state = YELLOW
+            row.reason = ("Making the first backup." if running else "No backup yet: the first is made within minutes.")
+        return row
+    age = now - newest
+    row.reason = f"Last backup {ago(age)} ago ({_size(newest_bytes)}).{doing}"
+    if age > BACKUP_RED:
+        row.state = RED
+        row.reason = f"No backup for {ago(age)}" + (f": {last_error}" if failed else ".") + doing
+    elif failed:
+        row.state = YELLOW
+        row.reason = f"The last backup failed: {last_error} The one before is {ago(age)} old.{doing}"
     return row

@@ -5,6 +5,7 @@ that), as a function a service can run before it starts, on any platform.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -88,6 +89,41 @@ def tenant_databases(control_url: str) -> list[tuple[str, str]]:
     finally:
         engine.dispose()
     return [(row[0], row[1]) for row in rows]
+
+
+def _behind(url: str, scripts: Path) -> bool:
+    """Whether the database's migrations are behind this version's."""
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    # Alembic says what it sets up at INFO; the service's log is for what happened.
+    logging.getLogger("alembic").setLevel(logging.WARNING)
+    heads = set(ScriptDirectory(str(scripts)).get_heads())
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            return set(MigrationContext.configure(conn).get_current_heads()) != heads
+    finally:
+        engine.dispose()
+
+
+def pending(control_url: str, *, cwd: Path = APP_DIR) -> bool:
+    """Whether migrating would change anything: the control plane's or an
+    account's database is behind. False for a new install with nothing in it
+    yet (nothing to back up). Raises MigrationError when it can't tell."""
+    try:
+        if _behind(control_url, cwd / "migrations/control"):
+            engine = create_engine(control_url)
+            try:
+                with engine.connect() as conn:
+                    has_routing = conn.execute(text("SELECT to_regclass('tenant_db_routing') IS NOT NULL")).scalar()
+            finally:
+                engine.dispose()
+            return bool(has_routing)
+        return any(_behind(url, cwd / "migrations/tenant") for _, url in tenant_databases(control_url))
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        raise MigrationError(f"Can't tell whether the databases need migrating: {first}") from exc
 
 
 def migrate(control_url: str, *, cwd: Path = APP_DIR, say: Callable[[str], None] = print) -> int:

@@ -79,6 +79,34 @@ sudo bash /opt/lumiverb/scripts/update.sh
 A server on your home network, without a domain: [docs/linux-server.md](docs/linux-server.md).
 More on the Linux install below, under [Running a Linux server](#running-a-linux-server).
 
+### Backups
+
+Every night Lumiverb backs up its databases: people, names, faces, ratings,
+notes, projects and settings, everything only it holds. Previews and the
+search index aren't in them; they're made again from the originals. A Mac
+asleep at 03:00 backs up when it wakes, and a Mac's service backs up before
+an upgrade's migrations. Settings › Backups shows them, makes one now, and
+chooses the folder (on the machine itself); a folder on another drive keeps
+them if this one fails. Kept: every one from the last 7 days, one a week for
+4 weeks, and the last 3 before an upgrade.
+
+To put one back, Settings › Backups › Restore… gives the commands for that
+backup. On a Mac:
+
+```bash
+brew services stop lumiverb
+```
+
+```bash
+lumiverb-server restore --env "$(brew --prefix)/etc/lumiverb/env" BACKUP_FOLDER
+```
+
+```bash
+brew services start lumiverb
+```
+
+It backs up what's there first, so a restore can be undone the same way.
+
 ---
 
 ## AI descriptions with Ollama

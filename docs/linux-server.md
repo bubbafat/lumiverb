@@ -197,6 +197,26 @@ Caches used to live in the `lumiverb` user's home, on the root disk. They are no
 sudo rm -rf /var/lib/lumiverb/.cache/lumiverb
 ```
 
+## Backups
+
+The API backs up every database each night (the 5-minute upkeep timer starts it once it's past 03:00 and none was made since), into `DATA_DIR/backups` (here `/mnt/ssd2/lumiverb/backups`): pg_dump archives, one folder a backup (`src/server/backups.py`). Settings › Backups lists them and makes one now; the Admin page's Backups row turns red with none for 2 days. The API's unit may write only under `DATA_DIR` (`ProtectSystem=strict`), so a folder elsewhere is refused until the unit allows it. It uses the `pg_dump` on the PATH (PostgreSQL 18's, installed with the server), or `PG_BIN`'s.
+
+To put one back (Settings › Backups › Restore… gives these with the backup's folder):
+
+```bash
+sudo systemctl stop lumiverb-scheduler lumiverb-api
+```
+
+```bash
+sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BACKUP_FOLDER
+```
+
+```bash
+sudo systemctl start lumiverb-api lumiverb-scheduler
+```
+
+`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while anything is connected to the databases, backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, migrates to this version, and marks each account's search index to be remade.
+
 ## Mac app changes (Swift, not built yet)
 
 1. **Report changes.** `LibraryWatcher` already gets FSEvents for each library root. After its debounce and the 30-second quarantine, send the changed paths, as the Mac sees them, to `POST /v1/changes` with body `{"paths": [...]}`.
