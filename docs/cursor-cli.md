@@ -94,7 +94,8 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb project export --id <project_id> --format fcp7|fcpxml [--output <file>]` — Export a bin of master clips for DaVinci Resolve / Premiere Pro (`fcp7`) or Final Cut Pro (`fcpxml`). Writes `<project name>.xml|.fcpxml` unless `--output` is given. Clips point at the originals as the libraries know them (relink in the editor where its paths differ); photos are in it as stills of 5 s. Reports how many photos are stills, and what was left out or approximated: videos with no known length, clips in the trash, clips whose files are missing, clips in a deleted library, archived clips, and unprobed videos exported at the fallback rate.
 
 #### User
-- `lumiverb user create --email <email> [--role admin|editor|viewer]` — Create user (prompts for password).
+- `lumiverb user create --email <email> [--role admin|editor|viewer]` — Invite someone: prints the link to send them (it works once, for 7 days; they choose their password there).
+- `lumiverb user invite --email <email>` — A new link for someone who hasn't signed in yet; their old one stops working.
 - `lumiverb user list` — List all users.
 - `lumiverb user set-role --email <email> --role <role>` — Change user role.
 - `lumiverb user remove --email <email> [--yes]` — Remove user (asks first unless `--yes`).

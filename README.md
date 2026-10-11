@@ -39,7 +39,8 @@ PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
 another PostgreSQL you run. It also brings ffmpeg, exiftool, libvips and
 Python 3.12. The web app is for that Mac only to begin with; to use it from
 a phone or another computer, an admin turns on Settings › Network on that
-Mac. Details, ports
+Mac. To add people, Admin › Manage users › Invite someone gives you a link to
+send them; they choose their own password there. Details, ports
 and the Terminal way to create the account: the
 [tap's README](https://github.com/bubbafat/homebrew-lumiverb).
 

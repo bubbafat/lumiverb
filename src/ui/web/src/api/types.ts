@@ -206,6 +206,15 @@ export interface UserItem {
   role: string;
   created_at: string;
   last_login_at: string | null;
+  /** Made just now by an invite: the link to send them (it works once, for 7 days). */
+  invite_url?: string | null;
+  invite_expires_at?: string | null;
+}
+
+/** A new invite link for someone who hasn't signed in yet. */
+export interface InviteLink {
+  invite_url: string;
+  invite_expires_at: string;
 }
 
 export interface SimilarityResponse {

@@ -1,4 +1,5 @@
-"""User management endpoints: list, create, update role, delete."""
+"""User management endpoints: list, create (an invite, or with a password),
+a new invite link, update role, delete. Invites: src/server/invites.py."""
 
 from __future__ import annotations
 
@@ -10,12 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src.server.api.dependencies import require_tenant_admin
+from src.server.api.errors import ApiError
 from src.server.api.middleware import _error_response
 from src.server.database import get_control_session, get_engine_for_url
 from src.server.api.routers.auth import MAX_PASSWORD_BYTES
 from src.server.api.routers.keys import _ROLE_RANK as ROLE_RANK
 from src.server.repository.control_plane import ApiKeyRepository, UserRepository
 from src.server.repository.tenant import RatingRepository, SavedViewRepository
+from src.server.invites import Invite, new_invite, unusable_password_hash
 
 router = APIRouter(prefix="/v1/users", tags=["users"])
 
@@ -29,12 +32,20 @@ class UserItem(BaseModel):
     role: str
     created_at: str
     last_login_at: str | None
+    # Made just now by an invite: the link to send them, and until when it works
+    invite_url: str | None = None
+    invite_expires_at: str | None = None
 
 
 class CreateUserRequest(BaseModel):
     email: str
-    password: str
+    password: str | None = None  # none: an invite, so they choose their own
     role: str = "viewer"
+
+
+class InviteResponse(BaseModel):
+    invite_url: str
+    invite_expires_at: str
 
 
 class UpdateRoleRequest(BaseModel):
@@ -45,13 +56,15 @@ def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt is not None else None
 
 
-def _user_item(user) -> UserItem:
+def _user_item(user, invite: Invite | None = None) -> UserItem:
     return UserItem(
         user_id=user.user_id,
         email=user.email,
         role=user.role,
         created_at=_iso(user.created_at) or "",
         last_login_at=_iso(user.last_login_at),
+        invite_url=invite.url if invite else None,
+        invite_expires_at=_iso(invite.expires_at) if invite else None,
     )
 
 
@@ -78,7 +91,8 @@ def create_user(
     body: CreateUserRequest,
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> UserItem:
-    """Create a new user for the current tenant."""
+    """Create a new user for the current tenant: without a password, an
+    invite (the link to send them comes back); with one, ready to sign in."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
@@ -86,12 +100,14 @@ def create_user(
     if body.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role; must be one of: {', '.join(sorted(VALID_ROLES))}")
 
-    if len(body.password) < MIN_PASSWORD_LENGTH:
-        raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
-    if len(body.password.encode()) > MAX_PASSWORD_BYTES:
-        raise HTTPException(status_code=400, detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
-
-    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    if body.password is None:
+        password_hash = unusable_password_hash()
+    else:
+        if len(body.password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        if len(body.password.encode()) > MAX_PASSWORD_BYTES:
+            raise HTTPException(status_code=400, detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
+        password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
     with get_control_session() as session:
         repo = UserRepository(session)
@@ -104,8 +120,32 @@ def create_user(
             password_hash=password_hash,
             role=body.role,
         )
+        invite = new_invite(session, user.user_id) if body.password is None else None
+        return _user_item(user, invite)  # in the session: the invite's commit expired the user's fields
 
-    return _user_item(user)
+
+@router.post("/{user_id}/invite", response_model=InviteResponse)
+def new_invite_link(
+    user_id: str,
+    request: Request,
+    _: Annotated[None, Depends(require_tenant_admin)],
+) -> InviteResponse:
+    """A new link for someone who hasn't signed in yet; their old one stops working."""
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not tenant_id:
+        raise HTTPException(status_code=500, detail="Tenant context missing")
+
+    with get_control_session() as session:
+        user = UserRepository(session).get_by_id(user_id)
+        if user is None or user.tenant_id != tenant_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        if user.last_login_at is not None:
+            raise ApiError(409, "already_joined",
+                           f"{user.email} has signed in already. If they've forgotten their password, "
+                           "they can use Forgot password.")
+        invite = new_invite(session, user_id)
+
+    return InviteResponse(invite_url=invite.url, invite_expires_at=_iso(invite.expires_at) or "")
 
 
 @router.patch("/{user_id}", response_model=UserItem)

@@ -280,9 +280,36 @@ def reset_password(
         raise HTTPException(status_code=400, detail=f"Password must be at most {MAX_PASSWORD_BYTES} bytes")
     token_repo = PasswordResetTokenRepository(session)
     password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
-    ok = token_repo.consume_valid_and_update_password(body.token, password_hash)
-    if not ok:
+    user = token_repo.consume_valid_and_update_password(body.token, password_hash)
+    if not user:
         raise HTTPException(status_code=400, detail="Invalid, expired, or already-used token")
+
+
+INVITE_NOT_VALID = "This link has been used or has expired. Ask whoever invited you for a new one."
+
+
+@router.post("/join", response_model=LoginResponse)
+def join(
+    body: ResetPasswordRequest,
+    request: Request,
+    session: Annotated[Session, Depends(_get_db)],
+) -> LoginResponse:
+    """An invite's link (src/server/invites.py): the new person chooses their
+    password, and is signed in."""
+    from src.server.api.errors import ApiError
+
+    reset_password_limiter.check(request)
+    settings = get_settings()
+    if not settings.jwt_secret:
+        raise ApiError(500, "jwt_secret_missing", "JWT_SECRET isn't set in the install's env file.")
+    if len(body.password) < MIN_PASSWORD_LENGTH or len(body.password.encode()) > MAX_PASSWORD_BYTES:
+        raise ApiError(400, "password_length", f"Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} characters.")
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    user = PasswordResetTokenRepository(session).consume_valid_and_update_password(body.token, password_hash)
+    if user is None:
+        raise ApiError(400, "invite_not_valid", INVITE_NOT_VALID)
+    UserRepository(session).update_last_login(user.user_id)
+    return LoginResponse(access_token=_issue_jwt(user, settings.jwt_secret))
 
 
 @router.post("/logout", status_code=204)

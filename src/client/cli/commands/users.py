@@ -1,4 +1,5 @@
-"""User management CLI commands: user create, user list, user set-role, user remove."""
+"""User management CLI commands: user create (an invite), user invite (a new
+link), user list, user set-role, user remove."""
 
 from __future__ import annotations
 
@@ -32,12 +33,17 @@ def _find_user_by_email(client: LumiverbClient, email: str) -> dict:
     return user
 
 
+def _say_link(email: str, url: str) -> None:
+    console.print(f"Send {escape(email)} this link. It works once, for 7 days, and they choose their password there:")
+    print(url)  # on a line of its own, never wrapped: it's copied whole
+
+
 @user_app.command("create")
 def create_user(
     email: Annotated[str, typer.Option("--email", help="Email address for the new user.")],
     role: Annotated[str, typer.Option("--role", help="Role: admin, editor, or viewer.")] = "viewer",
 ) -> None:
-    """Create a new user with email and password."""
+    """Invite someone: they get a link to choose their own password."""
     if not _EMAIL_RE.match(email):
         console.print("[red]Error: invalid email address.[/red]")
         raise typer.Exit(1)
@@ -46,19 +52,33 @@ def create_user(
         console.print(f"[red]Error: role must be one of: {', '.join(VALID_ROLES)}[/red]")
         raise typer.Exit(1)
 
-    password = typer.prompt("Password", hide_input=True, confirmation_prompt=True)
-    if len(password) < 12:
-        console.print("[red]Error: password must be at least 12 characters.[/red]")
-        raise typer.Exit(1)
-
     client = LumiverbClient()
-    resp = client.post("/v1/users", json={"email": email, "role": role, "password": password})
+    resp = client.raw("POST", "/v1/users", json={"email": email, "role": role})
     if resp.status_code == 409:
-        console.print(f"[red]Error: email already registered: {email}[/red]")
+        console.print(f"[red]Error: email already registered: {escape(email)}[/red]")
         raise typer.Exit(1)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        err = api_error(resp)
+        console.print(f"[red]Error: {escape(err.get('message') or resp.text or f'HTTP {resp.status_code}')}[/red]")
+        raise typer.Exit(1)
     data = resp.json()
-    console.print(f"[green]User created: {data['email']} ({data['role']})[/green]")
+    console.print(f"[green]Invited {escape(data['email'])} ({data['role']})[/green]")
+    _say_link(data["email"], data["invite_url"])
+
+
+@user_app.command("invite")
+def invite_again(
+    email: Annotated[str, typer.Option("--email", help="Email of someone who hasn't signed in yet.")],
+) -> None:
+    """A new invite link for someone who hasn't signed in yet; their old one stops working."""
+    client = LumiverbClient()
+    user = _find_user_by_email(client, email)
+    resp = client.raw("POST", f"/v1/users/{user['user_id']}/invite")
+    if resp.status_code >= 400:
+        err = api_error(resp)
+        console.print(f"[red]Error: {escape(err.get('message') or resp.text or f'HTTP {resp.status_code}')}[/red]")
+        raise typer.Exit(1)
+    _say_link(email, resp.json()["invite_url"])
 
 
 @user_app.command("list")

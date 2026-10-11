@@ -379,12 +379,25 @@ class PasswordResetTokenRepository:
             self._session.add(token)
             self._session.commit()
 
-    def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> bool:
+    def void_unused(self, user_id: str) -> None:
+        """Every link the user hasn't used stops working (a new one replaces them)."""
+        now = utcnow()
+        stmt = (
+            select(PasswordResetToken)
+            .where(PasswordResetToken.user_id == user_id)
+            .where(PasswordResetToken.used_at.is_(None))
+        )
+        for token in self._session.exec(stmt).all():
+            token.used_at = now
+            self._session.add(token)
+        self._session.commit()
+
+    def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> User | None:
         """
         Atomically consume a valid reset token and update the user's password.
 
-        Returns True when the token was valid and consumed; False when invalid,
-        expired, or already used.
+        Returns the user when the token was valid and consumed; None when
+        invalid, expired, or already used.
         """
         token_hash = self._hash_token(plaintext_token)
         now = utcnow()
@@ -398,12 +411,12 @@ class PasswordResetTokenRepository:
         )
         token = self._session.exec(stmt).first()
         if token is None:
-            return False
+            return None
 
         user = self._session.get(User, token.user_id)
         if user is None:
             self._session.rollback()
-            return False
+            return None
 
         user.password_hash = password_hash
         user.token_version += 1  # a reset signs out every session
@@ -411,7 +424,7 @@ class PasswordResetTokenRepository:
         self._session.add(user)
         self._session.add(token)
         self._session.commit()
-        return True
+        return user
 
 
 class PublicLibraryRepository:

@@ -260,3 +260,56 @@ def test_user_remove_says_why_a_400_failed() -> None:
 
     assert result.exit_code == 1
     assert "Cannot delete your own account" in result.output
+
+
+URL = "http://macstudio.local:6464/join?token=abc"
+
+
+def _create(answer: MagicMock, *args: str):
+    client = MagicMock()
+    client.raw.return_value = answer
+    with patch("src.client.cli.commands.users.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["user", "create", "--email", "new@b.co", *args])
+    return result, client
+
+
+def test_user_create_invites_and_prints_the_link_whole() -> None:
+    result, client = _create(_answer(201, {"user_id": "usr_2", "email": "new@b.co", "role": "editor",
+                                           "invite_url": URL}), "--role", "editor")
+
+    assert result.exit_code == 0, result.output
+    client.raw.assert_called_once_with("POST", "/v1/users", json={"email": "new@b.co", "role": "editor"})
+    assert "Invited new@b.co (editor)" in result.output
+    assert f"\n{URL}\n" in result.output, "on a line of its own"
+
+
+def test_user_create_says_an_email_that_s_taken() -> None:
+    result, _ = _create(_answer(409, {"error": {"code": "email_conflict", "message": "Email already registered"}}))
+
+    assert result.exit_code == 1
+    assert "email already registered: new@b.co" in result.output
+
+
+def _invite(answer: MagicMock):
+    client = MagicMock()
+    client.get.return_value.json.return_value = [{"user_id": "usr_2", "email": "new@b.co", "role": "viewer"}]
+    client.raw.return_value = answer
+    with patch("src.client.cli.commands.users.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["user", "invite", "--email", "new@b.co"])
+    return result, client
+
+
+def test_user_invite_prints_a_new_link() -> None:
+    result, client = _invite(_answer(200, {"invite_url": URL, "invite_expires_at": "2026-10-18T12:00:00"}))
+
+    assert result.exit_code == 0, result.output
+    client.raw.assert_called_once_with("POST", "/v1/users/usr_2/invite")
+    assert f"\n{URL}\n" in result.output
+
+
+def test_user_invite_says_why_not_for_someone_who_has_joined() -> None:
+    message = "new@b.co has signed in already. If they've forgotten their password, they can use Forgot password."
+    result, _ = _invite(_answer(409, {"error": {"code": "already_joined", "message": message, "details": {}}}))
+
+    assert result.exit_code == 1
+    assert "has signed in already" in result.output
