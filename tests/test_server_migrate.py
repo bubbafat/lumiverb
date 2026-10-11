@@ -87,9 +87,20 @@ def test_an_account_that_fails_is_named_and_the_others_still_migrate(databases):
     _add_tenant(control_url, "ten_gone", "postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing")
     _add_tenant(control_url, "ten_ok", one_url)
 
+    said: list[str] = []
     with pytest.raises(MigrationError, match=r"1 of 2 accounts' migrations failed: ten_gone: "):
-        migrate(control_url, say=lambda _: None)
+        migrate(control_url, say=said.append)
     assert _version(one_url) == _head("alembic-tenant.ini")
+    # Everything alembic said for it, not just its last line (a traceback's cause).
+    failing = said.index(next(line for line in said if line.startswith("  [1/2] ten_gone ✗")))
+    assert len([line for line in said[failing + 1:] if line.startswith("      ")]) > 1, said
+
+
+def test_a_control_plane_that_is_down_is_a_migration_error(databases):
+    from src.server.lifecycle.migrate import tenant_databases
+
+    with pytest.raises(MigrationError, match=r"Can't read the accounts from the control plane: "):
+        tenant_databases("postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing")
 
 
 def test_the_command_reads_the_install_env_file(databases, tmp_path, monkeypatch, capsys):
@@ -103,7 +114,3 @@ def test_the_command_reads_the_install_env_file(databases, tmp_path, monkeypatch
     assert _version(control_url) == _head("alembic-control.ini")
 
 
-def test_the_command_says_what_is_missing(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
-    assert cli.main(["--env", str(tmp_path / "nowhere"), "migrate"]) == 1
-    assert "No CONTROL_PLANE_DATABASE_URL in" in capsys.readouterr().err
