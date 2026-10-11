@@ -91,7 +91,7 @@ def repair(session: Session) -> dict[str, int]:
     except ValueError:
         entries = []
     storage = get_storage()
-    if storage.location.moving_from is not None:
+    if storage.location.moving:
         session.rollback()  # files are in two places at once: the reports wait for the move
         return {"checked": 0, "cleared": 0}
     checked = cleared = 0
@@ -123,14 +123,16 @@ def repair(session: Session) -> dict[str, int]:
 
 
 def _storage_gone(storage, key: str) -> bool:
-    """The previews folder (during a move, either one), or the account's
-    folder in it (a key's first part), missing or empty: an unmounted disk,
-    not files gone one by one."""
+    """The key's previews folder (its library's own, or the server's), or
+    the account's folder in it (a key's first part), missing or empty: an
+    unmounted disk, not files gone one by one."""
+    location = storage.location
+    root = location.root_for(location.library_of(key))
     try:
-        account = storage.abs_path(key.split("/", 1)[0])
+        account = storage._under(root, key.split("/", 1)[0])
     except ValueError:  # a key storage refuses: judged on its own below
         return False
-    for folder in (*storage.location.roots, account):
+    for folder in (root, account):
         try:
             if next(folder.iterdir(), None) is None:
                 return True

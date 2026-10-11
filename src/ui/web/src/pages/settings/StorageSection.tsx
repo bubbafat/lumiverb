@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ApiError,
@@ -8,6 +9,7 @@ import {
   movePreviews,
   type PreviewsMoveFacts,
   type StorageInfo,
+  type StorageMove,
 } from "../../api/client";
 
 export const STORAGE_QUERY_KEY = ["system", "storage"];
@@ -28,7 +30,7 @@ export function size(bytes: number): string {
   return i === 0 ? `${n} bytes` : `${n.toFixed(1)} ${units[i]}`;
 }
 
-function free(available: number | null, total: number | null): string {
+export function free(available: number | null, total: number | null): string {
   return available !== null && total ? `${size(available)} free of ${size(total)}` : "";
 }
 
@@ -36,13 +38,14 @@ function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Couldn't reach the server. Try again.";
 }
 
-/** Settings flags it: the previews' drive isn't plugged in, or a move stopped. */
+/** Settings flags it: a previews drive isn't plugged in, or a move stopped. */
 export function storageHasProblem(s: StorageInfo | undefined): boolean {
-  return !!s && (!s.previews_available || !!s.moving?.error);
+  return !!s && (!s.previews_available || !!s.moving?.error || s.libraries.some((l) => !l.available));
 }
 
 /** Where the previews are (off a Mac's system drive, say), and moving them. Admins only. */
 export default function StorageSection() {
+  const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const admin = user?.role === "admin";
   const { data, isLoading, error } = useQuery({
@@ -69,6 +72,7 @@ export default function StorageSection() {
   if (isLoading || !data) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
+  const isDefault = data.previews === data.data;
 
   return (
     <Frame>
@@ -83,12 +87,40 @@ export default function StorageSection() {
           </p>
         ) : (
           <p className="text-xs text-gray-500">
-            {data.previews === data.data ? "In the data folder. " : data.same_disk ? "On the same drive as the data folder. " : ""}
+            {isDefault ? "In the data folder. " : data.same_disk ? "On the same drive as the data folder. " : ""}
             {free(data.previews_free, data.previews_total)}
           </p>
         )}
-        {data.moving ? <Moving info={data} /> : <MoveChoice info={data} />}
+        {data.moving ? (
+          <Moving move={data.moving} onTriedAgain={(next) => queryClient.setQueryData(STORAGE_QUERY_KEY, next)} />
+        ) : (
+          <MoveChoice
+            changeableHere={data.changeable_here}
+            backLabel={isDefault ? null : "Back to the data folder…"}
+            ask={(to, go) => movePreviews(to, go)}
+            onMoving={(next) => queryClient.setQueryData(STORAGE_QUERY_KEY, next)}
+          />
+        )}
       </section>
+
+      {data.libraries.length > 0 && (
+        <section className="space-y-2" aria-labelledby="storage-libraries">
+          <h3 id="storage-libraries" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
+            Libraries with a folder of their own
+          </h3>
+          <ul className="space-y-1">
+            {data.libraries.map((l) => (
+              <li key={l.library_id} className="text-sm text-gray-300">
+                <Link to={`/libraries/${l.library_id}/settings`} className="text-indigo-300 hover:text-indigo-200">
+                  {l.name}
+                </Link>
+                : <span className="break-all font-mono">{l.folder}</span>
+                {!l.available && <span className="text-red-300"> (its drive isn&apos;t plugged in)</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="space-y-2" aria-labelledby="storage-data">
         <h3 id="storage-data" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
@@ -110,7 +142,8 @@ function Frame({ children }: { children: React.ReactNode }) {
         <h2 className="text-lg font-semibold text-gray-100">Storage</h2>
         <p className="mt-1 text-sm text-gray-400">
           Where Lumiverb keeps the previews it makes: thumbnails, video copies for analysis, scene frames and face
-          crops. They grow with your libraries; put them on a drive with room.
+          crops. They grow with your libraries; put them on a drive with room. A library can have a folder of its
+          own, in its settings.
         </p>
       </div>
       {children}
@@ -118,18 +151,22 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Moving({ info }: { info: StorageInfo }) {
-  const queryClient = useQueryClient();
-  const move = info.moving!;
+/** A move under way: how far, and Try again when it stopped. */
+export function Moving<T>({ move, onTriedAgain, what }: {
+  move: Omit<StorageMove, "library_id" | "library_name"> & { library_name?: string | null };
+  onTriedAgain: (next: T) => void;
+  what?: string;
+}) {
   const again = useMutation({
     mutationFn: goOnMovingPreviews,
-    onSuccess: (next) => queryClient.setQueryData(STORAGE_QUERY_KEY, next),
+    onSuccess: (next) => onTriedAgain(next as unknown as T),
   });
   const share = move.total_bytes ? Math.min(1, move.done_bytes / move.total_bytes) : 0;
+  const whose = what ?? (move.library_name ? `${move.library_name}'s previews` : "the previews");
   return (
     <div className="space-y-2">
       <p role="status" className="text-sm text-indigo-200">
-        Moving the previews from <span className="font-mono">{move.from_folder}</span>:{" "}
+        Moving {whose} from <span className="font-mono">{move.from_folder}</span>:{" "}
         {move.done_files.toLocaleString()} of {move.total_files.toLocaleString()} ({size(move.done_bytes)} of{" "}
         {size(move.total_bytes)}).
       </p>
@@ -157,15 +194,21 @@ function Moving({ info }: { info: StorageInfo }) {
   );
 }
 
-function MoveChoice({ info }: { info: StorageInfo }) {
-  const queryClient = useQueryClient();
+/** Choosing a folder, seeing what moves (the API's 409), and saying yes. */
+export function MoveChoice<T>({ changeableHere, backLabel, ask, onMoving }: {
+  changeableHere: boolean;
+  /** "Back to …": null when they're there already. */
+  backLabel: string | null;
+  ask: (to: string | null, go: boolean) => Promise<T>;
+  onMoving: (next: T) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [folder, setFolder] = useState("");
   const [facts, setFacts] = useState<{ folder: string | null; text: string; move: PreviewsMoveFacts } | null>(null);
-  const ask = useMutation({
-    mutationFn: ({ to, go }: { to: string | null; go: boolean }) => movePreviews(to, go),
+  const mutation = useMutation({
+    mutationFn: ({ to, go }: { to: string | null; go: boolean }) => ask(to, go),
     onSuccess: (next) => {
-      queryClient.setQueryData(STORAGE_QUERY_KEY, next);
+      onMoving(next);
       setFacts(null);
       setEditing(false);
     },
@@ -175,9 +218,9 @@ function MoveChoice({ info }: { info: StorageInfo }) {
       }
     },
   });
-  const isDefault = info.previews === info.data;
+  const refused = mutation.isError && !(mutation.error instanceof ApiError && mutation.error.code === "move_previews");
 
-  if (!info.changeable_here) {
+  if (!changeableHere) {
     return <p className="text-xs text-gray-500">Move them on the computer Lumiverb is installed on.</p>;
   }
   if (facts) {
@@ -189,8 +232,8 @@ function MoveChoice({ info }: { info: StorageInfo }) {
           <button
             type="button"
             className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
-            disabled={ask.isPending}
-            onClick={() => ask.mutate({ to: facts.folder, go: true })}
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate({ to: facts.folder, go: true })}
           >
             Move them
           </button>
@@ -207,24 +250,21 @@ function MoveChoice({ info }: { info: StorageInfo }) {
         <button type="button" className={linkClass} onClick={() => { setFolder(""); setEditing(true); }}>
           Move them…
         </button>
-        {!isDefault && (
-          <button type="button" className={linkClass} disabled={ask.isPending} onClick={() => ask.mutate({ to: null, go: false })}>
-            Back to the data folder…
+        {backLabel && (
+          <button type="button" className={linkClass} disabled={mutation.isPending} onClick={() => mutation.mutate({ to: null, go: false })}>
+            {backLabel}
           </button>
         )}
-        {ask.isError && !(ask.error instanceof ApiError && ask.error.code === "move_previews") && (
-          <p role="alert" className="text-sm text-red-300">{message(ask.error)}</p>
-        )}
+        {refused && <p role="alert" className="text-sm text-red-300">{message(mutation.error)}</p>}
       </div>
     );
   }
-  const refused = ask.isError && !(ask.error instanceof ApiError && ask.error.code === "move_previews");
   return (
     <form
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        ask.mutate({ to: folder.trim(), go: false });
+        mutation.mutate({ to: folder.trim(), go: false });
       }}
     >
       <input
@@ -235,11 +275,11 @@ function MoveChoice({ info }: { info: StorageInfo }) {
         onChange={(e) => setFolder(e.target.value)}
       />
       <p className="text-xs text-gray-500">An empty folder on the drive you want them on. You&apos;ll see what moves first.</p>
-      {refused && <p role="alert" className="text-sm text-red-300">{message(ask.error)}</p>}
+      {refused && <p role="alert" className="text-sm text-red-300">{message(mutation.error)}</p>}
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
-                disabled={ask.isPending || !folder.trim()}>
-          {ask.isPending ? "Checking…" : "Next"}
+                disabled={mutation.isPending || !folder.trim()}>
+          {mutation.isPending ? "Checking…" : "Next"}
         </button>
         <button type="button" className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => setEditing(false)}>
           Cancel

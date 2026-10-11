@@ -19,7 +19,8 @@ class UnsafeKeyError(ValueError):
 class LocalStorage:
     """
     Local filesystem storage. Keys are relative to the previews folder:
-    DATA_DIR, or the one an admin chose (src/shared/previews_location.py).
+    DATA_DIR, or the one an admin chose, or the key's library's own
+    (src/shared/previews_location.py).
 
     Path structure:
       {previews}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
@@ -56,7 +57,7 @@ class LocalStorage:
 
     @property
     def root(self) -> Path:
-        """Where new files go."""
+        """Where new files go, but a library's with a folder of its own."""
         return self.location.previews
 
     @staticmethod
@@ -148,8 +149,9 @@ class LocalStorage:
         return path
 
     def paths(self, key: str) -> list[Path]:
-        """Every place the key may be: the previews folder, then (moving) the old one."""
-        return [self._under(root, key) for root in self.location.roots]
+        """Every place the key may be: its folder, then (moving) the old one."""
+        location = self.location
+        return [self._under(root, key) for root in location.roots_for(location.library_of(key))]
 
     def abs_path(self, key: str) -> Path:
         """Where the key is to be read: where it is (during a move, moved or
@@ -165,10 +167,11 @@ class LocalStorage:
         FileNotFoundError when that's a chosen folder whose drive isn't
         plugged in: its empty mount point is on the system disk."""
         location = self.location
-        if not location.available(self._data_dir):
+        root = location.root_for(location.library_of(key))
+        if not location.available(self._data_dir, root):
             raise FileNotFoundError(errno.ENOENT, "The previews folder isn't there. Is its drive plugged in?",
-                                    str(location.previews))
-        return self._under(location.previews, key)
+                                    str(root))
+        return self._under(root, key)
 
     def write(self, key: str, data: bytes) -> None:
         path = self.write_path(key)

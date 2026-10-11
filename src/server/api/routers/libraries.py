@@ -583,3 +583,139 @@ def get_library_revision(
         revision=library.revision,
         asset_count=asset_count,
     )
+
+
+# -- Where its previews are -------------------------------------------------------
+
+
+class LibraryPreviews(BaseModel):
+    library_id: str
+    folder: str  # where its previews are
+    own: bool  # a folder of its own (else the server's, Settings › Storage)
+    server_folder: str
+    available: bool  # its drive is plugged in
+    free: int | None
+    total: int | None
+    # On the drive its originals are on: unplugged, it takes its previews too.
+    # None when its originals aren't reachable here.
+    same_drive_as_originals: bool | None
+    moving: dict | None  # this library's move under way (GET /v1/system/storage's moving)
+    changeable_here: bool  # moved only on the machine itself
+
+
+class LibraryPreviewsChange(BaseModel):
+    folder: str | None  # None: back to the server's previews folder
+    move: bool = False  # the user saw what moves (the 409's details) and said yes
+
+
+SAME_DRIVE = ("That's the drive this library's originals are on: when it's unplugged, its previews go too, "
+              "and the library can't be browsed.")
+
+
+def _originals_folder(root_path: str):
+    from pathlib import Path
+
+    from src.processing.roots import local_library_root
+
+    try:
+        local = local_library_root({"root_path": root_path})
+    except Exception:  # noqa: BLE001 — a root map it can't read: not reachable here
+        return None
+    return local if local is not None and Path(local).exists() else None
+
+
+def _library_previews(request: Request, library) -> LibraryPreviews:
+    import shutil
+    from pathlib import Path
+
+    from src.server.api.client_address import on_this_machine
+    from src.server.config import get_settings
+    from src.server.storage import move
+    from src.shared import previews_location
+
+    data = Path(get_settings().data_dir).absolute()
+    location = previews_location.read(data)
+    folder = location.root_for(library.library_id)
+    available = location.available(data, folder)
+    free = total = None
+    if available:
+        try:
+            usage = shutil.disk_usage(folder)
+            free, total = usage.free, usage.total
+        except OSError:
+            pass
+    originals = _originals_folder(library.root_path)
+    moving = None
+    if library.library_id in location.libraries_moving_from:
+        state = move.read_state(data)
+        moving = {k: state.get(k) for k in ("from_folder", "to_folder", "done_files", "total_files", "done_bytes",
+                                            "total_bytes", "error", "started_at")}
+        moving["running"] = move.running(data)
+    return LibraryPreviews(
+        library_id=library.library_id, folder=str(folder), own=library.library_id in location.libraries,
+        server_folder=str(location.previews), available=available, free=free, total=total,
+        same_drive_as_originals=None if originals is None else move.same_disk(folder, originals),
+        moving=moving, changeable_here=on_this_machine(request),
+    )
+
+
+@router.get("/{library_id}/previews", response_model=LibraryPreviews)
+def get_library_previews(
+    library_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_tenant_admin)],
+) -> LibraryPreviews:
+    """Where the library's previews are: the server's folder, or one of its own."""
+    library = LibraryRepository(session).get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    return _library_previews(request, library)
+
+
+@router.put("/{library_id}/previews", response_model=LibraryPreviews, status_code=202)
+def move_library_previews(
+    library_id: str,
+    body: LibraryPreviewsChange,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    _: Annotated[None, Depends(require_tenant_admin)],
+) -> LibraryPreviews:
+    """Moves the library's previews to a folder of its own (or back to the
+    server's), on the machine itself. Without move: true, a 409 says what
+    moves (and whether it's the drive its originals are on) for the user to
+    confirm. Lumiverb keeps working meanwhile."""
+    import shutil
+    from pathlib import Path
+
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+    from src.server.storage import move
+    from src.shared import previews_location
+
+    library = LibraryRepository(session).get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if not on_this_machine(request):
+        raise ApiError(403, "storage_elsewhere", "Move the previews on the computer Lumiverb is installed on.")
+    data = Path(get_settings().data_dir).absolute()
+    if previews_location.read(data).moving:
+        raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
+    try:
+        if not body.move:
+            old, chosen, need = move.plan(data, body.folder, library_id=library_id)
+            originals = _originals_folder(library.root_path)
+            same = originals is not None and move.same_disk(chosen, originals)
+            raise DecisionRequiredError(
+                "move_previews",
+                f"Moves {library.name}'s {need.files:,} previews ({move.size_text(need.bytes)}) from {old} to "
+                f"{chosen}. Lumiverb keeps working meanwhile; previews not moved yet show from where they are."
+                + (f" {SAME_DRIVE}" if same else ""),
+                {"from": str(old), "to": str(chosen), "files": need.files, "bytes": need.bytes,
+                 "free": shutil.disk_usage(chosen).free, "same_drive_as_originals": same},
+            )
+        move.start(data, body.folder, library_id=library_id)
+    except move.MoveError as exc:
+        raise ApiError(400, "folder_not_usable", str(exc)) from None
+    return _library_previews(request, library)

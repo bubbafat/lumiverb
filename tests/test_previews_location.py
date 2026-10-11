@@ -117,7 +117,8 @@ def test_a_move_carries_every_preview_and_leaves_the_install_s_own_things(instal
     assert (data / "postgres/PG_VERSION").is_file() and (data / "cache/lumiverb/analysis").is_dir()
     state = move.read_state(data)
     assert (state["done_files"], state["total_files"]) == (3, 3) and state["error"] is None and state["finished_at"]
-    assert json.loads((data / previews_location.FILE).read_text()) == {"previews": str(drive), "moving_from": None}
+    assert json.loads((data / previews_location.FILE).read_text()) == {
+        "previews": str(drive), "moving_from": None, "libraries": {}, "libraries_moving_from": {}}
     assert LocalStorage(str(data)).abs_path(PROXY) == drive / PROXY
 
 
@@ -355,3 +356,130 @@ def test_the_disk_row_with_previews_elsewhere():
                      previews={"folder": "/x", "available": True, "same_disk": True, "moving": 0.4})
     assert row.state == "green" and row.reason.endswith("Moving the previews: 40%.")
     assert h.disk_row(free=100 * gb, total=500 * gb, now=now).reason == "100.0 GB free of 500.0 GB (20%)."
+
+
+# -- A library's own folder -------------------------------------------------------------
+
+
+def test_a_library_with_a_folder_of_its_own(install):
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    location = previews_location.read(data)
+    assert location.libraries == {"lib_2": drive} and not location.moving
+    assert (drive / ANALYSIS).read_bytes() == b"analysis" * 100 and not (data / ANALYSIS).exists()
+    assert (data / PROXY).is_file() and not (drive / PROXY).exists(), "another library stays"
+    assert (data / "ten_a").is_dir(), "the account folder keeps the others"
+    storage = LocalStorage(str(data))
+    assert storage.abs_path(ANALYSIS) == drive / ANALYSIS and storage.write_path(ANALYSIS) == drive / ANALYSIS
+    assert storage.write_path(PROXY) == data / PROXY and storage.write_path(CUT) == data / CUT
+    state = move.read_state(data)
+    assert state["library_id"] == "lib_2" and (state["done_files"], state["total_files"]) == (1, 1)
+
+
+def test_the_server_s_move_leaves_a_library_s_own_folder_alone(install, tmp_path):
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    elsewhere = tmp_path / "Volumes" / "Other"
+    elsewhere.mkdir()
+    move.start(data, elsewhere, background=False)
+    assert (elsewhere / PROXY).is_file() and (drive / ANALYSIS).is_file()
+    assert not (elsewhere / ANALYSIS).exists()
+    assert previews_location.read(data).libraries == {"lib_2": drive}
+    assert move.size_of(elsewhere) == move.Size(2, len(b"proxy") + len(b"thumb"))
+
+
+def test_and_back_to_the_server_s_folder(install):
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    move.start(data, None, library_id="lib_2", background=False)
+    assert previews_location.read(data).libraries == {}
+    assert (data / ANALYSIS).is_file() and not (drive / "ten_a").exists()
+
+
+def test_during_a_library_s_move_only_its_files_are_read_from_two_places(install):
+    data, drive = install
+    (drive / previews_location.MARKER).write_text("")
+    previews_location.write(data, data, None, libraries={"lib_2": drive}, libraries_moving_from={"lib_2": data})
+    storage = LocalStorage(str(data))
+    assert storage.paths(ANALYSIS) == [drive / ANALYSIS, data / ANALYSIS]
+    assert storage.paths(PROXY) == [data / PROXY]
+    assert storage.abs_path(ANALYSIS) == data / ANALYSIS, "not moved yet"
+    move.run(data)
+    assert storage.abs_path(ANALYSIS) == drive / ANALYSIS and not previews_location.read(data).moving
+
+
+def test_a_library_s_folder_unplugged_stops_only_its_writes(install):
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    (drive / previews_location.MARKER).unlink()
+    storage = LocalStorage(str(data))
+    with pytest.raises(FileNotFoundError, match="plugged in"):
+        storage.write(ANALYSIS, b"x")
+    storage.write(PROXY, b"fine")
+    assert (data / PROXY).read_bytes() == b"fine"
+
+
+def test_missing_files_aren_t_repaired_when_a_library_s_drive_is_unplugged(install):
+    from src.server import missing_artifacts
+
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    storage = LocalStorage(str(data))
+    assert not missing_artifacts._storage_gone(storage, ANALYSIS)
+    shutil.rmtree(drive / "ten_a")
+    (drive / previews_location.MARKER).unlink()  # unplugged: an empty mount point
+    assert missing_artifacts._storage_gone(storage, ANALYSIS)
+    assert not missing_artifacts._storage_gone(storage, PROXY), "the other library's are judged as before"
+
+
+def test_a_library_can_t_move_where_it_is(install):
+    data, drive = install
+    with pytest.raises(move.MoveError, match="already"):
+        move.plan(data, None, library_id="lib_2")  # the server's folder: where it is
+
+
+def test_cleanup_visits_a_library_s_own_folder(install, monkeypatch):
+    from src.server.config import get_settings
+    from src.server.search import cleanup
+
+    data, drive = install
+    move.start(data, drive, library_id="lib_2", background=False)
+    monkeypatch.setenv("DATA_DIR", str(data))
+    get_settings.cache_clear()
+    try:
+        assert cleanup.library_folders("ten_a") == [("lib_2", drive)]
+        assert cleanup.library_folders("ten_b") == []
+        (drive / previews_location.MARKER).unlink()
+        assert cleanup.library_folders("ten_a") == [], "unplugged: nothing to clean there"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_library_walk_never_goes_into_a_library_s_previews_folder(tmp_path):
+    from src.processing import machine
+    from src.processing.ingest import _walk_library
+
+    library = tmp_path / "Media"
+    (library / "a.jpg").parent.mkdir(parents=True)
+    (library / "a.jpg").write_bytes(b"x")
+    own = library / "Trips previews"
+    (own / ANALYSIS).parent.mkdir(parents=True)
+    (own / ANALYSIS).write_bytes(b"x")
+    data = tmp_path / "data"
+    previews_location.write(data, data, None, libraries={"lib_2": own})
+    machine.use(machine.Machine(data_dir=str(data)))
+    try:
+        assert [f["rel_path"] for f in _walk_library(library)] == ["a.jpg"]
+    finally:
+        machine.use(None)
+
+
+def test_the_disk_row_says_a_library_s_drive_is_unplugged():
+    now = datetime.now(UTC)
+    gb = 1024**3
+    row = h.disk_row(free=100 * gb, total=500 * gb, now=now,
+                     previews={"folder": "/d", "available": True, "same_disk": True, "moving": None,
+                               "missing": ["/Volumes/Video"]})
+    assert row.state == "red" and row.reason == ("A library's previews folder isn't there: /Volumes/Video. "
+                                                 "Is its drive plugged in?")
+    assert row.link == "/settings/storage"

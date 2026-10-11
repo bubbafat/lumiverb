@@ -52,8 +52,8 @@ class Machine:
 
     def refused_here(self) -> tuple[str, ...]:
         """Folders never read as a library's, nor walked into inside one:
-        refused_roots, and the server's previews (where they are, and during
-        a move, were)."""
+        refused_roots, and the server's previews folders (the server's, the
+        libraries' own, and during a move, where they were)."""
         if not self.data_dir:
             return self.refused_roots
         from src.shared import previews_location
