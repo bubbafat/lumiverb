@@ -55,7 +55,12 @@ from src.server.lifecycle.migrate import (
     create_database_if_missing,
     migrate,
 )
-from src.server.lifecycle.postgres import PostgresError, make_cluster_if_missing, postgres_argv
+from src.server.lifecycle.postgres import (
+    PostgresError,
+    make_cluster_if_missing,
+    postgres_argv,
+    postgres_env,
+)
 from src.server.lifecycle.supervise import Child, Supervisor
 
 logger = logging.getLogger("lumiverb-server")
@@ -115,7 +120,7 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         # A smart shutdown once the API and the scheduler, its clients, have gone.
         started_first.append(Child("postgres", postgres_argv(Path(env["PG_BIN"]), data,
                                                              env["CONTROL_PLANE_DATABASE_URL"]),
-                                   base, cwd, restart_after=5, stop_within=60, term_main_only=True))
+                                   postgres_env(base), cwd, restart_after=5, stop_within=60, term_main_only=True))
     if env.get("QUICKWIT_BIN"):
         started_first.append(Child("quickwit", [env["QUICKWIT_BIN"], "run", "--config", env["QUICKWIT_CONFIG"]],
                                    base, cwd, restart_after=5, stop_within=30))

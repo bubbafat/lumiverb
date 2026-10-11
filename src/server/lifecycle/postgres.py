@@ -49,6 +49,14 @@ def make_cluster_if_missing(pg_bin: Path, data_dir: Path, url: str) -> bool:
     return True
 
 
+def postgres_env(env: dict[str, str]) -> dict[str, str]:
+    """Its environment: a locale set, as Homebrew's own PostgreSQL service
+    sets it. Without one (launchd's), macOS's locale lookup starts threads in
+    the postmaster, which then refuses to start ("postmaster became
+    multithreaded during startup")."""
+    return {**env, "LC_ALL": "C"}
+
+
 def postgres_argv(pg_bin: Path, data_dir: Path, url: str) -> list[str]:
     """The postmaster, on the control database URL's port, this machine only."""
     port = make_url(url).port or 5432

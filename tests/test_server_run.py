@@ -56,6 +56,7 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
     assert postgres.argv == ["/pg/bin/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468",
                              "-c", "listen_addresses=127.0.0.1"]
     assert postgres.term_main_only, "the postmaster stops its own backends"
+    assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
     assert quickwit.argv == ["/qw/quickwit", "run", "--config", "/etc/quickwit.yaml"]
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
     assert all(c.start_after is None for c in (postgres, quickwit, nginx))
@@ -199,8 +200,10 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
     env_file = tmp_path / "env"
     env_file.write_text("\n".join(lines) + "\n")
     out = tmp_path / "service.log"
+    # launchd's: none of the install's settings, and no locale.
     clean_env = {k: v for k, v in os.environ.items()
-                 if not k.startswith(("CONTROL_PLANE", "TENANT_DATABASE", "LUMIVERB_", "API_", "DATA_DIR", "PG"))}
+                 if not k.startswith(("CONTROL_PLANE", "TENANT_DATABASE", "LUMIVERB_", "API_", "DATA_DIR", "PG",
+                                      "LANG", "LC_"))}
     with out.open("w") as log:
         service = subprocess.Popen([str(lumiverb_server), "run", "--env", str(env_file)],
                                    stdout=log, stderr=subprocess.STDOUT, env=clean_env)

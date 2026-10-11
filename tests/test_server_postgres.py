@@ -16,7 +16,12 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 
-from src.server.lifecycle.postgres import PostgresError, make_cluster_if_missing, postgres_argv
+from src.server.lifecycle.postgres import (
+    PostgresError,
+    make_cluster_if_missing,
+    postgres_argv,
+    postgres_env,
+)
 
 
 def postgres_bin() -> Path | None:
@@ -44,6 +49,12 @@ def test_it_listens_on_the_url_s_port_on_this_machine_only(tmp_path):
 
 
 @pytest.mark.fast
+def test_it_has_a_locale_of_its_own():
+    # Without one, macOS's postmaster refuses to start under launchd.
+    assert postgres_env({"PATH": "/usr/bin"}) == {"PATH": "/usr/bin", "LC_ALL": "C"}
+
+
+@pytest.mark.fast
 def test_a_url_without_a_password_is_refused_before_anything_is_made(tmp_path):
     with pytest.raises(PostgresError, match="names no user and password"):
         make_cluster_if_missing(Path("/pg"), tmp_path, "postgresql+psycopg2://lumiverb@127.0.0.1:6468/cp")
@@ -58,7 +69,10 @@ def test_made_once_then_its_password_and_nothing_else_lets_you_in(tmp_path):
     assert make_cluster_if_missing(pg_bin, tmp_path, url) is True
     assert make_cluster_if_missing(pg_bin, tmp_path, url) is False, "made once"
 
-    server = subprocess.Popen(postgres_argv(pg_bin, tmp_path, url), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # As run starts it: launchd's environment, no locale of its own.
+    bare = postgres_env({"PATH": "/usr/bin:/bin"})
+    server = subprocess.Popen(postgres_argv(pg_bin, tmp_path, url), env=bare, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 30
         while True:
