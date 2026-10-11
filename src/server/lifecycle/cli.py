@@ -1,7 +1,11 @@
 """lumiverb-server: look after this machine's Lumiverb server.
 
+    lumiverb-server init --env FILE --data-dir DIR [--quickwit-config FILE] [--nginx-site FILE]
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
+
+init: the install's env file, Quickwit's config and the nginx site, each
+written only if it isn't there (init.py), for Homebrew's post_install.
 
 migrate: the control plane's and every account's database migrations, as
 scripts/migrate.sh does on the brain.
@@ -34,6 +38,7 @@ from pathlib import Path
 
 from src.server.lifecycle import upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
+from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import APP_DIR, MigrationError, migrate
 from src.server.lifecycle.supervise import Child, Supervisor
 
@@ -50,10 +55,14 @@ class InstallError(Exception):
     pass
 
 
+def _named_env_file(env_file: Path | None) -> Path | None:
+    return env_file or (Path(os.environ["LUMIVERB_ENV_FILE"]) if os.environ.get("LUMIVERB_ENV_FILE") else None)
+
+
 def install_env(env_file: Path | None) -> dict[str, str]:
     """The named env file's variables under the environment's own. Raises
     InstallError when no install is named or the file can't be read."""
-    path = env_file or (Path(os.environ["LUMIVERB_ENV_FILE"]) if os.environ.get("LUMIVERB_ENV_FILE") else None)
+    path = _named_env_file(env_file)
     if path is None:
         if not os.environ.get("CONTROL_PLANE_DATABASE_URL"):
             raise InstallError(NO_INSTALL)
@@ -126,6 +135,25 @@ def _env_and_url(args: argparse.Namespace) -> tuple[dict[str, str], str]:
     return env, url
 
 
+def _init(args: argparse.Namespace) -> int:
+    env_file = _named_env_file(args.env)
+    if env_file is None:
+        raise InstallError("Say which env file: --env FILE or $LUMIVERB_ENV_FILE")
+    choices = Choices(data_dir=args.data_dir.absolute() if args.data_dir else None,
+                      pg_port=args.pg_port, api_port=args.api_port,
+                      quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host)
+    try:
+        init(env_file, choices, quickwit_config=args.quickwit_config, nginx_site_file=args.nginx_site,
+             web_root=args.web_root)
+    except InitError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"✗ Can't write {exc.filename}: {exc.strerror or exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _migrate(args: argparse.Namespace) -> int:
     _, url = _env_and_url(args)
     try:
@@ -173,6 +201,16 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     # --env before or after the command. A subcommand's default would overwrite
     # one given before it, so it sets --env only when given there.
+    init_command = commands.add_parser(
+        "init", help="write the install's env file, Quickwit's config and the nginx site, each only if it isn't there")
+    _env_option(init_command, argparse.SUPPRESS)
+    init_command.add_argument("--data-dir", type=Path, help="where its data goes (a new env file needs it)")
+    init_command.add_argument("--quickwit-config", type=Path, help="write Quickwit's config here")
+    init_command.add_argument("--nginx-site", type=Path, help="write the nginx site here")
+    init_command.add_argument("--web-root", type=Path, default=WEB_ROOT, help="the web build nginx serves")
+    for port in ("pg", "api", "quickwit", "web"):
+        init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")
+    init_command.add_argument("--app-host", help="the URL people reach it at, for a new env file")
     _env_option(commands.add_parser("migrate", help="migrate the control plane and every account's database"),
                 argparse.SUPPRESS)
     _env_option(commands.add_parser(
@@ -180,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
-        return {"migrate": _migrate, "run": _run}[args.command](args)
+        return {"init": _init, "migrate": _migrate, "run": _run}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
