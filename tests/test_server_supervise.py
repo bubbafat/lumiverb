@@ -6,6 +6,7 @@ the way each unit does, and what's left is killed when its time is up."""
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import threading
 import time
@@ -226,3 +227,31 @@ def test_a_child_waits_for_its_start_after_and_a_stop_before_it_starts_nothing(t
     stop.set()
     thread.join(10)
     assert not thread.is_alive() and never.process is None and not (tmp_path / "never.log").exists()
+
+
+# Records which signal stopped it.
+_NAMES_ITS_STOP = """
+import signal, sys, time
+log = sys.argv[1]
+def stopped(number, _frame):
+    open(log, "w").write(signal.Signals(number).name)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stopped)
+signal.signal(signal.SIGINT, stopped)
+open(log + ".up", "w").close()
+while True:
+    time.sleep(0.05)
+"""
+
+
+@pytest.mark.parametrize(("stop_signal", "main_only"), [(signal.SIGINT, True), (signal.SIGINT, False),
+                                                        (signal.SIGTERM, True)])
+def test_a_child_hears_its_own_stop_signal(tmp_path, stop_signal, main_only):
+    # PostgreSQL's fast shutdown is SIGINT; the others stop on SIGTERM.
+    log = tmp_path / "stop"
+    child = _child(tmp_path, "postgres", _NAMES_ITS_STOP, str(log), stop_signal=stop_signal, term_main_only=main_only)
+    stop, thread = _running(Supervisor([child]))
+    _until(Path(f"{log}.up").exists)
+    stop.set()
+    thread.join(10)
+    assert log.read_text() == stop_signal.name

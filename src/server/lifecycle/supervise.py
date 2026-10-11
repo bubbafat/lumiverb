@@ -42,11 +42,12 @@ class Child:
     env: dict[str, str]
     cwd: Path
     restart_after: float  # seconds, as the unit's RestartSec
-    stop_within: float  # seconds after SIGTERM before what's left is killed, as TimeoutStopSec
+    stop_within: float  # seconds after the stop signal before what's left is killed, as TimeoutStopSec
     # SIGTERM to the main process only (KillMode=mixed: the scheduler lets
     # jobs in hand finish, and ffmpeg under one isn't cut off mid-clip), or to
     # the whole group (uvicorn and its workers).
     term_main_only: bool = False
+    stop_signal: int = signal.SIGTERM  # PostgreSQL's fast shutdown is SIGINT
     empty_first: Path | None = None  # emptied before each start, as its ExecStartPre
     start_after: threading.Event | None = field(default=None, repr=False)  # first start once it's set
     process: subprocess.Popen | None = field(default=None, repr=False)
@@ -116,9 +117,9 @@ class Supervisor:
         if process is None or process.poll() is not None:
             return
         if child.term_main_only:
-            process.send_signal(signal.SIGTERM)
+            process.send_signal(child.stop_signal)
         else:
-            _signal_group(process, signal.SIGTERM)
+            _signal_group(process, child.stop_signal)
         try:
             process.wait(timeout=child.stop_within)
         except subprocess.TimeoutExpired:

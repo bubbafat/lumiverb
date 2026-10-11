@@ -54,13 +54,27 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
     assert [c.name for c in children] == ["postgres", "quickwit", "nginx", "api", "scheduler"]
     postgres, quickwit, nginx, api, scheduler = children
     assert postgres.argv == ["/pg/bin/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468",
-                             "-c", "listen_addresses=127.0.0.1"]
+                             "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]
     assert postgres.term_main_only, "the postmaster stops its own backends"
+    assert postgres.stop_signal == signal.SIGINT, "a fast shutdown: its clients have gone"
     assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
     assert quickwit.argv == ["/qw/quickwit", "run", "--config", "/etc/quickwit.yaml"]
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
     assert all(c.start_after is None for c in (postgres, quickwit, nginx))
     assert api.start_after is migrated and scheduler.start_after is migrated
+
+
+# The formula's service `stop_timeout` (launchd's ExitTimeOut) in
+# bubbafat/homebrew-lumiverb: past it launchd kills the whole service.
+HOMEBREW_STOP_TIMEOUT_SEC = 240
+
+
+@pytest.mark.fast
+def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
+    env = {"DATA_DIR": str(tmp_path), "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://l:p@127.0.0.1:6468/c",
+           "PG_BIN": "/pg", "QUICKWIT_BIN": "/qw", "QUICKWIT_CONFIG": "/q", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c"}
+    # One after another, each at its longest.
+    assert sum(c.stop_within for c in cli.server_children(env, python="/py", cwd=tmp_path)) <= HOMEBREW_STOP_TIMEOUT_SEC
 
 
 @pytest.mark.fast

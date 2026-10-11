@@ -58,7 +58,9 @@ def postgres_env(env: dict[str, str]) -> dict[str, str]:
 
 
 def postgres_argv(pg_bin: Path, data_dir: Path, url: str) -> list[str]:
-    """The postmaster, on the control database URL's port, this machine only."""
+    """The postmaster, on the control database URL's port, this machine only,
+    and no Unix socket: Lumiverb connects over TCP, and a build's default
+    socket folder may not be ours to write (Debian's /var/run/postgresql)."""
     port = make_url(url).port or 5432
     return [str(pg_bin / "postgres"), "-D", str(cluster_dir(data_dir)), "-p", str(port),
-            "-c", "listen_addresses=127.0.0.1"]
+            "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]

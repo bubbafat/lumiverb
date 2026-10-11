@@ -45,7 +45,8 @@ def free_port() -> int:
 @pytest.mark.fast
 def test_it_listens_on_the_url_s_port_on_this_machine_only(tmp_path):
     assert postgres_argv(Path("/pg"), tmp_path, "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/control_plane") == [
-        "/pg/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468", "-c", "listen_addresses=127.0.0.1"]
+        "/pg/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468", "-c", "listen_addresses=127.0.0.1",
+        "-c", "unix_socket_directories="]
 
 
 @pytest.mark.fast
