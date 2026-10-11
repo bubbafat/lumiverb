@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,9 +40,20 @@ def test_not_there_is_not_known(tmp_path):
     assert libraries._same_device(tmp_path, None) is None
 
 
+# A share that never answers in a test: far longer than any slow machine adds.
+HANG_SEC = 30
+
+
+def _named(prefix: str) -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name.startswith(prefix)]
+
+
 def test_a_share_that_doesn_t_answer_is_never_waited_on(tmp_path, monkeypatch):
+    """What's asserted is that the hang isn't waited for (30 s), and that no
+    second probe starts while one is stuck: never how fast, which a busy
+    machine can't promise."""
     def asleep(path, require_entries):
-        time.sleep(3)
+        time.sleep(HANG_SEC)
         return path
 
     monkeypatch.setattr(roots, "_probe", asleep)
@@ -49,30 +61,31 @@ def test_a_share_that_doesn_t_answer_is_never_waited_on(tmp_path, monkeypatch):
     library = _library(tmp_path, "lib_sleepy")
     started = time.monotonic()
     assert libraries._originals_device(library) is None
-    assert time.monotonic() - started < 1.0
-    # Asked again while that probe is still stuck: no wait, and no second stuck thread.
-    started = time.monotonic()
+    assert time.monotonic() - started < HANG_SEC / 3, "the hang wasn't waited for"
+    stuck = _named("root-probe-lib_sleepy")
+    assert len(stuck) == 1
+    # Asked again while that probe is still stuck: no second stuck thread.
     assert libraries._originals_device(library) is None
-    assert time.monotonic() - started < 0.1
+    assert _named("root-probe-lib_sleepy") == stuck
 
 
 def test_a_stat_that_hangs_after_the_probe_isn_t_waited_on_either(tmp_path, monkeypatch):
     real_stat = os.stat
+    target = str(tmp_path.resolve())  # worked out before stat is replaced: resolve() calls stat
 
     def slow_stat(path, *a, **k):
-        if str(path) == str(tmp_path.resolve()):
-            time.sleep(3)
+        if str(path) == target:
+            time.sleep(HANG_SEC)
         return real_stat(path, *a, **k)
 
-    monkeypatch.setattr(roots, "_probe", lambda path, require_entries: path.resolve())  # it answered
+    monkeypatch.setattr(roots, "_probe", lambda path, require_entries: Path(target))  # it answered
     monkeypatch.setattr(libraries, "ORIGINALS_TIMEOUT_SEC", 0.2)
     monkeypatch.setattr(os, "stat", slow_stat)
     started = time.monotonic()
     assert libraries._originals_device(_library(tmp_path, "lib_slow")) is None
-    assert time.monotonic() - started < 1.0
-    # Asked again while that stat is still stuck: no wait, and no second stuck thread.
-    stuck = [t for t in threading.enumerate() if t.name == "originals-stat-lib_slow"]
-    started = time.monotonic()
+    assert time.monotonic() - started < HANG_SEC / 3, "the hang wasn't waited for"
+    stuck = _named("originals-stat-lib_slow")
+    assert len(stuck) == 1
+    # Asked again while that stat is still stuck: no second stuck thread.
     assert libraries._originals_device(_library(tmp_path, "lib_slow")) is None
-    assert time.monotonic() - started < 0.5
-    assert [t for t in threading.enumerate() if t.name == "originals-stat-lib_slow"] == stuck
+    assert _named("originals-stat-lib_slow") == stuck

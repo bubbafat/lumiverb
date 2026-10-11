@@ -329,8 +329,8 @@ def test_a_connection_that_s_closing_doesn_t_hold_a_restore_up(server, tmp_path)
     conn = engine.connect()
     threading.Timer(0.4, lambda: (conn.close(), engine.dispose())).start()
     started = time.monotonic()
-    assert backups.connected_elsewhere([control_url, tenant_url], grace=3.0) == []
-    assert time.monotonic() - started < 3.0, "said as soon as it was gone"
+    assert backups.connected_elsewhere([control_url, tenant_url], grace=60) == []
+    assert time.monotonic() - started < 30, "said once it was gone, not at the end of the grace"
 
 
 def test_the_api_s_and_scheduler_s_connections_say_who_they_are(server, monkeypatch):

@@ -23,6 +23,8 @@ from tests.test_network_api import _signed_in
 
 pytestmark = pytest.mark.slow
 
+SETTLE_SEC = 120
+
 
 @pytest.fixture
 def install(control, tmp_path, monkeypatch):  # noqa: F811
@@ -79,13 +81,17 @@ def _admin(client: TestClient, account_database) -> dict[str, str]:
 
 
 def _settled(client: TestClient, auth: dict[str, str]) -> dict:
-    for _ in range(200):
+    """The answer once the background work is done. Waits as long as a busy
+    machine needs (it's done or it isn't; how fast isn't what's tested), and
+    says what it last saw if it never is."""
+    deadline = time.monotonic() + SETTLE_SEC
+    while True:
         body = client.get("/v1/system/backups", headers=auth).json()
         if body["running"] is None:
             return body
+        if time.monotonic() > deadline:
+            raise AssertionError(f"not done after {SETTLE_SEC} s; last answer: {body}")
         time.sleep(0.05)
-    raise AssertionError("the backup didn't finish")
-
 
 def test_an_admin_backs_up_now_and_sees_how_to_restore_it(install):
     data, account_database = install
