@@ -162,6 +162,31 @@ describe("AiSection", () => {
     expect(await screen.findByText(/Descriptions & text are off: no model is chosen/)).toBeTruthy();
   });
 
+  it("points to the README's Ollama how-to where descriptions need a machine", async () => {
+    model = "";
+    whisper = "small";
+    renderSection();
+    const off = (await screen.findByText(/Descriptions & text are off/)).closest("[role=status]") as HTMLElement;
+    const guide = within(off).getByRole("link", { name: "How to set up Ollama" });
+    expect(guide.getAttribute("href")).toBe("https://github.com/bubbafat/lumiverb#ai-descriptions-with-ollama");
+    expect(guide.getAttribute("target")).toBe("_blank");
+    expect(screen.getByRole("link", { name: "how to set it up" }).getAttribute("href")).toBe(guide.getAttribute("href"));
+    cleanup();
+    // A model, but no machine doing it: paused, and the how-to again.
+    model = QWEN;
+    renderSection();
+    const paused = (await screen.findByText("Descriptions & text: paused")).closest("[role=alert]") as HTMLElement;
+    expect(within(paused).getByRole("link", { name: "How to set up Ollama" })).toBeTruthy();
+    cleanup();
+    // Transcripts without a machine: Ollama doesn't transcribe, so no how-to there.
+    whisper = "small";
+    model = QWEN;
+    machines = [machine({})];
+    renderSection();
+    const transcripts = (await screen.findByText("Transcripts: paused")).closest("[role=alert]") as HTMLElement;
+    expect(within(transcripts).queryByRole("link")).toBeNull();
+  });
+
   it("a viewer sees it all and changes nothing", async () => {
     role = "viewer";
     machines = [machine({ name: "Gaming PC" })];
