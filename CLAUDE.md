@@ -42,7 +42,7 @@ clients/resolve/           DaVinci Resolve Studio Workflow Integration (prototyp
 
 tests/        Python tests (pytest)
 migrations/   Alembic — control/ + tenant/ trees
-scripts/      Ops (update.sh = one-command update, logged; deploy-*, update-*, migrate.sh, convert-models/, …)
+scripts/      Ops (update.sh = one-command update, logged; release.sh vX.Y.Z = tag, GitHub release and the Homebrew tap's PR; deploy-*, update-*, migrate.sh, convert-models/, …)
 docs/         Long-form docs + ADRs
 quickwit/     Quickwit index schemas
 ```
