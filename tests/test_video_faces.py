@@ -52,7 +52,7 @@ def test_high_adds_a_frame_every_few_seconds_but_none_beside_a_picture():
     assert 7500 in times and 10_500 in times  # the grid where no picture is
     assert 4500 not in times  # 300 ms from the second scene's picture
     assert times == sorted(times)
-    assert all(b - a >= APART_MS for a, b in zip(times, times[1:]))
+    assert all(b - a >= APART_MS for a, b in zip(times, times[1:], strict=False))
     assert len(times) == len({1500, 4200} | {t for t in range(step // 2, 12_000, step) if abs(t - 4200) >= APART_MS
                                              and abs(t - 1500) >= APART_MS})
 

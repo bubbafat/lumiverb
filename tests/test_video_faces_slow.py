@@ -138,7 +138,7 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
     assert faces[a_id]["frame_ms"] == 4000 and faces[a_id]["seen_ms"] == [1000, 4000, 9000]
     assert faces[b_id]["frame_ms"] == 9000 and faces[b_id]["seen_ms"] == [9000]
     # Each face's crop is the one cut from its frame, as sent.
-    for face_id, crop in zip((a_id, b_id), crops):
+    for face_id, crop in zip((a_id, b_id), crops, strict=True):
         got = client.get(f"/v1/faces/{face_id}/crop", headers=auth)
         assert got.status_code == 200 and got.content == crop
     with engine.connect() as conn:
@@ -267,7 +267,7 @@ class _Server:
 
     def post(self, path: str, **kwargs):
         r = self._client.post(path, headers=self._auth, **kwargs)
-        assert r.status_code == 200, r.text
+        assert r.status_code in (200, 201, 204), r.text
         return r
 
 
@@ -344,3 +344,96 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
         dims = conn.execute(text("SELECT vector_dims(embedding_vector) FROM faces WHERE asset_id = :a"),
                             {"a": asset_id}).scalars().all()
     assert dims and set(dims) == {512}
+
+
+TWO_PEOPLE = os.environ.get("LUMIVERB_TWO_PEOPLE_CLIP")
+
+
+@pytest.mark.ai
+@pytest.mark.skipif(not TWO_PEOPLE, reason="LUMIVERB_TWO_PEOPLE_CLIP names no clip (Robert's: two people, 8.7 s, 4K HEVC)")
+def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
+    """Robert's clip of two people (not in the repo: its path comes from
+    LUMIVERB_TWO_PEOPLE_CLIP), the whole way as the scheduler takes it: its
+    analysis proxy rendered, its scenes found through the chunk routes,
+    then its faces at Low, Normal and High with InsightFace in its own
+    process, saved to the server. Each level finds the same two people, in
+    every frame looked at, kept as the same two faces from level to level.
+    Measured Oct 11 on a Mac (CoreML): 2 scenes; 2, 5 and 5 frames; the
+    two about 1.0 apart (cosine distance)."""
+    import shutil
+    import subprocess
+    import threading
+
+    import numpy as np
+
+    from src.processing.producer_settings import ProducerSettings
+    from src.processing.video.analysis_proxy import render_analysis_proxy
+    from src.producers.faces.detect import FaceDetector
+    from src.producers.scenes.work import index_video_scenes
+    from src.producers.video_faces.frames import frame_times
+    from src.producers.video_faces.work import VideoFaces
+    from src.shared.producers import level_of
+    from tests.machine_lineage import made as made_lineage
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg isn't installed")
+    if not (Path.home() / ".insightface/models/buffalo_l").is_dir():
+        pytest.skip("InsightFace's buffalo_l isn't downloaded")
+    client, auth, library_id, engine = env
+    proxy = tmp_path / "analysis.mp4"
+    render_analysis_proxy(Path(TWO_PEOPLE), proxy)
+    duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                     str(proxy)], capture_output=True, text=True, check=True).stdout)
+    asset_id = _clip(client, auth, library_id, "faces/two_people.mov")
+    server = _Server(client, auth)
+    index_video_scenes(client=server, source_path=proxy, asset_id=asset_id, duration_sec=duration,
+                       rel_path="faces/two_people.mov", lineage=made_lineage("scenes"), detail="normal")
+    scenes = client.get(f"/v1/video/{asset_id}/scenes", headers=auth).json()["scenes"]
+    assert scenes
+
+    detector = FaceDetector(per_process=200)
+    item = {"asset_id": asset_id, "library_id": library_id, "rel_path": "faces/two_people.mov",
+            "duration_sec": duration}
+    ids_before: set[str] | None = None
+    try:
+        for detail in ("low", "normal", "high"):
+            class _Acct:
+                stopping = threading.Event()
+                producers = ProducerSettings(None)
+
+                class analysis_cache:  # noqa: N801 — the account's cache, holding this clip's proxy
+                    @staticmethod
+                    def get(_asset_id):
+                        return proxy
+
+                class models:  # noqa: N801
+                    @staticmethod
+                    def faces():
+                        return detector
+
+            _Acct.client = server
+            _Acct.producers._uses["video_faces"]["detail"] = detail
+            work = VideoFaces(_Acct, None)
+            found = work.make(item)
+            work.save(server, [(item, found)])
+
+            times = frame_times(scenes, round(duration * 1000), detail)
+            faces = client.get(f"/v1/assets/{asset_id}/faces", headers=auth).json()["faces"]
+            assert found.frames == len(times)
+            assert len(faces) == 2, (detail, faces)
+            for f in faces:  # each seen in every frame looked at
+                assert f["seen_ms"] == times, (detail, f)
+                crop = client.get(f"/v1/faces/{f['face_id']}/crop", headers=auth)
+                assert crop.status_code == 200
+            ids = {f["face_id"] for f in faces}
+            assert ids_before is None or ids == ids_before, detail  # the same two, found again
+            ids_before = ids
+            a, b = (np.asarray(f["embedding"]) for f in found.faces)
+            assert 1.0 - float(a @ b) > 0.6, detail  # two people, not one seen twice
+            with engine.connect() as conn:
+                count, level = conn.execute(text(
+                    "SELECT a.face_count, l.level FROM assets a JOIN artifact_lineage l ON l.asset_id = a.asset_id"
+                    " AND l.artifact = 'video_faces' WHERE a.asset_id = :a"), {"a": asset_id}).one()
+            assert (count, level) == (2, level_of("video_faces", {"detail": detail})), detail
+    finally:
+        detector.close()

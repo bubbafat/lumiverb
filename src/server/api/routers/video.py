@@ -555,7 +555,7 @@ def submit_video_faces(
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         storage = get_storage()
-        for face_id, data in zip(face_ids, images):
+        for face_id, data in zip(face_ids, images, strict=True):
             key = storage.face_crop_key(tenant_id, asset.library_id, face_id)
             storage.write(key, data)
             session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
