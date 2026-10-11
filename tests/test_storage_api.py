@@ -22,6 +22,8 @@ from tests.test_first_run_setup import HERE, LAN, control  # noqa: F401 (control
 
 pytestmark = pytest.mark.slow
 
+SETTLE_SEC = 120
+
 KEY = "ten_x/lib_1/proxies/00/ast_1_a.webp"
 
 
@@ -46,13 +48,17 @@ def mac(control, tmp_path, monkeypatch):  # noqa: F811
 
 
 def _settled(client: TestClient, auth: dict[str, str]) -> dict:
-    for _ in range(200):
+    """The answer once the background work is done. Waits as long as a busy
+    machine needs (it's done or it isn't; how fast isn't what's tested), and
+    says what it last saw if it never is."""
+    deadline = time.monotonic() + SETTLE_SEC
+    while True:
         body = client.get("/v1/system/storage", headers=auth).json()
         if body["moving"] is None:
             return body
+        if time.monotonic() > deadline:
+            raise AssertionError(f"not done after {SETTLE_SEC} s; last answer: {body}")
         time.sleep(0.05)
-    raise AssertionError("the move didn't finish")
-
 
 def test_an_admin_on_the_mac_sees_what_moves_says_yes_and_it_moves(mac):
     data, drive, control_url = mac

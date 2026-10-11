@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from src.server.database import set_application_name
 from src.server.api.errors import (
     ApiError,
     api_error_handler,
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     playback.stop_cuts()
 
 
+set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
 
 

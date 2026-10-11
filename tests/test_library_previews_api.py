@@ -20,6 +20,8 @@ from tests.test_first_run_setup import HERE, LAN, control  # noqa: F401 (control
 
 pytestmark = pytest.mark.slow
 
+SETTLE_SEC = 120
+
 
 @pytest.fixture
 def mac(control, tmp_path, monkeypatch):  # noqa: F811
@@ -49,13 +51,17 @@ def _library(client: TestClient, control_url: str, originals) -> tuple[dict, str
 
 
 def _settled(client: TestClient, auth: dict, library_id: str) -> dict:
-    for _ in range(200):
+    """The answer once the move is done. Waits as long as a busy machine needs
+    (it's done or it isn't; how fast isn't what's tested), and says what it
+    last saw if it never is."""
+    deadline = time.monotonic() + SETTLE_SEC
+    while True:
         body = client.get(f"/v1/libraries/{library_id}/previews", headers=auth).json()
         if body["moving"] is None:
             return body
+        if time.monotonic() > deadline:
+            raise AssertionError(f"not done after {SETTLE_SEC} s; last answer: {body}")
         time.sleep(0.05)
-    raise AssertionError("the move didn't finish")
-
 
 def test_a_library_gets_a_folder_of_its_own_after_saying_yes_and_back(mac):
     data, originals, tmp, control_url = mac

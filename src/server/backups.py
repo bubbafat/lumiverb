@@ -45,6 +45,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic, sleep
 
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -63,11 +64,20 @@ _NAME = re.compile(r"^lumiverb-\d{4}-\d{2}-\d{2}-\d{6}-(" + "|".join(KINDS) + r"
 NIGHTLY_AT = time(3, 0)
 # A failed backup is tried again this much later, not at every upkeep.
 RETRY_AFTER = timedelta(hours=1)
+# running() looks at the lock by taking it for an instant (Settings › Backups
+# asks every 2 s while one runs; Back up now asks as it starts one). A backup
+# starting in that instant waits this long for it before taking the holder
+# for another backup: a look lets go at once, a backup holds it to the end.
+LOOK_WAIT_SEC = 2.0
 KEEP_DAYS = timedelta(days=7)
 KEEP_WEEKS = 4
 KEEP_BEFORE = 3
 # A .partial this old was a backup that died (the API restarted mid-way).
 PARTIAL_STALE = timedelta(days=1)
+# A connection that's closing (Lumiverb just stopped, or the restore's own
+# check before) is still listed for a moment after its client lets go: what's
+# connected is looked at again for this long before a restore is refused.
+CLOSING_GRACE_SEC = 3.0
 # Restoring: the database put back beside the live one, then swapped in.
 RESTORING = "__restoring"
 REPLACED = "__replaced"
@@ -437,14 +447,20 @@ def _update_state(data_dir: Path, **changes) -> None:
 
 
 @contextlib.contextmanager
-def _one_at_a_time(data_dir: Path) -> Iterator[None]:
-    """Held while a backup is made: across the API's workers and the CLI."""
+def _one_at_a_time(data_dir: Path, *, wait: float = 0.0) -> Iterator[None]:
+    """Held while a backup is made: across the API's workers and the CLI.
+    `wait`: how long to wait out a look (running())."""
     data_dir.mkdir(parents=True, exist_ok=True)
+    deadline = monotonic() + wait
     with open(data_dir / LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise BackupError("A backup is being made already.") from None
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if monotonic() >= deadline:
+                    raise BackupError("A backup is being made already.") from None
+                sleep(0.02)
         try:
             yield
         finally:
@@ -452,6 +468,7 @@ def _one_at_a_time(data_dir: Path) -> Iterator[None]:
 
 
 def running(data_dir: Path) -> bool:
+    """Whether a backup holds the lock now: a look, taking it for an instant."""
     try:
         with _one_at_a_time(data_dir):
             return False
@@ -466,7 +483,7 @@ def back_up(data_dir: Path, control_url: str, kind: str, *, pg_bin: str | None =
     """A backup now, into the backups folder (or `dest`), then the old ones
     pruned. Records how it went for Settings › Backups and the Admin page.
     Raises BackupError."""
-    with _one_at_a_time(data_dir):
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         started = datetime.now(UTC)
         _update_state(data_dir, running={"kind": kind, "started_at": started.isoformat(), "done": 0, "of": 0})
 
@@ -551,18 +568,29 @@ def _quoted(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def connected_elsewhere(urls: list[str]) -> list[str]:
-    """What's connected to these databases now, besides this process: Lumiverb
-    still running, or someone's psql. Empty when nothing is."""
+def connected_elsewhere(urls: list[str], *, grace: float | None = None) -> list[str]:
+    """The clients connected to these databases now, besides this one:
+    Lumiverb still running (its API and scheduler name themselves:
+    lumiverb-api, lumiverb-scheduler), or someone's psql. Empty when there
+    are none. Only clients: PostgreSQL's own workers (autovacuum tidying a
+    database) don't count. One that's closing is gone within the grace
+    (CLOSING_GRACE_SEC): only those still there after it are said."""
     names = sorted({make_url(u).database for u in urls if make_url(u).database})
     if not names:
         return []
+    grace = CLOSING_GRACE_SEC if grace is None else grace
+    deadline = monotonic() + grace
     engine = _admin_engine(urls[0])
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT datname, coalesce(nullif(application_name, ''), client_addr::text, 'local') FROM pg_stat_activity"
-                " WHERE datname = ANY(:names) AND pid <> pg_backend_pid()"), {"names": names}).all()
+        while True:
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT datname, coalesce(nullif(application_name, ''), host(client_addr), 'local')"
+                    " FROM pg_stat_activity WHERE datname = ANY(:names) AND pid <> pg_backend_pid()"
+                    " AND backend_type = 'client backend'"), {"names": names}).all()
+            if not rows or monotonic() >= deadline:
+                break
+            sleep(0.2)
     finally:
         engine.dispose()
     return sorted({f"{name} ({who})" for name, who in rows})

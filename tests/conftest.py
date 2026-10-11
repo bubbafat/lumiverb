@@ -26,6 +26,8 @@ import itertools
 import os
 import subprocess
 import sys
+from datetime import datetime
+from pathlib import Path
 
 # Test engines pool their connections, as the server's do (no
 # SQLALCHEMY_NULLPOOL). A new connection per session opened ~26k of them in a
@@ -347,9 +349,42 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         _current_item = None
 
 
+# Every failure, named with its traceback, appended here by the run that saw it
+# (the xdist controller, or a run without -n), whatever happens to the run's
+# output: a flaky test's name is never lost to `| tail -1` (Robert: never
+# ignore a flaky test).
+FAILURES_LOG = Path(".pytest_cache") / "failures.log"
+_failures_log: Path | None = None
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    if _failures_log is not None:
+        _failures_log.parent.mkdir(parents=True, exist_ok=True)
+        with _failures_log.open("a") as out:
+            out.write(f"--- run {datetime.now().isoformat(timespec='seconds')} pid {os.getpid()}: "
+                      f"{' '.join(session.config.invocation_params.args)}\n")
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if _failures_log is None or not report.failed:
+        return
+    worker = getattr(report, "node", None)
+    where = getattr(getattr(worker, "gateway", None), "id", "main")
+    with _failures_log.open("a") as out:
+        out.write(f"=== {datetime.now().isoformat(timespec='seconds')} FAILED {report.nodeid} ({report.when}, {where})\n"
+                  f"{report.longreprtext}\n\n")
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
+    if _failures_log is not None and terminalreporter.stats.get("failed"):
+        terminalreporter.write_line(f"Failures (with tracebacks) also in {_failures_log}")
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    global _server
+    global _server, _failures_log
+    if not hasattr(config, "workerinput"):  # the controller: workers' reports reach it too
+        _failures_log = Path(config.rootpath) / FAILURES_LOG
     shared = getattr(config, "workerinput", {}).get("lumiverb_pg")
     if shared:  # an xdist worker: the controller started the server
         _server = _Server(**shared)

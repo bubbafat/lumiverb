@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -216,7 +217,8 @@ def test_a_restore_that_fails_changes_nothing(server, tmp_path):
     assert not _exists(base, f"bk3_ten_{w}{backups.RESTORING}")
 
 
-def test_while_lumiverb_is_connected_it_is_refused(server, tmp_path):
+def test_while_lumiverb_is_connected_it_is_refused(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(backups, "CLOSING_GRACE_SEC", 0.5)
     base, name = server
     w = _worker()
     control_url, tenant_url = _install(base, name(f"bk4_control_{w}"), name(f"bk4_ten_{w}"))
@@ -311,3 +313,37 @@ def test_the_commands(server, tmp_path, monkeypatch, capsys):
     undo = next(b for b in backups.list_backups(tmp_path / "backups") if b.kind == "before-restore")
     assert cli.main(["restore", str(undo.path), "--yes"]) == 0
     assert _value(tenant_url, "note") == "after"
+
+
+def test_a_connection_that_s_closing_doesn_t_hold_a_restore_up(server, tmp_path):
+    """Lumiverb just stopped, or the restore's own look before: a client that
+    lets go within the grace isn't taken for Lumiverb still running (a full
+    run under load once failed on that: the backend outlives its client a
+    moment)."""
+    import threading
+
+    base, name = server
+    w = _worker()
+    control_url, tenant_url = _install(base, name(f"bk9_control_{w}"), name(f"bk9_ten_{w}"))
+    engine = create_engine(tenant_url, connect_args={"application_name": "lumiverb-api"})
+    conn = engine.connect()
+    threading.Timer(0.4, lambda: (conn.close(), engine.dispose())).start()
+    started = time.monotonic()
+    assert backups.connected_elsewhere([control_url, tenant_url], grace=60) == []
+    assert time.monotonic() - started < 30, "said once it was gone, not at the end of the grace"
+
+
+def test_the_api_s_and_scheduler_s_connections_say_who_they_are(server, monkeypatch):
+    from src.server import database
+
+    base, name = server
+    w = _worker()
+    control_url, _ = _install(base, name(f"bk10_control_{w}"), name(f"bk10_ten_{w}"))
+    monkeypatch.setattr(database, "APPLICATION_NAME", database.APPLICATION_NAME)
+    database.set_application_name("lumiverb-scheduler")
+    engine = database._create_engine(control_url)
+    try:
+        with engine.connect():
+            assert backups.connected_elsewhere([control_url], grace=0) == [f"bk10_control_{w} (lumiverb-scheduler)"]
+    finally:
+        engine.dispose()

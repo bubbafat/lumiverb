@@ -12,6 +12,7 @@ import errno
 import json
 import os
 import shutil
+import time
 from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -483,3 +484,34 @@ def test_the_disk_row_says_a_library_s_drive_is_unplugged():
     assert row.state == "red" and row.reason == ("A library's previews folder isn't there: /Volumes/Video. "
                                                  "Is its drive plugged in?")
     assert row.link == "/settings/storage"
+
+
+def test_a_look_at_whether_a_move_runs_never_stops_one_starting(install, monkeypatch):
+    """running() takes the lock for an instant to see whether it's free. A
+    mover starting in that instant used to give up ("being moved already")
+    and move nothing, silently: Settings › Storage polls running() every 2 s,
+    and Try again's answer polls it as the mover starts (a full run under
+    load caught it: the move never finished)."""
+    import threading
+
+    data, drive = install
+    _moving(data, drive)
+    monkeypatch.setattr(move, "LOOK_WAIT_SEC", 60)  # however slow the machine, the look is let go first
+    with move._one_at_a_time(data):  # a look, held a moment as the mover starts
+        mover = threading.Thread(target=move.run, args=(data,))
+        mover.start()
+        time.sleep(0.2)
+    mover.join(60)
+    assert not mover.is_alive()
+    assert previews_location.read(data) == previews_location.Location(drive), "it waited its turn and moved"
+    assert (drive / PROXY).is_file()
+
+
+def test_a_second_mover_still_finds_one_running(install, monkeypatch):
+    """Waiting out a look isn't waiting out a move: one that holds the lock
+    longer than a look is said to be running."""
+    data, drive = install
+    _moving(data, drive)
+    monkeypatch.setattr(move, "LOOK_WAIT_SEC", 0.2)
+    with move._one_at_a_time(data), pytest.raises(move.MoveError, match="being moved already"):
+        move.run(data)
