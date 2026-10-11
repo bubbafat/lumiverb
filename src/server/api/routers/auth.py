@@ -192,6 +192,7 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
 
 RESET_ELSEWHERE = ("Password reset isn't set up here. On the computer Lumiverb is installed on, "
                    "use Forgot password there, or ask whoever looks after it.")
+RESET_NOT_SET_UP = "Password reset isn't set up here. Ask whoever looks after Lumiverb."
 
 
 @router.post("/forgot-password", status_code=204, response_model=None)
@@ -200,16 +201,18 @@ def forgot_password(
     request: Request,
     background: BackgroundTasks,
 ) -> JSONResponse | None:
-    """From the machine Lumiverb runs on, its operator: the reset link the
-    email would carry, at once (a Mac has no email set up). From anywhere
-    else: the email, when SMTP is set up."""
+    """Where the install says the person at its machine owns it (a Mac's,
+    LUMIVERB_RESET_ON_THIS_MACHINE), from that machine: the reset link the
+    email would carry, at once (a Mac has no email set up). Otherwise: the
+    email, when SMTP is set up."""
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError
 
     forgot_password_limiter.check(request)
     forgot_password_limiter.check(request, key=f"email:{body.email.strip().lower()}")
 
-    if on_this_machine(request):
+    settings = get_settings()
+    if settings.lumiverb_reset_on_this_machine and on_this_machine(request):
         with _get_session() as session:
             user = UserRepository(session).get_by_email(body.email.strip())
             if user is None:
@@ -218,7 +221,6 @@ def forgot_password(
             PasswordResetTokenRepository(session).create(user.user_id, plaintext_token, utcnow() + timedelta(hours=1))
         return JSONResponse({"reset_url": f"/reset-password?token={plaintext_token}"})
 
-    settings = get_settings()
     smtp_ready = all(
         [
             settings.smtp_host,
@@ -231,7 +233,9 @@ def forgot_password(
     )
     if not smtp_ready:
         # The same for any email when reset is unavailable here.
-        raise ApiError(501, "reset_elsewhere", RESET_ELSEWHERE)
+        if settings.lumiverb_reset_on_this_machine:
+            raise ApiError(501, "reset_elsewhere", RESET_ELSEWHERE)
+        raise ApiError(501, "reset_not_set_up", RESET_NOT_SET_UP)
 
     # 204 always, at once: whether the email is known (and the mail's sent) happens after.
     background.add_task(_send_reset_email, body.email)

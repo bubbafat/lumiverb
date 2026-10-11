@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     app_host: str = ""  # Public URL, e.g. https://app.example.com
+    # Forgot password on this machine itself gives the reset link at once: the
+    # person at it owns the install (a Mac's: init --reset-on-this-machine).
+    # Never on a server, where "on this machine" isn't "the operator".
+    lumiverb_reset_on_this_machine: bool = False
 
     # App
     app_env: str = "development"

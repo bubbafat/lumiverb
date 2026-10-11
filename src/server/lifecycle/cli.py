@@ -1,7 +1,7 @@
 """lumiverb-server: look after this machine's Lumiverb server.
 
     lumiverb-server init --env FILE --data-dir DIR [--pg-bin DIR] [--quickwit-bin FILE --quickwit-config FILE]
-                         [--nginx-bin FILE --nginx-config FILE]
+                         [--nginx-bin FILE --nginx-config FILE] [--local-roots] [--reset-on-this-machine]
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
@@ -28,8 +28,8 @@ same as the web app's setup page (src/server/setup.py), while nobody can
 log in yet.
 
 reset-password: someone's new password, asked for twice, signing them out
-everywhere: the same as Forgot password on the machine itself (no email
-needed). The env file is the operator's, so this needs no other proof.
+everywhere: what Forgot password on a Mac itself does (no email needed), on
+any install. The env file is the operator's, so this needs no other proof.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
@@ -206,7 +206,8 @@ def _init(args: argparse.Namespace) -> int:
                       quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host,
                       pg_bin=full(args.pg_bin), quickwit_bin=full(args.quickwit_bin),
                       quickwit_config=full(args.quickwit_config), nginx_bin=full(args.nginx_bin),
-                      nginx_config=full(args.nginx_config), local_roots=args.local_roots)
+                      nginx_config=full(args.nginx_config), local_roots=args.local_roots,
+                      reset_on_this_machine=args.reset_on_this_machine)
     if (choices.quickwit_bin is None) != (choices.quickwit_config is None) or (
             (choices.nginx_bin is None) != (choices.nginx_config is None)):
         raise InstallError("Name each program with its config: --quickwit-bin with --quickwit-config, "
@@ -418,6 +419,9 @@ def main(argv: list[str] | None = None) -> int:
     init_command.add_argument("--nginx-config", type=Path, help="nginx's config, written here")
     init_command.add_argument("--local-roots", action="store_true",
                               help="the scheduler reads every library folder where it is (this machine has the files)")
+    init_command.add_argument("--reset-on-this-machine", action="store_true",
+                              help="Forgot password on this machine gives the reset link at once: whoever is at it "
+                                   "owns the install (a Mac's, never a server's)")
     init_command.add_argument("--web-root", type=Path, default=WEB_ROOT, help="the web build nginx serves")
     for port in ("pg", "api", "quickwit", "web"):
         init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")
@@ -431,7 +435,8 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(setup_command, argparse.SUPPRESS)
     setup_command.add_argument("--email", help="the admin's email (asked if not given)")
     setup_command.add_argument("--account-name", help="a new account's name (\"Lumiverb\" if not given)")
-    reset_command = commands.add_parser("reset-password", help="set someone's new password (no email needed)")
+    reset_command = commands.add_parser(
+        "reset-password", help="set someone's new password, signing them out everywhere (no email needed)")
     _env_option(reset_command, argparse.SUPPRESS)
     reset_command.add_argument("--email", help="theirs (asked if not given)")
     args = parser.parse_args(argv)
