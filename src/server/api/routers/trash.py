@@ -266,10 +266,8 @@ def purge_assets(
     storage = get_storage()
     for key in keys_to_remove:
         try:
-            path = storage.abs_path(key)
-            if path.exists():
-                path.unlink()
-        except (OSError, ValueError) as e:  # ValueError: a key outside DATA_DIR, never deleted
+            storage.delete(key)  # wherever it is (a move may be under way)
+        except (OSError, ValueError) as e:  # ValueError: a key outside the previews folder, never deleted
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
     if tenant_id:
         # Playback cuts are copies of the start of each video.

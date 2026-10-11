@@ -201,14 +201,14 @@ def _do_ingest(
 
     # --- Write proxy to storage ---
     proxy_key = storage.proxy_key(tenant_id, library_id, asset_id, rel_path)
-    proxy_path = storage.abs_path(proxy_key)
+    proxy_path = storage.write_path(proxy_key)
     proxy_path.parent.mkdir(parents=True, exist_ok=True)
     proxy_path.write_bytes(proxy_bytes)
     proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
 
     # --- Write thumbnail to storage ---
     thumb_key = storage.thumbnail_key(tenant_id, library_id, asset_id, rel_path)
-    thumb_path = storage.abs_path(thumb_key)
+    thumb_path = storage.write_path(thumb_key)
     thumb_path.parent.mkdir(parents=True, exist_ok=True)
     thumb_path.write_bytes(thumb_bytes)
     thumb_sha256 = hashlib.sha256(thumb_bytes).hexdigest()

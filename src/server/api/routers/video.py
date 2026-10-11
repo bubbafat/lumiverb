@@ -127,7 +127,7 @@ def _start_over(request: Request, session: Session, asset_id: str, made: dict) -
     # Only the images at the keys the server derives (a scene's rep frame).
     for ms in frames:  # best effort: an image left behind is only space
         try:
-            storage.abs_path(storage.scene_rep_key(tenant_id, row.library_id, asset_id, ms)).unlink(missing_ok=True)
+            storage.delete(storage.scene_rep_key(tenant_id, row.library_id, asset_id, ms))
         except OSError as exc:
             _log.warning("Couldn't delete a scene image of %s: %s", asset_id, exc)
     QuickwitClient().delete_scene_index_documents_by_asset_ids(tenant_id, [asset_id])

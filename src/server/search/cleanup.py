@@ -284,17 +284,31 @@ def run_cleanup_for_tenant(
     return result
 
 
+MOVING = "The previews are moving: cleanup waits until they're moved."
+
+
+def previews_folder() -> tuple[Path | None, str | None]:
+    """The folder the previews are in (DATA_DIR or the one chosen), or why it
+    isn't cleaned now: while they move, files are in two places at once."""
+    from src.server.config import get_settings
+    from src.shared import previews_location
+
+    location = previews_location.read(get_settings().data_dir)
+    if location.moving_from is not None:
+        return None, MOVING
+    if not location.previews.is_dir():
+        return None, f"The previews folder isn't there: {location.previews}"
+    return location.previews, None
+
+
 def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
     """Run cleanup across all tenants. Uses control plane to enumerate tenants."""
-    from src.server.config import get_settings
     from src.server.database import get_control_session, get_tenant_session
     from src.server.repository.control_plane import TenantRepository
 
-    settings = get_settings()
-    data_dir = Path(settings.data_dir)
-
-    if not data_dir.is_dir():
-        return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
+    data_dir, why_not = previews_folder()
+    if data_dir is None:
+        return CleanupResult(errors=[why_not])
 
     result = CleanupResult()
 
@@ -349,11 +363,9 @@ def run_cleanup_single_tenant(
 ) -> CleanupResult:
     """Run cleanup for a single tenant (used when called with tenant API key),
     or one library of it."""
-    from src.server.config import get_settings
-
-    data_dir = Path(get_settings().data_dir)
-    if not data_dir.is_dir():
-        return CleanupResult(errors=[f"Data dir does not exist: {data_dir}"])
+    data_dir, why_not = previews_folder()
+    if data_dir is None:
+        return CleanupResult(errors=[why_not])
     if _paused(session, tenant_id, dry_run):
         return CleanupResult(paused=True, paused_tenants=[tenant_id])
     result = run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)

@@ -1,32 +1,63 @@
-"""Local filesystem storage for proxy and thumbnail files."""
+"""Local filesystem storage for the stored artifacts (the previews)."""
 
+import errno
 import os
+import threading
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 
 from ulid import ULID
 
 from src.server.config import get_settings
+from src.shared import previews_location
 
 
 class UnsafeKeyError(ValueError):
-    """A storage key that would reach outside DATA_DIR."""
+    """A storage key that would reach outside the previews folder."""
 
 
 class LocalStorage:
     """
-    Local filesystem storage. All paths are relative to DATA_DIR.
+    Local filesystem storage. Keys are relative to the previews folder:
+    DATA_DIR, or the one an admin chose (src/shared/previews_location.py).
 
     Path structure:
-      {data_dir}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
-      {data_dir}/{tenant_id}/{library_id}/thumbnails/{bucket}/{asset_id}_{filename}.webp
-      {data_dir}/{tenant_id}/{library_id}/analysis/{bucket}/{asset_id}_{filename}.mp4
+      {previews}/{tenant_id}/{library_id}/proxies/{bucket}/{asset_id}_{filename}.webp
+      {previews}/{tenant_id}/{library_id}/thumbnails/{bucket}/{asset_id}_{filename}.webp
+      {previews}/{tenant_id}/{library_id}/analysis/{bucket}/{asset_id}_{filename}.mp4
 
     bucket = int(asset_id_ulid_timestamp) % 100, zero-padded to 2 digits.
+
+    While the previews move (src/server/storage/move.py), a key is read where
+    it is now (moved or not yet), written to the new folder, and deleted in
+    both. Where they are is read from storage.json when it changes, so every
+    API worker follows a move as it starts and ends.
     """
 
     def __init__(self, data_dir: str | None = None) -> None:
         self._data_dir = data_dir if data_dir is not None else get_settings().data_dir
+        self._lock = threading.Lock()
+        self._seen: tuple[int, int] | None = None
+        self._location = previews_location.read(self._data_dir)
+
+    @property
+    def location(self) -> previews_location.Location:
+        """Where the previews are now (and, during a move, were)."""
+        try:
+            st = os.stat(Path(self._data_dir) / previews_location.FILE)
+            seen = (st.st_mtime_ns, st.st_ino)
+        except OSError:
+            seen = None
+        with self._lock:
+            if seen != self._seen:
+                self._seen = seen
+                self._location = previews_location.read(self._data_dir)
+            return self._location
+
+    @property
+    def root(self) -> Path:
+        """Where new files go."""
+        return self.location.previews
 
     @staticmethod
     def _bucket_from_asset_id(asset_id: str) -> int:
@@ -99,32 +130,66 @@ class LocalStorage:
         bucket = self._bucket_from_face_id(face_id)
         return f"{tenant_id}/{library_id}/face_crops/{bucket:02d}/{face_id}.webp"
 
-    def abs_path(self, key: str) -> Path:
-        """Where a key lives under DATA_DIR. Every read, write and delete goes
-        through here, so a key that would leave DATA_DIR is refused: an
+    @staticmethod
+    def _under(root: Path, key: str) -> Path:
+        """The key's path in `root`. A key that would leave it is refused: an
         absolute key, one with a `..` part, or one that resolves outside it."""
         if not isinstance(key, str) or not key or "\x00" in key:
             raise UnsafeKeyError(f"Invalid storage key: {key!r}")
         rel = PurePosixPath(key)
         if rel.is_absolute() or key.startswith("\\") or ".." in rel.parts:
-            raise UnsafeKeyError(f"Storage key leaves the data directory: {key!r}")
-        root = os.path.abspath(self._data_dir)
-        path = Path(root) / key
-        # Checked on the path itself, not through links: a link inside
-        # DATA_DIR (an operator's choice) is followed as before.
-        if not os.path.normpath(path).startswith(root.rstrip(os.sep) + os.sep):
-            raise UnsafeKeyError(f"Storage key leaves the data directory: {key!r}")
+            raise UnsafeKeyError(f"Storage key leaves the previews folder: {key!r}")
+        base = os.path.abspath(root)
+        path = Path(base) / key
+        # Checked on the path itself, not through links: a link inside the
+        # folder (an operator's choice) is followed as before.
+        if not os.path.normpath(path).startswith(base.rstrip(os.sep) + os.sep):
+            raise UnsafeKeyError(f"Storage key leaves the previews folder: {key!r}")
         return path
 
+    def paths(self, key: str) -> list[Path]:
+        """Every place the key may be: the previews folder, then (moving) the old one."""
+        return [self._under(root, key) for root in self.location.roots]
+
+    def abs_path(self, key: str) -> Path:
+        """Where the key is to be read: where it is (during a move, moved or
+        not yet), else where it goes. Writes go through write_path."""
+        candidates = self.paths(key)
+        for path in candidates[1:]:
+            if not candidates[0].exists() and path.exists():
+                return path
+        return candidates[0]
+
+    def write_path(self, key: str) -> Path:
+        """Where the key is written: the previews folder, always. Raises
+        FileNotFoundError when that's a chosen folder whose drive isn't
+        plugged in: its empty mount point is on the system disk."""
+        location = self.location
+        if not location.available(self._data_dir):
+            raise FileNotFoundError(errno.ENOENT, "The previews folder isn't there. Is its drive plugged in?",
+                                    str(location.previews))
+        return self._under(location.previews, key)
+
     def write(self, key: str, data: bytes) -> None:
-        path = self.abs_path(key)
+        path = self.write_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(path.name + ".tmp")
         tmp_path.write_bytes(data)
         tmp_path.rename(path)
 
     def exists(self, key: str) -> bool:
-        return self.abs_path(key).exists()
+        return any(path.exists() for path in self.paths(key))
+
+    def delete(self, key: str) -> bool:
+        """Removes the key wherever it is; True if a file went."""
+        removed = False
+        for path in self.paths(key):
+            try:
+                path.unlink()
+                removed = True
+            except FileNotFoundError:
+                pass
+        return removed
 
 
 @lru_cache(maxsize=1)

@@ -106,7 +106,7 @@ def _outside(resolved: Path, mapping: dict[str, str]) -> str | None:
     from src.processing.machine import current
 
     here = current()
-    if any(resolved.is_relative_to(Path(d).resolve()) for d in here.refused_roots):
+    if any(resolved.is_relative_to(Path(d).resolve()) for d in here.refused_here()):
         return "root is in the server's data"
     if here.mapped_roots_only and not any(resolved.is_relative_to(Path(t).resolve()) for t in mapping.values()):
         return "root leaves the root map"

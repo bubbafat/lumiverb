@@ -44,11 +44,12 @@ class SchedulerSettings(BaseSettings):
 
     def machine(self) -> Machine:
         """Every account's libraries are read here: only through the root map,
-        never the server's data (DATA_DIR) or another refused folder."""
+        never the server's data (DATA_DIR), its previews, or another refused
+        folder."""
         from src.server.config import get_settings
 
         return Machine(root_map=dict(self.root_map), mapped_roots_only=True,
-                       refused_roots=(get_settings().data_dir, *self.refused_roots),
+                       refused_roots=(get_settings().data_dir, *self.refused_roots), data_dir=get_settings().data_dir,
                        analysis_proxy_encoder=self.analysis_proxy_encoder,
                        analysis_proxy_decoder=self.analysis_proxy_decoder, gpu_decodes=self.gpu_decodes,
                        render_concurrency=self.render_concurrency, analysis_cache_gb=self.analysis_cache_gb,

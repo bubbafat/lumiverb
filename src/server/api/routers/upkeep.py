@@ -135,6 +135,10 @@ class UpkeepResult(BaseModel):
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
+    # The admin key with tenants=all: a previews move that stopped goes on
+    # (src/server/storage/move.py): "started", "running", "waiting" (15 minutes
+    # after an error) or "not moving"; None for one account.
+    previews_move: str | None = None
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -444,6 +448,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     starts when it's due (none since the latest 03:00 here).
     """
     backup = _nightly_backup() if scope.all_tenants else None
+    previews_move = _previews_move() if scope.all_tenants else None
     if scope.all_tenants:
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
@@ -465,6 +470,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         dismissed_people=DismissedPeopleResult(**dismissed),
         face_clusters=FaceClustersResult(**clusters),
         backup=backup,
+        previews_move=previews_move,
     )
 
 
@@ -481,6 +487,19 @@ def _nightly_backup() -> str:
                                             pg_bin=os.environ.get("PG_BIN") or None)
     except Exception as exc:  # noqa: BLE001 — said in the log and on the Admin page, not here
         logger.warning("The nightly backup didn't start: %s", exc)
+        return "not started"
+
+
+def _previews_move() -> str:
+    """A previews move that stopped (an error, or the API restarted) goes on. Never fails upkeep."""
+    from pathlib import Path
+
+    from src.server.storage import move
+
+    try:
+        return move.go_on(Path(get_settings().data_dir), waits=True)
+    except Exception as exc:  # noqa: BLE001 — said in the log and in Settings › Storage
+        logger.warning("The previews move didn't go on: %s", exc)
         return "not started"
 
 
@@ -568,12 +587,12 @@ def remove_orphan_folders(body: RemoveOrphanFoldersRequest, scope: Scope) -> Rem
     An account admin's key: that account's library folders. The admin key
     with tenants=all: every account's, and the folders of accounts that are gone.
     """
-    from pathlib import Path
-
     from src.server.search import cleanup
 
     require_scope(body.folder_ids is not None, body.all, "folder_ids")
-    data_dir = Path(get_settings().data_dir)
+    data_dir, why_not = cleanup.previews_folder()
+    if data_dir is None:
+        return RemoveOrphanFoldersResult(errors=[why_not], dry_run=body.dry_run)
     ids = None if body.all else body.folder_ids
     if scope.all_tenants:
         out = cleanup.remove_orphan_folders(data_dir, tenant_id=None, session=None, folder_ids=ids,

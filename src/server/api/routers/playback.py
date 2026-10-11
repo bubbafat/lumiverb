@@ -185,7 +185,9 @@ def _duration(path: Path) -> float | None:
 
 
 def _playback_dir(storage: LocalStorage, tenant_id: str) -> Path:
-    return storage.abs_path(f"{tenant_id}/playback")
+    """Where the account's cuts are made: the previews folder (a move doesn't
+    carry them; they're made again on demand)."""
+    return storage.write_path(f"{tenant_id}/playback")
 
 
 def _duration_file(ask: "_Ask") -> Path:

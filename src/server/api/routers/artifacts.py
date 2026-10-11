@@ -116,7 +116,7 @@ async def upload_artifact(
             )
         key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
-    path = storage.abs_path(key)
+    path = storage.write_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(path.name + ".tmp")
 
@@ -230,7 +230,7 @@ async def upload_artifacts_batch(
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
 
-        path = storage.abs_path(key)
+        path = storage.write_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_name(path.name + ".tmp")
 

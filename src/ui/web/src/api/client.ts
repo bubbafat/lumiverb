@@ -1123,6 +1123,59 @@ export async function setBackupsFolder(folder: string | null): Promise<Backups> 
   return apiFetch<Backups>("/system/backups/folder", { method: "PUT", body: { folder } });
 }
 
+/** Where the previews are, and a move under way (Settings → Storage). */
+export interface StorageMove {
+  from_folder: string;
+  to_folder: string;
+  done_files: number;
+  total_files: number;
+  done_bytes: number;
+  total_bytes: number;
+  running: boolean;
+  /** Why it stopped; upkeep tries again 15 minutes later, or Try again now. */
+  error: string | null;
+  started_at: string | null;
+}
+
+export interface StorageInfo {
+  previews: string;
+  /** The data folder: the database, the search index, models and caches (they don't move). */
+  data: string;
+  /** The previews' drive is plugged in. */
+  previews_available: boolean;
+  previews_free: number | null;
+  previews_total: number | null;
+  data_free: number | null;
+  data_total: number | null;
+  same_disk: boolean;
+  moving: StorageMove | null;
+  /** Moved only on the machine itself. */
+  changeable_here: boolean;
+}
+
+/** What a move carries: the 409 move_previews's details, for the user to confirm. */
+export interface PreviewsMoveFacts {
+  from: string;
+  to: string;
+  files: number;
+  bytes: number;
+  free: number;
+}
+
+export async function getStorageInfo(): Promise<StorageInfo> {
+  return apiFetch<StorageInfo>("/system/storage");
+}
+
+/** Without move, a 409 move_previews with the facts; with it, the move starts (202). null: back to the data folder. */
+export async function movePreviews(folder: string | null, move: boolean): Promise<StorageInfo> {
+  return apiFetch<StorageInfo>("/system/storage/previews", { method: "PUT", body: { folder, move } });
+}
+
+/** Try again: a move that stopped goes on now. */
+export async function goOnMovingPreviews(): Promise<StorageInfo> {
+  return apiFetch<StorageInfo>("/system/storage/move", { method: "POST" });
+}
+
 /** A clip whose last try failed (Settings → Processing). */
 export interface FailingClip {
   asset_id: string;

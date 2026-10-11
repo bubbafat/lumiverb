@@ -13,6 +13,7 @@ per worker.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import threading
@@ -230,7 +231,30 @@ def _disk(now: datetime) -> h.Row:
         usage = shutil.disk_usage(get_settings().data_dir)
     except OSError as exc:
         return h.disk_row(free=None, total=None, now=now, error=_short(exc))
-    return h.disk_row(free=usage.free, total=usage.total, now=now)
+    return h.disk_row(free=usage.free, total=usage.total, now=now, previews=_previews_disk())
+
+
+def _previews_disk() -> dict | None:
+    """The previews' folder for the disk row, when it isn't DATA_DIR or a move runs."""
+    from src.server.config import get_settings
+    from src.server.storage import move
+    from src.shared import previews_location
+
+    data = Path(get_settings().data_dir).absolute()
+    location = previews_location.read(data)
+    if location.previews == data and location.moving_from is None:
+        return None
+    out: dict = {"folder": str(location.previews), "available": location.available(data),
+                 "same_disk": move.same_disk(location.previews, data), "moving": None}
+    if location.moving_from is not None:
+        state = move.read_state(data)
+        total = int(state.get("total_bytes") or 0)
+        out["moving"] = min(1.0, int(state.get("done_bytes") or 0) / total) if total else 0.0
+    if out["available"]:
+        with contextlib.suppress(OSError):
+            usage = shutil.disk_usage(location.previews)
+            out["free"], out["total"] = usage.free, usage.total
+    return out
 
 
 
@@ -421,3 +445,134 @@ def change_backups_folder(body: BackupFolderChange, request: Request) -> Backups
         raise ApiError(400, "folder_not_usable", str(exc)) from None
     logger.info("Backups go to %s (an admin's choice)", chosen)
     return _backups(request)
+
+
+class StorageMove(BaseModel):
+    from_folder: str
+    to_folder: str
+    done_files: int
+    total_files: int
+    done_bytes: int
+    total_bytes: int
+    running: bool
+    error: str | None  # why it stopped; it's tried again (upkeep, 15 minutes later) or by hand
+    started_at: datetime | None
+
+
+class Storage(BaseModel):
+    previews: str  # the folder the previews are in
+    data: str  # DATA_DIR: the database, the search index, models and caches (they don't move)
+    previews_available: bool  # its drive is plugged in
+    previews_free: int | None
+    previews_total: int | None
+    data_free: int | None
+    data_total: int | None
+    same_disk: bool
+    moving: StorageMove | None
+    changeable_here: bool  # moved only on the machine itself
+
+
+class PreviewsChange(BaseModel):
+    folder: str | None  # None: back to the data folder
+    move: bool = False  # the user saw what moves (the 409's details) and said yes
+
+
+STORAGE_ELSEWHERE = "Move the previews on the computer Lumiverb is installed on."
+
+
+def _storage(request: Request) -> Storage:
+    from src.server.api.client_address import on_this_machine
+    from src.server.config import get_settings
+    from src.server.storage import move
+    from src.shared import previews_location
+
+    data = Path(get_settings().data_dir).absolute()
+    location = previews_location.read(data)
+
+    def usage(path: Path) -> tuple[int | None, int | None]:
+        try:
+            u = shutil.disk_usage(path)
+            return u.free, u.total
+        except OSError:
+            return None, None
+
+    available = location.available(data)
+    previews_free, previews_total = usage(location.previews) if available else (None, None)
+    data_free, data_total = usage(data)
+    moving = None
+    if location.moving_from is not None:
+        state = move.read_state(data)
+        moving = StorageMove(
+            from_folder=str(location.moving_from), to_folder=str(location.previews),
+            done_files=int(state.get("done_files") or 0), total_files=int(state.get("total_files") or 0),
+            done_bytes=int(state.get("done_bytes") or 0), total_bytes=int(state.get("total_bytes") or 0),
+            running=move.running(data), error=state.get("error"),
+            started_at=state.get("started_at"),
+        )
+    return Storage(previews=str(location.previews), data=str(data), previews_available=available,
+                   previews_free=previews_free, previews_total=previews_total, data_free=data_free,
+                   data_total=data_total, same_disk=move.same_disk(location.previews, data), moving=moving,
+                   changeable_here=on_this_machine(request))
+
+
+@router.get("/storage", response_model=Storage, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def get_storage_location(request: Request) -> Storage:
+    """Where the previews are, how full their disk and the data disk are, and a move under way."""
+    return _storage(request)
+
+
+@router.put("/storage/previews", response_model=Storage, status_code=202,
+            dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def move_previews(body: PreviewsChange, request: Request) -> Storage:
+    """Moves the previews to another folder (or back to the data folder), on
+    the machine itself. Without move: true, a 409 says what moves (files,
+    bytes, from, to, free there) for the user to confirm. Lumiverb keeps
+    working meanwhile; new files go to the new folder at once."""
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError, DecisionRequiredError
+    from src.server.config import get_settings
+    from src.server.storage import move
+    from src.shared import previews_location
+
+    if not on_this_machine(request):
+        raise ApiError(403, "storage_elsewhere", STORAGE_ELSEWHERE)
+    data = Path(get_settings().data_dir).absolute()
+    location = previews_location.read(data)
+    if location.moving_from is not None:
+        raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
+    target = body.folder if body.folder is not None else str(data)
+    try:
+        if not body.move:
+            need = move.size_of(location.previews)
+            chosen = move.check_target(data, target, need)
+            free = shutil.disk_usage(chosen).free
+            raise DecisionRequiredError(
+                "move_previews",
+                f"Moves {need.files:,} previews ({move.size_text(need.bytes)}) from {location.previews} to {chosen}. "
+                "Lumiverb keeps working meanwhile; previews not moved yet show from where they are.",
+                {"from": str(location.previews), "to": str(chosen), "files": need.files, "bytes": need.bytes,
+                 "free": free},
+            )
+        move.start(data, target)
+    except move.MoveError as exc:
+        raise ApiError(400, "folder_not_usable", str(exc)) from None
+    logger.info("Moving the previews to %s (an admin's choice)", target)
+    return _storage(request)
+
+
+@router.post("/storage/move", response_model=Storage, status_code=202,
+             dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def go_on_moving(request: Request) -> Storage:
+    """Try again: a move that stopped (its error said why) goes on now."""
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+    from src.server.storage import move
+
+    data = Path(get_settings().data_dir).absolute()
+    if move.go_on(data) == "not moving":
+        raise ApiError(409, "not_moving", "The previews aren't being moved.")
+    for _ in range(20):  # the answer shows it running once it has the lock
+        if move.running(data):
+            break
+        time.sleep(0.05)
+    return _storage(request)

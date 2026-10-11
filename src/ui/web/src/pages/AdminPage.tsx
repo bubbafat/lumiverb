@@ -23,6 +23,7 @@ function linkLabel(link: string): string {
   if (link.startsWith("/settings/processing")) return "Processing settings";
   if (link.startsWith("/settings/ai")) return "AI settings";
   if (link.startsWith("/settings/backups")) return "Backups";
+  if (link.startsWith("/settings/storage")) return "Storage";
   if (link.startsWith("/libraries/") && link.endsWith("/settings")) return "Library settings";
   if (link.startsWith("/libraries")) return "Libraries";
   return "Open";
