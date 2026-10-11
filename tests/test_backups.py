@@ -199,12 +199,17 @@ def test_the_folder_is_the_data_folder_s_until_an_admin_chooses(tmp_path):
 @pytest.mark.parametrize(("given", "said"), [
     ("", "Say which folder"),
     ("relative/path", "full path"),
-    ("/no/such/folder", "There's no folder"),
+    ("/no/such/folder", "There's no drive at /no. Is it plugged in"),
 ])
 def test_a_folder_it_cant_use_is_refused_with_why(tmp_path, given, said):
     with pytest.raises(BackupError, match=said):
         backups.set_folder(tmp_path, given)
     assert backups.folder(tmp_path) == tmp_path / "backups"
+
+
+def test_a_folder_not_there_on_a_drive_that_is_says_so(tmp_path):
+    with pytest.raises(BackupError, match="There's no folder at"):
+        backups.set_folder(tmp_path, tmp_path / "nowhere")
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")

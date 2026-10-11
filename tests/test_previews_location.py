@@ -244,12 +244,18 @@ def test_one_move_at_a_time(install, tmp_path):
 @pytest.mark.parametrize(("folder", "said"), [
     ("", "Say which folder"),
     ("relative", "full path"),
-    ("/no/such/drive", "There's no folder"),
+    ("/no/such/drive", "There's no drive at /no. Is it plugged in"),
 ])
 def test_a_folder_it_cant_use_is_refused_with_why(install, folder, said):
     data, _ = install
     with pytest.raises(move.MoveError, match=said):
         move.check_target(data, folder)
+
+
+def test_a_folder_not_there_on_a_drive_that_is_says_so(install, tmp_path):
+    data, _ = install
+    with pytest.raises(move.MoveError, match="There's no folder at"):
+        move.check_target(data, tmp_path / "nowhere")
 
 
 def test_not_where_they_are_nor_inside_them(install):

@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.server import drives
 from src.shared import previews_location
 from src.shared.previews_location import Location
 
@@ -147,6 +148,8 @@ def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, cu
     current = current or location.previews
     if chosen == current:
         raise MoveError(f"The previews are in {chosen} already.")
+    if (why := drives.missing(chosen)) is not None:
+        raise MoveError(why)
     if not chosen.is_dir():
         raise MoveError(f"There's no folder at {chosen}.")
     for root in (*location.roots, Path(os.path.abspath(data_dir))):

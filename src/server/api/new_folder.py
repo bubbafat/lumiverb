@@ -2,10 +2,10 @@
 the backups'): the request says to make it (`make_folder`), or a 409
 `make_folder` asks the user first, or a 400 says why it can't be made.
 
-It's never made where a drive that isn't plugged in would be: right in `/`
-or `/Volumes` (a Mac's drives). Anywhere else the 409 says when it would be
-on the data folder's drive, so a Linux mount point whose drive is missing
-shows as the system disk before anything is made there.
+It's never made where a drive that isn't there would be (src/server/drives.py:
+right in `/`, in `/Volumes` or a Linux desktop's `/media`, or under an fstab
+mount point that isn't mounted). The 409 also says when it would be on the
+data folder's drive.
 
 Made only for a request that goes through: when what follows refuses the
 folder (no room, inside the previews) or asks the user something more
@@ -20,10 +20,8 @@ import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
+from src.server import drives
 from src.server.api.errors import ApiError, DecisionRequiredError
-
-# A folder made right in one would stand in for a drive that isn't there.
-DRIVES = (Path("/"), Path("/Volumes"))
 
 
 def _named(raw: str | None) -> Path | None:
@@ -36,11 +34,6 @@ def _named(raw: str | None) -> Path | None:
         return None
     chosen = Path(os.path.abspath(chosen))
     return None if os.path.lexists(chosen) else chosen
-
-
-def _nearest(path: Path) -> Path:
-    """The deepest folder above `path` that's there."""
-    return next((p for p in path.parents if p.is_dir()), Path("/"))
 
 
 def _same_drive(a: Path, b: Path) -> bool:
@@ -61,10 +54,9 @@ def made_if_asked(raw: str | None, make: bool, data_dir: Path) -> Iterator[None]
     if folder is None:
         yield
         return
-    there = _nearest(folder)
-    if there in DRIVES:
-        drive = there / folder.relative_to(there).parts[0]
-        raise ApiError(400, "folder_not_usable", f"There's no drive at {drive}. Is it plugged in?")
+    if (why := drives.missing(folder)) is not None:
+        raise ApiError(400, "folder_not_usable", why)
+    there = drives.nearest(folder)
     if not os.access(there, os.W_OK | os.X_OK):
         raise ApiError(400, "folder_not_usable", f"Lumiverb can't make a folder in {there}.")
     if not make:

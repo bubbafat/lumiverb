@@ -50,6 +50,8 @@ from time import monotonic, sleep
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from src.server import drives
+
 logger = logging.getLogger(__name__)
 
 KINDS = ("nightly", "now", "before-upgrade", "before-restore")
@@ -147,6 +149,8 @@ def check_folder(path: str | Path) -> Path:
     chosen = Path(raw).expanduser()
     if not chosen.is_absolute():
         raise BackupError("Use a full path, such as /Volumes/Backup/Lumiverb.")
+    if (why := drives.missing(Path(os.path.abspath(chosen)))) is not None:
+        raise BackupError(why)
     if not chosen.is_dir():
         raise BackupError(f"There's no folder at {chosen}.")
     try:
