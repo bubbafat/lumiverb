@@ -110,6 +110,13 @@ Routes under `/v1/auth`; no tenant auth required (these establish auth).
 - **POST /v1/auth/reset-password** — Body: `{ "token", "password" }`. Resets password using a reset token, and revokes every token the user holds. Returns 204. Rate limited: 5 requests/min per IP.
 - **POST /v1/auth/logout** — Revokes the JWT server-side (inserts jti into `revoked_tokens`). The token cannot be used or refreshed after logout. Returns 204.
 
+## Setup API
+
+An install's first admin (`src/server/setup.py`), from the web app. No auth: it's for before anyone can log in. Open while the server has no user at all, then closed for good. The same as `lumiverb-server setup` on the command line.
+
+- **GET /v1/setup** — Returns `{ "needed", "on_this_machine" }`: `needed` while there's no user; `on_this_machine` when this request may set it up (it comes from the machine the server runs on).
+- **POST /v1/setup** — Body: `{ "email", "password", "account_name"? }`. Makes the first admin in the server's one account (the installer's, on Linux), or in a new account named `account_name` (default `Lumiverb`) when there's none. Returns 201 `{ "access_token", "token_type", "expires_in" }`, as login does. 403 `setup_elsewhere` unless the request comes from the machine itself, as nginx saw it (`api/client_address.py`: the right-most `X-Forwarded-For` entry, counted only on a connection from this machine). 409 `already_set_up` once there's a user, and 409 `several_accounts` when there's more than one account and nobody to log in (`lumiverb user create` instead). 400 `invalid_email`, `password_too_short` (under 12 characters) or `password_too_long` (over 72 bytes). Two at once make one admin (an advisory lock).
+
 ## Users API
 
 All routes under `/v1/users`; require tenant auth and **admin** role.

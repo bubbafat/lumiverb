@@ -61,11 +61,22 @@ Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
 
 ### 4. Create your user
 
-It asks for a password (12 characters or more).
+The install has an account but nobody to log in. Make its first admin on
+the command line; it asks for a password (12 characters or more):
 
 ```bash
-sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb user create --email you@example.com --role admin
+sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --email you@example.com
 ```
+
+Or in the web app: its setup page appears while there's nobody to log in,
+and only works from the brain itself, so from another machine reach it
+through an SSH tunnel (`ssh -L 8080:localhost:80 the-brain`, then
+http://localhost:8080). Both are the same step (`src/server/setup.py`), and
+closed for good once there's a user. Finish it before putting a tunnel or
+proxy on the box in front of Lumiverb (`tailscale serve`, cloudflared,
+ngrok): its requests arrive from the box itself, so until then they could
+set it up too. Later users: `lumiverb user create`,
+or the web app's Admin › Users.
 
 ### 5. Create libraries with the Mac's paths
 

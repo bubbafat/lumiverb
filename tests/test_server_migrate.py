@@ -9,13 +9,18 @@ from __future__ import annotations
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, make_url, text
 from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
 from src.server.lifecycle import cli
 from src.server.lifecycle import migrate as migrate_module
-from src.server.lifecycle.migrate import APP_DIR, MigrationError, migrate
+from src.server.lifecycle.migrate import (
+    APP_DIR,
+    MigrationError,
+    create_database_if_missing,
+    migrate,
+)
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 
 
@@ -128,3 +133,19 @@ def test_the_command_reads_the_install_env_file(databases, tmp_path, monkeypatch
     assert _version(control_url) == _head("alembic-control.ini")
 
 
+
+
+@pytest.mark.slow
+def test_a_missing_control_database_is_made_once(databases):
+    # run's first step on a Mac: no createdb to type.
+    server = make_url(databases[0])
+    fresh = server.set(database=f"made_here_{server.database}").render_as_string(hide_password=False)
+    assert create_database_if_missing(fresh) is True
+    assert create_database_if_missing(fresh) is False
+    assert _version(fresh) is None, "there, and empty until migrated"
+
+
+@pytest.mark.fast
+def test_a_server_it_cant_reach_is_a_migration_error():
+    with pytest.raises(MigrationError, match=r"^Can't create the database nothing: "):
+        create_database_if_missing("postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing")

@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, make_url, text
 from testcontainers.postgres import PostgresContainer
 
 from src.server.lifecycle import cli
@@ -93,11 +93,11 @@ def test_run_migrates_serves_and_stops_cleanly(tmp_path):
     lumiverb_server = Path(sys.executable).parent / "lumiverb-server"  # the console script a formula installs
     assert lumiverb_server.exists()
     with PostgresContainer(PG_IMAGE) as pg:
-        control_url = _ensure_psycopg2(pg.get_connection_url())
+        # A control database that isn't there yet: run makes it (no createdb on a Mac).
+        server_url = make_url(_ensure_psycopg2(pg.get_connection_url()))
+        control_url = server_url.set(database=f"made_by_run_{server_url.database}").render_as_string(
+            hide_password=False)
         engine = create_engine(control_url)
-        with engine.connect() as conn:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
         port = _free_port()
         env_file = tmp_path / "env"
         env_file.write_text("\n".join([
@@ -124,6 +124,10 @@ def test_run_migrates_serves_and_stops_cleanly(tmp_path):
                 time.sleep(0.5)
             with engine.connect() as conn:
                 assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            # In the log while it runs, not held in a buffer until it stops.
+            running = out.read_text()
+            assert "lumiverb-server: Created the control database" in running, running
+            assert "lumiverb-server: Control plane" in running, running
         finally:
             service.send_signal(signal.SIGTERM)
             try:

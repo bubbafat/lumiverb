@@ -61,7 +61,7 @@ def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.accounts.provision_tenant_database"):
             with TestClient(app) as client:
                 r = client.post(
                     "/v1/admin/tenants",

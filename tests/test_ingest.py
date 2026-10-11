@@ -65,7 +65,7 @@ def ingest_env(tmp_path_factory):
 
         from unittest.mock import patch
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.accounts.provision_tenant_database"):
             with TestClient(app) as bootstrap_client:
                 r = bootstrap_client.post(
                     "/v1/admin/tenants",

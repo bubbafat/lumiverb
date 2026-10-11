@@ -81,7 +81,7 @@ def env(tmp_path_factory):
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"), TestClient(app) as client:
+        with patch("src.server.accounts.provision_tenant_database"), TestClient(app) as client:
             r = client.post("/v1/admin/tenants", json={"name": "PlaybackTenant", "plan": "free"},
                             headers={"Authorization": "Bearer test-admin-playback"})
             assert r.status_code == 200, r.text

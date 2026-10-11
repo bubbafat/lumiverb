@@ -3,6 +3,7 @@
     lumiverb-server init --env FILE --data-dir DIR [--quickwit-config FILE] [--nginx-site FILE]
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
+    lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
 
 init: the install's env file, Quickwit's config and the nginx site, each
 written only if it isn't there (init.py), for Homebrew's post_install.
@@ -11,10 +12,14 @@ migrate: the control plane's and every account's database migrations, as
 scripts/migrate.sh does on the brain.
 
 run: the server as one long-running service, for a Mac (Homebrew's
-service; launchd keeps it up). Migrates first, waiting for Postgres if it
-isn't up yet, then runs the API and the scheduler as the brain's systemd
+service; launchd keeps it up). Makes its control database if it's missing,
+and migrates, waiting for Postgres if it isn't up yet; then runs the API and the scheduler as the brain's systemd
 units do (supervise.py) and posts upkeep as its timers do (upkeep.py), until
 SIGTERM. The brain keeps its systemd units: it doesn't use this.
+
+setup: the install's first admin, asking for their email and password; the
+same as the web app's setup page (src/server/setup.py), while nobody can
+log in yet.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
@@ -34,12 +39,18 @@ import sys
 import threading
 from collections.abc import Callable
 from datetime import datetime
+from getpass import getpass
 from pathlib import Path
 
 from src.server.lifecycle import upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
-from src.server.lifecycle.migrate import APP_DIR, MigrationError, migrate
+from src.server.lifecycle.migrate import (
+    APP_DIR,
+    MigrationError,
+    create_database_if_missing,
+    migrate,
+)
 from src.server.lifecycle.supervise import Child, Supervisor
 
 logger = logging.getLogger("lumiverb-server")
@@ -165,6 +176,14 @@ def _migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _created_and_migrated(url: str) -> int:
+    """Its control database made if missing, then migrated. Said through the
+    log: print()'s lines wait in a buffer when the log is a file (launchd's)."""
+    if create_database_if_missing(url):
+        logger.info("Created the control database")
+    return migrate(url, say=logger.info)
+
+
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
     data_dir(env)  # before anything starts
@@ -173,7 +192,7 @@ def _run(args: argparse.Namespace) -> int:
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: stop.set())
 
-    if not migrate_when_ready(url, stop):
+    if not migrate_when_ready(url, stop, migrate_fn=_created_and_migrated):
         return 0
     base_url = f"http://127.0.0.1:{env.get('API_PORT') or DEFAULT_API_PORT}"
     if env.get("ADMIN_KEY"):
@@ -193,6 +212,42 @@ def _run(args: argparse.Namespace) -> int:
 def _env_option(parser: argparse.ArgumentParser, default: object) -> None:
     parser.add_argument("--env", type=Path, default=default,
                         help="the install's env file (or $LUMIVERB_ENV_FILE); none is assumed")
+
+
+def _setup(args: argparse.Namespace) -> int:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.server.accounts import AccountError
+    from src.server.config import get_settings
+    from src.server.database import get_control_session
+    from src.server.setup import ALREADY_SET_UP, SetupError, create_first_admin, setup_needed
+
+    env, _ = _env_and_url(args)
+    os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
+    get_settings.cache_clear()
+
+    try:
+        with get_control_session() as session:
+            needed = setup_needed(session)  # said before asking for anything
+        if not needed:
+            print(f"✗ {ALREADY_SET_UP}", file=sys.stderr)
+            return 1
+        email = args.email or input("Email: ")
+        password = getpass("Password: ")
+        if getpass("Password again: ") != password:
+            print("✗ The passwords don't match", file=sys.stderr)
+            return 1
+        user = create_first_admin(email, password, account_name=args.account_name)
+    except (SetupError, AccountError) as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
+        return 1
+    where = env.get("APP_HOST")
+    print(f"✓ {user.email} is this Lumiverb's admin" + (f". Log in at {where}" if where else ""))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -216,9 +271,13 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(commands.add_parser(
         "run", help="migrate, then run the API, the scheduler and upkeep until stopped (a Mac's service)"),
         argparse.SUPPRESS)
+    setup_command = commands.add_parser("setup", help="make the install's first admin (while nobody can log in)")
+    _env_option(setup_command, argparse.SUPPRESS)
+    setup_command.add_argument("--email", help="the admin's email (asked if not given)")
+    setup_command.add_argument("--account-name", help="a new account's name (\"Lumiverb\" if not given)")
     args = parser.parse_args(argv)
     try:
-        return {"init": _init, "migrate": _migrate, "run": _run}[args.command](args)
+        return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1

@@ -53,7 +53,7 @@ def env(tmp_path_factory):
         _engines.clear()
 
         with (
-            patch("src.server.api.routers.admin.provision_tenant_database"),
+            patch("src.server.accounts.provision_tenant_database"),
             TestClient(app) as bootstrap,
         ):
             r = bootstrap.post(

@@ -60,6 +60,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 from src.server.api.routers import admin, ai, archive, assets, producers, changes, projects, keys, libraries, me, path_filters, tenant, trash, video
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
+from src.server.api.routers.setup import router as setup_router
 from src.server.api.routers.artifacts import router as artifacts_router
 from src.server.api.routers import playback
 from src.server.api.routers.playback import router as playback_router
@@ -134,6 +135,7 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
 app.include_router(auth_router)
+app.include_router(setup_router)
 app.include_router(users_router)
 app.include_router(admin.router)
 app.include_router(ai.router)

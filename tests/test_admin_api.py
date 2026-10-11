@@ -37,7 +37,7 @@ def admin_client() -> TestClient:
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.api.routers.admin.provision_tenant_database"):
+        with patch("src.server.accounts.provision_tenant_database"):
             with TestClient(app) as client:
                 yield client
 
