@@ -113,9 +113,8 @@ def _free_gpu_memory() -> None:
 
     gc.collect()  # the model's tensors, held by reference cycles, before the cache is emptied
     try:
-        import torch
+        from src.shared.torch_device import empty_torch_cache
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_torch_cache()  # CUDA's, or Apple's GPU's on a Mac
     except Exception:  # noqa: BLE001 — no torch, or no GPU
         pass

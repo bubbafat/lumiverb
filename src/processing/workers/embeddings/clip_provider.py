@@ -46,9 +46,10 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
             with self._lock:
                 if self._model is None:
                     import open_clip
-                    import torch
 
-                    self._device = "cuda" if torch.cuda.is_available() else "cpu"
+                    from src.shared.torch_device import torch_device
+
+                    self._device = torch_device()
                     model, _, preprocess = open_clip.create_model_and_transforms(
                         self._model_name,
                         pretrained=self._pretrained,
