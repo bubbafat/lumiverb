@@ -224,3 +224,17 @@ describe("LibrariesPage delete asks about projects", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Only an admin can delete libraries");
   });
 });
+
+describe("LibrariesPage a library's card", () => {
+  it("keeps room for its name and path, and wraps a long path instead of painting over the buttons", async () => {
+    // Seen on a new Mac install: the buttons squeezed the name and path to nothing.
+    api.listLibraries.mockResolvedValue([
+      { library_id: "lib_3", name: "HS150", root_path: "/Volumes/MEDIA-01/Media/HS150", status: "active",
+        is_public: false, last_scan_at: null },
+    ]);
+    renderPage();
+    const path = await screen.findByText("/Volumes/MEDIA-01/Media/HS150");
+    expect(path.className).toContain("break-all");
+    expect(path.parentElement?.className).toContain("sm:min-w-56");
+  });
+});

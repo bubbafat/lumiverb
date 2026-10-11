@@ -78,6 +78,17 @@ def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
 
 
 @pytest.mark.fast
+def test_the_scheduler_reads_libraries_where_they_are_unless_the_env_file_maps_them(tmp_path):
+    # run is where the files are (a Mac); the scheduler reads only mapped roots.
+    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
+    assert scheduler.env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}'
+    mapped = '{"/Volumes/media-01": "/mnt/media-01"}'
+    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_ROOT_MAP": mapped},
+                                        python="/py", cwd=tmp_path)
+    assert scheduler.env["LUMIVERB_ROOT_MAP"] == mapped
+
+
+@pytest.mark.fast
 def test_nothing_named_is_the_api_and_the_scheduler_only(tmp_path):
     assert [c.name for c in cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)] == [
         "api", "scheduler"]

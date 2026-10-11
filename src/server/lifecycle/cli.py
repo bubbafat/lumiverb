@@ -70,6 +70,7 @@ NO_INSTALL = ("Say which install: --env FILE or $LUMIVERB_ENV_FILE, or CONTROL_P
 DEFAULT_API_PORT = "8000"  # update.sh's default when the env file has none
 DEFAULT_API_WORKERS = "2"  # the brain's unit: uvicorn --workers 2
 MIGRATE_RETRY_MAX_SEC = 60.0
+THIS_MACHINE_ROOT_MAP = '{"/": "/"}'  # every library root is where it says
 
 
 class InstallError(Exception):
@@ -140,10 +141,14 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         {**base, "TMPDIR": str(data / "tmp")}, cwd,
         restart_after=5, stop_within=90, empty_first=data / "tmp", start_after=migrated,
     )
+    # run's scheduler is where the files are (a Mac): it reads every library's
+    # root where it is, unless the env file maps them (the brain's does: the
+    # Mac's /Volumes are its /mnt). Its data stays refused (machine.py).
+    root_map = {"LUMIVERB_ROOT_MAP": THIS_MACHINE_ROOT_MAP} if not env.get("LUMIVERB_ROOT_MAP") else {}
     scheduler = Child(
         "scheduler",
         [python, "-m", "src.server.scheduler"],
-        {**base, "XDG_CACHE_HOME": str(data / "cache"), "TMPDIR": str(data / "worker-tmp")}, cwd,
+        {**base, **root_map, "XDG_CACHE_HOME": str(data / "cache"), "TMPDIR": str(data / "worker-tmp")}, cwd,
         # It lets jobs in hand finish for up to 25 s; only it hears the stop.
         restart_after=30, stop_within=40, term_main_only=True, empty_first=data / "worker-tmp",
         start_after=migrated,

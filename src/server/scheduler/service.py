@@ -594,7 +594,7 @@ class Accounts:
     are picked up every few minutes, and one whose key stopped working is
     started again with a new one."""
 
-    LIST_EVERY_SEC = 300.0
+    LIST_EVERY_SEC = 30.0  # a new account (first-run setup's) is worked for within half a minute
     # A listing that failed (the control plane away) is tried again sooner.
     LIST_RETRY_SEC = 30.0
 

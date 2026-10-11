@@ -886,6 +886,25 @@ def test_a_listing_that_failed_is_tried_again_soon(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.fast
+def test_a_new_account_is_worked_for_within_half_a_minute(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Mac's first-run setup makes its account after the scheduler started:
+    # at five minutes between listings, its first library waited that long.
+    from src.server.scheduler import service
+
+    clock = Clock()
+    listings: list[float] = []
+    monkeypatch.setattr(service.Accounts, "_list", lambda self: listings.append(clock.now))
+    accounts = service.Accounts(MagicMock(), url="http://api", clock=clock)
+    accounts()
+    clock.now += 29
+    accounts()
+    assert len(listings) == 1
+    clock.now += 2
+    accounts()
+    assert len(listings) == 2
+
+
+@pytest.mark.fast
 def test_failures_are_sent_off_the_dispatching_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     # Review round 2: a slow server held up every tick (up to 120 s).
     from src.server.scheduler import service
