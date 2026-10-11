@@ -11,6 +11,7 @@ then killed with what's left once its time is up.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -52,10 +53,8 @@ def _empty(directory: Path) -> None:
 
 
 def _signal_group(process: subprocess.Popen, sig: int) -> None:
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, sig)
-    except ProcessLookupError:
-        pass
 
 
 class Supervisor:

@@ -155,13 +155,22 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _env_option(parser: argparse.ArgumentParser, default: object) -> None:
+    parser.add_argument("--env", type=Path, default=default,
+                        help="the install's env file (or $LUMIVERB_ENV_FILE); none is assumed")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lumiverb-server", description="Look after this machine's Lumiverb server.")
-    parser.add_argument("--env", type=Path, default=None,
-                        help="the install's env file (or $LUMIVERB_ENV_FILE); none is assumed")
+    _env_option(parser, None)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("migrate", help="migrate the control plane and every account's database")
-    commands.add_parser("run", help="migrate, then run the API, the scheduler and upkeep until stopped (a Mac's service)")
+    # --env before or after the command. A subcommand's default would overwrite
+    # one given before it, so it sets --env only when given there.
+    _env_option(commands.add_parser("migrate", help="migrate the control plane and every account's database"),
+                argparse.SUPPRESS)
+    _env_option(commands.add_parser(
+        "run", help="migrate, then run the API, the scheduler and upkeep until stopped (a Mac's service)"),
+        argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         return {"migrate": _migrate, "run": _run}[args.command](args)

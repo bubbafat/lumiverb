@@ -52,6 +52,17 @@ def test_the_environment_can_name_it(tmp_path, monkeypatch, capsys):
     assert called == ["postgresql://from-the-file", "postgresql://from-the-environment"]
 
 
+@pytest.mark.parametrize("argv", [["--env", "{file}", "migrate"], ["migrate", "--env", "{file}"]],
+                         ids=["before the command", "after it"])
+def test_env_goes_before_or_after_the_command(argv, tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://from-the-file\n")
+    assert cli.main([part.format(file=env_file) for part in argv]) == 0
+    assert called == ["postgresql://from-the-file"]
+
+
 def test_a_named_file_that_isnt_there_is_refused(tmp_path, capsys):
     assert cli.main(["--env", str(tmp_path / "nowhere"), "migrate"]) == 1
     assert _err(capsys) == f"✗ No env file at {tmp_path / 'nowhere'}"

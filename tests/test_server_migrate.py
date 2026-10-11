@@ -1,11 +1,10 @@
 """lumiverb-server migrate (src/server/lifecycle/migrate.py): scripts/migrate.sh's
 steps, as a function a Mac's service runs before it starts. On real Postgres:
 from nothing to head, again with nothing to do, and an account whose
-database fails is named while the others are still migrated."""
+database fails is named while the others are still migrated. A failure is
+named by its exception line, not by whatever alembic printed after it."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from alembic.config import Config
@@ -15,10 +14,9 @@ from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
 from src.server.lifecycle import cli
+from src.server.lifecycle import migrate as migrate_module
 from src.server.lifecycle.migrate import APP_DIR, MigrationError, migrate
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
-
-pytestmark = pytest.mark.slow
 
 
 def _head(ini: str) -> str:
@@ -58,12 +56,22 @@ def _add_tenant(control_url: str, tenant_id: str, tenant_url: str) -> None:
     engine.dispose()
 
 
+@pytest.mark.fast
+def test_without_an_exception_line_the_last_line_says_why(monkeypatch):
+    said_by_alembic = ["INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.",
+                       "FAILED: Can't locate revision identified by 'f00d'"]
+    monkeypatch.setattr(migrate_module, "_upgrade", lambda *a, **k: said_by_alembic)
+    with pytest.raises(MigrationError, match=r"^The control plane's migration failed: FAILED: Can't locate revision"):
+        migrate("postgresql://unused", say=lambda _: None)
+
+
 @pytest.fixture
 def databases():
     with PostgresContainer(PG_IMAGE) as control, PostgresContainer(PG_IMAGE) as one, PostgresContainer(PG_IMAGE) as two:
         yield [_with_vector(_ensure_psycopg2(pg.get_connection_url())) for pg in (control, one, two)]
 
 
+@pytest.mark.slow
 def test_from_nothing_to_head_then_nothing_to_do(databases):
     control_url, one_url, two_url = databases
     said: list[str] = []
@@ -81,6 +89,7 @@ def test_from_nothing_to_head_then_nothing_to_do(databases):
     assert migrate(control_url, say=lambda _: None) == 2  # again: nothing to do, no error
 
 
+@pytest.mark.slow
 def test_an_account_that_fails_is_named_and_the_others_still_migrate(databases):
     control_url, one_url, _ = databases
     migrate(control_url, say=lambda _: None)
@@ -88,14 +97,18 @@ def test_an_account_that_fails_is_named_and_the_others_still_migrate(databases):
     _add_tenant(control_url, "ten_ok", one_url)
 
     said: list[str] = []
-    with pytest.raises(MigrationError, match=r"1 of 2 accounts' migrations failed: ten_gone: "):
+    # Named by its exception, not by the "(Background on this error at: ...)" link after it.
+    with pytest.raises(MigrationError, match=r"1 of 2 accounts' migrations failed: ten_gone: "
+                                             r"sqlalchemy\.exc\.OperationalError: .*Connection refused"):
         migrate(control_url, say=said.append)
     assert _version(one_url) == _head("alembic-tenant.ini")
     # Everything alembic said for it, not just its last line (a traceback's cause).
-    failing = said.index(next(line for line in said if line.startswith("  [1/2] ten_gone ✗")))
+    failing = said.index(next(line for line in said
+                              if line.startswith("  [1/2] ten_gone ✗ sqlalchemy.exc.OperationalError: ")))
     assert len([line for line in said[failing + 1:] if line.startswith("      ")]) > 1, said
 
 
+@pytest.mark.slow
 def test_a_control_plane_that_is_down_is_a_migration_error(databases):
     from src.server.lifecycle.migrate import tenant_databases
 
@@ -103,6 +116,7 @@ def test_a_control_plane_that_is_down_is_a_migration_error(databases):
         tenant_databases("postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing")
 
 
+@pytest.mark.slow
 def test_the_command_reads_the_install_env_file(databases, tmp_path, monkeypatch, capsys):
     control_url, *_ = databases
     monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
