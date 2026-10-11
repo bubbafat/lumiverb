@@ -5,7 +5,10 @@
 
     LUMIVERB_ROOT_MAP              library roots as the server stores them -> here, JSON:
                                    '{"/Volumes/media-01": "/mnt/media-01"}'; a library
-                                   whose root isn't under it isn't read
+                                   whose root isn't under it isn't read. A Mac with the
+                                   files: '{"/": "/"}' (init --local-roots writes it)
+    LUMIVERB_REFUSED_ROOTS         folders never read besides DATA_DIR, JSON: '["/opt/homebrew/etc/lumiverb"]'
+                                   (lumiverb-server run sets the install's settings folder)
     LUMIVERB_ANALYSIS_PROXY_ENCODER  libx264
     LUMIVERB_ANALYSIS_PROXY_DECODER  auto | cpu | an ffmpeg hwaccel (cuda)
     LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1)
@@ -27,6 +30,7 @@ from src.processing.machine import Machine
 
 class SchedulerSettings(BaseSettings):
     root_map: dict[str, str] = Field(default_factory=dict)
+    refused_roots: list[str] = Field(default_factory=list)
     analysis_proxy_encoder: str = "libx264"
     analysis_proxy_decoder: str = "auto"
     gpu_decodes: int = Field(default=1, ge=0)
@@ -40,11 +44,12 @@ class SchedulerSettings(BaseSettings):
 
     def machine(self) -> Machine:
         """Every account's libraries are read here: only through the root map,
-        never the server's data (DATA_DIR)."""
+        never the server's data (DATA_DIR) or another refused folder."""
         from src.server.config import get_settings
 
         return Machine(root_map=dict(self.root_map), mapped_roots_only=True,
-                       refused_roots=(get_settings().data_dir,), analysis_proxy_encoder=self.analysis_proxy_encoder,
+                       refused_roots=(get_settings().data_dir, *self.refused_roots),
+                       analysis_proxy_encoder=self.analysis_proxy_encoder,
                        analysis_proxy_decoder=self.analysis_proxy_decoder, gpu_decodes=self.gpu_decodes,
                        render_concurrency=self.render_concurrency, analysis_cache_gb=self.analysis_cache_gb,
                        face_batches_per_process=self.face_batches_per_process)

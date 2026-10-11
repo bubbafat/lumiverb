@@ -5,6 +5,7 @@ runs the scheduler, and stops both cleanly on SIGTERM."""
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import socket
@@ -78,14 +79,20 @@ def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
 
 
 @pytest.mark.fast
-def test_the_scheduler_reads_libraries_where_they_are_unless_the_env_file_maps_them(tmp_path):
-    # run is where the files are (a Mac); the scheduler reads only mapped roots.
+def test_which_folders_the_scheduler_reads_is_the_env_file_s_never_assumed(tmp_path):
     *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
-    assert scheduler.env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}'
-    mapped = '{"/Volumes/media-01": "/mnt/media-01"}'
-    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_ROOT_MAP": mapped},
+    assert "LUMIVERB_ROOT_MAP" not in scheduler.env, "no map: it reads nothing"
+    local = '{"/": "/"}'
+    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_ROOT_MAP": local},
                                         python="/py", cwd=tmp_path)
-    assert scheduler.env["LUMIVERB_ROOT_MAP"] == mapped
+    assert scheduler.env["LUMIVERB_ROOT_MAP"] == local
+
+
+@pytest.mark.fast
+def test_the_scheduler_never_reads_the_install_s_settings(tmp_path):
+    env = {"DATA_DIR": str(tmp_path), "LUMIVERB_REFUSED_ROOTS": '["/elsewhere"]'}
+    *_, scheduler = cli.server_children(env, python="/py", cwd=tmp_path, config_dir=Path("/opt/homebrew/etc/lumiverb"))
+    assert json.loads(scheduler.env["LUMIVERB_REFUSED_ROOTS"]) == ["/elsewhere", "/opt/homebrew/etc/lumiverb"]
 
 
 @pytest.mark.fast

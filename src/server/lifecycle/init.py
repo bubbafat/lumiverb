@@ -30,6 +30,8 @@ API_PORT = 6465
 QUICKWIT_PORT = 6466  # gRPC on the next one, as deploy-api.sh does
 PG_PORT = 6468  # Lumiverb's own PostgreSQL (not Homebrew's, on 5432)
 PG_ROLE = "lumiverb"
+# The scheduler reads every library folder where it is: this machine has the files.
+LOCAL_ROOT_MAP = '{"/": "/"}'
 WEB_ROOT = APP_DIR / "src" / "ui" / "web" / "dist"
 
 # deploy-web.sh's: the built app loads only its own files and calls only its
@@ -60,6 +62,7 @@ class Choices:
     quickwit_config: Path | None = None
     nginx_bin: Path | None = None
     nginx_config: Path | None = None
+    local_roots: bool = False  # LUMIVERB_ROOT_MAP: library folders read where they are
 
     def runs(self) -> dict[str, str]:
         named = {"PG_BIN": self.pg_bin, "QUICKWIT_BIN": self.quickwit_bin, "QUICKWIT_CONFIG": self.quickwit_config,
@@ -69,7 +72,8 @@ class Choices:
     def given(self) -> dict[str, str]:
         named = {"DATA_DIR": self.data_dir, "API_PORT": self.api_port, "QUICKWIT_PORT": self.quickwit_port,
                  "WEB_PORT": self.web_port, "APP_HOST": self.app_host}
-        return {key: str(value) for key, value in named.items() if value is not None} | self.runs()
+        roots = {"LUMIVERB_ROOT_MAP": LOCAL_ROOT_MAP} if self.local_roots else {}
+        return {key: str(value) for key, value in named.items() if value is not None} | self.runs() | roots
 
 
 def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> str:
@@ -82,6 +86,11 @@ def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> s
     admin_key, api_secret_key, jwt_secret, pg_password = secret(), secret(), secret(), secret()
     db = f"postgresql+psycopg2://{PG_ROLE}:{pg_password}@127.0.0.1:{choices.pg_port or PG_PORT}"
     runs = "".join(f"{key}={value}\n" for key, value in choices.runs().items())
+    roots = (f"""
+# Library folders: the scheduler reads each one where it is (this machine has
+# the files). The brain maps another machine's paths instead.
+LUMIVERB_ROOT_MAP='{LOCAL_ROOT_MAP}'
+""" if choices.local_roots else "")
     return f"""\
 # Written by lumiverb-server init, {now.strftime('%Y-%m-%dT%H:%M:%SZ')}. Yours to edit:
 # init never rewrites it (move it away and run init again to start over).
@@ -114,7 +123,7 @@ QUICKWIT_PORT={qw_port}
 WEB_PORT={web_port}
 
 # What lumiverb-server run starts besides the API and the scheduler
-{runs}
+{runs}{roots}
 # App
 APP_ENV=production
 APP_HOST={choices.app_host or f'http://localhost:{web_port}'}

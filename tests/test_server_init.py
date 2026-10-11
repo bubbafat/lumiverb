@@ -56,7 +56,7 @@ def _homebrews(tmp_path: Path) -> Choices:
     paths = _paths(tmp_path)
     return Choices(data_dir=tmp_path / "var", pg_bin=OPT / "postgresql@18/bin",
                    quickwit_bin=OPT / "quickwit/bin/quickwit", quickwit_config=paths["quickwit"],
-                   nginx_bin=OPT / "nginx/bin/nginx", nginx_config=paths["nginx"])
+                   nginx_bin=OPT / "nginx/bin/nginx", nginx_config=paths["nginx"], local_roots=True)
 
 
 def _install(tmp_path: Path, choices: Choices | None = None, said: list[str] | None = None) -> dict[str, Path]:
@@ -92,6 +92,10 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
         "PG_BIN": str(OPT / "postgresql@18/bin"), "QUICKWIT_BIN": str(OPT / "quickwit/bin/quickwit"),
         "QUICKWIT_CONFIG": str(paths["quickwit"]), "NGINX_BIN": str(OPT / "nginx/bin/nginx"),
         "NGINX_CONFIG": str(paths["nginx"])}
+
+    # The Mac has the files: the scheduler reads each library folder where it is, said here.
+    assert env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}'
+    assert "# Library folders: the scheduler reads each one where it is" in paths["env"].read_text()
 
     assert "listen_port: 6466\ngrpc_listen_port: 6467\n" in paths["quickwit"].read_text()
     assert f"data_dir: {tmp_path / 'var' / 'quickwit'}\n" in paths["quickwit"].read_text()
@@ -144,7 +148,7 @@ def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
 def test_what_it_doesnt_name_isnt_written(tmp_path):
     paths = _install(tmp_path, Choices(data_dir=tmp_path / "var"))
     env = read_env_file(paths["env"])
-    assert not {"PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG"} & env.keys()
+    assert not {"PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG", "LUMIVERB_ROOT_MAP"} & env.keys()
     assert not paths["quickwit"].exists() and not paths["nginx"].exists()
 
 
@@ -212,7 +216,8 @@ def test_the_env_file_names_every_setting_the_brain_s_does(tmp_path):
     # Its Postgres cluster (a Mac's port is in the database URL), checkout and ufw.
     linux_only = {"PG_PORT", "PG_VERSION", "BRANCH", "NO_FIREWALL"}
     # What run starts: the brain's systemd units name theirs.
-    mac_only = {"WEB_PORT", "PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG"}
+    mac_only = {"WEB_PORT", "PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG",
+                "LUMIVERB_ROOT_MAP"}  # the brain's map is scheduler-env.py's, after this file
     ours = keys(_install(tmp_path)["env"].read_text())
     assert ours - mac_only == keys(brain) - linux_only
 
@@ -222,9 +227,10 @@ def test_the_command_writes_them_with_env_before_or_after(tmp_path, capsys):
     assert cli.main(["init", "--env", str(env_file), "--data-dir", str(tmp_path / "var"),
                      "--pg-bin", str(OPT / "postgresql@18/bin"),
                      "--quickwit-bin", str(OPT / "quickwit/bin/quickwit"),
-                     "--quickwit-config", str(tmp_path / "quickwit.yaml")]) == 0
+                     "--quickwit-config", str(tmp_path / "quickwit.yaml"), "--local-roots"]) == 0
     env = read_env_file(env_file)
     assert env["DATA_DIR"] == str(tmp_path / "var") and env["QUICKWIT_CONFIG"] == str(tmp_path / "quickwit.yaml")
+    assert env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}'
     assert (tmp_path / "quickwit.yaml").exists()
     capsys.readouterr()
     assert cli.main(["--env", str(env_file), "init"]) == 0
@@ -253,3 +259,11 @@ def test_a_folder_it_cant_write_is_one_line(tmp_path, capsys):
     finally:
         locked.chmod(0o700)
     assert capsys.readouterr().err.strip() == f"✗ Can't write {locked / 'env'}: Permission denied"
+
+
+def test_the_root_map_it_writes_is_the_one_the_scheduler_reads(tmp_path, monkeypatch):
+    from src.server.scheduler.settings import SchedulerSettings
+
+    env = read_env_file(_install(tmp_path)["env"])
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", env["LUMIVERB_ROOT_MAP"])
+    assert SchedulerSettings().root_map == {"/": "/"}
