@@ -7,24 +7,6 @@ import { getApiKey } from "../api/client";
 
 const fetchMock = vi.fn();
 
-/** Where the login token goes. Node's own global localStorage shadows jsdom's here and keeps nothing. */
-function memoryStorage(): Storage {
-  const items = new Map<string, string>();
-  return {
-    get length() {
-      return items.size;
-    },
-    clear: () => items.clear(),
-    getItem: (key) => items.get(key) ?? null,
-    key: (index) => [...items.keys()][index] ?? null,
-    removeItem: (key) => {
-      items.delete(key);
-    },
-    setItem: (key, value) => {
-      items.set(key, String(value));
-    },
-  };
-}
 let status = { needed: true, on_this_machine: true };
 let posted: { email: string; password: string } | null = null;
 let answer: Response = new Response(JSON.stringify({ access_token: "tok-first-admin" }), { status: 201 });
@@ -34,7 +16,6 @@ beforeEach(() => {
   posted = null;
   answer = new Response(JSON.stringify({ access_token: "tok-first-admin" }), { status: 201 });
   vi.stubGlobal("fetch", fetchMock);
-  vi.stubGlobal("localStorage", memoryStorage());
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === "/v1/setup" && init?.method === "POST") {
       posted = JSON.parse(String(init.body));
@@ -49,6 +30,7 @@ afterEach(() => {
   cleanup();
   fetchMock.mockReset();
   vi.unstubAllGlobals();
+  localStorage.clear();
 });
 
 function at(path: string) {
