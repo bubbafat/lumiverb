@@ -548,3 +548,12 @@ def test_a_root_reached_through_a_symlink_is_checked_where_it_lands(tmp_path: Pa
     assert reachable_root(lib, root_map=root_map, require_entries=True) is None
     mounts.add(str(share))
     assert reachable_root(lib, root_map=root_map, require_entries=True) == (share / "Media").resolve()
+
+
+@pytest.mark.fast
+def test_only_a_map_of_slash_to_itself_reads_every_folder() -> None:
+    from src.processing.roots import reads_every_folder
+
+    assert reads_every_folder({"/": "/"}) and reads_every_folder({"/": "/", MAC: "/mnt/x"})
+    assert not reads_every_folder({}) and not reads_every_folder({MAC: "/mnt/media-01"})
+    assert not reads_every_folder({"/": "/mnt"}), "everything, but somewhere else: the map bounds it"

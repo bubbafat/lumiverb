@@ -12,6 +12,7 @@ from src.server.api.dependencies import (
     get_current_user_id,
     get_tenant_session,
     require_editor,
+    require_folder_chosen_here,
     require_signed_in,
     require_tenant_admin,
 )
@@ -135,6 +136,7 @@ def create_library(
     New libraries inherit tenant path filter defaults at creation time.
     """
     root_path = checked_root_path(body.root_path)
+    require_folder_chosen_here(request)
     repo = LibraryRepository(session)
     require_admin_for(request, body, {"is_public"})
     existing = repo.get_by_name(body.name)
@@ -339,6 +341,7 @@ def update_library(
     """Update library name, root_path and/or is_public."""
     if body.root_path is not None:
         checked_root_path(body.root_path)
+        require_folder_chosen_here(request)
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
