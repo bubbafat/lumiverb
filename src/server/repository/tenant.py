@@ -3747,7 +3747,8 @@ class FaceRepository:
         the new detections plus kept faces.
 
         Args:
-            faces: list of dicts with keys: bounding_box, detection_confidence, embedding (optional).
+            faces: list of dicts with keys: bounding_box, detection_confidence, embedding (optional),
+                and for a video's, frame_ms and seen_ms (where in it the face was seen).
 
         Returns:
             One face_id per input detection, in input order.
@@ -3848,6 +3849,8 @@ class FaceRepository:
                 face.detection_model = detection_model
                 face.detection_model_version = detection_model_version
                 face.embedding_model = embedding_model
+                face.frame_ms = f.get("frame_ms")
+                face.seen_ms = f.get("seen_ms")
                 self._session.add(face)
                 face_ids.append(old_id)
                 continue
@@ -3861,6 +3864,8 @@ class FaceRepository:
                 detection_model=detection_model,
                 detection_model_version=detection_model_version,
                 embedding_model=embedding_model,
+                frame_ms=f.get("frame_ms"),
+                seen_ms=f.get("seen_ms"),
             )
             self._session.add(face)
             face_ids.append(face_id)
@@ -4359,6 +4364,8 @@ class FaceRepository:
                     "bounding_box": f.bounding_box_json,
                     "detection_confidence": f.detection_confidence,
                     "rel_path": asset.rel_path if asset else None,
+                    "media_type": asset.media_type if asset else None,
+                    "frame_ms": f.frame_ms,  # a video's face: where in it (None: a photo's)
                 })
             result.append(cluster_data)
 

@@ -1929,6 +1929,10 @@ class FaceListItem(BaseModel):
     bounding_box: dict | None
     detection_confidence: float | None
     person: dict | None = None
+    # A video's face (one a person seen): the time of the frame its box is
+    # in, and every time they were seen at. None for a photo's.
+    frame_ms: int | None = None
+    seen_ms: list[int] | None = None
 
 
 class FaceListResponse(BaseModel):
@@ -1942,9 +1946,11 @@ def _generate_face_crops(
     faces_data: list[dict],
     session: object,
 ) -> None:
-    """Generate 128x128 WebP face crop thumbnails from the asset proxy."""
-    import io
+    """Generate 128x128 WebP face crop thumbnails from the asset proxy (a
+    photo's: a video's faces bring their crops, cut from their frames)."""
     from PIL import Image
+
+    from src.shared.face_crop import face_crop
 
     storage = get_storage()
     proxy_key = asset.proxy_key  # type: ignore[union-attr]
@@ -1962,36 +1968,15 @@ def _generate_face_crops(
         return
 
     try:
-        w, h = img.size
-
         for face_id, face_data in zip(face_ids, faces_data):
             bb = face_data.get("bounding_box")
             if not bb:
                 continue
 
-            # Expand bounding box by 40% padding, clamp to image bounds
-            pad = 0.4
-            fx, fy, fw, fh = bb["x"], bb["y"], bb["w"], bb["h"]
-            cx, cy = fx + fw / 2, fy + fh / 2
-            side = max(fw, fh) * (1 + pad)
-            x1 = max(0.0, cx - side / 2)
-            y1 = max(0.0, cy - side / 2)
-            x2 = min(1.0, cx + side / 2)
-            y2 = min(1.0, cy + side / 2)
-
-            # Convert fractions to pixels
-            px1, py1 = int(x1 * w), int(y1 * h)
-            px2, py2 = int(x2 * w), int(y2 * h)
-            if px2 <= px1 or py2 <= py1:
-                continue
-
             try:
-                crop = img.crop((px1, py1, px2, py2))
-                crop = crop.resize((128, 128), Image.LANCZOS)
-                buf = io.BytesIO()
-                crop.save(buf, format="WEBP", quality=80)
-                crop_bytes = buf.getvalue()
-
+                crop_bytes = face_crop(img, bb)
+                if crop_bytes is None:
+                    continue
                 crop_key = storage.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
                 storage.write(crop_key, crop_bytes)
 
@@ -2155,6 +2140,8 @@ def list_faces(
                     {"person_id": p.person_id, "display_name": p.display_name, "dismissed": p.dismissed}
                     if (p := persons_by_face.get(f.face_id)) else None
                 ),
+                frame_ms=f.frame_ms,
+                seen_ms=list(f.seen_ms) if f.seen_ms is not None else None,
             )
             for f in faces
         ]

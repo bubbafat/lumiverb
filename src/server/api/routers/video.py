@@ -1,24 +1,27 @@
-"""Video chunk API: init chunks, claim next, complete, fail. All require tenant auth."""
+"""Video API: scene chunks (init, claim next, complete, fail), scenes, and a
+video's faces. All require tenant auth."""
 
 import json
 import uuid
 from typing import Any, Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_tenant_session, require_editor
-from src.server.api.errors import ConflictError
-from src.server.api.routers.producers import LineageIn, require_lineage
+from src.server.api.errors import ApiError, ConflictError
+from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
 from src.server.repository.tenant import (
     AssetMetadataRepository,
     ChunksBusy,
     AssetRepository,
+    FaceRepository,
+    LibraryRepository,
     VideoIndexChunkRepository,
     VideoSceneRepository,
 )
@@ -441,3 +444,122 @@ def sync_scene(
         raise HTTPException(status_code=404, detail="Asset not found")
     ok = try_sync_scene(session, scene, asset, tenant_id=getattr(request.state, "tenant_id", None))
     return {"scene_id": scene_id, "status": "synced" if ok else "deferred"}
+
+
+# ---------------------------------------------------------------------------
+# A video's faces (src/producers/video_faces)
+# ---------------------------------------------------------------------------
+
+# A video's people a request, and the times one was seen at (a frame every
+# 3 s of a day-long video is 28,800).
+MAX_VIDEO_FACES = 500
+MAX_SEEN = 50_000
+MAX_CROP_BYTES = 256 * 1024
+
+
+class VideoFaceIn(BaseModel):
+    """One person seen in a video: their face as shown (its box in the frame
+    at frame_ms, {x, y, w, h} as fractions, or {x1, y1, x2, y2}), and every
+    time (ms) they were seen at."""
+
+    bounding_box: dict[str, float]
+    detection_confidence: float
+    embedding: list[float] | None = None
+    frame_ms: int = Field(ge=0)
+    seen_ms: list[int] = Field(min_length=1, max_length=MAX_SEEN)
+
+
+class VideoFacesResponse(BaseModel):
+    face_count: int
+    face_ids: list[str]
+
+
+def _webp(data: bytes) -> bool:
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            if img.format != "WEBP":
+                return False
+            img.verify()
+    except Exception:  # noqa: BLE001 — not an image PIL reads
+        return False
+    return True
+
+
+@router.post("/{asset_id}/faces", response_model=VideoFacesResponse, dependencies=[Depends(require_editor)])
+def submit_video_faces(
+    asset_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    faces: Annotated[str, Form()],
+    lineage: Annotated[str, Form()] = "",
+    detection_model: Annotated[str, Form(max_length=100)] = "insightface",
+    detection_model_version: Annotated[str, Form(max_length=100)] = "buffalo_l",
+    embedding_model: Annotated[str, Form(max_length=100)] = "buffalo_l",
+    source_sha256: Annotated[str, Form(max_length=128)] = "",
+    crops: Annotated[list[UploadFile] | None, File()] = None,
+) -> VideoFacesResponse:
+    """A video's faces, one a person seen (multipart): faces, a JSON list of
+    VideoFaceIn; crops, one 128 x 128 WebP a face in the same order, cut from
+    its frame (the server has no frames); lineage, how they were found (JSON).
+    Saved as a photo's are (FaceRepository.submit_faces): faces people named,
+    or said aren't someone, are kept; the rest are found again."""
+    from src.server.api.routers.assets import _normalize_bounding_box
+    from src.server.repository import lineage as lineage_repo
+
+    made = require_lineage(lineage, "video_faces")  # before anything is saved
+    try:
+        items = TypeAdapter(list[VideoFaceIn]).validate_json(faces)
+    except ValidationError as e:
+        raise ApiError(400, "faces_not_valid", "faces is a JSON list of faces, each with bounding_box,"
+                       " detection_confidence, embedding, frame_ms and seen_ms.",
+                       {"errors": e.errors(include_url=False, include_context=False)[:5]}) from None
+    if len(items) > MAX_VIDEO_FACES:
+        raise ApiError(400, "too_many_faces", f"At most {MAX_VIDEO_FACES} faces a video.", {"sent": len(items)})
+    crops = crops or []
+    if len(crops) != len(items):
+        raise ApiError(400, "crops_dont_match", "One crop a face, in the order of the faces.",
+                       {"faces": len(items), "crops": len(crops)})
+    images: list[bytes] = []
+    for i, crop in enumerate(crops):
+        data = crop.file.read(MAX_CROP_BYTES + 1)
+        if len(data) > MAX_CROP_BYTES or not _webp(data):
+            raise ApiError(400, "crop_not_valid", f"A crop is a WebP image, up to {MAX_CROP_BYTES // 1024} KB.",
+                           {"index": i})
+        images.append(data)
+
+    asset = AssetRepository(session).get_by_id(asset_id)
+    if asset is None or asset.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.media_type != "video":
+        raise ApiError(400, "not_a_video", "Faces with times are a video's; a photo's go to /v1/assets/batch-faces.",
+                       {"media_type": asset.media_type})
+
+    face_ids = FaceRepository(session).submit_faces(
+        asset_id=asset_id,
+        detection_model=detection_model,
+        detection_model_version=detection_model_version,
+        faces=[{"bounding_box": _normalize_bounding_box(f.bounding_box),
+                "detection_confidence": f.detection_confidence,
+                "embedding": [float(x) for x in f.embedding] if f.embedding else None,
+                "frame_ms": f.frame_ms,
+                "seen_ms": sorted({*f.seen_ms, f.frame_ms})} for f in items],
+        embedding_model=embedding_model,
+    )
+    lineage_repo.record(session, asset_id, "video_faces", with_source(made, source_sha256 or None),
+                        outcome="ok" if items else "empty")
+
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        storage = get_storage()
+        for face_id, data in zip(face_ids, images):
+            key = storage.face_crop_key(tenant_id, asset.library_id, face_id)
+            storage.write(key, data)
+            session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
+    session.commit()
+    LibraryRepository(session).bump_revision(asset.library_id)
+    session.refresh(asset)
+    return VideoFacesResponse(face_count=asset.face_count or 0, face_ids=face_ids)

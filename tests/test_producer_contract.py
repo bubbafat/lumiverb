@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 def test_every_producer_declares_what_the_rest_needs():
     producers = registry()
     assert list(producers) == ["probe", "capture", "proxy", "video_preview", "analysis_proxy", "scenes", "scene_vision",
-                               "vision", "ocr", "clip", "faces", "transcript", "location"]
+                               "vision", "ocr", "clip", "faces", "video_faces", "transcript", "location"]
     for p in producers.values():
         assert isinstance(p, ProducerSpec) and p.applies and p.made
         assert all(n in producers for n in p.needs), (p.artifact, p.needs)
@@ -290,6 +290,6 @@ def test_video_producers_are_timed_by_the_second_and_the_rest_by_the_clip():
     from src.shared.producers import PRODUCERS
 
     by_second = {a for a, p in PRODUCERS.items() if p.unit == "second"}
-    assert by_second == {"analysis_proxy", "transcript", "scenes", "scene_vision"}
+    assert by_second == {"analysis_proxy", "transcript", "scenes", "scene_vision", "video_faces"}
     assert KINDS["render"].spec.by_seconds and KINDS["redo_transcript"].spec.by_seconds
     assert not KINDS["vision"].spec.by_seconds
