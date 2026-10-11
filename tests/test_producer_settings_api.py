@@ -10,6 +10,7 @@ redoing what the old ones made, as a model change in Settings → AI does.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_by_hand import _sha
@@ -210,33 +211,94 @@ def test_a_new_prompt_is_saved_whole_with_its_equals_signs(env):
     assert _producer(env, "vision")["settings"]["prompt"] == prompt
 
 
-def test_faces_settings_ask_saying_what_a_redo_keeps(env):
+def _due(env, kind: str) -> list[str]:
+    """What the scheduler's queue hands out of a kind in the library (a redo kind, by what's current now)."""
+    from src.server.repository import lineage
+    from src.server.scheduler.kinds import KINDS
+    from src.server.scheduler.queue import candidates
+    from tests.test_lineage_api import _db
+
+    k = KINDS[kind]
+    with _db(env) as s:
+        want = lineage.desired(s, k.artifact) if k.redo else None
+        return [i["asset_id"] for i in candidates(s, k, [env[2]], want=want)]
+
+
+def test_faces_are_found_by_level_and_off_finds_none(env):
+    """Photos: Off / Low / Normal / High (Settings → Processing → Faces).
+    Raising it asks nothing and finds nothing again by itself: what was found
+    lower is counted below. Off finds no face anywhere, so nothing is missing
+    or handed out, and the faces found, named ones too, stay."""
     from tests.test_lineage_api import _want
 
-    lib = _library(env, "FaceSettings")
+    lib = _library(env, "FaceLevels")
     client, headers, *_ = lib
     sha = _sha()
-    photo = _ingest_with(lib, "a.jpg", sha, None)
-    r = client.post(f"/v1/assets/{photo}/faces", json={
-        "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [],
+    named = _ingest_with(lib, "named.jpg", sha, None)
+    waiting = _ingest_with(lib, "waiting.jpg", _sha(), None)
+    r = client.post(f"/v1/assets/{named}/faces", json={
+        "detection_model": "insightface", "detection_model_version": "buffalo_l",
+        "faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9,
+                   "embedding": [0.0] * 100 + [1.0] + [0.0] * 411}],
         "lineage": _want(lib, "faces", sha)}, headers=headers)
     assert r.status_code == 201, r.text
-    assert _counts(lib, "faces")["current"] == 1
+    assert client.post("/v1/people", json={"display_name": "Kept", "face_ids": r.json()["face_ids"]},
+                       headers=headers).status_code in (200, 201)
+    counts = _counts(lib, "faces")
+    assert (counts["applicable"], counts["current"], counts["missing"]) == (2, 1, 1)
+    assert _due(lib, "faces") == [waiting]
+    client.post("/v1/upkeep/recluster", headers=headers)
+    assert _clusters_current(env)
     try:
-        r = _put(env, "faces", settings={"min_confidence": 0.7})
-        assert r.status_code == 409, r.text
-        assert "Faces people named, or said aren't a certain person, are kept" in r.json()["error"]["message"]
-        assert r.json()["error"]["details"]["clips"] >= 1
-        r = _put(env, "faces", settings={"min_confidence": 0.7}, redo=True)
-        assert r.status_code == 200 and r.json()["settings"]["min_confidence"] == 0.7, r.text
-        assert _counts(lib, "faces")["stale"] == 1
+        r = _put(env, "faces", settings={"detail": "high"})  # no redo asked: a level never asks
+        assert r.status_code == 200, r.text
+        assert _clusters_current(env)  # what's found next changes, not the groups
+        counts = _counts(lib, "faces")
+        assert (counts["current"], counts["below"], counts["stale"]) == (0, 1, 0)
+        assert _due(lib, "faces") == [waiting]  # below isn't made again by itself
+
+        r = _put(env, "faces", settings={"detail": "off"})
+        assert r.status_code == 200, r.text
+        counts = _counts(lib, "faces")
+        assert (counts["applicable"], counts["missing"], counts["below"]) == (0, 0, 0)
+        assert _due(lib, "faces") == [] and _due(lib, "redo_faces") == []
+        faces = client.get(f"/v1/assets/{named}/faces", headers=headers).json()["faces"]
+        assert [f["person"]["display_name"] for f in faces] == ["Kept"]
     finally:
-        _put(env, "faces", settings={"min_confidence": None}, redo=True)
+        _put(env, "faces", settings={"detail": None})
+    assert _due(lib, "faces") == [waiting]  # on again: what's missing is found
     for settings in ({"model": "antelopev2"}, {"det_size": 320}):
         r = _put(env, "faces", settings=settings)
         assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
-    r = _put(env, "faces", settings={"max_detect_edge": 2048})  # past the proxies' size
+    r = _put(env, "faces", settings={"min_confidence": 0.7})  # the gates went with levels
+    assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_setting", r.text
+    r = _put(env, "faces", settings={"detail": "max"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
+
+
+def test_videos_off_finds_no_face_in_any_video(env):
+    """Videos: Off / Low (the default) / Normal / High, apart from photos'."""
+    from tests.test_lineage_api import _db
+
+    lib = _library(env, "VideoFacesOff")
+    client, headers, library_id, *_ = lib
+    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": "v.mov", "file_size": 1,
+                                               "file_mtime": "2025-01-01T00:00:00Z", "media_type": "video"},
+                    headers=headers)
+    assert r.status_code == 200, r.text
+    with _db(lib) as s:
+        s.execute(text("UPDATE assets SET video_indexed = true, analysis_proxy_key = 'a.mp4' WHERE library_id = :l"),
+                  {"l": library_id})
+        s.commit()
+    assert _counts(lib, "video_faces")["missing"] == 1 and len(_due(lib, "video_faces")) == 1
+    assert _producer(env, "video_faces")["fields"][-1]["value"] == "low"
+    try:
+        assert _put(env, "video_faces", settings={"detail": "off"}).status_code == 200
+        assert _counts(lib, "video_faces")["applicable"] == 0 and _due(lib, "video_faces") == []
+        assert _producer(env, "faces")["level"] == 2  # photos' own level, still Normal
+    finally:
+        _put(env, "video_faces", settings={"detail": None})
+    assert len(_due(lib, "video_faces")) == 1
 
 
 def _meta(env, key: str) -> str | None:
@@ -296,7 +358,7 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
         "remakes": False, "choices": []}
     assert fields["merge_distance"]["advanced"] and not fields["merge_distance"]["remakes"]
     assert fields["merge_distance"]["value"] == distance
-    assert fields["min_confidence"]["remakes"]
+    assert fields["detail"]["kind"] == "level" and not fields["detail"]["remakes"]
     assert "merge_close_clusters" not in before["settings"] and "merge_distance" not in before["settings"]
     assert _merge_epsilon(env) == distance
 

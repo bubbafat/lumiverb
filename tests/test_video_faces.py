@@ -226,7 +226,7 @@ def test_the_people_in_a_video_with_their_times_and_their_crops_from_their_frame
     sent = json.loads(kwargs["data"]["faces"])
     assert [f["seen_ms"] for f in sent] == [[1500, 4200], [4200]]
     lineage = json.loads(kwargs["data"]["lineage"])
-    assert lineage["producer"] == "insightface-video" and lineage["level"] == 0
+    assert lineage["producer"] == "insightface-video" and lineage["level"] == 1  # Low (Off is 0)
     assert lineage["source_sha256"] == CLIP["sha256"]
     assert [name for name, _ in kwargs["files"]] == ["crops", "crops"]
     assert kwargs["files"][0][1][1] == found.crops[0]
@@ -241,7 +241,7 @@ def test_the_detail_now_says_which_frames_and_is_recorded(red_then_blue):
     # 750, 1500, 2250; 4200, 5250 (3750 is the 4200 picture).
     assert found.frames == 5 and detector.seen == ["red", "red", "red", "blue", "blue"]
     work.save(acct.client, [(CLIP, found)])
-    assert json.loads(acct.client.posts[0][1]["data"]["lineage"])["level"] == 1
+    assert json.loads(acct.client.posts[0][1]["data"]["lineage"])["level"] == 2  # Normal
 
 
 @needs_ffmpeg

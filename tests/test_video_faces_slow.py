@@ -144,7 +144,7 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
     with engine.connect() as conn:
         row = conn.execute(text("SELECT producer, level, outcome FROM artifact_lineage"
                                 " WHERE asset_id = :a AND artifact = 'video_faces'"), {"a": asset_id}).one()
-    assert tuple(row) == ("insightface-video", 0, "ok")
+    assert tuple(row) == ("insightface-video", 1, "ok")  # Low
 
 
 def test_a_video_with_no_one_in_it_is_done(env):

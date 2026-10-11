@@ -1,6 +1,6 @@
-"""Face detection reads the account's settings (Settings → Processing → Faces):
-how sure, how big and how sharp a face must be, and the image size looked at.
-The model and the detector's input size stay fixed."""
+"""Face detection reads the account's level (Settings → Processing → Faces:
+Photos Off / Low / Normal / High), which says how sure, how big and how
+sharp a face must be. The model and the detector's input size stay fixed."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from PIL import Image
 
 from src.processing.workers.faces.insightface_provider import FaceSettings, InsightFaceProvider
 from src.producers.faces import PRODUCER as FACES
+from src.producers.faces.levels import DETAILS, GATES, gates
 from tests.test_face_detection import _make_mock_face, _make_sharp_image
 
 pytestmark = pytest.mark.fast
@@ -25,16 +26,24 @@ def _found(settings: FaceSettings | None, *faces, image=None) -> list:
     return provider.detect_faces(image or _make_sharp_image(640, 480))
 
 
-def test_the_defaults_are_the_producers_declared_defaults():
+def test_the_defaults_are_normals_gates_and_the_producers_detector_size():
     s = FaceSettings()
-    for key, value in FACES.defaults.items():
-        if key != "model":
-            assert getattr(s, key) == value, key
+    assert {k: getattr(s, k) for k in GATES["normal"]} == GATES["normal"]
+    assert s.det_size == FACES.defaults["det_size"]
+
+
+def test_each_level_up_finds_as_many_faces_or_more():
+    """Low only clear faces, High smaller and softer ones too: every gate eases level by level."""
+    assert DETAILS == ("off", "low", "normal", "high") and FACES.level.default == "normal"
+    for key in GATES["normal"]:
+        assert GATES["low"][key] > GATES["normal"][key] > GATES["high"][key], key
+    assert GATES["high"]["min_confidence"] >= 0.3  # under it the detector slows a lot
+    assert gates("off") == gates("normal") == gates(None)  # Off never looks; the rest default to Normal
 
 
 def test_settings_come_from_the_producers_settings_and_ignore_the_rest():
-    s = FaceSettings.for_producer({**FACES.defaults, "min_confidence": 0.8, "something_new": 1})
-    assert s.min_confidence == 0.8 and s.min_sharpness == FACES.defaults["min_sharpness"]
+    s = FaceSettings.for_producer({**FACES.defaults, **gates("low"), "something_new": 1})
+    assert s.min_confidence == GATES["low"]["min_confidence"] and s.min_sharpness == GATES["low"]["min_sharpness"]
 
 
 def test_how_sure_a_face_must_be():
@@ -109,7 +118,7 @@ def _detect(settings: dict, provider=None):
 
 
 def test_the_face_process_finds_faces_with_the_settings_its_given_and_says_which_models(tmp_path):
-    used = {**FACES.defaults, "min_confidence": 0.8}
+    used = {**FACES.defaults, **gates("high")}
     out, made = _detect(used)
     assert made[-1] == FaceSettings.for_producer(used)
     # InsightFace's model pack embeds the faces it finds: it says so.
@@ -145,16 +154,18 @@ def test_one_model_per_process_while_the_detector_size_stays(tmp_path):
     assert c is not a and len(built) == 2
 
 
-def test_the_scheduler_finds_faces_with_the_settings_its_lineage_names(tmp_path, monkeypatch):
+@pytest.mark.parametrize("detail, level", [("low", 1), ("normal", 2), ("high", 3)])
+def test_the_scheduler_finds_faces_at_the_level_its_lineage_names(tmp_path, monkeypatch, detail, level):
     from src.server.scheduler import runners
     from src.shared.producers import lineage
     from tests.test_scheduler_runners import FakeAccount, _job
 
     acct = FakeAccount(tmp_path)
     monkeypatch.setattr("src.producers.faces.work.face_proxy", lambda item, root, cache: True)
-    used = {**FACES.defaults, "min_face_pixels": 60}
+    used = dict(FACES.defaults)
     acct.producers = MagicMock()
     acct.producers.settings.return_value = used
+    acct.producers.uses.return_value = {"detail": detail, "merge_close_clusters": True}
     acct.producers.lineage.side_effect = lambda artifact, sha, used=None: lineage(artifact, used, sha)
     acct.cache.get.return_value = b"jpg"
     detector = MagicMock()
@@ -162,22 +173,22 @@ def test_the_scheduler_finds_faces_with_the_settings_its_lineage_names(tmp_path,
                                     "embedding_model": "buffalo_l", "faces": []}
     acct.models.faces.return_value = detector
     runners.runners()["faces"](acct, _job("faces", "ast_1"))
-    assert detector.detect.call_args.args[1] == used
-    assert acct.client.post.call_args.kwargs["json"]["lineage"] == lineage("faces", used, None)
+    assert detector.detect.call_args.args[1] == {**used, **gates(detail)}  # its level's gates
+    assert acct.client.post.call_args.kwargs["json"]["lineage"] == {**lineage("faces", used, None), "level": level}
     acct.producers.settings.assert_called_once_with("faces")
 
 
 def test_faces_settings_that_can_change_and_those_that_cant():
     from src.producers.clip import PROXY_CACHE_EDGE
 
-    editable = {s.key for s in FACES.settings if not s.fixed and s.remakes}
-    assert editable == {"max_detect_edge", "min_confidence", "min_area_fraction", "min_face_pixels",
-                        "min_relative_size", "min_sharpness"}
-    # How faces are grouped, not found: outside lineage.
-    assert {s.key for s in FACES.settings if not s.remakes} == {"merge_close_clusters", "merge_distance"}
-    assert "merge_close_clusters" not in FACES.defaults
+    # The level is what changes which faces are found; nothing else that remakes can change.
+    assert {s.key for s in FACES.settings if not s.fixed and s.remakes} == set()
+    assert FACES.level.key == "detail" and FACES.level.label == "Photos"
+    # How faces are grouped, not found, and the level: outside the hash.
+    assert {s.key for s in FACES.settings if not s.remakes} == {"detail", "merge_close_clusters", "merge_distance"}
+    assert set(FACES.defaults) == {"model", "det_size"}
     assert FACES.setting("model").fixed and FACES.setting("det_size").fixed
-    assert FACES.setting("max_detect_edge").maximum <= PROXY_CACHE_EDGE  # faces are found in the proxies
+    assert FaceSettings().max_detect_edge <= PROXY_CACHE_EDGE  # faces are found in the proxies
 
 
 def test_the_detector_keeps_faces_down_to_the_least_confidence_set():

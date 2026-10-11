@@ -52,9 +52,14 @@ class Faces(Work):
     together = True  # one request for the job's photos
 
     def __init__(self, acct, job) -> None:
+        from src.producers.faces.levels import gates
+
         super().__init__(acct, job)
         # One read: what's found and its lineage agree.
         self.used = acct.producers.settings(self.artifact)
+        self.detail = acct.producers.uses(self.artifact).get("detail")
+        # The gates of its level: which faces count.
+        self.gates = {**self.used, **gates(self.detail)}
 
     def make(self, clip: dict) -> dict:
         from src.producers.runner import out_of_memory
@@ -65,7 +70,7 @@ class Faces(Work):
         image = cache.get(clip["asset_id"], clip.get("rel_path"))
         if image is None:
             raise Failed("no proxy")
-        found = self.acct.models.faces().detect(image, self.used)  # in use: not let go of meanwhile
+        found = self.acct.models.faces().detect(image, self.gates)  # in use: not let go of meanwhile
         if "error" in found:
             if out_of_memory(found["error"]):  # the GPU's trouble, not the photo's
                 raise Waits(found["error"])
@@ -73,7 +78,9 @@ class Faces(Work):
         return found
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
+        from src.shared.producers import level_of
+
         client.post("/v1/assets/batch-faces", json={
             "items": [{"asset_id": clip["asset_id"], "source_sha256": clip.get("sha256"), **found}
                       for clip, found in made],
-            "lineage": self.lineage(None, used=self.used)})
+            "lineage": {**self.lineage(None, used=self.used), "level": level_of(self.artifact, {"detail": self.detail})}})
