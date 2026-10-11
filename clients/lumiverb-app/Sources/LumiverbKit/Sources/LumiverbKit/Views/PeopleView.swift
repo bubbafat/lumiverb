@@ -241,7 +241,7 @@ struct PersonCardView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            Text("\(person.faceCount) photo\(person.faceCount == 1 ? "" : "s")")
+            Text("\(person.faceCount) clip\(person.faceCount == 1 ? "" : "s")")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

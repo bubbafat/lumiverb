@@ -36,7 +36,11 @@ def test_the_workers_constants_are_the_registrys_settings():
     assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner)  # keyframes only
     faces = P.PRODUCERS["faces"].defaults
     assert face.MODEL_VERSION == faces["model"]
-    assert {k: v for k, v in faces.items() if k != "model"} == face.FaceSettings().__dict__
+    # The rest of what faces are found with is the level's (Normal's are the provider's defaults).
+    from src.producers.faces.levels import GATES
+
+    assert face.FaceSettings().__dict__ == {"det_size": faces["det_size"], "max_detect_edge": face.MAX_DETECT_EDGE,
+                                           **GATES["normal"]}
     clip = P.PRODUCERS["clip"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
     from src.processing.proxy import proxy_cache

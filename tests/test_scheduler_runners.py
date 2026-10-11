@@ -804,7 +804,10 @@ def test_a_jobs_faces_are_saved_together_and_the_clips_that_failed_charged(acct,
     assert [i["asset_id"] for i in body["items"]] == ["ast_1", "ast_3"]
     assert body["items"][0]["source_sha256"] == SHA and body["lineage"]["producer"] == "insightface"
     assert _charged(acct) == [("faces", "ast_2")]
-    assert detector.detect.call_args.args[1] == acct.producers.settings("faces")
+    from src.producers.faces.levels import gates
+
+    # The settings, with the gates of its level (Normal's by default).
+    assert detector.detect.call_args.args[1] == {**acct.producers.settings("faces"), **gates("normal")}
 
 
 def test_faces_say_which_clips_wait(acct, monkeypatch) -> None:

@@ -132,6 +132,8 @@ class AssetResponse(BaseModel):
     # suggestion), beside the file's GPS above. Signed-in only.
     location: dict | None = None
     gps_accuracy_m: float | None = None
+    # Faces found in it (null: not looked for yet); a video's, the people seen.
+    face_count: int | None = None
 
 
 class AssetPageItem(BaseModel):
@@ -712,6 +714,7 @@ def _trim_public_transcript(request: Request, session: Session, response: AssetR
     response.note_updated_at = None
     response.corrected = []
     response.transcript_source = None
+    response.face_count = None  # who's in a clip is for signed-in people
     if not response.transcript_srt:
         return
     from src.server.api.routers.playback import srt_before
@@ -743,6 +746,7 @@ def _to_asset_response(asset) -> AssetResponse:
         gps_lat=asset.gps_lat,
         gps_lon=asset.gps_lon,
         gps_accuracy_m=asset.gps_accuracy_m,
+        face_count=asset.face_count,
         iso=asset.iso,
         exposure_time_us=asset.exposure_time_us,
         aperture=asset.aperture,

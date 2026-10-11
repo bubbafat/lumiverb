@@ -40,10 +40,18 @@ def test_the_frozen_v1_hashes_are_the_registry_s():
         "m", os.path.join(PROJECT_ROOT, "migrations/tenant/versions/d9f3a6b1c2e8_artifact_lineage.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
+    # Faces' gates gave way to levels (c8e2f4a6b1d9): that migration carries what was found with the v1
+    # hash (its OLD_DEFAULTS) to the hash now, at Normal.
+    spec = importlib.util.spec_from_file_location(
+        "levels", os.path.join(PROJECT_ROOT, "migrations/tenant/versions/c8e2f4a6b1d9_face_levels.py"))
+    levels = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(levels)
+    carried = {"faces": (levels._hash(levels.OLD_DEFAULTS), levels._hash(levels.NEW_SETTINGS))}
     for artifact, (producer, h) in m.V1.items():
         assert PRODUCERS[artifact].producer == producer
         if PRODUCERS[artifact].version == "1":
-            assert settings_hash(effective_settings(artifact)) == h, artifact
+            then, now = carried.get(artifact, (h, h))
+            assert h == then and settings_hash(effective_settings(artifact)) == now, artifact
     assert m._vision_hash("qwen3-vl:8b") == settings_hash(effective_settings("vision", account={"vision": "qwen3-vl:8b"}))
     assert m._vision_hash("qwen3-vl:8b", m._OCR_PROMPT) == settings_hash(
         effective_settings("ocr", account={"vision": "qwen3-vl:8b"}))

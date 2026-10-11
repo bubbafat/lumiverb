@@ -366,6 +366,8 @@ export default function BrowsePage() {
         flash_fired: item.flash_fired,
         gps_lat: item.gps_lat,
         gps_lon: item.gps_lon,
+        // Whether it has faces: the lightbox's faces button, and a video's People.
+        face_count: item.face_count,
         created_at: item.created_at,
       })),
     );

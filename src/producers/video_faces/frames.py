@@ -12,9 +12,8 @@ from __future__ import annotations
 import bisect
 from collections.abc import Sequence
 
-# Lowest first: lineage records a level as its index here (made below the
-# setting: out of date; at or above: current).
-DETAILS: tuple[str, ...] = ("low", "normal", "high")
+from src.producers.faces.levels import DETAILS  # Off, Low, Normal, High: the photos' too
+
 DEFAULT = "low"
 
 EVERY_SEC = 3.0  # High
@@ -25,7 +24,8 @@ APART_MS = 500
 def frame_times(scenes: Sequence[dict], duration_ms: int, detail: str | None) -> list[int]:
     """The times (ms) of the frames to look at, in order. scenes: the video's,
     each {start_ms, end_ms, rep_frame_ms}. A video without scenes is looked at
-    as one scene, its picture in the middle."""
+    as one scene, its picture in the middle. (Off looks at nothing: the
+    producer applies to no video then.)"""
     detail = detail if detail in DETAILS else DEFAULT
     if not scenes:
         scenes = [{"start_ms": 0, "end_ms": duration_ms, "rep_frame_ms": duration_ms // 2}]

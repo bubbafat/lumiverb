@@ -97,6 +97,10 @@ public struct FaceListItem: Decodable, Identifiable, Sendable {
     public let boundingBox: FaceBoundingBox?
     public let detectionConfidence: Float?
     public let person: FaceMatchedPerson?
+    /// A video's face: the moment its box is from, and every moment the
+    /// person was seen at (ms, in order). Nil for a photo's.
+    public let frameMs: Int?
+    public let seenMs: [Int]?
 
     public var id: String { faceId }
 }

@@ -146,6 +146,31 @@ describe("VideoPlayer", () => {
     expect(video.currentTime).toBe(4);
   });
 
+  it("opens at a person's moment", () => {
+    const { container } = render(<VideoPlayer src="/v1/stream/m" source="analysis_proxy" maxSeconds={null} startAt={12} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
+    Object.defineProperty(video, "duration", { value: 60, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(12);
+    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+  });
+
+  it("a moment past the short preview waits for the whole video", () => {
+    const { rerender, container } = render(
+      <VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} startAt={30} />,
+    );
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "currentTime", { value: 0, writable: true, configurable: true });
+    Object.defineProperty(video, "duration", { value: 10, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(0);
+    rerender(<VideoPlayer src="/v1/stream/full" source="analysis_proxy" maxSeconds={null} startAt={30} />);
+    Object.defineProperty(video, "duration", { value: 60, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(30);
+  });
+
   it("doesn't start playing a paused video when it switches", () => {
     const { rerender, container } = render(<VideoPlayer src="/v1/stream/short" source="preview" maxSeconds={null} />);
     const video = container.querySelector("video") as HTMLVideoElement;
