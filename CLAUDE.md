@@ -110,7 +110,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
   The install/update script tests (`test_update_script.py`, `test_deploy_scripts.py`) run only on Linux (`LINUX_INSTALLER` in conftest): the scripts use systemd, apt, flock and GNU sed, and a Mac installs with Homebrew.
 - Swift: XCTest in `LumiverbKit`. **No macOS-target test bundle** — testable code must live in LumiverbKit.
 - Resolve plugin: `node --test clients/resolve/test/` (no dependencies; fakes for `fetch` and Resolve).
-- Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`.
+- Web UI: `npx vitest run` in `src/ui/web` (Testing Library component tests sit beside their components), plus `npx tsc --noEmit -p .`. `src/test/setup.ts` gives tests jsdom's localStorage back: Node 25+'s own shadows it, undefined.
 
 ---
 
