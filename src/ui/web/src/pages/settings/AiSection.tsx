@@ -15,12 +15,22 @@ import {
   type AiSettings,
   type MachineFields,
 } from "../../api/client";
+import { OLLAMA_GUIDE } from "../../lib/guides";
 
 const inputClass =
   "w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 disabled:opacity-50";
 const buttonClass =
   "rounded-md px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50";
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
+
+/** The README's how-to: Ollama and the model to pull, for descriptions & text. */
+function OllamaGuide({ children = "How to set up Ollama" }: { children?: string }) {
+  return (
+    <a href={OLLAMA_GUIDE} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80">
+      {children}
+    </a>
+  );
+}
 
 export const AI_QUERY_KEY = ["ai-settings"];
 
@@ -74,8 +84,9 @@ export default function AiSection() {
         <h2 className="text-lg font-semibold text-gray-100">AI</h2>
         <p className="mt-1 text-sm text-gray-400">
           The GPU machines that write descriptions, read text in images, describe video scenes and transcribe
-          speech: any OpenAI-compatible endpoint, such as Ollama for descriptions or speaches for transcripts,
-          and the worker&apos;s own Whisper. Work is spread across the machines that are online.
+          speech: any OpenAI-compatible endpoint, such as Ollama for descriptions (
+          <OllamaGuide>how to set it up</OllamaGuide>) or speaches for transcripts, and the worker&apos;s own
+          Whisper. Work is spread across the machines that are online.
         </p>
       </div>
 
@@ -137,6 +148,12 @@ function JobBanner({ ai, job }: { ai: AiSettings; job: AiJob }) {
     return (
       <div role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
         {job.label} {job.label.endsWith("s") || job.label.includes("&") ? "are" : "is"} off: no model is chosen.
+        {job.job === "vision" && (
+          <>
+            {" "}
+            <OllamaGuide />
+          </>
+        )}
       </div>
     );
   }
@@ -148,6 +165,12 @@ function JobBanner({ ai, job }: { ai: AiSettings; job: AiJob }) {
         {job.machines === 0
           ? `No machine does ${job.label.toLowerCase()}. Add one, or give the job to a machine.`
           : `No machine doing ${job.label.toLowerCase()} is online. Each machine below says why.`}
+        {job.job === "vision" && job.machines === 0 && (
+          <>
+            {" "}
+            <OllamaGuide />
+          </>
+        )}
       </p>
       <p className="mt-1 text-red-200/80">The work waits until it's fixed; no clip is marked as failed for it.</p>
     </div>

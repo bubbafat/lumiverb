@@ -32,7 +32,8 @@ that's `brew trust`.)
 
 Then open <http://localhost:6464> on that Mac and create your account. Add a
 library (Libraries › Add library: a name and the folder your photos and
-videos are in) and Lumiverb scans and processes it.
+videos are in) and Lumiverb scans and processes it. Descriptions, tags and
+text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama).
 
 It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
@@ -77,6 +78,70 @@ sudo bash /opt/lumiverb/scripts/update.sh
 
 A server on your home network, without a domain: [docs/linux-server.md](docs/linux-server.md).
 More on the Linux install below, under [Running a Linux server](#running-a-linux-server).
+
+---
+
+## AI descriptions with Ollama
+
+Most of Lumiverb needs no setup: previews, search by what's in a photo,
+similar photos, faces and people, video scenes and transcripts all run on
+the server itself. Descriptions, tags and text in photos (signs, screens,
+documents) need an **AI machine**: a computer running
+[Ollama](https://ollama.com) with a vision model. Without one they wait;
+nothing fails, and once you add one it catches up on everything.
+
+The model to use is `qwen3-vl:8b-instruct` (a 6 GB download). It used
+about 10 GB of memory on a Mac Studio. Take the `-instruct` one: plain
+`qwen3-vl:8b` thinks before it answers, and the thinking uses up the
+answer, so most descriptions come back empty. With less memory,
+`qwen3-vl:4b-instruct` is smaller (not tested here).
+
+On a Mac:
+
+```bash
+brew install ollama
+```
+
+```bash
+brew services start ollama
+```
+
+```bash
+ollama pull qwen3-vl:8b-instruct
+```
+
+(Or the app from [ollama.com/download](https://ollama.com/download), then the
+`ollama pull`.)
+
+On Linux:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+```bash
+ollama pull qwen3-vl:8b-instruct
+```
+
+Then, as an admin, in Lumiverb:
+
+1. **Settings › AI › Add machine**: a name and the URL, then **Connect**. It
+   lists the models the machine has.
+2. Under **Does**, tick **Descriptions & text**, then **Add**.
+3. **Settings › AI › Models**, Descriptions & text: `qwen3-vl:8b-instruct`.
+
+The URL is `http://localhost:11434/v1` when Ollama runs on the same computer
+as Lumiverb. On another computer it's that computer's address, such as
+`http://192.168.1.20:11434/v1`, and Ollama there must listen on the network
+(`OLLAMA_HOST=0.0.0.0`: [Ollama's FAQ](https://docs.ollama.com/faq)). Ollama
+has no password, so do that only on a network you trust.
+
+**Requests at once** is how many photos it works on together. Leave it at 1 unless
+that Ollama runs several in parallel (`OLLAMA_NUM_PARALLEL`); each one takes
+more memory.
+
+Transcripts don't need Ollama: Lumiverb's own Whisper does them. To make
+them faster with another GPU, see [AI machines](docs/linux-server.md#6-ai-machines).
 
 ---
 
