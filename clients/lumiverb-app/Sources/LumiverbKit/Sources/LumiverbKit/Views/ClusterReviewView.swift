@@ -261,9 +261,22 @@ struct ClusterCardView: View {
                         .frame(width: 64, height: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                         .background(Color.gray.opacity(0.1))
+                        .overlay(alignment: .bottomLeading) {
+                            // A video's face: the moment it's from.
+                            if face.isVideo {
+                                Text("▶" + (face.frameMs.map { " " + FaceMoments.clock($0) } ?? ""))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 3)
+                                    .background(Color.black.opacity(0.7))
+                                    .cornerRadius(3)
+                                    .padding(3)
+                            }
+                        }
                 }
                 .buttonStyle(.plain)
-                .help("Open this photo to tag just this face")
+                .help(face.isVideo ? "Open this video where the face is, to tag just this face"
+                                   : "Open this photo to tag just this face")
             }
             if cluster.size > cluster.faces.count {
                 Text("+\(cluster.size - cluster.faces.count)")
@@ -291,7 +304,9 @@ struct ClusterCardView: View {
         browseState.displayedAssetIdsOverride = cluster.faces.map(\.assetId)
         browseState.displayedFaceIdsOverride = cluster.faces.map(\.faceId)
         browseState.pendingHighlightFaceId = face.faceId
-        Task { await browseState.loadAssetDetail(assetId: face.assetId) }
+        // A video opens at the moment the face is from.
+        let start = face.isVideo ? face.frameMs.map { Double($0) / 1000 } : nil
+        Task { await browseState.openClip(assetId: face.assetId, startSeconds: start) }
     }
 
     // MARK: - Actions column (name input + dismiss)

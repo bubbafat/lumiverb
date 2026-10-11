@@ -286,6 +286,19 @@ public class BrowseState: ObservableObject {
     /// `closeLightbox()`.
     @Published public var pendingHighlightFaceId: String?
 
+    /// Play a video from a moment (a person seen there: People, cluster
+    /// review, the lightbox's People list). The lightbox's player seeks
+    /// there once it can, for this asset only; a new request each time
+    /// (its id), so the same moment asked again plays again. Cleared by
+    /// `closeLightbox()`.
+    @Published public var videoStart: VideoStart?
+
+    /// Open a clip in the lightbox; a video at a moment, when given.
+    public func openClip(assetId: String, startSeconds: Double? = nil) async {
+        videoStart = startSeconds.map { VideoStart(assetId: assetId, seconds: $0) }
+        await loadAssetDetail(assetId: assetId)
+    }
+
     // MARK: - Mode
 
     @Published public var mode: BrowseMode = .library
@@ -796,6 +809,7 @@ public class BrowseState: ObservableObject {
         // Clear any cluster-review face highlight so the next lightbox
         // open doesn't pop a stale popover.
         pendingHighlightFaceId = nil
+        videoStart = nil
     }
 
     // MARK: - Search

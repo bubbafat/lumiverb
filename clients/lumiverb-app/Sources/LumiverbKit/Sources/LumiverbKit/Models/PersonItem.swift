@@ -79,8 +79,17 @@ public struct PersonFaceItem: Decodable, Identifiable, Sendable {
     public let detectionConfidence: Float?
     public let relPath: String?
     public let takenAt: String?  // ISO 8601, used by client-side date grouping
+    /// "image" or "video" (older servers don't say).
+    public let mediaType: String?
+    /// A video's face (the person seen there): the moment its crop is from, ms.
+    public let frameMs: Int?
+    /// Every moment the person was seen at, ms, in order (a cluster's sample doesn't say).
+    public let seenMs: [Int]?
 
     public var id: String { faceId }
+
+    /// Whether the face is a person seen in a video.
+    public var isVideo: Bool { mediaType == "video" || frameMs != nil }
 }
 
 /// Response from `GET /v1/people/{person_id}/faces`. Cursor-paginated.
