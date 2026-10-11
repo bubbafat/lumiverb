@@ -12,6 +12,7 @@ const sent: { method: string; url: string; body: unknown }[] = [];
 const GB = 1024 ** 3;
 const DATA = "/opt/homebrew/var/lumiverb";
 const DRIVE = "/Volumes/Media/Lumiverb previews";
+const NEW = "/Volumes/CACHE/Lumiverb/previews";
 
 function info(over: Partial<StorageInfo> = {}): StorageInfo {
   return {
@@ -37,7 +38,16 @@ beforeEach(() => {
     if (path === "/system/storage") return json(state);
     if (path === "/system/storage/previews") {
       if (body.folder === "/nowhere") {
-        return json({ error: { code: "folder_not_usable", message: "There's no folder at /nowhere.", details: {} } }, 400);
+        return json({ error: { code: "folder_not_usable", message: "There's no drive at /nowhere. Is it plugged in?",
+                               details: {} } }, 400);
+      }
+      if (body.folder === NEW && !body.make_folder) {
+        return json({ error: { code: "make_folder", message: `There's no folder at ${NEW}. Make it?`,
+                               details: { folder: NEW, free: 800 * GB, same_drive_as_data: false } } }, 409);
+      }
+      if (body.folder === NEW) { // made, and nothing to move: there at once
+        state = info({ previews: NEW, same_disk: false });
+        return json(state, 202);
       }
       if (!body.move) {
         return json({ error: { code: "move_previews",
@@ -82,7 +92,8 @@ describe("StorageSection", () => {
     const previews = await screen.findByRole("region", { name: "Previews" });
     expect(within(previews).getByText(DATA)).toBeTruthy();
     expect(within(previews).getByText(/In the data folder\. 100\.0 GB free of 500\.0 GB/)).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "Data" })).getByText(/They stay here/)).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Data" })).getByText(/They stay here; Ollama keeps its own/))
+      .toBeTruthy();
   });
 
   it("shows what moves, and moves only once the user says so", async () => {
@@ -92,12 +103,29 @@ describe("StorageSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     const dialog = await screen.findByRole("dialog", { name: "Move the previews" });
     expect(dialog.textContent).toContain("Moves 1,234 previews (2.0 GB)");
-    expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([{ folder: DRIVE, move: false }]);
+    expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([
+      { folder: DRIVE, move: false, make_folder: false }]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Move them" }));
     expect(await screen.findByText(/Moving the previews from/)).toBeTruthy();
     expect(screen.getByText(/0 of 1,234/)).toBeTruthy();
     expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([
-      { folder: DRIVE, move: false }, { folder: DRIVE, move: true }]);
+      { folder: DRIVE, move: false, make_folder: false }, { folder: DRIVE, move: true, make_folder: false }]);
+  });
+
+  it("offers to make a folder that isn't there, and with nothing to move, that's all", async () => {
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Move them…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Previews folder" }), { target: { value: NEW } });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    const dialog = await screen.findByRole("dialog", { name: "Make the folder" });
+    expect(dialog.textContent).toContain(`There's no folder at ${NEW}. Make it?`);
+    expect(dialog.textContent).toContain("800.0 GB free there.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Make it" }));
+    const previews = await screen.findByRole("region", { name: "Previews" });
+    expect(await within(previews).findByText(NEW)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([
+      { folder: NEW, move: false, make_folder: false }, { folder: NEW, move: false, make_folder: true }]);
   });
 
   it("says why a folder can't be used", async () => {
@@ -105,7 +133,7 @@ describe("StorageSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Move them…" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Previews folder" }), { target: { value: "/nowhere" } });
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("There's no folder at /nowhere.");
+    expect((await screen.findByRole("alert")).textContent).toBe("There's no drive at /nowhere. Is it plugged in?");
   });
 
   it("says when a move stopped, and tries again", async () => {

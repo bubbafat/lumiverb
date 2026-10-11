@@ -142,9 +142,19 @@ def test_the_folder_is_chosen_on_the_machine_itself(install, tmp_path):
         moved = here.put("/v1/system/backups/folder", json={"folder": str(drive)}, headers=auth)
         assert moved.status_code == 200, moved.text
         assert moved.json()["folder"] == str(drive)
-        bad = here.put("/v1/system/backups/folder", json={"folder": str(tmp_path / "nowhere")}, headers=auth)
+        wanted = tmp_path / "Other" / "Lumiverb"
+        asked = here.put("/v1/system/backups/folder", json={"folder": str(wanted)}, headers=auth)
+        assert asked.status_code == 409 and asked.json()["error"]["code"] == "make_folder"
+        assert asked.json()["error"]["details"]["folder"] == str(wanted) and not wanted.exists()
+        assert here.get("/v1/system/backups", headers=auth).json()["folder"] == str(drive)
+        bad = here.put("/v1/system/backups/folder", json={"folder": "/lumiverb-no-such-drive/b", "make_folder": True},
+                       headers=auth)
         assert bad.status_code == 400 and bad.json()["error"]["code"] == "folder_not_usable"
-        assert "There's no folder" in bad.json()["error"]["message"]
+        assert "There's no drive" in bad.json()["error"]["message"]
+        made = here.put("/v1/system/backups/folder", json={"folder": str(wanted), "make_folder": True}, headers=auth)
+        assert made.status_code == 200, made.text
+        assert made.json()["folder"] == str(wanted) and wanted.is_dir()
+        assert here.put("/v1/system/backups/folder", json={"folder": str(drive)}, headers=auth).status_code == 200
     with TestClient(app, client=LAN) as there:
         seen = there.get("/v1/system/backups", headers=auth).json()
         assert seen["folder"] == str(drive) and seen["changeable_here"] is False

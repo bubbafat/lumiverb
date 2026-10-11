@@ -288,6 +288,19 @@ def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = Non
     return chosen
 
 
+def settled(data_dir: Path, *, within: float = 1.0) -> bool:
+    """Whether no move is under way, waiting up to `within` seconds for one
+    to finish: a small one (or one with nothing to carry) is done in a
+    moment, so the answer to starting it shows it done; a big one shows
+    how far it got."""
+    deadline = time.monotonic() + within
+    while previews_location.read(data_dir).moving:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
 def go_on(data_dir: Path, *, now: float | None = None, waits: bool = False) -> str:
     """A move under way and not running (stopped by an error, or the API
     restarted): goes on in the background. With `waits` (upkeep), one that

@@ -47,7 +47,7 @@ export default function LibraryPreviewsSection({ libraryId }: { libraryId: strin
         <MoveChoice
           changeableHere={data.changeable_here}
           backLabel={data.own ? "Back to the server's folder…" : null}
-          ask={(to, go) => moveLibraryPreviews(libraryId, to, go)}
+          ask={(to, go, make) => moveLibraryPreviews(libraryId, to, go, make)}
           onMoving={moved}
         />
       )}

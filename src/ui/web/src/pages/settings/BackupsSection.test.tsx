@@ -51,7 +51,13 @@ beforeEach(() => {
     }
     if (path === "/system/backups/folder") {
       if (body.folder === "/nowhere") {
-        return json({ error: { code: "folder_not_usable", message: "There's no folder at /nowhere.", details: {} } }, 400);
+        return json({ error: { code: "folder_not_usable", message: "There's no drive at /nowhere. Is it plugged in?",
+                               details: {} } }, 400);
+      }
+      if (body.folder === "/Volumes/Backup/New" && !body.make_folder) {
+        return json({ error: { code: "make_folder", message: "There's no folder at /Volumes/Backup/New. Make it?",
+                               details: { folder: "/Volumes/Backup/New", free: 2 * 1024 ** 4,
+                                          same_drive_as_data: false } } }, 409);
       }
       state = { ...state, folder: body.folder ?? state.default_folder };
       return json(state);
@@ -119,11 +125,25 @@ describe("BackupsSection", () => {
     const input = screen.getByRole("textbox", { name: "Backups folder" });
     fireEvent.change(input, { target: { value: "/nowhere" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("There's no folder at /nowhere.");
+    expect((await screen.findByRole("alert")).textContent).toBe("There's no drive at /nowhere. Is it plugged in?");
     fireEvent.change(input, { target: { value: "/Volumes/Backup/Lumiverb" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("/Volumes/Backup/Lumiverb")).toBeTruthy();
     expect(screen.queryByText(/On the same drive/)).toBeNull();
+  });
+
+  it("offers to make a folder that isn't there", async () => {
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Backups folder" }), { target: { value: "/Volumes/Backup/New" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Make the folder" });
+    expect(dialog.textContent).toContain("Make it?");
+    expect(dialog.textContent).toContain("2.0 TB free there.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Make it" }));
+    expect(await screen.findByText("/Volumes/Backup/New")).toBeTruthy();
+    expect(sent.filter((s) => s.method === "PUT").map((s) => s.body)).toEqual([
+      { folder: "/Volumes/Backup/New", make_folder: false }, { folder: "/Volumes/Backup/New", make_folder: true }]);
   });
 
   it("from another device, the folder isn't changed here", async () => {

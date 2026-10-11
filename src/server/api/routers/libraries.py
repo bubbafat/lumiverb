@@ -605,7 +605,8 @@ class LibraryPreviews(BaseModel):
 
 class LibraryPreviewsChange(BaseModel):
     folder: str | None  # None: back to the server's previews folder
-    move: bool = False  # the user saw what moves (the 409's details) and said yes
+    move: bool = False  # the user saw what moves (the 409 move_previews) and said yes
+    make_folder: bool = False  # it isn't there: the user said to make it (the 409 make_folder)
 
 
 SAME_DRIVE = ("That's the drive this library's originals are on: when it's unplugged, its previews go too, "
@@ -721,10 +722,13 @@ def move_library_previews(
     """Moves the library's previews to a folder of its own (or back to the
     server's), on the machine itself. Without move: true, a 409 says what
     moves (and whether it's the drive its originals are on) for the user to
-    confirm. Lumiverb keeps working meanwhile."""
+    confirm; with nothing to move or say, they're there at once. A folder
+    that isn't there: a 409 asks to make it first. Lumiverb keeps working
+    meanwhile."""
     import shutil
     from pathlib import Path
 
+    from src.server.api import new_folder
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError
     from src.server.config import get_settings
@@ -740,18 +744,20 @@ def move_library_previews(
     if previews_location.read(data).moving:
         raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
     try:
-        if not body.move:
+        with new_folder.made_if_asked(body.folder, body.make_folder, data):
             old, chosen, need = move.plan(data, body.folder, library_id=library_id)
-            same = _same_device(chosen, _originals_device(library)) is True
-            raise DecisionRequiredError(
-                "move_previews",
-                f"Moves {library.name}'s {need.files:,} previews ({move.size_text(need.bytes)}) from {old} to "
-                f"{chosen}. Lumiverb keeps working meanwhile; previews not moved yet show from where they are."
-                + (f" {SAME_DRIVE}" if same else ""),
-                {"from": str(old), "to": str(chosen), "files": need.files, "bytes": need.bytes,
-                 "free": shutil.disk_usage(chosen).free, "same_drive_as_originals": same},
-            )
-        move.start(data, body.folder, library_id=library_id)
+            same = not body.move and _same_device(chosen, _originals_device(library)) is True
+            if (need.files or same) and not body.move:
+                said = (f"Moves {library.name}'s {need.files:,} previews ({move.size_text(need.bytes)}) from {old} "
+                        f"to {chosen}. Lumiverb keeps working meanwhile; previews not moved yet show from where "
+                        "they are." if need.files else f"{library.name}'s previews go to {chosen} from now on.")
+                raise DecisionRequiredError(
+                    "move_previews", said + (f" {SAME_DRIVE}" if same else ""),
+                    {"from": str(old), "to": str(chosen), "files": need.files, "bytes": need.bytes,
+                     "free": shutil.disk_usage(chosen).free, "same_drive_as_originals": same},
+                )
+            move.start(data, body.folder, library_id=library_id)
     except move.MoveError as exc:
         raise ApiError(400, "folder_not_usable", str(exc)) from None
+    move.settled(data)
     return _library_previews(request, library)

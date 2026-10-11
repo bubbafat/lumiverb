@@ -7,6 +7,7 @@ import {
   getStorageInfo,
   goOnMovingPreviews,
   movePreviews,
+  type NewFolderFacts,
   type PreviewsMoveFacts,
   type StorageInfo,
   type StorageMove,
@@ -97,7 +98,7 @@ export default function StorageSection() {
           <MoveChoice
             changeableHere={data.changeable_here}
             backLabel={isDefault ? null : "Back to the data folder…"}
-            ask={(to, go) => movePreviews(to, go)}
+            ask={(to, go, make) => movePreviews(to, go, make)}
             onMoving={(next) => queryClient.setQueryData(STORAGE_QUERY_KEY, next)}
           />
         )}
@@ -128,7 +129,8 @@ export default function StorageSection() {
         </h3>
         <p className="break-all font-mono text-sm text-gray-200">{data.data}</p>
         <p className="text-xs text-gray-500">
-          The database, the search index and AI models. They stay here. {free(data.data_free, data.data_total)}
+          The database, the search index, and the models for search and transcripts. They stay here; Ollama keeps
+          its own. {free(data.data_free, data.data_total)}
         </p>
       </section>
     </Frame>
@@ -194,50 +196,107 @@ export function Moving<T>({ move, onTriedAgain, what }: {
   );
 }
 
-/** Choosing a folder, seeing what moves (the API's 409), and saying yes. */
+/** The API's questions: a folder not there yet (make_folder) and what moves (move_previews). */
+const ASKED = ["make_folder", "move_previews"];
+
+/** The question a 409 asks, when it's one of these; null otherwise. */
+export function asked(error: unknown, codes: string[] = ASKED): ApiError | null {
+  return error instanceof ApiError && !!error.code && codes.includes(error.code) && error.details ? error : null;
+}
+
+/** A folder not there yet: the API's question (409 make_folder), and Make it. */
+export function MakeFolder({ text, facts, pending, onMake, onCancel }: {
+  text: string;
+  facts: NewFolderFacts;
+  pending: boolean;
+  onMake: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div role="dialog" aria-label="Make the folder" className="space-y-3 rounded-md border border-gray-700 px-4 py-3">
+      <p className="text-sm text-gray-200">{text}</p>
+      <p className="text-xs text-gray-500">{size(facts.free)} free there.</p>
+      <div className="flex flex-wrap gap-3">
+        <button type="button" className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
+                disabled={pending} onClick={onMake}>
+          Make it
+        </button>
+        <button type="button" className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type Question =
+  | { kind: "make"; folder: string | null; text: string; facts: NewFolderFacts }
+  | { kind: "move"; folder: string | null; text: string; facts: PreviewsMoveFacts; make: boolean };
+
+/** Choosing a folder, making it if it isn't there, seeing what moves, and
+ * saying yes: the API's questions (409s), each asked in turn. With nothing to
+ * move, it doesn't ask. */
 export function MoveChoice<T>({ changeableHere, backLabel, ask, onMoving }: {
   changeableHere: boolean;
   /** "Back to …": null when they're there already. */
   backLabel: string | null;
-  ask: (to: string | null, go: boolean) => Promise<T>;
+  ask: (to: string | null, go: boolean, make: boolean) => Promise<T>;
   onMoving: (next: T) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [folder, setFolder] = useState("");
-  const [facts, setFacts] = useState<{ folder: string | null; text: string; move: PreviewsMoveFacts } | null>(null);
+  const [question, setQuestion] = useState<Question | null>(null);
   const mutation = useMutation({
-    mutationFn: ({ to, go }: { to: string | null; go: boolean }) => ask(to, go),
+    mutationFn: ({ to, go, make }: { to: string | null; go: boolean; make: boolean }) => ask(to, go, make),
     onSuccess: (next) => {
       onMoving(next);
-      setFacts(null);
+      setQuestion(null);
       setEditing(false);
     },
     onError: (err, vars) => {
-      if (err instanceof ApiError && err.code === "move_previews" && err.details) {
-        setFacts({ folder: vars.to, text: err.message, move: err.details as unknown as PreviewsMoveFacts });
+      const q = asked(err);
+      if (q?.code === "make_folder") {
+        setQuestion({ kind: "make", folder: vars.to, text: q.message, facts: q.details as unknown as NewFolderFacts });
+      } else if (q) {
+        setQuestion({ kind: "move", folder: vars.to, text: q.message, make: vars.make,
+                      facts: q.details as unknown as PreviewsMoveFacts });
+      } else {
+        setQuestion(null); // said where it's chosen
       }
     },
   });
-  const refused = mutation.isError && !(mutation.error instanceof ApiError && mutation.error.code === "move_previews");
+  const refused = mutation.isError && !asked(mutation.error);
 
   if (!changeableHere) {
     return <p className="text-xs text-gray-500">Move them on the computer Lumiverb is installed on.</p>;
   }
-  if (facts) {
+  if (question?.kind === "make") {
+    return (
+      <MakeFolder
+        text={question.text}
+        facts={question.facts}
+        pending={mutation.isPending}
+        onMake={() => mutation.mutate({ to: question.folder, go: false, make: true })}
+        onCancel={() => setQuestion(null)}
+      />
+    );
+  }
+  if (question) {
+    const facts = question;
     return (
       <div role="dialog" aria-label="Move the previews" className="space-y-3 rounded-md border border-gray-700 px-4 py-3">
         <p className="text-sm text-gray-200">{facts.text}</p>
-        <p className="text-xs text-gray-500">{size(facts.move.free)} free there.</p>
+        <p className="text-xs text-gray-500">{size(facts.facts.free)} free there.</p>
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
             className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
             disabled={mutation.isPending}
-            onClick={() => mutation.mutate({ to: facts.folder, go: true })}
+            onClick={() => mutation.mutate({ to: facts.folder, go: true, make: facts.make })}
           >
-            Move them
+            {facts.facts.files ? "Move them" : "Use it"}
           </button>
-          <button type="button" className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => setFacts(null)}>
+          <button type="button" className={`${buttonClass} text-gray-300 hover:bg-gray-800`} onClick={() => setQuestion(null)}>
             Cancel
           </button>
         </div>
@@ -251,7 +310,8 @@ export function MoveChoice<T>({ changeableHere, backLabel, ask, onMoving }: {
           Move them…
         </button>
         {backLabel && (
-          <button type="button" className={linkClass} disabled={mutation.isPending} onClick={() => mutation.mutate({ to: null, go: false })}>
+          <button type="button" className={linkClass} disabled={mutation.isPending}
+                  onClick={() => mutation.mutate({ to: null, go: false, make: false })}>
             {backLabel}
           </button>
         )}
@@ -264,7 +324,7 @@ export function MoveChoice<T>({ changeableHere, backLabel, ask, onMoving }: {
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        mutation.mutate({ to: folder.trim(), go: false });
+        mutation.mutate({ to: folder.trim(), go: false, make: false });
       }}
     >
       <input
@@ -274,7 +334,9 @@ export function MoveChoice<T>({ changeableHere, backLabel, ask, onMoving }: {
         placeholder="/Volumes/Media/Lumiverb previews"
         onChange={(e) => setFolder(e.target.value)}
       />
-      <p className="text-xs text-gray-500">An empty folder on the drive you want them on. You&apos;ll see what moves first.</p>
+      <p className="text-xs text-gray-500">
+        An empty folder on the drive you want them on, or one to make. You&apos;ll see what moves first.
+      </p>
       {refused && <p role="alert" className="text-sm text-red-300">{message(mutation.error)}</p>}
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
