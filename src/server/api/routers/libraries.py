@@ -612,16 +612,46 @@ SAME_DRIVE = ("That's the drive this library's originals are on: when it's unplu
               "and the library can't be browsed.")
 
 
-def _originals_folder(root_path: str):
-    from pathlib import Path
+# How long the originals' drive gets to answer: a network share whose server
+# sleeps (prod's CIFS mount of the Mac's drives) can block a stat for minutes,
+# and this runs in the request.
+ORIGINALS_TIMEOUT_SEC = 2.0
 
-    from src.processing.roots import local_library_root
+
+def _originals_device(library) -> int | None:
+    """The device the library's originals are on here, or None when that
+    isn't known now: no root map entry, not there, or not answering within
+    ORIGINALS_TIMEOUT_SEC (roots.reachable_root's probe, in a thread)."""
+    import os
+    import threading
+
+    from src.processing.roots import reachable_root
 
     try:
-        local = local_library_root({"root_path": root_path})
-    except Exception:  # noqa: BLE001 — a root map it can't read: not reachable here
+        root = reachable_root({"library_id": library.library_id, "name": library.name,
+                               "root_path": library.root_path}, timeout=ORIGINALS_TIMEOUT_SEC)
+    except Exception:  # noqa: BLE001 — a root map it can't read: not known here
         return None
-    return local if local is not None and Path(local).exists() else None
+    if root is None:
+        return None
+    found: dict[str, int] = {}
+
+    def stat() -> None:
+        found["dev"] = os.stat(root).st_dev
+
+    worker = threading.Thread(target=stat, name=f"originals-stat-{library.library_id}", daemon=True)
+    worker.start()
+    worker.join(ORIGINALS_TIMEOUT_SEC)
+    return found.get("dev")
+
+
+def _same_device(folder, device: int | None) -> bool | None:
+    if device is None:
+        return None
+    try:
+        return folder.stat().st_dev == device
+    except OSError:
+        return None
 
 
 def _library_previews(request: Request, library) -> LibraryPreviews:
@@ -644,7 +674,7 @@ def _library_previews(request: Request, library) -> LibraryPreviews:
             free, total = usage.free, usage.total
         except OSError:
             pass
-    originals = _originals_folder(library.root_path)
+    originals = _originals_device(library)
     moving = None
     if library.library_id in location.libraries_moving_from:
         state = move.read_state(data)
@@ -654,7 +684,7 @@ def _library_previews(request: Request, library) -> LibraryPreviews:
     return LibraryPreviews(
         library_id=library.library_id, folder=str(folder), own=library.library_id in location.libraries,
         server_folder=str(location.previews), available=available, free=free, total=total,
-        same_drive_as_originals=None if originals is None else move.same_disk(folder, originals),
+        same_drive_as_originals=_same_device(folder, originals),
         moving=moving, changeable_here=on_this_machine(request),
     )
 
@@ -705,8 +735,7 @@ def move_library_previews(
     try:
         if not body.move:
             old, chosen, need = move.plan(data, body.folder, library_id=library_id)
-            originals = _originals_folder(library.root_path)
-            same = originals is not None and move.same_disk(chosen, originals)
+            same = _same_device(chosen, _originals_device(library)) is True
             raise DecisionRequiredError(
                 "move_previews",
                 f"Moves {library.name}'s {need.files:,} previews ({move.size_text(need.bytes)}) from {old} to "

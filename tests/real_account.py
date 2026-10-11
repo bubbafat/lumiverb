@@ -10,6 +10,9 @@ from sqlalchemy import create_engine, make_url, text
 
 from tests.test_first_run_setup import PASSWORD
 
+# The databases make_database made, per control plane: the only ones drop_databases drops.
+_made: dict[str, list[str]] = {}
+
 
 def make_database(control_url: str, tenant_id: str) -> None:
     """The account's database, made, routed (the fixture's template hides the
@@ -21,6 +24,7 @@ def make_database(control_url: str, tenant_id: str) -> None:
     with admin.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{tenant_id}"'))
     admin.dispose()
+    _made.setdefault(control_url, []).append(tenant_id)
     tenant_url = url.set(database=tenant_id).render_as_string(hide_password=False)
     engine = create_engine(tenant_url)
     with engine.begin() as conn:
@@ -35,11 +39,11 @@ def make_database(control_url: str, tenant_id: str) -> None:
 
 
 def drop_databases(control_url: str) -> None:
-    """Every account database the control plane routes to on its server."""
-    engine = create_engine(control_url)
-    with engine.connect() as conn:
-        names = [r[0] for r in conn.execute(text("SELECT tenant_id FROM tenants")).all()]
-    engine.dispose()
+    """The databases make_database made for this control plane, and only
+    those: pointed at a real install's, it drops nothing of its own."""
+    names = _made.pop(control_url, [])
+    if not names:
+        return
     admin = create_engine(make_url(control_url).set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
         for name in names:
