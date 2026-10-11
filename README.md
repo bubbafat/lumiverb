@@ -16,35 +16,59 @@ Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), a
 
 ---
 
-## Getting Started (Self-Hosted)
+## Install
 
-### Prerequisites
-- Docker and Docker Compose
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+### On a Mac
 
-### Setup
+With [Homebrew](https://brew.sh):
+
 ```bash
-git clone https://github.com/bubbafat/lumiverb
-cd lumiverb
-cp .env.example .env.local    # edit if needed
-docker compose up -d
-uv sync --all-extras
-./scripts/init.sh
+brew install --HEAD bubbafat/lumiverb/lumiverb
+brew services start postgresql@18 && brew services start quickwit && brew services start nginx && brew services start lumiverb
 ```
 
-In a second terminal:
+Then open <http://localhost:6464> on that Mac and create your account. Add a
+library (Libraries › Add library: a name and the folder your photos and
+videos are in) and Lumiverb scans and processes it.
+
+It brings PostgreSQL 18 with pgvector, nginx, ffmpeg, exiftool, libvips,
+Python 3.12 and Quickwit, and starts again at login. The web app is for that
+Mac only to begin with. Details, ports and the Terminal way to create the
+account: the [tap's README](https://github.com/bubbafat/homebrew-lumiverb).
+
+Update (`--fetch-HEAD` because it builds from `main`: there are no releases yet):
+
 ```bash
-uv run fastapi dev src/api/main.py
+brew upgrade --fetch-HEAD lumiverb && brew services restart lumiverb
 ```
 
-Re-run `./scripts/init.sh` after the server is running to complete setup.
+### On a Linux server
 
-### First library
+Ubuntu 22.04 or later, with a domain name already pointing at it (the TLS
+certificate is checked against it):
+
 ```bash
-lumiverb library create "My Photos" /path/to/your/photos
-lumiverb ingest --library "My Photos"
+curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
+  | sudo bash -s -- --domain app.example.com --email you@example.com --worker
 ```
+
+It installs everything (PostgreSQL 18 with pgvector, nginx with a
+certificate, Quickwit, Python, Node.js), builds the web app and starts the
+services. `--worker` adds the scheduler, which does all the processing. Then
+create your account:
+
+```bash
+sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env
+```
+
+Update:
+
+```bash
+sudo bash /opt/lumiverb/scripts/update.sh
+```
+
+A server on your home network, without a domain: [docs/brain-setup.md](docs/brain-setup.md).
+More on the Linux install below, under [Running a Linux server](#running-a-linux-server).
 
 ---
 
@@ -255,72 +279,19 @@ uv run alembic -c alembic-tenant.ini upgrade head
 
 ---
 
-## Deployment (VPS)
+## Running a Linux server
 
-Deploy Lumiverb to a DigitalOcean Droplet, Hetzner VPS, or any Ubuntu server (x86_64 or ARM64). The bootstrap script handles everything — Postgres, nginx, TLS, Quickwit, the API, and the web UI.
+`deploy-vps.sh` (above) runs `scripts/deploy-api.sh` and `scripts/deploy-web.sh`
+on one machine; run them yourself to split the API and the web app across
+machines. It's safe to run again. Options it passes on include `--tenant
+<name>` (the account's name), `--data-dir <path>` (proxies, thumbnails and
+search indexes; e.g. a mounted volume) and `--skip-certbot` (no certificate
+yet: run `certbot --nginx -d app.example.com` once DNS resolves).
 
-### What you need before you start
-
-| Requirement | Details |
-|---|---|
-| **A VPS** | Ubuntu 22.04+, 2+ vCPUs, 4 GB+ RAM. A $24/mo DigitalOcean Droplet or Hetzner CX22 works. |
-| **A domain** | e.g. `app.example.com`. You need access to its DNS records. |
-| **SSH access** | You'll run the deploy script as root over SSH. |
-
-The VPS does not need anything pre-installed beyond the Ubuntu base image. The script installs all dependencies (PostgreSQL 18, pgvector, nginx, Node.js 20, Python/uv, Quickwit, certbot).
-
-### Step 1: Create the VPS
-
-Create a Droplet (or equivalent) with Ubuntu 22.04 LTS. Note its public IP address.
-
-### Step 2: Point DNS to the VPS
-
-At your DNS provider (Cloudflare, Namecheap, Route 53, etc.), create an **A record**:
-
-```
-app.example.com  →  A  →  <your-vps-ip>
-```
-
-Wait for propagation (usually 1–5 minutes; you can check with `dig app.example.com`).
-
-> DNS must resolve before the script runs — certbot validates the domain by making an HTTP request to it. If you want to deploy first and set up DNS later, add `--skip-certbot` and run `certbot --nginx -d app.example.com` after DNS is live.
-
-### Step 3: Run the deploy script
-
-SSH into the VPS and run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
-  | sudo bash -s -- --domain app.example.com --email you@example.com
-```
-
-This takes 3–5 minutes. It installs all system packages, creates the database, generates secrets, provisions a default tenant, builds the web UI, configures nginx with TLS, and starts all services.
-
-Options:
-- `--email` — Let's Encrypt certificate expiry notices (optional but recommended)
-- `--tenant <name>` — name for the default tenant (default: "Lumiverb")
-- `--data-dir <path>` — data directory for proxies, thumbnails, and Quickwit indexes (default: `/var/lib/lumiverb`). Use this to point at a mounted volume, e.g. `--data-dir /mnt/lumiverb`
-- `--skip-certbot` — skip TLS setup (run certbot manually later)
-
-### Step 4: Create the admin user
-
-```bash
-sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
-```
-
-You'll be prompted to set a password (minimum 12 characters).
-
-### Step 5: Log in
-
-Open `https://app.example.com` in your browser and sign in with the email and password you just created.
-
-### Updating
-
-To pull the latest code, run migrations, rebuild the UI, and restart services:
-
-```bash
-bash /opt/lumiverb/scripts/update-vps.sh
-```
+Its account has nobody to log in until you create the first one, with
+`lumiverb-server setup` (above) or the web app's setup page, which works only
+from the server itself (reach it through an SSH tunnel). Finish that before
+putting a tunnel or proxy in front of Lumiverb.
 
 ### Optional: enable password reset emails
 
