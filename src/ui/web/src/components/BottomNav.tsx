@@ -85,8 +85,9 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
     isActive ? "text-indigo-400" : "text-gray-400"
   }`;
 
-/** adminAlert: a yellow or red dot on Admin when the system needs a look (AppShell asks). */
-export function BottomNav({ adminAlert = null }: { adminAlert?: "yellow" | "red" | null } = {}) {
+/** adminAlert: a yellow or red dot on Admin when the system needs a look (AppShell asks).
+ * showAdmin: the Admin link, for admins only. */
+export function BottomNav({ adminAlert = null, showAdmin = false }: { adminAlert?: "yellow" | "red" | null; showAdmin?: boolean } = {}) {
   const { libraryId } = useParams<{ libraryId?: string }>();
 
   return (
@@ -114,13 +115,15 @@ export function BottomNav({ adminAlert = null }: { adminAlert?: "yellow" | "red"
         <span>People</span>
       </NavLink>
 
-      <NavLink to="/admin" className={linkClass}>
-        <span className="relative flex">
-          <GearIcon />
-          <AdminAlertDot alert={adminAlert} />
-        </span>
-        <span>Admin</span>
-      </NavLink>
+      {showAdmin && (
+        <NavLink to="/admin" className={linkClass}>
+          <span className="relative flex">
+            <GearIcon />
+            <AdminAlertDot alert={adminAlert} />
+          </span>
+          <span>Admin</span>
+        </NavLink>
+      )}
 
       {libraryId && (
         <NavLink to={`/libraries/${libraryId}/settings`} className={linkClass}>

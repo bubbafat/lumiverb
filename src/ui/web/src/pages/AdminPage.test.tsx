@@ -122,6 +122,14 @@ describe("AdminPage", () => {
     expect(dot.getAttribute("aria-label")).toBe("Not checked lately · never seen");
   });
 
+  it("is for admins: anyone else at its address is told so, with nothing of the system shown", async () => {
+    api.getSystemHealth.mockRejectedValue(new ApiError(403, "Admin API key required"));
+    renderPage();
+    expect(await screen.findByText("Admin access required.")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "System health" })).toBeNull();
+    expect(screen.queryByText(/The API isn't answering/)).toBeNull();
+  });
+
   it("keeps the link to manage users", async () => {
     renderPage();
     expect((await screen.findByRole("link", { name: /Manage users/ })).getAttribute("href")).toBe("/admin/users");

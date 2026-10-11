@@ -4,8 +4,8 @@ Settings › Network).
 
 Six rows (website, processing, AI machines, search, storage, disk), each
 green, yellow or red with a one-line reason and where to fix it; the rules
-are src/server/system_health.py. Anyone signed in sees it; a public page's
-visitor doesn't. The web page asks every 10 seconds, so what costs more
+are src/server/system_health.py. Admins see it (the Admin page, and its
+link's dot); nobody else, a public page's visitor least of all. The web page asks every 10 seconds, so what costs more
 than a query (asking Quickwit, counting clips) is kept for a little while
 per worker.
 """
@@ -81,7 +81,8 @@ class SystemHealth(BaseModel):
     libraries: list[LibraryReach]
 
 
-@router.get("/health", response_model=SystemHealth, dependencies=[Depends(require_signed_in)])
+@router.get("/health", response_model=SystemHealth,
+            dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
 def system_health(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SystemHealth:
     """Each part of the system green, yellow or red, why, and where to fix it."""
     tenant_id = request.state.tenant_id

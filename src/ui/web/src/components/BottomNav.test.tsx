@@ -3,12 +3,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BottomNav } from "./BottomNav";
 
-function renderAt(path: string, adminAlert: "yellow" | "red" | null = null) {
+function renderAt(path: string, adminAlert: "yellow" | "red" | null = null, showAdmin = true) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path="/libraries/:libraryId/*" element={<BottomNav adminAlert={adminAlert} />} />
-        <Route path="*" element={<BottomNav adminAlert={adminAlert} />} />
+        <Route path="/libraries/:libraryId/*" element={<BottomNav adminAlert={adminAlert} showAdmin={showAdmin} />} />
+        <Route path="*" element={<BottomNav adminAlert={adminAlert} showAdmin={showAdmin} />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -45,5 +45,11 @@ describe("BottomNav", () => {
     cleanup();
     renderAt("/");
     expect(screen.getByRole("link", { name: "Admin" }).querySelector('[role="img"]')).toBeNull();
+  });
+
+  it("has no Admin for anyone but an admin", () => {
+    renderAt("/", "red", false);
+    expect(screen.queryByRole("link", { name: /Admin/ })).toBeNull();
+    expect(screen.getByRole("link", { name: "Projects" })).toBeTruthy();
   });
 });
