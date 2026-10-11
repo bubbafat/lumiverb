@@ -8,7 +8,8 @@
 # Tags origin/main as it is now, whatever is checked out here. --dry-run
 # says what it would do and changes nothing. Needs git and gh, signed in.
 # Run again after a failure: a version already tagged and released goes
-# straight to the tap's PR, unless the tap has it already.
+# straight to the tap's PR, unless the tap has it already. While that PR is
+# open, a run stops at the push (its branch exists): merge or close it first.
 set -euo pipefail
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; BOLD='\033[1m'; NC='\033[0m'
