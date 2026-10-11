@@ -382,10 +382,10 @@ def test_hard_delete_public_library_removes_control_plane_row(libraries_client: 
 
     # Trash the library WITHOUT using the DELETE endpoint so the CP row is not
     # removed by the trash handler — exercise the empty-trash cleanup path directly.
-    from src.server.database import get_control_session
-    from src.server.repository.tenant import LibraryRepository as TenantLibraryRepo
-    from src.server.database import get_engine_for_url
     from sqlmodel import Session as SqlSession
+
+    from src.server.database import get_control_session, get_engine_for_url
+    from src.server.repository.tenant import LibraryRepository as TenantLibraryRepo
     with get_control_session() as ctrl_session:
         from src.server.repository.control_plane import TenantDbRoutingRepository
         routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(
@@ -402,3 +402,51 @@ def test_hard_delete_public_library_removes_control_plane_row(libraries_client: 
     r_empty = client.post("/v1/libraries/empty-trash", json={"all": True}, headers=auth)
     assert r_empty.status_code == 200
     assert _get_public_libraries_row(library_id) is None
+
+
+# A Mac whose scheduler reads every folder (init --local-roots): a library's
+# folder is chosen only on that machine (dependencies.require_folder_chosen_here).
+EVERY_FOLDER = '{"/": "/"}'
+HERE = ("127.0.0.1", 50000)
+LAN = ("192.168.86.20", 50000)
+
+
+def _from(address, api_key: str):
+    client = TestClient(app, client=address)
+    client.headers["Authorization"] = f"Bearer {api_key}"
+    return client
+
+
+@pytest.mark.slow
+def test_where_every_folder_is_read_a_library_s_folder_is_chosen_on_the_mac_only(
+        libraries_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    _, api_key = libraries_client
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", EVERY_FOLDER)
+    name = "Here_" + __import__("secrets").token_urlsafe(6)
+
+    refused = _from(LAN, api_key).post("/v1/libraries", json={"name": name, "root_path": "/Users/robert/Desktop"})
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "folder_elsewhere"
+    assert refused.json()["error"]["message"] == "Choose a library's folder on the computer Lumiverb is installed on."
+
+    made = _from(HERE, api_key).post("/v1/libraries", json={"name": name, "root_path": "/Volumes/MEDIA-01/Media"})
+    assert made.status_code == 200, made.text
+    library_id = made.json()["library_id"]
+
+    moved = _from(LAN, api_key).patch(f"/v1/libraries/{library_id}", json={"root_path": "/Users/robert/Library"})
+    assert moved.status_code == 403
+    renamed = _from(LAN, api_key).patch(f"/v1/libraries/{library_id}", json={"name": name + "_renamed"})
+    assert renamed.status_code == 200, "everything but its folder, from anywhere"
+    assert _from(HERE, api_key).patch(f"/v1/libraries/{library_id}",
+                                      json={"root_path": "/Volumes/MEDIA-01/Other"}).status_code == 200
+
+
+@pytest.mark.slow
+def test_where_roots_are_mapped_the_map_bounds_them_from_anywhere(
+        libraries_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    # The brain: another machine's paths, mapped.
+    _, api_key = libraries_client
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/Volumes/media-01": "/mnt/media-01"}')
+    name = "Mapped_" + __import__("secrets").token_urlsafe(6)
+    made = _from(LAN, api_key).post("/v1/libraries", json={"name": name, "root_path": "/Volumes/media-01/Footage"})
+    assert made.status_code == 200, made.text

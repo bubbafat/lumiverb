@@ -104,6 +104,27 @@ def checked_root_path(root_path: str) -> str:
     return root_path
 
 
+FOLDER_ELSEWHERE = "Choose a library's folder on the computer Lumiverb is installed on."
+
+
+def require_folder_chosen_here(request: Request) -> None:
+    """Where the scheduler reads every folder (a Mac with the files:
+    LUMIVERB_ROOT_MAP maps "/"), a library's folder is chosen only on that
+    machine: from anywhere else, anyone who may set one could point a library
+    at any folder the Mac's user can read. 403 otherwise. Where roots are
+    mapped (the brain), the map already bounds them. A tunnel or proxy on the
+    Mac itself (tailscale serve, cloudflared, ngrok) brings other people's
+    requests in over loopback: with one, choosing folders is open to whoever
+    reaches it, for as long as the install exists."""
+    from src.processing.roots import reads_every_folder
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+    from src.server.scheduler.settings import SchedulerSettings
+
+    if reads_every_folder(SchedulerSettings().root_map) and not on_this_machine(request):
+        raise ApiError(403, "folder_elsewhere", FOLDER_ELSEWHERE)
+
+
 def checked_rel_path(rel_path: str) -> str:
     """A rel_path a request sent, as stored (NFC); 400 unless it stays inside
     its library (relative, no "..", no leading "/"). Every write that takes a

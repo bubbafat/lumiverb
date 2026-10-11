@@ -96,6 +96,17 @@ def test_the_scheduler_never_reads_the_install_s_settings(tmp_path):
 
 
 @pytest.mark.fast
+def test_refused_folders_it_can_t_read_stop_it_before_anything_starts(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(cli, "make_cluster_if_missing", lambda *a, **k: pytest.fail("nothing may be made"))
+    env_file = tmp_path / "env"
+    env_file.write_text(f"CONTROL_PLANE_DATABASE_URL=postgresql://x\nDATA_DIR={tmp_path}\nPG_BIN=/pg\n"
+                        "LUMIVERB_REFUSED_ROOTS=/Volumes/private\n")
+    assert cli.main(["run", "--env", str(env_file)]) == 1
+    assert capsys.readouterr().err.strip().startswith("✗ LUMIVERB_REFUSED_ROOTS must be a JSON list of folders")
+
+
+@pytest.mark.fast
 def test_nothing_named_is_the_api_and_the_scheduler_only(tmp_path):
     assert [c.name for c in cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)] == [
         "api", "scheduler"]

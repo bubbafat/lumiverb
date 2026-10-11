@@ -83,6 +83,12 @@ def _maps(root_path: str, root_map: dict[str, str]) -> bool:
     return False
 
 
+def reads_every_folder(root_map: dict[str, str]) -> bool:
+    """The map takes "/" as it is: every folder this machine's user can read
+    (a Mac with the files, init --local-roots)."""
+    return any(_clean(src) == "/" and _clean(dst) == "/" for src, dst in root_map.items())
+
+
 def _refused(library: dict, mapping: dict[str, str]) -> str | None:
     """Why the library's root mustn't be read here, before looking at the disk."""
     from src.processing.machine import current

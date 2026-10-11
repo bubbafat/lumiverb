@@ -144,7 +144,13 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
     )
     # Which library folders it reads is the env file's to say (LUMIVERB_ROOT_MAP),
     # never assumed here. What it refuses can only grow: the install's settings too.
-    refused = [*json.loads(env.get("LUMIVERB_REFUSED_ROOTS") or "[]"), *([str(config_dir)] if config_dir else [])]
+    try:
+        listed = json.loads(env.get("LUMIVERB_REFUSED_ROOTS") or "[]")
+    except ValueError:
+        listed = None
+    if not isinstance(listed, list) or not all(isinstance(path, str) for path in listed):
+        raise InstallError('LUMIVERB_REFUSED_ROOTS must be a JSON list of folders, e.g. \'["/Volumes/private"]\'')
+    refused = [*listed, *([str(config_dir)] if config_dir else [])]
     scheduler = Child(
         "scheduler",
         [python, "-m", "src.server.scheduler"],
@@ -246,6 +252,10 @@ def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrate
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
     data = data_dir(env)  # before anything starts
+    migrated = threading.Event()
+    named = _named_env_file(args.env)
+    # Built first: a setting it can't use stops it before anything starts.
+    children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None)
     logging.basicConfig(level=logging.INFO, format="lumiverb-server: %(message)s")
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -260,11 +270,9 @@ def _run(args: argparse.Namespace) -> int:
             return 1
     if env.get("NGINX_BIN"):
         (data / "nginx").mkdir(parents=True, exist_ok=True)
-    migrated = threading.Event()
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()
-    named = _named_env_file(args.env)
-    Supervisor(server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None)).run(stop)
+    Supervisor(children).run(stop)
     return 0
 
 
