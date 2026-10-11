@@ -263,6 +263,7 @@ def test_user_remove_says_why_a_400_failed() -> None:
 
 
 URL = "http://macstudio.local:6464/join?token=abc"
+BY_ADDRESS = "http://192.168.86.55:6464/join?token=abc"
 
 
 def _create(answer: MagicMock, *args: str):
@@ -275,12 +276,13 @@ def _create(answer: MagicMock, *args: str):
 
 def test_user_create_invites_and_prints_the_link_whole() -> None:
     result, client = _create(_answer(201, {"user_id": "usr_2", "email": "new@b.co", "role": "editor",
-                                           "invite_url": URL}), "--role", "editor")
+                                           "invite_urls": [URL, BY_ADDRESS]}), "--role", "editor")
 
     assert result.exit_code == 0, result.output
     client.raw.assert_called_once_with("POST", "/v1/users", json={"email": "new@b.co", "role": "editor"})
     assert "Invited new@b.co (editor)" in result.output
     assert f"\n{URL}\n" in result.output, "on a line of its own"
+    assert f"send this one instead:\n{BY_ADDRESS}\n" in result.output, "for devices without Bonjour"
 
 
 def test_user_create_says_an_email_that_s_taken() -> None:
@@ -300,7 +302,7 @@ def _invite(answer: MagicMock):
 
 
 def test_user_invite_prints_a_new_link() -> None:
-    result, client = _invite(_answer(200, {"invite_url": URL, "invite_expires_at": "2026-10-18T12:00:00"}))
+    result, client = _invite(_answer(200, {"invite_urls": [URL], "invite_expires_at": "2026-10-18T12:00:00"}))
 
     assert result.exit_code == 0, result.output
     client.raw.assert_called_once_with("POST", "/v1/users/usr_2/invite")

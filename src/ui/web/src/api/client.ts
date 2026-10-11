@@ -1220,7 +1220,7 @@ export async function listUsers(): Promise<UserItem[]> {
   return apiFetch<UserItem[]>("/users");
 }
 
-/** Invite someone: they get a link (invite_url) to choose their own password. */
+/** Invite someone: they get a link (invite_urls) to choose their own password. */
 export async function inviteUser(email: string, role: string): Promise<UserItem> {
   return apiFetch<UserItem>("/users", {
     method: "POST",

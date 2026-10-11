@@ -17,8 +17,8 @@ import { timeAgo } from "../lib/format";
 const ROLES = ["admin", "editor", "viewer"] as const;
 type Role = (typeof ROLES)[number];
 
-/** A link just made: shown once, to copy and send however they like. */
-type MadeLink = { email: string; url: string };
+/** A link just made, at each address (the likeliest to open first): shown once, to copy and send. */
+type MadeLink = { email: string; urls: string[] };
 
 function relativeTime(iso: string | null): string {
   return iso ? timeAgo(iso) : "never";
@@ -100,7 +100,7 @@ export default function AdminUsersPage() {
     mutationFn: ({ email, role }: { email: string; role: string }) => inviteUser(email, role),
     onSuccess: (made) => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
-      setMadeLink(made.invite_url ? { email: made.email, url: made.invite_url } : null);
+      setMadeLink(made.invite_urls?.length ? { email: made.email, urls: made.invite_urls } : null);
       setNewEmail("");
       setNewRole("viewer");
       setCreateError(null);
@@ -115,7 +115,7 @@ export default function AdminUsersPage() {
   });
 
   const linkMutation = useMutation({
-    mutationFn: (user: UserItem) => newInviteLink(user.user_id).then((link) => ({ email: user.email, url: link.invite_url })),
+    mutationFn: (user: UserItem) => newInviteLink(user.user_id).then((link) => ({ email: user.email, urls: link.invite_urls })),
     onSuccess: (made) => {
       setMadeLink(made);
       setLinkError(null);
@@ -287,41 +287,20 @@ export default function AdminUsersPage() {
 
 /** The link just made, to copy: it isn't shown again (a new one can be made while they haven't joined). */
 function InviteLinkPanel({ link, thisMacOnly, onDone }: { link: MadeLink; thisMacOnly: boolean; onDone: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(link.url);
-      setCopied(true);
-    } catch {
-      // No clipboard here (a page that isn't https or this machine's): select it to copy by hand.
-      input.current?.select();
-    }
-  }
-
+  const [first, ...others] = link.urls;
   return (
     <section className="rounded-lg border border-indigo-500/40 bg-indigo-950/30 p-5 space-y-3">
       <p className="text-sm text-gray-200">
         Send <span className="font-medium">{link.email}</span> this link. It works once, for 7 days, and they
         choose their password there.
       </p>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <input
-          ref={input}
-          readOnly
-          aria-label="Invite link"
-          value={link.url}
-          onFocus={(e) => e.target.select()}
-          className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-100"
-        />
-        <button
-          onClick={() => void copy()}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
+      <CopyableLink url={first} label="Invite link" />
+      {others.map((url) => (
+        <div key={url} className="space-y-2">
+          <p className="text-sm text-gray-400">If that one doesn't open on their device, send this one instead:</p>
+          <CopyableLink url={url} label="Invite link by address" />
+        </div>
+      ))}
       {thisMacOnly && (
         <p className="text-sm text-amber-300">
           Only this Mac can open it until{" "}
@@ -333,5 +312,39 @@ function InviteLinkPanel({ link, thisMacOnly, onDone }: { link: MadeLink; thisMa
         Done
       </button>
     </section>
+  );
+}
+
+function CopyableLink({ url, label }: { url: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      // No clipboard here (a page that isn't https or this machine's): select it to copy by hand.
+      input.current?.select();
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row">
+      <input
+        ref={input}
+        readOnly
+        aria-label={label}
+        value={url}
+        onFocus={(e) => e.target.select()}
+        className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-100"
+      />
+      <button
+        onClick={() => void copy()}
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
   );
 }

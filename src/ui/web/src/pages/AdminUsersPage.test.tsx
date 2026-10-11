@@ -7,6 +7,7 @@ import AdminUsersPage from "./AdminUsersPage";
 const fetchMock = vi.fn();
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
 const LINK = "http://macstudio.local:6464/join?token=abc";
+const BY_ADDRESS = "http://192.168.86.55:6464/join?token=abc";
 let network = { available: true, other_devices: true, addresses: ["http://macstudio.local:6464"] };
 let posts: { url: string; body: unknown }[] = [];
 
@@ -21,12 +22,12 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body));
       return new Response(
         JSON.stringify({ user_id: "u3", email: body.email, role: body.role, created_at: hoursAgo(0),
-                         last_login_at: null, invite_url: LINK, invite_expires_at: hoursAgo(-168) }),
+                         last_login_at: null, invite_urls: [LINK, BY_ADDRESS], invite_expires_at: hoursAgo(-168) }),
         { status: 201 },
       );
     }
     if (url.endsWith("/v1/users/u2/invite")) {
-      return new Response(JSON.stringify({ invite_url: LINK + "2", invite_expires_at: hoursAgo(-168) }), { status: 200 });
+      return new Response(JSON.stringify({ invite_urls: [LINK + "2"], invite_expires_at: hoursAgo(-168) }), { status: 200 });
     }
     if (url.endsWith("/v1/users")) {
       return new Response(
@@ -74,6 +75,8 @@ describe("AdminUsersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Make invite link" }));
     const link = (await screen.findByLabelText("Invite link")) as HTMLInputElement;
     expect(link.value).toBe(LINK);
+    expect((screen.getByLabelText("Invite link by address") as HTMLInputElement).value).toBe(BY_ADDRESS);
+    expect(screen.getByText(/If that one doesn't open on their device/)).toBeTruthy();
     expect(posts).toEqual([{ url: "/v1/users", body: { email: "new@b.co", role: "editor" } }]);
     expect(screen.getByText(/It works once, for 7 days/)).toBeTruthy();
     expect(screen.queryByText(/Only this Mac can open it/)).toBeNull();

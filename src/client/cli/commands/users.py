@@ -33,9 +33,12 @@ def _find_user_by_email(client: LumiverbClient, email: str) -> dict:
     return user
 
 
-def _say_link(email: str, url: str) -> None:
+def _say_link(email: str, urls: list[str]) -> None:
     console.print(f"Send {escape(email)} this link. It works once, for 7 days, and they choose their password there:")
-    print(url)  # on a line of its own, never wrapped: it's copied whole
+    print(urls[0])  # on a line of its own, never wrapped: it's copied whole
+    for other in urls[1:]:
+        console.print("If that one doesn't open on their device, send this one instead:")
+        print(other)
 
 
 @user_app.command("create")
@@ -63,7 +66,7 @@ def create_user(
         raise typer.Exit(1)
     data = resp.json()
     console.print(f"[green]Invited {escape(data['email'])} ({data['role']})[/green]")
-    _say_link(data["email"], data["invite_url"])
+    _say_link(data["email"], data["invite_urls"])
 
 
 @user_app.command("invite")
@@ -78,7 +81,7 @@ def invite_again(
         err = api_error(resp)
         console.print(f"[red]Error: {escape(err.get('message') or resp.text or f'HTTP {resp.status_code}')}[/red]")
         raise typer.Exit(1)
-    _say_link(email, resp.json()["invite_url"])
+    _say_link(email, resp.json()["invite_urls"])
 
 
 @user_app.command("list")

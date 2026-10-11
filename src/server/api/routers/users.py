@@ -32,8 +32,9 @@ class UserItem(BaseModel):
     role: str
     created_at: str
     last_login_at: str | None
-    # Made just now by an invite: the link to send them, and until when it works
-    invite_url: str | None = None
+    # Made just now by an invite: the link to send them (the same link at each
+    # address other people open Lumiverb at, the likeliest first), and until when
+    invite_urls: list[str] | None = None
     invite_expires_at: str | None = None
 
 
@@ -44,7 +45,7 @@ class CreateUserRequest(BaseModel):
 
 
 class InviteResponse(BaseModel):
-    invite_url: str
+    invite_urls: list[str]
     invite_expires_at: str
 
 
@@ -63,7 +64,7 @@ def _user_item(user, invite: Invite | None = None) -> UserItem:
         role=user.role,
         created_at=_iso(user.created_at) or "",
         last_login_at=_iso(user.last_login_at),
-        invite_url=invite.url if invite else None,
+        invite_urls=list(invite.urls) if invite else None,
         invite_expires_at=_iso(invite.expires_at) if invite else None,
     )
 
@@ -145,7 +146,7 @@ def new_invite_link(
                            "they can use Forgot password.")
         invite = new_invite(session, user_id)
 
-    return InviteResponse(invite_url=invite.url, invite_expires_at=_iso(invite.expires_at) or "")
+    return InviteResponse(invite_urls=list(invite.urls), invite_expires_at=_iso(invite.expires_at) or "")
 
 
 @router.patch("/{user_id}", response_model=UserItem)
