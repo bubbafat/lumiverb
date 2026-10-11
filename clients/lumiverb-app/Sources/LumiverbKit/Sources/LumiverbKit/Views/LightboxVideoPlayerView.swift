@@ -64,6 +64,22 @@ public struct LightboxVideoPlayerView: View {
                 }
             }
 
+            // A moment this source doesn't reach.
+            if let moment = viewModel.unreachableMoment {
+                VStack {
+                    Spacer()
+                    Text(viewModel.isPreview
+                         ? "\(FaceMoments.clock(Int(moment * 1000))) plays once the whole video is ready"
+                         : "\(FaceMoments.clock(Int(moment * 1000))) is past what plays here")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.6))
+                        .cornerRadius(6)
+                        .padding(.bottom, 56)
+                }
+            }
+
             // Source indicator
             if viewModel.isPreview && viewModel.hasStartedPlaying {
                 VStack {
@@ -190,6 +206,9 @@ final class VideoPlayerViewModel: ObservableObject {
 
     /// The stream is the scan's 10-second clip, not the whole video.
     @Published var streamIsPreview = false
+    /// A moment asked for that this source doesn't reach (past the short
+    /// preview, or the account's playback cap): said where the video is.
+    @Published var unreachableMoment: Double?
 
     private var currentAssetId: String?
     private var tempFileURL: URL?
@@ -211,7 +230,11 @@ final class VideoPlayerViewModel: ObservableObject {
         if length == nil || !(length!.seconds.isFinite) {
             length = nil
         }
-        if let length, start.seconds >= length.seconds { return }
+        if let length, start.seconds >= length.seconds {
+            unreachableMoment = start.seconds
+            return
+        }
+        unreachableMoment = nil
         await player.seek(to: CMTime(seconds: start.seconds, preferredTimescale: 600),
                           toleranceBefore: .zero, toleranceAfter: .zero)
         if start.play {
@@ -274,9 +297,10 @@ final class VideoPlayerViewModel: ObservableObject {
         #endif
 
         // 2. The server's stream: AVPlayer streams the signed link (Range requests).
-        if let client, let link = await Self.streamLink(client, assetId: detail.assetId),
-           let url = URL(string: link.url, relativeTo: client.baseURL)?.absoluteURL {
+        if let client, let link = await Self.streamLink(client, assetId: detail.assetId) {
             guard currentAssetId == detail.assetId else { return }
+            // Under the server's address as every request is (a server under a path keeps it).
+            let url = client.baseURL.appendingPathComponent(link.url)
             player = AVPlayer(url: url)
             streamIsPreview = link.source != "analysis_proxy"
             source = .stream
@@ -311,6 +335,7 @@ final class VideoPlayerViewModel: ObservableObject {
         player = nil
         hasStartedPlaying = false
         streamIsPreview = false
+        unreachableMoment = nil
         source = .loading
 
         if let url = tempFileURL {

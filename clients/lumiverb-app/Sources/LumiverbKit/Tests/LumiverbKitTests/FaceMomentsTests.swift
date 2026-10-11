@@ -112,6 +112,10 @@ final class FaceMomentsTests: XCTestCase {
         vm.source = .serverPreview
         await vm.seek(VideoStart(assetId: "a", seconds: 3_600))
         XCTAssertEqual(vm.player!.currentTime().seconds, 0, accuracy: 0.01)
+        XCTAssertEqual(vm.unreachableMoment, 3_600)  // said where the video is
+        XCTAssertTrue(vm.isPreview)
+        await vm.seek(VideoStart(assetId: "a", seconds: 1))
+        XCTAssertNil(vm.unreachableMoment)  // one it reaches clears it
         vm.tearDown()
     }
 }
