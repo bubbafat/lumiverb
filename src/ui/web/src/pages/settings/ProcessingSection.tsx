@@ -154,9 +154,10 @@ export default function ProcessingSection() {
             const parts = producers.filter((q) => q.part_of === p.artifact);
             return (
               <ProducerRow key={`${p.artifact}|${scopeValue}`} {...rowProps(p)}
-                canRedoBelow={kind !== "project"}>
-                {parts.map((q) => <DetailControl key={`detail-${q.artifact}`} producer={q} admin={admin}
-                  libraryId={kind === "library" ? id : undefined} canRedo={kind !== "project"} />)}
+                canRedoBelow={kind !== "project"}
+                // Its parts' levels beside its own (faces: Photos, then Videos).
+                levels={parts.map((q) => <DetailControl key={`detail-${q.artifact}`} producer={q} admin={admin}
+                  libraryId={kind === "library" ? id : undefined} canRedo={kind !== "project"} />)}>
                 {parts.map((q) => <ProducerRow key={`${q.artifact}|${scopeValue}`} {...rowProps(q)} nested />)}
               </ProducerRow>
             );
@@ -194,6 +195,7 @@ function ProducerRow({
   timeNotKnown = false,
   nested = false,
   canRedoBelow = true,
+  levels,
   children,
 }: {
   producer: Producer;
@@ -210,6 +212,8 @@ function ProducerRow({
   nested?: boolean;
   // Its own level control may offer Redo (not over one project's clips).
   canRedoBelow?: boolean;
+  // Its parts' level controls, shown after its own.
+  levels?: ReactNode;
   children?: ReactNode;
 }) {
   const [showFailures, setShowFailures] = useState(false);
@@ -218,7 +222,10 @@ function ProducerRow({
   const headingId = `producer-${producer.artifact}`;
   const Item = nested ? "div" : "li";
   const Heading = nested ? "h4" : "h3";
-  const hasLevel = (producer.fields ?? []).some((f) => f.kind === "level");
+  const level = (producer.fields ?? []).find((f) => f.kind === "level");
+  const hasLevel = !!level;
+  // Off (faces): it makes nothing new, so its counts say nothing; what it made stays.
+  const off = level?.value === "off";
   return (
     <Item className={nested ? "space-y-2 border-t border-gray-800 pt-2"
                             : "rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2"}
@@ -242,7 +249,9 @@ function ProducerRow({
       <CountsBar producer={producer} />
       {!producer.scheduled && scansPaused && <p className="text-sm text-amber-300">Paused with scans</p>}
       {producer.waiting && <WaitingLine why={producer.waiting} />}
-      {c && (
+      {off ? (
+        <p className="text-sm text-gray-400">Off: nothing new is found. What's found stays.</p>
+      ) : c && (
         <p className="text-sm text-gray-400">
           {c.applicable === 0 ? (
             "Nothing to make yet."
@@ -280,6 +289,7 @@ function ProducerRow({
       {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} paused={paused} />}
       {!nested && hasLevel && <DetailControl producer={producer} admin={admin} libraryId={libraryId}
         canRedo={canRedoBelow} />}
+      {levels}
       <Settings producer={producer} admin={admin} />
       {children}
     </Item>
@@ -305,7 +315,8 @@ function DetailControl({ producer, admin, libraryId, canRedo }: { producer: Prod
   const choices = field.choices ?? [];
   const label = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
   const below = producer.counts?.below ?? 0;
-  const what = producer.media.length === 1 && producer.media[0] === "video" ? "video" : "clip";
+  const only = producer.media.length === 1 ? producer.media[0] : null;
+  const what = only === "video" ? "video" : only === "image" ? "photo" : "clip";
   return (
     <div className="space-y-1 text-sm">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

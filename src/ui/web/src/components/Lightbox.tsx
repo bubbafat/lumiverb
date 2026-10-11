@@ -41,6 +41,8 @@ interface LightboxProps {
   publicProjectId?: string;
   /** Highlight a specific face with a red border (e.g. the clustered face). */
   highlightFaceId?: string;
+  /** A video: the seconds to open it at (a person's moment). */
+  startAt?: number;
 }
 
 function SimilarThumbnail({
@@ -263,6 +265,7 @@ export function Lightbox({
   publicLibraryId,
   publicProjectId,
   highlightFaceId,
+  startAt,
 }: LightboxProps) {
   // A visitor can't rate, collect or edit: those are a signed-in person's.
   const onRatingChange = isPublic ? undefined : onRatingChangeProp;
@@ -804,6 +807,7 @@ export function Lightbox({
                 onRenew={playback.renew}
                 failed={playback.failed}
                 fill={isFullscreen}
+                startAt={startAt}
               />
             ) : mediaUrl ? (
               <div className="relative inline-block">

@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { AssetPageItem } from "../api/types";
 import { Lightbox } from "../components/Lightbox";
+import { clipCount } from "../components/ProjectUsageList";
+import { clipOfFace, clock, isVideoFace } from "../lib/faceMoments";
 import {
   listPeople,
   getClusters,
@@ -95,7 +97,7 @@ function PersonCard({ person }: { person: PersonItem }) {
         {person.display_name}
       </span>
       <span className="text-xs text-gray-500">
-        {person.face_count} {person.face_count === 1 ? "photo" : "photos"}
+        {clipCount(person.face_count)}
       </span>
     </Link>
   );
@@ -122,8 +124,14 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
       ) : url ? (
         <>
           <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
+          {isVideoFace(face) && (
+            <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white"
+                  title={face.frame_ms != null ? `Seen at ${clock(face.frame_ms)}` : undefined}>
+              ▶{face.frame_ms != null ? ` ${clock(face.frame_ms)}` : ""}
+            </span>
+          )}
           {/* If showing full thumbnail (no crop), overlay bounding box in red to highlight the clustered face */}
-          {!hasCrop && box && (
+          {!hasCrop && box && !isVideoFace(face) && (
             <div
               className="absolute border-2 border-red-500 rounded pointer-events-none"
               style={{
@@ -204,36 +212,9 @@ function ClusterCard({
 
   const displayFaces = expanded ? allFaces : cluster.faces;
 
-  // Build minimal AssetPageItem[] for Lightbox from display faces
-  const lightboxAssets: AssetPageItem[] = useMemo(
-    () =>
-      displayFaces.map((f) => ({
-        asset_id: f.asset_id,
-        rel_path: f.rel_path ?? "",
-        file_size: 0,
-        file_mtime: null,
-        sha256: null,
-        media_type: "image",
-        width: null,
-        height: null,
-        taken_at: null,
-        status: "active",
-        duration_sec: null,
-        camera_make: null,
-        camera_model: null,
-        iso: null,
-        aperture: null,
-        focal_length: null,
-        focal_length_35mm: null,
-        lens_model: null,
-        flash_fired: null,
-        gps_lat: null,
-        gps_lon: null,
-        face_count: 1,
-        created_at: null,
-      })),
-    [displayFaces],
-  );
+  // The clips the faces are in, for the lightbox: a video's face opens it at the moment it's from.
+  const lightboxAssets: AssetPageItem[] = useMemo(() => displayFaces.map(clipOfFace), [displayFaces]);
+  const shown = lightboxIndex !== null ? displayFaces[lightboxIndex] : undefined;
 
   // Naming, assigning and dismissing clusters need an editor, as on the server.
   const canEdit = useCanEdit();
@@ -274,7 +255,7 @@ function ClusterCard({
           onClick={() => setExpanded(!expanded)}
           className="text-sm font-medium text-gray-300 hover:text-white"
         >
-          {cluster.size} {cluster.size === 1 ? "photo" : "photos"}
+          {clipCount(cluster.size)}
           {!expanded && cluster.size > cluster.faces.length && (
             <span className="ml-1 text-xs text-gray-500">— click to see all</span>
           )}
@@ -465,7 +446,8 @@ function ClusterCard({
           onClose={() => setLightboxIndex(null)}
           onNavigate={(i) => setLightboxIndex(i)}
           hasMore={expanded && allFacesQuery.hasNextPage}
-          highlightFaceId={displayFaces[lightboxIndex]?.face_id}
+          highlightFaceId={shown?.face_id}
+          startAt={shown && isVideoFace(shown) && shown.frame_ms != null ? shown.frame_ms / 1000 : undefined}
         />
       )}
     </div>

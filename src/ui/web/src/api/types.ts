@@ -79,6 +79,9 @@ export interface FaceItem {
   bounding_box: { x: number; y: number; w: number; h: number } | null;
   detection_confidence: number | null;
   person: { person_id: string; display_name: string; dismissed: boolean } | null;
+  /** A video's face: the moment its box is from, and every moment the person was seen at (ms). */
+  frame_ms?: number | null;
+  seen_ms?: number[] | null;
 }
 
 export interface FaceListResponse {

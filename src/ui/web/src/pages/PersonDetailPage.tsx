@@ -2,31 +2,64 @@ import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getPerson, updatePerson, deletePerson, listPersonFaces, mergePerson, searchPeople, getNearestPeopleForPerson } from "../api/client";
-import type { PersonFaceItem, PersonItem } from "../api/client";
+import type { PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
 import { Lightbox } from "../components/Lightbox";
+import { clipCount } from "../components/ProjectUsageList";
+import { clipOfFace, isVideoFace, momentLabel, personClips, type PersonClip } from "../lib/faceMoments";
 import { useCanEdit } from "../lib/useCanEdit";
 
-function FaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick: () => void }) {
-  const { url, isLoading } = useAuthenticatedImage(face.asset_id, "thumbnail");
+/** One of the person's clips: a photo, or a video with the moments they're seen at (each opens it there). */
+function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: number) => void }) {
+  const { url, isLoading } = useAuthenticatedImage(clip.face.asset_id, "thumbnail");
+  const video = isVideoFace(clip.face);
+  const name = clip.face.rel_path ?? "";
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    >
-      {isLoading ? (
-        <div className="h-full w-full animate-pulse bg-gray-700" />
-      ) : url ? (
-        <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-gray-600">No image</div>
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => onOpen(video ? clip.face.frame_ms ?? clip.moments[0]?.start : undefined)}
+        aria-label={video ? `Play ${name}` : `Open ${name}`}
+        className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {isLoading ? (
+          <div className="h-full w-full animate-pulse bg-gray-700" />
+        ) : url ? (
+          <img src={url} alt={name} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-gray-600">No image</div>
+        )}
+        {video && (
+          <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
+            ▶ Video
+          </span>
+        )}
+      </button>
+      {video && clip.moments.length > 0 && (
+        <div className="flex flex-wrap gap-1" aria-label={`When they're seen in ${name}`}>
+          {clip.moments.slice(0, MOMENTS_SHOWN).map((m) => (
+            <button
+              key={m.start}
+              type="button"
+              onClick={() => onOpen(m.start)}
+              className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white"
+            >
+              {momentLabel(m)}
+            </button>
+          ))}
+          {clip.moments.length > MOMENTS_SHOWN && (
+            <span className="px-1 py-0.5 text-[11px] text-gray-500">+{clip.moments.length - MOMENTS_SHOWN} more</span>
+          )}
+        </div>
       )}
-    </button>
+    </div>
   );
 }
+
+// A long video can see someone many times: the first few, then how many more (the video holds them all).
+const MOMENTS_SHOWN = 4;
 
 function InfiniteScrollSentinel({
   hasNextPage,
@@ -73,6 +106,8 @@ export default function PersonDetailPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // Seconds into a video to open it at: the moment picked.
+  const [startAt, setStartAt] = useState<number | undefined>(undefined);
   const [mergeMode, setMergeMode] = useState(false);
   const [mergeSearch, setMergeSearch] = useState("");
   const [mergeResults, setMergeResults] = useState<PersonItem[]>([]);
@@ -150,38 +185,10 @@ export default function PersonDetailPage() {
   }, [personQuery.data]);
 
   const person = personQuery.data;
-  const faces = facesQuery.data?.pages.flatMap((p) => p.items) ?? [];
-
-  // Build minimal AssetPageItem[] for Lightbox
-  const lightboxAssets: AssetPageItem[] = useMemo(
-    () =>
-      faces.map((f) => ({
-        asset_id: f.asset_id,
-        rel_path: f.rel_path ?? "",
-        file_size: 0,
-        file_mtime: null,
-        sha256: null,
-        media_type: "image",
-        width: null,
-        height: null,
-        taken_at: null,
-        status: "active",
-        duration_sec: null,
-        camera_make: null,
-        camera_model: null,
-        iso: null,
-        aperture: null,
-        focal_length: null,
-        focal_length_35mm: null,
-        lens_model: null,
-        flash_fired: null,
-        gps_lat: null,
-        gps_lon: null,
-        face_count: 1,
-        created_at: null,
-      })),
-    [faces],
-  );
+  const faces = useMemo(() => facesQuery.data?.pages.flatMap((p) => p.items) ?? [], [facesQuery.data]);
+  // One tile a clip: a video they're seen in many times is one video.
+  const clips = useMemo(() => personClips(faces), [faces]);
+  const lightboxAssets: AssetPageItem[] = useMemo(() => clips.map((c) => clipOfFace(c.face)), [clips]);
 
   if (personQuery.isLoading) {
     return (
@@ -255,7 +262,7 @@ export default function PersonDetailPage() {
         )}
 
         <span className="text-sm text-gray-500">
-          {person.face_count} {person.face_count === 1 ? "photo" : "photos"}
+          {clipCount(person.face_count)}
         </span>
 
         {canEdit && (
@@ -347,11 +354,18 @@ export default function PersonDetailPage() {
         )}
       </div>
 
-      {/* Photo grid */}
-      {faces.length > 0 && (
+      {/* Their photos and videos */}
+      {clips.length > 0 && (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-          {faces.map((face, i) => (
-            <FaceThumbnail key={face.face_id} face={face} onClick={() => setLightboxIndex(i)} />
+          {clips.map((clip, i) => (
+            <ClipThumbnail
+              key={clip.face.asset_id}
+              clip={clip}
+              onOpen={(atMs) => {
+                setStartAt(atMs != null ? atMs / 1000 : undefined);
+                setLightboxIndex(i);
+              }}
+            />
           ))}
         </div>
       )}
@@ -364,7 +378,7 @@ export default function PersonDetailPage() {
       />
 
       {faces.length === 0 && !facesQuery.isLoading && (
-        <p className="text-sm text-gray-500">No photos assigned to this person yet.</p>
+        <p className="text-sm text-gray-500">No photos or videos assigned to this person yet.</p>
       )}
 
       {lightboxIndex !== null && lightboxAssets[lightboxIndex] && (
@@ -373,7 +387,13 @@ export default function PersonDetailPage() {
           assets={lightboxAssets}
           hasMore={facesQuery.hasNextPage}
           onClose={() => setLightboxIndex(null)}
-          onNavigate={(i) => setLightboxIndex(i)}
+          onNavigate={(i) => {
+            // Another clip: a video opens where they're first shown in it.
+            const face = clips[i]?.face;
+            setStartAt(face && isVideoFace(face) && face.frame_ms != null ? face.frame_ms / 1000 : undefined);
+            setLightboxIndex(i);
+          }}
+          startAt={startAt}
         />
       )}
     </div>

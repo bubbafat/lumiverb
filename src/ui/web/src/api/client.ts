@@ -532,6 +532,12 @@ export interface PersonFaceItem {
   bounding_box: { x: number; y: number; w: number; h: number } | null;
   detection_confidence: number | null;
   rel_path: string | null;
+  taken_at?: string | null;
+  media_type?: string | null;
+  /** A video's face (the person seen there): the moment its crop is from, ms. */
+  frame_ms?: number | null;
+  /** Every moment they were seen at, ms, in order. */
+  seen_ms?: number[] | null;
 }
 
 export interface PersonFacesResponse {
