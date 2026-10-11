@@ -24,7 +24,7 @@ With [Homebrew](https://brew.sh):
 
 ```bash
 brew trust --tap bubbafat/lumiverb && brew install --HEAD bubbafat/lumiverb/lumiverb
-brew services start postgresql@18 && brew services start quickwit && brew services start nginx && brew services start lumiverb
+brew services start lumiverb
 ```
 
 (Homebrew installs from a tap that isn't its own only once you trust it:
@@ -34,10 +34,12 @@ Then open <http://localhost:6464> on that Mac and create your account. Add a
 library (Libraries › Add library: a name and the folder your photos and
 videos are in) and Lumiverb scans and processes it.
 
-It brings PostgreSQL 18 with pgvector, nginx, ffmpeg, exiftool, libvips,
-Python 3.12 and Quickwit, and starts again at login. The web app is for that
-Mac only to begin with. Details, ports and the Terminal way to create the
-account: the [tap's README](https://github.com/bubbafat/homebrew-lumiverb).
+It's one service that starts again at login: Lumiverb runs its own
+PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
+another PostgreSQL you run. It also brings ffmpeg, exiftool, libvips and
+Python 3.12. The web app is for that Mac only to begin with. Details, ports
+and the Terminal way to create the account: the
+[tap's README](https://github.com/bubbafat/homebrew-lumiverb).
 
 Update (`--fetch-HEAD` because it builds from `main`: there are no releases yet):
 

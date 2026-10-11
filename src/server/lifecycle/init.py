@@ -1,17 +1,18 @@
 """The files an install needs, each written once: its env file, Quickwit's
-config and nginx's site. Homebrew's post_install runs it on every install
-and upgrade, so a file already there is kept as it is: init never rewrites
-one (move it away and run init again to start over).
+config and nginx's. Homebrew's post_install runs it on every install and
+upgrade, so a file already there is kept as it is: init never rewrites one
+(move it away and run init again to start over).
 
-The env file is deploy-api.sh's, for a Mac: Homebrew's PostgreSQL as you,
-secrets generated here. Quickwit's config and nginx's site are made from
-the env file, whichever wrote it, so they agree with it. The nginx site is
+The env file is deploy-api.sh's, for a Mac, where `lumiverb-server run` is
+the one service: it names what run starts besides the API and the scheduler
+(Lumiverb's own PostgreSQL, Quickwit and nginx: each one named), with
+secrets generated here. Quickwit's config and nginx's are made from the env
+file, whichever wrote it, so they agree with it. nginx's server block is
 deploy-web.sh's (a test holds them to the same bytes).
 """
 
 from __future__ import annotations
 
-import getpass
 import os
 import secrets
 from collections.abc import Callable
@@ -27,7 +28,8 @@ from src.server.lifecycle.migrate import APP_DIR
 WEB_PORT = 6464
 API_PORT = 6465
 QUICKWIT_PORT = 6466  # gRPC on the next one, as deploy-api.sh does
-PG_PORT = 5432  # Homebrew's PostgreSQL
+PG_PORT = 6468  # Lumiverb's own PostgreSQL (not Homebrew's, on 5432)
+PG_ROLE = "lumiverb"
 WEB_ROOT = APP_DIR / "src" / "ui" / "web" / "dist"
 
 # deploy-web.sh's: the built app loads only its own files and calls only its
@@ -52,34 +54,47 @@ class Choices:
     quickwit_port: int | None = None
     web_port: int | None = None
     app_host: str | None = None
+    # What run starts besides the API and the scheduler, each only if named.
+    pg_bin: Path | None = None  # PostgreSQL's bin folder (initdb, postgres)
+    quickwit_bin: Path | None = None
+    quickwit_config: Path | None = None
+    nginx_bin: Path | None = None
+    nginx_config: Path | None = None
 
-    def given(self) -> dict[str, str]:
-        named = {"DATA_DIR": self.data_dir, "PG_PORT": self.pg_port, "API_PORT": self.api_port,
-                 "QUICKWIT_PORT": self.quickwit_port, "WEB_PORT": self.web_port, "APP_HOST": self.app_host}
+    def runs(self) -> dict[str, str]:
+        named = {"PG_BIN": self.pg_bin, "QUICKWIT_BIN": self.quickwit_bin, "QUICKWIT_CONFIG": self.quickwit_config,
+                 "NGINX_BIN": self.nginx_bin, "NGINX_CONFIG": self.nginx_config}
         return {key: str(value) for key, value in named.items() if value is not None}
 
+    def given(self) -> dict[str, str]:
+        named = {"DATA_DIR": self.data_dir, "API_PORT": self.api_port, "QUICKWIT_PORT": self.quickwit_port,
+                 "WEB_PORT": self.web_port, "APP_HOST": self.app_host}
+        return {key: str(value) for key, value in named.items() if value is not None} | self.runs()
 
-def env_text(choices: Choices, *, user: str, now: datetime, secret: Callable[[], str]) -> str:
+
+def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> str:
     if choices.data_dir is None:
         raise InitError("Say where its data goes: --data-dir DIR")
     data = choices.data_dir
-    pg_port = choices.pg_port or PG_PORT
     api_port = choices.api_port or API_PORT
     qw_port = choices.quickwit_port or QUICKWIT_PORT
     web_port = choices.web_port or WEB_PORT
-    db = f"postgresql+psycopg2://{user}@127.0.0.1:{pg_port}"
+    admin_key, api_secret_key, jwt_secret, pg_password = secret(), secret(), secret(), secret()
+    db = f"postgresql+psycopg2://{PG_ROLE}:{pg_password}@127.0.0.1:{choices.pg_port or PG_PORT}"
+    runs = "".join(f"{key}={value}\n" for key, value in choices.runs().items())
     return f"""\
 # Written by lumiverb-server init, {now.strftime('%Y-%m-%dT%H:%M:%SZ')}. Yours to edit:
 # init never rewrites it (move it away and run init again to start over).
 
-# Database (Homebrew's PostgreSQL, as you)
+# Database: Lumiverb's own PostgreSQL (its data in DATA_DIR/postgres, on
+# this machine only), as its role, with this password
 CONTROL_PLANE_DATABASE_URL={db}/control_plane
 TENANT_DATABASE_URL_TEMPLATE={db}/{{tenant_id}}
 
 # Auth
-ADMIN_KEY={secret()}
-API_SECRET_KEY={secret()}
-JWT_SECRET={secret()}
+ADMIN_KEY={admin_key}
+API_SECRET_KEY={api_secret_key}
+JWT_SECRET={jwt_secret}
 
 # Storage
 STORAGE_PROVIDER=local
@@ -95,10 +110,11 @@ API_LISTEN_HOST=127.0.0.1
 API_PORT={api_port}
 
 # What this install uses
-PG_PORT={pg_port}
 QUICKWIT_PORT={qw_port}
 WEB_PORT={web_port}
 
+# What lumiverb-server run starts besides the API and the scheduler
+{runs}
 # App
 APP_ENV=production
 APP_HOST={choices.app_host or f'http://localhost:{web_port}'}
@@ -209,6 +225,44 @@ def this_machine_only(port: int) -> tuple[str, ...]:
     return (f"listen 127.0.0.1:{port} default_server;", f"listen [::1]:{port} default_server;")
 
 
+# What the web build serves. nginx's own list isn't read: this config stands alone.
+_TYPES = (
+    "text/html html;", "text/css css;", "application/javascript js mjs;", "application/json json;",
+    "application/manifest+json webmanifest;", "application/wasm wasm;", "text/plain txt;",
+    "image/svg+xml svg;", "image/png png;", "image/jpeg jpg jpeg;", "image/webp webp;", "image/gif gif;",
+    "image/x-icon ico;", "font/woff2 woff2;", "font/woff woff;",
+)
+
+
+def nginx_conf(site: str) -> str:
+    """A whole nginx config around the site, for the install's own nginx: run
+    starts it in the foreground with -p DATA_DIR/nginx (its pid and temp files
+    there) and its errors in the service's log."""
+    indented = "\n".join(f"    {line}" if line else "" for line in site.splitlines())
+    return f"""\
+# Lumiverb's own nginx: lumiverb-server run starts it (-p DATA_DIR/nginx).
+daemon off;
+error_log stderr;
+pid nginx.pid;
+worker_processes 1;
+
+events {{
+    worker_connections 256;
+}}
+
+http {{
+    types {{
+        {_at(8, _TYPES)}
+    }}
+    default_type application/octet-stream;
+    sendfile on;
+    access_log off;
+
+{indented}
+}}
+"""
+
+
 def write_new(path: Path, text: str, mode: int) -> bool:
     """Writes the file if there's none; False (and nothing written) if there is."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,13 +282,12 @@ def _port(env: dict[str, str], key: str, env_file: Path) -> int:
     return int(value)
 
 
-def init(env_file: Path, choices: Choices, *, quickwit_config: Path | None = None, nginx_site_file: Path | None = None,
-         web_root: Path = WEB_ROOT, say: Callable[[str], None] = print,
-         user: str | None = None, secret: Callable[[], str] = lambda: secrets.token_hex(32)) -> None:
-    """Writes the env file if there's none, then Quickwit's config and the
-    nginx site (each if named and not there) from it, and makes its data
-    folders. Raises InitError when a given choice disagrees with the env file
-    already there."""
+def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Callable[[str], None] = print,
+         secret: Callable[[], str] = lambda: secrets.token_hex(32)) -> None:
+    """Writes the env file if there's none, then Quickwit's config and
+    nginx's (each where the env file names it, if it isn't there) from it,
+    and makes its data folders. Raises InitError when a given choice
+    disagrees with the env file already there."""
     if env_file.exists():
         env = read_env_file(env_file)
         differ = [f"{key}={env.get(key, '')!r} (you said {value!r})"
@@ -244,7 +297,7 @@ def init(env_file: Path, choices: Choices, *, quickwit_config: Path | None = Non
                             + ". init doesn't change it: edit it, or move it away to start again.")
         say(f"· {env_file} kept")
     else:
-        text = env_text(choices, user=user or getpass.getuser(), now=datetime.now(UTC), secret=secret)
+        text = env_text(choices, now=datetime.now(UTC), secret=secret)
         write_new(env_file, text, 0o600)
         env = read_env_file(env_file)
         say(f"✓ {env_file}")
@@ -252,13 +305,15 @@ def init(env_file: Path, choices: Choices, *, quickwit_config: Path | None = Non
     data = Path(env.get("DATA_DIR") or APP_DIR / "data")
     if not data.is_absolute():
         raise InitError(f"DATA_DIR must be a full path, not {data}")
-    for folder in (data, data / "quickwit", data / "cache", data / "tmp", data / "worker-tmp"):
+    for folder in (data, data / "quickwit", data / "cache", data / "tmp", data / "worker-tmp", data / "nginx"):
         folder.mkdir(parents=True, exist_ok=True)
 
-    if quickwit_config is not None:
+    if env.get("QUICKWIT_CONFIG"):
+        path = Path(env["QUICKWIT_CONFIG"])
         text = quickwit_yaml(data, _port(env, "QUICKWIT_PORT", env_file))
-        say(f"✓ {quickwit_config}" if write_new(quickwit_config, text, 0o644) else f"· {quickwit_config} kept")
-    if nginx_site_file is not None:
-        text = nginx_site(listen=this_machine_only(_port(env, "WEB_PORT", env_file)), server_name="_",
+        say(f"✓ {path}" if write_new(path, text, 0o644) else f"· {path} kept")
+    if env.get("NGINX_CONFIG"):
+        path = Path(env["NGINX_CONFIG"])
+        site = nginx_site(listen=this_machine_only(_port(env, "WEB_PORT", env_file)), server_name="_",
                           root=web_root, upstream=f"http://127.0.0.1:{_port(env, 'API_PORT', env_file)}")
-        say(f"✓ {nginx_site_file}" if write_new(nginx_site_file, text, 0o644) else f"· {nginx_site_file} kept")
+        say(f"✓ {path}" if write_new(path, nginx_conf(site), 0o644) else f"· {path} kept")

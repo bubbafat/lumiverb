@@ -2,6 +2,9 @@
 (deploy-api.sh) do for each, for a Mac, where launchd runs one process per
 Homebrew service.
 
+A child can wait for something first (`start_after`): the API and the
+scheduler wait for migrations, which wait for the PostgreSQL started here.
+
 Each child starts in its own process group. One that dies is started again
 after its delay. systemd restarts only on failure, but here nothing else
 would, so any exit is restarted. One that keeps exiting soon after it starts
@@ -45,7 +48,9 @@ class Child:
     # the whole group (uvicorn and its workers).
     term_main_only: bool = False
     empty_first: Path | None = None  # emptied before each start, as its ExecStartPre
+    start_after: threading.Event | None = field(default=None, repr=False)  # first start once it's set
     process: subprocess.Popen | None = field(default=None, repr=False)
+    started: bool = False
     started_at: float | None = None
     restart_at: float | None = None
     delay: float | None = None  # its last wait before a start, while it keeps exiting
@@ -84,11 +89,16 @@ class Supervisor:
         if child.empty_first is not None:
             _empty(child.empty_first)
         child.process = self._spawn(child.argv, env=child.env, cwd=child.cwd, start_new_session=True)
+        child.started = True
         child.started_at = self._clock()
         child.restart_at = None
         logger.info("%s started (pid %d)", child.name, child.process.pid)
 
     def _watch(self, child: Child) -> None:
+        if not child.started:
+            if child.start_after is not None and child.start_after.is_set():
+                self._start(child)
+            return
         now = self._clock()
         if child.process is not None and child.process.poll() is not None:
             uptime = now - (child.started_at or now)
@@ -120,7 +130,8 @@ class Supervisor:
     def run(self, stop: threading.Event, poll_sec: float = 0.5) -> None:
         """Starts the children and keeps them up until `stop` is set, then stops them."""
         for child in self.children:
-            self._start(child)
+            if child.start_after is None:
+                self._start(child)
         try:
             while not stop.wait(poll_sec):
                 for child in self.children:

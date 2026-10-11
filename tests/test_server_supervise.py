@@ -202,3 +202,27 @@ def test_its_temp_folder_is_emptied_before_it_starts(tmp_path):
     assert list(spool.iterdir()) == []
     stop.set()
     thread.join(10)
+
+
+def test_a_child_waits_for_its_start_after_and_a_stop_before_it_starts_nothing(tmp_path):
+    # The API and the scheduler wait for migrations, which wait for PostgreSQL.
+    first_log, later_log = tmp_path / "postgres.log", tmp_path / "api.log"
+    migrated = threading.Event()
+    first = _child(tmp_path, "postgres", _POLITE, str(first_log))
+    later = _child(tmp_path, "api", _POLITE, str(later_log), start_after=migrated)
+    stop, thread = _running(Supervisor([first, later]))
+    _until(first_log.exists)
+    time.sleep(0.3)
+    assert not later_log.exists(), "not before what it waits for"
+    migrated.set()
+    _until(later_log.exists)
+    stop.set()
+    thread.join(15)
+    assert not thread.is_alive()
+
+    never = _child(tmp_path, "scheduler", _POLITE, str(tmp_path / "never.log"), start_after=threading.Event())
+    stop, thread = _running(Supervisor([never]))
+    time.sleep(0.2)
+    stop.set()
+    thread.join(10)
+    assert not thread.is_alive() and never.process is None and not (tmp_path / "never.log").exists()
