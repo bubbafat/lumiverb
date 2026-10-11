@@ -64,6 +64,11 @@ _NAME = re.compile(r"^lumiverb-\d{4}-\d{2}-\d{2}-\d{6}-(" + "|".join(KINDS) + r"
 NIGHTLY_AT = time(3, 0)
 # A failed backup is tried again this much later, not at every upkeep.
 RETRY_AFTER = timedelta(hours=1)
+# running() looks at the lock by taking it for an instant (Settings › Backups
+# asks every 2 s while one runs; Back up now asks as it starts one). A backup
+# starting in that instant waits this long for it before taking the holder
+# for another backup: a look lets go at once, a backup holds it to the end.
+LOOK_WAIT_SEC = 2.0
 KEEP_DAYS = timedelta(days=7)
 KEEP_WEEKS = 4
 KEEP_BEFORE = 3
@@ -442,14 +447,20 @@ def _update_state(data_dir: Path, **changes) -> None:
 
 
 @contextlib.contextmanager
-def _one_at_a_time(data_dir: Path) -> Iterator[None]:
-    """Held while a backup is made: across the API's workers and the CLI."""
+def _one_at_a_time(data_dir: Path, *, wait: float = 0.0) -> Iterator[None]:
+    """Held while a backup is made: across the API's workers and the CLI.
+    `wait`: how long to wait out a look (running())."""
     data_dir.mkdir(parents=True, exist_ok=True)
+    deadline = monotonic() + wait
     with open(data_dir / LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise BackupError("A backup is being made already.") from None
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if monotonic() >= deadline:
+                    raise BackupError("A backup is being made already.") from None
+                sleep(0.02)
         try:
             yield
         finally:
@@ -457,6 +468,7 @@ def _one_at_a_time(data_dir: Path) -> Iterator[None]:
 
 
 def running(data_dir: Path) -> bool:
+    """Whether a backup holds the lock now: a look, taking it for an instant."""
     try:
         with _one_at_a_time(data_dir):
             return False
@@ -471,7 +483,7 @@ def back_up(data_dir: Path, control_url: str, kind: str, *, pg_bin: str | None =
     """A backup now, into the backups folder (or `dest`), then the old ones
     pruned. Records how it went for Settings › Backups and the Admin page.
     Raises BackupError."""
-    with _one_at_a_time(data_dir):
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         started = datetime.now(UTC)
         _update_state(data_dir, running={"kind": kind, "started_at": started.isoformat(), "done": 0, "of": 0})
 

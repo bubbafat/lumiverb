@@ -61,6 +61,11 @@ PROGRESS_EVERY = 200
 STALE_TMP_SEC = 3600
 # A move that stopped on an error is tried again (by upkeep) this much later.
 RETRY_AFTER_SEC = 15 * 60
+# running() looks at the lock by taking it for an instant (Settings › Storage
+# asks every 2 s). A mover starting in that instant waits this long for it
+# before taking the holder for another move: a look lets go at once, a move
+# holds it to the end.
+LOOK_WAIT_SEC = 2.0
 
 
 class MoveError(Exception):
@@ -198,13 +203,19 @@ def _update_state(data_dir: Path, **changes) -> None:
 
 
 @contextlib.contextmanager
-def _one_at_a_time(data_dir: Path) -> Iterator[None]:
+def _one_at_a_time(data_dir: Path, *, wait: float = 0.0) -> Iterator[None]:
+    """Held while a move starts or runs; `wait`: how long to wait out a look."""
     data_dir.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + wait
     with open(data_dir / LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise MoveError("The previews are being moved already.") from None
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise MoveError("The previews are being moved already.") from None
+                time.sleep(0.02)
         try:
             yield
         finally:
@@ -212,6 +223,7 @@ def _one_at_a_time(data_dir: Path) -> Iterator[None]:
 
 
 def running(data_dir: Path) -> bool:
+    """Whether a move holds the lock now: a look, taking it for an instant."""
     try:
         with _one_at_a_time(data_dir):
             return False
@@ -248,7 +260,7 @@ def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = Non
     folder. Raises MoveError before changing anything when it can't."""
     data_dir = Path(os.path.abspath(data_dir))
     old, chosen, need = plan(data_dir, to, library_id=library_id)
-    with _one_at_a_time(data_dir):
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         location = previews_location.read(data_dir)
         if chosen != data_dir:
             (chosen / previews_location.MARKER).write_text(
@@ -315,7 +327,7 @@ def _under_way(location: Location) -> tuple[Scope, Path, Path] | None:
 def run(data_dir: Path) -> None:
     """Moves what's left, here and now. Raises MoveError (recorded) when it stops."""
     data_dir = Path(os.path.abspath(data_dir))
-    with _one_at_a_time(data_dir):
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         location = previews_location.read(data_dir)
         under_way = _under_way(location)
         if under_way is None:

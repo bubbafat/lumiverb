@@ -173,7 +173,8 @@ def test_a_failure_is_recorded_and_the_lock_is_let_go(tmp_path, monkeypatch):
     assert not backups.running(tmp_path)
 
 
-def test_one_at_a_time(tmp_path):
+def test_one_at_a_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(backups, "LOOK_WAIT_SEC", 0.2)
     with backups._one_at_a_time(tmp_path):
         assert backups.running(tmp_path)
         with pytest.raises(BackupError, match="already"):
@@ -296,3 +297,24 @@ def test_as_root_the_commands_go_on_as_the_data_folder_s_owner(tmp_path, monkeyp
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     cli.as_data_owner(tmp_path)
     assert did == [], "not root: nothing to change"
+
+
+def test_a_look_at_whether_one_runs_never_stops_a_backup_starting(tmp_path, monkeypatch):
+    """running() takes the lock for an instant to see whether it's free. A
+    backup starting in that instant used to give up, silently ("being made
+    already", raised before anything was recorded): Back up now, or the
+    nightly one, did nothing. Found as a move's twin under load."""
+    import threading
+    import time
+
+    made = []
+    monkeypatch.setattr(backups, "make", lambda dest, url, kind, **k: made.append(kind) or Backup(
+        dest / "lumiverb-2026-10-11-030000-now", datetime.now(UTC), kind, []))
+    monkeypatch.setattr(backups, "prune", lambda where, now=None: [])
+    monkeypatch.setattr(backups, "LOOK_WAIT_SEC", 60)  # however slow the machine, the look is let go first
+    with backups._one_at_a_time(tmp_path):  # a look, held a moment as the backup starts
+        worker = threading.Thread(target=backups.back_up, args=(tmp_path, "postgresql://x/y", "now"))
+        worker.start()
+        time.sleep(0.2)
+    worker.join(60)
+    assert made == ["now"], "it waited its turn and made the backup"
