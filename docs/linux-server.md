@@ -219,7 +219,7 @@ sudo systemctl start lumiverb-api lumiverb-scheduler
 
 ## Where previews live
 
-Previews (every stored artifact) are in `DATA_DIR` (here `/mnt/ssd2/lumiverb`). Settings › Storage can move them to another folder, but the API's unit may write only under `DATA_DIR` (`ProtectSystem=strict`), so another folder there is refused ("Lumiverb can't write to …") until the unit allows it. A folder under `DATA_DIR` works.
+Previews (every stored artifact) are in `DATA_DIR` (here `/mnt/ssd2/lumiverb`). Settings › Storage can move them to another folder, but the API's unit may write only under `DATA_DIR` (`ProtectSystem=strict`), so another folder there is refused ("Lumiverb can't write to …") until the unit allows it: add the folder to `ReadWritePaths` in `lumiverb-api.service` (deploy-api.sh writes it), then `sudo systemctl daemon-reload` and restart the API. A folder under `DATA_DIR` works as it is.
 
 ## Mac app changes (Swift, not built yet)
 
