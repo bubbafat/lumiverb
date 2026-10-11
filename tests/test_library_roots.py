@@ -358,6 +358,22 @@ def test_the_scheduler_refuses_an_unmapped_root(brain: Path, caplog: pytest.LogC
 
 
 @pytest.mark.fast
+def test_on_a_mac_the_scheduler_reads_a_root_where_it_is_but_never_the_servers_data(
+        brain: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    # lumiverb-server run's map (cli.THIS_MACHINE_ROOT_MAP): the files are on this machine.
+    from src.server.lifecycle.cli import THIS_MACHINE_ROOT_MAP
+    from src.server.scheduler.settings import SchedulerSettings
+
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", THIS_MACHINE_ROOT_MAP)
+    machine.use(SchedulerSettings().machine())
+    here = {"library_id": "lib_1", "name": "HS150", "root_path": str(brain / "mnt" / "Footage")}
+    assert reachable_root(here, require_entries=True) == (brain / "mnt" / "Footage").resolve()
+    data = {"library_id": "lib_x", "name": "Data", "root_path": str(brain / "data" / "ten_other")}
+    assert reachable_root(data) is None
+    assert "Data (lib_x) refused: root is in the server's data" in caplog.text
+
+
+@pytest.mark.fast
 def test_the_scheduler_refuses_a_mapped_root_that_climbs_out(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
     # /Volumes/media-01/../data maps to <mnt>/../data: the server's data.
     lib = {"library_id": "lib_x", "name": "Climb", "root_path": f"{MAC}/../data/ten_other"}

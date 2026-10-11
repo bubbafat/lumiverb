@@ -274,7 +274,8 @@ export default function LibrariesPage() {
                   className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-4 transition-colors duration-150 hover:border-gray-600/50"
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0 flex-1">
+                    {/* At least 14rem for the name and path: with none, the buttons squeeze them to nothing and they paint over them. */}
+                    <div className="min-w-0 flex-1 sm:min-w-56">
                       <div className="flex flex-wrap items-center gap-2">
                         {lib.status !== "trashed" && (() => {
                           const h = healthByLibraryId.get(lib.library_id);
@@ -306,7 +307,7 @@ export default function LibrariesPage() {
                           <Badge variant="trashed">Trashed</Badge>
                         )}
                       </div>
-                      <p className="mt-0.5 font-mono text-sm text-gray-400">
+                      <p className="mt-0.5 break-all font-mono text-sm text-gray-400">
                         {lib.root_path}
                       </p>
                       {lib.status === "trashed" && (() => {
@@ -318,7 +319,7 @@ export default function LibrariesPage() {
                         );
                       })()}
                     </div>
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3 sm:justify-end">
                       {lib.status !== "trashed" && (
                         <>
                           <Link
