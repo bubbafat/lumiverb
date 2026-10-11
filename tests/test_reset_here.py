@@ -1,0 +1,87 @@
+"""A forgotten password on a Mac, which has no email set up (auth.py
+forgot_password; `lumiverb-server reset-password`): from the machine
+Lumiverb runs on, the reset link the email would carry comes back at once;
+from anywhere else, the email (when set up) or where to go instead. The
+command line does the same. A new password signs the person out everywhere."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src.server.api import rate_limit
+from src.server.api.main import app
+from src.server.lifecycle import cli
+from src.server.setup import create_first_admin
+from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
+    HERE,
+    LAN,
+    PASSWORD,
+    _env_file,
+    control,
+)
+
+pytestmark = pytest.mark.slow
+
+NEW = "an entirely new password"
+
+
+@pytest.fixture
+def admin(control, monkeypatch):  # noqa: F811
+    for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter):
+        monkeypatch.setattr(limiter, "_hits", {})
+    return create_first_admin("robert@example.com", PASSWORD).email
+
+
+def _login(client: TestClient, password: str) -> int:
+    return client.post("/v1/auth/login", json={"email": "robert@example.com", "password": password}).status_code
+
+
+def test_on_the_mac_forgot_password_leads_straight_to_a_new_one(admin):
+    with TestClient(app, client=HERE) as client:
+        asked = client.post("/v1/auth/forgot-password", json={"email": f" {admin} "})
+        assert asked.status_code == 200, asked.text
+        reset_url = asked.json()["reset_url"]
+        assert reset_url.startswith("/reset-password?token=")
+        token = reset_url.split("token=", 1)[1]
+        assert client.post("/v1/auth/reset-password", json={"token": token, "password": NEW}).status_code == 204
+        assert _login(client, NEW) == 200 and _login(client, PASSWORD) == 401
+        again = client.post("/v1/auth/reset-password", json={"token": token, "password": NEW + "!"})
+        assert again.status_code == 400, "a link works once"
+
+
+def test_on_the_mac_an_unknown_email_is_said(admin):
+    with TestClient(app, client=HERE) as client:
+        asked = client.post("/v1/auth/forgot-password", json={"email": "nobody@example.com"})
+    assert asked.status_code == 404 and asked.json()["error"]["code"] == "no_such_account"
+
+
+def test_from_another_device_without_email_it_says_where_to_go(admin):
+    with TestClient(app, client=LAN) as client:
+        asked = client.post("/v1/auth/forgot-password", json={"email": admin})
+    assert asked.status_code == 501
+    assert asked.json()["error"]["message"].startswith("Password reset isn't set up here. On the computer Lumiverb")
+    assert "reset_url" not in asked.text
+
+
+def test_the_command_line_sets_a_new_one(admin, control, tmp_path, monkeypatch, capsys):  # noqa: F811
+    typed = iter([NEW, NEW])
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(typed))
+    assert cli.main(["reset-password", "--env", str(_env_file(tmp_path, control)), "--email", admin]) == 0
+    assert capsys.readouterr().out.strip() == "✓ A new password for robert@example.com; they're signed out everywhere else"
+    with TestClient(app, client=LAN) as client:
+        assert _login(client, NEW) == 200
+
+
+@pytest.mark.parametrize(("email", "typed", "says"), [
+    ("nobody@example.com", [], "✗ There's no account with that email here"),
+    ("robert@example.com", [NEW, NEW + "!"], "✗ The passwords don't match"),
+    ("robert@example.com", ["short"], "✗ Use 12 to 72 characters"),
+])
+def test_the_command_line_refuses_what_won_t_do(admin, control, tmp_path, monkeypatch, capsys, email, typed, says):  # noqa: F811
+    answers = iter(typed)
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: next(answers))
+    assert cli.main(["reset-password", "--env", str(_env_file(tmp_path, control)), "--email", email]) == 1
+    assert capsys.readouterr().err.strip() == says
+    with TestClient(app, client=LAN) as client:
+        assert _login(client, PASSWORD) == 200, "unchanged"

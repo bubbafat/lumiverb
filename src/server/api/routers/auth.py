@@ -11,6 +11,7 @@ from typing import Annotated
 import bcrypt
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -189,14 +190,33 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
     return RefreshResponse(access_token=new_token)
 
 
-@router.post("/forgot-password", status_code=204)
+RESET_ELSEWHERE = ("Password reset isn't set up here. On the computer Lumiverb is installed on, "
+                   "use Forgot password there, or ask whoever looks after it.")
+
+
+@router.post("/forgot-password", status_code=204, response_model=None)
 def forgot_password(
     body: ForgotPasswordRequest,
     request: Request,
     background: BackgroundTasks,
-) -> None:
+) -> JSONResponse | None:
+    """From the machine Lumiverb runs on, its operator: the reset link the
+    email would carry, at once (a Mac has no email set up). From anywhere
+    else: the email, when SMTP is set up."""
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+
     forgot_password_limiter.check(request)
     forgot_password_limiter.check(request, key=f"email:{body.email.strip().lower()}")
+
+    if on_this_machine(request):
+        with _get_session() as session:
+            user = UserRepository(session).get_by_email(body.email.strip())
+            if user is None:
+                raise ApiError(404, "no_such_account", "There's no account with that email here.")
+            plaintext_token = secrets.token_urlsafe(32)
+            PasswordResetTokenRepository(session).create(user.user_id, plaintext_token, utcnow() + timedelta(hours=1))
+        return JSONResponse({"reset_url": f"/reset-password?token={plaintext_token}"})
 
     settings = get_settings()
     smtp_ready = all(
@@ -210,8 +230,8 @@ def forgot_password(
         ]
     )
     if not smtp_ready:
-        # Return the same result for any email when reset is unavailable.
-        raise HTTPException(status_code=501, detail="Password reset not configured")
+        # The same for any email when reset is unavailable here.
+        raise ApiError(501, "reset_elsewhere", RESET_ELSEWHERE)
 
     # 204 always, at once: whether the email is known (and the mail's sent) happens after.
     background.add_task(_send_reset_email, body.email)

@@ -5,6 +5,7 @@
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
+    lumiverb-server reset-password --env FILE [--email EMAIL]
 
 init: the install's env file, Quickwit's config and nginx's, each written
 only if it isn't there (init.py), for Homebrew's post_install.
@@ -25,6 +26,10 @@ The brain keeps its systemd units: it doesn't use this.
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
 log in yet.
+
+reset-password: someone's new password, asked for twice, signing them out
+everywhere: the same as Forgot password on the machine itself (no email
+needed). The env file is the operator's, so this needs no other proof.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
@@ -359,6 +364,43 @@ def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reset_password(args: argparse.Namespace) -> int:
+    import bcrypt
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.server.api.routers.auth import MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH
+    from src.server.config import get_settings
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import UserRepository
+
+    env, _ = _env_and_url(args)
+    os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
+    get_settings.cache_clear()
+    email = (args.email or input("Email: ")).strip()
+    try:
+        with get_control_session() as session:
+            user = UserRepository(session).get_by_email(email)
+        if user is None:
+            print("✗ There's no account with that email here", file=sys.stderr)
+            return 1
+        password = getpass("New password: ")
+        if len(password) < MIN_PASSWORD_LENGTH or len(password.encode()) > MAX_PASSWORD_BYTES:
+            print(f"✗ Use {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_BYTES} characters", file=sys.stderr)
+            return 1
+        if getpass("New password again: ") != password:
+            print("✗ The passwords don't match", file=sys.stderr)
+            return 1
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+        with get_control_session() as session:
+            UserRepository(session).update_password(user.user_id, password_hash)
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
+        return 1
+    print(f"✓ A new password for {email}; they're signed out everywhere else")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lumiverb-server", description="Look after this machine's Lumiverb server.")
     _env_option(parser, None)
@@ -389,9 +431,13 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(setup_command, argparse.SUPPRESS)
     setup_command.add_argument("--email", help="the admin's email (asked if not given)")
     setup_command.add_argument("--account-name", help="a new account's name (\"Lumiverb\" if not given)")
+    reset_command = commands.add_parser("reset-password", help="set someone's new password (no email needed)")
+    _env_option(reset_command, argparse.SUPPRESS)
+    reset_command.add_argument("--email", help="theirs (asked if not given)")
     args = parser.parse_args(argv)
     try:
-        return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup}[args.command](args)
+        return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
+                "reset-password": _reset_password}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
