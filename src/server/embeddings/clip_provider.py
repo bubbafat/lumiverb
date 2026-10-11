@@ -65,9 +65,10 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
 
                     import open_clip
 
-                    from src.shared.torch_device import torch_device
+                    from src.shared.torch_device import cpu_threads_for, torch_device
 
                     self._device = torch_device()
+                    cpu_threads_for(self._device)
                     model, _, preprocess = open_clip.create_model_and_transforms(
                         self._model_name,
                         pretrained=self._pretrained,
@@ -89,7 +90,10 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         import numpy as np
         import torch
 
+        from src.shared.torch_device import cpu_threads_for
+
         model, preprocess, device = self._load()
+        cpu_threads_for(device)  # this thread's, whoever built the model
         tensor = preprocess(pil_image).unsqueeze(0).to(device)
         with torch.no_grad():
             features = model.encode_image(tensor)
