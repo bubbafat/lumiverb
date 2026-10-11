@@ -32,6 +32,13 @@ def test_no_install_named_is_refused_not_guessed(capsys, monkeypatch):
     assert called == [], "nothing was migrated"
 
 
+def test_run_with_no_install_named_is_refused_and_starts_nothing(capsys, monkeypatch):
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(cli, "migrate_when_ready", lambda *a, **k: pytest.fail("nothing may migrate"))
+    assert cli.main(["run"]) == 1
+    assert _err(capsys).startswith("✗ Say which install:")
+
+
 def test_the_environment_can_name_it(tmp_path, monkeypatch, capsys):
     called = []
     monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)
