@@ -1,8 +1,9 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getAiSettings, getBackups, getCurrentUser } from "../api/client";
+import { getAiSettings, getBackups, getCurrentUser, getStorageInfo } from "../api/client";
 import { AI_QUERY_KEY, aiHasProblem } from "./settings/AiSection";
 import { BACKUPS_QUERY_KEY, backupsHaveProblem } from "./settings/BackupsSection";
+import { STORAGE_QUERY_KEY, storageHasProblem } from "./settings/StorageSection";
 
 interface NavItem {
   to: string;
@@ -20,6 +21,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/files", label: "Files" },
   { to: "/settings/network", label: "Network" },
   { to: "/settings/backups", label: "Backups", requireAdmin: true },
+  { to: "/settings/storage", label: "Storage", requireAdmin: true },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];
@@ -36,6 +38,8 @@ export default function SettingsPage() {
   const isAdmin = user?.role === "admin";
   const { data: backups } = useQuery({ queryKey: BACKUPS_QUERY_KEY, queryFn: getBackups, enabled: isAdmin });
   const backupsProblem = backupsHaveProblem(backups);
+  const { data: storage } = useQuery({ queryKey: STORAGE_QUERY_KEY, queryFn: getStorageInfo, enabled: isAdmin });
+  const storageProblem = storageHasProblem(storage);
 
   // Don't hide editor-only items until we know the role (avoids flicker)
   const isEditorOrAbove =
@@ -73,6 +77,13 @@ export default function SettingsPage() {
                   <span
                     role="img"
                     aria-label="Backups need a look"
+                    className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500 align-middle"
+                  />
+                )}
+                {item.to === "/settings/storage" && storageProblem && (
+                  <span
+                    role="img"
+                    aria-label="Storage needs a look"
                     className="ml-2 inline-block h-2 w-2 rounded-full bg-red-500 align-middle"
                   />
                 )}

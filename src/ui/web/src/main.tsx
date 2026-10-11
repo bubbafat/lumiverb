@@ -32,6 +32,7 @@ import ProcessingSection from "./pages/settings/ProcessingSection";
 import FilesSection from "./pages/settings/FilesSection";
 import NetworkSection from "./pages/settings/NetworkSection";
 import BackupsSection from "./pages/settings/BackupsSection";
+import StorageSection from "./pages/settings/StorageSection";
 import SecuritySection from "./pages/settings/SecuritySection";
 import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import { getApiKey } from "./api/client";
@@ -204,6 +205,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="files" element={<FilesSection />} />
               <Route path="network" element={<NetworkSection />} />
               <Route path="backups" element={<BackupsSection />} />
+              <Route path="storage" element={<StorageSection />} />
               <Route path="security" element={<SecuritySection />} />
               <Route path="keys" element={<ApiKeysSection />} />
             </Route>

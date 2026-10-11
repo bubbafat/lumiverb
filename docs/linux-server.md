@@ -217,6 +217,10 @@ sudo systemctl start lumiverb-api lumiverb-scheduler
 
 `lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while anything is connected to the databases, backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, migrates to this version, and marks each account's search index to be remade.
 
+## Where previews live
+
+Previews (every stored artifact) are in `DATA_DIR` (here `/mnt/ssd2/lumiverb`). Settings › Storage can move them to another folder, but the API's unit may write only under `DATA_DIR` (`ProtectSystem=strict`), so another folder there is refused ("Lumiverb can't write to …") until the unit allows it: add the folder to `ReadWritePaths` in `lumiverb-api.service` (deploy-api.sh writes it), then `sudo systemctl daemon-reload` and restart the API. A daemon-reload can take the GPU from running containers (prod's Ollama, see AI machines): check `docker exec ollama nvidia-smi` after it (`ollama ps` can still say GPU), and if the GPU is gone recreate the container (`docker compose -f ~/ollama/docker-compose.yaml up -d --force-recreate ollama`): a restart keeps the broken binding. A folder under `DATA_DIR` works as it is.
+
 ## Mac app changes (Swift, not built yet)
 
 1. **Report changes.** `LibraryWatcher` already gets FSEvents for each library root. After its debounce and the 30-second quarantine, send the changed paths, as the Mac sees them, to `POST /v1/changes` with body `{"paths": [...]}`.

@@ -33,7 +33,9 @@ that's `brew trust`.)
 Then open <http://localhost:6464> on that Mac and create your account. Add a
 library (Libraries › Add library: a name and the folder your photos and
 videos are in) and Lumiverb scans and processes it. Descriptions, tags and
-text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama).
+text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama). The previews it makes (thumbnails,
+video copies for analysis) grow with your libraries: Settings › Storage moves
+them to another drive, Lumiverb working meanwhile.
 
 It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with

@@ -31,6 +31,9 @@ class Machine:
     # account's libraries), and never one under these (the server's data).
     mapped_roots_only: bool = False
     refused_roots: tuple[str, ...] = ()
+    # The server's data folder (the scheduler's): where its previews are is
+    # read from it (src/shared/previews_location.py), as they may move.
+    data_dir: str = ""
     # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set.
     cache_home: str = ""
     # How analysis proxies are rendered here (src/processing/video/analysis_proxy.py):
@@ -46,6 +49,16 @@ class Machine:
     # Face batches a detection process does before a fresh one takes over
     # (ONNX Runtime leaks: src/producers/faces/detect.py).
     face_batches_per_process: int = 20
+
+    def refused_here(self) -> tuple[str, ...]:
+        """Folders never read as a library's, nor walked into inside one:
+        refused_roots, and the server's previews (where they are, and during
+        a move, were)."""
+        if not self.data_dir:
+            return self.refused_roots
+        from src.shared import previews_location
+
+        return (*self.refused_roots, *(str(root) for root in previews_location.read(self.data_dir).roots))
 
     @property
     def renders(self) -> int:

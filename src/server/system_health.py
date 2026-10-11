@@ -314,18 +314,38 @@ def _size(n: int) -> str:
     return f"{size:.1f} TB"
 
 
-def disk_row(*, free: int | None, total: int | None, now: datetime, error: str | None = None) -> Row:
-    """The data disk (DATA_DIR): red under 5% free, yellow under 15%."""
+def _space(free: int, total: int) -> tuple[str, str]:
+    share = free / total
+    state = RED if share < DISK_RED else YELLOW if share < DISK_YELLOW else GREEN
+    return state, f"{_size(free)} free of {_size(total)} ({share:.0%})"
+
+
+def disk_row(*, free: int | None, total: int | None, now: datetime, error: str | None = None,
+             previews: Mapping[str, Any] | None = None) -> Row:
+    """The data disk (DATA_DIR) and, when they're elsewhere, the previews'
+    (`previews`: folder, available, free, total, same_disk, moving: share
+    moved): red under 5% free or the previews' drive unplugged, yellow under
+    15%."""
     row = Row("disk", "Disk", GREEN, "", checked_at=now)
     if error or not total or free is None:
         row.state, row.reason = YELLOW, f"Couldn't read the data disk: {error or 'no size'}"
         return row
-    share = free / total
-    row.reason = f"{_size(free)} free of {_size(total)} ({share:.0%})."
-    if share < DISK_RED:
-        row.state = RED
-    elif share < DISK_YELLOW:
-        row.state = YELLOW
+    row.state, said = _space(free, total)
+    row.reason = f"{said}."
+    if previews:
+        moving = previews.get("moving")
+        doing = f" Moving the previews: {moving:.0%}." if moving is not None else ""
+        if not previews.get("available"):
+            row.state, row.link = RED, "/settings/storage"
+            row.reason = f"The previews folder isn't there: {previews.get('folder')}. Is its drive plugged in?"
+            return row
+        if not previews.get("same_disk") and previews.get("total"):
+            state, theirs = _space(int(previews.get("free") or 0), int(previews["total"]))
+            row.reason = f"Data: {said}. Previews: {theirs}.{doing}"
+            row.state = max(row.state, state, key=_RANK.__getitem__)
+            row.link = "/settings/storage"
+        elif doing:
+            row.reason += doing
     return row
 
 

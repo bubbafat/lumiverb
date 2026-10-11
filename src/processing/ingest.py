@@ -188,6 +188,34 @@ def _generate_video_preview(source_path: Path) -> bytes:
         preview_path.unlink(missing_ok=True)
 
 
+def _refused_folders() -> dict[str, set[tuple[int, int]]]:
+    """The folders a library walk never goes into (the server's data and its
+    previews, which may be on a library's drive, even inside its folder), as
+    {lowercased name: {(device, inode)}}: matched by what they are, whatever
+    the path's spelling (a case-insensitive disk) or the links to them."""
+    from src.processing.machine import current
+
+    out: dict[str, set[tuple[int, int]]] = {}
+    for folder in current().refused_here():
+        try:
+            st = os.stat(folder)
+        except OSError:
+            continue
+        out.setdefault(Path(folder).name.lower(), set()).add((st.st_dev, st.st_ino))
+    return out
+
+
+def _is_refused(path: Path, refused: dict[str, set[tuple[int, int]]]) -> bool:
+    same_name = refused.get(path.name.lower())
+    if not same_name:
+        return False
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) in same_name
+
+
 def _walk_library(
     root_path: Path,
     path_prefix: str | None = None,
@@ -227,8 +255,11 @@ def _walk_library(
     t_filters = tenant_filters or []
     l_filters = library_filters or []
 
+    refused = _refused_folders()
     found: list[Path] = []
-    for folder, _dirs, names in os.walk(walk_root, onerror=_unreadable):
+    for folder, dirs, names in os.walk(walk_root, onerror=_unreadable):
+        if refused:
+            dirs[:] = [d for d in dirs if not _is_refused(Path(folder, d), refused)]
         found.extend(Path(folder, name) for name in names)
 
     results = []
