@@ -1,21 +1,25 @@
 """lumiverb-server: look after this machine's Lumiverb server.
 
-    lumiverb-server init --env FILE --data-dir DIR [--quickwit-config FILE] [--nginx-site FILE]
+    lumiverb-server init --env FILE --data-dir DIR [--pg-bin DIR] [--quickwit-bin FILE --quickwit-config FILE]
+                         [--nginx-bin FILE --nginx-config FILE]
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
 
-init: the install's env file, Quickwit's config and the nginx site, each
-written only if it isn't there (init.py), for Homebrew's post_install.
+init: the install's env file, Quickwit's config and nginx's, each written
+only if it isn't there (init.py), for Homebrew's post_install.
 
 migrate: the control plane's and every account's database migrations, as
 scripts/migrate.sh does on the brain.
 
-run: the server as one long-running service, for a Mac (Homebrew's
-service; launchd keeps it up). Makes its control database if it's missing,
-and migrates, waiting for Postgres if it isn't up yet; then runs the API and the scheduler as the brain's systemd
-units do (supervise.py) and posts upkeep as its timers do (upkeep.py), until
-SIGTERM. The brain keeps its systemd units: it doesn't use this.
+run: the whole server as one long-running service, for a Mac (Homebrew's
+one service; launchd keeps it up). It starts what the env file names
+(PG_BIN: Lumiverb's own PostgreSQL, made on first start; QUICKWIT_BIN;
+NGINX_BIN), makes the control database if it's missing and migrates,
+waiting for PostgreSQL, then runs the API and the scheduler as the brain's
+systemd units do (supervise.py) and posts upkeep as its timers do
+(upkeep.py), until SIGTERM. The brain keeps its systemd units: it doesn't
+use this.
 
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
@@ -50,6 +54,12 @@ from src.server.lifecycle.migrate import (
     MigrationError,
     create_database_if_missing,
     migrate,
+)
+from src.server.lifecycle.postgres import (
+    PostgresError,
+    make_cluster_if_missing,
+    postgres_argv,
+    postgres_env,
 )
 from src.server.lifecycle.supervise import Child, Supervisor
 
@@ -97,11 +107,29 @@ def data_dir(env: dict[str, str]) -> Path:
     return path
 
 
-def server_children(env: dict[str, str], *, python: str = sys.executable, cwd: Path = APP_DIR) -> list[Child]:
-    """The API and the scheduler, with the brain's units' environment, restart
-    delays and stop times (deploy-api.sh), API first."""
+def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
+                    cwd: Path = APP_DIR) -> list[Child]:
+    """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
+    API and the scheduler (once `migrated`), with the brain's units'
+    environment, restart delays and stop times (deploy-api.sh). They stop in
+    reverse: the scheduler first, PostgreSQL last."""
     base = {**env, "PYTHONUNBUFFERED": "1"}
     data = data_dir(env)
+    started_first: list[Child] = []
+    if env.get("PG_BIN"):
+        # Stopped last, once the API and the scheduler, its clients, have gone:
+        # a fast shutdown (SIGINT), the postmaster stopping its own backends.
+        started_first.append(Child("postgres", postgres_argv(Path(env["PG_BIN"]), data,
+                                                             env["CONTROL_PLANE_DATABASE_URL"]),
+                                   postgres_env(base), cwd, restart_after=5, stop_within=60, term_main_only=True,
+                                   stop_signal=signal.SIGINT))
+    if env.get("QUICKWIT_BIN"):
+        started_first.append(Child("quickwit", [env["QUICKWIT_BIN"], "run", "--config", env["QUICKWIT_CONFIG"]],
+                                   base, cwd, restart_after=5, stop_within=30))
+    if env.get("NGINX_BIN"):
+        started_first.append(Child("nginx", [env["NGINX_BIN"], "-p", f"{data / 'nginx'}/",
+                                             "-c", env["NGINX_CONFIG"], "-e", "stderr"],
+                                   base, cwd, restart_after=5, stop_within=15, term_main_only=True))
     api = Child(
         "api",
         [python, "-m", "uvicorn", "src.server.api.main:app",
@@ -110,7 +138,7 @@ def server_children(env: dict[str, str], *, python: str = sys.executable, cwd: P
          "--workers", env.get("LUMIVERB_API_WORKERS") or DEFAULT_API_WORKERS],
         # Large uploads (analysis proxies) are spooled on the data disk.
         {**base, "TMPDIR": str(data / "tmp")}, cwd,
-        restart_after=5, stop_within=90, empty_first=data / "tmp",
+        restart_after=5, stop_within=90, empty_first=data / "tmp", start_after=migrated,
     )
     scheduler = Child(
         "scheduler",
@@ -118,8 +146,9 @@ def server_children(env: dict[str, str], *, python: str = sys.executable, cwd: P
         {**base, "XDG_CACHE_HOME": str(data / "cache"), "TMPDIR": str(data / "worker-tmp")}, cwd,
         # It lets jobs in hand finish for up to 25 s; only it hears the stop.
         restart_after=30, stop_within=40, term_main_only=True, empty_first=data / "worker-tmp",
+        start_after=migrated,
     )
-    return [api, scheduler]
+    return [*started_first, api, scheduler]
 
 
 def migrate_when_ready(url: str, stop: threading.Event, *, migrate_fn: Callable[[str], int] = migrate,
@@ -150,12 +179,20 @@ def _init(args: argparse.Namespace) -> int:
     env_file = _named_env_file(args.env)
     if env_file is None:
         raise InstallError("Say which env file: --env FILE or $LUMIVERB_ENV_FILE")
-    choices = Choices(data_dir=args.data_dir.absolute() if args.data_dir else None,
-                      pg_port=args.pg_port, api_port=args.api_port,
-                      quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host)
+    def full(path: Path | None) -> Path | None:
+        return path.absolute() if path else None
+
+    choices = Choices(data_dir=full(args.data_dir), pg_port=args.pg_port, api_port=args.api_port,
+                      quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host,
+                      pg_bin=full(args.pg_bin), quickwit_bin=full(args.quickwit_bin),
+                      quickwit_config=full(args.quickwit_config), nginx_bin=full(args.nginx_bin),
+                      nginx_config=full(args.nginx_config))
+    if (choices.quickwit_bin is None) != (choices.quickwit_config is None) or (
+            (choices.nginx_bin is None) != (choices.nginx_config is None)):
+        raise InstallError("Name each program with its config: --quickwit-bin with --quickwit-config, "
+                           "--nginx-bin with --nginx-config")
     try:
-        init(env_file, choices, quickwit_config=args.quickwit_config, nginx_site_file=args.nginx_site,
-             web_root=args.web_root)
+        init(env_file, choices, web_root=args.web_root)
     except InitError as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
@@ -184,28 +221,43 @@ def _created_and_migrated(url: str) -> int:
     return migrate(url, say=logger.info)
 
 
+def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrated: threading.Event) -> None:
+    """Migrations (waiting for PostgreSQL), then the API and the scheduler may
+    start, and upkeep runs."""
+    first_wait = 1.0 if env.get("PG_BIN") else 5.0  # ours is up in a second or two
+    if not migrate_when_ready(url, stop, migrate_fn=_created_and_migrated, first_wait=first_wait):
+        return
+    migrated.set()
+    base_url = f"http://127.0.0.1:{env.get('API_PORT') or DEFAULT_API_PORT}"
+    if env.get("ADMIN_KEY"):
+        schedule = upkeep.Schedule(datetime.now(), data_dir(env) / "upkeep-state.json")
+        upkeep.run_upkeep(schedule, stop, is_healthy=lambda: upkeep.healthy(base_url),
+                          send=lambda path: upkeep.post(base_url, path, env["ADMIN_KEY"]))
+    else:
+        logger.warning("No ADMIN_KEY: upkeep (search sync, trash purge, cleanup) won't run")
+
+
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
-    data_dir(env)  # before anything starts
+    data = data_dir(env)  # before anything starts
     logging.basicConfig(level=logging.INFO, format="lumiverb-server: %(message)s")
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: stop.set())
 
-    if not migrate_when_ready(url, stop, migrate_fn=_created_and_migrated):
-        return 0
-    base_url = f"http://127.0.0.1:{env.get('API_PORT') or DEFAULT_API_PORT}"
-    if env.get("ADMIN_KEY"):
-        schedule = upkeep.Schedule(datetime.now(), data_dir(env) / "upkeep-state.json")
-        threading.Thread(
-            target=upkeep.run_upkeep, name="upkeep", daemon=True,
-            args=(schedule, stop),
-            kwargs={"is_healthy": lambda: upkeep.healthy(base_url),
-                    "send": lambda path: upkeep.post(base_url, path, env["ADMIN_KEY"])},
-        ).start()
-    else:
-        logger.warning("No ADMIN_KEY: upkeep (search sync, trash purge, cleanup) won't run")
-    Supervisor(server_children(env)).run(stop)
+    if env.get("PG_BIN"):
+        try:
+            if make_cluster_if_missing(Path(env["PG_BIN"]), data, url):
+                logger.info("Made Lumiverb's database in %s", data / "postgres")
+        except PostgresError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+    if env.get("NGINX_BIN"):
+        (data / "nginx").mkdir(parents=True, exist_ok=True)
+    migrated = threading.Event()
+    threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
+                     daemon=True).start()
+    Supervisor(server_children(env, migrated=migrated)).run(stop)
     return 0
 
 
@@ -260,8 +312,11 @@ def main(argv: list[str] | None = None) -> int:
         "init", help="write the install's env file, Quickwit's config and the nginx site, each only if it isn't there")
     _env_option(init_command, argparse.SUPPRESS)
     init_command.add_argument("--data-dir", type=Path, help="where its data goes (a new env file needs it)")
-    init_command.add_argument("--quickwit-config", type=Path, help="write Quickwit's config here")
-    init_command.add_argument("--nginx-site", type=Path, help="write the nginx site here")
+    init_command.add_argument("--pg-bin", type=Path, help="PostgreSQL's bin folder: run starts Lumiverb's own")
+    init_command.add_argument("--quickwit-bin", type=Path, help="Quickwit: run starts it")
+    init_command.add_argument("--quickwit-config", type=Path, help="Quickwit's config, written here")
+    init_command.add_argument("--nginx-bin", type=Path, help="nginx: run starts it")
+    init_command.add_argument("--nginx-config", type=Path, help="nginx's config, written here")
     init_command.add_argument("--web-root", type=Path, default=WEB_ROOT, help="the web build nginx serves")
     for port in ("pg", "api", "quickwit", "web"):
         init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")

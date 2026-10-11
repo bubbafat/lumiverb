@@ -20,7 +20,9 @@ from sqlalchemy import create_engine, make_url, text
 from testcontainers.postgres import PostgresContainer
 
 from src.server.lifecycle import cli
+from src.server.lifecycle.init import nginx_conf, nginx_site, this_machine_only
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
+from tests.test_server_postgres import NO_POSTGRES, free_port, postgres_bin
 
 
 @pytest.mark.fast
@@ -39,6 +41,46 @@ def test_the_children_are_the_brains_units(tmp_path):
     assert (scheduler.restart_after, scheduler.stop_within, scheduler.term_main_only) == (30, 40, True)
     assert api.env["PYTHONUNBUFFERED"] == scheduler.env["PYTHONUNBUFFERED"] == "1"
     assert scheduler.env["ADMIN_KEY"] == "k"  # the install's variables reach both
+
+
+@pytest.mark.fast
+def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp_path):
+    migrated = threading.Event()
+    env = {"DATA_DIR": str(tmp_path), "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/cp",
+           "PG_BIN": "/pg/bin", "QUICKWIT_BIN": "/qw/quickwit", "QUICKWIT_CONFIG": "/etc/quickwit.yaml",
+           "NGINX_BIN": "/nginx/nginx", "NGINX_CONFIG": "/etc/nginx.conf"}
+    children = cli.server_children(env, migrated=migrated, python="/py", cwd=tmp_path)
+    # Stopped in reverse: the scheduler first, PostgreSQL (its clients gone) last.
+    assert [c.name for c in children] == ["postgres", "quickwit", "nginx", "api", "scheduler"]
+    postgres, quickwit, nginx, api, scheduler = children
+    assert postgres.argv == ["/pg/bin/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468",
+                             "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]
+    assert postgres.term_main_only, "the postmaster stops its own backends"
+    assert postgres.stop_signal == signal.SIGINT, "a fast shutdown: its clients have gone"
+    assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
+    assert quickwit.argv == ["/qw/quickwit", "run", "--config", "/etc/quickwit.yaml"]
+    assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
+    assert all(c.start_after is None for c in (postgres, quickwit, nginx))
+    assert api.start_after is migrated and scheduler.start_after is migrated
+
+
+# The formula's service `stop_timeout` (launchd's ExitTimeOut) in
+# bubbafat/homebrew-lumiverb: past it launchd kills the whole service.
+HOMEBREW_STOP_TIMEOUT_SEC = 240
+
+
+@pytest.mark.fast
+def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
+    env = {"DATA_DIR": str(tmp_path), "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://l:p@127.0.0.1:6468/c",
+           "PG_BIN": "/pg", "QUICKWIT_BIN": "/qw", "QUICKWIT_CONFIG": "/q", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c"}
+    # One after another, each at its longest.
+    assert sum(c.stop_within for c in cli.server_children(env, python="/py", cwd=tmp_path)) <= HOMEBREW_STOP_TIMEOUT_SEC
+
+
+@pytest.mark.fast
+def test_nothing_named_is_the_api_and_the_scheduler_only(tmp_path):
+    assert [c.name for c in cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)] == [
+        "api", "scheduler"]
 
 
 @pytest.mark.fast
@@ -141,3 +183,64 @@ def test_run_migrates_serves_and_stops_cleanly(tmp_path):
     assert code == 0, said
     assert "api started" in said and "scheduler started" in said, said
     assert said.index("scheduler stopped") < said.index("api stopped"), said
+
+
+def _nginx_bin() -> Path | None:
+    for candidate in ("/opt/homebrew/opt/nginx/bin/nginx", "/usr/local/opt/nginx/bin/nginx", "/usr/sbin/nginx"):
+        if Path(candidate).exists():
+            return Path(candidate)
+    return None
+
+
+@pytest.mark.slow
+@NO_POSTGRES
+def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
+    """A Mac's one service: nothing running beforehand. It makes its own
+    PostgreSQL, the control database and migrates it, serves the API (through
+    its own nginx, where there's one), and stops it all, PostgreSQL last."""
+    lumiverb_server = Path(sys.executable).parent / "lumiverb-server"
+    pg_port, api_port, web_port = free_port(), free_port(), free_port()
+    url = f"postgresql+psycopg2://lumiverb:its-own-password@127.0.0.1:{pg_port}"
+    lines = [f"CONTROL_PLANE_DATABASE_URL={url}/control_plane", f"TENANT_DATABASE_URL_TEMPLATE={url}/{{tenant_id}}",
+             f"DATA_DIR={tmp_path / 'data'}", f"API_PORT={api_port}", "API_LISTEN_HOST=127.0.0.1",
+             "LUMIVERB_API_WORKERS=1", "ADMIN_KEY=test-admin-run", "JWT_SECRET=test-jwt-secret-of-at-least-32-bytes",
+             "QUICKWIT_ENABLED=false", f"PG_BIN={postgres_bin()}"]
+    nginx = _nginx_bin()
+    if nginx:
+        conf = tmp_path / "nginx.conf"
+        conf.write_text(nginx_conf(nginx_site(listen=this_machine_only(web_port), server_name="_",
+                                              root=tmp_path / "web", upstream=f"http://127.0.0.1:{api_port}")))
+        lines += [f"NGINX_BIN={nginx}", f"NGINX_CONFIG={conf}"]
+    env_file = tmp_path / "env"
+    env_file.write_text("\n".join(lines) + "\n")
+    out = tmp_path / "service.log"
+    # launchd's: none of the install's settings, and no locale.
+    clean_env = {k: v for k, v in os.environ.items()
+                 if not k.startswith(("CONTROL_PLANE", "TENANT_DATABASE", "LUMIVERB_", "API_", "DATA_DIR", "PG",
+                                      "LANG", "LC_"))}
+    with out.open("w") as log:
+        service = subprocess.Popen([str(lumiverb_server), "run", "--env", str(env_file)],
+                                   stdout=log, stderr=subprocess.STDOUT, env=clean_env)
+    try:
+        deadline = time.monotonic() + 120
+        while not _healthy(api_port):
+            assert service.poll() is None, out.read_text()
+            assert time.monotonic() < deadline, out.read_text()
+            time.sleep(0.5)
+        if nginx:
+            with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/v1/setup", timeout=5) as response:
+                assert response.status == 200 and b'"needed":true' in response.read()
+    finally:
+        service.send_signal(signal.SIGTERM)
+        try:
+            code = service.wait(timeout=180)
+        except subprocess.TimeoutExpired:
+            service.kill()
+            raise
+
+    said = out.read_text()
+    assert code == 0, said
+    for line in ("Made Lumiverb's database", "postgres started", "Created the control database", "Control plane"):
+        assert line in said, said
+    order = ["scheduler stopped", "api stopped", *(["nginx stopped"] if nginx else []), "postgres stopped"]
+    assert [said.index(line) for line in order] == sorted(said.index(line) for line in order), said
