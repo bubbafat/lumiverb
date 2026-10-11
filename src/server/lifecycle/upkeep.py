@@ -6,7 +6,9 @@
 
 A Mac is often asleep at 03:00, so a cleanup missed then runs as soon as the
 service is up again (start or wake): the last one is kept in a state file.
-Nothing is posted until the API answers /health.
+A first start, with none kept yet, waits for the first 03:00, as the
+Persistent timer does with no stamp. Nothing is posted until the API answers
+/health.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ class Schedule:
         self.started = started
         self.state_file = state_file
         self.upkeep_at: datetime | None = None
-        self.cleanup_at = self._load()
+        self.cleanup_at = self._load() or started  # none kept: the first 03:00 after it started
 
     def _load(self) -> datetime | None:
         try:
@@ -58,7 +60,7 @@ class Schedule:
         due = []
         if now - self.started >= FIRST_AFTER and (self.upkeep_at is None or now - self.upkeep_at >= EVERY):
             due.append("upkeep")
-        if self.cleanup_at is None or self.cleanup_at < last_cleanup_time(now):
+        if self.cleanup_at < last_cleanup_time(now):
             due.append("cleanup")
         return due
 

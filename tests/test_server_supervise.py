@@ -6,7 +6,6 @@ the way each unit does, and what's left is killed when its time is up."""
 from __future__ import annotations
 
 import os
-import signal
 import sys
 import threading
 import time
@@ -14,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from src.server.lifecycle.supervise import Child, Supervisor
+from src.server.lifecycle import supervise
+from src.server.lifecycle.supervise import Child, Supervisor, restart_delay
 
 pytestmark = pytest.mark.fast
 
@@ -107,6 +107,46 @@ def test_a_child_that_dies_is_started_again_after_its_delay(tmp_path):
     stop.set()
     thread.join(10)
     assert not thread.is_alive()
+
+
+def _exiting(restart_after: float, delay: float | None) -> Child:
+    return Child("scheduler", [], {}, Path("."), restart_after=restart_after, stop_within=40, delay=delay)
+
+
+def test_exits_soon_after_starting_wait_twice_as_long_each_time_up_to_ten_minutes():
+    child = _exiting(30, None)
+    waits = []
+    for _ in range(8):
+        child.delay = restart_delay(child, uptime=1)
+        waits.append(child.delay)
+    assert waits == [30, 60, 120, 240, 480, 600, 600, 600]
+
+
+def test_a_child_that_stayed_up_a_while_waits_only_its_own_delay_again():
+    assert restart_delay(_exiting(30, 600), uptime=supervise.STAYED_UP_SEC) == 30
+    assert restart_delay(_exiting(5, 40), uptime=supervise.STAYED_UP_SEC - 1) == 80
+
+
+# Exits at once, every time: a scheduler that can't import.
+_CRASH_LOOP = """
+import sys, time
+with open(sys.argv[1], "a") as f:
+    f.write(f"{time.monotonic()}\\n")
+sys.exit(1)
+"""
+
+
+def test_a_child_in_a_crash_loop_is_started_less_and_less_often(tmp_path):
+    starts = tmp_path / "starts"
+    child = _child(tmp_path, "scheduler", _CRASH_LOOP, str(starts), restart_after=0.2)
+    stop, thread = _running(Supervisor([child]))
+    _until(lambda: starts.exists() and len(starts.read_text().split()) >= 4)
+    stop.set()
+    thread.join(10)
+    times = [float(line) for line in starts.read_text().split()]
+    gaps = [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
+    # At least 0.2, 0.4, 0.8 s: each start waits twice the last.
+    assert all(gap >= 0.2 * 2 ** n for n, gap in enumerate(gaps[:3])), gaps
 
 
 def test_a_stop_goes_in_reverse_order_and_each_child_hears_sigterm(tmp_path):

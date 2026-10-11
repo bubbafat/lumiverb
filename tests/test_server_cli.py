@@ -39,6 +39,15 @@ def test_run_with_no_install_named_is_refused_and_starts_nothing(capsys, monkeyp
     assert _err(capsys).startswith("✗ Say which install:")
 
 
+def test_run_with_a_data_dir_that_isnt_a_full_path_is_refused_and_starts_nothing(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(cli, "migrate_when_ready", lambda *a, **k: pytest.fail("nothing may migrate"))
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://x\nDATA_DIR=data\n")
+    assert cli.main(["run", "--env", str(env_file)]) == 1
+    assert _err(capsys) == "✗ DATA_DIR must be a full path, not data"
+
+
 def test_the_environment_can_name_it(tmp_path, monkeypatch, capsys):
     called = []
     monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)

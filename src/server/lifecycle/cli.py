@@ -68,7 +68,13 @@ def install_env(env_file: Path | None) -> dict[str, str]:
 
 
 def data_dir(env: dict[str, str]) -> Path:
-    return Path(env.get("DATA_DIR") or APP_DIR / "data")
+    """DATA_DIR, else the install's data/. Raises InstallError when it isn't a
+    full path: run empties folders under it, so it's never taken from
+    wherever the service started."""
+    path = Path(env.get("DATA_DIR") or APP_DIR / "data")
+    if not path.is_absolute():
+        raise InstallError(f"DATA_DIR must be a full path, not {path}")
+    return path
 
 
 def server_children(env: dict[str, str], *, python: str = sys.executable, cwd: Path = APP_DIR) -> list[Child]:
@@ -133,6 +139,7 @@ def _migrate(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
+    data_dir(env)  # before anything starts
     logging.basicConfig(level=logging.INFO, format="lumiverb-server: %(message)s")
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):

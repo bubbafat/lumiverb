@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from src.server.lifecycle.upkeep import CLEANUP_PATH, UPKEEP_PATH, Schedule, last_cleanup_time, run_upkeep
+from src.server.lifecycle.upkeep import (
+    CLEANUP_PATH,
+    UPKEEP_PATH,
+    Schedule,
+    last_cleanup_time,
+    run_upkeep,
+)
 
 pytestmark = pytest.mark.fast
 
@@ -29,7 +35,6 @@ def test_the_latest_cleanup_time():
 
 def test_upkeep_two_minutes_after_start_then_every_five(tmp_path):
     s = _schedule(tmp_path)
-    s.done("cleanup", START)
     assert s.due(START + timedelta(minutes=1)) == []
     assert s.due(START + timedelta(minutes=2)) == ["upkeep"]
     s.done("upkeep", START + timedelta(minutes=2))
@@ -37,13 +42,16 @@ def test_upkeep_two_minutes_after_start_then_every_five(tmp_path):
     assert s.due(START + timedelta(minutes=7)) == ["upkeep"]
 
 
-def test_a_first_start_cleans_up_once_then_at_three_each_day(tmp_path):
+def test_a_first_start_waits_for_the_first_three_oclock_then_each_day(tmp_path):
+    # As the Persistent timer with no stamp yet: no cleanup the moment it's installed.
     s = _schedule(tmp_path)
-    assert s.due(START) == ["cleanup"]  # never yet
-    s.done("cleanup", START)
     s.done("upkeep", START)
+    assert "cleanup" not in s.due(START)
     assert "cleanup" not in s.due(datetime(2026, 10, 11, 2, 59))
     assert "cleanup" in s.due(datetime(2026, 10, 11, 3, 0))
+    s.done("cleanup", datetime(2026, 10, 11, 3, 0))
+    assert "cleanup" not in s.due(datetime(2026, 10, 12, 2, 59))
+    assert "cleanup" in s.due(datetime(2026, 10, 12, 3, 0))
 
 
 def test_a_cleanup_missed_while_asleep_runs_on_waking(tmp_path):
@@ -55,10 +63,13 @@ def test_a_cleanup_missed_while_asleep_runs_on_waking(tmp_path):
 
 
 def test_the_last_cleanup_is_kept_across_restarts(tmp_path):
+    # A missed one is still due after a restart: kept, not taken for a first start.
     first = _schedule(tmp_path)
-    first.done("cleanup", START)
+    first.done("cleanup", datetime(2026, 10, 9, 3, 0))  # then asleep through the 10th's
     again = _schedule(tmp_path, START + timedelta(hours=1))
-    assert "cleanup" not in again.due(START + timedelta(hours=1))
+    assert "cleanup" in again.due(START + timedelta(hours=1))
+    again.done("cleanup", START + timedelta(hours=1))
+    assert "cleanup" not in _schedule(tmp_path, START + timedelta(hours=2)).due(START + timedelta(hours=2))
 
 
 def _drive(schedule, *, healthy, send, clock):
@@ -88,7 +99,9 @@ def test_nothing_is_posted_until_the_api_is_healthy(tmp_path):
             health["ok"] = True
         return health["ok"]
 
-    _drive(_schedule(tmp_path), healthy=healthy, send=sent.append, clock=clock)
+    s = _schedule(tmp_path)
+    s.done("cleanup", START - timedelta(days=2))  # last night's was missed
+    _drive(s, healthy=healthy, send=sent.append, clock=clock)
     assert sent[:2] == [UPKEEP_PATH, CLEANUP_PATH]  # first at 5 min, once healthy
     assert sent.count(CLEANUP_PATH) == 1
 
@@ -101,8 +114,6 @@ def test_a_failed_post_waits_for_its_next_turn(tmp_path):
         tries.append(path)
         raise OSError("connection refused")
 
-    s = _schedule(tmp_path)
-    s.done("cleanup", START)
-    _drive(s, healthy=lambda: True, send=send, clock=clock)
+    _drive(_schedule(tmp_path), healthy=lambda: True, send=send, clock=clock)
     # 12 minutes: at 2, 7 and 12 min, not every turn.
     assert tries == [UPKEEP_PATH, UPKEEP_PATH, UPKEEP_PATH]

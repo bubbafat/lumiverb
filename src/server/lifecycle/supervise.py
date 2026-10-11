@@ -4,9 +4,11 @@ Homebrew service.
 
 Each child starts in its own process group. One that dies is started again
 after its delay. systemd restarts only on failure, but here nothing else
-would, so any exit is restarted. On stop, children stop in reverse order
-(the scheduler before the API), each sent SIGTERM the way its unit has it,
-then killed with what's left once its time is up.
+would, so any exit is restarted. One that keeps exiting soon after it starts
+(a bad setting, a missing model) waits twice as long each time, up to 10
+minutes, where systemd's start limit would give up. On stop, children stop
+in reverse order (the scheduler before the API), each sent SIGTERM the way
+its unit has it, then killed with what's left once its time is up.
 """
 
 from __future__ import annotations
@@ -25,6 +27,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+RESTART_MAX_SEC = 600.0
+# Up this long, a child that exits had been working: its next start waits only its own delay.
+STAYED_UP_SEC = 180.0
+
 
 @dataclass
 class Child:
@@ -40,7 +46,17 @@ class Child:
     term_main_only: bool = False
     empty_first: Path | None = None  # emptied before each start, as its ExecStartPre
     process: subprocess.Popen | None = field(default=None, repr=False)
+    started_at: float | None = None
     restart_at: float | None = None
+    delay: float | None = None  # its last wait before a start, while it keeps exiting
+
+
+def restart_delay(child: Child, uptime: float) -> float:
+    """How long before a child that exited is started again: its unit's
+    RestartSec, doubled for each exit soon after a start, up to RESTART_MAX_SEC."""
+    if child.delay is None or uptime >= STAYED_UP_SEC:
+        return child.restart_after
+    return min(child.delay * 2, max(RESTART_MAX_SEC, child.restart_after))
 
 
 def _empty(directory: Path) -> None:
@@ -68,17 +84,20 @@ class Supervisor:
         if child.empty_first is not None:
             _empty(child.empty_first)
         child.process = self._spawn(child.argv, env=child.env, cwd=child.cwd, start_new_session=True)
+        child.started_at = self._clock()
         child.restart_at = None
         logger.info("%s started (pid %d)", child.name, child.process.pid)
 
     def _watch(self, child: Child) -> None:
         now = self._clock()
         if child.process is not None and child.process.poll() is not None:
-            logger.warning("%s exited (%s); starting it again in %.0f s",
-                           child.name, child.process.returncode, child.restart_after)
+            uptime = now - (child.started_at or now)
+            child.delay = restart_delay(child, uptime)
+            logger.warning("%s exited (%s) after %.0f s; starting it again in %.0f s",
+                           child.name, child.process.returncode, uptime, child.delay)
             _signal_group(child.process, signal.SIGKILL)  # anything it left behind
             child.process = None
-            child.restart_at = now + child.restart_after
+            child.restart_at = now + child.delay
         if child.process is None and child.restart_at is not None and now >= child.restart_at:
             self._start(child)
 
