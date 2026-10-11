@@ -63,6 +63,8 @@ class Choices:
     nginx_bin: Path | None = None
     nginx_config: Path | None = None
     local_roots: bool = False  # LUMIVERB_ROOT_MAP: library folders read where they are
+    # LUMIVERB_RESET_ON_THIS_MACHINE: the person at this machine owns the install
+    reset_on_this_machine: bool = False
 
     def runs(self) -> dict[str, str]:
         named = {"PG_BIN": self.pg_bin, "QUICKWIT_BIN": self.quickwit_bin, "QUICKWIT_CONFIG": self.quickwit_config,
@@ -73,7 +75,8 @@ class Choices:
         named = {"DATA_DIR": self.data_dir, "API_PORT": self.api_port, "QUICKWIT_PORT": self.quickwit_port,
                  "WEB_PORT": self.web_port, "APP_HOST": self.app_host}
         roots = {"LUMIVERB_ROOT_MAP": LOCAL_ROOT_MAP} if self.local_roots else {}
-        return {key: str(value) for key, value in named.items() if value is not None} | self.runs() | roots
+        reset = {"LUMIVERB_RESET_ON_THIS_MACHINE": "true"} if self.reset_on_this_machine else {}
+        return {key: str(value) for key, value in named.items() if value is not None} | self.runs() | roots | reset
 
 
 def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> str:
@@ -91,6 +94,12 @@ def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> s
 # the files). The brain maps another machine's paths instead.
 LUMIVERB_ROOT_MAP='{LOCAL_ROOT_MAP}'
 """ if choices.local_roots else "")
+    reset = ("""
+# Forgot password, on this machine itself: the reset link at once (whoever is
+# at it owns this install). Never on a server: email, or lumiverb-server
+# reset-password.
+LUMIVERB_RESET_ON_THIS_MACHINE=true
+""" if choices.reset_on_this_machine else "")
     return f"""\
 # Written by lumiverb-server init, {now.strftime('%Y-%m-%dT%H:%M:%SZ')}. Yours to edit:
 # init never rewrites it (move it away and run init again to start over).
@@ -128,7 +137,7 @@ WEB_PORT={web_port}
 APP_ENV=production
 APP_HOST={choices.app_host or f'http://localhost:{web_port}'}
 LOG_LEVEL=INFO
-
+{reset}
 # Password reset SMTP (uncomment and fill in to enable forgot-password)
 # SMTP_HOST=smtp.example.com
 # SMTP_PORT=587

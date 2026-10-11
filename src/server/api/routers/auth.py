@@ -11,6 +11,7 @@ from typing import Annotated
 import bcrypt
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -189,16 +190,37 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
     return RefreshResponse(access_token=new_token)
 
 
-@router.post("/forgot-password", status_code=204)
+RESET_ELSEWHERE = ("Password reset isn't set up here. On the computer Lumiverb is installed on, "
+                   "use Forgot password there, or ask whoever looks after it.")
+RESET_NOT_SET_UP = "Password reset isn't set up here. Ask whoever looks after Lumiverb."
+
+
+@router.post("/forgot-password", status_code=204, response_model=None)
 def forgot_password(
     body: ForgotPasswordRequest,
     request: Request,
     background: BackgroundTasks,
-) -> None:
+) -> JSONResponse | None:
+    """Where the install says the person at its machine owns it (a Mac's,
+    LUMIVERB_RESET_ON_THIS_MACHINE), from that machine: the reset link the
+    email would carry, at once (a Mac has no email set up). Otherwise: the
+    email, when SMTP is set up."""
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+
     forgot_password_limiter.check(request)
     forgot_password_limiter.check(request, key=f"email:{body.email.strip().lower()}")
 
     settings = get_settings()
+    if settings.lumiverb_reset_on_this_machine and on_this_machine(request):
+        with _get_session() as session:
+            user = UserRepository(session).get_by_email(body.email.strip())
+            if user is None:
+                raise ApiError(404, "no_such_account", "There's no account with that email here.")
+            plaintext_token = secrets.token_urlsafe(32)
+            PasswordResetTokenRepository(session).create(user.user_id, plaintext_token, utcnow() + timedelta(hours=1))
+        return JSONResponse({"reset_url": f"/reset-password?token={plaintext_token}"})
+
     smtp_ready = all(
         [
             settings.smtp_host,
@@ -210,8 +232,10 @@ def forgot_password(
         ]
     )
     if not smtp_ready:
-        # Return the same result for any email when reset is unavailable.
-        raise HTTPException(status_code=501, detail="Password reset not configured")
+        # The same for any email when reset is unavailable here.
+        if settings.lumiverb_reset_on_this_machine:
+            raise ApiError(501, "reset_elsewhere", RESET_ELSEWHERE)
+        raise ApiError(501, "reset_not_set_up", RESET_NOT_SET_UP)
 
     # 204 always, at once: whether the email is known (and the mail's sent) happens after.
     background.add_task(_send_reset_email, body.email)
