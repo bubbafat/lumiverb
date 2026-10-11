@@ -22,6 +22,7 @@ from src.server.models.control_plane import User
 from src.server.repository.control_plane import TenantRepository, UserRepository
 
 DEFAULT_ACCOUNT_NAME = "Lumiverb"  # renamed later in Settings
+ALREADY_SET_UP = "This Lumiverb is set up already. Log in instead."
 # One setup at a time: a second waits, then finds the first admin made.
 _SETUP_LOCK = 0x4C56_5345  # "LVSE"
 
@@ -61,7 +62,7 @@ def create_first_admin(email: str, password: str, *, account_name: str | None = 
         try:
             with Session(engine) as session:
                 if not setup_needed(session):
-                    raise SetupError(409, "already_set_up", "This Lumiverb is set up already. Log in instead.")
+                    raise SetupError(409, "already_set_up", ALREADY_SET_UP)
                 accounts = [t for t in TenantRepository(session).list_all() if t.status == "active"]
                 if len(accounts) > 1:
                     raise SetupError(409, "several_accounts",

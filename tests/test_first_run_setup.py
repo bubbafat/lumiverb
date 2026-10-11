@@ -197,8 +197,10 @@ def test_the_command_line_makes_the_same_admin(control, tmp_path, monkeypatch, c
     [user] = _rows(control, User)
     assert user.role == "admin"
 
-    typed = iter([PASSWORD, PASSWORD])
-    assert cli.main(["setup", "--env", str(_env_file(tmp_path, control)), "--email", "b@example.com"]) == 1
+    # Closed: said before asking for anything.
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: pytest.fail("nothing may be asked"))
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("nothing may be asked"))
+    assert cli.main(["setup", "--env", str(_env_file(tmp_path, control))]) == 1
     assert capsys.readouterr().err.strip() == "✗ This Lumiverb is set up already. Log in instead."
 
 

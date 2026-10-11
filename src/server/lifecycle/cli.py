@@ -215,23 +215,35 @@ def _env_option(parser: argparse.ArgumentParser, default: object) -> None:
 
 
 def _setup(args: argparse.Namespace) -> int:
+    from sqlalchemy.exc import SQLAlchemyError
+
     from src.server.accounts import AccountError
     from src.server.config import get_settings
-    from src.server.setup import SetupError, create_first_admin
+    from src.server.database import get_control_session
+    from src.server.setup import ALREADY_SET_UP, SetupError, create_first_admin, setup_needed
 
     env, _ = _env_and_url(args)
     os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
     get_settings.cache_clear()
 
-    email = args.email or input("Email: ")
-    password = getpass("Password: ")
-    if getpass("Password again: ") != password:
-        print("✗ The passwords don't match", file=sys.stderr)
-        return 1
     try:
+        with get_control_session() as session:
+            needed = setup_needed(session)  # said before asking for anything
+        if not needed:
+            print(f"✗ {ALREADY_SET_UP}", file=sys.stderr)
+            return 1
+        email = args.email or input("Email: ")
+        password = getpass("Password: ")
+        if getpass("Password again: ") != password:
+            print("✗ The passwords don't match", file=sys.stderr)
+            return 1
         user = create_first_admin(email, password, account_name=args.account_name)
     except (SetupError, AccountError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
         return 1
     where = env.get("APP_HOST")
     print(f"✓ {user.email} is this Lumiverb's admin" + (f". Log in at {where}" if where else ""))

@@ -102,3 +102,20 @@ def test_a_line_it_cant_read_is_one_line_too(tmp_path, capsys):
     env_file.write_text("not a setting\n")
     assert cli.main(["--env", str(env_file), "migrate"]) == 1
     assert _err(capsys).startswith(f"✗ {env_file}, line 1: not KEY=VALUE")
+
+
+def test_setup_against_a_database_it_cant_reach_is_one_line(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "getpass", lambda _prompt: pytest.fail("nothing may be asked"))
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing\n"
+                        "TENANT_DATABASE_URL_TEMPLATE=postgresql+psycopg2://nobody:x@127.0.0.1:1/{tenant_id}\n")
+    # Restored afterwards: setup puts the file's settings in the environment.
+    monkeypatch.delenv("TENANT_DATABASE_URL_TEMPLATE", raising=False)
+    try:
+        assert cli.main(["setup", "--env", str(env_file), "--email", "a@example.com"]) == 1
+    finally:
+        from src.server.config import get_settings
+        from src.server.database import _engines
+        get_settings.cache_clear()
+        _engines.clear()
+    assert _err(capsys).startswith("✗ Can't reach the control database: ")

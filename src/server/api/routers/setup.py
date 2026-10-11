@@ -1,7 +1,11 @@
 """First-run setup from the web app (src/server/setup.py): the first admin,
 while nobody can log in yet, and only from the machine Lumiverb runs on. A
 new install is set up on that machine before it's opened to others; this
-holds for one that is open already (the brain's nginx listens everywhere)."""
+holds for one that is open already (the brain's nginx listens everywhere).
+
+A tunnel or proxy on the machine itself (cloudflared, `tailscale serve`,
+ngrok) brings other people's requests in over loopback, so they'd count as
+here: finish setup before putting one in front."""
 
 from __future__ import annotations
 

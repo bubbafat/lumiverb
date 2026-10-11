@@ -72,7 +72,10 @@ Or in the web app: its setup page appears while there's nobody to log in,
 and only works from the brain itself, so from another machine reach it
 through an SSH tunnel (`ssh -L 8080:localhost:80 the-brain`, then
 http://localhost:8080). Both are the same step (`src/server/setup.py`), and
-closed for good once there's a user. Later users: `lumiverb user create`,
+closed for good once there's a user. Finish it before putting a tunnel or
+proxy on the box in front of Lumiverb (`tailscale serve`, cloudflared,
+ngrok): its requests arrive from the box itself, so until then they could
+set it up too. Later users: `lumiverb user create`,
 or the web app's Admin › Users.
 
 ### 5. Create libraries with the Mac's paths
