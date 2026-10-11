@@ -39,6 +39,8 @@ dependencies = [
 lumiverb = "src.client.cli:main"
 # The brain's processing service (src/server/scheduler).
 lumiverb-scheduler = "src.server.scheduler.service:entry"
+# Look after a server on its own machine: migrations, and on a Mac its service (src/server/lifecycle).
+lumiverb-server = "src.server.lifecycle.cli:entry"
 
 [project.optional-dependencies]
 # CLI: local agent that talks to the API
