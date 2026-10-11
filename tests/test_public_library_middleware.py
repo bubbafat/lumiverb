@@ -395,6 +395,7 @@ def test_a_public_page_doesnt_show_notes(public_lib_client, spoken):
     public = client.get(f"/v1/assets/{spoken}", params={"public_library_id": library_id}).json()
     # Notes are the team's working notes (Robert's call, Oct 8).
     assert not public.get("note") and not public.get("note_author") and not public.get("note_updated_at")
+    assert public.get("face_count") is None  # who's in a clip is for signed-in people
     signed_in = client.get(f"/v1/assets/{spoken}", headers=auth).json()
     assert signed_in["note"] == "keep this take"
 

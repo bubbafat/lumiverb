@@ -168,6 +168,8 @@ export interface AssetDetail {
   note_author?: string | null;
   note_updated_at?: string | null;
   gps_accuracy_m?: number | null;
+  /** Faces found in it (null: not looked for yet, or a public page's); a video's, the people seen. */
+  face_count?: number | null;
   /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
   location?: AssetLocation | null;
 }

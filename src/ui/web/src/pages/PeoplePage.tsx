@@ -67,11 +67,17 @@ function InfiniteScrollSentinel({
 }
 
 function PersonCard({ person }: { person: PersonItem }) {
-  const { url, isLoading } = useAuthenticatedImage(
+  // Their face: the crop of their representative face. The clip's still only
+  // when there's no crop (it can show others too: a video's shows its first moment).
+  const crop = useFaceCrop(person.representative_face_id ?? "");
+  const hasCrop = !!crop.url;
+  const still = useAuthenticatedImage(
     person.representative_asset_id ?? "",
     "thumbnail",
-    { enabled: !!person.representative_asset_id },
+    { enabled: !!person.representative_asset_id && !hasCrop && !crop.isLoading },
   );
+  const url = crop.url ?? still.url;
+  const isLoading = crop.isLoading || (!hasCrop && still.isLoading);
 
   return (
     <Link
@@ -583,7 +589,7 @@ export default function PeoplePage() {
 
       {people.length === 0 && !peopleQuery.isLoading && remaining.length === 0 && (
         <p className="text-sm text-gray-500">
-          No named people yet. Use face clustering below to identify and name people in your photos.
+          No named people yet. Use face clustering below to identify and name people in your photos and videos.
         </p>
       )}
 

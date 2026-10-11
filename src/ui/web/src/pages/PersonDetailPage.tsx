@@ -5,6 +5,7 @@ import { getPerson, updatePerson, deletePerson, listPersonFaces, mergePerson, se
 import type { PersonItem } from "../api/client";
 import type { AssetPageItem } from "../api/types";
 import { useAuthenticatedImage } from "../api/useAuthenticatedImage";
+import { FaceCropImage } from "../components/FaceCropImage";
 import { Lightbox } from "../components/Lightbox";
 import { clipCount } from "../components/ProjectUsageList";
 import { clipOfFace, isVideoFace, momentLabel, personClips, type PersonClip } from "../lib/faceMoments";
@@ -32,9 +33,13 @@ function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: num
           <div className="flex h-full w-full items-center justify-center text-gray-600">No image</div>
         )}
         {video && (
-          <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
-            ▶ Video
-          </span>
+          <>
+            {/* Whose tile it is: a video's still can show others first. */}
+            <FaceCropImage faceId={clip.face.face_id} size={32} className="absolute left-1.5 top-1.5 ring-2 ring-black/60" />
+            <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
+              ▶ Video
+            </span>
+          </>
         )}
       </button>
       {video && clip.moments.length > 0 && (
