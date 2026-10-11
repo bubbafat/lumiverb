@@ -33,10 +33,10 @@ any install. The env file is the operator's, so this needs no other proof.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
-environment (a dev checkout). On Linux /etc/lumiverb/env is prod's, so a
-dev checkout run without one would migrate prod: it's refused instead. A
-variable already in the environment wins over the file's, as for the
-server's own settings.
+environment (a dev checkout). On Linux /etc/lumiverb/env is the live
+install's, so a dev checkout run without one would migrate it: it's refused
+instead. A variable already in the environment wins over the file's, as for
+the server's own settings.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ from src.server.lifecycle.supervise import Child, Supervisor
 logger = logging.getLogger("lumiverb-server")
 
 NO_INSTALL = ("Say which install: --env FILE or $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL in the "
-              "environment. None is assumed (on Linux, /etc/lumiverb/env is prod's).")
+              "environment. None is assumed (on Linux, /etc/lumiverb/env is the live install's).")
 DEFAULT_API_PORT = "8000"  # update.sh's default when the env file has none
 DEFAULT_API_WORKERS = "2"  # a Linux install's unit: uvicorn --workers 2
 MIGRATE_RETRY_MAX_SEC = 60.0

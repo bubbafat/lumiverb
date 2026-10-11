@@ -1,5 +1,5 @@
 """lumiverb-server's install is always named, never assumed
-(src/server/lifecycle/cli.py): on Linux /etc/lumiverb/env is prod's, so a
+(src/server/lifecycle/cli.py): on Linux /etc/lumiverb/env is the live install's, so a
 dev checkout run with no --env must not migrate prod. And a file it can't
 use is one clear line, not a traceback."""
 
