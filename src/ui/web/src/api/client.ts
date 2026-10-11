@@ -1057,6 +1057,25 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   return apiFetch<SystemHealth>("/system/health");
 }
 
+/** Whether other devices on the network may use a Mac's Lumiverb (Settings → Network). */
+export interface NetworkAccess {
+  /** Lumiverb runs this machine's web server (a Mac's install), so it's changed here. */
+  available: boolean;
+  /** Other devices may use it; otherwise this machine only. */
+  other_devices: boolean;
+  /** Where other devices reach it. */
+  addresses: string[];
+}
+
+export async function getNetworkAccess(): Promise<NetworkAccess> {
+  return apiFetch<NetworkAccess>("/system/network");
+}
+
+/** An admin's choice, on the machine itself (403 network_elsewhere otherwise). */
+export async function setNetworkAccess(otherDevices: boolean): Promise<NetworkAccess> {
+  return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: { other_devices: otherDevices } });
+}
+
 /** A clip whose last try failed (Settings → Processing). */
 export interface FailingClip {
   asset_id: string;

@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/ai", label: "AI" },
   { to: "/settings/processing", label: "Processing" },
   { to: "/settings/files", label: "Files" },
+  { to: "/settings/network", label: "Network" },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];

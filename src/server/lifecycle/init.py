@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.server.lifecycle import network
 from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
 
@@ -228,12 +229,6 @@ server {{
 """
 
 
-def this_machine_only(port: int) -> tuple[str, ...]:
-    """nginx on this machine's own addresses only: a new install is set up
-    there (routers/setup.py) before anyone opens it to other devices."""
-    return (f"listen 127.0.0.1:{port} default_server;", f"listen [::1]:{port} default_server;")
-
-
 # What the web build serves. nginx's own list isn't read: this config stands alone.
 _TYPES = (
     "text/html html;", "text/css css;", "application/javascript js mjs;", "application/json json;",
@@ -322,7 +317,12 @@ def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Ca
         text = quickwit_yaml(data, _port(env, "QUICKWIT_PORT", env_file))
         say(f"✓ {path}" if write_new(path, text, 0o644) else f"· {path} kept")
     if env.get("NGINX_CONFIG"):
+        # Where it listens is Settings › Network's (network.py): this machine
+        # only, as a new install is set up there (routers/setup.py), until an
+        # admin says other devices may use it. run rewrites the lines then.
         path = Path(env["NGINX_CONFIG"])
-        site = nginx_site(listen=this_machine_only(_port(env, "WEB_PORT", env_file)), server_name="_",
+        web_port = _port(env, "WEB_PORT", env_file)
+        site = nginx_site(listen=(network.include_line(data),), server_name="_",
                           root=web_root, upstream=f"http://127.0.0.1:{_port(env, 'API_PORT', env_file)}")
         say(f"✓ {path}" if write_new(path, nginx_conf(site), 0o644) else f"· {path} kept")
+        network.write_listen_file(data, web_port, network.other_devices(data))

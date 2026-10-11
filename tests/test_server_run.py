@@ -20,8 +20,8 @@ import pytest
 from sqlalchemy import create_engine, make_url, text
 from testcontainers.postgres import PostgresContainer
 
-from src.server.lifecycle import cli
-from src.server.lifecycle.init import nginx_conf, nginx_site, this_machine_only
+from src.server.lifecycle import cli, network
+from src.server.lifecycle.init import nginx_conf, nginx_site
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 from tests.test_server_postgres import NO_POSTGRES, free_port, postgres_bin
 
@@ -221,6 +221,31 @@ def _nginx_bin() -> Path | None:
     return None
 
 
+def _setup_needed(base: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base}/v1/setup", timeout=5) as response:
+            return response.status == 200 and b'"needed":true' in response.read()
+    except OSError:
+        return False
+
+
+def _other_devices_may_use_it(data: Path, web_port: int, out: Path) -> None:
+    """Settings › Network's choice, as the API writes it: run rewrites nginx's
+    listen lines and restarts it, and it answers on the network's address too
+    (where this machine has one), not only on this machine's own."""
+    lan = network._lan_address()
+    if lan:
+        assert not _setup_needed(f"http://{lan}:{web_port}"), "this machine only, until an admin says"
+    network.set_other_devices(data, True)
+    deadline = time.monotonic() + 30
+    while "Other devices on the network may use it now: restarting nginx" not in out.read_text() or not all(
+            _setup_needed(f"http://{host}:{web_port}") for host in ["127.0.0.1", *([lan] if lan else [])]):
+        assert time.monotonic() < deadline, out.read_text()
+        time.sleep(0.5)
+    assert f"listen {web_port} default_server;" in network.listen_file(data).read_text()
+    assert "nginx restarting" in out.read_text()
+
+
 @pytest.mark.slow
 @NO_POSTGRES
 def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
@@ -237,9 +262,9 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
     nginx = _nginx_bin()
     if nginx:
         conf = tmp_path / "nginx.conf"
-        conf.write_text(nginx_conf(nginx_site(listen=this_machine_only(web_port), server_name="_",
+        conf.write_text(nginx_conf(nginx_site(listen=(network.include_line(tmp_path / "data"),), server_name="_",
                                               root=tmp_path / "web", upstream=f"http://127.0.0.1:{api_port}")))
-        lines += [f"NGINX_BIN={nginx}", f"NGINX_CONFIG={conf}"]
+        lines += [f"NGINX_BIN={nginx}", f"NGINX_CONFIG={conf}", f"WEB_PORT={web_port}"]
     env_file = tmp_path / "env"
     env_file.write_text("\n".join(lines) + "\n")
     out = tmp_path / "service.log"
@@ -257,8 +282,8 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
             assert time.monotonic() < deadline, out.read_text()
             time.sleep(0.5)
         if nginx:
-            with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/v1/setup", timeout=5) as response:
-                assert response.status == 200 and b'"needed":true' in response.read()
+            assert _setup_needed(f"http://127.0.0.1:{web_port}")
+            _other_devices_may_use_it(tmp_path / "data", web_port, out)
     finally:
         service.send_signal(signal.SIGTERM)
         try:
@@ -272,4 +297,5 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
     for line in ("Made Lumiverb's database", "postgres started", "Created the control database", "Control plane"):
         assert line in said, said
     order = ["scheduler stopped", "api stopped", *(["nginx stopped"] if nginx else []), "postgres stopped"]
-    assert [said.index(line) for line in order] == sorted(said.index(line) for line in order), said
+    # The last of each: nginx also stopped once to restart.
+    assert [said.rindex(line) for line in order] == sorted(said.rindex(line) for line in order), said

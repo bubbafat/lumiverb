@@ -49,7 +49,7 @@ from datetime import datetime
 from getpass import getpass
 from pathlib import Path
 
-from src.server.lifecycle import upkeep
+from src.server.lifecycle import network, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -321,12 +321,22 @@ def _run(args: argparse.Namespace) -> int:
             return 1
     if env.get("NGINX_BIN"):
         (data / "nginx").mkdir(parents=True, exist_ok=True)
+    # Its own nginx listens where Settings › Network says: on this machine only
+    # until an admin says other devices may use it.
+    web_port = env.get("WEB_PORT", "")
+    listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
+    if listens:
+        network.write_listen_file(data, int(web_port), network.other_devices(data))
+    supervisor = Supervisor(children)
+    if listens:
+        threading.Thread(target=network.watch, args=(data, int(web_port), stop, lambda: supervisor.restart_soon("nginx")),
+                         name="network-watch", daemon=True).start()
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()
     launched, upgraded = _launched_as(), threading.Event()
     threading.Thread(target=watch_for_upgrade, args=(launched, stop, upgraded), kwargs={"every": UPGRADE_CHECK_SEC},
                      name="upgrade-watch", daemon=True).start()
-    Supervisor(children).run(stop)
+    supervisor.run(stop)
     if upgraded.is_set():
         # The same process (launchd's job stays up), now the new install's code.
         os.execv(launched, [str(launched), *sys.argv[1:]])

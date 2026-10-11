@@ -37,7 +37,9 @@ videos are in) and Lumiverb scans and processes it.
 It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
 another PostgreSQL you run. It also brings ffmpeg, exiftool, libvips and
-Python 3.12. The web app is for that Mac only to begin with. Details, ports
+Python 3.12. The web app is for that Mac only to begin with; to use it from
+a phone or another computer, an admin turns on Settings › Network on that
+Mac. Details, ports
 and the Terminal way to create the account: the
 [tap's README](https://github.com/bubbafat/homebrew-lumiverb).
 
