@@ -119,3 +119,24 @@ def test_setup_against_a_database_it_cant_reach_is_one_line(tmp_path, capsys, mo
         get_settings.cache_clear()
         _engines.clear()
     assert _err(capsys).startswith("✗ Can't reach the control database: ")
+
+
+@pytest.mark.parametrize("command", ["run", "setup"])
+def test_an_env_file_missing_a_server_setting_says_which_before_anything_starts(command, tmp_path, capsys,
+                                                                               monkeypatch):
+    # The API and the scheduler would otherwise fail at their first use, over and over.
+    monkeypatch.setattr(cli, "Supervisor", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.delenv("TENANT_DATABASE_URL_TEMPLATE", raising=False)
+    env_file = tmp_path / "env"
+    env_file.write_text(f"CONTROL_PLANE_DATABASE_URL=postgresql://x\nDATA_DIR={tmp_path}\n")
+    assert cli.main([command, "--env", str(env_file)]) == 1
+    assert _err(capsys) == f"✗ {env_file} needs TENANT_DATABASE_URL_TEMPLATE"
+
+
+def test_migrate_needs_only_the_control_database(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(cli, "migrate", lambda url: called.append(url) or 0)
+    monkeypatch.delenv("TENANT_DATABASE_URL_TEMPLATE", raising=False)
+    env_file = tmp_path / "env"
+    env_file.write_text("CONTROL_PLANE_DATABASE_URL=postgresql://x\n")
+    assert cli.main(["migrate", "--env", str(env_file)]) == 0 and called == ["postgresql://x"]

@@ -182,11 +182,26 @@ def migrate_when_ready(url: str, stop: threading.Event, *, migrate_fn: Callable[
     return False
 
 
-def _env_and_url(args: argparse.Namespace) -> tuple[dict[str, str], str]:
+def missing_settings(env: dict[str, str]) -> list[str]:
+    """The server's required settings (src/server/config.py) the install
+    doesn't set: without them the API and the scheduler fail at their first
+    use, over and over."""
+    from src.server.config import Settings
+
+    return [name.upper() for name, field in Settings.model_fields.items()
+            if field.is_required() and not env.get(name.upper())]
+
+
+def _env_and_url(args: argparse.Namespace, *, server: bool = False) -> tuple[dict[str, str], str]:
+    """The install's env and control database URL; for the server (run,
+    setup), also every setting it requires."""
     env = install_env(args.env)
+    where = args.env or os.environ.get("LUMIVERB_ENV_FILE") or "the environment"
     url = env.get("CONTROL_PLANE_DATABASE_URL")
     if not url:
-        raise InstallError(f"No CONTROL_PLANE_DATABASE_URL in {args.env or os.environ.get('LUMIVERB_ENV_FILE')}")
+        raise InstallError(f"No CONTROL_PLANE_DATABASE_URL in {where}")
+    if server and (missing := missing_settings(env)):
+        raise InstallError(f"{where} needs {', '.join(missing)}")
     return env, url
 
 
@@ -286,7 +301,7 @@ def _launched_as() -> Path:
 
 
 def _run(args: argparse.Namespace) -> int:
-    env, url = _env_and_url(args)
+    env, url = _env_and_url(args, server=True)
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
     named = _named_env_file(args.env)
@@ -331,7 +346,7 @@ def _setup(args: argparse.Namespace) -> int:
     from src.server.database import get_control_session
     from src.server.setup import ALREADY_SET_UP, SetupError, create_first_admin, setup_needed
 
-    env, _ = _env_and_url(args)
+    env, _ = _env_and_url(args, server=True)
     os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
     get_settings.cache_clear()
 
