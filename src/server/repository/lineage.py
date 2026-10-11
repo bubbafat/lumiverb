@@ -207,11 +207,12 @@ def _stale_params(artifact: str, want: dict[str, Any], library_id: str | None,
 def _below_sql(artifact: str) -> str:
     """Made below the level now (:level): the producer's own, current but for
     its level (a level isn't in the hash), at a lower one or none recorded.
-    "false" for a producer without a level setting."""
+    A person's never is: it's current whatever the settings. "false" for a
+    producer without a level setting."""
     if PRODUCERS[artifact].level is None:
         return "false"
-    return (f"(l.asset_id IS NOT NULL AND NOT ({_stale_sql()}) AND NOT ({RECHECK[artifact]})"
-            " AND (l.level IS NULL OR l.level < :level))")
+    return (f"(l.asset_id IS NOT NULL AND l.producer <> :person AND NOT ({_stale_sql()})"
+            f" AND NOT ({RECHECK[artifact]}) AND (l.level IS NULL OR l.level < :level))")
 
 
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,

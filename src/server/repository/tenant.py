@@ -3409,8 +3409,10 @@ def _mark_clusters_dirty(session: Session) -> None:
 
 
 def regroup_faces(session: Session, before: dict, after: dict) -> None:
-    """The faces producer's regroup: its grouping settings changed."""
-    _mark_clusters_dirty(session)
+    """The faces producer's regroup: its grouping settings changed (not its
+    level, which changes what's found next, not the groups)."""
+    if any(before.get(k) != after.get(k) for k in ("merge_close_clusters", "merge_distance")):
+        _mark_clusters_dirty(session)
 
 
 def face_clusters_version(session: Session) -> str:
