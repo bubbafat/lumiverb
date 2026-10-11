@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { getApiKey, getCurrentUser } from "../api/client";
 import { Sidebar } from "./Sidebar";
 import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
@@ -49,9 +51,12 @@ export default function AppShell() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
-  // Admin's dot: the system's health, for anyone signed in.
-  const health = useSystemHealth();
-  const adminAlert = healthAlert(health.data, health.isError);
+  // Admin, and its dot (the system's health), for admins only. Hidden until the
+  // role is known: never shown to someone it isn't for.
+  const { data: me } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser, enabled: Boolean(getApiKey()) });
+  const isAdmin = me?.role === "admin";
+  const health = useSystemHealth(undefined, isAdmin);
+  const adminAlert = isAdmin ? healthAlert(health.data, health.isError) : null;
 
   const sidebarWidth = collapsed ? "w-12" : "w-64";
 
@@ -66,6 +71,7 @@ export default function AppShell() {
           onToggleCollapsed={() => setCollapsed((prev) => !prev)}
           onOpenPalette={() => setPaletteOpen(true)}
           adminAlert={adminAlert}
+          showAdmin={isAdmin}
         />
       </div>
       <ScrollContainerContext.Provider value={mainEl}>
@@ -76,7 +82,7 @@ export default function AppShell() {
           <Outlet />
         </main>
       </ScrollContainerContext.Provider>
-      <BottomNav adminAlert={adminAlert} />
+      <BottomNav adminAlert={adminAlert} showAdmin={isAdmin} />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <KeyboardShortcuts

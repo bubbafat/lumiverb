@@ -114,6 +114,15 @@ export default function AdminPage() {
     return () => clearInterval(id);
   }, []);
 
+  // Someone who isn't an admin, at /admin by its address: the nav doesn't link it for them.
+  if (health.error instanceof ApiError && health.error.status === 403) {
+    return (
+      <div className="mx-auto max-w-3xl px-6 py-6">
+        <p className="text-sm text-red-400">Admin access required.</p>
+      </div>
+    );
+  }
+
   function lastUpdated(ts: number) {
     if (!ts) return null;
     const s = Math.floor((Date.now() - ts) / 1000);

@@ -91,6 +91,16 @@ def test_only_someone_signed_in_sees_it(env):
     assert client.get("/v1/system/health", params={"public_library_id": library_id}).status_code == 401
 
 
+@pytest.mark.parametrize("role", ["editor", "viewer"])
+def test_only_admins_see_it(env, role):
+    """The Admin page's: nothing in it is theirs to fix."""
+    client, headers, *_ = env
+    made = client.post("/v1/keys", json={"label": f"{role}-health", "role": role}, headers=headers)
+    assert made.status_code == 200, made.text
+    theirs = {"Authorization": f"Bearer {made.json()['plaintext']}"}
+    assert client.get("/v1/system/health", headers=theirs).status_code == 403
+
+
 def test_processing_follows_the_scheduler(env):
     _forget(env, "scheduler.status")
     row = _rows(env)["processing"]

@@ -155,9 +155,11 @@ export interface SidebarProps {
   onOpenPalette?: () => void;
   /** A yellow or red dot on Admin when the system needs a look (AppShell asks). */
   adminAlert?: "yellow" | "red" | null;
+  /** The Admin link: admins only. */
+  showAdmin?: boolean;
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAlert = null }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAlert = null, showAdmin = false }: SidebarProps) {
   const canEdit = useCanEdit(Boolean(getApiKey()));
   const folderActions = useClipActions();
   const { libraryId } = useParams<{ libraryId: string }>();
@@ -555,18 +557,20 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
       <div className="border-t border-gray-800" />
 
       <div className="px-2 py-2 space-y-1">
-        <Link
-          to="/admin"
-          className={`flex items-center gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
-            location.pathname === "/admin" || location.pathname.startsWith("/admin/") ? "bg-indigo-600/20 text-indigo-300" : ""
-          }`}
-        >
-          <span className="relative flex">
-            {gearIcon()}
-            <AdminAlertDot alert={adminAlert} />
-          </span>
-          {showLabels && <span className="font-medium text-gray-300">Admin</span>}
-        </Link>
+        {showAdmin && (
+          <Link
+            to="/admin"
+            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
+              location.pathname === "/admin" || location.pathname.startsWith("/admin/") ? "bg-indigo-600/20 text-indigo-300" : ""
+            }`}
+          >
+            <span className="relative flex">
+              {gearIcon()}
+              <AdminAlertDot alert={adminAlert} />
+            </span>
+            {showLabels && <span className="font-medium text-gray-300">Admin</span>}
+          </Link>
+        )}
         <Link
           to="/settings"
           className={`flex items-center gap-2 rounded-lg px-2 py-3 text-xs text-gray-400 transition-colors duration-150 hover:bg-gray-800/80 ${
