@@ -324,8 +324,8 @@ def disk_row(*, free: int | None, total: int | None, now: datetime, error: str |
              previews: Mapping[str, Any] | None = None) -> Row:
     """The data disk (DATA_DIR) and, when they're elsewhere, the previews'
     (`previews`: folder, available, free, total, same_disk, moving: share
-    moved): red under 5% free or the previews' drive unplugged, yellow under
-    15%."""
+    moved, missing: libraries' own folders whose drive is unplugged): red
+    under 5% free or a previews drive unplugged, yellow under 15%."""
     row = Row("disk", "Disk", GREEN, "", checked_at=now)
     if error or not total or free is None:
         row.state, row.reason = YELLOW, f"Couldn't read the data disk: {error or 'no size'}"
@@ -338,6 +338,11 @@ def disk_row(*, free: int | None, total: int | None, now: datetime, error: str |
         if not previews.get("available"):
             row.state, row.link = RED, "/settings/storage"
             row.reason = f"The previews folder isn't there: {previews.get('folder')}. Is its drive plugged in?"
+            return row
+        if previews.get("missing"):
+            row.state, row.link = RED, "/settings/storage"
+            row.reason = (f"A library's previews folder isn't there: {', '.join(previews['missing'])}. "
+                          "Is its drive plugged in?")
             return row
         if not previews.get("same_disk") and previews.get("total"):
             state, theirs = _space(int(previews.get("free") or 0), int(previews["total"]))

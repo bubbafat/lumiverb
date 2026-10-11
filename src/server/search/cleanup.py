@@ -294,11 +294,32 @@ def previews_folder() -> tuple[Path | None, str | None]:
     from src.shared import previews_location
 
     location = previews_location.read(get_settings().data_dir)
-    if location.moving_from is not None:
+    if location.moving:
         return None, MOVING
     if not location.previews.is_dir():
         return None, f"The previews folder isn't there: {location.previews}"
     return location.previews, None
+
+
+def library_folders(tenant_id: str, library_id: str | None = None) -> list[tuple[str, Path]]:
+    """The account's libraries with a folder of their own (plugged in), and
+    their folders: cleaned there, one library at a time."""
+    from src.server.config import get_settings
+    from src.shared import previews_location
+
+    data = get_settings().data_dir
+    location = previews_location.read(data)
+    return [(lib, root) for lib, root in sorted(location.libraries.items())
+            if (library_id is None or lib == library_id) and location.available(data, root)
+            and (root / tenant_id / lib).is_dir()]
+
+
+def _merged(result: CleanupResult, other: CleanupResult) -> None:
+    result.orphan_folders.extend(other.orphan_folders)
+    result.orphan_files += other.orphan_files
+    result.bytes_freed += other.bytes_freed
+    result.skipped_libraries += other.skipped_libraries
+    result.errors.extend(other.errors)
 
 
 def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
@@ -339,6 +360,9 @@ def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
                 tenant_result = run_cleanup_for_tenant(
                     data_dir, tenant_dir_name, session, dry_run=dry_run,
                 )
+                for lib, root in library_folders(tenant_dir_name):
+                    _merged(tenant_result, run_cleanup_for_tenant(root, tenant_dir_name, session, dry_run=dry_run,
+                                                                  library_id=lib))
         except Exception as exc:
             logger.error("Failed to run cleanup for tenant %s: %s", tenant_dir_name, exc)
             result.errors.append(f"Tenant {tenant_dir_name}: {exc}")
@@ -369,6 +393,8 @@ def run_cleanup_single_tenant(
     if _paused(session, tenant_id, dry_run):
         return CleanupResult(paused=True, paused_tenants=[tenant_id])
     result = run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)
+    for lib, root in library_folders(tenant_id, library_id):
+        _merged(result, run_cleanup_for_tenant(root, tenant_id, session, dry_run=dry_run, library_id=lib))
     _warn_orphan_folders(result)
     return result
 

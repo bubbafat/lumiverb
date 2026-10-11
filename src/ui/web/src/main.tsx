@@ -18,6 +18,7 @@ import LoginPage from "./pages/LoginPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import JoinPage from "./pages/JoinPage";
 import SetupPage from "./pages/SetupPage";
+import WelcomePage from "./pages/WelcomePage";
 import DismissedPeoplePage from "./pages/DismissedPeoplePage";
 import PeoplePage from "./pages/PeoplePage";
 import PersonDetailPage from "./pages/PersonDetailPage";
@@ -177,6 +178,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<AdminPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="welcome"
+              element={
+                <RequireAuth>
+                  {<WelcomePage />}
                 </RequireAuth>
               }
             />

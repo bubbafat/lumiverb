@@ -30,12 +30,15 @@ brew services start lumiverb
 (Homebrew installs from a tap that isn't its own only once you trust it:
 that's `brew trust`.)
 
-Then open <http://localhost:6464> on that Mac and create your account. Add a
-library (Libraries › Add library: a name and the folder your photos and
-videos are in) and Lumiverb scans and processes it. Descriptions, tags and
+Then open <http://localhost:6464> on that Mac and create your account. Setting
+up follows: where previews go, who can open Lumiverb, what to find, AI,
+people and your first library (a name and the folder your photos and videos
+are in), each saying what skipping it costs. Lumiverb then scans and
+processes the library. Descriptions, tags and
 text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama). The previews it makes (thumbnails,
 video copies for analysis) grow with your libraries: Settings › Storage moves
-them to another drive, Lumiverb working meanwhile.
+them to another drive, Lumiverb working meanwhile, and a library can have a
+folder of its own (its settings).
 
 It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
