@@ -16,7 +16,8 @@ const DRIVE = "/Volumes/Media/Lumiverb previews";
 function info(over: Partial<StorageInfo> = {}): StorageInfo {
   return {
     previews: DATA, data: DATA, previews_available: true, previews_free: 100 * GB, previews_total: 500 * GB,
-    data_free: 100 * GB, data_total: 500 * GB, same_disk: true, moving: null, changeable_here: true, ...over,
+    data_free: 100 * GB, data_total: 500 * GB, same_disk: true, moving: null, changeable_here: true, libraries: [],
+    ...over,
   };
 }
 
@@ -139,6 +140,25 @@ describe("StorageSection", () => {
     renderSection();
     expect(await screen.findByText("Only admins see where Lumiverb keeps its files.")).toBeTruthy();
     expect(sent.some((s) => s.url.includes("/system/storage"))).toBe(false);
+  });
+});
+
+describe("libraries with a folder of their own", () => {
+  it("are listed with a link to their settings, and an unplugged one is flagged", async () => {
+    state = info({ libraries: [{ library_id: "lib_v", name: "Video", folder: "/Volumes/Video", available: false }] });
+    renderSection();
+    const list = await screen.findByRole("region", { name: "Libraries with a folder of their own" });
+    expect(within(list).getByRole("link", { name: "Video" }).getAttribute("href")).toBe("/libraries/lib_v/settings");
+    expect(list.textContent).toContain("its drive isn't plugged in");
+    expect(storageHasProblem(state)).toBe(true);
+  });
+
+  it("a library's move says whose", async () => {
+    state = info({ moving: { library_id: "lib_v", library_name: "Video", from_folder: DATA, to_folder: "/Volumes/Video",
+                             done_files: 1, total_files: 2, done_bytes: GB, total_bytes: 2 * GB, running: true,
+                             error: null, started_at: null } });
+    renderSection();
+    expect((await screen.findByRole("status")).textContent).toContain("Moving Video's previews from");
   });
 });
 

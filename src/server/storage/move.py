@@ -1,24 +1,26 @@
-"""Moving the previews to another folder (Settings › Storage): off a Mac's
-system drive, say. Only the previews (every storage key: the account
-folders in the previews folder) move; the database, the search index,
-models and caches stay in DATA_DIR.
+"""Moving the previews to another folder: the server's (Settings › Storage;
+off a Mac's system drive, say) or one library's (its settings; a big video
+library on a drive of its own). Only the previews (storage keys) move; the
+database, the search index, models and caches stay in DATA_DIR.
 
 start() records the new folder and where they're moving from
 (src/shared/previews_location.py), so new files go to the new folder at
 once and the rest are read where they are (src/server/storage/local.py);
 then moves them in a thread of its own. Lumiverb keeps working meanwhile.
 
-Each file under the old folder's account folders: one already in the new
-folder (written there since the move began) is newer, and the old copy
-goes; otherwise it's renamed across (the same disk) or copied beside its
-new place and linked in, never over a file written meanwhile, then the old
-one removed. Playback cuts aren't moved: they're made again on demand.
+What a move carries: the server's, every account folder's files but the
+libraries with a folder of their own; a library's, its folder in each
+account folder. Each file: one already in the new folder (written there
+since the move began) is newer, and the old copy goes; otherwise it's
+renamed across (the same disk) or copied beside its new place and linked
+in, never over a file written meanwhile, then the old one removed.
+Playback cuts aren't moved: they're made again on demand.
 
 It stops at the first error (the new drive full or unplugged, the old one
 gone) and says why; the 5-minute upkeep starts it again, as does Try
 again. A move the API was restarted in the middle of goes on the same way.
-Once every file is across, the old account folders (empty by then) are
-removed and storage.json forgets where from.
+Once every file is across, the folders it emptied are removed and
+storage.json forgets where from.
 
 One move at a time per install (a lock in DATA_DIR); a new one waits for
 the last to finish.
@@ -41,6 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.shared import previews_location
+from src.shared.previews_location import Location
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,22 @@ class Size:
     bytes: int
 
 
+@dataclass(frozen=True)
+class Scope:
+    """What a move carries: the server's previews (library_id None), or one library's."""
+
+    library_id: str | None = None
+    # The server's move leaves these alone: they have folders of their own.
+    leaves: frozenset[str] = frozenset()
+
+    def takes(self, rel: Path) -> bool:
+        """Whether a file (relative to the old folder: account/library/...) is the move's."""
+        library = rel.parts[1] if len(rel.parts) > 1 else None
+        if self.library_id is not None:
+            return library == self.library_id
+        return library not in self.leaves
+
+
 # -- What's there ----------------------------------------------------------------
 
 
@@ -80,18 +99,23 @@ def _accounts(root: Path) -> list[Path]:
         return []
 
 
-def _files(root: Path) -> Iterator[Path]:
-    """Every file in the root's account folders, playback cuts too."""
+def _files(root: Path, scope: Scope) -> Iterator[Path]:
+    """The scope's files in the root's account folders, playback cuts too."""
     for account in _accounts(root):
-        for folder, _dirs, names in os.walk(account):
-            for name in names:
-                yield Path(folder, name)
+        tops = [account / scope.library_id] if scope.library_id else [account]
+        for top in tops:
+            for folder, dirs, names in os.walk(top):
+                if scope.library_id is None and Path(folder) == account:
+                    dirs[:] = [d for d in dirs if d not in scope.leaves]
+                for name in names:
+                    yield Path(folder, name)
 
 
-def size_of(root: Path) -> Size:
-    """How much the previews in `root` are: what a move carries."""
+def size_of(root: Path, scope: Scope | None = None) -> Size:
+    """How much the scope's previews in `root` are: what a move carries."""
+    scope = scope or Scope()
     files = total = 0
-    for path in _files(root):
+    for path in _files(root, scope):
         if path.relative_to(root).parts[1:2] == (PLAYBACK,):
             continue
         try:
@@ -102,9 +126,10 @@ def size_of(root: Path) -> Size:
     return Size(files, total)
 
 
-def check_target(data_dir: Path, to: str | Path, need: Size | None = None) -> Path:
-    """The folder, when the previews can move there: a full path to a folder
-    this machine's Lumiverb can write, not where they are, not inside them,
+def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, current: Path | None = None) -> Path:
+    """The folder, when previews can move there: a full path to a folder this
+    machine's Lumiverb can write, not where they are (`current`: the server's
+    previews folder unless said), not inside any previews folder's accounts,
     and with room for them (`need`). Raises MoveError saying why not."""
     raw = str(to).strip()
     if not raw:
@@ -113,14 +138,16 @@ def check_target(data_dir: Path, to: str | Path, need: Size | None = None) -> Pa
     if not chosen.is_absolute():
         raise MoveError("Use a full path, such as /Volumes/Media/Lumiverb previews.")
     chosen = Path(os.path.abspath(chosen))
-    if not chosen.is_dir():
-        raise MoveError(f"There's no folder at {chosen}.")
-    current = previews_location.read(data_dir).previews
+    location = previews_location.read(data_dir)
+    current = current or location.previews
     if chosen == current:
         raise MoveError(f"The previews are in {chosen} already.")
-    for root in (current, Path(os.path.abspath(data_dir))):
+    if not chosen.is_dir():
+        raise MoveError(f"There's no folder at {chosen}.")
+    for root in (*location.roots, Path(os.path.abspath(data_dir))):
         with contextlib.suppress(ValueError):
-            if chosen.relative_to(root).parts[:1] and chosen.relative_to(root).parts[0].startswith(ACCOUNT_PREFIX):
+            first = chosen.relative_to(root).parts[:1]
+            if first and first[0].startswith(ACCOUNT_PREFIX):
                 raise MoveError("That folder is inside the previews themselves.")
     try:
         probe = chosen / f".lumiverb-write-check-{os.getpid()}"
@@ -194,30 +221,54 @@ def running(data_dir: Path) -> bool:
         return False
 
 
-# -- Moving ---------------------------------------------------------------------------
+# -- Starting ---------------------------------------------------------------------------
 
 
-def start(data_dir: Path, to: str | Path, *, background: bool = True) -> Path:
-    """Moves the previews to `to`: new files go there from now on, and the
-    rest move in the background. Returns the folder. Raises MoveError
-    before changing anything when it can't."""
+def plan(data_dir: Path, to: str | Path | None, *, library_id: str | None = None) -> tuple[Path, Path, Size]:
+    """(from, to, what moves) for moving the server's previews (library_id
+    None; `to` None: back to DATA_DIR) or a library's (`to` None: back to
+    the server's folder). Raises MoveError when it can't."""
     data_dir = Path(os.path.abspath(data_dir))
     location = previews_location.read(data_dir)
-    if location.moving_from is not None:
+    if location.moving:
         raise MoveError("The previews are being moved already: wait for that to finish.")
-    need = size_of(location.previews)
-    chosen = check_target(data_dir, to, need)
+    if library_id is None:
+        old, target = location.previews, (data_dir if to is None else to)
+        scope = Scope(leaves=frozenset(location.libraries))
+    else:
+        old, target = location.root_for(library_id), (location.previews if to is None else to)
+        scope = Scope(library_id)
+    need = size_of(old, scope)
+    return old, check_target(data_dir, target, need, current=old), need
+
+
+def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = None, background: bool = True) -> Path:
+    """Moves the server's previews (or a library's) to `to`: new files go
+    there from now on, and the rest move in the background. Returns the
+    folder. Raises MoveError before changing anything when it can't."""
+    data_dir = Path(os.path.abspath(data_dir))
+    old, chosen, need = plan(data_dir, to, library_id=library_id)
     with _one_at_a_time(data_dir):
+        location = previews_location.read(data_dir)
         if chosen != data_dir:
             (chosen / previews_location.MARKER).write_text(
                 "Lumiverb's previews. Settings › Storage moves them; don't delete this folder.\n")
-        previews_location.write(data_dir, chosen, location.previews)
+        if library_id is None:
+            previews_location.write(data_dir, chosen, old)
+        else:
+            libraries = dict(location.libraries)
+            if chosen == location.previews:
+                libraries.pop(library_id, None)  # back to the server's folder
+            else:
+                libraries[library_id] = chosen
+            previews_location.write(data_dir, location.previews, location.moving_from, libraries=libraries,
+                                    libraries_moving_from={**location.libraries_moving_from, library_id: old})
         _update_state(data_dir, started_at=datetime.now(UTC).isoformat(), finished_at=None,
-                      from_folder=str(location.previews), to_folder=str(chosen),
+                      library_id=library_id, from_folder=str(old), to_folder=str(chosen),
                       total_files=need.files, total_bytes=need.bytes, done_files=0, done_bytes=0,
                       error=None, failed_at=None)
-    logger.info("Moving the previews (%d files, %d bytes) from %s to %s", need.files, need.bytes,
-                location.previews, chosen)
+    logger.info("Moving %s previews (%d files, %d bytes) from %s to %s",
+                f"library {library_id}'s" if library_id else "the", need.files, need.bytes, old, chosen)
     if background:
         go_on(data_dir)
     else:
@@ -230,7 +281,7 @@ def go_on(data_dir: Path, *, now: float | None = None, waits: bool = False) -> s
     restarted): goes on in the background. With `waits` (upkeep), one that
     stopped on an error waits 15 minutes first. "started", "running",
     "waiting" or "not moving"."""
-    if previews_location.read(data_dir).moving_from is None:
+    if not previews_location.read(data_dir).moving:
         return "not moving"
     if running(data_dir):
         return "running"
@@ -249,18 +300,31 @@ def go_on(data_dir: Path, *, now: float | None = None, waits: bool = False) -> s
     return "started"
 
 
+# -- Moving ---------------------------------------------------------------------------
+
+
+def _under_way(location: Location) -> tuple[Scope, Path, Path] | None:
+    """The move under way: (what it carries, from, to)."""
+    for library_id, old in sorted(location.libraries_moving_from.items()):
+        return Scope(library_id), old, location.root_for(library_id)
+    if location.moving_from is not None:
+        return Scope(leaves=frozenset(location.libraries)), location.moving_from, location.previews
+    return None
+
+
 def run(data_dir: Path) -> None:
     """Moves what's left, here and now. Raises MoveError (recorded) when it stops."""
     data_dir = Path(os.path.abspath(data_dir))
     with _one_at_a_time(data_dir):
         location = previews_location.read(data_dir)
-        old, new = location.moving_from, location.previews
-        if old is None:
+        under_way = _under_way(location)
+        if under_way is None:
             return
+        scope, old, new = under_way
         _update_state(data_dir, error=None, failed_at=None)
         try:
-            _both_there(data_dir, location)
-            _move_all(data_dir, location)
+            _both_there(data_dir, location, old, new)
+            _move_all(data_dir, location, scope, old, new)
         except MoveError as exc:
             _stopped(data_dir, str(exc))
             raise
@@ -268,10 +332,15 @@ def run(data_dir: Path) -> None:
             said = _said(exc)
             _stopped(data_dir, said)
             raise MoveError(said) from exc
-        _remove_empty(old)
-        previews_location.write(data_dir, new, None)
+        _remove_empty(old, scope)
+        now = previews_location.read(data_dir)
+        if scope.library_id is None:
+            previews_location.write(data_dir, new, None)
+        else:
+            previews_location.write(data_dir, now.previews, now.moving_from, libraries_moving_from={
+                k: v for k, v in now.libraries_moving_from.items() if k != scope.library_id})
         _update_state(data_dir, finished_at=datetime.now(UTC).isoformat(), error=None, failed_at=None)
-        logger.info("The previews are in %s now", new)
+        logger.info("The previews are in %s now%s", new, f" (library {scope.library_id})" if scope.library_id else "")
 
 
 def _stopped(data_dir: Path, said: str) -> None:
@@ -288,21 +357,20 @@ def _said(exc: OSError) -> str:
     return f"{exc.strerror or exc}{where}"
 
 
-def _both_there(data_dir: Path, location: previews_location.Location) -> None:
+def _both_there(data_dir: Path, location: Location, old: Path, new: Path) -> None:
     """Both folders' drives are plugged in. Checked as it goes: a file not
     found on a drive that went away isn't a file deleted meanwhile."""
-    if not location.available(data_dir):
-        raise MoveError(f"The new folder isn't there: {location.previews}. Is its drive plugged in?")
-    if location.moving_from is not None and not location.available(data_dir, location.moving_from):
-        raise MoveError(f"The old folder isn't there: {location.moving_from}. Is its drive plugged in?")
+    if not location.available(data_dir, new):
+        raise MoveError(f"The new folder isn't there: {new}. Is its drive plugged in?")
+    if not location.available(data_dir, old):
+        raise MoveError(f"The old folder isn't there: {old}. Is its drive plugged in?")
 
 
-def _move_all(data_dir: Path, location: previews_location.Location) -> None:
-    old, new = location.moving_from, location.previews
+def _move_all(data_dir: Path, location: Location, scope: Scope, old: Path, new: Path) -> None:
     state = read_state(data_dir)
     done_files, done_bytes = int(state.get("done_files") or 0), int(state.get("done_bytes") or 0)
     since = 0
-    for path in _files(old):
+    for path in _files(old, scope):
         rel = path.relative_to(old)
         if rel.parts[1:2] == (PLAYBACK,):
             path.unlink(missing_ok=True)  # made again on demand
@@ -317,7 +385,7 @@ def _move_all(data_dir: Path, location: previews_location.Location) -> None:
             size = path.stat().st_size
             _move_one(path, new / rel)
         except FileNotFoundError:
-            _both_there(data_dir, location)
+            _both_there(data_dir, location, old, new)
             if path.exists():
                 raise
             continue  # deleted meanwhile
@@ -325,10 +393,10 @@ def _move_all(data_dir: Path, location: previews_location.Location) -> None:
         done_bytes += size
         since += 1
         if since >= PROGRESS_EVERY:
-            _both_there(data_dir, location)
+            _both_there(data_dir, location, old, new)
             _update_state(data_dir, done_files=done_files, done_bytes=done_bytes)
             since = 0
-    _both_there(data_dir, location)  # nothing listed because a drive went away isn't done
+    _both_there(data_dir, location, old, new)  # nothing listed because a drive went away isn't done
     _update_state(data_dir, done_files=done_files, done_bytes=done_bytes)
 
 
@@ -370,9 +438,15 @@ def _move_one(src: Path, dest: Path) -> None:
     src.unlink(missing_ok=True)
 
 
-def _remove_empty(old: Path) -> None:
-    """The old account folders, once nothing's left in them."""
+def _remove_empty(old: Path, scope: Scope) -> None:
+    """The folders the move emptied: the scope's in each old account folder,
+    then the account folder if nothing else is left in it."""
     for account in _accounts(old):
-        for folder, _dirs, _names in sorted(os.walk(account), key=lambda w: len(w[0]), reverse=True):
+        top = account / scope.library_id if scope.library_id else account
+        if not top.exists():
+            continue
+        for folder, _dirs, _names in sorted(os.walk(top), key=lambda w: len(w[0]), reverse=True):
             with contextlib.suppress(OSError):
                 Path(folder).rmdir()
+        with contextlib.suppress(OSError):
+            account.rmdir()

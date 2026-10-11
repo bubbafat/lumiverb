@@ -35,7 +35,8 @@ library (Libraries › Add library: a name and the folder your photos and
 videos are in) and Lumiverb scans and processes it. Descriptions, tags and
 text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama). The previews it makes (thumbnails,
 video copies for analysis) grow with your libraries: Settings › Storage moves
-them to another drive, Lumiverb working meanwhile.
+them to another drive, Lumiverb working meanwhile, and a library can have a
+folder of its own (its settings).
 
 It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with

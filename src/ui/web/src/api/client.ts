@@ -1125,6 +1125,9 @@ export async function setBackupsFolder(folder: string | null): Promise<Backups> 
 
 /** Where the previews are, and a move under way (Settings → Storage). */
 export interface StorageMove {
+  /** One library's previews (else the server's). */
+  library_id?: string | null;
+  library_name?: string | null;
   from_folder: string;
   to_folder: string;
   done_files: number;
@@ -1151,6 +1154,34 @@ export interface StorageInfo {
   moving: StorageMove | null;
   /** Moved only on the machine itself. */
   changeable_here: boolean;
+  /** The account's libraries with a folder of their own. */
+  libraries: { library_id: string; name: string; folder: string; available: boolean }[];
+}
+
+/** Where a library's previews are: the server's folder, or one of its own (Library settings). */
+export interface LibraryPreviews {
+  library_id: string;
+  folder: string;
+  own: boolean;
+  server_folder: string;
+  available: boolean;
+  free: number | null;
+  total: number | null;
+  /** On the drive its originals are on (null: they aren't reachable here). */
+  same_drive_as_originals: boolean | null;
+  moving: Omit<StorageMove, "library_id" | "library_name"> | null;
+  changeable_here: boolean;
+}
+
+export async function getLibraryPreviews(libraryId: string): Promise<LibraryPreviews> {
+  return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`);
+}
+
+/** Without move, a 409 move_previews with the facts; with it, the move starts. null: back to the server's folder. */
+export async function moveLibraryPreviews(libraryId: string, folder: string | null, move: boolean): Promise<LibraryPreviews> {
+  return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`, {
+    method: "PUT", body: { folder, move },
+  });
 }
 
 /** What a move carries: the 409 move_previews's details, for the user to confirm. */
@@ -1160,6 +1191,8 @@ export interface PreviewsMoveFacts {
   files: number;
   bytes: number;
   free: number;
+  /** A library's: the drive its originals are on. */
+  same_drive_as_originals?: boolean;
 }
 
 export async function getStorageInfo(): Promise<StorageInfo> {
