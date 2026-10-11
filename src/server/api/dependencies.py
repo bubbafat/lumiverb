@@ -112,7 +112,10 @@ def require_folder_chosen_here(request: Request) -> None:
     LUMIVERB_ROOT_MAP maps "/"), a library's folder is chosen only on that
     machine: from anywhere else, anyone who may set one could point a library
     at any folder the Mac's user can read. 403 otherwise. Where roots are
-    mapped (the brain), the map already bounds them."""
+    mapped (the brain), the map already bounds them. A tunnel or proxy on the
+    Mac itself (tailscale serve, cloudflared, ngrok) brings other people's
+    requests in over loopback: with one, choosing folders is open to whoever
+    reaches it, for as long as the install exists."""
     from src.processing.roots import reads_every_folder
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError
