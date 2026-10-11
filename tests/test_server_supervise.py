@@ -45,10 +45,11 @@ while True:
     time.sleep(0.05)
 """
 
-# Ignores SIGTERM: only a kill stops it.
+# Ignores SIGTERM: only a kill stops it. Says when it's ignoring it.
 _STUBBORN = """
-import signal, time
+import signal, sys, time
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1], "w").close()
 while True:
     time.sleep(0.05)
 """
@@ -181,9 +182,11 @@ def test_only_the_schedulers_main_process_hears_the_stop_and_whats_left_is_kille
 
 
 def test_a_child_that_ignores_sigterm_is_killed_when_its_time_is_up(tmp_path):
-    child = _child(tmp_path, "api", _STUBBORN, stop_within=0.5)
+    # Started, and ignoring SIGTERM: a stop sooner would kill it at once.
+    ignoring = tmp_path / "ignoring"
+    child = _child(tmp_path, "api", _STUBBORN, str(ignoring), stop_within=0.5)
     stop, thread = _running(Supervisor([child]))
-    _until(lambda: child.process is not None)
+    _until(ignoring.exists)
     pid = child.process.pid
     started = time.monotonic()
     stop.set()
