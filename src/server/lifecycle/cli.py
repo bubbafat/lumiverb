@@ -18,8 +18,9 @@ one service; launchd keeps it up). It starts what the env file names
 NGINX_BIN), makes the control database if it's missing and migrates,
 waiting for PostgreSQL, then runs the API and the scheduler as the brain's
 systemd units do (supervise.py) and posts upkeep as its timers do
-(upkeep.py), until SIGTERM. The brain keeps its systemd units: it doesn't
-use this.
+(upkeep.py), until SIGTERM. When `brew upgrade` replaces its install, it
+stops everything and starts the new one, so an upgrade needs no restart.
+The brain keeps its systemd units: it doesn't use this.
 
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
@@ -39,6 +40,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -71,6 +73,7 @@ NO_INSTALL = ("Say which install: --env FILE or $LUMIVERB_ENV_FILE, or CONTROL_P
 DEFAULT_API_PORT = "8000"  # update.sh's default when the env file has none
 DEFAULT_API_WORKERS = "2"  # the brain's unit: uvicorn --workers 2
 MIGRATE_RETRY_MAX_SEC = 60.0
+UPGRADE_CHECK_SEC = 10.0
 
 
 class InstallError(Exception):
@@ -249,6 +252,39 @@ def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrate
         logger.warning("No ADMIN_KEY: upkeep (search sync, trash purge, cleanup) won't run")
 
 
+def install_identity(command: Path) -> tuple[str, int] | None:
+    """Which install `command` is now: what it resolves to through Homebrew's
+    opt link, and that file's inode (a reinstall of the same version makes a
+    new one). None while it doesn't resolve (mid-upgrade)."""
+    try:
+        real = command.resolve(strict=True)
+        return str(real), real.stat().st_ino
+    except OSError:
+        return None
+
+
+def watch_for_upgrade(command: Path, stop: threading.Event, upgraded: threading.Event,
+                      every: float = UPGRADE_CHECK_SEC) -> None:
+    """Sets `upgraded` and `stop` once `command` is another install (`brew
+    upgrade` moved the opt link): run then stops everything and starts the new
+    one. Homebrew deletes the old install right after, so it's looked at often."""
+    first = install_identity(command)
+    if first is None:
+        return
+    while not stop.wait(every):
+        now = install_identity(command)
+        if now is not None and now != first:
+            logger.info("Lumiverb was upgraded (%s): restarting into it", now[0])
+            upgraded.set()
+            stop.set()
+            return
+
+
+def _launched_as() -> Path:
+    """The command this was started as: for Homebrew's service, through the opt link."""
+    return Path(shutil.which(sys.argv[0]) or sys.argv[0]).absolute()
+
+
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
     data = data_dir(env)  # before anything starts
@@ -272,7 +308,13 @@ def _run(args: argparse.Namespace) -> int:
         (data / "nginx").mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()
+    launched, upgraded = _launched_as(), threading.Event()
+    threading.Thread(target=watch_for_upgrade, args=(launched, stop, upgraded), kwargs={"every": UPGRADE_CHECK_SEC},
+                     name="upgrade-watch", daemon=True).start()
     Supervisor(children).run(stop)
+    if upgraded.is_set():
+        # The same process (launchd's job stays up), now the new install's code.
+        os.execv(launched, [str(launched), *sys.argv[1:]])
     return 0
 
 
