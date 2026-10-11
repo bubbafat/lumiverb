@@ -162,7 +162,8 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function FolderChoice({ backups }: { backups: Backups }) {
+/** Where backups go: shown, and chosen on the machine itself (also in the setup wizard). */
+export function FolderChoice({ backups }: { backups: Backups }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [folder, setFolder] = useState(backups.folder);

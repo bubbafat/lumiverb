@@ -251,3 +251,71 @@ def delete_filter_default(
     filter_repo = PathFilterRepository(session)
     if not filter_repo.delete_default(default_id=default_id, tenant_id=tenant_id):
         raise HTTPException(status_code=404, detail="Filter default not found")
+
+
+# -- Setting up (the first-run wizard) -----------------------------------------------
+
+# The wizard's steps after the first admin (the web app's /welcome), in order:
+# where previews live, who can open it, what to find, AI machines, people,
+# the first library. Each is a Settings section; the wizard only remembers
+# which ones the admin went through, so it can be left and picked up again.
+SETUP_STEPS = ("storage", "network", "find", "ai", "people", "library")
+SETUP_KEY = "setup.wizard"
+
+
+class SetupProgress(BaseModel):
+    steps: list[str]
+    done: list[str]  # gone through (changed, or kept as they were): in step order
+    dismissed: bool  # an admin said they'd rather not: the Admin page stops offering it
+    finished: bool  # every step done
+
+
+class SetupChange(BaseModel):
+    """Fields left out stay as they are."""
+
+    done: list[str] | None = Field(default=None, max_length=len(SETUP_STEPS))
+    dismissed: StrictBool | None = None
+
+
+def _setup(session: Session) -> SetupProgress:
+    import json
+
+    from sqlalchemy import text
+
+    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = :k"), {"k": SETUP_KEY}).scalar()
+    try:
+        kept = json.loads(raw) if raw else {}
+    except ValueError:
+        kept = {}
+    done = [s for s in SETUP_STEPS if s in set(kept.get("done") or [])]
+    return SetupProgress(steps=list(SETUP_STEPS), done=done, dismissed=bool(kept.get("dismissed")),
+                         finished=len(done) == len(SETUP_STEPS))
+
+
+@router.get("/setup", response_model=SetupProgress, dependencies=[Depends(require_tenant_admin)])
+def get_setup(session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
+    """How far the account's admins got through setting it up (the wizard)."""
+    return _setup(session)
+
+
+@router.put("/setup", response_model=SetupProgress, dependencies=[Depends(require_tenant_admin)])
+def change_setup(body: SetupChange, session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
+    """Steps gone through (the whole list, as the wizard has it), and whether it's put away."""
+    import json
+
+    from sqlalchemy import text
+
+    from src.server.api.errors import InvalidChoiceError
+
+    now = _setup(session)
+    done = now.done if body.done is None else body.done
+    unknown = sorted(set(done) - set(SETUP_STEPS))
+    if unknown:
+        raise InvalidChoiceError("unknown_step", f"There's no step {unknown[0]!r}.", {"steps": list(SETUP_STEPS)})
+    value = {"done": [s for s in SETUP_STEPS if s in set(done)],
+             "dismissed": now.dismissed if body.dismissed is None else body.dismissed}
+    session.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
+                         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
+                    {"k": SETUP_KEY, "v": json.dumps(value)})
+    session.commit()
+    return _setup(session)

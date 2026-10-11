@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   listLibraries: vi.fn(),
   getSystemHealth: vi.fn(),
   getApiKey: vi.fn(() => "key"),
+  getSetupProgress: vi.fn(),
+  setSetupProgress: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -40,7 +42,10 @@ function health(over: Partial<SystemHealth> = {}): SystemHealth {
   };
 }
 
+const STEPS = ["storage", "network", "find", "ai", "people", "library"];
+
 beforeEach(() => {
+  api.getSetupProgress.mockResolvedValue({ steps: STEPS, done: STEPS, dismissed: false, finished: true });
   api.getSystemHealth.mockResolvedValue(health());
   api.listLibraries.mockResolvedValue([
     { library_id: "lib_1", name: "Photos", root_path: "/p", status: "active", is_public: false, last_scan_at: null },
@@ -133,5 +138,26 @@ describe("AdminPage", () => {
   it("keeps the link to manage users", async () => {
     renderPage();
     expect((await screen.findByRole("link", { name: /Manage users/ })).getAttribute("href")).toBe("/admin/users");
+  });
+});
+
+
+describe("AdminPage setting up", () => {
+  it("offers to carry on setting up until it's finished, or put away", async () => {
+    api.getSetupProgress.mockResolvedValue({ steps: STEPS, done: ["storage", "network"], dismissed: false, finished: false });
+    api.setSetupProgress.mockResolvedValue({ steps: STEPS, done: ["storage", "network"], dismissed: true, finished: false });
+    renderPage();
+    const card = await screen.findByRole("region", { name: "Setting up" });
+    expect(card.textContent).toContain("Setting up: 2 of 6 done");
+    expect(within(card).getByRole("link", { name: "Continue setting up" }).getAttribute("href")).toBe("/welcome");
+    within(card).getByRole("button", { name: "Don't show this again" }).click();
+    await vi.waitFor(() => expect(screen.queryByRole("region", { name: "Setting up" })).toBeNull());
+    expect(api.setSetupProgress).toHaveBeenCalledWith({ dismissed: true });
+  });
+
+  it("isn't there once it's finished", async () => {
+    renderPage();
+    await screen.findByRole("list", { name: "System health" });
+    expect(screen.queryByRole("region", { name: "Setting up" })).toBeNull();
   });
 });

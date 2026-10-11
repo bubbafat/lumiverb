@@ -40,6 +40,7 @@ function at(path: string) {
         <Route path="/setup" element={<SetupPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<p>Libraries</p>} />
+        <Route path="/welcome" element={<p>Set up Lumiverb</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -53,11 +54,11 @@ function fill(email: string, password: string, again: string) {
 }
 
 describe("SetupPage", () => {
-  it("makes the first admin and logs them in", async () => {
+  it("makes the first admin, logs them in, and goes on to setting up", async () => {
     at("/setup");
     await screen.findByText(/Create your account/);
     fill(" robert@example.com ", "correct horse battery", "correct horse battery");
-    expect(await screen.findByText("Libraries")).toBeTruthy();
+    expect(await screen.findByText("Set up Lumiverb")).toBeTruthy();
     expect(posted).toEqual({ email: "robert@example.com", password: "correct horse battery" });
     expect(getApiKey()).toBe("tok-first-admin");
   });

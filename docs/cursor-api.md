@@ -187,6 +187,11 @@ During a move, cleanup (`/v1/upkeep/cleanup`, `remove-orphan-folders`) and the r
   - `backups`: the databases' backups (below). Red with none in 2 days (or none at all and the last try failed); yellow when the last try failed after the newest one ("The last backup failed: … The one before is 20 hours old."), or none is made yet ("the first is made within minutes"); green otherwise ("Last backup 5 hours ago (12.0 MB)."), saying when one is being made.
   A row that can't be checked is yellow and says why; the others still answer. Counts are kept for a minute per API worker.
 
+## Setting up (the first-run wizard)
+
+- **GET /v1/tenant/setup** — Tenant admin. How far the account's admins got through setting it up (the web app's `/welcome`, opened after the first admin is made): `{ "steps": ["storage", "network", "find", "ai", "people", "library"], "done": [...], "dismissed", "finished" }`. Each step is a Settings section (where previews live with the backups folder, who can open it, face levels and place guesses, AI machines, invites, the first library); the wizard only remembers which ones were gone through, in `system_metadata` (`setup.wizard`), so it can be left and picked up again. The Admin page offers it until it's `finished` or `dismissed`.
+- **PUT /v1/tenant/setup** — Tenant admin. Body: `{ "done": [step, …] }` (the whole list, kept in step order) and/or `{ "dismissed": bool }`; fields left out stay. 422 `unknown_step` (details: the steps) for a step there isn't.
+
 ## Tenant Maintenance API
 
 All routes under `/v1/tenant/maintenance` require tenant auth and **tenant admin** role (`require_tenant_admin`). Maintenance mode is stored as a JSON value in `system_metadata` under the key `maintenance_mode`. Used to pause operations during upgrades.

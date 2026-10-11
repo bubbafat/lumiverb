@@ -68,7 +68,7 @@ export default function SetupPage() {
       if (res.ok) {
         const data = (await res.json()) as { access_token: string };
         setApiKey(data.access_token);
-        navigate("/", { replace: true });
+        navigate("/welcome", { replace: true }); // the rest of setting up: where previews live, AI, …
         return;
       }
       const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;

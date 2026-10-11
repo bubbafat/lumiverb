@@ -1209,6 +1209,23 @@ export async function goOnMovingPreviews(): Promise<StorageInfo> {
   return apiFetch<StorageInfo>("/system/storage/move", { method: "POST" });
 }
 
+/** How far the account's admins got through setting it up (the /welcome wizard). */
+export interface SetupProgress {
+  steps: string[];
+  done: string[];
+  /** Put away: the Admin page stops offering it. */
+  dismissed: boolean;
+  finished: boolean;
+}
+
+export async function getSetupProgress(): Promise<SetupProgress> {
+  return apiFetch<SetupProgress>("/tenant/setup");
+}
+
+export async function setSetupProgress(change: { done?: string[]; dismissed?: boolean }): Promise<SetupProgress> {
+  return apiFetch<SetupProgress>("/tenant/setup", { method: "PUT", body: change });
+}
+
 /** A clip whose last try failed (Settings → Processing). */
 export interface FailingClip {
   asset_id: string;

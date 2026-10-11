@@ -18,7 +18,7 @@ const ROLES = ["admin", "editor", "viewer"] as const;
 type Role = (typeof ROLES)[number];
 
 /** A link just made, at each address (the likeliest to open first): shown once, to copy and send. */
-type MadeLink = { email: string; urls: string[] };
+export type MadeLink = { email: string; urls: string[] };
 
 function relativeTime(iso: string | null): string {
   return iso ? timeAgo(iso) : "never";
@@ -96,24 +96,6 @@ export default function AdminUsersPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 
-  const inviteMutation = useMutation({
-    mutationFn: ({ email, role }: { email: string; role: string }) => inviteUser(email, role),
-    onSuccess: (made) => {
-      qc.invalidateQueries({ queryKey: ["admin", "users"] });
-      setMadeLink(made.invite_urls?.length ? { email: made.email, urls: made.invite_urls } : null);
-      setNewEmail("");
-      setNewRole("viewer");
-      setCreateError(null);
-    },
-    onError: (err) => {
-      if (err instanceof ApiError && err.status === 409) {
-        setCreateError("Someone with that email is already here.");
-      } else {
-        setCreateError(err instanceof ApiError ? err.message : "Couldn't make the invite. Try again.");
-      }
-    },
-  });
-
   const linkMutation = useMutation({
     mutationFn: (user: UserItem) => newInviteLink(user.user_id).then((link) => ({ email: user.email, urls: link.invite_urls })),
     onSuccess: (made) => {
@@ -128,9 +110,6 @@ export default function AdminUsersPage() {
   const { data: network } = useQuery({ queryKey: ["system", "network"], queryFn: getNetworkAccess });
   const thisMacOnly = !!network?.available && !network.other_devices;
 
-  const [newEmail, setNewEmail] = useState("");
-  const [newRole, setNewRole] = useState<Role>("viewer");
-  const [createError, setCreateError] = useState<string | null>(null);
   const [madeLink, setMadeLink] = useState<MadeLink | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
 
@@ -166,12 +145,6 @@ export default function AdminUsersPage() {
         }
       },
     });
-  }
-
-  function handleInvite(e: React.FormEvent) {
-    e.preventDefault();
-    setCreateError(null);
-    inviteMutation.mutate({ email: newEmail.trim(), role: newRole });
   }
 
   function handleNewLink(user: UserItem) {
@@ -241,52 +214,90 @@ export default function AdminUsersPage() {
         <p className="mb-4 text-sm text-gray-500">
           You get a link to send them. They choose their own password there.
         </p>
-        <form onSubmit={handleInvite} className="space-y-3 max-w-sm">
-          <div>
-            <label htmlFor="invite-email" className="mb-1 block text-sm font-medium text-gray-300">Email</label>
-            <input
-              id="invite-email"
-              type="email"
-              value={newEmail}
-              onChange={(e) => setNewEmail(e.target.value)}
-              placeholder="them@example.com"
-              required
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="invite-role" className="mb-1 block text-sm font-medium text-gray-300">Role</label>
-            <select
-              id="invite-role"
-              value={newRole}
-              onChange={(e) => setNewRole(e.target.value as Role)}
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r.charAt(0).toUpperCase() + r.slice(1)}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {createError && <p className="text-sm text-red-400">{createError}</p>}
-
-          <button
-            type="submit"
-            disabled={inviteMutation.isPending || !newEmail.trim()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {inviteMutation.isPending ? "One moment…" : "Make invite link"}
-          </button>
-        </form>
+        <InviteForm
+          onMade={(link) => {
+            qc.invalidateQueries({ queryKey: ["admin", "users"] });
+            setMadeLink(link);
+          }}
+        />
       </section>
     </div>
   );
 }
 
+/** Someone's email and role: an invite link for them (onMade), to copy and send. */
+export function InviteForm({ onMade }: { onMade: (link: MadeLink | null) => void }) {
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState<Role>("viewer");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const inviteMutation = useMutation({
+    mutationFn: ({ email, role }: { email: string; role: string }) => inviteUser(email, role),
+    onSuccess: (made) => {
+      onMade(made.invite_urls?.length ? { email: made.email, urls: made.invite_urls } : null);
+      setNewEmail("");
+      setNewRole("viewer");
+      setCreateError(null);
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) {
+        setCreateError("Someone with that email is already here.");
+      } else {
+        setCreateError(err instanceof ApiError ? err.message : "Couldn't make the invite. Try again.");
+      }
+    },
+  });
+
+  function handleInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setCreateError(null);
+    inviteMutation.mutate({ email: newEmail.trim(), role: newRole });
+  }
+
+  return (
+    <form onSubmit={handleInvite} className="space-y-3 max-w-sm">
+      <div>
+        <label htmlFor="invite-email" className="mb-1 block text-sm font-medium text-gray-300">Email</label>
+        <input
+          id="invite-email"
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          placeholder="them@example.com"
+          required
+          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+        />
+      </div>
+      <div>
+        <label htmlFor="invite-role" className="mb-1 block text-sm font-medium text-gray-300">Role</label>
+        <select
+          id="invite-role"
+          value={newRole}
+          onChange={(e) => setNewRole(e.target.value as Role)}
+          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200"
+        >
+          {ROLES.map((r) => (
+            <option key={r} value={r}>
+              {r.charAt(0).toUpperCase() + r.slice(1)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {createError && <p className="text-sm text-red-400">{createError}</p>}
+
+      <button
+        type="submit"
+        disabled={inviteMutation.isPending || !newEmail.trim()}
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {inviteMutation.isPending ? "One moment…" : "Make invite link"}
+      </button>
+    </form>
+  );
+}
+
 /** The link just made, to copy: it isn't shown again (a new one can be made while they haven't joined). */
-function InviteLinkPanel({ link, thisMacOnly, onDone }: { link: MadeLink; thisMacOnly: boolean; onDone: () => void }) {
+export function InviteLinkPanel({ link, thisMacOnly, onDone }: { link: MadeLink; thisMacOnly: boolean; onDone: () => void }) {
   const [first, ...others] = link.urls;
   return (
     <section className="rounded-lg border border-indigo-500/40 bg-indigo-950/30 p-5 space-y-3">

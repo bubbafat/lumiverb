@@ -1,11 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ApiError, listLibraries, type HealthRow, type HealthState } from "../api/client";
+import {
+  ApiError,
+  getSetupProgress,
+  listLibraries,
+  setSetupProgress,
+  type HealthRow,
+  type HealthState,
+} from "../api/client";
 import type { LibraryListItem } from "../api/types";
 import { HealthDot } from "../components/HealthDot";
 import { timeAgo } from "../lib/format";
 import { useSystemHealth } from "../lib/useSystemHealth";
+import { SETUP_QUERY_KEY } from "./WelcomePage";
 
 const POLL_INTERVAL = 10_000;
 
@@ -145,6 +153,8 @@ export default function AdminPage() {
         </Link>
       </div>
 
+      <SetupCard />
+
       <section>
         <div className="flex items-center justify-between mb-4">
           <SectionHeader title="System health" />
@@ -184,5 +194,34 @@ export default function AdminPage() {
         )}
       </section>
     </div>
+  );
+}
+
+
+/** Setting up isn't finished: how far, Continue, or put it away. */
+function SetupCard() {
+  const queryClient = useQueryClient();
+  const { data } = useQuery({ queryKey: SETUP_QUERY_KEY, queryFn: getSetupProgress, retry: false });
+  const dismiss = useMutation({
+    mutationFn: () => setSetupProgress({ dismissed: true }),
+    onSuccess: (next) => queryClient.setQueryData(SETUP_QUERY_KEY, next),
+  });
+  if (!data || data.finished || data.dismissed) return null;
+  return (
+    <section aria-label="Setting up" className="rounded-lg border border-indigo-500/40 bg-indigo-950/30 p-5 space-y-3">
+      <p className="text-sm text-gray-200">
+        Setting up: {data.done.length} of {data.steps.length} done. Where previews live, who can open Lumiverb, AI and
+        more.
+      </p>
+      <div className="flex flex-wrap items-center gap-4">
+        <Link to="/welcome" className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+          Continue setting up
+        </Link>
+        <button type="button" className="text-sm text-gray-400 hover:text-gray-200" disabled={dismiss.isPending}
+                onClick={() => dismiss.mutate()}>
+          Don&apos;t show this again
+        </button>
+      </div>
+    </section>
   );
 }
