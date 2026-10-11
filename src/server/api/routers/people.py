@@ -63,6 +63,11 @@ class PersonFaceItem(BaseModel):
     detection_confidence: float | None = None
     rel_path: str | None = None
     taken_at: str | None = None  # ISO 8601, used by client-side date grouping
+    media_type: str | None = None
+    # A video's face (one a person seen): the time of the frame its box and
+    # crop are from, and every time they were seen at. None for a photo's.
+    frame_ms: int | None = None
+    seen_ms: list[int] | None = None
 
 
 class PersonFacesResponse(BaseModel):
@@ -475,36 +480,42 @@ def list_person_faces(
     if person is None:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    faces = repo.get_faces(person_id, after=after, limit=limit)
-
-    # Get asset rel_paths for each face
-    asset_ids = list({f.asset_id for f in faces})
-    from src.server.models.tenant import Asset
-    from sqlmodel import select
-    asset_map: dict[str, tuple[str, object]] = {}
-    if asset_ids:
-        stmt = select(Asset.asset_id, Asset.rel_path, Asset.taken_at).where(Asset.asset_id.in_(asset_ids))
-        asset_map = {r[0]: (r[1], r[2]) for r in session.exec(stmt).all()}
-
-    items = [
-        PersonFaceItem(
-            face_id=f.face_id,
-            asset_id=f.asset_id,
-            bounding_box=f.bounding_box_json,
-            detection_confidence=f.detection_confidence,
-            rel_path=(asset_map.get(f.asset_id) or (None, None))[0],
-            taken_at=(asset_map.get(f.asset_id) or (None, None))[1].isoformat()
-                if (asset_map.get(f.asset_id) or (None, None))[1] is not None
-                else None,
-        )
-        for f in faces
-    ]
+    items = _face_items(session, repo.get_faces(person_id, after=after, limit=limit))
 
     next_cursor: str | None = None
     if items and len(items) == limit:
         next_cursor = items[-1].face_id
 
     return PersonFacesResponse(items=items, next_cursor=next_cursor)
+
+
+def _face_items(session: Session, faces: list) -> list[PersonFaceItem]:
+    """Faces as a person's or a cluster's list shows them, with their clips' path, date and media."""
+    from sqlmodel import select
+
+    from src.server.models.tenant import Asset
+
+    asset_ids = list({f.asset_id for f in faces})
+    clips: dict[str, tuple] = {}
+    if asset_ids:
+        clips = {r[0]: r[1:] for r in session.exec(
+            select(Asset.asset_id, Asset.rel_path, Asset.taken_at, Asset.media_type)
+            .where(Asset.asset_id.in_(asset_ids))).all()}
+    items = []
+    for f in faces:
+        rel, taken, media = clips.get(f.asset_id) or (None, None, None)
+        items.append(PersonFaceItem(
+            face_id=f.face_id,
+            asset_id=f.asset_id,
+            bounding_box=f.bounding_box_json,
+            detection_confidence=f.detection_confidence,
+            rel_path=rel,
+            taken_at=taken.isoformat() if taken is not None else None,
+            media_type=media,
+            frame_ms=f.frame_ms,
+            seen_ms=list(f.seen_ms) if f.seen_ms is not None else None,
+        ))
+    return items
 
 
 @router.post("/{person_id}/merge", response_model=PersonItem, dependencies=[Depends(require_editor)])
@@ -816,7 +827,7 @@ def list_cluster_faces(
 ) -> ClusterFacesResponse:
     """List all faces in a cluster, cursor-paginated. 409 cluster_changed
     when no cluster has this id any more."""
-    from src.server.models.tenant import Face, Asset
+    from src.server.models.tenant import Face
     from sqlmodel import select
 
     all_face_ids = find_cluster(session, cluster_id).get("face_ids", [])
@@ -838,29 +849,7 @@ def list_cluster_faces(
     # Load face + asset data
     stmt = select(Face).where(Face.face_id.in_(page_ids))
     faces_by_id = {f.face_id: f for f in session.exec(stmt).all()}
-
-    asset_ids = list({faces_by_id[fid].asset_id for fid in page_ids if fid in faces_by_id})
-    asset_map: dict[str, tuple[str, object]] = {}
-    if asset_ids:
-        rows = session.exec(
-            select(Asset.asset_id, Asset.rel_path, Asset.taken_at).where(Asset.asset_id.in_(asset_ids))
-        ).all()
-        asset_map = {r[0]: (r[1], r[2]) for r in rows}
-
-    items = []
-    for fid in page_ids:
-        f = faces_by_id.get(fid)
-        if not f:
-            continue
-        rel, taken = asset_map.get(f.asset_id) or (None, None)
-        items.append(PersonFaceItem(
-            face_id=f.face_id,
-            asset_id=f.asset_id,
-            bounding_box=f.bounding_box_json,
-            detection_confidence=f.detection_confidence,
-            rel_path=rel,
-            taken_at=taken.isoformat() if taken is not None else None,
-        ))
+    items = _face_items(session, [faces_by_id[fid] for fid in page_ids if fid in faces_by_id])
 
     next_cursor = page_ids[-1] if len(page_ids) == limit and start + limit < total else None
 
@@ -887,6 +876,8 @@ def get_face_crop(
 
     # Generate crop on demand if missing
     if not face.crop_key or not storage.abs_path(face.crop_key).exists():
+        if face.frame_ms is not None:  # a video's: cut from its frame when found, never from the poster
+            raise HTTPException(status_code=404, detail="No crop for this face")
         if not face.bounding_box_json:
             raise HTTPException(status_code=404, detail="No bounding box for this face")
         tenant_id = getattr(request.state, "tenant_id", None)

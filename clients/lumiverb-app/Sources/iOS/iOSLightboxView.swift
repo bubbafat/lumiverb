@@ -140,8 +140,10 @@ struct iOSLightboxView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
+                // A video's faces are from its frames, not the picture shown.
                 if showFaces,
                    let detail = browseState.assetDetail,
+                   !detail.isVideo,
                    let width = detail.width,
                    let height = detail.height {
                     iOSFaceOverlayView(

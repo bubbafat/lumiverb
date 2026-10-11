@@ -121,7 +121,8 @@ system_metadata   — key, value, updated_at
 ```
 faces             — face_id, asset_id, bounding_box_json,
                     embedding_vector vector(512), detection_confidence,
-                    detection_model, detection_model_version, created_at
+                    detection_model, detection_model_version, embedding_model,
+                    crop_key, frame_ms, seen_ms int[], created_at
 people            — person_id, display_name, created_by_user,
                     centroid_vector vector(512), confirmation_count,
                     representative_face_id, created_at
@@ -129,7 +130,7 @@ face_person_matches — face_id, person_id, confidence,
                     confirmed (bool), confirmed_at
 ```
 
-Face detection runs client-side in the CLI via InsightFace (buffalo_l). Detected faces with ArcFace 512-dim embeddings are POSTed to `POST /v1/assets/{id}/faces`. The `assets.face_count` column tracks detection status (NULL = unprocessed, 0 = no faces, N = N faces). Face crops (128x128 WebP) are generated server-side from the asset proxy on submission.
+Faces are found by the scheduler with InsightFace (buffalo_l), in a process of its own: photos by the faces producer, in their proxies (`POST /v1/assets/batch-faces`), and videos by the video faces producer (`src/producers/video_faces`). A video is looked at in frames from its analysis proxy, chosen by its Detail (Low: each scene's picture; Normal: three a scene; High: those and a frame every 3 s); the faces found are grouped into the people seen (cosine distance under 0.4 to a person's mean, never two faces of one frame to one person), and each person is saved as one face (`POST /v1/video/{id}/faces`): the face shown, the frame it's from (`frame_ms`), every time they were seen (`seen_ms`) and its crop, cut from that frame. The `assets.face_count` column tracks detection status (NULL = unprocessed, 0 = no faces, N = N faces; a video's, the people seen). A photo's face crops (128x128 WebP) are generated server-side from the asset proxy on submission.
 
 Person clustering uses cosine distance on ArcFace embeddings (threshold 0.55) with a materialized cache in `system_metadata` (dirty flag invalidation). The People page shows clusters for naming. When a user names a cluster, all faces in it are assigned to a person. New faces are auto-assigned to known people on ingest if centroid distance < 0.45. The upkeep sweep periodically propagates assignments for untagged faces.
 

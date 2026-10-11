@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, JSON, SmallInteger, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, JSON, SmallInteger, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
 from src.shared.utils import utcnow
@@ -486,6 +486,14 @@ class Face(SQLModel, table=True):
         nullable=True,
     )
     crop_key: str | None = Field(default=None, nullable=True)
+    # A face found in a video (src/producers/video_faces): the time of the
+    # frame its box and crop are from, and every time it was seen at, in
+    # order. None for a photo's.
+    frame_ms: int | None = Field(default=None, nullable=True)
+    seen_ms: list[int] | None = Field(
+        default=None,
+        sa_column=Column(ARRAY(Integer), nullable=True),
+    )
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
