@@ -138,7 +138,7 @@ def local_library_root(library: dict, root_map: dict[str, str] | None = None) ->
 FSTAB = Path("/etc/fstab")
 
 
-def _expected_mount(path: Path) -> Path | None:
+def expected_mount(path: Path) -> Path | None:
     """The deepest mount point fstab lists at or above `path`, other than /."""
     try:
         lines = FSTAB.read_text().splitlines()
@@ -162,7 +162,7 @@ def _probe(path: Path, require_entries: bool) -> Path | None:
     # in an unmounted mount point (a stray copy) isn't the share.
     resolved = path.resolve()
     for candidate in dict.fromkeys((path, resolved)):  # a root map may reach the mount through a symlink
-        mount = _expected_mount(candidate)
+        mount = expected_mount(candidate)
         if mount is not None and not os.path.ismount(mount):
             return None
     if not resolved.is_dir():

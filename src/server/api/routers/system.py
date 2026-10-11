@@ -355,6 +355,7 @@ class Backups(BaseModel):
 
 class BackupFolderChange(BaseModel):
     folder: str | None  # None: back to the default
+    make_folder: bool = False  # it isn't there: the user said to make it (the 409 make_folder)
 
 
 BACKUPS_ELSEWHERE = "Choose the backups folder on the computer Lumiverb is installed on."
@@ -435,14 +436,17 @@ def change_backups_folder(body: BackupFolderChange, request: Request) -> Backups
     """An admin's choice, on the machine itself (as for a library's folder):
     backups go there from now on; those made already stay where they are."""
     from src.server import backups
+    from src.server.api import new_folder
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError
     from src.server.config import get_settings
 
     if not on_this_machine(request):
         raise ApiError(403, "backups_elsewhere", BACKUPS_ELSEWHERE)
+    data = Path(get_settings().data_dir)
     try:
-        chosen = backups.set_folder(Path(get_settings().data_dir), body.folder)
+        with new_folder.made_if_asked(body.folder, body.make_folder, data):
+            chosen = backups.set_folder(data, body.folder)
     except backups.BackupError as exc:
         raise ApiError(400, "folder_not_usable", str(exc)) from None
     logger.info("Backups go to %s (an admin's choice)", chosen)
@@ -472,7 +476,7 @@ class StorageMove(BaseModel):
 
 class Storage(BaseModel):
     previews: str  # the folder the previews are in
-    data: str  # DATA_DIR: the database, the search index, models and caches (they don't move)
+    data: str  # DATA_DIR: the database, the search index, backups, caches and the search and transcript models (they don't move)
     previews_available: bool  # its drive is plugged in
     previews_free: int | None
     previews_total: int | None
@@ -487,7 +491,8 @@ class Storage(BaseModel):
 
 class PreviewsChange(BaseModel):
     folder: str | None  # None: back to the data folder
-    move: bool = False  # the user saw what moves (the 409's details) and said yes
+    move: bool = False  # the user saw what moves (the 409 move_previews) and said yes
+    make_folder: bool = False  # it isn't there: the user said to make it (the 409 make_folder)
 
 
 STORAGE_ELSEWHERE = "Move the previews on the computer Lumiverb is installed on."
@@ -551,8 +556,11 @@ def move_previews(body: PreviewsChange, request: Request,
                   session: Annotated[Session, Depends(get_tenant_session)]) -> Storage:
     """Moves the previews to another folder (or back to the data folder), on
     the machine itself. Without move: true, a 409 says what moves (files,
-    bytes, from, to, free there) for the user to confirm. Lumiverb keeps
-    working meanwhile; new files go to the new folder at once."""
+    bytes, from, to, free there) for the user to confirm; with nothing to
+    move, they're there at once. A folder that isn't there: a 409 asks to
+    make it first. Lumiverb keeps working meanwhile; new files go to the
+    new folder at once."""
+    from src.server.api import new_folder
     from src.server.api.client_address import on_this_machine
     from src.server.api.errors import ApiError, DecisionRequiredError
     from src.server.config import get_settings
@@ -567,20 +575,21 @@ def move_previews(body: PreviewsChange, request: Request,
         raise ApiError(409, "move_running", "The previews are being moved already: wait for that to finish.")
     target = body.folder if body.folder is not None else str(data)
     try:
-        if not body.move:
+        with new_folder.made_if_asked(body.folder, body.make_folder, data):
             _, chosen, need = move.plan(data, body.folder)
-            free = shutil.disk_usage(chosen).free
-            raise DecisionRequiredError(
-                "move_previews",
-                f"Moves {need.files:,} previews ({move.size_text(need.bytes)}) from {location.previews} to {chosen}. "
-                "Lumiverb keeps working meanwhile; previews not moved yet show from where they are.",
-                {"from": str(location.previews), "to": str(chosen), "files": need.files, "bytes": need.bytes,
-                 "free": free},
-            )
-        move.start(data, target)
+            if need.files and not body.move:
+                raise DecisionRequiredError(
+                    "move_previews",
+                    f"Moves {need.files:,} previews ({move.size_text(need.bytes)}) from {location.previews} to "
+                    f"{chosen}. Lumiverb keeps working meanwhile; previews not moved yet show from where they are.",
+                    {"from": str(location.previews), "to": str(chosen), "files": need.files, "bytes": need.bytes,
+                     "free": shutil.disk_usage(chosen).free},
+                )
+            move.start(data, target)
     except move.MoveError as exc:
         raise ApiError(400, "folder_not_usable", str(exc)) from None
     logger.info("Moving the previews to %s (an admin's choice)", target)
+    move.settled(data)
     return _storage(request, session)
 
 

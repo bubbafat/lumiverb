@@ -120,7 +120,46 @@ def test_a_folder_it_cant_use_says_why(mac):
     data, originals, tmp, control_url = mac
     with TestClient(app, client=HERE) as client:
         auth, library_id, _ = _library(client, control_url, originals)
-        bad = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(tmp / "nowhere")}, headers=auth)
-        assert bad.status_code == 400 and "There's no folder" in bad.json()["error"]["message"]
+        bad = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": "/lumiverb-no-such-drive/x"},
+                         headers=auth)
+        assert bad.status_code == 400 and "There's no drive" in bad.json()["error"]["message"]
         where = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": None}, headers=auth)
         assert where.status_code == 400 and "already" in where.json()["error"]["message"]
+
+
+def test_a_folder_not_there_is_asked_about_then_made(mac):
+    data, originals, tmp, control_url = mac
+    wanted = tmp / "Video" / "Lumiverb"
+    with TestClient(app, client=HERE) as client:
+        auth, library_id, _ = _library(client, control_url, originals)
+        asked = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(wanted)}, headers=auth)
+        assert asked.status_code == 409 and asked.json()["error"]["code"] == "make_folder"
+        assert not (tmp / "Video").exists()
+        # Nothing to move, but it's the originals' drive: that's still said first.
+        said = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(wanted), "make_folder": True},
+                          headers=auth)
+        assert said.status_code == 409, said.text
+        err = said.json()["error"]
+        assert err["code"] == "move_previews" and err["details"]["files"] == 0
+        assert err["message"].startswith(f"Trips's previews go to {wanted} from now on.") and "can't be browsed" in err["message"]
+        assert not (tmp / "Video").exists()
+        moved = client.put(f"/v1/libraries/{library_id}/previews",
+                           json={"folder": str(wanted), "make_folder": True, "move": True}, headers=auth)
+        assert moved.status_code == 202, moved.text
+        assert _settled(client, auth, library_id)["folder"] == str(wanted)
+    assert previews_location.read(data).libraries == {library_id: wanted}
+
+
+def test_with_nothing_to_move_or_say_it_doesnt_ask(mac, monkeypatch):
+    from src.server.api.routers import libraries
+
+    data, originals, tmp, control_url = mac
+    monkeypatch.setattr(libraries, "_same_device", lambda a, b: False)  # the originals on a drive of their own
+    drive = tmp / "Video"
+    drive.mkdir()
+    with TestClient(app, client=HERE) as client:
+        auth, library_id, _ = _library(client, control_url, originals)
+        there = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(drive)}, headers=auth)
+        assert there.status_code == 202, there.text
+        assert _settled(client, auth, library_id)["folder"] == str(drive)
+    assert previews_location.read(data).libraries == {library_id: drive}

@@ -8,7 +8,9 @@ import {
   setBackupsFolder,
   type BackupItem,
   type Backups,
+  type NewFolderFacts,
 } from "../../api/client";
+import { MakeFolder, asked } from "./StorageSection";
 
 export const BACKUPS_QUERY_KEY = ["system", "backups"];
 
@@ -167,13 +169,20 @@ export function FolderChoice({ backups }: { backups: Backups }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [folder, setFolder] = useState(backups.folder);
+  const [toMake, setToMake] = useState<{ folder: string | null; text: string; facts: NewFolderFacts } | null>(null);
   const change = useMutation({
-    mutationFn: setBackupsFolder,
+    mutationFn: ({ to, make }: { to: string | null; make: boolean }) => setBackupsFolder(to, make),
     onSuccess: (next) => {
       queryClient.setQueryData(BACKUPS_QUERY_KEY, next);
+      setToMake(null);
       setEditing(false);
     },
+    onError: (err, vars) => {
+      const q = asked(err, ["make_folder"]);
+      setToMake(q ? { folder: vars.to, text: q.message, facts: q.details as unknown as NewFolderFacts } : null);
+    },
   });
+  const refused = change.isError && !asked(change.error, ["make_folder"]);
   const isDefault = backups.folder === backups.default_folder;
 
   return (
@@ -181,7 +190,15 @@ export function FolderChoice({ backups }: { backups: Backups }) {
       <h3 id="backups-folder" className="text-sm font-semibold uppercase tracking-wide text-gray-400">
         Folder
       </h3>
-      {!editing ? (
+      {toMake ? (
+        <MakeFolder
+          text={toMake.text}
+          facts={toMake.facts}
+          pending={change.isPending}
+          onMake={() => change.mutate({ to: toMake.folder, make: true })}
+          onCancel={() => setToMake(null)}
+        />
+      ) : !editing ? (
         <>
           <p className="break-all font-mono text-sm text-gray-200">{backups.folder}</p>
           {isDefault && (
@@ -202,7 +219,7 @@ export function FolderChoice({ backups }: { backups: Backups }) {
           className="space-y-2"
           onSubmit={(e) => {
             e.preventDefault();
-            change.mutate(folder.trim());
+            change.mutate({ to: folder.trim(), make: false });
           }}
         >
           <input
@@ -213,14 +230,15 @@ export function FolderChoice({ backups }: { backups: Backups }) {
             onChange={(e) => setFolder(e.target.value)}
           />
           <p className="text-xs text-gray-500">From now on. Those made already stay where they are.</p>
-          {change.isError && <p role="alert" className="text-sm text-red-300">{message(change.error)}</p>}
+          {refused && <p role="alert" className="text-sm text-red-300">{message(change.error)}</p>}
           <div className="flex flex-wrap items-center gap-3">
             <button type="submit" className={`${buttonClass} bg-indigo-600 text-white hover:bg-indigo-500`}
                     disabled={change.isPending || !folder.trim()}>
               Save
             </button>
             {!isDefault && (
-              <button type="button" className={linkClass} disabled={change.isPending} onClick={() => change.mutate(null)}>
+              <button type="button" className={linkClass} disabled={change.isPending}
+                      onClick={() => change.mutate({ to: null, make: false })}>
                 Use the default
               </button>
             )}

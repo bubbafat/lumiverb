@@ -1118,9 +1118,16 @@ export async function backUpNow(): Promise<Backups> {
   return apiFetch<Backups>("/system/backups", { method: "POST" });
 }
 
-/** An admin's choice, on the machine itself; null: back to the default. */
-export async function setBackupsFolder(folder: string | null): Promise<Backups> {
-  return apiFetch<Backups>("/system/backups/folder", { method: "PUT", body: { folder } });
+/** An admin's choice, on the machine itself; null: back to the default. One not there: a 409 make_folder, unless makeFolder. */
+export async function setBackupsFolder(folder: string | null, makeFolder = false): Promise<Backups> {
+  return apiFetch<Backups>("/system/backups/folder", { method: "PUT", body: { folder, make_folder: makeFolder } });
+}
+
+/** A folder not there yet: the 409 make_folder's details, for the user to say make it. */
+export interface NewFolderFacts {
+  folder: string;
+  free: number;
+  same_drive_as_data: boolean;
 }
 
 /** Where the previews are, and a move under way (Settings → Storage). */
@@ -1177,10 +1184,13 @@ export async function getLibraryPreviews(libraryId: string): Promise<LibraryPrev
   return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`);
 }
 
-/** Without move, a 409 move_previews with the facts; with it, the move starts. null: back to the server's folder. */
-export async function moveLibraryPreviews(libraryId: string, folder: string | null, move: boolean): Promise<LibraryPreviews> {
+/** Without move, a 409 move_previews with the facts (unless there's nothing to move or say); with it, the move
+ * starts. A folder not there: a 409 make_folder first, unless makeFolder. null: back to the server's folder. */
+export async function moveLibraryPreviews(
+  libraryId: string, folder: string | null, move: boolean, makeFolder = false,
+): Promise<LibraryPreviews> {
   return apiFetch<LibraryPreviews>(`/libraries/${encodeURIComponent(libraryId)}/previews`, {
-    method: "PUT", body: { folder, move },
+    method: "PUT", body: { folder, move, make_folder: makeFolder },
   });
 }
 
@@ -1199,9 +1209,12 @@ export async function getStorageInfo(): Promise<StorageInfo> {
   return apiFetch<StorageInfo>("/system/storage");
 }
 
-/** Without move, a 409 move_previews with the facts; with it, the move starts (202). null: back to the data folder. */
-export async function movePreviews(folder: string | null, move: boolean): Promise<StorageInfo> {
-  return apiFetch<StorageInfo>("/system/storage/previews", { method: "PUT", body: { folder, move } });
+/** Without move, a 409 move_previews with the facts (unless there's nothing to move); with it, the move starts
+ * (202). A folder not there: a 409 make_folder first, unless makeFolder. null: back to the data folder. */
+export async function movePreviews(folder: string | null, move: boolean, makeFolder = false): Promise<StorageInfo> {
+  return apiFetch<StorageInfo>("/system/storage/previews", {
+    method: "PUT", body: { folder, move, make_folder: makeFolder },
+  });
 }
 
 /** Try again: a move that stopped goes on now. */

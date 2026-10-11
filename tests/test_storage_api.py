@@ -1,8 +1,10 @@
 """Settings › Storage's API (GET /v1/system/storage, PUT
 /v1/system/storage/previews, POST /v1/system/storage/move, routers/system.py):
 where the previews are and moving them. An admin, on the machine itself,
-says yes to what moves (a 409 with the facts first); the move runs in the
-background and is followed here; the upkeep goes on with one that stopped.
+says yes to what moves (a 409 with the facts first; with nothing to move,
+it isn't asked) and to making a folder that isn't there; the move runs in
+the background and is followed here; the upkeep goes on with one that
+stopped.
 The rules on real folders: tests/test_previews_location.py."""
 
 from __future__ import annotations
@@ -95,12 +97,59 @@ def test_from_another_device_nothing_moves(mac):
 
 
 def test_a_folder_it_cant_use_says_why(mac, tmp_path):
-    _, _, control_url = mac
+    data, _, control_url = mac
     with TestClient(app, client=HERE) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
-        bad = client.put("/v1/system/storage/previews", json={"folder": str(tmp_path / "nowhere")}, headers=auth)
-    assert bad.status_code == 400 and bad.json()["error"]["code"] == "folder_not_usable"
-    assert "There's no folder" in bad.json()["error"]["message"]
+        no_drive = client.put("/v1/system/storage/previews", json={"folder": "/lumiverb-no-such-drive/previews",
+                                                                  "make_folder": True}, headers=auth)
+        assert no_drive.status_code == 400 and no_drive.json()["error"]["code"] == "folder_not_usable"
+        assert no_drive.json()["error"]["message"] == "There's no drive at /lumiverb-no-such-drive. Is it plugged in?"
+        inside = data / "ten_x" / "new" / "deeper"
+        refused = client.put("/v1/system/storage/previews", json={"folder": str(inside), "make_folder": True},
+                             headers=auth)
+        assert refused.status_code == 400 and "inside the previews" in refused.json()["error"]["message"]
+    assert not (data / "ten_x" / "new").exists(), "made for a request that didn't go through: taken away"
+    assert previews_location.read(data).previews == data
+
+
+def test_a_folder_not_there_is_made_when_the_user_says_so(mac):
+    data, drive, control_url = mac
+    wanted = drive / "Lumiverb" / "previews"
+    with TestClient(app, client=HERE) as client:
+        auth, _ = real_account.admin_with_database(client, control_url)
+        asked = client.put("/v1/system/storage/previews", json={"folder": str(wanted)}, headers=auth)
+        assert asked.status_code == 409, asked.text
+        err = asked.json()["error"]
+        assert err["code"] == "make_folder" and err["message"].startswith(f"There's no folder at {wanted}. Make it?")
+        assert err["details"]["folder"] == str(wanted) and err["details"]["same_drive_as_data"] is True
+        assert not (drive / "Lumiverb").exists()
+        # Made, then what moves is asked: nothing stays made until the user says yes to that too.
+        made = client.put("/v1/system/storage/previews", json={"folder": str(wanted), "make_folder": True},
+                          headers=auth)
+        assert made.status_code == 409 and made.json()["error"]["code"] == "move_previews"
+        assert made.json()["error"]["details"]["to"] == str(wanted)
+        assert not (drive / "Lumiverb").exists()
+        moved = client.put("/v1/system/storage/previews", json={"folder": str(wanted), "make_folder": True,
+                                                               "move": True}, headers=auth)
+        assert moved.status_code == 202, moved.text
+        assert _settled(client, auth)["previews"] == str(wanted)
+    assert (wanted / KEY).read_bytes() == b"proxy"
+
+
+def test_with_nothing_to_move_it_doesnt_ask(mac):
+    data, drive, control_url = mac
+    (data / KEY).unlink()
+    wanted = drive / "previews"
+    with TestClient(app, client=HERE) as client:
+        auth, _ = real_account.admin_with_database(client, control_url)
+        there = client.put("/v1/system/storage/previews", json={"folder": str(wanted), "make_folder": True},
+                           headers=auth)
+        assert there.status_code == 202, there.text
+        assert _settled(client, auth)["previews"] == str(wanted)
+        back = client.put("/v1/system/storage/previews", json={"folder": None}, headers=auth)
+        assert back.status_code == 202, back.text
+        assert _settled(client, auth)["previews"] == str(data)
+    assert previews_location.read(data) == previews_location.Location(data)
 
 
 def test_one_move_at_a_time_and_try_again(mac):

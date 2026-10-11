@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.server import drives
 from src.shared import previews_location
 from src.shared.previews_location import Location
 
@@ -147,6 +148,8 @@ def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, cu
     current = current or location.previews
     if chosen == current:
         raise MoveError(f"The previews are in {chosen} already.")
+    if (why := drives.missing(chosen)) is not None:
+        raise MoveError(why)
     if not chosen.is_dir():
         raise MoveError(f"There's no folder at {chosen}.")
     for root in (*location.roots, Path(os.path.abspath(data_dir))):
@@ -286,6 +289,19 @@ def start(data_dir: Path, to: str | Path | None, *, library_id: str | None = Non
     else:
         run(data_dir)
     return chosen
+
+
+def settled(data_dir: Path, *, within: float = 1.0) -> bool:
+    """Whether no move is under way, waiting up to `within` seconds for one
+    to finish: a small one (or one with nothing to carry) is done in a
+    moment, so the answer to starting it shows it done; a big one shows
+    how far it got."""
+    deadline = time.monotonic() + within
+    while previews_location.read(data_dir).moving:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
 
 
 def go_on(data_dir: Path, *, now: float | None = None, waits: bool = False) -> str:
