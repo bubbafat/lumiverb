@@ -36,6 +36,7 @@ server's own settings.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -70,7 +71,6 @@ NO_INSTALL = ("Say which install: --env FILE or $LUMIVERB_ENV_FILE, or CONTROL_P
 DEFAULT_API_PORT = "8000"  # update.sh's default when the env file has none
 DEFAULT_API_WORKERS = "2"  # the brain's unit: uvicorn --workers 2
 MIGRATE_RETRY_MAX_SEC = 60.0
-THIS_MACHINE_ROOT_MAP = '{"/": "/"}'  # every library root is where it says
 
 
 class InstallError(Exception):
@@ -109,11 +109,12 @@ def data_dir(env: dict[str, str]) -> Path:
 
 
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
-                    cwd: Path = APP_DIR) -> list[Child]:
+                    cwd: Path = APP_DIR, config_dir: Path | None = None) -> list[Child]:
     """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
     API and the scheduler (once `migrated`), with the brain's units'
     environment, restart delays and stop times (deploy-api.sh). They stop in
-    reverse: the scheduler first, PostgreSQL last."""
+    reverse: the scheduler first, PostgreSQL last. The scheduler never reads
+    the install's own settings (config_dir: the env file's folder, its secrets)."""
     base = {**env, "PYTHONUNBUFFERED": "1"}
     data = data_dir(env)
     started_first: list[Child] = []
@@ -141,14 +142,14 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         {**base, "TMPDIR": str(data / "tmp")}, cwd,
         restart_after=5, stop_within=90, empty_first=data / "tmp", start_after=migrated,
     )
-    # run's scheduler is where the files are (a Mac): it reads every library's
-    # root where it is, unless the env file maps them (the brain's does: the
-    # Mac's /Volumes are its /mnt). Its data stays refused (machine.py).
-    root_map = {"LUMIVERB_ROOT_MAP": THIS_MACHINE_ROOT_MAP} if not env.get("LUMIVERB_ROOT_MAP") else {}
+    # Which library folders it reads is the env file's to say (LUMIVERB_ROOT_MAP),
+    # never assumed here. What it refuses can only grow: the install's settings too.
+    refused = [*json.loads(env.get("LUMIVERB_REFUSED_ROOTS") or "[]"), *([str(config_dir)] if config_dir else [])]
     scheduler = Child(
         "scheduler",
         [python, "-m", "src.server.scheduler"],
-        {**base, **root_map, "XDG_CACHE_HOME": str(data / "cache"), "TMPDIR": str(data / "worker-tmp")}, cwd,
+        {**base, "LUMIVERB_REFUSED_ROOTS": json.dumps(refused), "XDG_CACHE_HOME": str(data / "cache"),
+         "TMPDIR": str(data / "worker-tmp")}, cwd,
         # It lets jobs in hand finish for up to 25 s; only it hears the stop.
         restart_after=30, stop_within=40, term_main_only=True, empty_first=data / "worker-tmp",
         start_after=migrated,
@@ -191,7 +192,7 @@ def _init(args: argparse.Namespace) -> int:
                       quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host,
                       pg_bin=full(args.pg_bin), quickwit_bin=full(args.quickwit_bin),
                       quickwit_config=full(args.quickwit_config), nginx_bin=full(args.nginx_bin),
-                      nginx_config=full(args.nginx_config))
+                      nginx_config=full(args.nginx_config), local_roots=args.local_roots)
     if (choices.quickwit_bin is None) != (choices.quickwit_config is None) or (
             (choices.nginx_bin is None) != (choices.nginx_config is None)):
         raise InstallError("Name each program with its config: --quickwit-bin with --quickwit-config, "
@@ -262,7 +263,8 @@ def _run(args: argparse.Namespace) -> int:
     migrated = threading.Event()
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()
-    Supervisor(server_children(env, migrated=migrated)).run(stop)
+    named = _named_env_file(args.env)
+    Supervisor(server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None)).run(stop)
     return 0
 
 
@@ -322,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     init_command.add_argument("--quickwit-config", type=Path, help="Quickwit's config, written here")
     init_command.add_argument("--nginx-bin", type=Path, help="nginx: run starts it")
     init_command.add_argument("--nginx-config", type=Path, help="nginx's config, written here")
+    init_command.add_argument("--local-roots", action="store_true",
+                              help="the scheduler reads every library folder where it is (this machine has the files)")
     init_command.add_argument("--web-root", type=Path, default=WEB_ROOT, help="the web build nginx serves")
     for port in ("pg", "api", "quickwit", "web"):
         init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")
