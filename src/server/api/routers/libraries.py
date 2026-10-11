@@ -616,6 +616,9 @@ SAME_DRIVE = ("That's the drive this library's originals are on: when it's unplu
 # sleeps (prod's CIFS mount of the Mac's drives) can block a stat for minutes,
 # and this runs in the request.
 ORIGINALS_TIMEOUT_SEC = 2.0
+# A stat of the originals still stuck, per folder: while one is, no other starts
+# (as roots.reachable_root does for its probe), so threads don't pile up.
+_stats: dict[str, object] = {}
 
 
 def _originals_device(library) -> int | None:
@@ -634,12 +637,16 @@ def _originals_device(library) -> int | None:
         return None
     if root is None:
         return None
+    stuck = _stats.get(str(root))
+    if stuck is not None and stuck.is_alive():
+        return None
     found: dict[str, int] = {}
 
     def stat() -> None:
         found["dev"] = os.stat(root).st_dev
 
     worker = threading.Thread(target=stat, name=f"originals-stat-{library.library_id}", daemon=True)
+    _stats[str(root)] = worker
     worker.start()
     worker.join(ORIGINALS_TIMEOUT_SEC)
     return found.get("dev")

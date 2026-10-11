@@ -8,6 +8,7 @@ and not knowing says nothing."""
 from __future__ import annotations
 
 import os
+import threading
 import time
 from types import SimpleNamespace
 
@@ -69,3 +70,9 @@ def test_a_stat_that_hangs_after_the_probe_isn_t_waited_on_either(tmp_path, monk
     started = time.monotonic()
     assert libraries._originals_device(_library(tmp_path, "lib_slow")) is None
     assert time.monotonic() - started < 1.0
+    # Asked again while that stat is still stuck: no wait, and no second stuck thread.
+    stuck = [t for t in threading.enumerate() if t.name == "originals-stat-lib_slow"]
+    started = time.monotonic()
+    assert libraries._originals_device(_library(tmp_path, "lib_slow")) is None
+    assert time.monotonic() - started < 0.5
+    assert [t for t in threading.enumerate() if t.name == "originals-stat-lib_slow"] == stuck
