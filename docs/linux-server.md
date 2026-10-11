@@ -1,6 +1,6 @@
-# The brain: setup and operation
+# A Linux server: setup and operation
 
-The brain is the Linux box `media` (LAN 192.168.86.166, Tailscale 100.94.35.123). It runs Lumiverb, reads the DAS, and does all processing: one scheduler ranks every job and runs it here (ADR-016 phases 2 and 4). The Mac Studio keeps the DAS and editing; it reports file changes and browses.
+Prod is the Linux box `media` (LAN 192.168.86.166, Tailscale 100.94.35.123). It runs Lumiverb, reads the DAS, and does all processing: one scheduler ranks every job and runs it here (ADR-016 phases 2 and 4). The Mac Studio keeps the DAS and editing; it reports file changes and browses.
 
 ```
 Mac Studio ── DAS (media-01, media-02)
@@ -15,7 +15,7 @@ media: /mnt/media-01, /mnt/media-02  ──►  lumiverb-scheduler ──►  AP
 
 Settled so prod and dev run side by side. Don't use other ports without updating this table.
 
-| What | Dev (unchanged) | Brain (prod) |
+| What | Dev (unchanged) | Prod |
 |---|---|---|
 | Postgres | 5433 (Docker, pgvector:pg18) | **5434** (Ubuntu postgresql-18 + pgvector) |
 | Quickwit | 7280 (Docker) | **7290** REST, 7291 gRPC |
@@ -28,9 +28,9 @@ Already taken by other things: 5432 (DaVinci Resolve's Postgres), 8080 (Resource
 
 ### 1. Where the DAS is on the Mac
 
-Libraries keep the root the Mac sees, because exports point Resolve, Premiere and Final Cut there. The brain maps it to its own mount:
+Libraries keep the root the Mac sees, because exports point Resolve, Premiere and Final Cut there. Prod maps it to its own mount:
 
-| On the Mac | On the brain |
+| On the Mac | On `media` |
 |---|---|
 | `/Volumes/media-01` | `/mnt/media-01` |
 
@@ -38,10 +38,10 @@ The first library is `/Volumes/media-01/Media`: about 14,400 photos and videos, 
 
 ### 2. Install the API and the scheduler
 
-From this checkout (`~/src/lumiverb`), on `feat/brain` until the stack is merged:
+From this checkout (`~/src/lumiverb`):
 
 ```bash
-sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01 --branch feat/brain
+sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01
 ```
 
 Add `--dry-run` to see the settings it will use without changing anything. Once installed, it needs sudo too: the remembered settings are in `/etc/lumiverb/env`, which only root can read.
@@ -54,7 +54,7 @@ Add `--dry-run` to see the settings it will use without changing anything. Once 
 ### 3. Install the web UI
 
 ```bash
-sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 --no-firewall --branch feat/brain
+sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 --no-firewall
 ```
 
 Lumiverb is then at http://192.168.86.166 and http://100.94.35.123.
@@ -69,8 +69,8 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --ema
 ```
 
 Or in the web app: its setup page appears while there's nobody to log in,
-and only works from the brain itself, so from another machine reach it
-through an SSH tunnel (`ssh -L 8080:localhost:80 the-brain`, then
+and only works from the server itself, so from another machine reach it
+through an SSH tunnel (`ssh -L 8080:localhost:80 media`, then
 http://localhost:8080). Both are the same step (`src/server/setup.py`), and
 closed for good once there's a user. Finish it before putting a tunnel or
 proxy on the box in front of Lumiverb (`tailscale serve`, cloudflared,
@@ -102,10 +102,10 @@ On Oct 8 there are two:
 
 | Machine | URL | At once |
 |---|---|---|
-| Brain 3080 | `http://10.10.10.2:11434/v1` | 2 |
+| `media`'s 3080 | `http://10.10.10.2:11434/v1` | 2 |
 | Mac Studio (over the direct 10 Gb link) | `http://10.10.10.1:11434/v1` | 4 |
 
-**The brain's Ollama** is Lumiverb's own: `~/ollama/docker-compose.yaml` (`docker compose -f ~/ollama/docker-compose.yaml up -d`), with the image digest and model folder (`/mnt/ssd1/ollama-models`) it had as ResourceSpace's `ollama` service. Its port is published on every address of the brain, so it's at a fixed address: 10.10.10.2 (the direct link to the Mac), localhost, and the LAN. Ollama has no password. Until Oct 8 Lumiverb borrowed ResourceSpace's Ollama at a Docker-internal address, which changed when that container restarted and stopped vision. ResourceSpace is retired: its containers are stopped with `restart=no`. If its compose file is ever started again, take the `ollama` service out of it first: it would take the same container name and GPU. Every update (`update.sh`) checks that containers using the GPU still have it: systemd reloading its units takes the GPU from running containers, and Ollama then quietly runs its model on the CPU. One that lost it is restarted; `docker exec ollama nvidia-smi` shows the GPU when all is well, and `curl -s localhost:11434/api/ps` a non-zero `size_vram`.
+**Prod's Ollama** is Lumiverb's own: `~/ollama/docker-compose.yaml` (`docker compose -f ~/ollama/docker-compose.yaml up -d`), with the image digest and model folder (`/mnt/ssd1/ollama-models`) it had as ResourceSpace's `ollama` service. Its port is published on every address of `media`, so it's at a fixed address: 10.10.10.2 (the direct link to the Mac), localhost, and the LAN. Ollama has no password. Until Oct 8 Lumiverb borrowed ResourceSpace's Ollama at a Docker-internal address, which changed when that container restarted and stopped vision. ResourceSpace is retired: its containers are stopped with `restart=no`. If its compose file is ever started again, take the `ollama` service out of it first: it would take the same container name and GPU. Every update (`update.sh`) checks that containers using the GPU still have it: systemd reloading its units takes the GPU from running containers, and Ollama then quietly runs its model on the CPU. One that lost it is restarted; `docker exec ollama nvidia-smi` shows the GPU when all is well, and `curl -s localhost:11434/api/ps` a non-zero `size_vram`.
 
 To add a machine, as an admin: **Settings → AI → Add machine**, a name, the URL, **Connect** (it lists the models the machine offers), tick **Descriptions & text**, how many at once, **Add**. "At once" is how many images it works on together; more needs more GPU memory. It only helps if that Ollama runs that many in parallel (`OLLAMA_NUM_PARALLEL`); otherwise the rest wait there. A request is about 2k tokens (a 1280 px image, the prompt, a 500-token answer), so any context of 8k or more is plenty.
 
@@ -121,7 +121,7 @@ A machine that doesn't answer, breaks off or can't load the model is skipped and
 
 ### 7. The Mac app
 
-Not pointed at the brain yet (your call, Oct 8): its Swift changes wait. Until then it keeps scanning and enriching its own server. The changes it needs are under "Mac app changes" below.
+Not pointed at prod yet (your call, Oct 8): its Swift changes wait. Until then it keeps scanning and enriching its own server. The changes it needs are under "Mac app changes" below.
 
 ### 8. The DAS mounts
 
@@ -134,7 +134,7 @@ Keep the DAS mounts in `/etc/fstab`, not in hand-written systemd mount units or 
 ## How it runs
 
 - **One queue.** The scheduler ranks every job, in every library: first what you see (scans, which make thumbnails and previews, and probes), then analysis copies, then the AI and the rest that makes clips findable (CLIP, descriptions and tags, text in images, transcripts, faces, scenes, scene descriptions). Within a tier, oldest first (in the order clips were added). Each resource has its own slots: scans one at a time, probes 2, analysis copies as below, CLIP and faces taking turns on the GPU (25 clips a batch), scenes 1, and the AI machines as many at once as Settings → AI says. A free slot takes the best job that uses it, so AI keeps going while renders wait on the storage, and a long backlog of one kind never holds up another.
-- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Every 30 s the scheduler scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next look (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait). When a scan finds most of a library missing, the server asks first (409 `mass_missing`) and the scheduler doesn't answer: nothing is archived, and its log names the library and the count. If the files really are gone: `lumiverb scan --library <name> --allow-mass-delete` (on the brain, after `lumiverb config map-root`, or on the Mac).
+- **Changes.** The Mac reports paths it sees change: `POST /v1/changes`. Every 30 s the scheduler scans the one folder that covers a library's reported changes, then acknowledges them. A file modified in the last 30 seconds may still be copying, so it waits for the next look (one stamped more than 5 minutes in the future came from a camera clock running ahead, and doesn't wait). When a scan finds most of a library missing, the server asks first (409 `mass_missing`) and the scheduler doesn't answer: nothing is archived, and its log names the library and the count. If the files really are gone: `lumiverb scan --library <name> --allow-mass-delete` (on the server, after `lumiverb config map-root`, or on the Mac).
 - **Files that fail.** A file that fails to scan doesn't hold back the changes around it. It's tried again on its own after 5 minutes, then 10, 20 and so on, up to once a day. A folder that can't be listed (no permission, or the share timing out mid-scan) keeps its changes for the same retry, and that scan removes nothing. A clip whose processing fails is tried again after 5 minutes, doubling up to a day, and given up after 10 tries (about two days); Settings → Processing ("Show failures") and `lumiverb producers failures` list failing clips with their errors, and Try again (`lumiverb producers retry`) starts over. One that waits without failing (the GPU out of memory, the AI machines down, its file gone since the last look) isn't charged, and waits an hour before the scheduler takes it again, unless someone asks for it to be tried again.
 - **Safety net.** Each library is scanned in full once a day, in case a report was missed. When each was last scanned in full, and which files and folders wait for a retry, are kept in `worker-state.json` beside the scheduler's lock (in `/mnt/ssd2/lumiverb/cache/lumiverb`; the names are the old worker's, so it carried them over), so a restart or deploy doesn't rescan everything; delete it to force full scans.
 - **The Mac Studio asleep.** The scheduler doesn't scan its libraries. A folder `/etc/fstab` lists as a mount counts only while it's mounted, and an empty folder never counts, so an unmounted share is never scanned. Work from analysis proxies goes on; only probing and rendering wait, and they start as soon as the storage is back.
@@ -143,7 +143,7 @@ Keep the DAS mounts in `/etc/fstab`, not in hand-written systemd mount units or 
 - **Now.** Settings → Processing shows what the scheduler is doing (it says every 5 seconds) and what's next, or that it isn't running.
 - **Redo on change.** Changing a model in Settings → AI is the approval: it asks once, naming how many clips it makes again, and then everything made with the old one is redone everywhere, after anything missing (the lowest tier). Settings → Processing shows each producer's stale clips being redone, with Stop and Resume (admins). A transcript a person wrote is never redone. New settings in Settings → Processing are the approval the same way. Scenes found again replace the clip's old ones, and their descriptions are made again with them. Proxies and previews show as stale but aren't redone yet.
 - **How it saves.** Jobs save their results through the API's own routes on this machine, with the same checks and lineage as before; at start the scheduler makes itself an API key per account (labelled `scheduler`) and revokes its previous one.
-- **Analysis proxies** render up to three at once on the brain's 20 cores. The RTX 3080 decodes the originals through Vulkan, about four times faster than the CPU (a 24-minute 4K HEVC clip in about 6 minutes instead of 22); One render at a time decodes there (`LUMIVERB_GPU_DECODES` in `/etc/lumiverb/env`), and only while the card has 1.5 GB free: one decode already keeps the 3080's video decoder near full, and three at once (about 300 MB of video memory each) ran the vision model out of memory beside it. The other renders decode on the CPU meanwhile. ffmpeg decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose GPU decoding fails runs again on the CPU. `nvidia-smi dmon -s u` shows the decoder busy (the `dec` column). Until a video's is ready, it plays its 10-second preview. They are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
+- **Analysis proxies** render up to three at once on `media`'s 20 cores. The RTX 3080 decodes the originals through Vulkan, about four times faster than the CPU (a 24-minute 4K HEVC clip in about 6 minutes instead of 22); One render at a time decodes there (`LUMIVERB_GPU_DECODES` in `/etc/lumiverb/env`), and only while the card has 1.5 GB free: one decode already keeps the 3080's video decoder near full, and three at once (about 300 MB of video memory each) ran the vision model out of memory beside it. The other renders decode on the CPU meanwhile. ffmpeg decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose GPU decoding fails runs again on the CPU. `nvidia-smi dmon -s u` shows the decoder busy (the `dec` column). Until a video's is ready, it plays its 10-second preview. They are full-length copies at most 960 px on the long side, at most 30 fps, with every audio track ffmpeg can decode: each at most stereo, 48 kHz AAC at 48 kbps per channel. With several tracks, a stereo mix of them comes first ("Lumiverb mix"): it's what the web player plays and what transcription hears, so a lav on its own track counts. A track ffmpeg can't decode (iPhone spatial audio, for one) is left out rather than failing the clip. Scenes and scene vision read the proxies too, never the originals. They are not edit proxies.
 - **Library health.** The libraries page shows a library as pending until its videos have analysis proxies.
 - **Playback.** Signed in, the web plays each video in full from its analysis proxy, framed in green; until the proxy exists, the 10-second preview plays, framed in amber, and switches to the whole video when it's ready. Public pages play 10 seconds unless raised. Both are in Settings → Playback, or `lumiverb settings video-preview` / `public-preview` (`full` or seconds). The server enforces them; public transcripts stop where public playback does.
 
@@ -183,7 +183,7 @@ It pulls the install's branch, then runs `update-api.sh` (packages, migrations, 
 - **One at a time:** a second update while one runs stops at once.
 - **Never merges on the server:** a checkout with commits of its own stops at the pull. A `--branch` older than `update.sh` is refused before anything changes.
 
-The first time, the install is still on `feat/brain`, which has no `update.sh`, so the script comes from `main` itself and moves the install there:
+An install on a branch that has no `update.sh` gets the script from `main` itself, which moves the install there:
 
 ```bash
 sudo -v && sudo -u lumiverb git -C /opt/lumiverb fetch -q origin && sudo -u lumiverb git -C /opt/lumiverb show origin/main:scripts/update.sh | sudo bash -s -- --branch main
@@ -203,10 +203,10 @@ sudo rm -rf /var/lib/lumiverb/.cache/lumiverb
    - Files or folders, up to 10,000 per request.
    - Retry on failure.
    - The response says how many matched a library (`accepted`) and how many didn't (`unmatched`).
-2. **Stop scanning and enriching.** The brain does both now. Keep browsing.
+2. **Stop scanning and enriching.** The server does both now. Keep browsing.
    - Retire Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint and whisper.cpp.
    - A Mac can still serve a model as an ordinary endpoint, such as Ollama, as long as the model isn't Mac-specific.
-3. Until then, nothing breaks. If the Mac and the brain both transcribe a clip, the last write wins; phase 3 makes each artifact have one producer.
+3. Until then, nothing breaks. If the Mac and the server both transcribe a clip, the last write wins; phase 3 makes each artifact have one producer.
 
 ## Moving the dev database to Postgres 18
 

@@ -1,4 +1,4 @@
-"""Processing both sides run: the scheduler on the brain (src/server/scheduler)
+"""Processing both sides run: the scheduler on the server (src/server/scheduler)
 and the CLI's scan (src/client/cli).
 
 What's here: the API client results are saved through (api.py), this

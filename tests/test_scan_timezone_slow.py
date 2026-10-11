@@ -1,7 +1,7 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
 """A Postgres that isn't in UTC.
 
-Ubuntu's Postgres takes the machine's timezone; the brain's runs in
+Ubuntu's Postgres takes the machine's timezone; prod's runs in
 America/New_York. The tests' sessions default to that too (PGTZ, set in
 conftest), so anything that leans on UTC fails here first.
 """
@@ -53,7 +53,7 @@ def test_the_server_talks_to_postgres_in_utc(env) -> None:
 
 @pytest.mark.slow
 def test_a_second_scan_doesnt_hash_an_unchanged_file(env, tmp_path: Path) -> None:
-    """What the brain's daily full scan does with a file it already has: its
+    """What the server's daily full scan does with a file it already has: its
     mtime and size match what the server stored, so it isn't read again."""
     client, headers, library_id, _ = env
     (tmp_path / "tz").mkdir()

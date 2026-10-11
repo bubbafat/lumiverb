@@ -1,4 +1,4 @@
-"""The scheduler service: the brain runs all processing (ADR-016 phase 4).
+"""The scheduler service: the server runs all processing (ADR-016 phase 4).
 
 Each tick tops up the queue from each account's database, starts the best
 job for every free slot of every pool, and collects what's done. A job

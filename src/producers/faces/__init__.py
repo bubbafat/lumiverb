@@ -1,4 +1,4 @@
-"""Faces in photos (InsightFace), on the brain's GPU, 25 photos a job
+"""Faces in photos (InsightFace), on the server's GPU, 25 photos a job
 (src/processing/workers/faces/insightface_provider.py, in a process of its
 own: detect.py; work.py saves a job's photos together)."""
 

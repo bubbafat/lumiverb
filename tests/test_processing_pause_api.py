@@ -203,13 +203,13 @@ def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
     """Robert, Oct 9: "New settings do not lift a pause. Only an explicit toggle does." """
     from src.server.scheduler.service import _on_hold_in_database
     from src.shared.producers import pause_targets
-    from tests.test_ai_machines import BRAIN, LLAVA, QWEN, _add, _machines, _model
+    from tests.test_ai_machines import GAMING_PC, LLAVA, QWEN, _add, _machines, _model
 
     client, headers, *_ = env
     for m in client.get("/v1/ai", headers=headers).json()["machines"]:
         if not m["built_in"]:
             client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
-    fake, _ = _machines({BRAIN: (QWEN, LLAVA)})
+    fake, _ = _machines({GAMING_PC: (QWEN, LLAVA)})
     try:
         with fake:
             assert _add(env).status_code == 201

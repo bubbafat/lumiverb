@@ -75,7 +75,7 @@ Update:
 sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
-A server on your home network, without a domain: [docs/brain-setup.md](docs/brain-setup.md).
+A server on your home network, without a domain: [docs/linux-server.md](docs/linux-server.md).
 More on the Linux install below, under [Running a Linux server](#running-a-linux-server).
 
 ---

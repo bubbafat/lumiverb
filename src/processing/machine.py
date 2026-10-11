@@ -4,7 +4,7 @@ the account's, on the server: src/producers/).
 
 Whatever runs processing says once, at its start, where these come from
 (use): the scheduler from its environment (src/server/scheduler/settings.py;
-/etc/lumiverb/env on the brain), the CLI from its config
+/etc/lumiverb/env on Linux), the CLI from its config
 (~/.lumiverb/config.json). Until then it's the defaults.
 """
 

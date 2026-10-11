@@ -71,7 +71,7 @@ def pause_state(paused: set[str] | frozenset[str]) -> str:
 MISSING_FLAGS: dict[str, str] = {p.flag: p.artifact for p in PRODUCERS.values() if p.flag}
 
 # Lineage a write carries when nothing says who made it (an old client, the
-# macOS app today): never current, so the brain makes it again.
+# macOS app today): never current, so the server makes it again.
 UNKNOWN = "unknown"
 # A person, not a producer, made it (a transcript typed or pasted): current
 # whatever the producer's settings, never regenerated over.

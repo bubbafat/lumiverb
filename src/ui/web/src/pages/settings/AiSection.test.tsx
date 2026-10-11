@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import AiSection, { aiHasProblem, ago } from "./AiSection";
 import type { AiMachine, AiSettings } from "../../api/client";
 
-const BRAIN = "http://172.18.0.6:11434/v1";
+const GAMING_PC = "http://172.18.0.6:11434/v1";
 const STUDIO = "http://10.10.10.1:11434/v1";
 const QWEN = "qwen3-vl:8b";
 const SPEACHES = "http://10.10.10.2:8000/v1";
@@ -25,7 +25,7 @@ const sent: { method: string; url: string; body: unknown }[] = [];
 
 function machine(over: Partial<AiMachine>): AiMachine {
   return {
-    machine_id: `aim_${over.name}`, name: "Brain", api_url: BRAIN, has_key: false, jobs: ["vision"], at_once: 2,
+    machine_id: `aim_${over.name?.replace(/ /g, "_")}`, name: "Gaming PC", api_url: GAMING_PC, has_key: false, jobs: ["vision"], at_once: 2,
     enabled: true, built_in: false,
     status: { online: true, error: "", models: [QWEN], checked_at: new Date().toISOString() }, ...over,
   };
@@ -136,15 +136,15 @@ const lastSent = (method: string, part: string) => [...sent].reverse().find((s) 
 describe("AiSection", () => {
   it("lists each machine with its jobs, how many at once and how it's doing", async () => {
     machines = [
-      machine({ name: "Brain 3080" }),
+      machine({ name: "Gaming PC 3080" }),
       machine({ name: "Mac Studio", api_url: STUDIO, at_once: 4,
                 status: { online: false, error: `Couldn't reach ${STUDIO}: ConnectionError.`, models: [], checked_at: new Date().toISOString() } }),
       machine({ name: "Spare", enabled: false, status: null }),
     ];
     renderSection();
-    const brain = (await screen.findByText("Brain 3080")).closest("li")!;
-    expect(within(brain).getByText("Does: Descriptions & text · 2 at once")).toBeTruthy();
-    expect(within(brain).getByText(/Online · checked just now/)).toBeTruthy();
+    const gamingPc = (await screen.findByText("Gaming PC 3080")).closest("li")!;
+    expect(within(gamingPc).getByText("Does: Descriptions & text · 2 at once")).toBeTruthy();
+    expect(within(gamingPc).getByText(/Online · checked just now/)).toBeTruthy();
     const studio = screen.getByText("Mac Studio").closest("li")!;
     expect(within(studio).getByRole("alert").textContent).toContain("Offline: Couldn't reach");
     expect(within(studio).getByText(/4 at once/)).toBeTruthy();
@@ -164,17 +164,17 @@ describe("AiSection", () => {
 
   it("a viewer sees it all and changes nothing", async () => {
     role = "viewer";
-    machines = [machine({ name: "Brain" })];
+    machines = [machine({ name: "Gaming PC" })];
     renderSection();
-    await screen.findByText("Brain");
+    await screen.findByText("Gaming PC");
     await screen.findByText("Only admins can change these.");
     expect(screen.queryByRole("button", { name: "Add machine" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Edit Brain" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit Gaming PC" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Change the model/ })).toBeNull();
   });
 
   it("adds a machine once Connect has checked it", async () => {
-    machines = [machine({ name: "Brain" })];
+    machines = [machine({ name: "Gaming PC" })];
     offers = { [STUDIO]: [QWEN, "llava:13b"] };
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
@@ -195,7 +195,7 @@ describe("AiSection", () => {
   });
 
   it("marks a machine as sharing the GPU video work runs on", async () => {
-    machines = [machine({ name: "Brain" })];
+    machines = [machine({ name: "Gaming PC" })];
     offers = { [STUDIO]: [QWEN] };
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
@@ -236,7 +236,7 @@ describe("AiSection", () => {
 
   it("Connect gives a new machine the jobs whose model it offers", async () => {
     whisper = "small";
-    machines = [builtIn(), machine({ name: "Brain" })];
+    machines = [builtIn(), machine({ name: "Gaming PC" })];
     offers = { [SPEACHES]: ["small", "speaches-ai/Kokoro-82M-v1.0-ONNX"] };
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
@@ -258,12 +258,12 @@ describe("AiSection", () => {
     model = "";
     whisper = "small";
     machines = [builtIn()];
-    offers = { [BRAIN]: [QWEN] };
+    offers = { [GAMING_PC]: [QWEN] };
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Add machine" }));
     const form = screen.getByRole("form", { name: "Add a machine" });
-    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Brain 3080" } });
-    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: BRAIN } });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Gaming PC 3080" } });
+    fireEvent.change(within(form).getByLabelText("Endpoint URL"), { target: { value: GAMING_PC } });
     fireEvent.click(within(form).getByRole("button", { name: "Connect" }));
     await within(form).findByText(/Connected: offers/);
     const vision = within(form).getByRole("checkbox", { name: /Descriptions & text/ }) as HTMLInputElement;
@@ -295,19 +295,19 @@ describe("AiSection", () => {
 
   it("shows the built-in Whisper as this computer's, and it can't be removed", async () => {
     whisper = "small";
-    machines = [builtIn(), machine({ name: "Brain" })];
+    machines = [builtIn(), machine({ name: "Gaming PC" })];
     renderSection();
     const row = (await screen.findByText("Built in")).closest("li")!;
     expect(within(row).getByText("Whisper on the worker's own computer")).toBeTruthy();
     expect(within(row).getByText("Does: Transcripts · 1 at once")).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Remove Built in" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Remove Brain" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove Gaming PC" })).toBeTruthy();
     expect(screen.getByText(/Transcripts:/, { selector: "span" }).closest("p")!.textContent).toContain("small");
   });
 
   it("edits the built-in Whisper: no URL, key or Connect; only the jobs it can do", async () => {
     whisper = "small";
-    machines = [builtIn(), machine({ name: "Brain" })];
+    machines = [builtIn(), machine({ name: "Gaming PC" })];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Built in" }));
     const form = screen.getByRole("form", { name: "Edit Built in" });
@@ -325,7 +325,7 @@ describe("AiSection", () => {
 
   it("turning off the built-in Whisper when nothing else transcribes just does it (never asks)", async () => {
     whisper = "small";
-    machines = [builtIn(), machine({ name: "Brain" })];
+    machines = [builtIn(), machine({ name: "Gaming PC" })];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Edit Built in" }));
     const form = screen.getByRole("form", { name: "Edit Built in" });
@@ -347,34 +347,34 @@ describe("AiSection", () => {
   });
 
   it("edits a machine: a rename needs no Connect, and the saved key stays unless changed", async () => {
-    machines = [machine({ name: "Brain", has_key: true })];
-    offers = { [BRAIN]: [QWEN] };
+    machines = [machine({ name: "Gaming PC", has_key: true })];
+    offers = { [GAMING_PC]: [QWEN] };
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Brain" }));
-    const form = screen.getByRole("form", { name: "Edit Brain" });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Gaming PC" }));
+    const form = screen.getByRole("form", { name: "Edit Gaming PC" });
     expect((within(form).getByLabelText("API key") as HTMLInputElement).placeholder).toContain("Saved");
-    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Brain 3080" } });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Gaming PC 3080" } });
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
-    await screen.findByText("Brain 3080");
-    const body = lastSent("PATCH", "/ai/machines/aim_Brain")!.body as Record<string, unknown>;
-    expect(body.name).toBe("Brain 3080");
+    await screen.findByText("Gaming PC 3080");
+    const body = lastSent("PATCH", "/ai/machines/aim_Gaming_PC")!.body as Record<string, unknown>;
+    expect(body.name).toBe("Gaming PC 3080");
     expect("api_key" in body).toBe(false);
   });
 
   it("removing the last machine doing a job just removes it (never asks)", async () => {
-    machines = [machine({ name: "Brain" })];
+    machines = [machine({ name: "Gaming PC" })];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Remove Brain" }));
-    await waitFor(() => expect(screen.queryByText("Brain")).toBeNull());
+    fireEvent.click(await screen.findByRole("button", { name: "Remove Gaming PC" }));
+    await waitFor(() => expect(screen.queryByText("Gaming PC")).toBeNull());
     expect(screen.queryByRole("button", { name: "Remove anyway" })).toBeNull();
-    expect(lastSent("DELETE", "/ai/machines/aim_Brain")!.url).not.toContain("leave_jobs");
+    expect(lastSent("DELETE", "/ai/machines/aim_Gaming_PC")!.url).not.toContain("leave_jobs");
   });
 
   it("turning off the last machine doing a job just saves (never asks)", async () => {
-    machines = [machine({ name: "Brain" })];
+    machines = [machine({ name: "Gaming PC" })];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Brain" }));
-    const form = screen.getByRole("form", { name: "Edit Brain" });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Gaming PC" }));
+    const form = screen.getByRole("form", { name: "Edit Gaming PC" });
     fireEvent.click(within(form).getByRole("checkbox", { name: "Use this machine" }));
     fireEvent.click(within(form).getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Turned off: gets no work.")).toBeTruthy();
@@ -382,17 +382,17 @@ describe("AiSection", () => {
   });
 
   it("changes a job's model to one its machines offer, and says why not when none does", async () => {
-    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
-    offers = { [BRAIN]: [QWEN] };
+    machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
+    offers = { [GAMING_PC]: [QWEN] };
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     const select = screen.getByLabelText("Model for Descriptions & text");
     fireEvent.change(select, { target: { value: "llava:13b" } });
     expect(screen.getByText(/What was made with qwen3-vl:8b is made again with llava:13b, after anything missing/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("Brain: qwen3-vl:8b");
+    expect((await screen.findByRole("alert")).textContent).toContain("Gaming PC: qwen3-vl:8b");
 
-    offers = { [BRAIN]: [QWEN, "llava:13b"] };
+    offers = { [GAMING_PC]: [QWEN, "llava:13b"] };
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/llava:13b/, { selector: "p" });
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
@@ -404,8 +404,8 @@ describe("AiSection", () => {
 
 describe("AiSection model change that redoes clips", () => {
   it("asks with the count before a new model makes clips again", async () => {
-    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
-    offers = { [BRAIN]: [QWEN, "llava:13b"] };
+    machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
+    offers = { [GAMING_PC]: [QWEN, "llava:13b"] };
     made = 12;
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
@@ -421,8 +421,8 @@ describe("AiSection model change that redoes clips", () => {
   });
 
   it("forgets the question when another model is picked", async () => {
-    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN, "llava:13b", "m3"], checked_at: null } })];
-    offers = { [BRAIN]: [QWEN, "llava:13b", "m3"] };
+    machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN, "llava:13b", "m3"], checked_at: null } })];
+    offers = { [GAMING_PC]: [QWEN, "llava:13b", "m3"] };
     made = 1;
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
@@ -435,8 +435,8 @@ describe("AiSection model change that redoes clips", () => {
   });
 
   it("turns a job off without asking", async () => {
-    machines = [machine({ name: "Brain", status: { online: true, error: "", models: [QWEN], checked_at: null } })];
-    offers = { [BRAIN]: [QWEN] };
+    machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN], checked_at: null } })];
+    offers = { [GAMING_PC]: [QWEN] };
     made = 12;
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));

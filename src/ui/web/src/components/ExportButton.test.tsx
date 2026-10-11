@@ -66,7 +66,7 @@ describe("ExportButton", () => {
   });
 
   it("the menu arrow always opens the chooser, with no media location to give", async () => {
-    // Robert, Oct 9: just the brain's paths; the editor relinks.
+    // Robert, Oct 9: just the server's paths; the editor relinks.
     api.getDefaultExportFormat.mockReturnValue("fcp7");
     renderButton();
 

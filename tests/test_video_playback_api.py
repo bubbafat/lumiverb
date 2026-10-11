@@ -597,7 +597,7 @@ def test_viewers_cant_download_the_whole_proxy_while_capped(env, media):
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=keys["admin"])
     url = f"/v1/assets/{asset_id}/artifacts/analysis_proxy"
     assert _fetch(client, url, headers=keys["viewer"]).status_code == 403
-    assert _fetch(client, url, headers=keys["editor"]).status_code == 200  # the brain's tools need it
+    assert _fetch(client, url, headers=keys["editor"]).status_code == 200  # the server's tools need it
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": None}, headers=keys["admin"])
     assert _fetch(client, url, headers=keys["viewer"]).status_code == 200
 

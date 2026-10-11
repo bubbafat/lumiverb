@@ -1,4 +1,4 @@
-"""The scheduler service: the brain runs all processing (ADR-016 phase 4).
+"""The scheduler service: the server runs all processing (ADR-016 phase 4).
 
 One process beside the API (systemd: lumiverb-scheduler), sharing its
 database. Every second or so it:
@@ -15,7 +15,7 @@ Pools are sized as the producers declare them (src/producers/pools.py
 for today's): so many slots, or this machine's setting, or each account's
 AI machines (Settings → AI) times the job's per_request; a job whose
 machines can't be used isn't handed out, and no clip is charged for it.
-Jobs save their results through the API's routes on the brain (runners.py,
+Jobs save their results through the API's routes on the server (runners.py,
 src/producers/runner.py). The GPU models are the scheduler's, shared by
 every account (models.py). A crash restarts the scheduler, never the site;
 ffmpeg and face detection run in their own processes. One scheduler runs

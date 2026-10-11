@@ -11,17 +11,17 @@ init: the install's env file, Quickwit's config and nginx's, each written
 only if it isn't there (init.py), for Homebrew's post_install.
 
 migrate: the control plane's and every account's database migrations, as
-scripts/migrate.sh does on the brain.
+scripts/migrate.sh does on Linux.
 
 run: the whole server as one long-running service, for a Mac (Homebrew's
 one service; launchd keeps it up). It starts what the env file names
 (PG_BIN: Lumiverb's own PostgreSQL, made on first start; QUICKWIT_BIN;
 NGINX_BIN), makes the control database if it's missing and migrates,
-waiting for PostgreSQL, then runs the API and the scheduler as the brain's
-systemd units do (supervise.py) and posts upkeep as its timers do
+waiting for PostgreSQL, then runs the API and the scheduler as a Linux
+install's systemd units do (supervise.py) and posts upkeep as its timers do
 (upkeep.py), until SIGTERM. When `brew upgrade` replaces its install, it
 stops everything and starts the new one, so an upgrade needs no restart.
-The brain keeps its systemd units: it doesn't use this.
+A Linux install keeps its systemd units: it doesn't use this.
 
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
@@ -33,7 +33,7 @@ any install. The env file is the operator's, so this needs no other proof.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
-environment (a dev checkout). On the brain /etc/lumiverb/env is prod's, so a
+environment (a dev checkout). On Linux /etc/lumiverb/env is prod's, so a
 dev checkout run without one would migrate prod: it's refused instead. A
 variable already in the environment wins over the file's, as for the
 server's own settings.
@@ -74,9 +74,9 @@ from src.server.lifecycle.supervise import Child, Supervisor
 logger = logging.getLogger("lumiverb-server")
 
 NO_INSTALL = ("Say which install: --env FILE or $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL in the "
-              "environment. None is assumed (on the brain, /etc/lumiverb/env is prod's).")
+              "environment. None is assumed (on Linux, /etc/lumiverb/env is prod's).")
 DEFAULT_API_PORT = "8000"  # update.sh's default when the env file has none
-DEFAULT_API_WORKERS = "2"  # the brain's unit: uvicorn --workers 2
+DEFAULT_API_WORKERS = "2"  # a Linux install's unit: uvicorn --workers 2
 MIGRATE_RETRY_MAX_SEC = 60.0
 UPGRADE_CHECK_SEC = 10.0
 
@@ -119,7 +119,7 @@ def data_dir(env: dict[str, str]) -> Path:
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
                     cwd: Path = APP_DIR, config_dir: Path | None = None) -> list[Child]:
     """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
-    API and the scheduler (once `migrated`), with the brain's units'
+    API and the scheduler (once `migrated`), with a Linux install's units'
     environment, restart delays and stop times (deploy-api.sh). They stop in
     reverse: the scheduler first, PostgreSQL last. The scheduler never reads
     the install's own settings (config_dir: the env file's folder, its secrets)."""

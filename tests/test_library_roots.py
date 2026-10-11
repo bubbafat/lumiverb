@@ -2,7 +2,7 @@
 
 The database keeps each library's ingest root as the editing machine sees
 it, because exports point editors there. A machine that reaches the same
-storage at another path (the brain mounts the DAS at /mnt/media-01) maps
+storage at another path (prod mounts the DAS at /mnt/media-01) maps
 the prefix in its own config, never in the database.
 """
 
@@ -320,7 +320,7 @@ def test_the_schedulers_map_is_its_own_settings_not_the_clis(home: Path, tmp_pat
 
 
 @pytest.fixture
-def brain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The scheduler's settings: /Volumes/media-01 -> tmp_path/mnt, DATA_DIR tmp_path/data."""
     import json
 
@@ -343,14 +343,14 @@ def brain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.mark.fast
-def test_the_scheduler_reads_a_mapped_root(brain: Path) -> None:
+def test_the_scheduler_reads_a_mapped_root(server: Path) -> None:
     lib = {"library_id": "lib_1", "name": "Footage", "root_path": f"{MAC}/Footage"}
-    assert reachable_root(lib, require_entries=True) == (brain / "mnt" / "Footage").resolve()
+    assert reachable_root(lib, require_entries=True) == (server / "mnt" / "Footage").resolve()
 
 
 @pytest.mark.fast
-def test_the_scheduler_refuses_an_unmapped_root(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
-    for root_path in ("/", "/etc", str(brain / "mnt" / "Footage")):
+def test_the_scheduler_refuses_an_unmapped_root(server: Path, caplog: pytest.LogCaptureFixture) -> None:
+    for root_path in ("/", "/etc", str(server / "mnt" / "Footage")):
         lib = {"library_id": "lib_x", "name": "Sneaky", "root_path": root_path}
         assert reachable_root(lib) is None
     assert "Sneaky (lib_x) refused: root isn't under the root map" in caplog.text
@@ -358,7 +358,7 @@ def test_the_scheduler_refuses_an_unmapped_root(brain: Path, caplog: pytest.LogC
 
 @pytest.mark.fast
 def test_on_a_mac_the_scheduler_reads_a_root_where_it_is_but_never_the_servers_data(
-        brain: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+        server: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     # A Mac's env file (init --local-roots): the files are on this machine. Its
     # settings folder is refused too (lumiverb-server run says so).
     import json
@@ -366,25 +366,25 @@ def test_on_a_mac_the_scheduler_reads_a_root_where_it_is_but_never_the_servers_d
     from src.server.lifecycle.init import LOCAL_ROOT_MAP
     from src.server.scheduler.settings import SchedulerSettings
 
-    settings_folder = brain / "etc" / "lumiverb"
+    settings_folder = server / "etc" / "lumiverb"
     settings_folder.mkdir(parents=True)
     (settings_folder / "env").write_text("ADMIN_KEY=secret\n")
     monkeypatch.setenv("LUMIVERB_ROOT_MAP", LOCAL_ROOT_MAP)
     monkeypatch.setenv("LUMIVERB_REFUSED_ROOTS", json.dumps([str(settings_folder)]))
     machine.use(SchedulerSettings().machine())
-    here = {"library_id": "lib_1", "name": "HS150", "root_path": str(brain / "mnt" / "Footage")}
-    assert reachable_root(here, require_entries=True) == (brain / "mnt" / "Footage").resolve()
-    data = {"library_id": "lib_x", "name": "Data", "root_path": str(brain / "data" / "ten_other")}
+    here = {"library_id": "lib_1", "name": "HS150", "root_path": str(server / "mnt" / "Footage")}
+    assert reachable_root(here, require_entries=True) == (server / "mnt" / "Footage").resolve()
+    data = {"library_id": "lib_x", "name": "Data", "root_path": str(server / "data" / "ten_other")}
     assert reachable_root(data) is None
     assert "Data (lib_x) refused: root is in the server's data" in caplog.text
-    secrets = {"library_id": "lib_y", "name": "Settings", "root_path": str(brain / "etc")}
+    secrets = {"library_id": "lib_y", "name": "Settings", "root_path": str(server / "etc")}
     assert reachable_root(secrets) is not None, "around it is fine"
     secrets = {"library_id": "lib_z", "name": "Settings", "root_path": str(settings_folder)}
     assert reachable_root(secrets) is None
 
 
 @pytest.mark.fast
-def test_the_scheduler_refuses_a_mapped_root_that_climbs_out(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_the_scheduler_refuses_a_mapped_root_that_climbs_out(server: Path, caplog: pytest.LogCaptureFixture) -> None:
     # /Volumes/media-01/../data maps to <mnt>/../data: the server's data.
     lib = {"library_id": "lib_x", "name": "Climb", "root_path": f"{MAC}/../data/ten_other"}
     assert reachable_root(lib) is None
@@ -394,17 +394,17 @@ def test_the_scheduler_refuses_a_mapped_root_that_climbs_out(brain: Path, caplog
 
 
 @pytest.mark.fast
-def test_the_scheduler_refuses_a_root_symlinked_out(brain: Path) -> None:
-    (brain / "mnt" / "out").symlink_to(brain / "data")
+def test_the_scheduler_refuses_a_root_symlinked_out(server: Path) -> None:
+    (server / "mnt" / "out").symlink_to(server / "data")
     lib = {"library_id": "lib_x", "name": "Link", "root_path": f"{MAC}/out"}
     assert reachable_root(lib) is None
 
 
 @pytest.mark.fast
-def test_the_servers_data_is_never_read_even_when_mapped(brain: Path, monkeypatch, caplog) -> None:
+def test_the_servers_data_is_never_read_even_when_mapped(server: Path, monkeypatch, caplog) -> None:
     from src.server.scheduler.settings import SchedulerSettings
 
-    monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/Volumes/data": "%s"}' % (brain / "data"))
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/Volumes/data": "%s"}' % (server / "data"))
     machine.use(SchedulerSettings().machine())
     lib = {"library_id": "lib_x", "name": "Data", "root_path": "/Volumes/data/ten_other"}
     assert reachable_root(lib) is None
@@ -421,7 +421,7 @@ def test_a_relative_root_is_never_read(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 @pytest.mark.fast
-def test_a_refusal_is_logged_once(brain: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_refusal_is_logged_once(server: Path, caplog: pytest.LogCaptureFixture) -> None:
     lib = {"library_id": "lib_x", "name": "Sneaky", "root_path": "/etc"}
     reachable_root(lib)
     reachable_root(lib)
@@ -498,8 +498,8 @@ def test_folders_fstab_doesnt_mention_are_checked_as_before(tmp_path: Path, monk
     local.mkdir(parents=True)
     (local / "a.mov").write_text("x")
     monkeypatch.setattr(roots, "FSTAB", _fstab(tmp_path, "/mnt/somewhere-else"))
-    lib = {"root_path": "/Volumes/brain-das/Journey"}
-    assert reachable_root(lib, root_map={"/Volumes/brain-das": str(tmp_path / "dev" / "das")},
+    lib = {"root_path": "/Volumes/das/Journey"}
+    assert reachable_root(lib, root_map={"/Volumes/das": str(tmp_path / "dev" / "das")},
                           require_entries=True) == local.resolve()
 
 

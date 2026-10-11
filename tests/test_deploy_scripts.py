@@ -41,7 +41,7 @@ def _settings(tmp_path: Path, *args: str, env_file: str | None = None, path_pref
 
 
 def test_first_install_without_any_postgres_gets_18(tmp_path):
-    # The brain has no /etc/postgresql (Resolve's database runs in Docker).
+    # Prod has no /etc/postgresql (Resolve's database runs in Docker).
     s = _settings(tmp_path, "--app-host", "http://192.168.86.166")
     assert s["PG_VERSION"] == "18"
     assert s["DATA_DIR"] == "/var/lib/lumiverb"
@@ -51,11 +51,11 @@ def test_first_install_without_any_postgres_gets_18(tmp_path):
 
 def test_first_install_takes_its_flags(tmp_path):
     s = _settings(
-        tmp_path, "--app-host", "http://x", "--data-dir", "/mnt/ssd2/lumiverb", "--branch", "feat/brain",
+        tmp_path, "--app-host", "http://x", "--data-dir", "/mnt/ssd2/lumiverb", "--branch", "feat/other",
         "--no-firewall", "--pg-port", "5434", "--pg-version", "17",
     )
     assert s["DATA_DIR"] == "/mnt/ssd2/lumiverb"
-    assert s["BRANCH"] == "feat/brain"
+    assert s["BRANCH"] == "feat/other"
     assert s["NO_FIREWALL"] == "true"
     assert s["PG_PORT"] == "5434"
     assert s["PG_VERSION"] == "17"
@@ -74,7 +74,7 @@ PG_PORT=5434
 PG_VERSION=18
 QUICKWIT_PORT=7290
 APP_HOST=http://192.168.86.166
-BRANCH=feat/brain
+BRANCH=feat/other
 NO_FIREWALL=true
 """
 
@@ -84,7 +84,7 @@ def test_rerun_without_flags_keeps_everything(tmp_path):
     # empty, artifacts 404), checked out main and turned ufw on (port 80 shut).
     s = _settings(tmp_path, env_file=REMEMBERED)
     assert s["DATA_DIR"] == "/mnt/ssd2/lumiverb"
-    assert s["BRANCH"] == "feat/brain"
+    assert s["BRANCH"] == "feat/other"
     assert s["NO_FIREWALL"] == "true"
     assert s["PG_VERSION"] == "18"
     assert s["PG_PORT"] == "5434"
@@ -139,7 +139,7 @@ def _write_env(env: Path) -> None:
     script = (
         f'ENV_FILE="{env}"; DB_URL=postgresql://app:pw@127.0.0.1:5434; PG_DB=control_plane\n'
         "ADMIN_KEY=a; API_SECRET_KEY=b; JWT_SECRET=c; DATA_DIR=/mnt/ssd2/lumiverb; QW_PORT=7290\n"
-        "API_LISTEN_HOST=127.0.0.1; API_PORT=8100; PG_PORT=5434; PG_VERSION=18; BRANCH=feat/brain\n"
+        "API_LISTEN_HOST=127.0.0.1; API_PORT=8100; PG_PORT=5434; PG_VERSION=18; BRANCH=feat/other\n"
         "NO_FIREWALL=true; APP_HOST=http://192.168.86.166; DOMAIN=\n"
         + block
     )
@@ -177,7 +177,7 @@ def test_scheduler_caches_live_in_the_data_dir():
 
 def test_api_buffers_uploads_on_the_data_disk():
     # Starlette spools large uploads (analysis proxies) to TMPDIR; the API's
-    # PrivateTmp /tmp is RAM on the brain.
+    # PrivateTmp /tmp is RAM on prod.
     text = DEPLOY_API.read_text()
     api_unit = text.split("Description=Lumiverb API Server", 1)[1].split("UNIT", 1)[0]
     assert "Environment=TMPDIR=${DATA_DIR}/tmp" in api_unit
@@ -317,7 +317,7 @@ def test_processing_keeps_its_packages_whichever_service_it_has():
 
 def test_scheduler_temp_files_go_on_the_data_disk():
     # Whisper's WAVs (hundreds of MB for a long clip) went to PrivateTmp's
-    # /tmp, RAM on the brain. Not the API's tmp: each API start empties that.
+    # /tmp, RAM on prod. Not the API's tmp: each API start empties that.
     text = DEPLOY_API.read_text()
     unit = text.split("Description=Lumiverb scheduler", 1)[1].split("UNIT", 1)[0]
     assert "Environment=TMPDIR=${DATA_DIR}/worker-tmp" in unit
@@ -437,7 +437,7 @@ def _update_python(tmp_path: Path, venv_cfg: str | None, pin: str = "3.12\n", fa
         f'if [[ "$1" == is-active ]]; then [[ ! -e "{tmp_path}/stopped" ]]; fi; }}\n'
         f'sudo() {{ echo "sudo $*" >> "{calls}"; [[ -z "{fail_on}" || "$*" != *"{fail_on}"* ]]; }}\n'
         f'APP_DIR="{app}"; SVC_USER=lumiverb; UV_BIN=/usr/local/bin/uv; ENV_FILE="{env_file}"\n'
-        # Never this machine's own units (the brain's may be here).
+        # Never this machine's own units (prod's may be here).
         + block.replace("/etc/systemd/system/", f"{units}/")
     )
     out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
@@ -537,7 +537,7 @@ def test_web_follows_the_api_install_on_the_same_machine(tmp_path):
     # Both scripts deploy /opt/lumiverb: a web deploy without --branch must
     # not switch the API's code to main, nor turn ufw on.
     s = _web_settings(tmp_path, env_file=REMEMBERED)
-    assert s["BRANCH"] == "feat/brain"
+    assert s["BRANCH"] == "feat/other"
     assert s["NO_FIREWALL"] == "true"
 
 
@@ -597,7 +597,7 @@ def test_the_real_run_uses_the_worker_setting_the_dry_run_shows():
 def test_web_on_its_own_machine_uses_defaults_and_flags(tmp_path):
     assert _web_settings(tmp_path)["BRANCH"] == "main"
     assert _web_settings(tmp_path)["NO_FIREWALL"] == "false"
-    s = _web_settings(tmp_path, "--branch", "x", "--no-firewall", env_file=REMEMBERED.replace("BRANCH=feat/brain", "BRANCH=y"))
+    s = _web_settings(tmp_path, "--branch", "x", "--no-firewall", env_file=REMEMBERED.replace("BRANCH=feat/other", "BRANCH=y"))
     assert s["BRANCH"] == "x"
     assert s["NO_FIREWALL"] == "true"
 
@@ -837,7 +837,7 @@ def test_a_python_change_stops_the_old_worker_gently_too():
 
 # --- Containers that use the GPU get it back after systemd reloads ----------
 # systemctl daemon-reload takes the GPU from running containers
-# (nvidia-container-toolkit with systemd's cgroups): the brain's Ollama then
+# (nvidia-container-toolkit with systemd's cgroups): prod's Ollama then
 # ran its model on the CPU, with no error, until restarted (Oct 9).
 
 

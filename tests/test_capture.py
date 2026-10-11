@@ -210,7 +210,7 @@ def test_a_scan_that_says_how_it_read_them_isnt_read_again_and_one_that_doesnt_i
 @pytest.mark.slow
 def test_the_producer_reads_the_originals_and_fixes_a_macs_taken_at(env, tmp_path) -> None:
     """The macOS app stored taken_at in its own zone (New York: 4 hours late in
-    June). Read again on the brain, it's the camera's wall clock, with its zone."""
+    June). Read again on the server, it's the camera's wall clock, with its zone."""
     from src.producers.capture.work import Capture
 
     lib = _library(env, tmp_path)

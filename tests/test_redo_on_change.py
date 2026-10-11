@@ -323,14 +323,14 @@ def test_the_upgrade_step_is_gone(env):
 
 
 def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
-    from tests.test_ai_machines import BRAIN, _machines
+    from tests.test_ai_machines import GAMING_PC, _machines
 
     lib = _library(env, "RedoModel")
     client, headers, *_ = lib
-    fake, _ = _machines({BRAIN: (VISION, "m1", "m2")})
+    fake, _ = _machines({GAMING_PC: (VISION, "m1", "m2")})
     try:
         with fake:
-            r = client.post("/v1/ai/machines", json={"name": "Brain", "api_url": BRAIN, "jobs": ["vision"],
+            r = client.post("/v1/ai/machines", json={"name": "Gaming PC", "api_url": GAMING_PC, "jobs": ["vision"],
                                                      "at_once": 2}, headers=headers)
             assert r.status_code == 201, r.text
             assert client.put("/v1/ai/jobs/vision", json={"model": "m1", "redo": True}, headers=headers).status_code == 200

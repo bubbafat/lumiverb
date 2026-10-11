@@ -47,7 +47,7 @@ def _git(cwd: Path, *args: str) -> str:
 
 @pytest.fixture
 def install(tmp_path: Path):
-    """An origin with main and feat/brain, and an install checked out on feat/brain."""
+    """An origin with main and feat/other, and an install checked out on feat/other."""
     seed = tmp_path / "seed"
     (seed / "scripts").mkdir(parents=True)
     _git(tmp_path, "init", "-q", "-b", "main", str(seed))
@@ -58,11 +58,11 @@ def install(tmp_path: Path):
     (seed / "scripts" / "update-web.sh").write_text('echo "update-web ran"\n')
     _git(seed, "add", "-A")
     _git(seed, "commit", "-qm", "first")
-    _git(seed, "branch", "feat/brain")
+    _git(seed, "branch", "feat/other")
     origin = tmp_path / "origin.git"
     _git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
     app = tmp_path / "app"
-    _git(tmp_path, "clone", "-q", "-b", "feat/brain", str(origin), str(app))
+    _git(tmp_path, "clone", "-q", "-b", "feat/other", str(origin), str(app))
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -72,7 +72,7 @@ def install(tmp_path: Path):
         stub.chmod(0o755)
     conf = tmp_path / "conf"
     conf.mkdir()
-    (conf / "env").write_text("API_PORT=8100\nBRANCH=feat/brain\nADMIN_KEY=k-7f3a-not-for-logs\n")
+    (conf / "env").write_text("API_PORT=8100\nBRANCH=feat/other\nADMIN_KEY=k-7f3a-not-for-logs\n")
     site = tmp_path / "nginx-site"
     site.write_text("server {}\n")
     calls = tmp_path / "calls"
@@ -117,7 +117,7 @@ def _log(install) -> str:
 
 
 def test_one_command_updates_the_api_then_the_web_and_logs_it(install):
-    after = _push(install, "README", "new\n", branch="feat/brain")
+    after = _push(install, "README", "new\n", branch="feat/other")
     out = _run(install)
     assert out.returncode == 0, out.stdout + out.stderr
     log = _log(install)
@@ -150,7 +150,7 @@ def test_branch_switches_the_install_and_is_remembered(install):
     assert _git(install["app"], "branch", "--show-current") == "main"
     assert _git(install["app"], "rev-parse", "--short", "HEAD") == after
     env_text = (install["conf"] / "env").read_text()
-    assert "BRANCH=main\n" in env_text and "feat/brain" not in env_text
+    assert "BRANCH=main\n" in env_text and "feat/other" not in env_text
     assert "ADMIN_KEY=k-7f3a-not-for-logs" in env_text  # the rest of the file stays
     # The next run stays on main without being told.
     _push(install, "README", "again\n", branch="main")
@@ -161,13 +161,13 @@ def test_branch_switches_the_install_and_is_remembered(install):
 def test_without_branch_the_checkout_s_branch_is_kept_and_remembered(install):
     (install["conf"] / "env").write_text("API_PORT=8100\n")
     assert _run(install).returncode == 0
-    assert "BRANCH=feat/brain" in (install["conf"] / "env").read_text()
+    assert "BRANCH=feat/other" in (install["conf"] / "env").read_text()
 
 
 def test_the_pulled_copy_of_the_script_runs(install):
     # bash runs the copy it started with: a step the update adds must run now.
     new = UPDATE.read_text().replace("set -euo pipefail\n", 'set -euo pipefail\necho "pulled copy"\n', 1)
-    _push(install, "scripts/update.sh", new, branch="feat/brain")
+    _push(install, "scripts/update.sh", new, branch="feat/other")
     out = _run(install)
     assert out.returncode == 0, out.stdout + out.stderr
     assert _log(install).count("pulled copy") == 1
@@ -211,7 +211,7 @@ def test_no_nginx_site_skips_the_web_ui(install):
 def test_a_checkout_with_local_commits_stops_instead_of_merging(install):
     app = install["app"]
     _git(app, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "local")
-    _push(install, "README", "upstream\n", branch="feat/brain")
+    _push(install, "README", "upstream\n", branch="feat/other")
     out = _run(install)
     assert out.returncode != 0
     assert "Result: FAILED" in _log(install)
@@ -220,7 +220,7 @@ def test_a_checkout_with_local_commits_stops_instead_of_merging(install):
 
 def test_back_to_back_runs_keep_a_log_each(install):
     assert _run(install).returncode == 0
-    after = _push(install, "README", "second\n", branch="feat/brain")
+    after = _push(install, "README", "second\n", branch="feat/other")
     assert _run(install).returncode == 0
     logs = list((install["tmp"] / "log").glob("update-2*.log"))
     assert len(logs) == 2
@@ -261,7 +261,7 @@ def test_the_result_is_a_plain_line(install):
 
 def test_ctrl_c_during_the_update_says_it_failed(install):
     # Ctrl-C reaches the script while update-api.sh runs: it must not end "OK".
-    _push(install, "scripts/update-api.sh", 'kill -INT "$PPID"; sleep 0.3; echo "api end"\n', branch="feat/brain")
+    _push(install, "scripts/update-api.sh", 'kill -INT "$PPID"; sleep 0.3; echo "api end"\n', branch="feat/other")
     out = _run(install)
     assert out.returncode != 0
     lines = _lines(install)
@@ -271,7 +271,7 @@ def test_ctrl_c_during_the_update_says_it_failed(install):
 
 def test_a_terminated_update_still_logs_its_result(install):
     # SIGTERM (or a hangup) to the whole process group, tee included.
-    _push(install, "scripts/update-api.sh", "kill -TERM 0; sleep 1\n", branch="feat/brain")
+    _push(install, "scripts/update-api.sh", "kill -TERM 0; sleep 1\n", branch="feat/other")
     out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh")], capture_output=True, text=True,
                          timeout=60, env=install["env"], start_new_session=True)
     assert out.returncode != 0
@@ -287,8 +287,8 @@ def test_a_branch_without_update_sh_changes_nothing(install):
     out = _run(install, "--branch", "old")
     assert out.returncode != 0
     assert "update.sh" in out.stdout + out.stderr
-    assert _git(install["app"], "branch", "--show-current") == "feat/brain"
-    assert "BRANCH=feat/brain" in (install["conf"] / "env").read_text()
+    assert _git(install["app"], "branch", "--show-current") == "feat/other"
+    assert "BRANCH=feat/other" in (install["conf"] / "env").read_text()
     assert "update-api ran" not in _log(install)
     assert "Result: FAILED" in _lines(install)
 
@@ -325,13 +325,13 @@ def test_a_branch_name_git_allows_is_remembered_exactly(install):
 def test_a_name_that_isnt_a_branch_changes_nothing(install):
     out = _run(install, "--branch", "no such branch")
     assert out.returncode != 0
-    assert _git(install["app"], "branch", "--show-current") == "feat/brain"
+    assert _git(install["app"], "branch", "--show-current") == "feat/other"
 
 
 def test_moving_to_an_older_commit_says_so(install):
-    _push(install, "README", "newer\n", branch="feat/brain")
+    _push(install, "README", "newer\n", branch="feat/other")
     assert _run(install).returncode == 0
-    out = _run(install, "--branch", "main")  # main is behind feat/brain now
+    out = _run(install, "--branch", "main")  # main is behind feat/other now
     assert out.returncode == 0, out.stdout + out.stderr
     assert any("No new commits: moved to an older one, 1 back" in line for line in _lines(install))
 
@@ -358,7 +358,7 @@ def test_the_first_run_can_come_from_the_new_branch_itself(install):
 def test_ctrl_c_in_the_terminal_still_logs_that_it_failed(install):
     # A terminal's Ctrl-C reaches every process in the group: the script,
     # update-api.sh and tee alike.
-    _push(install, "scripts/update-api.sh", "kill -INT 0; sleep 1\n", branch="feat/brain")
+    _push(install, "scripts/update-api.sh", "kill -INT 0; sleep 1\n", branch="feat/other")
     out = subprocess.run(["bash", str(install["app"] / "scripts" / "update.sh")], capture_output=True, text=True,
                          timeout=60, env=install["env"], start_new_session=True)
     assert out.returncode != 0
@@ -381,7 +381,7 @@ def test_the_scheduler_stops_before_the_pull(install):
 def test_a_failure_with_the_scheduler_stopped_says_how_to_start_it(install):
     app = install["app"]
     _git(app, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "local")
-    _push(install, "README", "upstream\n", branch="feat/brain")
+    _push(install, "README", "upstream\n", branch="feat/other")
     out = _run(install, INACTIVE="lumiverb-scheduler")  # stopped, then the pull fails
     assert out.returncode != 0
     lines = _lines(install)

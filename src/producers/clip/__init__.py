@@ -1,4 +1,4 @@
-"""Visual search: CLIP vectors of photos, on the brain's GPU."""
+"""Visual search: CLIP vectors of photos, on the server's GPU."""
 
 from src.producers.contract import IMAGE, NOT_READ_YET, ProducerSpec, Setting
 from src.producers.pools import GPU
@@ -25,6 +25,6 @@ PRODUCER = ProducerSpec(
         Setting("input_edge", PROXY_CACHE_EDGE, "Image size", unit="px", advanced=True, fixed=NOT_READ_YET),
     ),
     uniform=True, needs=("proxy",),
-    # CLIP and face detection take turns on the brain's GPU.
+    # CLIP and face detection take turns on the server's GPU.
     kind="clip", flag="missing_embeddings", run="src.producers.clip.work:Clip", pool=GPU,
 )

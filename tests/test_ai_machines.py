@@ -26,7 +26,7 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 from tests.test_archive_trash_safety import _key_with_role
 from tests.test_lineage_api import _ingest_with, _sha
 
-BRAIN = "http://172.18.0.6:11434/v1"
+GAMING_PC = "http://172.18.0.6:11434/v1"
 STUDIO = "http://10.10.10.1:11434/v1"
 QWEN, LLAVA = "qwen3-vl:8b", "llava:13b"
 # A transcription server (speaches) lists faster-whisper's models by repo.
@@ -63,7 +63,7 @@ def _ai(env, headers=None) -> dict:
 
 def _add(env, headers=None, **body):
     client, own, *_ = env
-    body = {"name": "Brain", "api_url": BRAIN, "jobs": ["vision"], "at_once": 2, **body}
+    body = {"name": "Gaming PC", "api_url": GAMING_PC, "jobs": ["vision"], "at_once": 2, **body}
     return client.post("/v1/ai/machines", json=body, headers=headers or own)
 
 
@@ -127,12 +127,12 @@ def none(env):
 @pytest.mark.slow
 def test_connect_lists_what_a_machine_offers(env, none):
     client, headers, *_ = env
-    fake, seen = _machines({BRAIN: (QWEN, LLAVA)})
+    fake, seen = _machines({GAMING_PC: (QWEN, LLAVA)})
     with fake:
-        r = client.post("/v1/ai/connect", json={"api_url": BRAIN + "/", "api_key": "sk-1"}, headers=headers)
+        r = client.post("/v1/ai/connect", json={"api_url": GAMING_PC + "/", "api_key": "sk-1"}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json() == {"models": [LLAVA, QWEN]}
-    assert seen[0]["url"] == BRAIN + "/models" and seen[0]["headers"]["Authorization"] == "Bearer sk-1"
+    assert seen[0]["url"] == GAMING_PC + "/models" and seen[0]["headers"]["Authorization"] == "Bearer sk-1"
 
 
 @pytest.mark.slow
@@ -140,13 +140,13 @@ def test_connect_lists_what_a_machine_offers(env, none):
 def test_connect_says_the_same_whatever_went_wrong(env, none, answer, caplog):
     """One message for every failure, so Connect can't map a network; why is logged."""
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: answer})
+    fake, _ = _machines({GAMING_PC: answer})
     with fake, caplog.at_level("WARNING", logger="src.shared.vision_endpoint"):
-        r = client.post("/v1/ai/connect", json={"api_url": BRAIN}, headers=headers)
+        r = client.post("/v1/ai/connect", json={"api_url": GAMING_PC}, headers=headers)
     assert r.status_code == 502, r.text
     error = r.json()["error"]
     assert (error["code"], error["message"]) == ("machine_unreachable", "Couldn't reach the AI machine.")
-    assert BRAIN in caplog.text
+    assert GAMING_PC in caplog.text
 
 
 @pytest.mark.slow
@@ -164,25 +164,25 @@ def test_a_machine_url_is_plain_http(env, none, url):
 
 @pytest.mark.slow
 def test_machines_each_with_their_jobs_and_how_many_at_once(env, none):
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN, LLAVA)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN, LLAVA)})
     with fake:
-        assert _add(env, name="Brain 3080", api_url=BRAIN + "/", at_once=2).status_code == 201
+        assert _add(env, name="Gaming PC 3080", api_url=GAMING_PC + "/", at_once=2).status_code == 201
         r = _add(env, name="Mac Studio", api_url=STUDIO, api_key="sk-studio", at_once=4)
     assert r.status_code == 201, r.text
     assert "sk-studio" not in r.text  # never shown back
     ai = r.json()
     # The built-in first, then in the order added.
-    assert [m["name"] for m in ai["machines"]] == ["Built in", "Brain 3080", "Mac Studio"]
-    _, brain, studio = ai["machines"]
-    assert (brain["api_url"], brain["has_key"], brain["jobs"], brain["at_once"], brain["enabled"]) == (
-        BRAIN, False, ["vision"], 2, True)
+    assert [m["name"] for m in ai["machines"]] == ["Built in", "Gaming PC 3080", "Mac Studio"]
+    _, gaming_pc, studio = ai["machines"]
+    assert (gaming_pc["api_url"], gaming_pc["has_key"], gaming_pc["jobs"], gaming_pc["at_once"], gaming_pc["enabled"]) == (
+        GAMING_PC, False, ["vision"], 2, True)
     assert (studio["has_key"], studio["at_once"]) == (True, 4)
     # What Connect found is what's known of it until the worker checks.
     assert studio["status"]["online"] is True and studio["status"]["models"] == [LLAVA, QWEN]
     assert _job(ai, "vision") == {"job": "vision", "label": "Descriptions & text", "model": "",
                                   "machines": 2, "offering": 0, "choices": [LLAVA, QWEN],
                                   "built_in": False}
-    assert not brain["built_in"] and not studio["built_in"]
+    assert not gaming_pc["built_in"] and not studio["built_in"]
 
 
 @pytest.mark.slow
@@ -190,14 +190,14 @@ def test_machines_each_with_their_jobs_and_how_many_at_once(env, none):
     {"at_once": 0}, {"at_once": 33}, {"jobs": ["audio"]}, {"name": ""}, {"api_url": ""},
 ])
 def test_a_machine_needs_a_name_a_url_known_jobs_and_a_sane_limit(env, none, body):
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         assert _add(env, **body).status_code == 422
 
 
 @pytest.mark.slow
 def test_names_are_unique(env, none):
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
         assert _add(env, name="GPU").status_code == 201
         r = _add(env, name="GPU", api_url=STUDIO)
@@ -206,9 +206,9 @@ def test_names_are_unique(env, none):
 
 @pytest.mark.slow
 def test_a_machine_doing_a_job_must_offer_its_model(env, none):
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (LLAVA,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (LLAVA,)})
     with fake:
-        _add(env, name="Brain")
+        _add(env, name="Gaming PC")
         assert _model(env, "vision", QWEN).status_code == 200
         r = _add(env, name="Studio", api_url=STUDIO)
         assert r.status_code == 409, r.text
@@ -225,18 +225,18 @@ def test_a_machine_doing_a_job_must_offer_its_model(env, none):
 
 @pytest.mark.slow
 def test_a_jobs_model_must_be_offered_by_a_machine_doing_it(env, none):
-    fake, _ = _machines({BRAIN: (QWEN, LLAVA), STUDIO: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN, LLAVA), STUDIO: (QWEN,)})
     with fake:
-        _add(env, name="Brain")
+        _add(env, name="Gaming PC")
         _add(env, name="Studio", api_url=STUDIO)
     # The studio has gone offline since.
-    fake, _ = _machines({BRAIN: (QWEN, LLAVA)})
+    fake, _ = _machines({GAMING_PC: (QWEN, LLAVA)})
     with fake:
         r = _model(env, "vision", "gpt-9")
         assert r.status_code == 409, r.text
         error = r.json()["error"]
         assert error["code"] == "model_not_offered" and error["details"]["model"] == "gpt-9"
-        assert {m["name"]: m["models"] for m in error["details"]["machines"]} == {"Brain": [LLAVA, QWEN], "Studio": []}
+        assert {m["name"]: m["models"] for m in error["details"]["machines"]} == {"Gaming PC": [LLAVA, QWEN], "Studio": []}
         assert "Couldn't reach" in next(m for m in error["details"]["machines"] if m["name"] == "Studio")["error"]
 
         r = _model(env, "vision", QWEN)
@@ -246,7 +246,7 @@ def test_a_jobs_model_must_be_offered_by_a_machine_doing_it(env, none):
                                   "machines": 2, "offering": 1, "choices": [LLAVA, QWEN],
                                   "built_in": False}
     # What saving found is each machine's status until the worker checks.
-    assert _machine(ai, "Brain")["status"]["online"] is True
+    assert _machine(ai, "Gaming PC")["status"]["online"] is True
     studio = _machine(ai, "Studio")["status"]
     assert studio["online"] is False and "Couldn't reach" in studio["error"]
 
@@ -259,29 +259,29 @@ def test_unknown_jobs_are_404(env, none):
 @pytest.mark.slow
 def test_the_saved_key_is_kept_and_used_until_replaced(env, none):
     client, headers, *_ = env
-    fake, seen = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, seen = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
         _add(env, api_key="sk-1")
-        brain = _machine(_ai(env), "Brain")["machine_id"]
+        gaming_pc = _machine(_ai(env), "Gaming PC")["machine_id"]
         # Connect for a saved machine uses its key when none is given.
-        assert client.post("/v1/ai/connect", json={"api_url": BRAIN, "machine_id": brain},
+        assert client.post("/v1/ai/connect", json={"api_url": GAMING_PC, "machine_id": gaming_pc},
                            headers=headers).status_code == 200
         assert seen[-1]["headers"]["Authorization"] == "Bearer sk-1"
         # Another URL never gets it.
-        client.post("/v1/ai/connect", json={"api_url": STUDIO, "machine_id": brain}, headers=headers)
+        client.post("/v1/ai/connect", json={"api_url": STUDIO, "machine_id": gaming_pc}, headers=headers)
         assert "Authorization" not in seen[-1]["headers"]
-        r = client.patch(f"/v1/ai/machines/{brain}", json={"name": "Brain 3080"}, headers=headers)
-        assert r.status_code == 200 and _machine(r.json(), "Brain 3080")["has_key"] is True
-        r = client.patch(f"/v1/ai/machines/{brain}", json={"api_key": ""}, headers=headers)
-        assert _machine(r.json(), "Brain 3080")["has_key"] is False
+        r = client.patch(f"/v1/ai/machines/{gaming_pc}", json={"name": "Gaming PC 3080"}, headers=headers)
+        assert r.status_code == 200 and _machine(r.json(), "Gaming PC 3080")["has_key"] is True
+        r = client.patch(f"/v1/ai/machines/{gaming_pc}", json={"api_key": ""}, headers=headers)
+        assert _machine(r.json(), "Gaming PC 3080")["has_key"] is False
 
 
 @pytest.mark.slow
 def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env, none):
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
-        _add(env, name="Brain", api_key="sk-1", at_once=2)
+        _add(env, name="Gaming PC", api_key="sk-1", at_once=2)
         _add(env, name="Studio", api_url=STUDIO, at_once=4)
         _model(env, "vision", QWEN)
     studio = _machine(_ai(env), "Studio")["machine_id"]
@@ -289,7 +289,7 @@ def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env
     r = client.get("/v1/ai/jobs/vision", headers=worker)
     assert r.status_code == 200, r.text
     assert r.json() == {"job": "vision", "model": QWEN, "machines": [
-        {"machine_id": _machine(_ai(env), "Brain")["machine_id"], "name": "Brain", "api_url": BRAIN,
+        {"machine_id": _machine(_ai(env), "Gaming PC")["machine_id"], "name": "Gaming PC", "api_url": GAMING_PC,
          "api_key": "sk-1", "at_once": 2, "built_in": False, "shares_gpu": False},
         {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "at_once": 4, "built_in": False,
          "shares_gpu": False},
@@ -298,12 +298,12 @@ def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env
 
     # A machine turned off gets no work.
     assert client.patch(f"/v1/ai/machines/{studio}", json={"enabled": False}, headers=headers).status_code == 200
-    assert [m["name"] for m in client.get("/v1/ai/jobs/vision", headers=worker).json()["machines"]] == ["Brain"]
+    assert [m["name"] for m in client.get("/v1/ai/jobs/vision", headers=worker).json()["machines"]] == ["Gaming PC"]
     assert _job(_ai(env), "vision")["machines"] == 1
 
     # Clients that know one endpoint (the Mac app) get the first vision machine's.
     editor = client.get("/v1/tenant/context", headers=worker).json()
-    assert (editor["vision_api_url"], editor["vision_api_key"], editor["vision_model_id"]) == (BRAIN, "sk-1", QWEN)
+    assert (editor["vision_api_url"], editor["vision_api_key"], editor["vision_model_id"]) == (GAMING_PC, "sk-1", QWEN)
     viewer = client.get("/v1/tenant/context", headers=_key_with_role(env, "viewer")).json()
     assert viewer["vision_api_key"] == "" and viewer["vision_model_id"] == QWEN
 
@@ -312,25 +312,25 @@ def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env
 def test_only_admins_change_machines_or_models(env, none):
     client, headers, *_ = env
     editor = _key_with_role(env, "editor")
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         assert _add(env).status_code == 201
-        brain = _machine(_ai(env), "Brain")["machine_id"]
-        assert client.post("/v1/ai/connect", json={"api_url": BRAIN}, headers=editor).status_code == 403
+        gaming_pc = _machine(_ai(env), "Gaming PC")["machine_id"]
+        assert client.post("/v1/ai/connect", json={"api_url": GAMING_PC}, headers=editor).status_code == 403
         assert _add(env, name="Other", headers=editor).status_code == 403
-        assert client.patch(f"/v1/ai/machines/{brain}", json={"at_once": 3}, headers=editor).status_code == 403
-        assert client.delete(f"/v1/ai/machines/{brain}", headers=editor).status_code == 403
+        assert client.patch(f"/v1/ai/machines/{gaming_pc}", json={"at_once": 3}, headers=editor).status_code == 403
+        assert client.delete(f"/v1/ai/machines/{gaming_pc}", headers=editor).status_code == 403
         assert _model(env, "vision", QWEN, headers=editor).status_code == 403
-    viewer = _machine(_ai(env, headers=_key_with_role(env, "viewer")), "Brain")
+    viewer = _machine(_ai(env, headers=_key_with_role(env, "viewer")), "Gaming PC")
     assert viewer["has_key"] is False and "api_key" not in viewer
 
 
 @pytest.mark.slow
 def test_the_workers_check_shows_per_machine_until_fixed(env, none):
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
-        _add(env, name="Brain")
+        _add(env, name="Gaming PC")
         _add(env, name="Studio", api_url=STUDIO)
         _model(env, "vision", QWEN)
     studio = _machine(_ai(env), "Studio")["machine_id"]
@@ -354,7 +354,7 @@ def test_the_workers_check_shows_per_machine_until_fixed(env, none):
 
     # A machine moved to another URL: what was known of the old one goes, and Connect's answer stands.
     with fake:
-        r = client.patch(f"/v1/ai/machines/{studio}", json={"api_url": BRAIN + "/"}, headers=headers)
+        r = client.patch(f"/v1/ai/machines/{studio}", json={"api_url": GAMING_PC + "/"}, headers=headers)
     assert r.status_code == 200, r.text
     assert _machine(r.json(), "Studio")["status"]["models"] == [QWEN]
 
@@ -365,16 +365,16 @@ def test_leaving_a_job_without_a_machine_never_asks_and_processing_says_it_waits
     machine doing a job just does it; the job's work waits, and Settings →
     Processing says why."""
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
-        _add(env, name="Brain")
+        _add(env, name="Gaming PC")
         _add(env, name="Studio", api_url=STUDIO)
         _model(env, "vision", QWEN, redo=True)
-    brain, studio = (m["machine_id"] for m in _added(_ai(env)))
+    gaming_pc, studio = (m["machine_id"] for m in _added(_ai(env)))
     assert _waiting(env, "vision") is None
     for method, path, body in (("patch", f"/v1/ai/machines/{studio}", {"enabled": False}),
-                               ("patch", f"/v1/ai/machines/{brain}", {"jobs": []}),
-                               ("delete", f"/v1/ai/machines/{brain}", None)):
+                               ("patch", f"/v1/ai/machines/{gaming_pc}", {"jobs": []}),
+                               ("delete", f"/v1/ai/machines/{gaming_pc}", None)):
         r = client.request(method.upper(), path, json=body, headers=headers)
         assert r.status_code == 200, (method, body, r.text)
     assert _job(_ai(env), "vision")["machines"] == 0
@@ -390,36 +390,36 @@ def test_leaving_a_job_without_a_machine_never_asks_and_processing_says_it_waits
 @pytest.mark.slow
 def test_a_job_whose_machines_are_all_offline_says_so_in_processing(env, none):
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
-        _add(env, name="Brain")
+        _add(env, name="Gaming PC")
         _model(env, "vision", QWEN, redo=True)
-    brain = _machine(_ai(env), "Brain")["machine_id"]
+    gaming_pc = _machine(_ai(env), "Gaming PC")["machine_id"]
     worker = _key_with_role(env, "admin")  # the scheduler's key
-    client.post(f"/v1/ai/machines/{brain}/status", json={"online": False, "error": "Couldn't reach it."},
+    client.post(f"/v1/ai/machines/{gaming_pc}/status", json={"online": False, "error": "Couldn't reach it."},
                 headers=worker)
     assert _waiting(env, "vision") == ("No machine doing descriptions & text is online: its work waits. "
                                        "Settings → AI shows why.")
-    client.post(f"/v1/ai/machines/{brain}/status", json={"online": True, "models": [QWEN]}, headers=worker)
+    client.post(f"/v1/ai/machines/{gaming_pc}/status", json={"online": True, "models": [QWEN]}, headers=worker)
     assert _waiting(env, "vision") is None
 
 
 @pytest.mark.slow
 def test_removing_a_machine(env, none):
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         _add(env)
-    brain = _machine(_ai(env), "Brain")["machine_id"]
-    r = client.delete(f"/v1/ai/machines/{brain}", headers=headers)
+    gaming_pc = _machine(_ai(env), "Gaming PC")["machine_id"]
+    r = client.delete(f"/v1/ai/machines/{gaming_pc}", headers=headers)
     assert r.status_code == 200 and _added(r.json()) == []
-    assert client.delete(f"/v1/ai/machines/{brain}", headers=headers).status_code == 404
+    assert client.delete(f"/v1/ai/machines/{gaming_pc}", headers=headers).status_code == 404
 
 
 @pytest.mark.slow
 def test_no_model_turns_the_job_off(env, none):
     client, *_ = env
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         _add(env)
         _model(env, "vision", QWEN)
@@ -434,7 +434,7 @@ def test_changing_the_model_makes_descriptions_stale(env, none):
     from tests.test_reconciler import _counts, _describe, _library
 
     lib = _library(env, "AiStale")
-    fake, _ = _machines({BRAIN: (QWEN, LLAVA)})
+    fake, _ = _machines({GAMING_PC: (QWEN, LLAVA)})
     with fake:
         _add(env)
         _model(env, "vision", QWEN)
@@ -455,9 +455,9 @@ def test_changing_the_model_makes_descriptions_stale(env, none):
 @pytest.mark.slow
 def test_a_machine_moved_to_another_url_leaves_its_key_behind(env, none):
     client, headers, *_ = env
-    fake, seen = _machines({BRAIN: (QWEN,), STUDIO: (QWEN,)})
+    fake, seen = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
-        _add(env, name="Box", api_key="sk-brain")
+        _add(env, name="Box", api_key="sk-gaming-pc")
         box = _machine(_ai(env), "Box")["machine_id"]
         r = client.patch(f"/v1/ai/machines/{box}", json={"api_url": STUDIO}, headers=headers)
     assert r.status_code == 200, r.text
@@ -495,22 +495,22 @@ def test_a_tenant_made_with_a_vision_url_gets_its_first_machine(env, none):
 
     client, *_ = env
     with patch("src.server.accounts.provision_tenant_database"):
-        r = client.post("/v1/admin/tenants", json={"name": "WithVision", "vision_api_url": BRAIN + "/",
+        r = client.post("/v1/admin/tenants", json={"name": "WithVision", "vision_api_url": GAMING_PC + "/",
                                                    "vision_api_key": "sk-v"},
                         headers={"Authorization": "Bearer test-admin-analysis"})
     assert r.status_code == 200, r.text
     with get_control_session() as ctrl:
         machine = first_vision_machine(ctrl, r.json()["tenant_id"])
-        assert (machine.api_url, machine.api_key, machine.jobs, machine.name) == (BRAIN, "sk-v", ["vision"], "172.18.0.6:11434")
+        assert (machine.api_url, machine.api_key, machine.jobs, machine.name) == (GAMING_PC, "sk-v", ["vision"], "172.18.0.6:11434")
 
 
 @pytest.mark.slow
 def test_the_admin_vision_url_never_clashes_with_a_machines_name(env, none):
     client, headers, _lib, _storage, tenant_id, _url = env
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         assert _add(env, name="172.18.0.6:11434", jobs=[]).status_code == 201  # not doing vision
-    r = client.patch(f"/v1/admin/tenants/{tenant_id}", json={"vision_api_url": BRAIN},
+    r = client.patch(f"/v1/admin/tenants/{tenant_id}", json={"vision_api_url": GAMING_PC},
                      headers={"Authorization": "Bearer test-admin-analysis"})
     assert r.status_code == 200, r.text
     assert sorted(m["name"] for m in _added(_ai(env))) == ["172.18.0.6:11434", "172.18.0.6:11434 (2)"]
@@ -578,7 +578,7 @@ def test_the_built_in_whisper_can_be_renamed_given_more_at_once_or_turned_off(en
     built_in = _built_in(_ai(env))["machine_id"]
     fake, seen = _machines({})
     with fake:
-        r = client.patch(f"/v1/ai/machines/{built_in}", json={"name": "Brain Whisper", "at_once": 2},
+        r = client.patch(f"/v1/ai/machines/{built_in}", json={"name": "Server Whisper", "at_once": 2},
                          headers=headers)
         assert r.status_code == 200, r.text
         # Turning off the only machine doing transcripts: done, and they wait.
@@ -590,20 +590,20 @@ def test_the_built_in_whisper_can_be_renamed_given_more_at_once_or_turned_off(en
         assert r.status_code == 200, r.text
     assert seen == []
     m = _built_in(r.json())
-    assert (m["name"], m["at_once"], m["enabled"], m["status"]) == ("Brain Whisper", 2, True, None)
+    assert (m["name"], m["at_once"], m["enabled"], m["status"]) == ("Server Whisper", 2, True, None)
 
 
 @pytest.mark.slow
 def test_a_transcription_server_offers_whisper_by_its_repo_name(env, none):
     client, headers, *_ = env
-    fake, _ = _machines({SPEACHES: (SMALL_REPO, KOKORO), BRAIN: (QWEN,)})
+    fake, _ = _machines({SPEACHES: (SMALL_REPO, KOKORO), GAMING_PC: (QWEN,)})
     with fake:
         r = client.post("/v1/ai/connect", json={"api_url": SPEACHES}, headers=headers)
         assert r.status_code == 200 and r.json() == {"models": ["small", KOKORO]}
         r = _add(env, name="Speaches", api_url=SPEACHES, jobs=["transcripts"], at_once=2)
         assert r.status_code == 201, r.text
         # An Ollama box doesn't do Whisper.
-        r = _add(env, name="Brain", jobs=["vision", "transcripts"])
+        r = _add(env, name="Gaming PC", jobs=["vision", "transcripts"])
         assert r.status_code == 409, r.text
         assert r.json()["error"]["details"] == {"job": "transcripts", "model": "small", "models": [QWEN]}
     ai = _ai(env)
@@ -653,7 +653,7 @@ def test_the_workers_check_of_the_built_in_whisper_shows(env, none):
     assert r.status_code == 204, r.text
     assert _job(_ai(env), "transcripts")["offering"] == 1
     client.post(f"/v1/ai/machines/{built_in}/status",
-                json={"online": False, "error": "faster-whisper isn't installed on brain."}, headers=worker)
+                json={"online": False, "error": "faster-whisper isn't installed on the server."}, headers=worker)
     status = _built_in(_ai(env))["status"]
     assert status["online"] is False and "faster-whisper" in status["error"]
     assert _job(_ai(env), "transcripts")["offering"] == 0
@@ -683,7 +683,7 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
     assert {p["artifact"]: p for p in r.json()["producers"]}["transcript"]["settings"] == {
         "model": "medium", "vad_min_silence_ms": 500}
     # The vision model is the vision job's alone.
-    fake, _ = _machines({BRAIN: (QWEN,)})
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         _add(env)
         assert _model(env, "vision", QWEN, redo=True).status_code == 200

@@ -328,7 +328,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
       <p className="font-medium text-gray-100">{title}</p>
       <label className="block space-y-1 text-sm text-gray-300">
         <span>Name</span>
-        <input aria-label="Name" placeholder="Brain 3080" value={name} className={inputClass} onChange={(e) => setName(e.target.value)} />
+        <input aria-label="Name" placeholder="Gaming PC" value={name} className={inputClass} onChange={(e) => setName(e.target.value)} />
       </label>
       {!builtIn && (
         <>

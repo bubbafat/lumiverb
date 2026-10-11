@@ -99,7 +99,7 @@ def test_signed_out_it_isn_t_said(mac):
 
 
 def test_where_lumiverb_doesn_t_run_the_web_server_it_isn_t_changed_here(control, tmp_path, monkeypatch):  # noqa: F811
-    """The brain's nginx is deploy-web.sh's: no NGINX_CONFIG of run's."""
+    """A Linux install's nginx is deploy-web.sh's: no NGINX_CONFIG of run's."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
     get_settings.cache_clear()

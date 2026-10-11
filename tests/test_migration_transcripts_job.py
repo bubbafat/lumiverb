@@ -29,7 +29,7 @@ def test_each_tenant_gets_its_built_in_whisper_and_small() -> None:
                     " VALUES (:t, :t, 'free', 'active', now() - interval '1 day', 'qwen3-vl:8b')"), {"t": tid})
             conn.execute(text(
                 "INSERT INTO ai_machines (machine_id, tenant_id, name, api_url, jobs)"
-                " VALUES ('aim_gpu', 'ten_a', 'Brain', 'http://10.10.10.2:11434/v1', '[\"vision\"]'),"
+                " VALUES ('aim_gpu', 'ten_a', 'Gaming PC', 'http://10.10.10.2:11434/v1', '[\"vision\"]'),"
                 "        ('aim_taken', 'ten_b', 'Built in', 'http://x/v1', '[]')"))
         _alembic(url, "upgrade", AFTER)
         with engine.connect() as conn:

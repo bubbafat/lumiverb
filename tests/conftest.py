@@ -33,7 +33,7 @@ import sys
 # the ephemeral range: Docker then couldn't map a port for a container started
 # mid-run. A database's pooled connections end when it's dropped (WITH FORCE),
 # and its name is never used again in the run.
-# Sessions default to a timezone that isn't UTC, as on the brain (Ubuntu's
+# Sessions default to a timezone that isn't UTC, as on prod (Ubuntu's
 # Postgres takes the machine's), so code that leans on UTC fails here first.
 os.environ.setdefault("PGTZ", "America/New_York")
 # The suite never talks to a real Quickwit: not the developer's (.env.local

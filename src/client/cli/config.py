@@ -24,7 +24,7 @@ class CLIConfig(BaseModel):
     # machine, by path prefix (src/processing/roots.py).
     root_map: dict[str, str] = {}
     # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set
-    # (src/processing/cache_dir.py). The brain's install sets it to the data
+    # (src/processing/cache_dir.py). A Linux install sets it to the data
     # disk, so a command run by hand as the lumiverb user finds the
     # scheduler's caches and lock.
     cache_home: str = ""

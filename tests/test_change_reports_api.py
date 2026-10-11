@@ -1,7 +1,7 @@
-"""Change reports: the Mac tells the brain what changed on storage (ADR-016 phase 2).
+"""Change reports: the Mac tells the server what changed on storage (ADR-016 phase 2).
 
-The brain mounts the DAS over the network and can't watch it, so the Mac,
-which has the disks, reports paths it sees change. The brain's worker reads
+Prod mounts the DAS over the network and can't watch it, so the Mac,
+which has the disks, reports paths it sees change. The server's worker reads
 the pending reports, scans just those folders, and acknowledges them.
 
 Uses testcontainers Postgres (control + tenant).

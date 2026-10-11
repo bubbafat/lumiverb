@@ -8,10 +8,10 @@
 # Usage:
 #   bash scripts/deploy-web.sh --domain app.example.com --api-upstream http://10.0.0.5:8000
 #
-# On a LAN/Tailscale box (the brain), answer on any address over HTTP and
+# On a LAN/Tailscale box (prod), answer on any address over HTTP and
 # leave the firewall alone:
 #   sudo bash scripts/deploy-web.sh --domain _ --api-upstream http://127.0.0.1:8100 \
-#     --no-firewall --branch feat/brain
+#     --no-firewall
 #
 # Idempotent: safe to run again to update an existing install.
 #

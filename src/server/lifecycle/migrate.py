@@ -1,5 +1,5 @@
 """Database migrations for an install: the control plane, then every
-account's database. scripts/migrate.sh's steps (the brain's update runs
+account's database. scripts/migrate.sh's steps (a Linux install's update runs
 that), as a function a service can run before it starts, on any platform.
 """
 
@@ -53,7 +53,7 @@ def _say_all(said: list[str], say: Callable[[str], None]) -> None:
 def create_database_if_missing(url: str) -> bool:
     """Creates the URL's database when its server doesn't have it (connecting
     to the server's own `postgres` database); True if it did. For a Mac's
-    service, so there's no createdb to type; the brain's installer makes its
+    service, so there's no createdb to type; Linux's installer makes its
     own. Raises MigrationError when the server can't be reached."""
     target = make_url(url)
     name = target.database

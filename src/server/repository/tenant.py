@@ -80,7 +80,7 @@ def _active_assets_subquery():
 
 
 class LibraryChangeRepository:
-    """Paths reported changed on storage, waiting for the brain to scan them."""
+    """Paths reported changed on storage, waiting for the server to scan them."""
 
     def __init__(self, session: Session) -> None:
         self._session = session

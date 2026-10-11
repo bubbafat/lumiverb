@@ -1,7 +1,7 @@
 """`lumiverb enrich PRODUCER (--library NAME | --all) [--redo]`: ask the
 scheduler to do work now (POST /v1/producers/run).
 
-The scheduler on the brain does all processing (ADR-016): this asks it to
+The scheduler on the server does all processing (ADR-016): this asks it to
 try a producer's failing clips again at once and look again now, or with
 --redo to make again what it's made (re-detecting faces, say). The
 producer and the libraries are named (a producer or all; --library or

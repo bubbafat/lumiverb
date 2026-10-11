@@ -1,7 +1,7 @@
 """Where Lumiverb's local caches live: ~/.cache/lumiverb, or $XDG_CACHE_HOME/lumiverb.
 
-The brain's scheduler sets XDG_CACHE_HOME to its data disk, so proxy caches
-don't fill the root disk during the first ingest.
+A Linux install's scheduler sets XDG_CACHE_HOME to its data disk, so proxy
+caches don't fill the root disk during the first ingest.
 """
 
 from __future__ import annotations

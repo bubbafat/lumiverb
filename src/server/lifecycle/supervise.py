@@ -1,6 +1,6 @@
-"""The API and the scheduler as one service: what the brain's systemd units
-(deploy-api.sh) do for each, for a Mac, where launchd runs one process per
-Homebrew service.
+"""The API and the scheduler as one service: what a Linux install's systemd
+units (deploy-api.sh) do for each, for a Mac, where launchd runs one process
+per Homebrew service.
 
 A child can wait for something first (`start_after`): the API and the
 scheduler wait for migrations, which wait for the PostgreSQL started here.

@@ -3,7 +3,7 @@
 The database keeps each library's ingest root as the editing machine sees
 it (for example /Volumes/media-01/Footage on the Mac Studio), because
 exports point editors there. A machine that reaches the same storage at
-another path, such as the brain mounting the DAS at /mnt/media-01, maps
+another path, such as prod mounting the DAS at /mnt/media-01, maps
 the prefix in its own settings (src/processing/machine.py: the scheduler's
 LUMIVERB_ROOT_MAP, the CLI's `lumiverb config map-root`), never in the
 database (ADR-016 phase 2).
@@ -134,7 +134,7 @@ def local_library_root(library: dict, root_map: dict[str, str] | None = None) ->
     return Path(map_root(root_path, mapping))
 
 
-# Mount points the system expects (the brain mounts the DAS from here).
+# Mount points the system expects (prod mounts the DAS from here).
 FSTAB = Path("/etc/fstab")
 
 

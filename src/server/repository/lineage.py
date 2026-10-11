@@ -453,7 +453,7 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
            produced_at: datetime | None = None, commit: bool = True) -> None:
     """Record how an artifact was just made. A write that doesn't say (an
     old client, the macOS app today) is an unknown producer's: stale, so
-    the brain makes it again. person: a person made it (only the server
+    the server makes it again. person: a person made it (only the server
     says so; a client can't). The source defaults to the clip's file now.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}

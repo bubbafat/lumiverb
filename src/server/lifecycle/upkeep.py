@@ -1,4 +1,4 @@
-"""Upkeep on a Mac: what the brain's systemd timers do (deploy-api.sh).
+"""Upkeep on a Mac: what a Linux install's systemd timers do (deploy-api.sh).
 
   lumiverb-upkeep.timer        POST /v1/upkeep?tenants=all, 2 min after boot, then every 5 min
   lumiverb-upkeep-daily.timer  POST /v1/upkeep/cleanup?tenants=all&dry_run=false at 03:00,
