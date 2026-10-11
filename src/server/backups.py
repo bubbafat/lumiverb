@@ -45,6 +45,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic, sleep
 
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -68,6 +69,10 @@ KEEP_WEEKS = 4
 KEEP_BEFORE = 3
 # A .partial this old was a backup that died (the API restarted mid-way).
 PARTIAL_STALE = timedelta(days=1)
+# A connection that's closing (Lumiverb just stopped, or the restore's own
+# check before) is still listed for a moment after its client lets go: what's
+# connected is looked at again for this long before a restore is refused.
+CLOSING_GRACE_SEC = 3.0
 # Restoring: the database put back beside the live one, then swapped in.
 RESTORING = "__restoring"
 REPLACED = "__replaced"
@@ -551,18 +556,29 @@ def _quoted(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def connected_elsewhere(urls: list[str]) -> list[str]:
-    """What's connected to these databases now, besides this process: Lumiverb
-    still running, or someone's psql. Empty when nothing is."""
+def connected_elsewhere(urls: list[str], *, grace: float | None = None) -> list[str]:
+    """The clients connected to these databases now, besides this one:
+    Lumiverb still running (its API and scheduler name themselves:
+    lumiverb-api, lumiverb-scheduler), or someone's psql. Empty when there
+    are none. Only clients: PostgreSQL's own workers (autovacuum tidying a
+    database) don't count. One that's closing is gone within the grace
+    (CLOSING_GRACE_SEC): only those still there after it are said."""
     names = sorted({make_url(u).database for u in urls if make_url(u).database})
     if not names:
         return []
+    grace = CLOSING_GRACE_SEC if grace is None else grace
+    deadline = monotonic() + grace
     engine = _admin_engine(urls[0])
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT datname, coalesce(nullif(application_name, ''), client_addr::text, 'local') FROM pg_stat_activity"
-                " WHERE datname = ANY(:names) AND pid <> pg_backend_pid()"), {"names": names}).all()
+        while True:
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT datname, coalesce(nullif(application_name, ''), host(client_addr), 'local')"
+                    " FROM pg_stat_activity WHERE datname = ANY(:names) AND pid <> pg_backend_pid()"
+                    " AND backend_type = 'client backend'"), {"names": names}).all()
+            if not rows or monotonic() >= deadline:
+                break
+            sleep(0.2)
     finally:
         engine.dispose()
     return sorted({f"{name} ({who})" for name, who in rows})

@@ -762,7 +762,10 @@ def main() -> int:
 
     from src.server.scheduler.settings import SchedulerSettings
 
+    from src.server.database import set_application_name
+
     configure_logging()
+    set_application_name("lumiverb-scheduler")  # its connections, as PostgreSQL shows them
     here = SchedulerSettings().machine()
     machine.use(here)  # never the CLI's config
     lock = ServiceLock()
