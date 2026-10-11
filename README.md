@@ -23,9 +23,12 @@ Supports JPEG, PNG, TIFF, HEIC, HEIF, WebP, RAW (CR2/CR3/NEF/ARW/DNG/ORF/RW2), a
 With [Homebrew](https://brew.sh):
 
 ```bash
-brew install --HEAD bubbafat/lumiverb/lumiverb
+brew trust --tap bubbafat/lumiverb && brew install --HEAD bubbafat/lumiverb/lumiverb
 brew services start postgresql@18 && brew services start quickwit && brew services start nginx && brew services start lumiverb
 ```
+
+(Homebrew installs from a tap that isn't its own only once you trust it:
+that's `brew trust`.)
 
 Then open <http://localhost:6464> on that Mac and create your account. Add a
 library (Libraries › Add library: a name and the folder your photos and
