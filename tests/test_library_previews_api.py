@@ -7,6 +7,7 @@ real folders: tests/test_previews_location.py."""
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -87,7 +88,7 @@ def test_a_library_gets_a_folder_of_its_own_after_saying_yes_and_back(mac):
         assert after["folder"] == str(drive) and after["own"] is True and after["available"] is True
         storage = client.get("/v1/system/storage", headers=auth).json()
         assert storage["libraries"] == [{"library_id": library_id, "name": "Trips", "folder": str(drive),
-                                         "available": True}]
+                                         "available": True, "write_error": None}]
         assert storage["previews"] == str(data), "the server's folder stays"
         assert (drive / key).read_bytes() == b"clip" and not (data / key).exists()
         back = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": None, "move": True}, headers=auth)
@@ -163,3 +164,24 @@ def test_with_nothing_to_move_or_say_it_doesnt_ask(mac, monkeypatch):
         assert there.status_code == 202, there.text
         assert _settled(client, auth, library_id)["folder"] == str(drive)
     assert previews_location.read(data).libraries == {library_id: drive}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
+def test_its_own_folder_it_cant_write_any_more_is_flagged(mac):
+    data, originals, tmp, control_url = mac
+    drive = tmp / "Video"
+    drive.mkdir()
+    (drive / previews_location.MARKER).write_text("")
+    with TestClient(app, client=HERE) as client:
+        auth, library_id, _ = _library(client, control_url, originals)
+        previews_location.write(data, data, None, libraries={library_id: drive})
+        drive.chmod(0o500)
+        try:
+            own = client.get(f"/v1/libraries/{library_id}/previews", headers=auth).json()
+            listed = client.get("/v1/system/storage", headers=auth).json()["libraries"]
+        finally:
+            drive.chmod(0o700)
+    said = f"Lumiverb can't write to {drive}: no permission."
+    assert own["available"] is True and own["write_error"] == said
+    assert listed == [{"library_id": library_id, "name": "Trips", "folder": str(drive), "available": True,
+                       "write_error": said}]

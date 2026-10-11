@@ -594,6 +594,7 @@ class LibraryPreviews(BaseModel):
     own: bool  # a folder of its own (else the server's, Settings › Storage)
     server_folder: str
     available: bool  # its drive is plugged in
+    write_error: str | None = None  # Lumiverb can't write there now: why (src/server/write_check.py)
     free: int | None
     total: int | None
     # On the drive its originals are on: unplugged, it takes its previews too.
@@ -666,6 +667,7 @@ def _library_previews(request: Request, library) -> LibraryPreviews:
     import shutil
     from pathlib import Path
 
+    from src.server import write_check
     from src.server.api.client_address import on_this_machine
     from src.server.config import get_settings
     from src.server.storage import move
@@ -691,7 +693,8 @@ def _library_previews(request: Request, library) -> LibraryPreviews:
         moving["running"] = move.running(data)
     return LibraryPreviews(
         library_id=library.library_id, folder=str(folder), own=library.library_id in location.libraries,
-        server_folder=str(location.previews), available=available, free=free, total=total,
+        server_folder=str(location.previews), available=available,
+        write_error=write_check.why_not(folder) if available else None, free=free, total=total,
         same_drive_as_originals=_same_device(folder, originals),
         moving=moving, changeable_here=on_this_machine(request),
     )

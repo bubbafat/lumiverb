@@ -39,9 +39,10 @@ function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Couldn't reach the server. Try again.";
 }
 
-/** Settings flags it: a previews drive isn't plugged in, or a move stopped. */
+/** Settings flags it: a previews drive isn't plugged in, a folder Lumiverb can't write, or a move stopped. */
 export function storageHasProblem(s: StorageInfo | undefined): boolean {
-  return !!s && (!s.previews_available || !!s.moving?.error || s.libraries.some((l) => !l.available));
+  return !!s && (!s.previews_available || !!s.previews_write_error || !!s.moving?.error
+    || s.libraries.some((l) => !l.available || !!l.write_error));
 }
 
 /** Where the previews are (off a Mac's system drive, say), and moving them. Admins only. */
@@ -92,6 +93,11 @@ export default function StorageSection() {
             {free(data.previews_free, data.previews_total)}
           </p>
         )}
+        {data.previews_write_error && (
+          <p role="alert" className="text-sm text-red-300">
+            {data.previews_write_error} Until it can, no previews are made.
+          </p>
+        )}
         {data.moving ? (
           <Moving move={data.moving} onTriedAgain={(next) => queryClient.setQueryData(STORAGE_QUERY_KEY, next)} />
         ) : (
@@ -117,6 +123,7 @@ export default function StorageSection() {
                 </Link>
                 : <span className="break-all font-mono">{l.folder}</span>
                 {!l.available && <span className="text-red-300"> (its drive isn&apos;t plugged in)</span>}
+                {l.write_error && <span className="text-red-300"> ({l.write_error})</span>}
               </li>
             ))}
           </ul>

@@ -1097,6 +1097,8 @@ export interface BackupItem {
 
 export interface Backups {
   folder: string;
+  /** Lumiverb can't write there now: why. */
+  folder_write_error?: string | null;
   default_folder: string;
   /** The folder is chosen on the machine itself. */
   changeable_here: boolean;
@@ -1153,6 +1155,8 @@ export interface StorageInfo {
   data: string;
   /** The previews' drive is plugged in. */
   previews_available: boolean;
+  /** Lumiverb can't write there now: why. */
+  previews_write_error?: string | null;
   previews_free: number | null;
   previews_total: number | null;
   data_free: number | null;
@@ -1162,7 +1166,7 @@ export interface StorageInfo {
   /** Moved only on the machine itself. */
   changeable_here: boolean;
   /** The account's libraries with a folder of their own. */
-  libraries: { library_id: string; name: string; folder: string; available: boolean }[];
+  libraries: { library_id: string; name: string; folder: string; available: boolean; write_error?: string | null }[];
 }
 
 /** Where a library's previews are: the server's folder, or one of its own (Library settings). */
@@ -1172,6 +1176,8 @@ export interface LibraryPreviews {
   own: boolean;
   server_folder: string;
   available: boolean;
+  /** Lumiverb can't write there now: why. */
+  write_error?: string | null;
   free: number | null;
   total: number | null;
   /** On the drive its originals are on (null: they aren't reachable here). */

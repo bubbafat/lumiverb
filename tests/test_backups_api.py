@@ -6,6 +6,7 @@ real install (tests/test_backups_slow.py has the rules on real databases)."""
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import patch
 
@@ -164,6 +165,33 @@ def test_the_folder_is_chosen_on_the_machine_itself(install, tmp_path):
     with TestClient(app, client=HERE) as here:
         back = here.put("/v1/system/backups/folder", json={"folder": None}, headers=auth)
     assert back.json()["folder"] == str(data / "backups")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
+def test_a_folder_it_cant_write_any_more_is_flagged(install, tmp_path):
+    data, _ = install
+    drive = tmp_path / "Backup"
+    drive.mkdir()
+    backups.set_folder(data, drive)  # chosen when it could be written
+    drive.chmod(0o500)  # then it can't
+    try:
+        with TestClient(app, client=HERE) as here:
+            auth = _signed_in(here)
+            body = here.get("/v1/system/backups", headers=auth).json()
+            row = {r["key"]: r for r in here.get("/v1/system/health", headers=auth).json()["rows"]}["backups"]
+    finally:
+        drive.chmod(0o700)
+    said = f"Lumiverb can't write to {drive}: no permission."
+    assert body["folder"] == str(drive) and body["folder_write_error"] == said
+    assert row["state"] == "red" and row["reason"] == f"{said} The next backup can't be made."
+
+
+def test_the_default_folder_not_made_yet_is_fine(install):
+    data, _ = install
+    with TestClient(app, client=HERE) as here:
+        auth = _signed_in(here)
+        body = here.get("/v1/system/backups", headers=auth).json()
+    assert body["folder"] == str(data / "backups") and body["folder_write_error"] is None
 
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
