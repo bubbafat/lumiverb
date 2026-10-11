@@ -215,7 +215,7 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BAC
 sudo systemctl start lumiverb-api lumiverb-scheduler
 ```
 
-It refuses while anything is connected to the databases, backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, migrates to this version, and marks each account's search index to be remade.
+`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while anything is connected to the databases, backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, migrates to this version, and marks each account's search index to be remade.
 
 ## Mac app changes (Swift, not built yet)
 

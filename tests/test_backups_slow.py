@@ -288,10 +288,13 @@ def test_the_commands(server, tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("TENANT_DATABASE_URL_TEMPLATE", raising=False)
     monkeypatch.delenv("LUMIVERB_ENV_FILE", raising=False)
     _run(tenant_url, "INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', 'before', now())")
+    assert cli.main(["backup", "--before-upgrade"]) == 0  # a Linux update's, before migrating
+    assert backups.list_backups(tmp_path / "backups")[0].kind == "before-upgrade"
     assert cli.main(["backup"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("✓ Backed up 2 database(s)")
+    assert "✓ Backed up 2 database(s)" in out
     made = backups.list_backups(tmp_path / "backups")[0]
+    assert made.kind == "now"
 
     _run(tenant_url, "UPDATE system_metadata SET value = 'after' WHERE key = 'note'")
     monkeypatch.setattr("builtins.input", lambda _: "no")
@@ -303,7 +306,7 @@ def test_the_commands(server, tmp_path, monkeypatch, capsys):
     assert "✓ What was here:" in out and "✓ Restored the backup from" in out
     assert _value(tenant_url, "note") == "before"
     kinds = sorted(b.kind for b in backups.list_backups(tmp_path / "backups"))
-    assert kinds == ["before-restore", "now"]
+    assert kinds == ["before-restore", "before-upgrade", "now"]
     # Undone: the backup made first puts back what was there.
     undo = next(b for b in backups.list_backups(tmp_path / "backups") if b.kind == "before-restore")
     assert cli.main(["restore", str(undo.path), "--yes"]) == 0

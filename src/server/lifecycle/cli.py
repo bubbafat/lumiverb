@@ -6,7 +6,7 @@
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
     lumiverb-server reset-password --env FILE [--email EMAIL]
-    lumiverb-server backup --env FILE
+    lumiverb-server backup --env FILE [--before-upgrade]
     lumiverb-server restore --env FILE BACKUP [--yes]
 
 init: the install's env file, Quickwit's config and nginx's, each written
@@ -36,7 +36,9 @@ any install. The env file is the operator's, so this needs no other proof.
 backup: every database backed up now, into the install's backups folder
 (src/server/backups.py), as Settings › Backups' Back up now does. Run as
 root (a Linux install's sudo), backup and restore go on as the data
-folder's owner, so what they write stays the API's.
+folder's owner, so what they write stays the API's. --before-upgrade marks
+it as an upgrade's (a Linux update runs it before migrating; the 3 newest
+of those are kept however old).
 
 restore: every database put back from a backup (its folder, or its name in
 the backups folder), with Lumiverb stopped: after backing up what's there
@@ -501,7 +503,8 @@ def _backup(args: argparse.Namespace) -> int:
     as_data_owner(data)
     try:
         with up_while(Path(env["PG_BIN"]) if env.get("PG_BIN") else None, data, url, env):
-            backup = backups.back_up(data, url, "now", pg_bin=env.get("PG_BIN") or None)
+            backup = backups.back_up(data, url, "before-upgrade" if args.before_upgrade else "now",
+                                     pg_bin=env.get("PG_BIN") or None)
     except (backups.BackupError, PostgresError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
@@ -612,8 +615,10 @@ def main(argv: list[str] | None = None) -> int:
         "reset-password", help="set someone's new password, signing them out everywhere (no email needed)")
     _env_option(reset_command, argparse.SUPPRESS)
     reset_command.add_argument("--email", help="theirs (asked if not given)")
-    _env_option(commands.add_parser("backup", help="back up every database now, into the backups folder"),
-                argparse.SUPPRESS)
+    backup_command = commands.add_parser("backup", help="back up every database now, into the backups folder")
+    _env_option(backup_command, argparse.SUPPRESS)
+    backup_command.add_argument("--before-upgrade", action="store_true",
+                                help="an upgrade's backup, before migrating (the 3 newest kept however old)")
     restore_command = commands.add_parser(
         "restore", help="put every database back from a backup, with Lumiverb stopped (what's there is backed up first)")
     _env_option(restore_command, argparse.SUPPRESS)
