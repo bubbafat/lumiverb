@@ -41,6 +41,8 @@ public struct AssetDetail: Decodable, Identifiable, Sendable {
     public let note: String?
     public let noteAuthor: String?
     public let noteUpdatedAt: String?
+    /// Faces found in it (nil: not looked for yet); a video's, the people seen.
+    public let faceCount: Int?
 
     public var id: String { assetId }
 

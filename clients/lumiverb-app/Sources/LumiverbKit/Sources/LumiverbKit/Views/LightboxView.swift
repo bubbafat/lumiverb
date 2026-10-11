@@ -50,7 +50,8 @@ public struct LightboxView: View {
                         LightboxVideoPlayerView(
                             detail: detail,
                             libraryRootPath: browseState.selectedLibraryRootPath,
-                            client: client
+                            client: client,
+                            start: browseState.videoStart
                         )
                     } else {
                         AuthenticatedImageView(
@@ -144,6 +145,10 @@ public struct LightboxView: View {
                     onPathClick: { path in
                         browseState.closeLightbox()
                         browseState.selectedPath = path
+                    },
+                    videoPeople: videoHasFaces(detail) ? facesVM : nil,
+                    onPlayMoment: { seconds in
+                        browseState.videoStart = VideoStart(assetId: detail.assetId, seconds: seconds, play: true)
                     }
                 )
                 .frame(width: 300)
@@ -151,7 +156,9 @@ public struct LightboxView: View {
         }
         .background(Rectangle().fill(.black))
         .task(id: showFacesTaskKey) {
-            if showFaces, let assetId = browseState.assetDetail?.assetId {
+            // A video's faces are listed in the sidebar (People), whatever Show Faces says.
+            let videoFaces = browseState.assetDetail.map(videoHasFaces) ?? false
+            if showFaces || videoFaces, let assetId = browseState.assetDetail?.assetId {
                 await facesVM.loadFaces(forAsset: assetId)
                 if let pending = browseState.pendingHighlightFaceId,
                    facesVM.faces.contains(where: { $0.faceId == pending }) {
@@ -185,6 +192,11 @@ public struct LightboxView: View {
             return .handled
         }
         #endif
+    }
+
+    /// A video someone was found in: its People are listed in the sidebar.
+    private func videoHasFaces(_ detail: AssetDetail) -> Bool {
+        detail.isVideo && (detail.faceCount ?? 0) > 0
     }
 
     /// Composite key so `.task(id:)` re-runs both when the user toggles the
@@ -227,6 +239,10 @@ struct MetadataSidebar: View {
     var onTagSearch: ((String) -> Void)?
     /// When set, path segments become clickable directory filters.
     var onPathClick: ((String) -> Void)?
+    /// A video's people (its faces loaded here), listed with when they're seen.
+    var videoPeople: LightboxFacesViewModel?
+    /// Play the video from a moment (seconds).
+    var onPlayMoment: ((Double) -> Void)?
 
     var body: some View {
         ScrollView {
@@ -287,6 +303,13 @@ struct MetadataSidebar: View {
                             Label("Open in Player", systemImage: "play.rectangle")
                         }
                         .controlSize(.small)
+                    }
+                }
+
+                // People in a video: who's seen, when; naming them.
+                if let videoPeople, !videoPeople.faces.isEmpty, let onPlayMoment {
+                    metadataSection("People") {
+                        VideoPeopleSection(vm: videoPeople, onPlay: onPlayMoment)
                     }
                 }
 

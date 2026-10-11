@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// Detail view for a single person — header with name + face count, then
-/// a grid of every photo containing that person. Phase 6 M3 of ADR-014.
+/// a grid of every photo and video containing that person, one cell a clip.
+/// A video's cell shows the person's face and when they're seen, and opens
+/// the video at their moment. Phase 6 M3 of ADR-014.
 ///
 /// Tapping a photo opens the existing `LightboxView` overlay through
 /// `BrowseState`, with the person's full asset id list installed as the
@@ -174,7 +176,7 @@ struct PersonDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(current.displayName)
                     .font(.title2)
-                Text("\(current.faceCount) photo\(current.faceCount == 1 ? "" : "s")")
+                Text("\(current.faceCount) clip\(current.faceCount == 1 ? "" : "s")")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -188,14 +190,18 @@ struct PersonDetailView: View {
 
     // MARK: - Grid
 
+    /// Their faces as clips: a video they're seen in many times is one cell.
+    private var clips: [PersonClip] { PersonClip.group(peopleState.personFaces) }
+
     @ViewBuilder
     private var grid: some View {
+        let clips = self.clips
         if peopleState.personFaces.isEmpty && !peopleState.isLoadingFaces {
             VStack(spacing: 8) {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 32))
                     .foregroundColor(.secondary)
-                Text("No photos for this person yet.")
+                Text("No photos or videos for this person yet.")
                     .font(.callout)
                     .foregroundColor(.secondary)
             }
@@ -205,38 +211,42 @@ struct PersonDetailView: View {
             #if os(iOS)
             DateGroupedGrid(
                 browseState: browseState,
-                items: peopleState.personFaces,
+                items: clips,
                 client: client,
-                dateString: { $0.takenAt },
+                dateString: { $0.face.takenAt },
                 assetId: { $0.assetId },
+                isVideo: { $0.isVideo },
                 isLoading: peopleState.isLoadingFaces,
-                onTap: { face in openLightbox(at: face) },
+                onTap: { clip in openLightbox(clip, clips: clips) },
                 onLastItemAppear: { _ in
                     Task { await peopleState.loadNextFacesPage() }
+                },
+                caption: { clip in
+                    clip.moments.isEmpty ? nil
+                        : AttributedString(clip.moments.prefix(4).map(\.label).joined(separator: " · "))
                 }
             )
             #else
             LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(peopleState.personFaces) { face in
-                    let isSelected = browseState.selectedAssetIds.contains(face.assetId)
-                    PersonFaceCellView(
-                        face: face,
+                ForEach(clips) { clip in
+                    let isSelected = browseState.selectedAssetIds.contains(clip.assetId)
+                    PersonClipCellView(
+                        clip: clip,
                         client: client,
                         isSelected: isSelected,
                         onToggleSelect: {
-                            browseState.toggleSelection(assetId: face.assetId)
+                            browseState.toggleSelection(assetId: clip.assetId)
                         }
                     )
                     .onTapGesture {
                         if browseState.isSelecting {
-                            browseState.toggleSelection(assetId: face.assetId)
+                            browseState.toggleSelection(assetId: clip.assetId)
                         } else {
-                            openLightbox(at: face)
+                            openLightbox(clip, clips: clips)
                         }
                     }
                     .onAppear {
-                        if let last = peopleState.personFaces.last,
-                           last.faceId == face.faceId {
+                        if let last = clips.last, last.assetId == clip.assetId {
                             Task { await peopleState.loadNextFacesPage() }
                         }
                     }
@@ -258,31 +268,55 @@ struct PersonDetailView: View {
         }
     }
 
-    private func openLightbox(at face: PersonFaceItem) {
-        // Install the person's asset list as the lightbox prev/next
+    private func openLightbox(_ clip: PersonClip, clips: [PersonClip]) {
+        // Install the person's clip list as the lightbox prev/next
         // override BEFORE loading the detail, so the lightbox renders
         // with the right neighborhood from the first frame.
-        browseState.displayedAssetIdsOverride = peopleState.personFaces.map(\.assetId)
-        Task { await browseState.loadAssetDetail(assetId: face.assetId) }
+        browseState.displayedAssetIdsOverride = clips.map(\.assetId)
+        Task { await browseState.openClip(assetId: clip.assetId, startSeconds: clip.startSeconds) }
     }
 }
 
-/// One cell in the per-person photo grid. Same look as `AssetCellView` but
-/// keyed off `assetId` and without the AssetPageItem (which we don't have
-/// here — `PersonFaceItem` exposes only face/asset ids and a rel_path).
-private struct PersonFaceCellView: View {
-    let face: PersonFaceItem
+/// One cell in the per-person grid. Same look as `AssetCellView` but keyed
+/// off `assetId` (the faces list has no AssetPageItem). A video's cell
+/// carries the person's face, since its still can show others first, and
+/// when they're first seen.
+private struct PersonClipCellView: View {
+    let clip: PersonClip
     let client: APIClient?
     let isSelected: Bool
     let onToggleSelect: () -> Void
 
     var body: some View {
         AssetGridCell(
-            assetId: face.assetId,
+            assetId: clip.assetId,
             isSelected: isSelected,
             client: client,
             onToggleSelect: onToggleSelect
         )
+        .overlay(alignment: .topLeading) {
+            if clip.isVideo {
+                FaceThumbnailView(faceId: clip.face.faceId, client: client)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.gray.opacity(0.3)))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 2))
+                    .padding(6)
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if clip.isVideo {
+                Text("▶ " + (clip.moments.first?.label ?? "Video")
+                     + (clip.moments.count > 1 ? " +\(clip.moments.count - 1)" : ""))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(4)
+                    .padding(6)
+            }
+        }
     }
 }
 
