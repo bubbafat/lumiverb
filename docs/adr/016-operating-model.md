@@ -12,7 +12,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 |-------|-------------|--------|
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
-| 2 | The brain: one machine schedules all processing and reads storage read-only | Built; installed on the brain and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
+| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
 | 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
 | 4 | Producers and endpoints | Producers in progress: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints not started |
 
@@ -22,7 +22,7 @@ Lumiverb is the step between "I shot 400 clips" and "the right clips are in my e
 
 Two principles shape everything else. Lumiverb never owns originals: it reads media where it lives and owns only what it derives and what the user tells it. Everything Lumiverb derives is rebuildable: proxies, thumbnails, transcripts, descriptions and embeddings are a cache of the footage, not a record of it.
 
-Today processing happens wherever a client happens to run (the Python CLI or the macOS app), several artifacts have two producers that overwrite each other, nothing records how a derived file was made, and human data is overwritten in five places. This ADR replaces that with one machine (the brain) that schedules all processing, one producer per artifact, lineage on every derived artifact, and reconciliation instead of manual enqueueing.
+Today processing happens wherever a client happens to run (the Python CLI or the macOS app), several artifacts have two producers that overwrite each other, nothing records how a derived file was made, and human data is overwritten in five places. This ADR replaces that with one machine (the server) that schedules all processing, one producer per artifact, lineage on every derived artifact, and reconciliation instead of manual enqueueing.
 
 ## Motivation
 
@@ -52,7 +52,7 @@ These are the rules other docs defer to.
 5. **Desired-state reconciliation.** The system compares what should exist with what does and sorts every artifact into missing, stale or current. Missing work runs right away at high priority. Stale work is flagged and upgraded in the background when the user approves. Retries, failures, partial runs and empty outputs collapse into one idea: an artifact that isn't current yet.
 6. **One producer per artifact kind.** A producer declares the milestone it needs (never another producer by name), which assets it applies to (a condition such as "only video"), which of its settings change its output, and which scarce resources it uses. AI producers also name a model and an endpoint. Producers are first-party for now.
 7. **Milestones, not a chain of workers.** Discovered (the asset exists and has an identity) → Probed (technical facts known) → Rendered (proxies and thumbnails exist) → Enriched (AI outputs exist) → Indexed (searchable). A producer whose prerequisites can never exist is disabled with a stated reason instead of failing on every asset.
-8. **Paths are resolved, not stored.** The catalog stores a library root and each asset's path relative to it, Unicode-normalized to NFC. A full path is built when needed, for whoever needs it: the brain's mount, an edit station's mount, or an export prefix. No machine-specific absolute path is treated as truth.
+8. **Paths are resolved, not stored.** The catalog stores a library root and each asset's path relative to it, Unicode-normalized to NFC. A full path is built when needed, for whoever needs it: the server's mount, an edit station's mount, or an export prefix. No machine-specific absolute path is treated as truth.
 9. **Surprising outcomes need explicit agreement.** When an action may do something the user doesn't expect (re-embedding a whole library, replacing edited values), the prompt spells out the outcome and the confirm button names the action ("Re-embed all 12,408 assets"), not a default Yes. **The API requires that agreement, not just the UI:** the request must carry the user's choice, or it's refused (409, with the facts), so every client (web, CLI, macOS, iOS) has to show the facts and ask. Moving an asset or a project to the trash is reversible and needs none.
 10. **Deleting goes through the trash.** Assets and projects follow one pattern: delete → trash → restore or delete forever. Libraries have a trash but no restore yet. Deleting for good is a separate, explicit step, and it says what else it touches (the projects a clip is in) before it runs.
 
@@ -63,10 +63,10 @@ Lumiverb has three roles. They can be separate machines or share one.
 | Role | Does | Today |
 |---|---|---|
 | Storage | Holds the originals. Lumiverb reads from it and never writes to it. | A Mac Studio's NVMe DAS |
-| Brain | Runs the catalog (API, Postgres, Quickwit), schedules all producers, holds derived media, serves the web UI. Reaches storage over the network, read-only. | A Linux box with an NVIDIA GPU |
+| Server | Runs the catalog (API, Postgres, Quickwit), schedules all producers, holds derived media, serves the web UI. Reaches storage over the network, read-only. | A Linux box with an NVIDIA GPU |
 | Edit stations | Where cutting happens, and where the web UI is used to find and collect. | The Mac Studio (masters), a MacBook (proxies) |
 
-The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retires in phase 2. Because the brain can't watch a network mount for changes, the macOS app reports the file changes it sees on storage.
+The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retires in phase 2. Because the server can't watch a network mount for changes, the macOS app reports the file changes it sees on storage.
 
 ### AI inference runs at named endpoints
 
@@ -109,7 +109,7 @@ Decided (Robert, Oct 9): changing a setting or a model is the approval (stale wo
 
 | Today | Under this ADR |
 |---|---|
-| Processing runs on the machine that holds the files (CLI or macOS app) | The brain schedules all processing; storage is mounted read-only |
+| Processing runs on the machine that holds the files (CLI or macOS app) | The server schedules all processing; storage is mounted read-only |
 | macOS app enriches with Apple Vision, CoreML, FeaturePrint, whisper.cpp | Retired in phase 2; the app browses and reports file changes |
 | Two producers each for faces, CLIP and transcripts | One producer per artifact |
 | `lumiverb enrich` and `MISSING_CONDITIONS` decide what runs | A reconciler computes missing, stale and current |
@@ -142,7 +142,7 @@ Known limitations after phase 0 (accepted for now; each is a follow-up):
 | A "not this person" on a face that re-detection doesn't find again is dropped with the face | If a later detection of the same face isn't paired, it can be auto-assigned to that person again | Narrow; revisit with region-anchored corrections (phase 3) |
 | Re-detection pairs a face with its old self only within embedding distance 0.4 | The same face seen more than 0.4 apart becomes a second face next to the kept confirmed one (nothing is lost); identical twins closer than 0.4 can still be paired | Tune the gate on real Apple Vision vs InsightFace data |
 | Trash is tracked by path | A trashed file that is renamed or moved on disk comes back as a new asset | Use the stored SHA-256 to recognise it |
-| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the brain (phase 2) |
+| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the server (phase 2) |
 | Assets marked missing have no listing or purge UI | They wait, with their human data, until the file returns or someone purges them by id | A "missing files" view |
 | Two rows whose paths differ only in Unicode form are left as they are by the migration | The NFD one is marked missing on the next scan | Merge them by hand; the migration logs the count |
 
@@ -180,7 +180,7 @@ Each phase updates `docs/cursor-api.md` and `docs/cursor-cli.md` for the endpoin
 
 ### Requirements
 
-Every phase follows the requirements in `docs/adr/000-template.md`: tests for every endpoint and repository method, the full suite passing, the web build clean, docs and this table updated, and read-ahead into later phases. Each phase ends at a gate that can be checked on the brain, and no phase needs anything from a later one.
+Every phase follows the requirements in `docs/adr/000-template.md`: tests for every endpoint and repository method, the full suite passing, the web build clean, docs and this table updated, and read-ahead into later phases. Each phase ends at a gate that can be checked on prod, and no phase needs anything from a later one.
 
 ### Phase 0 — Groundwork and safety
 
@@ -214,21 +214,21 @@ A project becomes a bin in Resolve, Premiere or Final Cut, with media online.
 
 **Where it stands:** built, and the full suite passes with every marker. Tests show a project over 1,000 clips exporting whole and an archived project exporting. Smart projects are gone since (Robert, Oct 9: projects are explicit): a search is kept as a saved search, or saved as a project of the clips it finds then. Both export files are read back by OpenTimelineIO's FCP7 and FCPXML adapters with every clip finding its media, but the real imports into Resolve, Premiere and Final Cut still need a check on a Mac. The macOS and iOS apps aren't renamed (they can't be built here); since Oct 9 the API is what it should be, without `/v1/collections` or `collection_id` for them. Browsing the result on a phone led to fixes for phone layouts and to project trash (principles 9 and 10): delete, trash, restore or delete forever, with the API requiring the user's say before surprising deletes and restores.
 
-### Phase 2 — The brain
+### Phase 2 — One server processes everything
 
-The brain reads storage, schedules all rendering and enrichment, and is where Lumiverb lives.
+The server reads storage, schedules all rendering and enrichment, and is where Lumiverb lives.
 
 **Deliverables:**
-- Install the production stack on the brain (`scripts/deploy-api.sh`, `scripts/deploy-web.sh`), reachable over the LAN and Tailscale
-- Mount storage read-only; map each library's root to that mount in the brain's own config, not the database
+- Install the production stack on `media` (`scripts/deploy-api.sh`, `scripts/deploy-web.sh`), reachable over the LAN and Tailscale
+- Mount storage read-only; map each library's root to that mount in the server's own config, not the database
 - Render full-length analysis proxies at the Rendered milestone; transcription, scenes and vision read these instead of originals
-- Run scan and enrich as a service on the brain (since phase 4, the scheduler); the storage machine reports file changes it sees
+- Run scan and enrich as a service on the server (since phase 4, the scheduler); the storage machine reports file changes it sees
 - Retire the macOS app's built-in AI steps
 - Ingest the whole library fresh
 
 **Done when:** footage copied to storage becomes searchable and transcribed without starting anything on an edit station, and enrichment continues from proxies while storage sleeps.
 
-**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/brain-setup.md` has the install, which needs sudo, and the Swift changes for the macOS app, which can't be built here. The brain is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
+**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/linux-server.md` has the install, which needs sudo, and the Swift changes for the macOS app, which can't be built here. Prod is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
 
 ### Phase 3 — Lineage and reconciliation
 
@@ -258,13 +258,13 @@ Today's workers become producers that declare what they need.
 
 **Done when:** a new producer, such as audio waveform thumbnails, ships as one folder with no pipeline edits, its settings page renders from the class, and a producer whose prerequisites can never exist shows as disabled with the reason.
 
-**Orchestration (decided Oct 9):** the server runs all processing. A scheduler service on the brain (`src/server/scheduler/`, `lumiverb-scheduler.service`), beside the API and sharing its database, keeps one ranked queue of every job in every library and account: tiers first (1 see it: scans, previews, probes; 2 prepare: analysis copies; 3 find it: the AI and the rest that makes clips findable; 4 redo stale work), then oldest first. Each resource is a pool with so many slots (probes, renders, CLIP, the face process, scenes, and each account's AI machines); a free slot takes the best job that can use it, so a lower tier fills what a higher one leaves idle. It replaces the worker: distribution comes from storage and AI machines, not from workers on other machines. Producers become plug-ins it runs, with a public interface so outside producers can be added.
+**Orchestration (decided Oct 9):** the server runs all processing. A scheduler service on the server (`src/server/scheduler/`, `lumiverb-scheduler.service`), beside the API and sharing its database, keeps one ranked queue of every job in every library and account: tiers first (1 see it: scans, previews, probes; 2 prepare: analysis copies; 3 find it: the AI and the rest that makes clips findable; 4 redo stale work), then oldest first. Each resource is a pool with so many slots (probes, renders, CLIP, the face process, scenes, and each account's AI machines); a free slot takes the best job that can use it, so a lower tier fills what a higher one leaves idle. It replaces the worker: distribution comes from storage and AI machines, not from workers on other machines. Producers become plug-ins it runs, with a public interface so outside producers can be added.
 
-**Where it stands:** the scheduler is built (piece 1): the queue straight from each account's database (the reconciler's due clips), the dispatcher, scans from reported changes and a daily full scan (moved from the worker), and a runner per kind that reuses the worker's per-clip code and saves through the API's routes, with a key the scheduler makes itself. The update script replaces `lumiverb-worker` with it. Redo on change is built (piece 2): stale work is the scheduler's tier 4, a new model in Settings → AI asks once with the count and is the approval, admins can stop and resume a producer's redo, and the upgrade step (approvals, narrowing, the edits question, correction history) is gone. Failures you can see is built (piece 3): a clip is given up after 10 tries, and Processing and the CLI list failing clips with their errors and can try them again. Sharing the brain's GPU and the queue on screen are built (piece 4): an AI machine marked as sharing the GPU takes fewer requests while video is decoded there, and Processing shows what's running and what's next. Pausing is built (Robert, Oct 9): each processing action has a pause switch (Scans, Upkeep, each producer), Pause all and Resume all flip every one, and the account's state is derived from them (green running, yellow partly paused, red paused). Only an explicit switch lifts a pause. Next: the producer plug-ins.
+**Where it stands:** the scheduler is built (piece 1): the queue straight from each account's database (the reconciler's due clips), the dispatcher, scans from reported changes and a daily full scan (moved from the worker), and a runner per kind that reuses the worker's per-clip code and saves through the API's routes, with a key the scheduler makes itself. The update script replaces `lumiverb-worker` with it. Redo on change is built (piece 2): stale work is the scheduler's tier 4, a new model in Settings → AI asks once with the count and is the approval, admins can stop and resume a producer's redo, and the upgrade step (approvals, narrowing, the edits question, correction history) is gone. Failures you can see is built (piece 3): a clip is given up after 10 tries, and Processing and the CLI list failing clips with their errors and can try them again. Sharing the server's GPU and the queue on screen are built (piece 4): an AI machine marked as sharing the GPU takes fewer requests while video is decoded there, and Processing shows what's running and what's next. Pausing is built (Robert, Oct 9): each processing action has a pause switch (Scans, Upkeep, each producer), Pause all and Resume all flip every one, and the account's state is derived from them (green running, yellow partly paused, red paused). Only an explicit switch lifts a pause. Next: the producer plug-ins.
 
 ## Alternatives Considered
 
-**Keep processing on the machine that holds the files (ADR-014's model).** It needs that machine awake, gives faces, CLIP and transcripts two producers with different runtimes or models, and ties embeddings to platform-specific models. Rejected in favor of a brain that schedules everything and endpoints that can still run on a Mac.
+**Keep processing on the machine that holds the files (ADR-014's model).** It needs that machine awake, gives faces, CLIP and transcripts two producers with different runtimes or models, and ties embeddings to platform-specific models. Rejected in favor of a server that schedules everything and endpoints that can still run on a Mac.
 
 **Keep explicit runs (`lumiverb enrich`, enqueue, retry-failed).** Missing-only checks have no notion of stale output after a model change, and failures, retries and empty outputs each need their own handling. Rejected in favor of reconciliation.
 
@@ -282,7 +282,7 @@ Proposed answers; each needs a decision before its phase.
 
 | Question | Proposed answer | Phase |
 |---|---|---|
-| When does the old DAM (ResourceSpace) switch off? | After phase 2, once find, projects and send work on the brain against the whole library | 2 |
+| When does the old DAM (ResourceSpace) switch off? | After phase 2, once find, projects and send work on prod against the whole library | 2 |
 | Storage unreachable? | Keep enriching from analysis proxies; only discovery, probing and rendering wait | 2 |
 | Re-sending a project? | A new bin each time, since the export is a file | 1 |
 | Can a project span libraries? | Yes; the code already allows it | 1 |

@@ -1,5 +1,5 @@
 """lumiverb-server run (src/server/lifecycle/cli.py): a Mac's service. The
-children it runs match the brain's systemd units; migrations wait for
+children it runs match a Linux install's systemd units; migrations wait for
 Postgres; and end to end, on real Postgres, it migrates, serves the API,
 runs the scheduler, and stops both cleanly on SIGTERM."""
 
@@ -27,7 +27,7 @@ from tests.test_server_postgres import NO_POSTGRES, free_port, postgres_bin
 
 
 @pytest.mark.fast
-def test_the_children_are_the_brains_units(tmp_path):
+def test_the_children_are_linux_s_units(tmp_path):
     env = {"DATA_DIR": str(tmp_path), "API_PORT": "8100", "API_LISTEN_HOST": "0.0.0.0", "ADMIN_KEY": "k"}
     api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
 

@@ -10,7 +10,7 @@ const {
     rootsOnDisk,
 } = require('../plugin/projects');
 
-// The brain's roots say /Volumes/media-01; the disk is mounted as
+// The server's roots say /Volumes/media-01; the disk is mounted as
 // /Volumes/MEDIA-01 (what Resolve stores, and what realpath answers).
 const disk = (p) => p.replace('/Volumes/media-01', '/Volumes/MEDIA-01');
 const ROOTS = [['lib1', '/Volumes/media-01/Media'], ['lib2', '/Volumes/media-01/Media/Clients']];

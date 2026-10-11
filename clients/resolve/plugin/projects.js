@@ -10,7 +10,7 @@ const { currentProjectName, projectFilePaths } = require('./resolve');
 // Lookups in flight at once.
 const CONCURRENCY = 6;
 
-// Library roots as the disk spells them (the brain's `/Volumes/media-01` is
+// Library roots as the disk spells them (the server's `/Volumes/media-01` is
 // mounted as `/Volumes/MEDIA-01`), longest first so the deepest root wins,
 // as the server's change reports match.
 function rootsOnDisk(roots, realpath) {

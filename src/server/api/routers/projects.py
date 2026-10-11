@@ -767,7 +767,7 @@ def export_project(
     """Export a project as a bin of master clips for an editor.
 
     Clips point at the originals as the libraries know them (each library's
-    root plus rel_path; Robert, Oct 9: the brain's paths, relinked in the
+    root plus rel_path; Robert, Oct 9: the server's paths, relinked in the
     editor when they differ). Videos and photos: a photo is a still of
     STILL_SEC (Robert, Oct 9). Headers count what needs the user's
     attention: X-Lumiverb-Stills (photos, as stills),

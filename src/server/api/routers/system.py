@@ -234,7 +234,7 @@ def _disk(now: datetime) -> h.Row:
 
 class Network(BaseModel):
     # This install's own nginx (lumiverb-server run's): where it listens is
-    # changed here. An nginx set up otherwise (the brain's) isn't.
+    # changed here. An nginx set up otherwise (a Linux install's) isn't.
     available: bool
     other_devices: bool  # may use it, or this machine only
     addresses: list[str]  # where other devices reach it

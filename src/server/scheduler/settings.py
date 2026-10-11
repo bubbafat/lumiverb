@@ -1,6 +1,6 @@
 """The scheduler's own settings: this machine's way of processing
 (src/processing/machine.py) and where the API is, from the environment
-(on the brain, /etc/lumiverb/env through its systemd unit; in development
+(on Linux, /etc/lumiverb/env through its systemd unit; in development
 .env and .env.local). Never the CLI's config.
 
     LUMIVERB_ROOT_MAP              library roots as the server stores them -> here, JSON:

@@ -15,7 +15,7 @@ bash clients/resolve/install.sh
 ```
 
 Restart Resolve, then open **Workspace → Workflow Integrations → Lumiverb**.
-Sign in with your Lumiverb server (the brain is `http://media`), email and
+Sign in with your Lumiverb server (prod is `http://media`), email and
 password.
 
 ## Use
@@ -60,7 +60,7 @@ password.
   (`/Volumes/media-01/Media`), so a clip's original is the root plus its
   `rel_path`. A result whose file isn't there says "Not on this Mac".
 - **Paths as the disk spells them** (`plugin/paths.js`). A root can be
-  spelled differently from the mount it names: the brain's library says
+  spelled differently from the mount it names: the server's library says
   `/Volumes/media-01`, the disk is mounted as `/Volumes/MEDIA-01`, and the Mac
   treats them as one folder. Resolve stores the mount's spelling. So paths are
   compared by the file's real path (`fs.realpathSync.native`; Node's plain

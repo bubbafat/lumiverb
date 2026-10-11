@@ -1,7 +1,7 @@
 """Analysis proxies on the server (ADR-016 phase 2).
 
 A full-length, low-resolution copy of each video, with audio, kept on the
-brain. Transcription, scene detection and scene vision read it instead of
+server. Transcription, scene detection and scene vision read it instead of
 the original, so enrichment continues while the storage holding the
 originals sleeps. They are not edit proxies.
 
@@ -311,7 +311,7 @@ def test_cleanup_keeps_proxies_and_removes_orphans(env) -> None:
 
 @pytest.mark.slow
 def test_library_health_counts_videos_waiting_for_a_proxy(env) -> None:
-    # The libraries page shows a library as pending until the brain renders.
+    # The libraries page shows a library as pending until the server renders.
     client, headers, library_id, *_ = env
 
     def pending() -> int:

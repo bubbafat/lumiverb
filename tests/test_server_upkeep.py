@@ -1,6 +1,6 @@
-"""Upkeep on a Mac (src/server/lifecycle/upkeep.py): what the brain's systemd
-timers post, on their schedule, with a cleanup missed while asleep run on
-waking, and nothing posted before the API is healthy."""
+"""Upkeep on a Mac (src/server/lifecycle/upkeep.py): what a Linux install's
+systemd timers post, on their schedule, with a cleanup missed while asleep
+run on waking, and nothing posted before the API is healthy."""
 
 from __future__ import annotations
 

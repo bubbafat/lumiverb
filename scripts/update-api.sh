@@ -355,7 +355,7 @@ ok "Upkeep timers installed and started"
 step "Giving the GPU back to containers"
 # systemd reloading its units (daemon-reload, above) takes the GPU from
 # running containers that use it (nvidia-container-toolkit with systemd's
-# cgroups): the brain's Ollama then runs its model on the CPU, with no error,
+# cgroups): prod's Ollama then runs its model on the CPU, with no error,
 # until it's restarted (Oct 9). One that can't say (no nvidia-smi) is left alone.
 if command -v docker >/dev/null 2>&1; then
   for c in $(docker ps --format '{{.Names}}'); do

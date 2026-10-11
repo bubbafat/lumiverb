@@ -3,8 +3,8 @@ Quickwit's config and nginx's, each written once. Homebrew runs it on every
 upgrade, so what's there is kept, and what it makes agrees with the env
 file. The env file points at Lumiverb's own PostgreSQL and names what
 `lumiverb-server run` starts. Quickwit's config and nginx's server block are
-the brain's scripts' own, to the byte, and the env file names every setting
-the brain's does."""
+Linux's scripts' own, to the byte, and the env file names every setting
+Linux's does."""
 
 from __future__ import annotations
 
@@ -122,7 +122,7 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     assert said == [f"✓ {paths['env']}", f"✓ {paths['quickwit']}", f"✓ {paths['nginx']}"]
 
 
-def test_nginx_s_config_is_the_brain_s_server_block_inside_it():
+def test_nginx_s_config_is_linux_s_server_block_inside_it():
     site = nginx_site(listen=("listen 127.0.0.1:6464 default_server;",), server_name="_", root=Path("/web"),
                       upstream="http://127.0.0.1:6465")
     conf = nginx_conf(site)
@@ -208,30 +208,30 @@ def _heredoc(script: Path, opener: str, variables: dict[str, str], *, also: tupl
 
 
 def test_the_nginx_site_is_deploy_web_s_to_the_byte():
-    brain = _heredoc(SCRIPTS / "deploy-web.sh", "cat > /etc/nginx/sites-available/lumiverb <<NGINX",
+    linux = _heredoc(SCRIPTS / "deploy-web.sh", "cat > /etc/nginx/sites-available/lumiverb <<NGINX",
                      {"LISTEN": "listen 6464 default_server;", "DOMAIN": "_", "APP_DIR": "/opt/lumiverb",
                       "API_UPSTREAM": "http://127.0.0.1:6465"}, also=("CSP=",))
     assert nginx_site(listen=("listen 6464 default_server;",), server_name="_",
-                      root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465") == brain
+                      root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465") == linux
 
 
 def test_quickwit_s_config_is_deploy_api_s_to_the_byte():
-    brain = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF',
+    linux = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF',
                      {"QW_PORT": "6466", "QW_GRPC_PORT": "6467", "DATA_DIR": "/srv/lumiverb"})
-    assert quickwit_yaml(Path("/srv/lumiverb"), 6466) == brain
+    assert quickwit_yaml(Path("/srv/lumiverb"), 6466) == linux
 
 
-def test_the_env_file_names_every_setting_the_brain_s_does(tmp_path):
-    brain = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "$ENV_FILE" <<ENVEOF', {})
+def test_the_env_file_names_every_setting_linux_s_does(tmp_path):
+    linux = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "$ENV_FILE" <<ENVEOF', {})
     keys = lambda text: {m.group(1) for m in re.finditer(r"^#? ?([A-Z_]+)=", text, re.MULTILINE)}  # noqa: E731
     # Its Postgres cluster (a Mac's port is in the database URL), checkout and ufw.
     linux_only = {"PG_PORT", "PG_VERSION", "BRANCH", "NO_FIREWALL"}
-    # What run starts: the brain's systemd units name theirs.
+    # What run starts: a Linux install's systemd units name theirs.
     mac_only = {"WEB_PORT", "PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG",
-                "LUMIVERB_ROOT_MAP",  # the brain's map is scheduler-env.py's, after this file
+                "LUMIVERB_ROOT_MAP",  # a Linux install's map is scheduler-env.py's, after this file
                 "LUMIVERB_RESET_ON_THIS_MACHINE"}  # never a server's: anything on it could reset any account
     ours = keys(_install(tmp_path)["env"].read_text())
-    assert ours - mac_only == keys(brain) - linux_only
+    assert ours - mac_only == keys(linux) - linux_only
 
 
 def test_the_command_writes_them_with_env_before_or_after(tmp_path, capsys):

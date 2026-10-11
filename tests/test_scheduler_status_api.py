@@ -43,13 +43,13 @@ def test_the_queue_says_whats_running_and_whether_the_scheduler_is(env):
 
 
 def test_a_machine_can_share_the_gpu_and_the_built_in_one_always_does(env):
-    from tests.test_ai_machines import BRAIN, _machines
+    from tests.test_ai_machines import GAMING_PC, _machines
 
     client, headers, *_ = env
-    fake, _ = _machines({BRAIN: ("qwen3-vl:8b-instruct",)})
+    fake, _ = _machines({GAMING_PC: ("qwen3-vl:8b-instruct",)})
     try:
         with fake:
-            r = client.post("/v1/ai/machines", json={"name": "GPU box", "api_url": BRAIN, "jobs": ["vision"],
+            r = client.post("/v1/ai/machines", json={"name": "GPU box", "api_url": GAMING_PC, "jobs": ["vision"],
                                                      "at_once": 2, "shares_gpu": True}, headers=headers)
             assert r.status_code == 201, r.text
             machines = {m["name"]: m for m in r.json()["machines"]}

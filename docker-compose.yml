@@ -21,7 +21,7 @@ services:
     volumes:
       # Postgres 18 images keep their data under /var/lib/postgresql/18/docker.
       # A pg16 stack's volume (postgres_data) is left alone; to bring its data
-      # over, see "Moving the dev database to Postgres 18" in docs/brain-setup.md.
+      # over, see "Moving the dev database to Postgres 18" in docs/linux-server.md.
       - postgres18_data:/var/lib/postgresql
       - ./scripts/docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./scripts/docker/02-pg-hba.sh:/docker-entrypoint-initdb.d/02-pg-hba.sh:ro

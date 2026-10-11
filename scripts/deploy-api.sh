@@ -8,12 +8,12 @@
 # Usage:
 #   bash scripts/deploy-api.sh --domain api.example.com
 #
-# The brain (ADR-016 phase 2), a LAN/Tailscale box that shares its ports
+# Prod (ADR-016 phase 2), a LAN/Tailscale box that shares its ports
 # with other services and runs the scheduler (all processing):
 #   sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 \
 #     --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall \
 #     --data-dir /mnt/ssd2/lumiverb --worker \
-#     --root-map /Volumes/media-01=/mnt/media-01 --branch feat/brain
+#     --root-map /Volumes/media-01=/mnt/media-01
 #
 # Idempotent: safe to run again to update an existing install. Ports, the
 # app host, the data dir, the branch, the Postgres version and --no-firewall
@@ -208,7 +208,7 @@ fi
 
 # Create the cluster ourselves, on PG_PORT: left to itself the package
 # creates one on 5432, which may belong to something else (DaVinci
-# Resolve's database on the brain).
+# Resolve's database on prod).
 if [[ ! -d "/etc/postgresql/${PG_VERSION}/main" ]]; then
   mkdir -p /etc/postgresql-common/createcluster.d
   echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.d/lumiverb.conf

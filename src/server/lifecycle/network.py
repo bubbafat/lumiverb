@@ -6,7 +6,7 @@ The choice is an admin's (Settings › Network: routers/system.py), kept in
 DATA_DIR/network.json. `lumiverb-server run` owns nginx, so it applies it:
 it writes the listen lines nginx's config includes (DATA_DIR/nginx/
 listen.conf), at start and whenever the choice changes, and restarts nginx.
-An nginx set up some other way (the brain's, by deploy-web.sh) isn't this
+An nginx set up some other way (a Linux install's, by deploy-web.sh) isn't this
 install's to change: it's "not available" here.
 """
 

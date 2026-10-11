@@ -92,7 +92,7 @@ def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> s
     runs = "".join(f"{key}={value}\n" for key, value in choices.runs().items())
     roots = (f"""
 # Library folders: the scheduler reads each one where it is (this machine has
-# the files). The brain maps another machine's paths instead.
+# the files). A Linux install maps another machine's paths instead.
 LUMIVERB_ROOT_MAP='{LOCAL_ROOT_MAP}'
 """ if choices.local_roots else "")
     reset = ("""

@@ -23,11 +23,11 @@ from src.shared.vision_endpoint import VisionEndpointError
 pytestmark = pytest.mark.fast
 
 QWEN = "qwen3-vl:8b"
-BRAIN = {"machine_id": "aim_brain", "name": "Brain", "api_url": "http://brain/v1", "api_key": "sk-b", "at_once": 2}
+GAMING_PC = {"machine_id": "aim_gaming_pc", "name": "Gaming PC", "api_url": "http://gaming-pc/v1", "api_key": "sk-b", "at_once": 2}
 STUDIO = {"machine_id": "aim_studio", "name": "Studio", "api_url": "http://studio/v1", "api_key": "", "at_once": 4}
 
 
-def _client(machines=(BRAIN, STUDIO), model=QWEN):
+def _client(machines=(GAMING_PC, STUDIO), model=QWEN):
     client = MagicMock()
     client.get.return_value.json.return_value = {"job": "vision", "model": model, "machines": list(machines)}
     return client
@@ -54,20 +54,20 @@ def _statuses(client) -> dict[str, list[dict]]:
 
 def test_each_machine_is_checked_and_reported_before_work():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": VisionEndpointError("Couldn't reach it.")}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": VisionEndpointError("Couldn't reach it.")}):
         pool = MachinePool(client, "vision")
         assert pool.check() is True
     client.get.assert_called_with("/v1/ai/jobs/vision")
-    assert [m.name for m in pool.machines if m.online] == ["Brain"]
+    assert [m.name for m in pool.machines if m.online] == ["Gaming PC"]
     assert pool.capacity() == 2
     statuses = _statuses(client)
-    assert statuses["aim_brain"] == [{"online": True, "error": "", "models": [QWEN]}]
+    assert statuses["aim_gaming_pc"] == [{"online": True, "error": "", "models": [QWEN]}]
     assert statuses["aim_studio"] == [{"online": False, "error": "Couldn't reach it.", "models": []}]
 
 
 def test_a_machine_without_the_model_is_skipped_and_says_why():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": ("llava:13b",)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": ("llava:13b",)}):
         pool = MachinePool(client, "vision")
         pool.check()
     studio = _statuses(client)["aim_studio"][-1]
@@ -76,7 +76,7 @@ def test_a_machine_without_the_model_is_skipped_and_says_why():
 
 
 @pytest.mark.parametrize(("machines", "model", "says"), [
-    ((BRAIN,), "", "No model is chosen for descriptions & text"),
+    ((GAMING_PC,), "", "No model is chosen for descriptions & text"),
     ((), QWEN, "No machine does descriptions & text"),
 ])
 def test_nothing_to_work_with_says_what_to_do_in_settings(machines, model, says):
@@ -88,22 +88,22 @@ def test_nothing_to_work_with_says_what_to_do_in_settings(machines, model, says)
 
 def test_none_online_says_why_for_each():
     client = _client()
-    with _offering({"http://brain/v1": VisionEndpointError("no answer"), "http://studio/v1": VisionEndpointError("refused")}):
+    with _offering({"http://gaming-pc/v1": VisionEndpointError("no answer"), "http://studio/v1": VisionEndpointError("refused")}):
         pool = MachinePool(client, "vision")
         assert pool.check() is False
-    assert "Brain: no answer" in pool.error and "Studio: refused" in pool.error
+    assert "Gaming PC: no answer" in pool.error and "Studio: refused" in pool.error
 
 
 def test_requests_go_to_online_machines_each_up_to_its_limit_least_busy_first():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     assert pool.capacity() == 6
     taken = [pool.acquire() for _ in range(6)]
-    assert sorted(m.name for m in taken).count("Brain") == 2
+    assert sorted(m.name for m in taken).count("Gaming PC") == 2
     assert sorted(m.name for m in taken).count("Studio") == 4
-    assert taken[0].name == "Brain"  # both idle: the first; then whichever is least busy for its size
+    assert taken[0].name == "Gaming PC"  # both idle: the first; then whichever is least busy for its size
     # Full: the next waits for a slot.
     got = []
     t = threading.Thread(target=lambda: got.append(pool.acquire()))
@@ -112,13 +112,13 @@ def test_requests_go_to_online_machines_each_up_to_its_limit_least_busy_first():
     assert got == []
     pool.release(taken[0])
     t.join(2)
-    assert got and got[0].name == "Brain"
+    assert got and got[0].name == "Gaming PC"
 
 
 def test_a_machine_that_fails_is_skipped_and_checked_again_a_minute_later():
     client = _client()
     clock = {"now": 0.0}
-    answers = {"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}
+    answers = {"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}
     with _offering(answers) as asked:
         pool = MachinePool(client, "vision", clock=lambda: clock["now"])
         pool.check()
@@ -138,14 +138,14 @@ def test_a_machine_that_fails_is_skipped_and_checked_again_a_minute_later():
 
 def test_the_pooled_provider_moves_an_item_to_another_machine_when_one_fails():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     providers = {}
 
     def make(machine):
         p = MagicMock()
-        if machine.name == "Brain":
+        if machine.name == "Gaming PC":
             p.describe.side_effect = CaptionError("500 out of memory", endpoint_fault=True)
         else:
             p.describe.return_value = {"description": "a cat", "tags": ["cat"]}
@@ -154,17 +154,17 @@ def test_the_pooled_provider_moves_an_item_to_another_machine_when_one_fails():
 
     provider = PooledCaptionProvider(pool, make)
     assert provider.describe("a.jpg") == {"description": "a cat", "tags": ["cat"]}
-    assert providers["Brain"].describe.call_count == 1
+    assert providers["Gaming PC"].describe.call_count == 1
     assert [m.name for m in pool.machines if m.online] == ["Studio"]
     assert all(m.busy == 0 for m in pool.machines)
     # The next goes straight to the machine that works.
     provider.describe("b.jpg")
-    assert providers["Brain"].describe.call_count == 1
+    assert providers["Gaming PC"].describe.call_count == 1
 
 
 def test_an_items_own_failure_isnt_moved_or_held_against_the_machine():
-    client = _client((BRAIN,))
-    with _offering({"http://brain/v1": (QWEN,)}):
+    client = _client((GAMING_PC,))
+    with _offering({"http://gaming-pc/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     bad = MagicMock()
@@ -177,8 +177,8 @@ def test_an_items_own_failure_isnt_moved_or_held_against_the_machine():
 
 
 def test_with_no_machine_left_its_the_endpoints_fault():
-    client = _client((BRAIN,))
-    with _offering({"http://brain/v1": (QWEN,)}):
+    client = _client((GAMING_PC,))
+    with _offering({"http://gaming-pc/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     failing = MagicMock()
@@ -186,13 +186,13 @@ def test_with_no_machine_left_its_the_endpoints_fault():
     provider = PooledCaptionProvider(pool, lambda m: failing)
     with pytest.raises(CaptionError) as e:
         provider.describe("a.jpg")
-    assert e.value.endpoint_fault is True and "Brain" in str(e.value)
+    assert e.value.endpoint_fault is True and "Gaming PC" in str(e.value)
     assert pool.down
 
 
 def test_one_provider_per_machine():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     made = []
@@ -214,7 +214,7 @@ def test_an_item_tries_each_machine_once_then_its_the_endpoints_fault():
     back online after their recheck: the item must not go round forever."""
     client = _client()
     clock = {"now": 0.0}
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision", clock=lambda: clock["now"])
         pool.check()
         calls = []
@@ -233,19 +233,19 @@ def test_an_item_tries_each_machine_once_then_its_the_endpoints_fault():
         with pytest.raises(CaptionError) as e:
             PooledCaptionProvider(pool, make).describe("a.jpg")
     assert e.value.endpoint_fault is True
-    assert sorted(calls) == ["Brain", "Studio"]
+    assert sorted(calls) == ["Gaming PC", "Studio"]
 
 
 def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
     """One thread checks the only machine again; another wanting a slot waits
     for that check instead of declaring the job down."""
-    client = _client((BRAIN,))
+    client = _client((GAMING_PC,))
     clock = {"now": 0.0}
-    with _offering({"http://brain/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,)}):
         pool = MachinePool(client, "vision", clock=lambda: clock["now"])
         pool.check()
-    brain = pool.machines[0]
-    pool.fault(brain, "timed out")
+    gaming_pc = pool.machines[0]
+    pool.fault(gaming_pc, "timed out")
     clock["now"] = 61.0
     gate = threading.Event()
 
@@ -258,7 +258,7 @@ def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
         first = threading.Thread(target=lambda: got.append(pool.acquire()))
         first.start()
         for _ in range(50):
-            if brain.checking:
+            if gaming_pc.checking:
                 break
             time.sleep(0.01)
         second = threading.Thread(target=lambda: got.append(pool.acquire()))
@@ -268,12 +268,12 @@ def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
         gate.set()
         first.join(5)
         second.join(5)
-    assert [m.name if m else None for m in got] == ["Brain", "Brain"]
+    assert [m.name if m else None for m in got] == ["Gaming PC", "Gaming PC"]
 
 
 def test_a_failed_item_says_which_machine_served_it():
-    client = _client((BRAIN,))
-    with _offering({"http://brain/v1": (QWEN,)}):
+    client = _client((GAMING_PC,))
+    with _offering({"http://gaming-pc/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     bad = MagicMock()
@@ -416,22 +416,22 @@ def test_a_clip_one_server_refuses_goes_to_the_others_first():
 
 def test_checking_again_keeps_what_requests_in_flight_hold():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
-        held = [pool.acquire() for _ in range(6)]  # every slot: 2 on the brain, 4 on the studio
+        held = [pool.acquire() for _ in range(6)]  # every slot: 2 on the gaming PC, 4 on the studio
         assert all(held)
         pool.check()
     # Still full: a new request waits rather than overloading a machine.
-    assert {m.name: m.busy for m in pool.machines} == {"Brain": 2, "Studio": 4}
+    assert {m.name: m.busy for m in pool.machines} == {"Gaming PC": 2, "Studio": 4}
     for m in held:
         pool.release(m)
-    assert {m.name: m.busy for m in pool.machines} == {"Brain": 0, "Studio": 0}
+    assert {m.name: m.busy for m in pool.machines} == {"Gaming PC": 0, "Studio": 0}
 
 
 def test_a_machine_whose_address_changed_is_checked_again_and_gets_a_new_provider():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,), "http://brain2/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,), "http://gaming-pc-2/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
         made = []
@@ -445,21 +445,21 @@ def test_a_machine_whose_address_changed_is_checked_again_and_gets_a_new_provide
         provider = PooledCaptionProvider(pool, make)
         provider.describe("a.jpg")
         client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [
-            {**BRAIN, "api_url": "http://brain2/v1"}]}
+            {**GAMING_PC, "api_url": "http://gaming-pc-2/v1"}]}
         pool.check()
-        assert [m.api_url for m in pool.machines] == ["http://brain2/v1"] and pool.machines[0].online
+        assert [m.api_url for m in pool.machines] == ["http://gaming-pc-2/v1"] and pool.machines[0].online
         provider.describe("b.jpg")
-    assert made[-1] == "http://brain2/v1"
+    assert made[-1] == "http://gaming-pc-2/v1"
 
 
 def test_a_machine_no_longer_listed_is_dropped():
     client = _client()
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
-        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [BRAIN]}
+        client.get.return_value.json.return_value = {"job": "vision", "model": QWEN, "machines": [GAMING_PC]}
         pool.check()
-    assert [m.name for m in pool.machines] == ["Brain"] and pool.capacity() == 2
+    assert [m.name for m in pool.machines] == ["Gaming PC"] and pool.capacity() == 2
 
 
 def test_a_new_model_sends_nothing_to_a_machine_until_its_checked_with_it():
@@ -467,18 +467,18 @@ def test_a_new_model_sends_nothing_to_a_machine_until_its_checked_with_it():
     the new model's while the machine still served the old one."""
     llava = "llava:13b"
     client = _client()
-    with _offering({"http://brain/v1": (QWEN, llava), "http://studio/v1": (QWEN,)}) as listed:
+    with _offering({"http://gaming-pc/v1": (QWEN, llava), "http://studio/v1": (QWEN,)}) as listed:
         pool = MachinePool(client, "vision")
         pool.check()
         assert all(m.online and m.serves == QWEN for m in pool.machines)
-        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN, STUDIO]}
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [GAMING_PC, STUDIO]}
         pool.load()  # the recheck hasn't run yet
         assert pool.model == llava
         assert not any(m.online or m.serves for m in pool.machines)
         listed.reset_mock()
         machine = pool.acquire()  # checks them with the new model first
         assert listed.call_count == 2
-        assert machine is not None and machine.name == "Brain" and machine.serves == llava
+        assert machine is not None and machine.name == "Gaming PC" and machine.serves == llava
         pool.release(machine)
     studio = next(m for m in pool.machines if m.name == "Studio")
     assert not studio.online and llava in studio.error
@@ -489,8 +489,8 @@ def test_work_started_with_one_model_isnt_served_by_the_next():
     machine checked with the new one, was answered by the new model and
     saved as the old one's. It waits instead, uncharged."""
     llava = "llava:13b"
-    client = _client(machines=(BRAIN,))
-    with _offering({"http://brain/v1": (QWEN, llava)}):
+    client = _client(machines=(GAMING_PC,))
+    with _offering({"http://gaming-pc/v1": (QWEN, llava)}):
         pool = MachinePool(client, "vision")
         pool.check()
         made = []
@@ -502,7 +502,7 @@ def test_work_started_with_one_model_isnt_served_by_the_next():
             return p
 
         provider = PooledCaptionProvider(pool, make)  # made for qwen
-        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [GAMING_PC]}
         pool.check()
         with pytest.raises(CaptionError) as raised:
             provider.describe("a.jpg")
@@ -515,20 +515,20 @@ def test_a_check_for_a_model_no_longer_chosen_is_left_out():
     """Review round 3: a check that started before a model change mustn't
     mark the machine as serving the new model with the old one's answer."""
     llava = "llava:13b"
-    client = _client(machines=(BRAIN,))
+    client = _client(machines=(GAMING_PC,))
     pool = MachinePool(client, "vision")
 
     def list_models(url, key=None, **_):
         # The model changes while the machine is being asked.
-        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [BRAIN]}
+        client.get.return_value.json.return_value = {"job": "vision", "model": llava, "machines": [GAMING_PC]}
         pool.load()
         return [QWEN]
 
     with patch("src.processing.ai_pool.list_models", side_effect=list_models):
         pool.load()
         pool._check(pool.machines[0])
-    brain = pool.machines[0]
-    assert not brain.online and brain.serves == "" and brain.checked_at is None  # checked again, with llava
+    gaming_pc = pool.machines[0]
+    assert not gaming_pc.online and gaming_pc.serves == "" and gaming_pc.checked_at is None  # checked again, with llava
 
 
 # ---------------------------------------------------------------------------
@@ -537,17 +537,17 @@ def test_a_check_for_a_model_no_longer_chosen_is_left_out():
 
 
 def test_a_machine_sharing_the_gpu_takes_fewer_requests_while_video_is_decoded():
-    client = _client(machines=({**BRAIN, "shares_gpu": True}, STUDIO))
-    with _offering({"http://brain/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
+    client = _client(machines=({**GAMING_PC, "shares_gpu": True}, STUDIO))
+    with _offering({"http://gaming-pc/v1": (QWEN,), "http://studio/v1": (QWEN,)}):
         pool = MachinePool(client, "vision")
         pool.check()
     assert pool.capacity() == 6
     pool.set_gpu_hold(1)
-    assert pool.capacity() == 5  # the brain takes one fewer
+    assert pool.capacity() == 5  # the gaming PC takes one fewer
     held = [pool.acquire() for _ in range(5)]
-    assert sorted(m.name for m in held).count("Brain") == 1
+    assert sorted(m.name for m in held).count("Gaming PC") == 1
     pool.set_gpu_hold(5)
-    assert pool.capacity() == 4  # down to none on the brain; the studio keeps going
+    assert pool.capacity() == 4  # down to none on the gaming PC; the studio keeps going
     for m in held:
         pool.release(m)
     pool.set_gpu_hold(0)

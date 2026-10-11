@@ -19,7 +19,7 @@ def _env(tmp_path: Path, text: str) -> dict[str, str]:
     return read_env_file(path)
 
 
-def test_the_brains_env_file_reads_as_systemd_reads_it(tmp_path):
+def test_linux_s_env_file_reads_as_systemd_reads_it(tmp_path):
     # As deploy-api.sh writes it: plain values, a URL with = in it, and the
     # root map as JSON in single quotes.
     env = _env(tmp_path, "\n".join([

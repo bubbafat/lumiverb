@@ -444,7 +444,7 @@ def test_where_every_folder_is_read_a_library_s_folder_is_chosen_on_the_mac_only
 @pytest.mark.slow
 def test_where_roots_are_mapped_the_map_bounds_them_from_anywhere(
         libraries_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
-    # The brain: another machine's paths, mapped.
+    # Prod: another machine's paths, mapped.
     _, api_key = libraries_client
     monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/Volumes/media-01": "/mnt/media-01"}')
     name = "Mapped_" + __import__("secrets").token_urlsafe(6)

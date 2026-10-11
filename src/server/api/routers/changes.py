@@ -1,9 +1,9 @@
-"""Change reports: what changed on storage, for the brain to scan (ADR-016 phase 2).
+"""Change reports: what changed on storage, for the server to scan (ADR-016 phase 2).
 
-The brain mounts the DAS over the network and can't watch it for changes,
+Prod mounts the DAS over the network and can't watch it for changes,
 so the machine that holds the disks (the Mac Studio) reports the paths it
 sees change. Paths are absolute, as that machine sees them, which is how
-library roots are stored. The brain's worker reads a library's pending
+library roots are stored. The server's worker reads a library's pending
 changes, scans the folders they're in, and acknowledges what it saw.
 
 Reporting and acknowledging need an editor; reading needs any signed-in

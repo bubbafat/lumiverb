@@ -1,6 +1,6 @@
 """Library changes reported by the machine that holds the storage (ADR-016 phase 2).
 
-The brain mounts the DAS over the network and can't watch it, so the Mac
+Prod mounts the DAS over the network and can't watch it, so the Mac
 reports paths it sees change. Each row is one path waiting to be scanned;
 `version` grows on every report so an acknowledgement only clears what
 the scan actually saw.

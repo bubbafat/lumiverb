@@ -226,9 +226,9 @@ def library_report_changes(
     paths: Annotated[list[str] | None, typer.Argument(help="Files or folders that changed.")] = None,
     stdin: Annotated[bool, typer.Option("--stdin", help="Also read paths from standard input, one per line.")] = False,
 ) -> None:
-    """Tell the brain these paths changed on storage, so its scheduler scans them.
+    """Tell the server these paths changed on storage, so its scheduler scans them.
 
-    The machine holding the storage reports what it sees change; the brain
+    The machine holding the storage reports what it sees change; the server
     mounts it over the network and can't watch it. Paths under a root
     mapped with `config map-root` are sent as the library stores them.
     """

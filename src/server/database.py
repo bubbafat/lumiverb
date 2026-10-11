@@ -28,7 +28,7 @@ def _engine_kwargs() -> dict:
 
 def _create_engine(url: str) -> Engine:
     """An engine whose sessions run in UTC, whatever the server's default:
-    Ubuntu's Postgres takes the machine's timezone (the brain's is New York),
+    Ubuntu's Postgres takes the machine's timezone (prod's is New York),
     and timestamps should read the same from every install."""
     engine = create_engine(url, **_engine_kwargs())
 

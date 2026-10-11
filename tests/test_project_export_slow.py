@@ -2,7 +2,7 @@
 
 GET /v1/projects/{id}/export?format=fcp7|fcpxml returns the file. Clips
 point at the originals as the libraries know them (Robert, Oct 9: just the
-brain's paths), plus rel_path; photos are in it as stills.
+server's paths), plus rel_path; photos are in it as stills.
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def test_fcp7_export_points_at_originals(env, job) -> None:
 
 @pytest.mark.slow
 def test_there_is_no_media_location_to_give(env, job) -> None:
-    # Robert, Oct 9: just the brain's paths (the libraries'); the editor relinks.
+    # Robert, Oct 9: just the server's paths (the libraries'); the editor relinks.
     client, headers, _, _ = env
 
     r = _export(client, headers, job, format="fcp7", prefix="/Volumes/Travel SSD/")

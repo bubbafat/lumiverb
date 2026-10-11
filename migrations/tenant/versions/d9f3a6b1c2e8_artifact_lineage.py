@@ -19,7 +19,7 @@ Oct 8: nothing re-runs just because lineage arrived):
 Vision is current against the account's model (chosen in Settings → AI),
 so it goes stale until one is chosen that matches what made it.
 
-Accepted (the brain's data starts fresh from the CLI; older data is
+Accepted (prod's data starts fresh from the CLI; older data is
 re-ingested): proxies, previews and probes the macOS app made, and its
 zero-face and OCR results, can't be told from the CLI's, so they count as
 the CLI's.

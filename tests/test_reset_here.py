@@ -91,7 +91,7 @@ def test_from_another_device_without_email_it_says_where_to_go(admin, mac):
 
 
 def test_on_a_server_its_own_machine_gets_no_link(admin):
-    """Anything on the brain could ask from loopback: the operator has the command line."""
+    """Anything on the server could ask from loopback: the operator has the command line."""
     with TestClient(app, client=HERE) as client:
         asked = client.post("/v1/auth/forgot-password", json={"email": admin})
     assert asked.status_code == 501 and asked.json()["error"] == {

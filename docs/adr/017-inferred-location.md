@@ -45,7 +45,7 @@ A guess never overwrites the other two kinds. Location of any kind never leaves 
 | 3 | Can text or landmark results apply themselves? | No. They are suggestions until a person picks "Use this". |
 | 4 | Can a guess be made from other guesses? | No. Only GPS from the file and a person's locations are fixes. |
 | 5 | How are guesses gated and bounded? | Two settings: **Infer location**, off by default, and **Inference window**, 360 minutes by default. Cross-device matching (phone to camera) by date and time is the main signal and is not limited to one folder. |
-| 6 | Where do place names come from? | An offline gazetteer (GeoNames) on the brain. Nothing leaves the box. |
+| 6 | Where do place names come from? | An offline gazetteer (GeoNames) on the server. Nothing leaves the box. |
 | 7 | Does a person's location spread to neighbours? | Yes. A person's location is a fix, so nearby clips get guesses from it. |
 | 8 | How are bulk location actions targeted? | Only by an explicit list of clips. Replacing an existing location needs a 409 decision. |
 | 9 | Are place names searchable as text? | Later, signed-in only, and hidden on public pages. |
@@ -256,7 +256,7 @@ Requirements as in the ADR template: the full suite passes, tsc and vite build a
 - **Turning Infer location off** asks first (409 `redo_on_change`, "New settings remove location guesses from N clips"), then removes every guess and the producer's lineage; a person's location stays. It's the spec's `on_settings`, a new field of the producer contract.
 
 ### Phase 4: Place names
-- GeoNames offline on the brain.
+- GeoNames offline on the server.
 - Place search when setting a location.
 - OCR place hints as suggestions (accepted only when the text appears in `asset_ocr`).
 

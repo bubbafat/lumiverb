@@ -1,7 +1,7 @@
 """Assets: analysis proxy (ADR-016 phase 2).
 
 A full-length, low-resolution copy of each video, with audio, kept on the
-brain so transcription, scenes and vision can run while the storage holding
+server so transcription, scenes and vision can run while the storage holding
 the originals sleeps.
 
 Revision ID: w8x9y0z1a2b3

@@ -148,7 +148,7 @@ def test_a_server_that_isnt_there_or_breaks_off_is_the_machines_fault(speech):
                         (requests.exceptions.ChunkedEncodingError(), "broke off")):
         with patch("src.processing.workers.transcripts.openai_compatible.requests.post", side_effect=error):
             with pytest.raises(TranscriptError) as e:
-                OpenAITranscriber("http://brain/v1", None, "small").transcribe(speech)
+                OpenAITranscriber("http://gaming-pc/v1", None, "small").transcribe(speech)
         assert e.value.endpoint_fault and says in str(e.value)
 
 
@@ -170,7 +170,7 @@ def test_a_server_gets_time_for_the_speech_it_was_sent_and_running_out_is_the_cl
     with patch("src.processing.workers.transcripts.openai_compatible.requests.post",
                side_effect=requests.ReadTimeout()) as post:
         with pytest.raises(TranscriptError) as e:
-            OpenAITranscriber("http://brain/v1", None, "small").transcribe(wav)
+            OpenAITranscriber("http://gaming-pc/v1", None, "small").transcribe(wav)
     assert post.call_args.kwargs["timeout"] == (10, 1000.0)
     assert e.value.endpoint_fault is False and "100 s of speech within 1000 s" in str(e.value)
 

@@ -13,8 +13,8 @@ browsers play only the first track, and a lav may be on any. It starts at 0
 like the original, so times found in it are times in the original.
 
 Decoding a 4K HEVC original is most of a render. Where ffmpeg and the GPU
-can, the GPU decodes (Vulkan by default): about four times faster on the
-brain, with the same pictures, since decoding is exact. ffmpeg itself
+can, the GPU decodes (Vulkan by default): about four times faster on
+prod, with the same pictures, since decoding is exact. ffmpeg itself
 decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose
 GPU decoding fails runs again on the CPU. One render at a time decodes on
 the GPU, and only while it has room beside the models using it; the rest
@@ -95,7 +95,7 @@ def _vulkan_decodes() -> bool:
 
 
 # How many renders decode on the GPU at once is this machine's choice
-# (gpu_decodes in its config, default 1): one nearly saturates the brain's
+# (gpu_decodes in its config, default 1): one nearly saturates prod's
 # video decoder (a 3080's NVDEC at 100% with three, each a third as fast),
 # and each holds a few hundred MB of video memory that the vision model and
 # Whisper need more; three at once ran the vision model out of memory. The

@@ -1,7 +1,7 @@
-"""The install's env file (/etc/lumiverb/env on the brain, Homebrew's
+"""The install's env file (/etc/lumiverb/env on Linux, Homebrew's
 etc/lumiverb/env on a Mac), read as systemd reads an EnvironmentFile.
 
-systemd loads it for the brain's services; launchd can't, so a Mac's
+systemd loads it for a Linux install's services; launchd can't, so a Mac's
 service reads it here. One KEY=VALUE per line; blank lines and lines
 starting with # or ; are skipped. A value in single quotes is taken as it
 is (deploy-api.sh writes LUMIVERB_ROOT_MAP='{"/Volumes/...": "/mnt/..."}');

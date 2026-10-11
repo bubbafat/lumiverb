@@ -1,7 +1,7 @@
 """Where Lumiverb keeps local caches: $XDG_CACHE_HOME/lumiverb, else this
 machine's cache_home (src/processing/machine.py), else ~/.cache/lumiverb.
 
-The brain's install sets XDG_CACHE_HOME to its data disk for the scheduler
+A Linux install sets XDG_CACHE_HOME to its data disk for the scheduler
 (deploy-api.sh), and the lumiverb user's CLI config the same, so a command
 run by hand finds the scheduler's caches and lock.
 """

@@ -21,10 +21,10 @@ from src.shared.vision_endpoint import VisionEndpointError
 pytestmark = pytest.mark.fast
 
 QWEN = "qwen3-vl:8b"
-BRAIN = {"machine_id": "aim_brain", "name": "Brain", "api_url": "http://brain/v1", "api_key": "sk-1", "at_once": 2}
+GAMING_PC = {"machine_id": "aim_gaming_pc", "name": "Gaming PC", "api_url": "http://gaming-pc/v1", "api_key": "sk-1", "at_once": 2}
 
 
-def _client(machines=(BRAIN,), model=QWEN) -> MagicMock:
+def _client(machines=(GAMING_PC,), model=QWEN) -> MagicMock:
     client = MagicMock()
     client.get.return_value.json.return_value = {"job": "vision", "model": model, "machines": list(machines)}
     return client
@@ -52,7 +52,7 @@ def test_a_machine_offering_the_model_goes_ahead_and_says_so():
     with _offers((QWEN,)):
         assert guard.check() is True
     assert guard.model == QWEN and guard.capacity() == 2
-    assert "Brain (2 at once)" in guard.describe()
+    assert "Gaming PC (2 at once)" in guard.describe()
     [status] = [c.kwargs["json"] for c in client.post.call_args_list if c.args[0].endswith("/status")]
     assert status == {"online": True, "error": "", "models": [QWEN]}
 
@@ -111,7 +111,7 @@ def test_no_machine_left_stops_vision_without_asking_or_charging():
     with _offers((QWEN,)) as asked:
         guard.check()
         assert guard.charges(CaptionError(
-            "No machine doing descriptions & text is online (Brain: 503)", endpoint_fault=True)) is False
+            "No machine doing descriptions & text is online (Gaming PC: 503)", endpoint_fault=True)) is False
         assert guard.charges("x") is False  # stopped: nothing more is charged
     assert asked.call_count == 1
     assert guard.down and "503" in guard.error
@@ -119,14 +119,14 @@ def test_no_machine_left_stops_vision_without_asking_or_charging():
 
 @pytest.mark.parametrize(("served_by_after", "charged"), [("online", True), ("offline", False)])
 def test_a_clip_isnt_charged_when_the_machine_that_served_it_turns_out_down(served_by_after, charged):
-    """Two machines; Brain gave an empty answer. If Brain is found unreachable
-    when checked again, that was Brain's doing, not the clip's, even with the
-    Studio still fine."""
-    studio = {**BRAIN, "machine_id": "aim_studio", "name": "Studio", "api_url": "http://studio/v1"}
-    client = _client((BRAIN, studio))
+    """Two machines; Gaming PC gave an empty answer. If Gaming PC is found
+    unreachable when checked again, that was Gaming PC's doing, not the
+    clip's, even with the Studio still fine."""
+    studio = {**GAMING_PC, "machine_id": "aim_studio", "name": "Studio", "api_url": "http://studio/v1"}
+    client = _client((GAMING_PC, studio))
     clock, guard = _guard(client)
-    brain_again = (QWEN,) if served_by_after == "online" else VisionEndpointError("no answer")
-    with _offers((QWEN,), (QWEN,), brain_again, (QWEN,)):
+    gaming_pc_again = (QWEN,) if served_by_after == "online" else VisionEndpointError("no answer")
+    with _offers((QWEN,), (QWEN,), gaming_pc_again, (QWEN,)):
         guard.check()
         clock["now"] = 1.0
         error = CaptionError("Empty completion content", endpoint_fault=False)

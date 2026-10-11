@@ -1,7 +1,7 @@
 """The scheduler's own settings and the CLI's enrich (ADR-016 phase 4).
 
 The scheduler reads this machine's way of processing from its environment
-(/etc/lumiverb/env on the brain), never the CLI's config; the server and
+(/etc/lumiverb/env on Linux), never the CLI's config; the server and
 processing import nothing of the CLI's. `lumiverb enrich` only asks the
 scheduler, naming the producer and the libraries.
 """
@@ -53,8 +53,8 @@ def test_the_api_is_found_where_it_listens(monkeypatch) -> None:
     get_settings.cache_clear()
     try:
         assert api_url() == "http://127.0.0.1:8100"
-        monkeypatch.setenv("LUMIVERB_API_URL", "http://brain:9000/")
-        assert api_url() == "http://brain:9000"
+        monkeypatch.setenv("LUMIVERB_API_URL", "http://server:9000/")
+        assert api_url() == "http://server:9000"
     finally:
         get_settings.cache_clear()
 

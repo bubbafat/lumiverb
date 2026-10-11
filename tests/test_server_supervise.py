@@ -1,7 +1,8 @@
 """lumiverb-server run's supervisor (src/server/lifecycle/supervise.py): the
-API and the scheduler as one service, as the brain's systemd units run each.
-Real child processes: one that dies is started again, a stop sends SIGTERM
-the way each unit does, and what's left is killed when its time is up."""
+API and the scheduler as one service, as a Linux install's systemd units run
+each. Real child processes: one that dies is started again, a stop sends
+SIGTERM the way each unit does, and what's left is killed when its time is
+up."""
 
 from __future__ import annotations
 

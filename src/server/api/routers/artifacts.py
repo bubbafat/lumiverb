@@ -322,7 +322,7 @@ def download_artifact(
         key = asset.video_preview_key
     elif artifact_type == "analysis_proxy":
         # The whole video. Public pages and, while the account caps playback,
-        # viewers play it through /playback; editors and the brain's tools need it whole.
+        # viewers play it through /playback; editors and the server's tools need it whole.
         if public:
             raise HTTPException(status_code=403, detail="Analysis proxies aren't public")
         if getattr(request.state, "role", None) == "viewer":

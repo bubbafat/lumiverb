@@ -417,7 +417,7 @@ def test_path_prefix_is_nfc() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Files still being written (ADR-016 phase 2): the brain scans as soon as the
+# Files still being written (ADR-016 phase 2): the server scans as soon as the
 # Mac reports a copy, so a file still growing waits for a later scan, as the
 # macOS scanner's 30-second quarantine does.
 # ---------------------------------------------------------------------------
