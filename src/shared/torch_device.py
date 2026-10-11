@@ -8,6 +8,11 @@ exists only on a Mac. On a Mac, CLIP's vectors on MPS match the CPU's
 CPU to Whisper and ffmpeg. Faces choose through ONNX Runtime
 (insightface_provider: CUDA, then CoreML, then the CPU) and Whisper through
 CTranslate2, which has no Apple GPU.
+
+On Apple's GPU torch's own CPU work (building a model, preparing an image)
+gets one thread (cpu_threads_for): libomp's thread team, started from the
+scheduler's job threads, segfaults in __kmp_suspend_64 while CLIP is built.
+Every clip there is the GPU's work, so the CPU's one thread costs nothing.
 """
 
 from __future__ import annotations
@@ -27,6 +32,19 @@ def torch_device() -> str:
     if _mps_available(torch):
         return "mps"
     return "cpu"
+
+
+def cpu_threads_for(device: str) -> None:
+    """Before torch's work for a model on `device`, in the thread doing it: on
+    Apple's GPU, torch's CPU work in one thread. It holds for threads that
+    haven't used torch yet, but one that has keeps what it had, so each
+    thread calls it (it's cheap). Elsewhere, torch's own choice. Whisper, in
+    a process of its own, keeps its threads."""
+    if device != "mps":
+        return
+    import torch
+
+    torch.set_num_threads(1)
 
 
 def empty_torch_cache() -> None:
