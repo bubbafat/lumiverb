@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from src.processing.video import ffmpeg_run
 from src.shared.io_utils import file_non_empty
 
 _log = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ def probe_video_duration(source: Path) -> float | None:
         "ffprobe",
         "-v",
         "error",
+        *ffmpeg_run.input_args(),
         "-show_entries",
         "format=duration",
         "-of",
@@ -223,6 +225,7 @@ def transcode_to_720p_h264_detailed(
             "-loglevel",
             "error",
             "-y",
+            *ffmpeg_run.input_args(),
             "-i",
             str(source),
             "-vf",
@@ -343,6 +346,7 @@ def extract_head_clip_copy_detailed(
         "-loglevel",
         "error",
         "-y",
+        *ffmpeg_run.input_args(),
         "-ss",
         "0",
         "-i",
@@ -399,6 +403,7 @@ def extract_video_frame_detailed(
         "-loglevel",
         "error",
         "-y",
+        *ffmpeg_run.input_args(),
         "-ss",
         str(seek),
         "-i",
@@ -445,6 +450,7 @@ def extract_video_clip(
         "-loglevel",
         "error",
         "-y",
+        *ffmpeg_run.input_args(),
         "-ss",
         str(safe_start),
         "-i",
@@ -526,6 +532,7 @@ async def extract_clip(
         "-loglevel",
         "error",
         "-y",
+        *ffmpeg_run.input_args(),
         "-ss",
         str(safe_start),
         "-i",

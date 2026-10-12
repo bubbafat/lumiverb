@@ -26,13 +26,14 @@ A single, long-running FFmpeg process is opened to avoid process-spawn overhead.
 
 **FFmpeg command structure:**
 ```
-ffmpeg -hide_banner -loglevel info -skip_frame nokey -ss <start_ts>
+ffmpeg -hide_banner -loglevel info -skip_frame nokey
+  -protocol_whitelist file -format_whitelist matroska,mov -ss <start_ts>
   -i <input>
   -vf select='eq(pict_type\,I)',scale=480:<out_height>,showinfo
   -fps_mode passthrough -f rawvideo -pix_fmt rgb24 pipe:1
 ```
 
-`-fps_mode passthrough` (ffmpeg 5.1+) passes each selected frame on as it is; ffmpeg 9 removed the old `-vsync 0` spelling and stops at once on it.
+`-fps_mode passthrough` (ffmpeg 5.1+) passes each selected frame on as it is; ffmpeg 9 removed the old `-vsync 0` spelling and stops at once on it. The whitelists are `ffmpeg_run.input_args()`, as for every ffmpeg and ffprobe that opens a video: a local file only, read only as a container Lumiverb takes in.
 
 **Keyframes only, on the CPU:** `-skip_frame nokey` makes the decoder skip everything but keyframes, giving the same keyframes 9-17x faster than decoding all frames on the GPU (`-hwaccel auto`, measured on prod analysis proxies, Oct 2026).
 

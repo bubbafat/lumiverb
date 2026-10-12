@@ -36,6 +36,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from src.processing.video import ffmpeg_run
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.config import get_settings
@@ -196,7 +197,8 @@ def _file_version(path: Path) -> str:
 def _duration(path: Path) -> float | None:
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+            ["ffprobe", "-v", "error", *ffmpeg_run.input_args(), "-show_entries", "format=duration", "-of", "json",
+             str(path)],
             capture_output=True, text=True, timeout=30, check=True,
         ).stdout
         return float(json.loads(out)["format"]["duration"])
@@ -331,7 +333,8 @@ def _make_cut(ask: _Ask) -> None:
     tmp = Path(tmp_name)
     length = ["-t", str(max_seconds)] if max_seconds is not None else []
     try:
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(ask.path),
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", *ffmpeg_run.input_args(),
+               "-i", str(ask.path),
                "-map", "0:v", "-map", "0:a?", "-c", "copy", *length,
                "-map_metadata", "-1", "-map_chapters", "-1",
                "-movflags", "+faststart", "-f", "mp4", str(tmp)]

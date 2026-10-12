@@ -93,8 +93,11 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
     """Get the original video dimensions via ffprobe. Returns (width, height)."""
     import subprocess
 
+    from src.processing.video import ffmpeg_run
+
     cmd = [
         "ffprobe", "-v", "error",
+        *ffmpeg_run.input_args(),
         "-select_streams", "v:0",
         "-show_entries", "stream=width,height",
         "-of", "csv=p=0:s=x",
@@ -165,6 +168,7 @@ def _generate_video_preview(source_path: Path) -> bytes:
         return [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             *ffmpeg_run.hwaccel_args(hwaccel),
+            *ffmpeg_run.input_args(),
             "-ss", "0", "-i", str(source_path),
             "-t", str(PREVIEW_DURATION_SEC),
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",

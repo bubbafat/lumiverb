@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from src.processing.video import ffmpeg_run
+
 # Nominal rates above this are container timebases (e.g. 90000/1 from
 # some variable-frame-rate files), not frame rates.
 MAX_PLAUSIBLE_FPS = 240
@@ -173,7 +175,8 @@ def parse_ffprobe(data: dict) -> VideoFacet:
 def probe_video(path: Path) -> VideoFacet:
     """Run ffprobe on a source file. Raises CalledProcessError if ffprobe fails."""
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+        ["ffprobe", "-v", "error", *ffmpeg_run.input_args(), "-show_streams", "-show_format", "-of", "json",
+         str(path)],
         capture_output=True,
         text=True,
         check=True,

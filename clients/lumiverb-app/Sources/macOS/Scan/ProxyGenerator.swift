@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import CryptoKit
 import AppKit
+import LumiverbKit
 
 /// Generates proxy images and thumbnails using native ImageIO.
 ///
@@ -90,7 +91,8 @@ enum ProxyGenerator {
             }
         }
 
-        process.arguments = [
+        // A local file only, in a container Lumiverb takes in (FFmpegInput).
+        process.arguments = FFmpegInput.arguments + [
             "-i", sourceURL.path,
             "-vframes", "1",
             "-q:v", "2",
@@ -202,8 +204,7 @@ enum ProxyGenerator {
         }
 
         process.executableURL = URL(fileURLWithPath: ffprobePath)
-        process.arguments = [
-            "-v", "quiet",
+        process.arguments = ["-v", "quiet"] + FFmpegInput.arguments + [
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height",
             "-of", "json",
