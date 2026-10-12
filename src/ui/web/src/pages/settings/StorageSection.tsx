@@ -136,8 +136,8 @@ export default function StorageSection() {
         </h3>
         <p className="break-all font-mono text-sm text-gray-200">{data.data}</p>
         <p className="text-xs text-gray-500">
-          The database, the search index, and the models for search and transcripts. They stay here; Ollama keeps
-          its own. {free(data.data_free, data.data_total)}
+          The database, the search index and the AI models (search, faces, transcripts). They stay here; Ollama
+          keeps its own. {free(data.data_free, data.data_total)}
         </p>
       </section>
     </Frame>

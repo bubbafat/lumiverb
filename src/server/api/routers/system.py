@@ -506,7 +506,7 @@ class StorageMove(BaseModel):
 
 class Storage(BaseModel):
     previews: str  # the folder the previews are in
-    data: str  # DATA_DIR: the database, the search index, backups, caches and the search and transcript models (they don't move)
+    data: str  # DATA_DIR: the database, the search index, backups, caches and the AI models (they don't move)
     previews_available: bool  # its drive is plugged in
     previews_write_error: str | None = None  # Lumiverb can't write there now: why (src/server/write_check.py)
     previews_free: int | None

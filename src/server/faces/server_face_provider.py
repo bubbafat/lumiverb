@@ -8,11 +8,10 @@ needs two extra setup steps that don't apply on the worker side:
 1. **Writable model cache.** The systemd unit pins the API server's
    filesystem to read-only outside `${DATA_DIR}` (see deploy-api.sh —
    `ProtectSystem=strict` + `ReadWritePaths=${DATA_DIR}`). InsightFace
-   downloads models to `~/.insightface/models` on first call. Without
-   redirection that becomes a "Read-only file system" 500 the first
-   time anyone uploads a search image. We mirror the HF cache fix in
-   `src.server.embeddings.clip_provider`: set `INSIGHTFACE_HOME` to a
-   writable path under data_dir before importing the package.
+   downloads models to `~/.insightface/models` unless told otherwise
+   (it reads no setting: the provider passes root=, model_root). We set
+   `INSIGHTFACE_HOME` to the data folder's insightface-cache, the
+   scheduler's too, so search by image and the faces process share one copy.
 
 2. **Module-level singleton.** Workers spawn fresh per-batch
    subprocesses (the ONNX leak forces it). The API server is one

@@ -1,17 +1,70 @@
-"""InsightFace provider: face detection + ArcFace embedding in one pass."""
+"""InsightFace provider: face detection + ArcFace embedding in one pass.
+
+Its model (buffalo_l, about 330 MB) is kept with Lumiverb's others, in the
+install's data folder (model_root), for the scheduler's faces process and the
+API's search by image alike. InsightFace's own default, ~/.insightface, is
+read by neither but a development checkout; a model already downloaded
+there is copied in, not downloaded again, and left where it was.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 MODEL_ID = "insightface"
 MODEL_VERSION = "buffalo_l"
+
+
+def model_root() -> Path:
+    """Where the model is kept: INSIGHTFACE_HOME (an operator's), else the
+    install's data folder (DATA_DIR/insightface-cache, as CLIP's is
+    DATA_DIR/hf-cache), else InsightFace's own ~/.insightface (a development
+    checkout). InsightFace itself reads no setting: it's told (root=)."""
+    if home := os.environ.get("INSIGHTFACE_HOME"):
+        return Path(home).expanduser()
+    if data := os.environ.get("DATA_DIR"):
+        return Path(data) / "insightface-cache"
+    return Path.home() / ".insightface"
+
+
+def _home_copy() -> Path:
+    return Path.home() / ".insightface" / "models" / MODEL_VERSION
+
+
+def model_available() -> bool:
+    """Whether the model is here, or can be copied in without a download."""
+    return (model_root() / "models" / MODEL_VERSION).is_dir() or _home_copy().is_dir()
+
+
+def adopt_home_copy(root: Path) -> bool:
+    """A model downloaded to ~/.insightface before (InsightFace's default)
+    is copied into `root`, not downloaded again; the home folder's copy is
+    left alone. Into a folder of its own first, then renamed: another
+    process doing the same at once keeps the first. Whether it copied."""
+    target = root / "models" / MODEL_VERSION
+    old = _home_copy()
+    if target.is_dir() or not old.is_dir() or old.resolve() == target.resolve():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    copying = target.with_name(f".{MODEL_VERSION}.copying-{os.getpid()}-{threading.get_ident()}")
+    shutil.rmtree(copying, ignore_errors=True)
+    shutil.copytree(old, copying)
+    try:
+        copying.rename(target)
+    except OSError:  # there now: another process's
+        shutil.rmtree(copying, ignore_errors=True)
+        return False
+    logger.info("InsightFace model copied from %s into %s", old, target)
+    return True
 
 # ── Quality-gate thresholds ──────────────────────────────────────────────
 MIN_DETECTION_CONFIDENCE = 0.5   # InsightFace det_score
@@ -119,8 +172,14 @@ class InsightFaceProvider:
                         providers.append(("CoreMLExecutionProvider", {"MLComputeUnits": "ALL"}))
                     providers.append("CPUExecutionProvider")
 
+                    root = model_root()
+                    try:
+                        adopt_home_copy(root)
+                    except OSError as exc:  # downloaded instead
+                        logger.warning("Couldn't copy the InsightFace model from %s: %s", _home_copy(), exc)
                     app = FaceAnalysis(
                         name=MODEL_VERSION,
+                        root=str(root),
                         providers=providers,
                     )
                     app.prepare(ctx_id=0, det_size=(self.settings.det_size, self.settings.det_size))
