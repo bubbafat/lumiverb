@@ -23,9 +23,15 @@ pytestmark = pytest.mark.ai
 FIXTURES = Path(__file__).resolve().parents[1] / "clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/Fixtures"
 
 
+
+def _model_available() -> bool:
+    from src.processing.workers.faces.insightface_provider import model_available
+
+    return model_available()
+
 @pytest.fixture(scope="module")
 def provider():
-    if not (Path.home() / ".insightface/models/buffalo_l").is_dir():
+    if not _model_available():
         pytest.skip("InsightFace's buffalo_l isn't downloaded")
     return InsightFaceProvider()
 

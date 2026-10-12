@@ -33,6 +33,12 @@ from tests.machine_lineage import made, made_json
 pytestmark = pytest.mark.slow
 
 
+
+def _model_available() -> bool:
+    from src.processing.workers.faces.insightface_provider import model_available
+
+    return model_available()
+
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
     """Control + tenant DB, storage in a folder of the test's. Yields (client, auth, library_id, tenant_engine)."""
@@ -287,7 +293,7 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
 
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg isn't installed")
-    if not (Path.home() / ".insightface/models/buffalo_l").is_dir():
+    if not _model_available():
         pytest.skip("InsightFace's buffalo_l isn't downloaded")
     client, auth, library_id, engine = env
     clip = tmp_path / "two_shots.mp4"
@@ -378,7 +384,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
 
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg isn't installed")
-    if not (Path.home() / ".insightface/models/buffalo_l").is_dir():
+    if not _model_available():
         pytest.skip("InsightFace's buffalo_l isn't downloaded")
     client, auth, library_id, engine = env
     proxy = tmp_path / "analysis.mp4"
