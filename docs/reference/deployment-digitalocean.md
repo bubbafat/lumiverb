@@ -20,23 +20,23 @@ From a fresh Ubuntu 22.04+ VPS with DNS already pointed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
-  | sudo bash -s -- --domain app.example.com --email you@example.com
+  | sudo bash -s -- --domain app.example.com --email you@example.com --worker
 ```
 
-The script provisions a default tenant named "Lumiverb" (override with `--tenant "My Org"`).
+Add `--dry-run` to see the settings it would use (both halves, API and web) without changing anything.
 
-Then create the first admin user:
+Then create your account:
 
 ```bash
-sudo -u lumiverb /opt/lumiverb/.venv/bin/lumiverb create-user --email you@example.com --role admin
+sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env
 ```
 
-Open `https://app.example.com` and log in.
+Open `https://app.example.com` and sign in.
 
 To update an existing install:
 
 ```bash
-bash /opt/lumiverb/scripts/update-vps.sh
+sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
 The rest of this document covers what the script does and how to customize it.

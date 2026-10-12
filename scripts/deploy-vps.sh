@@ -6,15 +6,17 @@
 # run those scripts individually.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh | bash -s -- --domain app.example.com
+#   curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/deploy-vps.sh \
+#     | sudo bash -s -- --domain app.example.com --email you@example.com --worker
 #
 # Or from a local checkout:
-#   bash scripts/deploy-vps.sh --domain app.example.com
+#   sudo bash scripts/deploy-vps.sh --domain app.example.com
 #
-# Idempotent: safe to run again to update an existing install.
+# Idempotent: safe to run again to update an existing install. --dry-run
+# prints the settings both halves would use and changes nothing.
 #
 # After completion, create the first admin (while nobody can log in):
-#   sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env --email you@example.com
+#   sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env /etc/lumiverb/env
 #
 set -euo pipefail
 
@@ -26,7 +28,8 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-step()  { echo -e "\n${BOLD}=== $1 ===${NC}"; }
+# A dry run's stdout is the settings alone (KEY=value); its headings go to stderr.
+step()  { if [[ "$DRY_RUN" == "true" ]]; then echo -e "\n${BOLD}=== $1 ===${NC}" >&2; else echo -e "\n${BOLD}=== $1 ===${NC}"; fi; }
 fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,8 @@ DOMAIN=""
 CERTBOT_EMAIL=""
 SKIP_CERTBOT=false
 CERTIFICATE_ARCHIVE=""
+FIREWALL_FLAG=""
+DRY_RUN=false
 
 # Collect all args to forward to deploy-api.sh
 ALL_ARGS=("$@")
@@ -57,12 +62,16 @@ while [[ $# -gt 0 ]]; do
     --email)          CERTBOT_EMAIL="${2:-}"; shift 2 ;;
     --certificate)    CERTIFICATE_ARCHIVE="${2:-}"; shift 2 ;;
     --skip-certbot)   SKIP_CERTBOT=true; shift ;;
+    --no-firewall|--firewall) FIREWALL_FLAG="$1"; shift ;;  # both halves
+    --dry-run)        DRY_RUN=true; shift ;;                 # both halves
     *)                shift ;;  # skip other args (forwarded to deploy-api.sh)
   esac
 done
 
 [[ -n "$DOMAIN" ]] || fail "Required: --domain <FQDN>  (e.g. --domain app.example.com)"
-[[ "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
+# A dry run reads the remembered settings, so it too needs sudo where there
+# are some: each script says so.
+[[ "$DRY_RUN" == "true" || "$(id -u)" -eq 0 ]] || fail "This script must be run as root (try: sudo bash ...)"
 
 # ---------------------------------------------------------------------------
 # If scripts not found locally, we need to bootstrap
@@ -81,6 +90,16 @@ if [[ -z "$SCRIPT_DIR" ]]; then
     esac
   done
 
+  if [[ "$DRY_RUN" == "true" ]]; then
+    # Changes nothing: the scripts come from a throwaway clone, not /opt/lumiverb.
+    command -v git >/dev/null 2>&1 || fail "A dry run needs git (apt-get install git)"
+    CLONE="$(mktemp -d)"
+    trap 'rm -rf "$CLONE"' EXIT
+    git clone -q --depth 1 --branch "$BRANCH" "$REPO_URL" "$CLONE" >&2
+    SCRIPT_DIR="${CLONE}/scripts"
+  fi
+fi
+if [[ -z "$SCRIPT_DIR" ]]; then
   step "Bootstrapping repo for script access"
   if [[ -d "${APP_DIR}/.git" ]]; then
     cd "$APP_DIR"
@@ -110,17 +129,35 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-bash "${SCRIPT_DIR}/deploy-api.sh" "${API_ARGS[@]}"
+# The web half proxies to where the API half settled: --api-port and
+# --api-listen-host, else what the env file remembers, else the defaults.
+CONF_DIR="${LUMIVERB_CONF_DIR:-/etc/lumiverb}"
+if [[ "$DRY_RUN" == "true" ]]; then
+  API_SETTINGS="$(bash "${SCRIPT_DIR}/deploy-api.sh" "${API_ARGS[@]}")"
+  echo "$API_SETTINGS"
+else
+  bash "${SCRIPT_DIR}/deploy-api.sh" "${API_ARGS[@]}"
+  API_SETTINGS="$(grep -E '^API_(PORT|LISTEN_HOST)=' "${CONF_DIR}/env" || true)"
+fi
+API_PORT="$(sed -n 's/^API_PORT=//p' <<<"$API_SETTINGS" | head -1)"
+API_HOST="$(sed -n 's/^API_LISTEN_HOST=//p' <<<"$API_SETTINGS" | head -1)"
+[[ -n "$API_PORT" ]] || fail "No API_PORT from deploy-api.sh (${CONF_DIR}/env)"
+case "$API_HOST" in
+  ""|0.0.0.0|::|"[::]") API_HOST="127.0.0.1" ;;  # every address: this machine's own will do
+esac
+[[ "$API_HOST" != *:* || "$API_HOST" == \[* ]] || API_HOST="[${API_HOST}]"  # an IPv6 address
 
 # ---------------------------------------------------------------------------
 # Phase 2: Deploy Web
 # ---------------------------------------------------------------------------
 step "Deploying Web UI (Phase 2 of 2)"
 
-WEB_ARGS=(--domain "$DOMAIN" --api-upstream "http://127.0.0.1:8000")
+WEB_ARGS=(--domain "$DOMAIN" --api-upstream "http://${API_HOST}:${API_PORT}")
 [[ -n "$CERTBOT_EMAIL" ]]     && WEB_ARGS+=(--email "$CERTBOT_EMAIL")
 [[ -n "$CERTIFICATE_ARCHIVE" ]] && WEB_ARGS+=(--certificate "$CERTIFICATE_ARCHIVE")
 [[ "$SKIP_CERTBOT" == "true" ]] && WEB_ARGS+=(--skip-certbot)
+[[ -n "$FIREWALL_FLAG" ]]     && WEB_ARGS+=("$FIREWALL_FLAG")
+[[ "$DRY_RUN" == "true" ]]    && WEB_ARGS+=(--dry-run)
 
 # Forward --repo and --branch if present
 set -- "${ALL_ARGS[@]}"
@@ -133,6 +170,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 bash "${SCRIPT_DIR}/deploy-web.sh" "${WEB_ARGS[@]}"
+[[ "$DRY_RUN" != "true" ]] || exit 0
 
 # ---------------------------------------------------------------------------
 # Done
@@ -140,7 +178,9 @@ bash "${SCRIPT_DIR}/deploy-web.sh" "${WEB_ARGS[@]}"
 echo ""
 echo -e "${GREEN}${BOLD}Lumiverb fully deployed (API + Web on single machine).${NC}"
 echo ""
-echo "To update:  bash /opt/lumiverb/scripts/update-vps.sh"
-echo "API only:   bash /opt/lumiverb/scripts/update-api.sh"
-echo "Web only:   bash /opt/lumiverb/scripts/update-web.sh"
+echo "Create your account (while nobody can sign in):"
+echo "  sudo ${APP_DIR}/.venv/bin/lumiverb-server setup --env ${CONF_DIR}/env"
+echo ""
+echo "Update:"
+echo "  sudo bash ${APP_DIR}/scripts/update.sh"
 echo ""

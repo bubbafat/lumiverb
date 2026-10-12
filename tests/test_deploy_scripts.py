@@ -986,3 +986,115 @@ def test_deploy_stops_the_scheduler_before_the_migrations():
     stop = text.index("systemctl stop lumiverb-scheduler", step)
     assert step < stop < text.index("alembic -c alembic-control.ini upgrade head")
     assert stop < text.index("systemctl restart lumiverb-scheduler")
+
+
+DEPLOY_VPS = REPO / "scripts" / "deploy-vps.sh"
+
+
+def _vps_dry_run(tmp_path: Path, *args: str, env_file: str | None = None, script: Path = DEPLOY_VPS,
+                 extra_env: dict[str, str] | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """deploy-vps.sh --dry-run: the API half's settings, then the web half's."""
+    conf = tmp_path / "conf"
+    conf.mkdir(exist_ok=True)
+    if env_file is not None:
+        (conf / "env").write_text(env_file)
+    out = subprocess.run(
+        ["bash", str(script), "--domain", "app.lumiverb.test", *args, "--dry-run"],
+        capture_output=True, text=True, timeout=60, check=False,
+        env={**os.environ, "LUMIVERB_CONF_DIR": str(conf), **(extra_env or {})},
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    lines = out.stdout.splitlines()
+    web = lines.index("DOMAIN=app.lumiverb.test")
+    return (dict(line.split("=", 1) for line in lines[:web]),
+            dict(line.split("=", 1) for line in lines[web:]))
+
+
+def test_a_vps_dry_run_dry_runs_both_halves_and_changes_nothing(tmp_path):
+    # The web half used to run for real: nginx, Node.js, a build, a certificate.
+    data = tmp_path / "data"
+    api, web = _vps_dry_run(tmp_path, "--data-dir", str(data))
+    assert api["DATA_DIR"] == str(data)
+    assert web["DOMAIN"] == "app.lumiverb.test"
+    assert not data.exists()
+
+
+@pytest.mark.parametrize(("args", "env_file", "upstream"), [
+    ((), None, "http://127.0.0.1:8000"),
+    ((), REMEMBERED, "http://127.0.0.1:8100"),
+    (("--api-port", "8200"), REMEMBERED, "http://127.0.0.1:8200"),
+    (("--api-listen-host", "10.0.0.5"), REMEMBERED, "http://10.0.0.5:8100"),
+    (("--api-listen-host", "0.0.0.0"), None, "http://127.0.0.1:8000"),
+    (("--api-listen-host", "::1"), None, "http://[::1]:8000"),
+], ids=["defaults", "remembered", "flag-beats-remembered", "one-address", "every-address", "ipv6"])
+def test_the_web_half_proxies_to_where_the_api_half_listens(tmp_path, args, env_file, upstream):
+    # It was always 127.0.0.1:8000, whatever --api-port or the env file said.
+    api, web = _vps_dry_run(tmp_path, *args, env_file=env_file)
+    assert web["API_UPSTREAM"] == upstream
+    assert upstream.endswith(f":{api['API_PORT']}")
+
+
+@pytest.mark.parametrize(("flag", "no_firewall"), [("--firewall", "false"), ("--no-firewall", "true")])
+def test_firewall_flags_reach_both_halves(tmp_path, flag, no_firewall):
+    remembered = REMEMBERED if flag == "--firewall" else REMEMBERED.replace("NO_FIREWALL=true", "NO_FIREWALL=false")
+    api, web = _vps_dry_run(tmp_path, flag, env_file=remembered)
+    assert (api["NO_FIREWALL"], web["NO_FIREWALL"]) == (no_firewall, no_firewall)
+
+
+def _fake_bin(tmp_path: Path, name: str, body: str) -> None:
+    path = tmp_path / "bin" / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("#!/bin/bash\n" + body)
+    path.chmod(0o755)
+
+
+def test_a_curl_pipe_dry_run_reads_the_scripts_from_a_throwaway_clone(tmp_path):
+    # Piped from GitHub there are no sibling scripts: a real run clones into
+    # /opt/lumiverb (installing git with apt). A dry run touches neither.
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    for name in ("deploy-api.sh", "deploy-web.sh"):
+        (repo / "scripts" / name).write_text((REPO / "scripts" / name).read_text())
+    git_env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t"}
+    for cmd in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-q", "-m", "scripts"]):
+        subprocess.run(["git", *cmd], cwd=repo, env=git_env, check=True, capture_output=True)
+    piped = tmp_path / "piped" / "deploy-vps.sh"
+    piped.parent.mkdir()
+    piped.write_text(DEPLOY_VPS.read_text())
+    _fake_bin(tmp_path, "apt-get", f'echo "$@" >> {tmp_path}/apt-calls\n')
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    api, web = _vps_dry_run(tmp_path, "--repo", f"file://{repo}", "--branch", "main", env_file=REMEMBERED,
+                            script=piped, extra_env={"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+                                                     "TMPDIR": str(temp), **{k: v for k, v in git_env.items()
+                                                                              if k.startswith("GIT_CONFIG")}})
+    assert web["API_UPSTREAM"] == "http://127.0.0.1:8100"
+    assert not (tmp_path / "apt-calls").exists()
+    assert list(temp.iterdir()) == [], "the clone is gone"
+
+
+def test_a_real_run_proxies_to_the_port_the_api_half_wrote_and_says_what_next(tmp_path):
+    # Both halves faked: the API half writes the env file as deploy-api.sh does.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "deploy-vps.sh").write_text(DEPLOY_VPS.read_text())
+    conf = tmp_path / "conf"
+    conf.mkdir()
+    (scripts / "deploy-api.sh").write_text(f'printf "API_LISTEN_HOST=127.0.0.1\\nAPI_PORT=8100\\n" > {conf}/env\n')
+    (scripts / "deploy-web.sh").write_text(f'echo "$@" > {tmp_path}/web-args\n')
+    _fake_bin(tmp_path, "id", '[ "$1" = "-u" ] && echo 0 || /usr/bin/id "$@"\n')
+    out = subprocess.run(
+        ["bash", str(scripts / "deploy-vps.sh"), "--domain", "app.lumiverb.test", "--api-port", "8100",
+         "--no-firewall"],
+        capture_output=True, text=True, timeout=30, check=False,
+        env={**os.environ, "LUMIVERB_CONF_DIR": str(conf), "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"},
+    )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert (tmp_path / "web-args").read_text().split() == [
+        "--domain", "app.lumiverb.test", "--api-upstream", "http://127.0.0.1:8100", "--no-firewall"]
+    # The README's next steps, not the retired update-vps.sh.
+    assert f"sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env {conf}/env" in out.stdout
+    assert "sudo bash /opt/lumiverb/scripts/update.sh" in out.stdout
+    assert "update-vps.sh" not in out.stdout
