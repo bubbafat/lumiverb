@@ -389,10 +389,10 @@ ufw allow <port>/tcp
 
 ## Deployments and updates
 
-Preferred: run the update script, which pulls code, syncs deps, runs migrations, rebuilds the UI, and restarts services:
+Preferred: run the update script, which pulls code, syncs deps, runs migrations, rebuilds the UI, and restarts services (logged in `/var/log/lumiverb/`):
 
 ```bash
-bash /opt/lumiverb/scripts/update-vps.sh
+sudo bash /opt/lumiverb/scripts/update.sh
 ```
 
 Manual fallback (e.g. pinning a specific release):
