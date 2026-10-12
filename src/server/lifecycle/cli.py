@@ -70,7 +70,7 @@ from getpass import getpass
 from pathlib import Path
 
 from src.server import backups
-from src.server.lifecycle import network, upkeep
+from src.server.lifecycle import log, network, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -154,15 +154,20 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
                                    postgres_env(base), cwd, restart_after=5, stop_within=60, term_main_only=True,
                                    stop_signal=signal.SIGINT))
     if env.get("QUICKWIT_BIN"):
+        # Warnings and errors only, without colour codes: its info lines were
+        # a sixth of the log (actors starting and stopping).
         started_first.append(Child("quickwit", [env["QUICKWIT_BIN"], "run", "--config", env["QUICKWIT_CONFIG"]],
-                                   base, cwd, restart_after=5, stop_within=30))
+                                   {**base, "NO_COLOR": "1", "RUST_LOG": env.get("RUST_LOG") or "warn"},
+                                   cwd, restart_after=5, stop_within=30))
     if env.get("NGINX_BIN"):
         started_first.append(Child("nginx", [env["NGINX_BIN"], "-p", f"{data / 'nginx'}/",
                                              "-c", env["NGINX_CONFIG"], "-e", "stderr"],
                                    base, cwd, restart_after=5, stop_within=15, term_main_only=True))
     api = Child(
         "api",
-        [python, "-m", "uvicorn", "src.server.api.main:app",
+        # No line per request (over half the log, every thumbnail): nginx
+        # answers the web, and the API logs what goes wrong.
+        [python, "-m", "uvicorn", "src.server.api.main:app", "--no-access-log",
          "--host", env.get("API_LISTEN_HOST") or "127.0.0.1",
          "--port", env.get("API_PORT") or DEFAULT_API_PORT,
          "--workers", env.get("LUMIVERB_API_WORKERS") or DEFAULT_API_WORKERS],
@@ -358,7 +363,7 @@ def _run(args: argparse.Namespace) -> int:
     # Built first: a setting it can't use stops it before anything starts.
     children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None,
                                env_file=named.absolute() if named else None)
-    logging.basicConfig(level=logging.INFO, format="lumiverb-server: %(message)s")
+    log.configure()  # launchd's file, rotated, each child's lines named (log.py)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: stop.set())
@@ -378,7 +383,7 @@ def _run(args: argparse.Namespace) -> int:
     listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
     if listens:
         network.write_listen_file(data, int(web_port), network.other_devices(data))
-    supervisor = Supervisor(children)
+    supervisor = Supervisor(children, relay=log.relay)
     if listens:
         threading.Thread(target=network.watch, args=(data, int(web_port), stop, lambda: supervisor.restart_soon("nginx")),
                          name="network-watch", daemon=True).start()
