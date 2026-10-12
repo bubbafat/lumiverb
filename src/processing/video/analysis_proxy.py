@@ -17,8 +17,8 @@ machine can, its hardware decodes (ffmpeg_run.decoded_by: Vulkan on a
 Linux GPU, about four times faster on prod; VideoToolbox on a Mac, a fifth
 of the CPU's work on a 5.3K GoPro clip), with the same pictures, since
 decoding is exact. ffmpeg itself decodes on the CPU what the hardware
-can't (ProRes, 4:2:2), and a render whose hardware decoding fails runs
-again on the CPU. On a GPU one render at a time decodes, and only while it
+won't take on, and a render whose hardware decoding fails, at the start or
+on any picture (ffmpeg_run.hwaccel_args), runs again on the CPU. On a GPU one render at a time decodes, and only while it
 has room beside the models using it; the rest decode on the CPU meanwhile.
 A Mac's media engine takes every render.
 
@@ -196,7 +196,7 @@ def build_command(
         scale = f"format={pix_fmt},{scale}"
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        *(["-hwaccel", hwaccel] if hwaccel else []),
+        *ffmpeg_run.hwaccel_args(hwaccel),
         "-i", str(source),
         "-map", "0:V:0",
         "-vf", scale, "-fpsmax", str(s.fps_max), "-pix_fmt", "yuv420p",

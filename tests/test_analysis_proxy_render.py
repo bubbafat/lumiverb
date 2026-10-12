@@ -392,7 +392,10 @@ def test_gpu_decoding_is_asked_for_before_the_input() -> None:
     cmd = build_command(Path("/in.mov"), Path("/out.mp4"), hwaccel="vulkan")
     assert cmd[cmd.index("-hwaccel") + 1] == "vulkan"
     assert cmd.index("-hwaccel") < cmd.index("-i")
-    assert "-hwaccel" not in build_command(Path("/in.mov"), Path("/out.mp4"))
+    # Stopped at the first picture the hardware fails on, never filling the gap.
+    assert cmd.index("-xerror") < cmd.index("-i")
+    on_the_cpu = build_command(Path("/in.mov"), Path("/out.mp4"))
+    assert "-hwaccel" not in on_the_cpu and "-xerror" not in on_the_cpu
 
 
 @pytest.mark.fast
@@ -593,6 +596,39 @@ def test_a_macs_media_engine_makes_the_same_proxy_as_the_cpu(tmp_path: Path, mon
 
     assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == ["videotoolbox", None]
     assert (_video(_probe(engine))["width"], _video(_probe(engine))["height"]) == (540, 960)
+    assert _frame_hashes(engine) == _frame_hashes(cpu)
+
+
+def _damaged(path: Path) -> Path:
+    """Three seconds of H.264 with three runs of its pictures' bytes garbled.
+    The CPU's decoder goes on past them (90 pictures); a Mac's media engine
+    fails on some and ffmpeg, left to itself, leaves those out (69) and
+    still finishes, as it does on a Sony 4:2:2 10-bit H.264 clip."""
+    ok = _make(path.with_name("ok.mp4"), seconds=3.0, audio=0, extra=["-g", "30", "-movflags", "+faststart"])
+    data = bytearray(ok.read_bytes())
+    start = data.find(b"mdat") + 8
+    for share in (0.45, 0.62, 0.8):
+        at = start + int((len(data) - start) * share)
+        data[at:at + 64] = bytes(b ^ 0x5A for b in data[at:at + 64])
+    path.write_bytes(bytes(data))
+    return path
+
+
+@needs_videotoolbox
+@pytest.mark.fast
+def test_a_picture_the_hardware_cant_decode_sends_the_render_to_the_cpu(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    src = _damaged(tmp_path / "damaged.mp4")
+    ran = _recording_ffmpeg(monkeypatch)
+
+    engine, cpu = tmp_path / "engine.mp4", tmp_path / "cpu.mp4"
+    render_analysis_proxy(src, engine, AnalysisProxySettings(decoder="videotoolbox"))
+    render_analysis_proxy(src, cpu, AnalysisProxySettings(decoder="cpu"))
+
+    # The media engine's try stopped at its first failed picture; the CPU made it.
+    assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == [
+        "videotoolbox", None, None]
+    assert len(_frame_hashes(engine)) == 90
     assert _frame_hashes(engine) == _frame_hashes(cpu)
 
 

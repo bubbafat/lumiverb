@@ -10,7 +10,9 @@ CPU must never be penalized with a timeout).
 Which decoder reads the original is the machine's: decoded_by() is
 Vulkan where it works (a Linux GPU), else VideoToolbox (a Mac's media
 engine), else the CPU. H.264 and HEVC decoding is exact: the pictures
-are the same whichever decodes them."""
+are the same whichever decodes them, where the hardware decodes them at
+all. One that fails on a picture is stopped there (hwaccel_args), and the
+caller decodes on the CPU instead."""
 
 from __future__ import annotations
 
@@ -98,6 +100,18 @@ def vulkan_decodes() -> bool:
 def videotoolbox_decodes() -> bool:
     """Whether this ffmpeg can open VideoToolbox here (a Mac)."""
     return _opens("videotoolbox")
+
+
+def hwaccel_args(hwaccel: str | None) -> list[str]:
+    """ffmpeg's arguments for decoding on `hwaccel` (none: the CPU), before its -i.
+
+    A hardware decoder can fail on some pictures of a stream it took on (a
+    Mac's on a Sony 4:2:2 10-bit H.264 clip: about one in twenty), and
+    ffmpeg then leaves them out, fills the gaps with the pictures before,
+    and still finishes. -xerror stops it at the first error instead, so the
+    caller makes it again on the CPU, which goes on past an error as it
+    always did: the same pictures, every one of them."""
+    return ["-xerror", "-hwaccel", hwaccel] if hwaccel else []
 
 
 def decoded_by(choice: str) -> str | None:
