@@ -12,6 +12,7 @@ those resources themselves using the live client.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -19,6 +20,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from testcontainers.postgres import PostgresContainer
@@ -143,7 +145,11 @@ def artifact_env(tmp_path_factory):
 
 
 def _make_jpeg(size: int = 256) -> bytes:
-    return b"\xff\xd8\xff" + secrets.token_bytes(size)
+    """A real JPEG of random pixels, `size` px square: image artifacts are
+    re-encoded when stored, and no two of these are alike."""
+    buf = io.BytesIO()
+    Image.frombytes("RGB", (size, size), secrets.token_bytes(size * size * 3)).save(buf, "JPEG")
+    return buf.getvalue()
 
 
 def _sha256(data: bytes) -> str:
@@ -168,7 +174,7 @@ def test_upload_proxy_returns_key_and_sha256(artifact_env) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert "key" in body
-    assert body["sha256"] == _sha256(content)
+    assert body["sha256"] == _sha256(storage.abs_path(body["key"]).read_bytes()), "the stored file's"
     assert body["key"].endswith(".webp")
 
 
@@ -185,20 +191,21 @@ def test_upload_proxy_writes_file_to_storage(artifact_env) -> None:
     assert r.status_code == 200
     key = r.json()["key"]
     assert storage.abs_path(key).exists()
-    assert storage.abs_path(key).read_bytes() == content
+    stored = Image.open(storage.abs_path(key))
+    assert (stored.format, stored.size) == ("WEBP", (512, 512)), "re-encoded as WebP, the same picture"
 
 
 @pytest.mark.slow
 def test_upload_proxy_persists_sha256_in_db(artifact_env) -> None:
-    auth, _, _, asset_id, _, tenant_url, _ = artifact_env
+    auth, _, _, asset_id, storage, tenant_url, _ = artifact_env
     content = _make_jpeg()
-    expected = _sha256(content)
 
-    auth.post(
+    r = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("proxy")},
     )
+    expected = _sha256(storage.abs_path(r.json()["key"]).read_bytes())
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
@@ -239,7 +246,7 @@ def test_upload_proxy_does_not_advance_status(artifact_env) -> None:
 
 @pytest.mark.slow
 def test_upload_thumbnail_returns_key_and_sha256(artifact_env) -> None:
-    auth, _, _, asset_id, _, _, _ = artifact_env
+    auth, _, _, asset_id, storage, _, _ = artifact_env
     content = _make_jpeg(64)
 
     r = auth.post(
@@ -249,7 +256,7 @@ def test_upload_thumbnail_returns_key_and_sha256(artifact_env) -> None:
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["sha256"] == _sha256(content)
+    assert body["sha256"] == _sha256(storage.abs_path(body["key"]).read_bytes()), "the stored file's"
 
 
 @pytest.mark.slow
@@ -286,15 +293,15 @@ def test_upload_thumbnail_does_not_overwrite_proxy_key(artifact_env) -> None:
 
 @pytest.mark.slow
 def test_upload_thumbnail_persists_sha256_in_db(artifact_env) -> None:
-    auth, _, _, asset_id, _, tenant_url, _ = artifact_env
+    auth, _, _, asset_id, storage, tenant_url, _ = artifact_env
     content = _make_jpeg(64)
-    expected = _sha256(content)
 
-    auth.post(
+    r = auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
         data={"lineage": made_json("proxy")},  # the proxy producer makes thumbnails
     )
+    expected = _sha256(storage.abs_path(r.json()["key"]).read_bytes())
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
@@ -388,9 +395,9 @@ def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert "/scenes/" in body["key"]
-    assert body["sha256"] == _sha256(content)
-    assert storage.abs_path(body["key"]).exists()
-    assert storage.abs_path(body["key"]).read_bytes() == content
+    stored = storage.abs_path(body["key"]).read_bytes()
+    assert body["sha256"] == _sha256(stored), "the stored file's"
+    assert Image.open(io.BytesIO(stored)).format == "JPEG"
 
 
 @pytest.mark.slow
@@ -495,7 +502,7 @@ def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
     content_v1 = _make_jpeg(100)
     content_v2 = _make_jpeg(200)  # different bytes → different hash
 
-    auth.post(
+    r1 = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content_v1, "image/jpeg")},
         data={"lineage": made_json("proxy")},
@@ -506,7 +513,8 @@ def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
         data={"lineage": made_json("proxy")},
     )
     assert r2.status_code == 200
-    assert r2.json()["sha256"] == _sha256(content_v2)
+    stored_v2 = _sha256(storage.abs_path(r2.json()["key"]).read_bytes())
+    assert r2.json()["sha256"] == stored_v2 != r1.json()["sha256"]
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
@@ -515,7 +523,7 @@ def test_reupload_proxy_overwrites_sha256(artifact_env) -> None:
             {"id": asset_id},
         ).fetchone()
     engine.dispose()
-    assert row[0] == _sha256(content_v2)
+    assert row[0] == stored_v2
 
 
 @pytest.mark.slow
@@ -602,7 +610,7 @@ def test_download_proxy_returns_bytes(artifact_env) -> None:
     auth, _, _, asset_id, _, _, _ = artifact_env
     content = _make_jpeg(300)
 
-    auth.post(
+    up = auth.post(
         f"/v1/assets/{asset_id}/artifacts/proxy",
         files={"file": ("proxy.jpg", content, "image/jpeg")},
         data={"lineage": made_json("proxy")},
@@ -611,7 +619,7 @@ def test_download_proxy_returns_bytes(artifact_env) -> None:
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/proxy")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
-    assert r.content == content
+    assert _sha256(r.content) == up.json()["sha256"], "what was stored"
 
 
 @pytest.mark.slow
@@ -619,7 +627,7 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
     auth, _, _, asset_id, _, _, _ = artifact_env
     content = _make_jpeg(64)
 
-    auth.post(
+    up = auth.post(
         f"/v1/assets/{asset_id}/artifacts/thumbnail",
         files={"file": ("thumb.jpg", content, "image/jpeg")},
         data={"lineage": made_json("proxy")},  # the proxy producer makes thumbnails
@@ -628,7 +636,7 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
     r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
-    assert r.content == content
+    assert _sha256(r.content) == up.json()["sha256"], "what was stored"
 
 
 @pytest.mark.slow
@@ -695,8 +703,7 @@ def test_download_scene_rep_returns_bytes(artifact_env) -> None:
     )
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
-    assert r.content == content
-    assert _sha256(r.content) == _sha256(content)
+    assert _sha256(r.content) == r_up.json()["sha256"], "what was stored, as it was stored"
 
 
 @pytest.mark.slow
@@ -946,3 +953,49 @@ def test_the_duplicate_picture_routes_are_gone(artifact_env, route) -> None:
     """One route per artifact: /artifacts/{type}."""
     auth, _, _, asset_id, _, _, _ = artifact_env
     assert auth.get(f"/v1/assets/{asset_id}/{route}").status_code == 404
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("artifact_type", ["proxy", "thumbnail"])
+def test_an_uploaded_image_is_stored_without_the_originals_metadata(artifact_env, artifact_type) -> None:
+    from tests.test_preview_metadata import METADATA, photo, upright_with_profile
+
+    auth, _, _, asset_id, storage, _, _ = artifact_env
+    r = auth.post(
+        f"/v1/assets/{asset_id}/artifacts/{artifact_type}",
+        files={"file": ("p.webp", photo("WEBP"), "image/webp")},
+        data={"lineage": made_json("proxy")},
+    )
+    assert r.status_code == 200, r.text
+    stored = storage.abs_path(r.json()["key"]).read_bytes()
+    assert [m for m in METADATA if m in stored] == []
+    assert upright_with_profile(stored)
+
+
+@pytest.mark.slow
+def test_an_uploaded_scene_frame_is_stored_without_the_originals_metadata(artifact_env) -> None:
+    from tests.test_preview_metadata import METADATA, photo
+
+    auth, _, library_id, _, storage, _, _ = artifact_env
+    rel_path = f"frame_check_{secrets.token_hex(4)}.mp4"
+    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 2048,
+                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "video"})
+    video = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()
+    r = auth.post(
+        f"/v1/assets/{video['asset_id']}/artifacts/scene_rep",
+        files={"file": ("frame.jpg", photo("JPEG"), "image/jpeg")},
+        data={"rep_frame_ms": "1000"},
+    )
+    assert r.status_code == 200, r.text
+    assert [m for m in METADATA if m in storage.abs_path(r.json()["key"]).read_bytes()] == []
+
+
+@pytest.mark.slow
+def test_an_upload_that_isnt_a_jpeg_png_or_webp_is_refused(artifact_env) -> None:
+    auth, _, _, asset_id, _, _, _ = artifact_env
+    r = auth.post(
+        f"/v1/assets/{asset_id}/artifacts/proxy",
+        files={"file": ("p.jpg", b"\xff\xd8\xff" + secrets.token_bytes(64), "image/jpeg")},
+        data={"lineage": made_json("proxy")},
+    )
+    assert r.status_code == 400 and "JPEG, PNG or WebP" in r.text

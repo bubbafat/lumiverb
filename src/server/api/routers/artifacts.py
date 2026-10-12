@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 import logging
 from typing import Annotated
 
@@ -43,6 +44,21 @@ CONTENT_TYPES: dict[str, str] = {
     "scene_rep": "image/jpeg",
     "analysis_proxy": "video/mp4",
 }
+
+
+# Image artifacts are stored re-encoded, without the original's metadata
+# (src/server/preview_image.py): (format, quality).
+IMAGE_ARTIFACTS: dict[str, tuple[str, int]] = {"proxy": ("WEBP", 80), "thumbnail": ("WEBP", 80),
+                                                "scene_rep": ("JPEG", 90)}
+
+
+def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
+    """Rewrites the uploaded image at `path` in place; its new sha256."""
+    from src.server.preview_image import reencoded
+
+    data, _, _ = reencoded(path.read_bytes(), fmt=fmt, quality=quality)
+    path.write_bytes(data)
+    return hashlib.sha256(data).hexdigest()
 
 
 class ArtifactUploadResponse(BaseModel):
@@ -134,6 +150,16 @@ async def upload_artifact(
                     raise HTTPException(status_code=413, detail="File too large")
                 hasher.update(chunk)
                 f.write(chunk)
+        sha256 = hasher.hexdigest()
+        if artifact_type in IMAGE_ARTIFACTS:
+            from starlette.concurrency import run_in_threadpool
+
+            from src.server.preview_image import NotAnImageError
+
+            try:
+                sha256 = await run_in_threadpool(_reencode_image_file, tmp_path, *IMAGE_ARTIFACTS[artifact_type])
+            except NotAnImageError:
+                raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
         tmp_path.rename(path)
     except HTTPException:
         tmp_path.unlink(missing_ok=True)
@@ -141,8 +167,6 @@ async def upload_artifact(
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to write artifact to storage")
-
-    sha256 = hasher.hexdigest()
 
     if artifact_type == "proxy":
         asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)

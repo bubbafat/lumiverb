@@ -46,33 +46,12 @@ MAX_PROXY_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB raw upload limit
 
 
 def _normalize_proxy(data: bytes) -> tuple[bytes, int, int]:
-    """Decode image, resize to PROXY_MAX_LONG_EDGE if larger, encode as WebP.
+    """The client's proxy as stored: WebP, at most PROXY_MAX_LONG_EDGE, with
+    nothing of the original's metadata (preview_image.py), a WebP too.
+    Returns (webp_bytes, width, height), the proxy's own dimensions."""
+    from src.server.preview_image import reencoded
 
-    If the input is already WebP and within size limits, it is returned as-is
-    (no re-encoding). Returns (webp_bytes, width, height) where width/height
-    are the dimensions of the normalized proxy (not the original source).
-    """
-    img = Image.open(io.BytesIO(data))
-    try:
-        w, h = img.size
-        long_edge = max(w, h)
-
-        # Fast path: already WebP and within size limits — skip re-encoding
-        if img.format == "WEBP" and long_edge <= PROXY_MAX_LONG_EDGE:
-            return data, w, h
-
-        img = img.convert("RGB")
-        if long_edge > PROXY_MAX_LONG_EDGE:
-            scale = PROXY_MAX_LONG_EDGE / long_edge
-            w = int(w * scale)
-            h = int(h * scale)
-            img = img.resize((w, h), Image.LANCZOS)
-
-        buf = io.BytesIO()
-        img.save(buf, format="WEBP", quality=WEBP_QUALITY)
-        return buf.getvalue(), w, h
-    finally:
-        img.close()
+    return reencoded(data, fmt="WEBP", quality=WEBP_QUALITY, max_long_edge=PROXY_MAX_LONG_EDGE)
 
 
 def _generate_thumbnail(proxy_bytes: bytes) -> bytes:
