@@ -96,9 +96,12 @@ def get_current_user_id(request: Request) -> str:
 
 def checked_root_path(root_path: str) -> str:
     """A library root a request sent; 400 unless absolute and in one form:
-    no ".", ".." or empty part (so no trailing "/"), no backslash, no NUL."""
+    no ".", ".." or empty part (so no trailing "/"), no backslash, no control
+    character (a newline, a tab, NUL)."""
+    from src.shared.path_filter import has_control_character
+
     parts = root_path[1:].split("/")
-    if (not root_path.startswith("/") or "\x00" in root_path or "\\" in root_path
+    if (not root_path.startswith("/") or has_control_character(root_path) or "\\" in root_path
             or any(p in ("", ".", "..") for p in parts)):
         raise HTTPException(status_code=400, detail="Invalid root_path")
     return root_path
@@ -127,8 +130,9 @@ def require_folder_chosen_here(request: Request) -> None:
 
 def checked_rel_path(rel_path: str) -> str:
     """A rel_path a request sent, as stored (NFC); 400 unless it stays inside
-    its library (relative, no "..", no leading "/"). Every write that takes a
-    rel_path goes through here."""
+    its library in its one form (relative, no "..", no leading "/", no
+    control character: check_rel_path). Every write that takes a rel_path
+    goes through here."""
     from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 
     try:

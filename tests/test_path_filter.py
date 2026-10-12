@@ -4,7 +4,40 @@ from __future__ import annotations
 
 import pytest
 
-from src.shared.path_filter import PathFilter, _glob_match, is_path_included, is_path_included_merged, validate_pattern
+from src.shared.path_filter import (
+    PathFilter,
+    _glob_match,
+    has_control_character,
+    is_path_included,
+    is_path_included_merged,
+    validate_pattern,
+)
+
+# The same cases as ControlCharacterNameTests.swift: the twins agree.
+CONTROL_CHARACTERS = [chr(c) for c in range(0x20)] + ["\x7f"]
+ORDINARY_NAMES = [
+    "photo.jpg", "Shoots/Day 1/A001.mov", "café/résumé.jpg",
+    "Café/résumé.jpg",  # NFD, as macOS hands it out
+    "🎉 party.jpg", "日本/写真.jpg", "a~b!c@#$%^&()[]{}.jpg", "a b.jpg",
+]
+
+
+@pytest.mark.fast
+def test_a_name_with_a_newline_has_a_control_character() -> None:
+    assert has_control_character("a\nb.jpg")
+    assert has_control_character("Shoots/day\r1/a.jpg")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("control", CONTROL_CHARACTERS, ids=lambda c: f"U+{ord(c):04X}")
+def test_every_c0_control_and_del_is_a_control_character(control: str) -> None:
+    assert has_control_character(f"a{control}b.jpg")
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("name", ORDINARY_NAMES)
+def test_ordinary_names_have_no_control_character(name: str) -> None:
+    assert not has_control_character(name)
 
 
 @pytest.mark.fast
