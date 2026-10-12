@@ -21,7 +21,12 @@ from src.server.lifecycle import network
 from src.server.lifecycle.init import nginx_conf, nginx_site
 from src.server.setup import create_first_admin
 from src.shared.utils import utcnow
-from tests.test_first_run_setup import HERE, PASSWORD, control  # noqa: F401 (control: a fixture)
+from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
+    HERE,
+    LOCALHOST,
+    PASSWORD,
+    control,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -37,7 +42,7 @@ def admin(control, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     get_settings.cache_clear()
     create_first_admin("robert@example.com", PASSWORD)
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         token = _login(client, "robert@example.com", PASSWORD).json()["access_token"]
         client.headers["Authorization"] = f"Bearer {token}"
         yield client

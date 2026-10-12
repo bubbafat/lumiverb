@@ -17,6 +17,7 @@ from src.server.setup import create_first_admin
 from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
     HERE,
     LAN,
+    LOCALHOST,
     PASSWORD,
     control,
 )
@@ -54,7 +55,7 @@ def _signed_in(client: TestClient, role: str = "admin") -> dict[str, str]:
 
 
 def test_an_admin_reads_the_log_newest_first(mac_log):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         got = client.get("/v1/system/logs", headers=auth)
         assert got.status_code == 200, got.text
@@ -72,14 +73,14 @@ def test_an_admin_reads_the_log_newest_first(mac_log):
 
 
 def test_one_account_reads_it_from_another_device_too(mac_log):
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
     with TestClient(app, client=LAN) as client:
         assert client.get("/v1/system/logs", headers=auth).status_code == 200
 
 
 def test_with_more_than_one_account_only_on_the_machine_itself(mac_log):
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
         with get_control_session() as session:
             TenantRepository(session).create("Another account")
@@ -91,12 +92,12 @@ def test_with_more_than_one_account_only_on_the_machine_itself(mac_log):
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_only_admins(mac_log, role):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         assert client.get("/v1/system/logs", headers=_signed_in(client, role)).status_code == 403
 
 
 def test_a_cursor_not_of_this_log_is_a_400(mac_log):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         got = client.get("/v1/system/logs", params={"after": "nonsense"}, headers=_signed_in(client))
     assert got.status_code == 400 and got.json()["error"]["code"] == "bad_cursor"
 
@@ -105,6 +106,6 @@ def test_no_log_here_says_why(control, monkeypatch):  # noqa: F811
     monkeypatch.delenv("LUMIVERB_LOG_FILE", raising=False)
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         body = client.get("/v1/system/logs", headers=_signed_in(client)).json()
     assert body["source"] is None and body["entries"] == [] and "terminal" in body["unavailable"]

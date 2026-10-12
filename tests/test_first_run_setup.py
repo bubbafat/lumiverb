@@ -29,6 +29,7 @@ from tests.conftest import PG_IMAGE, _ensure_psycopg2, _run_control_migrations
 pytestmark = pytest.mark.slow
 
 HERE = ("127.0.0.1", 50000)
+LOCALHOST = "http://localhost:6464"  # how a browser on the machine itself addresses it
 LAN = ("192.168.86.20", 50000)
 PASSWORD = "correct horse battery"
 
@@ -66,7 +67,18 @@ def _rows(url: str, model) -> list:
 
 
 def _client(address=HERE) -> TestClient:
-    return TestClient(app, client=address)
+    return TestClient(app, client=address, base_url=LOCALHOST)
+
+
+def test_a_page_from_anywhere_else_can_t_set_it_up(control):  # noqa: F811
+    # A page whose name now points at this machine reaches it from 127.0.0.1,
+    # with its own name.
+    with _client() as client:
+        headers = {"Host": "rebind.example:6464", "Origin": "http://rebind.example:6464"}
+        assert client.get("/v1/setup", headers=headers).json() == {"needed": True, "on_this_machine": False}
+        refused = client.post("/v1/setup", json={"email": "x@example.com", "password": PASSWORD}, headers=headers)
+        assert refused.status_code == 403 and refused.json()["error"]["code"] == "setup_elsewhere"
+        assert client.get("/v1/setup").json() == {"needed": True, "on_this_machine": True}, "still open here"
 
 
 def test_a_new_install_makes_an_account_and_its_admin_then_setup_is_closed(control):

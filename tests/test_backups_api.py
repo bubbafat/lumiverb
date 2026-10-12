@@ -19,7 +19,12 @@ from src.server.api.main import app
 from src.server.api.routers import upkeep
 from src.server.config import get_settings
 from tests.test_backups_slow import PG_BIN
-from tests.test_first_run_setup import HERE, LAN, control  # noqa: F401 (control: a fixture)
+from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
+    HERE,
+    LAN,
+    LOCALHOST,
+    control,
+)
 from tests.test_network_api import _signed_in
 
 pytestmark = pytest.mark.slow
@@ -96,7 +101,7 @@ def _settled(client: TestClient, auth: dict[str, str]) -> dict:
 
 def test_an_admin_backs_up_now_and_sees_how_to_restore_it(install):
     data, account_database = install
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _admin(client, account_database)
         before = client.get("/v1/system/backups", headers=auth).json()
         assert before["folder"] == before["default_folder"] == str(data / "backups")
@@ -116,7 +121,7 @@ def test_an_admin_backs_up_now_and_sees_how_to_restore_it(install):
 
 def test_a_backup_that_fails_says_why_here_and_on_the_admin_page(install):
     data, account_database = install
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)  # the account's database is never made: pg_dump can't back it up
         assert client.post("/v1/system/backups", headers=auth).status_code == 202
         body = _settled(client, auth)
@@ -127,7 +132,7 @@ def test_a_backup_that_fails_says_why_here_and_on_the_admin_page(install):
 
 def test_one_at_a_time(install):
     data, account_database = install
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         with backups._one_at_a_time(data):
             refused = client.post("/v1/system/backups", headers=auth)
@@ -138,7 +143,7 @@ def test_the_folder_is_chosen_on_the_machine_itself(install, tmp_path):
     data, _ = install
     drive = tmp_path / "Backup"
     drive.mkdir()
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
         moved = here.put("/v1/system/backups/folder", json={"folder": str(drive)}, headers=auth)
         assert moved.status_code == 200, moved.text
@@ -162,7 +167,7 @@ def test_the_folder_is_chosen_on_the_machine_itself(install, tmp_path):
         refused = there.put("/v1/system/backups/folder", json={"folder": None}, headers=auth)
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "backups_elsewhere"
     assert backups.folder(data) == drive
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         back = here.put("/v1/system/backups/folder", json={"folder": None}, headers=auth)
     assert back.json()["folder"] == str(data / "backups")
 
@@ -175,7 +180,7 @@ def test_a_folder_it_cant_write_any_more_is_flagged(install, tmp_path):
     backups.set_folder(data, drive)  # chosen when it could be written
     drive.chmod(0o500)  # then it can't
     try:
-        with TestClient(app, client=HERE) as here:
+        with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
             auth = _signed_in(here)
             body = here.get("/v1/system/backups", headers=auth).json()
             row = {r["key"]: r for r in here.get("/v1/system/health", headers=auth).json()["rows"]}["backups"]
@@ -188,7 +193,7 @@ def test_a_folder_it_cant_write_any_more_is_flagged(install, tmp_path):
 
 def test_the_default_folder_not_made_yet_is_fine(install):
     data, _ = install
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
         body = here.get("/v1/system/backups", headers=auth).json()
     assert body["folder"] == str(data / "backups") and body["folder_write_error"] is None
@@ -196,7 +201,7 @@ def test_the_default_folder_not_made_yet_is_fine(install):
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_only_admins(install, role):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client, role)
         assert client.get("/v1/system/backups", headers=auth).status_code == 403
         assert client.post("/v1/system/backups", headers=auth).status_code == 403
