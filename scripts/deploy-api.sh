@@ -138,6 +138,7 @@ _existing_val() {
 }
 PG_PORT="${PG_PORT:-$(_existing_val PG_PORT)}";        PG_PORT="${PG_PORT:-5432}"
 API_PORT="${API_PORT:-$(_existing_val API_PORT)}";     API_PORT="${API_PORT:-8000}"
+API_LISTEN_HOST="${API_LISTEN_HOST:-$(_existing_val API_LISTEN_HOST)}"; API_LISTEN_HOST="${API_LISTEN_HOST:-127.0.0.1}"
 QW_PORT="${QW_PORT:-$(_existing_val QUICKWIT_PORT)}";  QW_PORT="${QW_PORT:-7280}"
 APP_HOST="${APP_HOST:-$(_existing_val APP_HOST)}"
 [[ -n "$DOMAIN" || -n "$APP_HOST" ]] || fail "Required: --domain <FQDN> (e.g. --domain api.example.com) or --app-host <URL>"
@@ -172,6 +173,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "PG_VERSION=${PG_VERSION}"
   echo "PG_PORT=${PG_PORT}"
   echo "API_PORT=${API_PORT}"
+  echo "API_LISTEN_HOST=${API_LISTEN_HOST}"
   echo "QUICKWIT_PORT=${QW_PORT}"
   echo "WORKER=${WITH_WORKER}"
   echo "ROOT_MAPS=${ROOT_MAPS[*]-}"
@@ -340,12 +342,6 @@ JWT_SECRET="$(_existing_val JWT_SECRET)"
 [[ -n "$ADMIN_KEY" ]]     || ADMIN_KEY="$(openssl rand -hex 32)"
 [[ -n "$API_SECRET_KEY" ]] || API_SECRET_KEY="$(openssl rand -hex 32)"
 [[ -n "$JWT_SECRET" ]]     || JWT_SECRET="$(openssl rand -hex 32)"
-
-# Resolve API listen host: CLI flag > existing env > default
-if [[ -z "$API_LISTEN_HOST" ]]; then
-  API_LISTEN_HOST="$(_existing_val API_LISTEN_HOST)"
-fi
-API_LISTEN_HOST="${API_LISTEN_HOST:-127.0.0.1}"
 
 DB_URL="postgresql+psycopg2://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}"
 
