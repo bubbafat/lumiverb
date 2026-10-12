@@ -86,6 +86,17 @@ def test_detail_is_the_one_scene_setting_offered(env):
     assert p["level"] == 1 and p["part_of"] == "scene_vision" and p["settings"] == {}
 
 
+def test_scene_descriptions_and_video_faces_say_they_need_scenes(env):
+    # They apply only to videos whose scenes are found, so a video without
+    # them isn't in their counts: the processing page says it waits for Scenes.
+    listed = {x["artifact"]: x for x in env[0].get("/v1/producers", params={"counts": "false"},
+                                                   headers=env[1]).json()["producers"]}
+    assert listed["scene_vision"]["needs"] == ["analysis_proxy", "scenes"]
+    assert listed["video_faces"]["needs"] == ["analysis_proxy", "scenes"]
+    assert listed["scenes"]["needs"] == ["analysis_proxy"]
+    assert listed["vision"]["needs"] == ["proxy"]
+
+
 def test_a_redo_starts_the_clip_over_and_new_scenes_are_found_and_described(env, monkeypatch):
     lib = _library(env, "SceneRedo")
     client, headers, library_id, storage, tenant_id, _ = lib

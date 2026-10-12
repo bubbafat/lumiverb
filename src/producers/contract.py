@@ -176,7 +176,8 @@ class ProducerSpec:
     # what's missing, yet counted apart ("rechecking"), not as missing.
     recheck: str = ""
     settings: tuple[Setting, ...] = ()  # output-affecting
-    # The artifacts it's made from: the queue waits until a clip has them.
+    # The artifacts it's made from: the queue waits until a clip has them,
+    # and Settings → Processing says how many clips wait for each.
     needs: tuple[str, ...] = ()
     # Its output must come from one model across the library (an embedding
     # space): an upgrade can't be partial.

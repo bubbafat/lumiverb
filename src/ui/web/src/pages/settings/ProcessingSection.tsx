@@ -40,6 +40,12 @@ function mediaLabel(media: string[]): string {
   return media.includes("video") ? "Videos" : "Images";
 }
 
+/** "videos", "photos" or "clips", for a count of a producer's media. */
+function mediaNoun(media: string[], count: number): string {
+  const one = media.length === 1 && media[0] === "video" ? "video" : media.length === 1 ? "photo" : "clip";
+  return count === 1 ? one : `${one}s`;
+}
+
 const STATUS_QUERY_KEY = ["scheduler-status"];
 
 /** Account-wide: what each producer has made for the clips, a pause switch for each processing action and one
@@ -144,6 +150,13 @@ export default function ProcessingSection() {
               admin,
               canRetry,
               paused: held.get(q.artifact) ?? q.paused,
+              // What it's made from that clips still lack: they wait, and aren't in its counts.
+              waitingFor: (q.needs ?? []).flatMap((need) => {
+                const p = producers.find((x) => x.artifact === need);
+                return p?.counts && p.counts.missing > 0
+                  ? [{ producer: p, clips: p.counts.missing, paused: held.get(p.artifact) ?? p.paused }]
+                  : [];
+              }),
               scansPaused: !!held.get("scans"),
               libraryId: kind === "library" ? id : undefined,
               timeLeft: kind === "all" && status?.live ? status.eta?.producers[q.artifact] : undefined,
@@ -197,11 +210,14 @@ function ProducerRow({
   canRedoBelow = true,
   levels,
   children,
+  waitingFor = [],
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
   paused: boolean;
+  // Clips waiting for what it's made from (scenes, for scene descriptions), each with whether that's paused.
+  waitingFor?: { producer: Producer; clips: number; paused: boolean }[];
   scansPaused: boolean;
   libraryId?: string;
   // Seconds until it's caught up: the whole account's, so only with its counts.
@@ -251,7 +267,7 @@ function ProducerRow({
       {producer.waiting && <WaitingLine why={producer.waiting} />}
       {off ? (
         <p className="text-sm text-gray-400">Off: nothing new is found. What's found stays.</p>
-      ) : c && (
+      ) : c && !(c.applicable === 0 && waitingFor.length > 0) && (
         <p className="text-sm text-gray-400">
           {c.applicable === 0 ? (
             "Nothing to make yet."
@@ -274,6 +290,12 @@ function ProducerRow({
           )}
         </p>
       )}
+      {!off && waitingFor.map((w) => (
+        <p key={w.producer.artifact} className={`text-sm ${w.paused ? "text-amber-300" : "text-gray-400"}`}>
+          {n(w.clips)} {mediaNoun(w.producer.media, w.clips)} wait for {w.producer.title}
+          {w.paused ? ", which is paused." : " first."}
+        </p>
+      ))}
       {c && c.failing > 0 && (
         <button
           type="button"

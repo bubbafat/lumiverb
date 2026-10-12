@@ -206,6 +206,9 @@ class ProducerItem(BaseModel):
     level: int | None = None
     # Shown as a part of another producer (its artifact): scenes are part of scene descriptions.
     part_of: str | None = None
+    # The artifacts it's made from: a clip that lacks one waits for it (and
+    # isn't counted here: scene descriptions apply to videos with scenes).
+    needs: list[str] = []
 
 
 class ProducerList(BaseModel):
@@ -284,7 +287,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None], use
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
         waiting=waits.get(p.job) if p.job else None, unit=p.unit, level=want.get("level"),
-        part_of=p.part_of or None,
+        part_of=p.part_of or None, needs=list(p.needs),
     )
 
 

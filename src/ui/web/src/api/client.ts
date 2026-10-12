@@ -961,6 +961,8 @@ export interface Producer {
   level?: number | null;
   /** Shown as a part of another producer (its artifact): scenes are part of scene descriptions. */
   part_of?: string | null;
+  /** The artifacts it's made from: a clip lacking one waits for it, and isn't in its counts. */
+  needs?: string[];
 }
 
 /** Make again what a producer made below its level now (admins): these clips (asset_ids) or every one
