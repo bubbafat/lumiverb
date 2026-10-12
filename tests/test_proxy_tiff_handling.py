@@ -25,9 +25,7 @@ def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
     sentinel_proxy.copy_memory.return_value = sentinel_proxy
 
     with (
-        patch.object(
-            proxy_mod.pyvips.Image, "new_from_file", return_value=fake_vips_loaded
-        ) as new_from_file,
+        patch.object(proxy_mod, "open_file", return_value=fake_vips_loaded) as open_file,
         patch.object(proxy_mod.PILImage, "open") as pil_open,
     ):
         out = proxy_mod._load_tiff_proxy_image(
@@ -39,8 +37,8 @@ def test_tiff_pyvips_primary_success_no_pillow_fallback() -> None:
     assert out is sentinel_proxy
     pil_open.assert_not_called()
 
-    assert new_from_file.call_count == 1
-    _, kwargs = new_from_file.call_args
+    assert open_file.call_count == 1
+    _, kwargs = open_file.call_args
     assert kwargs["access"] == proxy_mod.pyvips.enums.Access.SEQUENTIAL
     assert kwargs["fail_on"] == proxy_mod.pyvips.enums.FailOn.NONE
 
@@ -56,11 +54,7 @@ def test_tiff_pyvips_failure_falls_back_to_pillow() -> None:
     fake_pil_img = MagicMock(name="pil_img")
 
     with (
-        patch.object(
-            proxy_mod.pyvips.Image,
-            "new_from_file",
-            side_effect=RuntimeError("vips failure"),
-        ),
+        patch.object(proxy_mod, "open_file", side_effect=RuntimeError("vips failure")),
         patch.object(proxy_mod.PILImage, "open", return_value=fake_pil_img) as pil_open,
         patch.object(proxy_mod, "_pil_to_vips", return_value=sentinel_proxy) as pil_to_vips,
     ):
@@ -88,11 +82,7 @@ def test_tiff_oversize_guard_raises_without_pillow_decode() -> None:
 
     with (
         patch.object(proxy_mod, "TIFF_MAX_PIXELS", 10),
-        patch.object(
-            proxy_mod.pyvips.Image,
-            "new_from_file",
-            side_effect=RuntimeError("vips failure"),
-        ),
+        patch.object(proxy_mod, "open_file", side_effect=RuntimeError("vips failure")),
         patch.object(proxy_mod.PILImage, "open") as pil_open,
     ):
         with pytest.raises(RuntimeError, match=r"TIFF too large to proxy safely"):

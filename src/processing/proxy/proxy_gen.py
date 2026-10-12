@@ -2,7 +2,8 @@
 
 Single code path for all proxy generation: ingest uploads, face detection,
 and repair. Supports RAW (via rawpy + embedded thumbnail optimisation),
-TIFF, and standard image formats via pyvips.
+TIFF, BMP (via Pillow) and standard image formats via pyvips, which opens a
+file by its exact name with its trusted loaders only (src/processing/libvips.py).
 
 Target size is configurable — ingest uses 2048px for upload proxies,
 face detection uses 1280px.
@@ -14,8 +15,9 @@ import logging
 from pathlib import Path
 
 import numpy as np
-import pyvips
 from PIL import Image as PILImage
+
+from src.processing.libvips import open_file, pyvips, thumbnail_file
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +71,8 @@ def _load_tiff_proxy_image(
 
     # 1) Try pyvips first for best-effort behaviour on typical TIFFs.
     try:
-        vips_img = pyvips.Image.new_from_file(
-            str(source_path),
+        vips_img = open_file(
+            source_path,
             access=pyvips.enums.Access.SEQUENTIAL,
             fail_on=pyvips.enums.FailOn.NONE,
         )
@@ -119,7 +121,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
 
     Handles RAW files (via rawpy — prefers embedded JPEG thumbnail when
     large enough), TIFF, and standard image formats.  Uses pyvips for
-    speed; falls back to PIL for TIFF when vips fails.
+    speed; falls back to PIL for TIFF when vips fails, and reads BMP with PIL.
     """
     from src.shared.file_extensions import RAW_EXTENSIONS
 
@@ -171,16 +173,15 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             return proxy_bytes, width_orig, height_orig
         except Exception:
             # rawpy can't handle this file (e.g. Adobe-generated DNG) —
-            # try pyvips directly as it handles many DNG variants
+            # try pyvips directly, which reads a DNG as the TIFF it is (its
+            # RAW loaders, libraw's and ImageMagick's, are untrusted and blocked)
             logger.info("proxy: %s — rawpy failed, trying pyvips direct", source_path.name)
-            header = pyvips.Image.new_from_file(
-                str(source_path), fail_on=pyvips.enums.FailOn.NONE,
-            )
+            header = open_file(source_path, fail_on=pyvips.enums.FailOn.NONE)
             width_orig = header.width
             height_orig = header.height
             del header
-            proxy_img = pyvips.Image.thumbnail(
-                str(source_path), max_long_edge,
+            proxy_img = thumbnail_file(
+                source_path, max_long_edge,
                 height=max_long_edge,
                 size=pyvips.enums.Size.DOWN,
             ).copy_memory()
@@ -200,16 +201,24 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
         return proxy_bytes, width_orig, height_orig
 
+    elif ext == ".bmp":
+        # libvips reads BMP only with ImageMagick, a loader it doesn't trust:
+        # Pillow's BMP reader reads it.
+        with PILImage.open(source_path, formats=["BMP"]) as pil_img:
+            width_orig, height_orig = pil_img.size
+            pil_img.thumbnail((max_long_edge, max_long_edge), PILImage.LANCZOS)
+            proxy_img = _pil_to_vips(pil_img)
+        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+        return proxy_bytes, width_orig, height_orig
+
     else:
-        header = pyvips.Image.new_from_file(
-            str(source_path), fail_on=pyvips.enums.FailOn.NONE,
-        )
+        header = open_file(source_path, fail_on=pyvips.enums.FailOn.NONE)
         width_orig = header.width
         height_orig = header.height
         del header
 
-        proxy_img = pyvips.Image.thumbnail(
-            str(source_path), max_long_edge,
+        proxy_img = thumbnail_file(
+            source_path, max_long_edge,
             height=max_long_edge,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
