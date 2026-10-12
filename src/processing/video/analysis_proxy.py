@@ -12,13 +12,18 @@ With several tracks a stereo mix of them comes first (handler "Lumiverb mix"):
 browsers play only the first track, and a lav may be on any. It starts at 0
 like the original, so times found in it are times in the original.
 
-Decoding a 4K HEVC original is most of a render. Where ffmpeg and the GPU
-can, the GPU decodes (Vulkan by default): about four times faster on
-prod, with the same pictures, since decoding is exact. ffmpeg itself
-decodes on the CPU what the GPU can't (ProRes, 4:2:2), and a render whose
-GPU decoding fails runs again on the CPU. One render at a time decodes on
-the GPU, and only while it has room beside the models using it; the rest
-decode on the CPU meanwhile.
+Decoding a 4K HEVC original is most of a render. Where ffmpeg and the
+machine can, its hardware decodes (ffmpeg_run.decoded_by: Vulkan on a
+Linux GPU, about four times faster on prod; VideoToolbox on a Mac, a fifth
+of the CPU's work on a 5.3K GoPro clip), with the same pictures, since
+decoding is exact. ffmpeg itself decodes on the CPU what the hardware
+can't (ProRes, 4:2:2), and a render whose hardware decoding fails runs
+again on the CPU. On a GPU one render at a time decodes, and only while it
+has room beside the models using it; the rest decode on the CPU meanwhile.
+A Mac's media engine takes every render.
+
+A render is stopped only when ffmpeg stops making progress, never for
+being slow (ffmpeg_run.run).
 """
 
 from __future__ import annotations
@@ -32,14 +37,10 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
+from src.processing.video import ffmpeg_run
 from src.processing.video.audio import MIX_HANDLER, AudioTrack, audio_tracks, mix_and_tracks_filter
 
 logger = logging.getLogger(__name__)
-
-# Rendering a long recording takes a while; give up only when something's stuck.
-MIN_TIMEOUT_SEC = 600.0
-TIMEOUT_PER_SOURCE_SEC = 3.0
-UNKNOWN_DURATION_TIMEOUT_SEC = 6 * 3600.0
 
 
 class RenderError(Exception):
@@ -56,9 +57,10 @@ class AnalysisProxySettings:
     crf: int = 28
     # Speech, not music: Whisper hears 16 kHz mono.
     audio_kbps_per_channel: int = 48
-    # "auto" (Vulkan when it works here), "cpu", or an ffmpeg hwaccel name.
+    # "auto" (Vulkan, else VideoToolbox, when it works here), "cpu", or an ffmpeg hwaccel name.
     decoder: str = "auto"
-    # Renders that decode on the GPU at once (the rest on the CPU meanwhile).
+    # Renders that decode on the GPU at once (the rest on the CPU meanwhile;
+    # 0: none). A Mac's media engine takes every render.
     gpu_decodes: int = 1
 
     @classmethod
@@ -77,21 +79,6 @@ class AnalysisProxySettings:
 
 
 MACHINE_CHOICES = ("encoder", "decoder", "gpu_decodes")
-
-
-@functools.cache
-def _vulkan_decodes() -> bool:
-    """Whether this ffmpeg can open a Vulkan device here. A device without
-    video decoding (a software driver) is fine: ffmpeg then decodes on the CPU."""
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", "vulkan",
-             "-f", "lavfi", "-i", "nullsrc=s=64x64:d=0.04", "-frames:v", "1", "-f", "null", "-"],
-            capture_output=True, timeout=30, check=False,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return False
-    return result.returncode == 0
 
 
 # How many renders decode on the GPU at once is this machine's choice
@@ -127,11 +114,7 @@ def _gpu_has_room() -> bool:
 
 def gpu_decoder(choice: str) -> str | None:
     """The ffmpeg hwaccel to decode with, or None for the CPU."""
-    if choice in ("", "cpu"):
-        return None
-    if choice == "auto":
-        return "vulkan" if _vulkan_decodes() else None
-    return choice
+    return ffmpeg_run.decoded_by(choice)
 
 
 def _video_codec_args(settings: AnalysisProxySettings) -> list[str]:
@@ -198,29 +181,21 @@ def build_command(
     ]
 
 
-def render_timeout(duration_sec: float | None) -> float:
-    if not duration_sec:
-        return UNKNOWN_DURATION_TIMEOUT_SEC
-    return max(MIN_TIMEOUT_SEC, duration_sec * TIMEOUT_PER_SOURCE_SEC)
-
-
 def _run(source: Path, part: Path, settings: AnalysisProxySettings | None, tracks: list[AudioTrack],
-         timeout: float | None, hwaccel: str | None = None) -> None:
+         stall_after: float, hwaccel: str | None = None) -> None:
     cmd = build_command(source, part, settings, tracks, hwaccel)
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, timeout=timeout or UNKNOWN_DURATION_TIMEOUT_SEC, check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
+        result = ffmpeg_run.run(cmd, stall_after=stall_after)
+    except ffmpeg_run.StalledError as exc:
         part.unlink(missing_ok=True)
-        raise _TimeoutError(f"ffmpeg timed out after {exc.timeout:.0f}s on {source.name}") from exc
+        raise _StuckError(f"{exc} on {source.name}") from exc
     if result.returncode != 0 or not part.is_file() or part.stat().st_size == 0:
         part.unlink(missing_ok=True)
-        stderr = result.stderr.decode(errors="replace").strip()[-500:]
+        stderr = result.stderr.strip()[-500:]
         raise RenderError(f"ffmpeg failed on {source.name}: {stderr or f'exit {result.returncode}'}")
 
 
-class _TimeoutError(RenderError):
+class _StuckError(RenderError):
     pass
 
 
@@ -229,13 +204,14 @@ def render_analysis_proxy(
     dest: Path,
     settings: AnalysisProxySettings | None = None,
     *,
-    timeout: float | None = None,
+    stall_after: float = ffmpeg_run.STALL_SEC,
 ) -> None:
     """Render `source` into `dest`, or raise RenderError and leave nothing.
 
-    If decoding on the GPU fails, it runs again on the CPU. If a render
-    with several audio tracks fails, it tries once more with only the first:
-    one odd track shouldn't cost the clip its transcript.
+    If hardware decoding fails, it runs again on the CPU. If a render with
+    several audio tracks fails, it tries once more with only the first: one
+    odd track shouldn't cost the clip its transcript. ffmpeg is stopped
+    only when it made no progress for `stall_after` seconds.
     """
     part = dest.with_name(dest.name + ".part")
     try:
@@ -245,23 +221,25 @@ def render_analysis_proxy(
         raise RenderError(f"ffprobe couldn't read {source.name}: {exc}") from exc
     s = settings or AnalysisProxySettings()
     hwaccel = gpu_decoder(s.decoder) if s.gpu_decodes > 0 else None
-    slots = _gpu_slots(s.gpu_decodes) if hwaccel else None
+    shared = hwaccel in ffmpeg_run.SHARED_MEMORY
+    slots = _gpu_slots(s.gpu_decodes) if hwaccel and not shared else None
 
     def attempt(with_tracks: list[AudioTrack]) -> None:
-        if slots is not None and slots.acquire(blocking=False):
+        if hwaccel and (shared or slots.acquire(blocking=False)):
             try:
-                if _gpu_has_room():
-                    _run(source, part, settings, with_tracks, timeout, hwaccel)
+                if shared or _gpu_has_room():
+                    _run(source, part, settings, with_tracks, stall_after, hwaccel)
                     return
             except RenderError as exc:
                 logger.info("%s; decoding on the CPU instead", exc)
             finally:
-                slots.release()
-        _run(source, part, settings, with_tracks, timeout)
+                if slots is not None:
+                    slots.release()
+        _run(source, part, settings, with_tracks, stall_after)
 
     try:
         attempt(tracks)
-    except _TimeoutError:
+    except _StuckError:
         raise
     except RenderError as exc:
         if len(tracks) <= 1:

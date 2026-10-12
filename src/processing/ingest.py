@@ -142,9 +142,16 @@ def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
 
 
 def _generate_video_preview(source_path: Path) -> bytes:
-    """Generate a 10-second MP4 preview clip. Returns preview bytes."""
-    import subprocess
+    """Generate a 10-second MP4 preview clip. Returns preview bytes.
+
+    Decoded by a Mac's media engine where there is one (ffmpeg_run.SHARED_MEMORY:
+    a fifth of the CPU's work on a 4K or 5.3K original, and a scan makes
+    several at once), else on the CPU; one the hardware fails at is made
+    again on the CPU, and one with a broken audio track (some camera MOVs)
+    again without audio. ffmpeg is stopped only when it makes no progress."""
     import tempfile
+
+    from src.processing.video import ffmpeg_run
 
     PREVIEW_DURATION_SEC = 10
     PREVIEW_MAX_HEIGHT = 720
@@ -152,38 +159,33 @@ def _generate_video_preview(source_path: Path) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
         preview_path = Path(tmp.name)
 
-    cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-ss", "0", "-i", str(source_path),
-        "-t", str(PREVIEW_DURATION_SEC),
-        "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-        "-c:a", "aac", "-ac", "2", "-b:a", "128k",
-        # No metadata: phones and drones write where they were (GPS) into the file.
-        "-map_metadata", "-1", "-map_chapters", "-1",
-        "-movflags", "+faststart",
-        str(preview_path),
-    ]
-
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError:
-        # Retry without audio (broken audio track in some camera MOVs)
-        no_audio_cmd = [
+    def command(hwaccel: str | None, audio: bool) -> list[str]:
+        return [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            *(["-hwaccel", hwaccel] if hwaccel else []),
             "-ss", "0", "-i", str(source_path),
             "-t", str(PREVIEW_DURATION_SEC),
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
-            "-an", "-map_metadata", "-1", "-map_chapters", "-1", "-movflags", "+faststart",
+            *(["-c:a", "aac", "-ac", "2", "-b:a", "128k"] if audio else ["-an"]),
+            # No metadata: phones and drones write where they were (GPS) into the file.
+            "-map_metadata", "-1", "-map_chapters", "-1",
+            "-movflags", "+faststart",
             str(preview_path),
         ]
-        subprocess.run(no_audio_cmd, check=True, capture_output=True)
 
+    engine = ffmpeg_run.decoded_by("auto")
+    attempts = [(engine, True)] if engine in ffmpeg_run.SHARED_MEMORY else []
+    attempts += [(None, True), (None, False)]
     try:
-        if not preview_path.exists() or preview_path.stat().st_size == 0:
-            raise RuntimeError(f"ffmpeg produced no output for {source_path}")
-        return preview_path.read_bytes()
+        said = ""
+        for hwaccel, audio in attempts:
+            preview_path.unlink(missing_ok=True)
+            result = ffmpeg_run.run(command(hwaccel, audio))
+            if result.returncode == 0 and preview_path.is_file() and preview_path.stat().st_size > 0:
+                return preview_path.read_bytes()
+            said = result.stderr.strip()[-500:] or f"exit {result.returncode}"
+        raise RuntimeError(f"ffmpeg made no preview of {source_path}: {said}")
     finally:
         preview_path.unlink(missing_ok=True)
 
