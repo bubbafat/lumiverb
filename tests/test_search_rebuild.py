@@ -198,3 +198,27 @@ def test_a_restore_rebuilds_every_kind_beside_and_drops_nothing_first(env, quick
         where = indexes.read(s, env[4])
     assert all(w.live.endswith("_g1") and w.building is None and w.retired is None for w in where.values()), where
     assert not before & set(quickwit.indexes) and clip in _found(env)
+
+
+def test_a_rebuilt_scene_index_holds_the_scenes_shown_not_a_redos(env, quickwit):
+    """A redo's scenes are searchable once they're swapped in (routers/video.py), in a rebuild too."""
+    from src.server.search import indexes
+    from src.server.search.sync import mark_recreate
+
+    lib = _library(env, "RebuiltScenes")
+    vid = _ingest_with(lib, "scenes.mov", _sha(), None, media_type="video")
+    with _db(env) as s:
+        for n, staged in enumerate((None, "found")):
+            s.execute(text(
+                "INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
+                " description, tags, staged, created_at)"
+                " VALUES (:id, :a, 0, 0, 999, 0, :d, '[]', :st, now())"),
+                {"id": f"scn_{vid}_{n}", "a": vid, "d": f"scene {n}", "st": staged})
+        mark_recreate(s)
+        s.commit()
+    for _ in range(2):  # begun; filled and live
+        _sweep(env)
+    with _db(env) as s:
+        live = indexes.read(s, env[4])["scenes"].live
+    assert live.endswith("_g1")
+    assert sorted(d["scene_id"] for d in quickwit.indexes[live]["docs"] if d["asset_id"] == vid) == [f"scn_{vid}_0"]
