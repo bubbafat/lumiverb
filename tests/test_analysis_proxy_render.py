@@ -223,22 +223,38 @@ def test_audio_is_low_bitrate_at_48k(tmp_path: Path) -> None:
     assert int(mix["bit_rate"]) <= 110_000
 
 
-def _with_undecodable_second_track(path: Path) -> Path:
-    """Two tracks, the second relabelled with a codec no ffmpeg decodes (as iPhone spatial audio's apac)."""
+def _with_undecodable_second_track(path: Path, tag: bytes = b"zzzz") -> Path:
+    """Two tracks, the second relabelled `tag`: a codec ffmpeg doesn't know
+    ("zzzz"), or iPhone spatial audio's ("apac"), which ffmpeg 9 knows as
+    apple_apac and has no decoder for."""
     _make(path, layouts=["mono", "mono"], extra=["-c:a:0", "aac", "-c:a:1", "pcm_s16le"])
     data = path.read_bytes()
     assert data.count(b"sowt") == 1
-    path.write_bytes(data.replace(b"sowt", b"zzzz"))
+    path.write_bytes(data.replace(b"sowt", tag))
     return path
 
 
 @pytest.mark.fast
-def test_an_undecodable_track_is_left_out_not_fatal(tmp_path: Path) -> None:
-    src = _with_undecodable_second_track(tmp_path / "apac.mov")
+@pytest.mark.parametrize("tag", [b"zzzz", b"apac"], ids=["unknown", "iphone-spatial-audio"])
+def test_an_undecodable_track_is_left_out_not_fatal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                    tag: bytes) -> None:
+    src = _with_undecodable_second_track(tmp_path / "apac.mov", tag)
     assert [t.index for t in audio_tracks(src)] == [0]
+    ran = _recording_ffmpeg(monkeypatch)
     out = tmp_path / "out.mp4"
-    render_analysis_proxy(src, out)
+    render_analysis_proxy(src, out, AnalysisProxySettings(decoder="cpu"))
     assert [a["channels"] for a in _audio(_probe(out))] == [1]
+    assert len(ran) == 1  # made on the first try, not after one that failed on the track
+
+
+@pytest.mark.fast
+def test_what_ffmpeg_decodes_is_asked_of_ffmpeg() -> None:
+    from src.processing.video.audio import decodable_audio
+
+    decodable = decodable_audio()
+    assert decodable is not None and {"aac", "pcm_s16le", "mp3", "opus"} <= decodable
+    assert "apple_apac" not in decodable  # known to ffmpeg 9, not decodable
+    assert "h264" not in decodable  # audio only
 
 
 @pytest.mark.fast
