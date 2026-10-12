@@ -107,7 +107,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 ## Tests
 
 - Python: `uv run pytest -m fast` (no DB/AI), `-m slow` (testcontainers Postgres 18, `PG_IMAGE` in `tests/conftest.py`), `ai` (real inference, opt-in). Bare `pytest` runs fast + slow.
-  Every failure is also appended, named and with its traceback, to `.pytest_cache/failures.log` (conftest), whatever happens to the run's output: a flaky test is never ignored, so it must never go unnamed.
+  Every failure is also appended, named and with its traceback, to `.pytest_cache/failures.log` (conftest), whatever happens to the run's output: a flaky test is never ignored, so it must never go unnamed. Every skip and xfail, with its reason, to `.pytest_cache/skips.log`: a test that skips itself only sometimes is coverage lost only sometimes (a test never skips because of what another test did: it makes its own data).
   `-n auto` runs it in parallel (pytest-xdist, a module's tests on one worker). One Postgres serves the whole run: `PostgresContainer` in a test is a fresh database on it, and the migration helpers clone a template migrated once (`tests/conftest.py` docstring; `LUMIVERB_TEST_PG_PER_MODULE=1` for a container per module).
   Quickwit is off for every test (conftest pins `QUICKWIT_ENABLED=false`, whatever `.env.local` says; mock `QuickwitClient` to test sync code). `uv run pytest -m quickwit` (opt-in) checks the real document builders against the real index schemas and search in a throwaway Quickwit in Docker (`tests/test_quickwit_real.py`).
   The install/update script tests (`test_update_script.py`, `test_deploy_scripts.py`) run only on Linux (`LINUX_INSTALLER` in conftest): the scripts use systemd, apt, flock and GNU sed, and a Mac installs with Homebrew.
