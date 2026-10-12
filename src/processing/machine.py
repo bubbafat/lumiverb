@@ -38,8 +38,10 @@ class Machine:
     cache_home: str = ""
     # How analysis proxies are rendered here (src/processing/video/analysis_proxy.py):
     # the encoder, where originals are decoded ("auto": the GPU through
-    # Vulkan when it works; "cpu"; or an ffmpeg hwaccel such as "cuda") and
-    # how many decode on the GPU at once (the rest on the CPU meanwhile).
+    # Vulkan when it works, else a Mac's media engine through VideoToolbox,
+    # src/processing/video/ffmpeg_run.py; "cpu"; or an ffmpeg hwaccel such as
+    # "cuda") and how many decode on the GPU at once (the rest on the CPU
+    # meanwhile; a Mac's media engine takes every render).
     analysis_proxy_encoder: str = "libx264"
     analysis_proxy_decoder: str = "auto"
     gpu_decodes: int = 1

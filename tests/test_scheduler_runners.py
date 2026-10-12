@@ -294,7 +294,7 @@ def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, mon
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     used = []
 
-    def render(source, dest, settings, *, timeout):
+    def render(source, dest, settings):
         used.append(settings)
         dest.write_bytes(b"mp4")
 
@@ -314,7 +314,7 @@ def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, 
 
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
 
-    def render(source, dest, settings, *, timeout):
+    def render(source, dest, settings):
         dest.write_bytes(b"half")
         raise RenderError("ffmpeg exit 1")
 
@@ -326,7 +326,7 @@ def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, 
 
 
 def _renders(monkeypatch) -> None:
-    def render(source, dest, settings, *, timeout):
+    def render(source, dest, settings):
         dest.write_bytes(b"mp4")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
@@ -478,7 +478,7 @@ def test_whose_an_error_is() -> None:
 def test_this_machines_trouble_saving_isnt_the_clips(acct, monkeypatch, tmp_path) -> None:
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
 
-    def render(source, dest, settings, *, timeout):
+    def render(source, dest, settings):
         dest.write_bytes(b"mp4")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)

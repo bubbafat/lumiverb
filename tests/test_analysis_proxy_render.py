@@ -307,11 +307,19 @@ def test_a_broken_file_raises_and_leaves_nothing(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_timeout_raises_and_leaves_nothing(tmp_path: Path) -> None:
-    src = _make(tmp_path / "in.mov", seconds=4)
+def test_a_stuck_render_raises_and_leaves_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Stopped only when ffmpeg makes no progress (tests/test_ffmpeg_run.py), never for taking long.
+    from src.processing.video import ffmpeg_run
+
+    def stuck(cmd, *, stall_after):
+        Path(cmd[-1]).write_bytes(b"half a proxy")
+        raise ffmpeg_run.StalledError(f"ffmpeg made no progress for {stall_after:.0f} s")
+
+    monkeypatch.setattr(ffmpeg_run, "run", stuck)
+    src = _make(tmp_path / "in.mov")
     out = tmp_path / "out.mp4"
-    with pytest.raises(RenderError, match="timed out"):
-        render_analysis_proxy(src, out, timeout=0.01)
+    with pytest.raises(RenderError, match="ffmpeg made no progress for 300 s on in.mov"):
+        render_analysis_proxy(src, out)
     assert list(tmp_path.glob("out*")) == []
 
 
@@ -335,8 +343,10 @@ def test_settings_shape_the_command() -> None:
 # ---------------------------------------------------------------------------
 
 from src.processing.video import analysis_proxy as AP  # noqa: E402
+from src.processing.video import ffmpeg_run  # noqa: E402
 
-needs_vulkan = pytest.mark.skipif(not AP._vulkan_decodes(), reason="no Vulkan video decoding here")
+needs_vulkan = pytest.mark.skipif(not ffmpeg_run.vulkan_decodes(), reason="no Vulkan video decoding here")
+needs_videotoolbox = pytest.mark.skipif(not ffmpeg_run.videotoolbox_decodes(), reason="no VideoToolbox here (not a Mac)")
 _real_gpu_has_room = AP._gpu_has_room
 
 
@@ -356,14 +366,14 @@ def _frame_hashes(path: Path) -> list[str]:
 def _recording_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """The ffmpeg commands renders run (into a .part), still run for real."""
     ran: list[list[str]] = []
-    real = AP.subprocess.run
+    real = ffmpeg_run.run
 
-    def run(cmd, *args, **kwargs):
+    def run(cmd, **kwargs):
         if cmd[0] == "ffmpeg" and cmd[-1].endswith(".part"):
             ran.append(cmd)
-        return real(cmd, *args, **kwargs)
+        return real(cmd, **kwargs)
 
-    monkeypatch.setattr(AP.subprocess, "run", run)
+    monkeypatch.setattr(ffmpeg_run, "run", run)
     return ran
 
 
@@ -386,16 +396,19 @@ def test_gpu_decoding_is_asked_for_before_the_input() -> None:
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("choice,vulkan,expected", [
-    ("auto", True, "vulkan"),
-    ("auto", False, None),
-    ("cpu", True, None),
-    ("", True, None),
-    ("cuda", False, "cuda"),
-    ("vulkan", False, "vulkan"),
+@pytest.mark.parametrize("choice,vulkan,videotoolbox,expected", [
+    ("auto", True, False, "vulkan"),
+    ("auto", False, True, "videotoolbox"),
+    ("auto", False, False, None),
+    ("cpu", True, True, None),
+    ("", True, True, None),
+    ("cuda", False, False, "cuda"),
+    ("vulkan", False, False, "vulkan"),
 ])
-def test_which_decoder(monkeypatch: pytest.MonkeyPatch, choice: str, vulkan: bool, expected: str | None) -> None:
-    monkeypatch.setattr(AP, "_vulkan_decodes", lambda: vulkan)
+def test_which_decoder(monkeypatch: pytest.MonkeyPatch, choice: str, vulkan: bool, videotoolbox: bool,
+                       expected: str | None) -> None:
+    monkeypatch.setattr(ffmpeg_run, "vulkan_decodes", lambda: vulkan)
+    monkeypatch.setattr(ffmpeg_run, "videotoolbox_decodes", lambda: videotoolbox)
     assert AP.gpu_decoder(choice) == expected
 
 
@@ -440,7 +453,7 @@ def _fake_renders(monkeypatch: pytest.MonkeyPatch, seconds: float = 0.3) -> tupl
     now = [0]
     lock = threading.Lock()
 
-    def run(source, part, settings, tracks, timeout, hwaccel=None):
+    def run(source, part, settings, tracks, stall_after, hwaccel=None):
         with lock:
             used.append(hwaccel)
             if hwaccel:
@@ -486,6 +499,24 @@ def test_how_many_decode_on_the_gpu_at_once_is_this_machines_choice(
         list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4", settings), range(3)))
     assert most[0] == slots and used.count("vulkan") == slots
     assert "gpu_decodes" not in settings.output()
+
+
+@pytest.mark.fast
+def test_a_macs_media_engine_takes_every_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # It shares the machine's memory: no room on a GPU to keep for the models,
+    # so no turns, and every render decodes there.
+    from concurrent.futures import ThreadPoolExecutor
+
+    used, most = _fake_renders(monkeypatch)
+    monkeypatch.setattr(AP, "_gpu_has_room", lambda: False)  # no GPU's memory to ask about
+    settings = AnalysisProxySettings(decoder="videotoolbox", gpu_decodes=1)
+    with ThreadPoolExecutor(3) as pool:
+        list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4", settings), range(3)))
+    assert used == ["videotoolbox"] * 3
+    # gpu_decodes 0 still means none on the hardware.
+    render_analysis_proxy(tmp_path / "x.mov", tmp_path / "x.mp4", AnalysisProxySettings(decoder="videotoolbox",
+                                                                                         gpu_decodes=0))
+    assert used[-1] is None
 
 
 @pytest.mark.fast
@@ -542,6 +573,26 @@ def test_the_gpu_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: py
     assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == ["vulkan", None]
     assert (_video(_probe(gpu))["width"], _video(_probe(gpu))["height"]) == (540, 960)
     assert _frame_hashes(gpu) == _frame_hashes(cpu)
+
+
+@needs_videotoolbox
+@pytest.mark.fast
+def test_a_macs_media_engine_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 10-bit HEVC turned on its side, like an iPhone's portrait video.
+    flat = _make(tmp_path / "flat.mp4", extra=["-c:v", "libx265", "-pix_fmt", "yuv420p10le",
+                                               "-x265-params", "log-level=error"])
+    src = tmp_path / "portrait.mov"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90",
+                    "-i", str(flat), "-c", "copy", str(src)], check=True)
+    ran = _recording_ffmpeg(monkeypatch)
+
+    engine, cpu = tmp_path / "engine.mp4", tmp_path / "cpu.mp4"
+    render_analysis_proxy(src, engine, AnalysisProxySettings(decoder="auto"))
+    render_analysis_proxy(src, cpu, AnalysisProxySettings(decoder="cpu"))
+
+    assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == ["videotoolbox", None]
+    assert (_video(_probe(engine))["width"], _video(_probe(engine))["height"]) == (540, 960)
+    assert _frame_hashes(engine) == _frame_hashes(cpu)
 
 
 # ---------------------------------------------------------------------------

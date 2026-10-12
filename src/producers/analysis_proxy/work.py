@@ -26,7 +26,7 @@ class Render(Work):
                                                            here.gpu_decodes)
 
     def make(self, clip: dict) -> Path:
-        from src.processing.video.analysis_proxy import RenderError, render_analysis_proxy, render_timeout
+        from src.processing.video.analysis_proxy import RenderError, render_analysis_proxy
 
         source = self.original(clip)
         # Rendered beside the cache (same filesystem, so put() is a rename),
@@ -34,7 +34,7 @@ class Render(Work):
         work = self.acct.analysis_cache.path_for(clip["asset_id"]).with_suffix(".rendering")
         work.parent.mkdir(parents=True, exist_ok=True)
         try:
-            render_analysis_proxy(source, work, self.settings, timeout=render_timeout(clip.get("duration_sec")))
+            render_analysis_proxy(source, work, self.settings)
         except RenderError as e:
             work.unlink(missing_ok=True)
             logger.warning("Rendering the analysis proxy for %s failed: %s", clip["rel_path"], e)
