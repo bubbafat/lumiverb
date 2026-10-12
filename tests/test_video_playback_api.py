@@ -599,12 +599,13 @@ def test_a_cut_that_cant_be_made_is_a_503(env, media, monkeypatch):
     client, admin, *_ = env
     asset_id = _video(env, media, "cut_fail")
     client.patch("/v1/tenant/settings", json={"video_preview_max_seconds": 2}, headers=admin)
-    url = _path(_playback(env, asset_id).json()["url"])
     from src.server.api.routers import playback
 
+    # Before asking: asking for playback starts the cut in the background.
     real = playback.subprocess.Popen
     monkeypatch.setattr(playback.subprocess, "Popen",
                         lambda cmd, *a, **k: real(["false"], *a, **k) if cmd[0] == "ffmpeg" else real(cmd, *a, **k))
+    url = _path(_playback(env, asset_id).json()["url"])
     r = _fetch(client, url)
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "playback_cut_failed"

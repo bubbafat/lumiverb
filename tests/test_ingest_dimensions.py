@@ -530,11 +530,20 @@ def test_a_preview_the_hardware_cant_decode_is_made_on_the_cpu_whole(tmp_path, m
     src = tmp_path / "damaged.mp4"
     src.write_bytes(bytes(data))
 
-    engine = tmp_path / "engine.mp4"
-    engine.write_bytes(ingest._generate_video_preview(src))
-    monkeypatch.setattr(ffmpeg_run, "decoded_by", lambda choice: None)
-    cpu = tmp_path / "cpu.mp4"
-    cpu.write_bytes(ingest._generate_video_preview(src))
+    ran = []
+    real = ffmpeg_run.run
 
-    assert len(_frames(engine)) == 90
-    assert _frames(engine) == _frames(cpu)
+    def run(cmd, **kwargs):
+        ran.append(cmd)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_run, "run", run)
+    out = tmp_path / "out.mp4"
+    out.write_bytes(ingest._generate_video_preview(src))
+
+    # The media engine's try stopped at its first failed picture; the CPU made
+    # it, every picture. Not compared with another CPU render: ffmpeg's threaded
+    # decoder hides a damaged picture differently from one run to the next.
+    assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == [
+        "videotoolbox", None]
+    assert len(_frames(out)) == 90
