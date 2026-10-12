@@ -182,6 +182,49 @@ def test_only_the_schedulers_main_process_hears_the_stop_and_whats_left_is_kille
     _until(lambda: not _alive(grandchild), timeout=5)
 
 
+def _group_left_exiting(monkeypatch) -> list[int]:
+    """os.killpg as macOS answers it when all that's left of a group is
+    exiting (not yet reaped): EPERM, for the kill of what's left (a few
+    times in a hundred on a real Mac). Returns the signals it refused."""
+    refused: list[int] = []
+    real = os.killpg
+
+    def killpg(pgid: int, sig: int) -> None:
+        if sig == signal.SIGKILL:
+            refused.append(sig)
+            raise PermissionError(1, "Operation not permitted")
+        real(pgid, sig)
+
+    monkeypatch.setattr(supervise.os, "killpg", killpg)
+    return refused
+
+
+def test_a_stop_finishes_when_whats_left_of_a_group_is_exiting(tmp_path, monkeypatch):
+    refused = _group_left_exiting(monkeypatch)
+    api_log, scheduler_log = tmp_path / "api.log", tmp_path / "scheduler.log"
+    api = _child(tmp_path, "api", _POLITE, str(api_log))
+    scheduler = _child(tmp_path, "scheduler", _POLITE, str(scheduler_log), term_main_only=True)
+    stop, thread = _running(Supervisor([api, scheduler]))
+    _until(lambda: api_log.exists() and scheduler_log.exists())
+    stop.set()
+    thread.join(15)
+    assert not thread.is_alive()
+    assert refused, "the kill of what's left was answered EPERM"
+    assert "term" in api_log.read_text() and "term" in scheduler_log.read_text(), "both were stopped"
+
+
+def test_a_child_that_dies_is_started_again_when_whats_left_of_its_group_is_exiting(tmp_path, monkeypatch):
+    refused = _group_left_exiting(monkeypatch)
+    marker = tmp_path / "died"
+    child = _child(tmp_path, "api", _DIES_ONCE, str(marker), restart_after=0.3)
+    stop, thread = _running(Supervisor([child]))
+    _until(lambda: marker.exists() and "again" in marker.read_text())
+    stop.set()
+    thread.join(10)
+    assert not thread.is_alive()
+    assert refused
+
+
 def test_a_child_that_ignores_sigterm_is_killed_when_its_time_is_up(tmp_path):
     # Started, and ignoring SIGTERM: a stop sooner would kill it at once.
     ignoring = tmp_path / "ignoring"
