@@ -375,7 +375,9 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     # Synced as of when this began: a description, OCR, correction or
     # transcript saved meanwhile is newer, and goes in next time. And only a
     # row nothing wrote meanwhile (its xmin) is marked: a write that cleared
-    # its sync time (a note, a move) stays cleared.
+    # its sync time (a note, a move, and every description and OCR saved,
+    # whose time is taken before it commits: repository/tenant.py
+    # _unsynced) stays cleared.
     started = utcnow()
 
     # --- Asset sync ---
