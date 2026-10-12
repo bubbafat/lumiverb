@@ -10,7 +10,6 @@ The server normalizes the proxy (WebP, 2048px max), generates a thumbnail
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import logging
 import posixpath
@@ -19,9 +18,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
-from PIL import Image
 from sqlmodel import Session
 
+from src.server import preview_image
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.shared import asset_status
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
@@ -40,7 +39,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ingest"])
 
 PROXY_MAX_LONG_EDGE = 2048
-THUMBNAIL_LONG_EDGE = 512
+THUMBNAIL_LONG_EDGE = preview_image.THUMBNAIL_LONG_EDGE
 WEBP_QUALITY = 80
 MAX_PROXY_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB raw upload limit
 
@@ -55,24 +54,8 @@ def _normalize_proxy(data: bytes) -> tuple[bytes, int, int]:
 
 
 def _generate_thumbnail(proxy_bytes: bytes) -> bytes:
-    """Generate a thumbnail from proxy bytes. Returns WebP bytes."""
-    img = Image.open(io.BytesIO(proxy_bytes))
-    try:
-        img = img.convert("RGB")
-
-        w, h = img.size
-        long_edge = max(w, h)
-        if long_edge > THUMBNAIL_LONG_EDGE:
-            scale = THUMBNAIL_LONG_EDGE / long_edge
-            w = int(w * scale)
-            h = int(h * scale)
-            img = img.resize((w, h), Image.LANCZOS)
-
-        buf = io.BytesIO()
-        img.save(buf, format="WEBP", quality=WEBP_QUALITY)
-        return buf.getvalue()
-    finally:
-        img.close()
+    """Generate a thumbnail from proxy bytes. Returns WebP bytes (preview_image.thumbnail)."""
+    return preview_image.thumbnail(proxy_bytes)
 
 
 class IngestResponse(BaseModel):

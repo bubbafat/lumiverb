@@ -796,6 +796,67 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
     assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] is None
 
 
+def _clip_with_preview_and_thumbnail(auth, library_id: str) -> tuple[str, str, str]:
+    """A photo with its preview (1024 px) and its thumbnail: its id and their keys."""
+    rel_path = f"thumb_{secrets.token_hex(4)}.jpg"
+    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 100,
+                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "image"})
+    asset_id = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()["asset_id"]
+    proxy = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(1024), "image/jpeg")},
+                      data={"lineage": made_json("proxy")}).json()["key"]
+    thumb = auth.post(f"/v1/assets/{asset_id}/artifacts/thumbnail",
+                      files={"file": ("t.jpg", _make_jpeg(512), "image/jpeg")},
+                      data={"lineage": made_json("proxy")}).json()["key"]  # the proxy producer makes thumbnails
+    return asset_id, proxy, thumb
+
+
+def _upkeep(auth, storage) -> dict:
+    with patch("src.server.missing_artifacts.get_storage", return_value=storage):
+        r = auth.post("/v1/upkeep")
+    assert r.status_code == 200, r.text
+    return r.json()["missing_files"]
+
+
+@pytest.mark.slow
+def test_a_missing_thumbnail_is_made_again_from_the_preview_which_stays(artifact_env) -> None:
+    """The server made it from the preview at ingest, so it makes it again:
+    the preview isn't taken out of service, and no scan is needed."""
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
+    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, library_id)
+    preview = storage.abs_path(proxy).read_bytes()
+    storage.abs_path(thumb).unlink()
+    assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404  # reported
+
+    assert _upkeep(auth, storage)["remade"] >= 1
+    clip = auth.get(f"/v1/assets/{asset_id}").json()
+    assert (clip["proxy_key"], clip["thumbnail_key"]) == (proxy, thumb)
+    assert storage.abs_path(proxy).read_bytes() == preview
+    r = auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail")
+    assert r.status_code == 200, r.text
+    made = Image.open(io.BytesIO(r.content))
+    assert made.format == "WEBP" and max(made.size) == 512
+    engine = create_engine(tenant_url)
+    try:
+        with engine.connect() as conn:
+            recorded = conn.execute(text("SELECT thumbnail_sha256 FROM assets WHERE asset_id = :a"),
+                                    {"a": asset_id}).scalar()
+    finally:
+        engine.dispose()
+    assert recorded == hashlib.sha256(storage.abs_path(thumb).read_bytes()).hexdigest()
+
+
+@pytest.mark.slow
+def test_a_missing_thumbnail_without_its_preview_leaves_both_for_a_scan(artifact_env) -> None:
+    auth, _, library_id, _, storage, *_ = artifact_env
+    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, library_id)
+    storage.abs_path(proxy).unlink()
+    storage.abs_path(thumb).unlink()
+    assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404
+    assert _upkeep(auth, storage)["cleared"] >= 1
+    clip = auth.get(f"/v1/assets/{asset_id}").json()
+    assert (clip["proxy_key"], clip["thumbnail_key"]) == (None, None)
+
+
 @pytest.mark.fast
 @pytest.mark.parametrize("layout", ["no_data_dir", "empty_data_dir", "no_account_dir", "empty_account_dir"])
 def test_upkeep_repairs_nothing_while_the_data_folder_is_gone(tmp_path, layout) -> None:
@@ -815,7 +876,7 @@ def test_upkeep_repairs_nothing_while_the_data_folder_is_gone(tmp_path, layout) 
     session = MagicMock()
     session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), "ten_1/lib_1/proxies/00/ast_1.webp"]
     with patch("src.server.missing_artifacts.get_storage", return_value=LocalStorage(str(data))):
-        assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0}
+        assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0, "remade": 0}
     assert not any("UPDATE" in str(c.args[0]) for c in session.execute.call_args_list)
     session.rollback.assert_called_once()
     session.commit.assert_not_called()

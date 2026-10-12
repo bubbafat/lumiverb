@@ -106,9 +106,11 @@ class TrashPurgeResult(BaseModel):
 
 class MissingFilesResult(BaseModel):
     """Artifact files a request found gone (missing_artifacts): checked again,
-    and the keys of those still gone cleared, for the producers to make again."""
+    a thumbnail still gone made again from its clip's preview (remade), and
+    the keys of other files still gone cleared, for the producers to make again."""
     checked: int = 0
     cleared: int = 0
+    remade: int = 0
     # Skipped because Upkeep is paused, not "nothing to do"; with the admin key, which accounts.
     paused: bool = False
     paused_tenants: list[str] = Field(default_factory=list)

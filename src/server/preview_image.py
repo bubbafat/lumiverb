@@ -11,10 +11,34 @@ import io
 from PIL import Image, ImageOps
 
 FORMATS = ["JPEG", "PNG", "WEBP"]  # what clients send previews as
+THUMBNAIL_LONG_EDGE = 512
+THUMBNAIL_WEBP_QUALITY = 80
 
 
 class NotAnImageError(ValueError):
     """Not a JPEG, PNG or WebP image."""
+
+
+def thumbnail(proxy: bytes) -> bytes:
+    """A clip's thumbnail, made from its stored preview (already upright and
+    clean): WebP, at most THUMBNAIL_LONG_EDGE on its long side. At ingest, and
+    again when the thumbnail's file is lost (src/server/missing_artifacts.py)."""
+    try:
+        img = Image.open(io.BytesIO(proxy), formats=FORMATS)
+        img.load()
+    except (OSError, Image.DecompressionBombError) as exc:
+        raise NotAnImageError(str(exc)) from None
+    try:
+        rgb = img.convert("RGB")
+        w, h = rgb.size
+        if max(w, h) > THUMBNAIL_LONG_EDGE:
+            scale = THUMBNAIL_LONG_EDGE / max(w, h)
+            rgb = rgb.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        rgb.save(buf, format="WEBP", quality=THUMBNAIL_WEBP_QUALITY)
+        return buf.getvalue()
+    finally:
+        img.close()
 
 
 def reencoded(data: bytes, *, fmt: str, quality: int, max_long_edge: int | None = None) -> tuple[bytes, int, int]:

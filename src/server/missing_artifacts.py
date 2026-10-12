@@ -10,12 +10,16 @@ reporting never fails the request.
 
 Upkeep (`POST /v1/upkeep`, every 5 minutes) takes the reports, checks each
 file again, and clears the keys of those still gone, so the producers make
-them again (a producer's "made" is its key being set). A thumbnail is the
-proxy producer's, so a missing thumbnail clears the proxy's key too.
+them again (a producer's "made" is its key being set). A thumbnail is made
+again from the clip's preview, which stays as it is (the server made it
+from that preview in the first place). Only when the preview is gone too
+are both keys cleared: a thumbnail is the proxy producer's, and a scan
+makes the two again.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import threading
@@ -83,8 +87,10 @@ def reported(session: Session) -> list[str]:
 
 
 def repair(session: Session) -> dict[str, int]:
-    """Take the reports and clear the keys whose files are still gone.
-    Returns {"checked", "cleared"}."""
+    """Take the reports, make a thumbnail still gone again from its clip's
+    preview, and clear the keys of other files still gone. Returns
+    {"checked", "cleared", "remade"}."""
+    nothing = {"checked": 0, "cleared": 0, "remade": 0}
     raw = session.execute(text("DELETE FROM system_metadata WHERE key = :k RETURNING value"), {"k": KEY}).scalar()
     try:
         entries = [e for e in json.loads(raw) if isinstance(e, str)] if raw else []
@@ -93,8 +99,8 @@ def repair(session: Session) -> dict[str, int]:
     storage = get_storage()
     if storage.location.moving:
         session.rollback()  # files are in two places at once: the reports wait for the move
-        return {"checked": 0, "cleared": 0}
-    checked = cleared = 0
+        return nothing
+    checked = cleared = remade = 0
     for entry in entries:
         asset_id, _, kind = entry.rpartition(":")
         columns = COLUMNS.get(kind)
@@ -108,18 +114,45 @@ def repair(session: Session) -> dict[str, int]:
         if _storage_gone(storage, key):
             logger.warning("Missing files not repaired: the previews folder (or the account's) is missing or empty")
             session.rollback()  # the reports stay for the next upkeep
-            return {"checked": 0, "cleared": 0}
+            return nothing
         try:
             gone = not storage.abs_path(key).is_file()
         except ValueError:  # a key storage refuses is as good as gone
             gone = True
-        if gone:
+        if gone and kind == "thumbnail" and _thumbnail_again(session, storage, asset_id, key):
+            remade += 1
+            logger.info("Made the missing thumbnail of %s again from its preview", asset_id)
+        elif gone:
             sets = ", ".join(f"{c} = NULL" for c in columns)
             session.execute(text(f"UPDATE assets SET {sets} WHERE asset_id = :a"), {"a": asset_id})  # noqa: S608
             cleared += 1
             logger.info("Cleared the missing %s of %s for its producer to make again", kind, asset_id)
     session.commit()
-    return {"checked": checked, "cleared": cleared}
+    return {"checked": checked, "cleared": cleared, "remade": remade}
+
+
+def _thumbnail_again(session: Session, storage, asset_id: str, key: str) -> bool:
+    """Make a clip's thumbnail again at its key from its preview, as ingest
+    made it. False when the preview is gone too, or isn't an image."""
+    from src.server.preview_image import NotAnImageError, thumbnail
+
+    proxy_key = session.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
+    try:
+        proxy = storage.abs_path(proxy_key) if proxy_key else None
+        if proxy is None or not proxy.is_file():
+            return False
+        data = thumbnail(proxy.read_bytes())
+        path = storage.write_path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + ".part")
+        part.write_bytes(data)
+        part.replace(path)
+    except (ValueError, OSError, NotAnImageError) as exc:  # NotAnImageError is a ValueError
+        logger.warning("Couldn't make the thumbnail of %s again from its preview: %s", asset_id, exc)
+        return False
+    session.execute(text("UPDATE assets SET thumbnail_sha256 = :s WHERE asset_id = :a"),
+                    {"s": hashlib.sha256(data).hexdigest(), "a": asset_id})
+    return True
 
 
 def _storage_gone(storage, key: str) -> bool:
