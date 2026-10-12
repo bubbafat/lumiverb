@@ -7,9 +7,9 @@ a machine does a job only if it offers that model, so an artifact is the
 same model's whatever machine made it (which machine isn't tracked, like
 the encoder). An admin adds a machine by URL and presses Connect, which
 lists its models. The worker checks each machine before sending it work and
-reports what it found here; Settings shows it. Keys are never shown back,
-and a viewer never gets one. Changing a job's model makes its artifacts
-stale.
+reports what it found here; Settings shows it. Keys are never shown back:
+only an admin (the scheduler's key is one) reads them, to send machines
+work. Changing a job's model makes its artifacts stale.
 
 Every tenant has one built-in machine: the worker's own computer, with no
 URL or key, doing what the worker does itself (Whisper: transcripts). It
@@ -42,7 +42,7 @@ from src.server.api.errors import (
     UpstreamError,
 )
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, job_model, machines
+from src.server.repository.ai_machines import first_vision_machine, job_model, key_for, machines
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
@@ -170,6 +170,7 @@ class WorkerMachine(BaseModel):
     machine_id: str
     name: str
     api_url: str
+    # Its key for an admin (the scheduler); "" for anyone else.
     api_key: str
     at_once: int
     # The worker's own computer: it does the job itself.
@@ -483,16 +484,17 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
 
 @router.get("/jobs/{job}", response_model=WorkerJob, dependencies=[Depends(require_editor)])
 def job_machines(job: str, request: Request) -> WorkerJob:
-    """For the worker: a job's model and the enabled machines doing it, with
-    their keys, in order (built_in: the worker does it itself). It checks
-    each before sending it work."""
+    """For the worker: a job's model and the enabled machines doing it, in
+    order (built_in: the worker does it itself), with their keys for an
+    admin (the scheduler's key is one). It checks each before sending it work."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
+    role = getattr(request.state, "role", None)
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
         return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
-            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=m.api_key,
+            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=key_for(m, role),
                           at_once=m.at_once, built_in=m.built_in, shares_gpu=m.shares_gpu or m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 

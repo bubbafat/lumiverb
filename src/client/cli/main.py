@@ -753,7 +753,7 @@ def admin_vision_test(
     ] = None,
     api_key: Annotated[
         str | None,
-        typer.Option("--api-key", help="Vision API key (default: configured key)."),
+        typer.Option("--api-key", help="Vision API key (default: the account's, with an admin's key)."),
     ] = None,
     model: Annotated[
         str | None,
@@ -929,7 +929,8 @@ def _resolve_vision_config(
     client: LumiverbClient,
 ) -> tuple[str, str | None, str, str]:
     """The account's vision endpoint URL, key and model, chosen in Settings → AI
-    (the one place they live), and where they came from.
+    (the one place they live), and where they came from. The key comes back
+    only for an admin's key (None otherwise: --api-key gives one).
 
     Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
     """

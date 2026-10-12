@@ -8,7 +8,8 @@ it offers. A machine can do a job only if it offers that job's model, so
 whatever machine made an artifact, it's the same model's (the machine is
 the "where", out of lineage, like the encoder). The worker checks each
 machine before sending it work and reports what it found per machine;
-Settings shows it. Keys are never shown back, and a viewer never gets one.
+Settings shows it. Keys are never shown back: only an admin (the
+scheduler's key is one) reads them, to send machines work.
 
 Transcripts are the second job. Every account has a built-in machine: the
 worker's own Whisper (no URL), doing transcripts one at a time, so they run
@@ -24,6 +25,7 @@ import requests
 
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_trash_safety import _key_with_role
+from tests.test_authz_hardening import _user
 from tests.test_lineage_api import _ingest_with, _sha
 
 GAMING_PC = "http://172.18.0.6:11434/v1"
@@ -277,35 +279,106 @@ def test_the_saved_key_is_kept_and_used_until_replaced(env, none):
 
 
 @pytest.mark.slow
-def test_the_worker_gets_a_jobs_machines_with_their_keys_and_a_viewer_doesnt(env, none):
+def test_the_scheduler_gets_a_jobs_machines_with_their_keys(env, none):
+    """The scheduler's own key is an admin's: it reads each machine's key to send it work."""
+    from src.processing.ai_pool import MachinePool
+    from tests.producer_fakes import scheduler_client
+
     client, headers, *_ = env
     fake, _ = _machines({GAMING_PC: (QWEN,), STUDIO: (QWEN,)})
     with fake:
         _add(env, name="Gaming PC", api_key="sk-1", at_once=2)
         _add(env, name="Studio", api_url=STUDIO, at_once=4)
         _model(env, "vision", QWEN)
-    studio = _machine(_ai(env), "Studio")["machine_id"]
-    worker = _key_with_role(env, "editor")
-    r = client.get("/v1/ai/jobs/vision", headers=worker)
-    assert r.status_code == 200, r.text
-    assert r.json() == {"job": "vision", "model": QWEN, "machines": [
-        {"machine_id": _machine(_ai(env), "Gaming PC")["machine_id"], "name": "Gaming PC", "api_url": GAMING_PC,
-         "api_key": "sk-1", "at_once": 2, "built_in": False, "shares_gpu": False},
+    gaming_pc, studio = (_machine(_ai(env), name)["machine_id"] for name in ("Gaming PC", "Studio"))
+    scheduler = scheduler_client(env[4])
+    assert scheduler.get("/v1/ai/jobs/vision").json() == {"job": "vision", "model": QWEN, "machines": [
+        {"machine_id": gaming_pc, "name": "Gaming PC", "api_url": GAMING_PC, "api_key": "sk-1", "at_once": 2,
+         "built_in": False, "shares_gpu": False},
         {"machine_id": studio, "name": "Studio", "api_url": STUDIO, "api_key": "", "at_once": 4, "built_in": False,
          "shares_gpu": False},
     ]}
-    assert client.get("/v1/ai/jobs/vision", headers=_key_with_role(env, "viewer")).status_code == 403
+    pool = MachinePool(scheduler, "vision")
+    pool.load()
+    assert [(m.name, m.api_key) for m in pool.machines] == [("Gaming PC", "sk-1"), ("Studio", None)]
 
     # A machine turned off gets no work.
     assert client.patch(f"/v1/ai/machines/{studio}", json={"enabled": False}, headers=headers).status_code == 200
-    assert [m["name"] for m in client.get("/v1/ai/jobs/vision", headers=worker).json()["machines"]] == ["Gaming PC"]
+    assert [m["name"] for m in scheduler.get("/v1/ai/jobs/vision").json()["machines"]] == ["Gaming PC"]
     assert _job(_ai(env), "vision")["machines"] == 1
 
-    # Clients that know one endpoint (the Mac app) get the first vision machine's.
-    editor = client.get("/v1/tenant/context", headers=worker).json()
-    assert (editor["vision_api_url"], editor["vision_api_key"], editor["vision_model_id"]) == (GAMING_PC, "sk-1", QWEN)
-    viewer = client.get("/v1/tenant/context", headers=_key_with_role(env, "viewer")).json()
-    assert viewer["vision_api_key"] == "" and viewer["vision_model_id"] == QWEN
+
+@pytest.mark.slow
+def test_an_editor_never_sees_an_ai_machines_key(env, none):
+    """An editor, signed in or by key, still reads a job's machines and the
+    vision endpoint (the Mac app's), never a key; a viewer reads no job."""
+    client, headers, *_ = env
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        _add(env, name="Gaming PC", api_key="sk-1")
+        _model(env, "vision", QWEN)
+    _, signed_in = _user(client, headers, "ai-keys-editor@example.com", "editor")
+    for editor in (_key_with_role(env, "editor"), signed_in):
+        r = client.get("/v1/ai/jobs/vision", headers=editor)
+        assert r.status_code == 200, r.text
+        [machine] = r.json()["machines"]
+        assert (r.json()["model"], machine["name"], machine["api_url"], machine["api_key"]) == (
+            QWEN, "Gaming PC", GAMING_PC, "")
+        assert "sk-1" not in r.text
+        r = client.get("/v1/tenant/context", headers=editor)
+        assert r.status_code == 200, r.text
+        ctx = r.json()
+        assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (GAMING_PC, "", QWEN)
+        assert "sk-1" not in r.text
+
+    viewer = _key_with_role(env, "viewer")
+    assert client.get("/v1/ai/jobs/vision", headers=viewer).status_code == 403
+    ctx = client.get("/v1/tenant/context", headers=viewer).json()
+    assert (ctx["vision_api_url"], ctx["vision_api_key"], ctx["vision_model_id"]) == (GAMING_PC, "", QWEN)
+
+
+@pytest.mark.slow
+def test_an_admin_reads_ai_machines_keys(env, none):
+    """Signed in or by key; Settings → AI still only says whether one is saved."""
+    client, headers, *_ = env
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        _add(env, name="Gaming PC", api_key="sk-1")
+        _model(env, "vision", QWEN)
+    _, signed_in = _user(client, headers, "ai-keys-admin@example.com", "admin")
+    for admin in (headers, signed_in):
+        [machine] = client.get("/v1/ai/jobs/vision", headers=admin).json()["machines"]
+        assert machine["api_key"] == "sk-1"
+        assert client.get("/v1/tenant/context", headers=admin).json()["vision_api_key"] == "sk-1"
+    shown = _machine(_ai(env, headers=signed_in), "Gaming PC")
+    assert shown["has_key"] is True and "api_key" not in shown
+
+
+@pytest.mark.slow
+def test_editing_a_machine_without_its_key_keeps_the_key(env, none):
+    """Settings → AI never has the key to send back: its edit leaves it out,
+    and the key the scheduler sends the machine stays."""
+    from tests.producer_fakes import scheduler_client
+
+    client, headers, *_ = env
+    fake, seen = _machines({GAMING_PC: (QWEN,)})
+    _, admin = _user(client, headers, "ai-keys-edit@example.com", "admin")
+    with fake:
+        _add(env, name="Gaming PC", api_key="sk-1")
+        _model(env, "vision", QWEN)
+        gaming_pc = _machine(_ai(env, headers=admin), "Gaming PC")["machine_id"]
+        # The web's whole form, as it saves an edit with the key field left blank.
+        r = client.patch(f"/v1/ai/machines/{gaming_pc}", headers=admin, json={
+            "name": "Gaming PC 3080", "api_url": GAMING_PC, "jobs": ["vision"], "at_once": 3, "enabled": True,
+            "shares_gpu": False})
+        assert r.status_code == 200, r.text
+        assert _machine(r.json(), "Gaming PC 3080")["has_key"] is True
+        # Turned off and on, it's asked again with the saved key.
+        assert client.patch(f"/v1/ai/machines/{gaming_pc}", json={"enabled": False}, headers=admin).status_code == 200
+        assert client.patch(f"/v1/ai/machines/{gaming_pc}", json={"enabled": True}, headers=admin).status_code == 200
+        assert seen[-1]["headers"]["Authorization"] == "Bearer sk-1"
+    [machine] = scheduler_client(env[4]).get("/v1/ai/jobs/vision").json()["machines"]
+    assert (machine["name"], machine["api_key"]) == ("Gaming PC 3080", "sk-1")
 
 
 @pytest.mark.slow
