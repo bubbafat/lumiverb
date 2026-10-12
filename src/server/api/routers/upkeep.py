@@ -647,19 +647,19 @@ class RecreateSearchIndexesResult(BaseModel):
 
 @router.post("/recreate-search-indexes", response_model=RecreateSearchIndexesResult)
 def recreate_search_indexes(scope: Scope) -> RecreateSearchIndexesResult:
-    """Wipe and recreate Quickwit indexes. Used to clean up duplicate
-    documents accumulated by repeated force-resyncs (Quickwit doesn't
-    upsert, so each force-resync used to leave another copy of every
-    doc until the dedupe gate landed). After calling this, the caller
-    MUST also call POST /v1/upkeep/search-sync to repopulate the empty
-    indexes.
+    """Make Quickwit indexes again from Postgres (to clean up duplicate
+    documents, or an index that's gone wrong): each account's three are
+    made again beside the live ones, which search keeps answering from
+    while the search-sync sweep fills the new ones, then they're live and
+    the old ones go (src/server/search/indexes.py). Nothing is wiped first.
 
-    An account admin's key wipes that account's indexes; the admin key
-    with tenants=all wipes every account's. Destructive, no undo, but
-    the data can be rebuilt from Postgres via the search-sync sweep.
+    An account admin's key does that account's indexes; the admin key with
+    tenants=all every account's.
     """
     from src.server.database import get_tenant_session
+    from src.server.search import indexes as search_indexes
     from src.server.search.quickwit_client import QuickwitClient
+    from src.server.search.sync import rebuild
 
     qw = QuickwitClient()
     if not qw.enabled:
@@ -667,26 +667,16 @@ def recreate_search_indexes(scope: Scope) -> RecreateSearchIndexesResult:
             tenants_processed=0, errors=["Quickwit disabled"],
         )
 
-    tenant_ids = _tenant_ids(scope)
     errors: list[str] = []
     processed = 0
-    for tenant_id in tenant_ids:
+    for tenant_id in _tenant_ids(scope):
         try:
-            qw.recreate_tenant_indexes(tenant_id)
+            with get_tenant_session(tenant_id) as tsession:
+                rebuild(tsession, qw, tenant_id, search_indexes.KINDS)
             processed += 1
         except Exception as exc:
             errors.append(f"{tenant_id}: {exc}")
-            logger.warning("Recreate Quickwit indexes failed for %s: %s", tenant_id, exc)
-
-    # Marked for a reindex: the next search-sync sweep clears the sync times and does the work.
-    from src.server.search.sync import REINDEX_RESETS, mark_reindex
-
-    for tenant_id in tenant_ids:
-        try:
-            with get_tenant_session(tenant_id) as tsession:
-                mark_reindex(tsession, list(REINDEX_RESETS))
-        except Exception as exc:
-            logger.warning("Failed to mark tenant %s's search for a reindex: %s", tenant_id, exc)
+            logger.warning("Rebuilding Quickwit indexes failed for %s: %s", tenant_id, exc)
 
     return RecreateSearchIndexesResult(tenants_processed=processed, errors=errors)
 

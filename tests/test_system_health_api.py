@@ -276,6 +276,8 @@ def _quickwit_that(*remade: str) -> MagicMock:
     qw.ensure_tenant_index.return_value = "assets" in remade
     qw.ensure_tenant_scene_index.return_value = "scenes" in remade
     qw.ensure_tenant_transcript_index.return_value = "transcripts" in remade
+    qw.outdated.return_value = False  # their schemas are as now: nothing rebuilt
+    qw.make_index.return_value = False
     return qw
 
 
@@ -321,23 +323,37 @@ def test_a_missing_index_made_by_an_inline_sync_is_refilled_by_the_sweep(env):
     assert "search.reindex.assets" not in _marks(env)
 
 
-def test_recreating_the_indexes_only_marks_them(env):
+def test_recreating_the_indexes_makes_them_again_beside_the_live_ones(env):
+    """Nothing is wiped: search answers from the live indexes while new ones fill (tests/test_search_rebuild.py)."""
     from src.server.config import get_settings as settings
+    from src.server.search import indexes
 
     client, headers, *_ = env
     a = _ingest_with(env, "recreated.jpg", _sha())
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = now()"))
         s.commit()
+    made: list[str] = []
     with (patch.object(settings(), "quickwit_enabled", True),
-          patch("src.server.search.quickwit_client.QuickwitClient.recreate_tenant_indexes"),
+          patch("src.server.search.quickwit_client.QuickwitClient.make_index",
+                lambda self, index_id, kind: made.append(index_id) or True),
+          patch("src.server.search.quickwit_client.QuickwitClient.drop_index",
+                lambda self, index_id: pytest.fail(f"{index_id} dropped")),
           patch("src.server.database.get_tenant_session", lambda tenant_id: _db(env))):
         r = client.post("/v1/upkeep/recreate-search-indexes", headers=headers)
     assert r.status_code == 200 and r.json()["tenants_processed"] == 1, r.text
-    assert _synced(env, "search_synced_at", [a]) == {a: True}
-    assert {"search.reindex.assets", "search.reindex.scenes", "search.reindex.transcripts"} <= _marks(env)
-    _sweep(env, _quickwit_that())
-    assert not _marks(env)
+    tenant_id = env[4]
+    try:
+        with _db(env) as s:
+            where = indexes.read(s, tenant_id)
+        assert made == [f"{indexes.base_id(tenant_id, k)}_g1" for k in indexes.KINDS]
+        assert {k: (w.live, w.building) for k, w in where.items()} == {
+            k: (indexes.base_id(tenant_id, k), f"{indexes.base_id(tenant_id, k)}_g1") for k in indexes.KINDS}
+        assert _synced(env, "search_synced_at", [a]) == {a: True} and not _marks(env)
+    finally:
+        with _db(env) as s:
+            s.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": indexes.KEY})
+            s.commit()
 
 
 SRT = "1\n00:00:00,000 --> 00:00:01,500\nthe ferry leaves at noon\n"

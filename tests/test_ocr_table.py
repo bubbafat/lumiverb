@@ -109,6 +109,7 @@ def test_the_search_sweep_covers_every_clip_and_carries_its_ocr(env):
     _ocr(lib, undescribed, "PLATFORM 9", None)
     qw = MagicMock()
     qw.ensure_tenant_index.return_value = False  # the index was there already
+    qw.outdated.return_value = False  # with its schema as now: nothing rebuilt
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE library_id = :l"), {"l": lib[2]})
         s.commit()
@@ -122,6 +123,7 @@ def test_the_search_sweep_covers_every_clip_and_carries_its_ocr(env):
     # OCR newer than the clip's search document brings it back into the sweep.
     qw = MagicMock()
     qw.ensure_tenant_index.return_value = False  # the index was there already
+    qw.outdated.return_value = False  # with its schema as now: nothing rebuilt
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = now()"))  # the sweep is tenant-wide
         s.execute(text("UPDATE asset_ocr SET text = 'PLATFORM 10', generated_at = now() + interval '1 minute'"

@@ -9,6 +9,7 @@ from typing import Iterable
 import requests
 
 from src.server.config import get_settings
+from src.server.search import indexes as search_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +31,20 @@ class QuickwitClient:
     """
     Minimal Quickwit HTTP client for index management and ingest.
 
-    Uses per-tenant indexes: one asset index and one scene index per tenant.
-    The library_id field in each document enables per-library filtering.
+    Uses per-tenant indexes: one asset index, one scene index and one
+    transcript index per tenant. The library_id field in each document
+    enables per-library filtering. Searches read each kind's live index;
+    writes and deletes go to it and to one built or retired beside it
+    (src/server/search/indexes.py).
     """
 
-    def __init__(self, schema_dir: Path | None = None) -> None:
+    def __init__(self, schema_dir: Path | None = None, where=None) -> None:
         settings = get_settings()
         self._base_url = settings.quickwit_url.rstrip("/")
         self._enabled = settings.quickwit_enabled
         self._schema_dir = schema_dir or Path("quickwit")
+        # tenant_id → each kind's indexes (indexes.Where); the account's database's by default.
+        self._where = where or search_indexes.cached
 
     @property
     def enabled(self) -> bool:
@@ -57,20 +63,33 @@ class QuickwitClient:
     # Index naming
     # ------------------------------------------------------------------
 
+    # The original names (an account that never rebuilt an index still has them).
     def tenant_index_id(self, tenant_id: str) -> str:
-        return f"lumiverb_tenant_{tenant_id}"
+        return search_indexes.base_id(tenant_id, "assets")
 
     def tenant_scene_index_id(self, tenant_id: str) -> str:
-        return f"lumiverb_tenant_{tenant_id}_scenes"
+        return search_indexes.base_id(tenant_id, "scenes")
 
     def tenant_transcript_index_id(self, tenant_id: str) -> str:
-        return f"lumiverb_tenant_{tenant_id}_transcripts"
+        return search_indexes.base_id(tenant_id, "transcripts")
+
+    def schema_path(self, kind: str) -> Path:
+        return {"assets": self._schema_path, "scenes": self._scene_schema_path,
+                "transcripts": self._transcript_schema_path}[kind]()
+
+    def _live(self, tenant_id: str, kind: str) -> str:
+        """The index a kind's searches read."""
+        return self._where(tenant_id)[kind].live
+
+    def _targets(self, tenant_id: str, kind: str) -> list[str]:
+        """The indexes a kind's writes and deletes go to: its live one, and one built or retired beside it."""
+        return self._where(tenant_id)[kind].targets()
 
     def tenant_index_state(self, tenant_id: str, timeout: float = 2.0) -> tuple[str, str]:
         """Whether the account's asset index answers: ("ok", ""), ("missing", "")
         or ("down", why in a few words). For the Admin page's Search row; nothing is changed."""
         try:
-            resp = requests.get(f"{self._base_url}/api/v1/indexes/{self.tenant_index_id(tenant_id)}", timeout=timeout)
+            resp = requests.get(f"{self._base_url}/api/v1/indexes/{self._live(tenant_id, 'assets')}", timeout=timeout)
         except requests.RequestException as exc:
             return "down", type(exc).__name__
         if resp.status_code == 200:
@@ -84,31 +103,34 @@ class QuickwitClient:
     # ------------------------------------------------------------------
 
     def ensure_tenant_index(self, tenant_id: str) -> bool:
-        """Ensure the per-tenant asset index exists. Returns True if it was
-        (re)made: missing, or its schema changed. Everything goes in again."""
-        return self._ensure_index(self.tenant_index_id(tenant_id), self._schema_path())
+        """Ensure the account's live asset index exists. Returns True if it was
+        made (it was missing): everything goes in again. One whose schema
+        changed is rebuilt beside it by the sweep (search/sync.py), not here."""
+        return self._ensure_index(self._live(tenant_id, "assets"), self._schema_path())
 
     def ensure_tenant_scene_index(self, tenant_id: str) -> bool:
-        """Ensure the per-tenant scene index exists. Returns True if recreated."""
-        return self._ensure_index(self.tenant_scene_index_id(tenant_id), self._scene_schema_path())
+        """Ensure the account's live scene index exists. Returns True if it was made."""
+        return self._ensure_index(self._live(tenant_id, "scenes"), self._scene_schema_path())
 
     def ensure_tenant_transcript_index(self, tenant_id: str) -> bool:
-        """Ensure the per-tenant transcript index exists. Returns True if recreated."""
-        return self._ensure_index(self.tenant_transcript_index_id(tenant_id), self._transcript_schema_path())
+        """Ensure the account's live transcript index exists. Returns True if it was made."""
+        return self._ensure_index(self._live(tenant_id, "transcripts"), self._transcript_schema_path())
 
-    def recreate_tenant_indexes(self, tenant_id: str) -> None:
-        """Delete and recreate both tenant indexes (asset + scene) with current schema.
+    def outdated(self, index_id: str, kind: str) -> bool:
+        """Whether an index lacks fields the kind's schema has now (so it's
+        rebuilt beside). False when it's missing or can't be read."""
+        if not self._enabled:
+            return False
+        resp = requests.get(f"{self._base_url}/api/v1/indexes/{index_id}", timeout=5)
+        return resp.status_code == 200 and self._schema_fields_changed(resp.json(), self.schema_path(kind))
 
-        Use when the schema has changed (new fields added). All documents
-        must be re-indexed after this call.
-        """
-        for index_id, schema_path in [
-            (self.tenant_index_id(tenant_id), self._schema_path()),
-            (self.tenant_scene_index_id(tenant_id), self._scene_schema_path()),
-            (self.tenant_transcript_index_id(tenant_id), self._transcript_schema_path()),
-        ]:
-            self._delete_index(index_id)
-            self._ensure_index(index_id, schema_path)
+    def make_index(self, index_id: str, kind: str) -> bool:
+        """Make an index of the kind with its schema now, unless it's there. True if made."""
+        return self._ensure_index(index_id, self.schema_path(kind))
+
+    def drop_index(self, index_id: str) -> None:
+        """Delete an index (one retired after a rebuild)."""
+        self._delete_index(index_id)
 
     def _delete_index(self, index_id: str) -> None:
         if not self._enabled:
@@ -118,20 +140,15 @@ class QuickwitClient:
             return
         logger.warning("Quickwit index delete failed for %s: %s %s", index_id, resp.status_code, resp.text)
 
-    def _ensure_index(self, index_id: str, schema_path: Path, *, auto_recreate: bool = True) -> bool:
-        """Ensure index exists with current schema. Returns True if (re)created."""
+    def _ensure_index(self, index_id: str, schema_path: Path) -> bool:
+        """Ensure the index exists. Returns True if it was made. One that's
+        there stays as it is, whatever its schema: never deleted here."""
         if not self._enabled:
             return False
         recreated = False
         exists_resp = requests.get(f"{self._base_url}/api/v1/indexes/{index_id}", timeout=5)
         if exists_resp.status_code == 200:
-            if auto_recreate and self._schema_fields_changed(exists_resp.json(), schema_path):
-                logger.info("Quickwit index %s has outdated schema — recreating", index_id)
-                self._delete_index(index_id)
-                recreated = True
-                # Fall through to create below
-            else:
-                return False
+            return False
         elif exists_resp.status_code in (404, 400):
             # Missing (deleted, or Quickwit's data lost): what it held is
             # gone, so the caller indexes everything again.
@@ -214,16 +231,27 @@ class QuickwitClient:
     # ------------------------------------------------------------------
 
     def ingest_tenant_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
-        """Ingest asset documents into the per-tenant index."""
-        self._ingest_to_index(self.tenant_index_id(tenant_id), docs)
+        """Ingest asset documents into the account's asset indexes (live, and one beside it)."""
+        self._ingest_to_kind(tenant_id, "assets", docs)
 
     def ingest_tenant_scene_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
-        """Ingest scene documents into the per-tenant scene index."""
-        self._ingest_to_index(self.tenant_scene_index_id(tenant_id), docs)
+        """Ingest scene documents into the account's scene indexes."""
+        self._ingest_to_kind(tenant_id, "scenes", docs)
 
     def ingest_tenant_transcript_documents(self, tenant_id: str, docs: Iterable[dict]) -> None:
-        """Ingest transcript segment documents into the per-tenant transcript index."""
-        self._ingest_to_index(self.tenant_transcript_index_id(tenant_id), docs)
+        """Ingest transcript segment documents into the account's transcript indexes."""
+        self._ingest_to_kind(tenant_id, "transcripts", docs)
+
+    def _ingest_to_kind(self, tenant_id: str, kind: str, docs: Iterable[dict]) -> None:
+        if not self._enabled:
+            return
+        docs = list(docs)
+        for index_id in self._targets(tenant_id, kind):
+            self._ingest_to_index(index_id, docs)
+
+    def ingest_into(self, index_id: str, docs: Iterable[dict]) -> None:
+        """Ingest documents into one index (a rebuild's, as the sweep fills it)."""
+        self._ingest_to_index(index_id, docs)
 
     def _ingest_to_index(self, index_id: str, docs: Iterable[dict]) -> None:
         if not self._enabled:
@@ -290,7 +318,7 @@ class QuickwitClient:
         per-index calls.
         """
         effective_query = self._apply_library_filter(query, library_ids)
-        index_id = self.tenant_index_id(tenant_id)
+        index_id = self._live(tenant_id, "assets") if self._enabled else self.tenant_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
         for rank, hit in enumerate(raw_hits):
@@ -322,7 +350,7 @@ class QuickwitClient:
         filter by library_id(s). Position-based scoring — see
         ``search_tenant`` for the rationale."""
         effective_query = self._apply_library_filter(query, library_ids)
-        index_id = self.tenant_scene_index_id(tenant_id)
+        index_id = self._live(tenant_id, "scenes") if self._enabled else self.tenant_scene_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
         for rank, hit in enumerate(raw_hits):
@@ -356,7 +384,7 @@ class QuickwitClient:
         per-segment hits with position-based scoring — see
         ``search_tenant`` for the rationale."""
         effective_query = self._apply_library_filter(query, library_ids)
-        index_id = self.tenant_transcript_index_id(tenant_id)
+        index_id = self._live(tenant_id, "transcripts") if self._enabled else self.tenant_transcript_index_id(tenant_id)
         raw_hits = self._search_index(index_id, effective_query, max_hits, start_offset)
         results: list[dict] = []
         for rank, hit in enumerate(raw_hits):
@@ -389,173 +417,97 @@ class QuickwitClient:
     # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------
+    # Every delete goes to each index of its kind a write would go to: the
+    # live one, and one built or retired beside it (indexes.Where.targets).
+
+    def _delete_where(self, index_ids: list[str], field: str, values: list[str], *, what: str,
+                      batch: int = 500, timeout: float = 30) -> None:
+        """Delete the documents whose field is one of values from each index,
+        `batch` values a request (an OR'd delete-by-query). Best effort: a
+        failure is logged. Async at Quickwit's side (delete-tasks): documents
+        ingested just after may briefly coexist with the old ones, and the
+        per-asset_id merge in `_run_quickwit_search` collapses any duplicates."""
+        if not self._enabled or not values:
+            return
+        for i in range(0, len(values), batch):
+            chunk = values[i : i + batch]
+            query = " OR ".join(f'{field}:"{v}"' for v in chunk)
+            for index_id in index_ids:
+                try:
+                    resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
+                                         json={"query": query}, timeout=timeout)
+                    if resp.status_code not in (200, 201, 202):
+                        logger.warning("Quickwit %s delete failed for %s (%d ids): %s %s",
+                                       what, index_id, len(chunk), resp.status_code, resp.text)
+                except requests.RequestException as exc:
+                    logger.warning("Quickwit %s delete request failed for %s (%d ids): %s",
+                                   what, index_id, len(chunk), exc)
+
+    def _every_index(self, tenant_id: str) -> list[str]:
+        """Each index of each kind a write would go to."""
+        return [i for kind in search_indexes.KINDS for i in self._targets(tenant_id, kind)]
+
+    def delete_from(self, index_id: str, field: str, values: list[str]) -> None:
+        """Delete documents whose field is one of values from one index (a
+        rebuild's, before the sweep puts them in again)."""
+        self._delete_where([index_id], field, values, what="rebuild")
 
     def delete_tenant_transcript_documents(self, tenant_id: str, asset_id: str) -> None:
-        """Delete all transcript segment documents for an asset from the transcript index."""
+        """Delete all transcript segment documents for an asset from the transcript indexes."""
         if not self._enabled:
             return
-        query = f'asset_id:"{asset_id}"'
-        index_id = self.tenant_transcript_index_id(tenant_id)
-        try:
-            resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
-            if resp.status_code not in (200, 201, 202):
-                logger.warning("Quickwit transcript delete failed for %s asset_id=%s: %s %s", index_id, asset_id, resp.status_code, resp.text)
-        except requests.RequestException as exc:
-            logger.warning("Quickwit transcript delete request failed for %s asset_id=%s: %s", index_id, asset_id, exc)
+        self._delete_where(self._targets(tenant_id, "transcripts"), "asset_id", [asset_id], what="transcript",
+                           timeout=10)
 
     def delete_tenant_documents_by_asset_id(self, tenant_id: str, asset_id: str) -> None:
-        """Best-effort delete documents for an asset from both tenant indexes."""
+        """Best-effort delete documents for an asset from every tenant index."""
         if not self._enabled:
             return
-        query = f'asset_id:"{asset_id}"'
-        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id), self.tenant_transcript_index_id(tenant_id)):
-            try:
-                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning("Quickwit delete-tasks failed for %s asset_id=%s: %s %s", index_id, asset_id, resp.status_code, resp.text)
-            except requests.RequestException as exc:
-                logger.warning("Quickwit delete-tasks request failed for %s asset_id=%s: %s", index_id, asset_id, exc)
+        self._delete_where(self._every_index(tenant_id), "asset_id", [asset_id], what="asset", timeout=10)
 
-    def delete_asset_index_documents_by_asset_ids(
-        self, tenant_id: str, asset_ids: list[str]
-    ) -> None:
-        """Bulk-delete asset-index docs for a list of asset_ids in one
+    def delete_asset_index_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
+        """Bulk-delete asset-index docs for a list of asset_ids, 500 a
         request. Used by the search-sync sweep to wipe stale duplicates
-        before re-ingesting — Quickwit's HTTP ingest does NOT upsert
-        (you can't update a doc by primary key), so without an
-        explicit delete each re-sync pass would accumulate another
-        copy of every doc. This is the dedupe gate.
-
-        Issued as a single OR'd delete-by-query rather than N
-        per-asset deletes for throughput. Async at the Quickwit side
-        (delete-tasks); the new docs ingested immediately after may
-        briefly coexist with the old docs until the deletion task
-        runs, but the per-asset_id merge in `_run_quickwit_search`
-        collapses any temporary duplicates anyway.
-        """
+        before re-ingesting: Quickwit's HTTP ingest does NOT upsert (you
+        can't update a doc by primary key), so without an explicit delete
+        each re-sync pass would accumulate another copy of every doc. This
+        is the dedupe gate."""
         if not self._enabled or not asset_ids:
             return
-        # Quickwit query language: `asset_id:"id1" OR asset_id:"id2"`.
-        # Cap at ~500 ids per request to keep query string size sane;
-        # callers needing more should batch.
-        BATCH = 500
-        index_id = self.tenant_index_id(tenant_id)
-        for i in range(0, len(asset_ids), BATCH):
-            batch = asset_ids[i : i + BATCH]
-            clauses = [f'asset_id:"{aid}"' for aid in batch]
-            query = " OR ".join(clauses)
-            try:
-                resp = requests.post(
-                    f"{self._base_url}/api/v1/{index_id}/delete-tasks",
-                    json={"query": query},
-                    timeout=30,
-                )
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning(
-                        "Quickwit bulk delete failed for %s (%d ids): %s %s",
-                        index_id, len(batch), resp.status_code, resp.text,
-                    )
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Quickwit bulk delete request failed for %s (%d ids): %s",
-                    index_id, len(batch), exc,
-                )
+        self._delete_where(self._targets(tenant_id, "assets"), "asset_id", asset_ids, what="bulk")
 
-    def delete_scene_index_documents_by_asset_ids(
-        self, tenant_id: str, asset_ids: list[str]
-    ) -> None:
+    def delete_scene_index_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
         """Bulk-delete scene-index docs for a list of asset_ids. Mirror
         of `delete_asset_index_documents_by_asset_ids` for the scene
         index — used by the sync sweep before scene ingest."""
         if not self._enabled or not asset_ids:
             return
-        BATCH = 500
-        index_id = self.tenant_scene_index_id(tenant_id)
-        for i in range(0, len(asset_ids), BATCH):
-            batch = asset_ids[i : i + BATCH]
-            clauses = [f'asset_id:"{aid}"' for aid in batch]
-            query = " OR ".join(clauses)
-            try:
-                resp = requests.post(
-                    f"{self._base_url}/api/v1/{index_id}/delete-tasks",
-                    json={"query": query},
-                    timeout=30,
-                )
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning(
-                        "Quickwit bulk scene delete failed for %s (%d ids): %s %s",
-                        index_id, len(batch), resp.status_code, resp.text,
-                    )
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Quickwit bulk scene delete request failed for %s (%d ids): %s",
-                    index_id, len(batch), exc,
-                )
+        self._delete_where(self._targets(tenant_id, "scenes"), "asset_id", asset_ids, what="bulk scene")
 
     def delete_scene_index_documents_by_scene_ids(self, tenant_id: str, scene_ids: list[str]) -> None:
         """Bulk-delete these scenes' docs from the scene index (a clip's
         other scenes stay), 500 a request: inline scene sync's dedupe gate."""
         if not self._enabled or not scene_ids:
             return
-        index_id = self.tenant_scene_index_id(tenant_id)
-        for i in range(0, len(scene_ids), 500):
-            query = " OR ".join(f'scene_id:"{sid}"' for sid in scene_ids[i : i + 500])
-            try:
-                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
-                                     json={"query": query}, timeout=30)
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning("Quickwit bulk scene delete failed for %s: %s %s",
-                                   index_id, resp.status_code, resp.text)
-            except requests.RequestException as exc:
-                logger.warning("Quickwit bulk scene delete request failed for %s: %s", index_id, exc)
+        self._delete_where(self._targets(tenant_id, "scenes"), "scene_id", scene_ids, what="bulk scene")
 
     def delete_transcript_index_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
         """Bulk-delete transcript-index docs for a list of asset_ids, 500 a
         request: the sync sweep's dedupe gate before transcript ingest."""
         if not self._enabled or not asset_ids:
             return
-        index_id = self.tenant_transcript_index_id(tenant_id)
-        for i in range(0, len(asset_ids), 500):
-            query = " OR ".join(f'asset_id:"{aid}"' for aid in asset_ids[i : i + 500])
-            try:
-                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
-                                     json={"query": query}, timeout=30)
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning("Quickwit bulk transcript delete failed for %s: %s %s",
-                                   index_id, resp.status_code, resp.text)
-            except requests.RequestException as exc:
-                logger.warning("Quickwit bulk transcript delete request failed for %s: %s", index_id, exc)
+        self._delete_where(self._targets(tenant_id, "transcripts"), "asset_id", asset_ids, what="bulk transcript")
 
     def delete_tenant_documents_by_asset_ids(self, tenant_id: str, asset_ids: list[str]) -> None:
-        """Best-effort: delete these assets' documents from all three tenant
+        """Best-effort: delete these assets' documents from all three kinds'
         indexes (assets, scenes, transcript segments), 500 ids a request.
         For many clips at once (archiving a folder, trashing a selection)."""
         if not self._enabled or not asset_ids:
             return
-        BATCH = 500
-        indexes = (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id),
-                   self.tenant_transcript_index_id(tenant_id))
-        for i in range(0, len(asset_ids), BATCH):
-            query = " OR ".join(f'asset_id:"{aid}"' for aid in asset_ids[i : i + BATCH])
-            for index_id in indexes:
-                try:
-                    resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks",
-                                         json={"query": query}, timeout=30)
-                    if resp.status_code not in (200, 201, 202):
-                        logger.warning("Quickwit bulk delete failed for %s: %s %s",
-                                       index_id, resp.status_code, resp.text)
-                except requests.RequestException as exc:
-                    logger.warning("Quickwit bulk delete request failed for %s: %s", index_id, exc)
+        self._delete_where(self._every_index(tenant_id), "asset_id", asset_ids, what="bulk")
 
     def delete_tenant_documents_by_library_id(self, tenant_id: str, library_id: str) -> None:
-        """Best-effort delete all documents for a library from both tenant indexes."""
+        """Best-effort delete all documents for a library from every tenant index."""
         if not self._enabled:
             return
-        query = f'library_id:"{library_id}"'
-        for index_id in (self.tenant_index_id(tenant_id), self.tenant_scene_index_id(tenant_id), self.tenant_transcript_index_id(tenant_id)):
-            try:
-                resp = requests.post(f"{self._base_url}/api/v1/{index_id}/delete-tasks", json={"query": query}, timeout=10)
-                if resp.status_code not in (200, 201, 202):
-                    logger.warning("Quickwit delete-tasks failed for %s library_id=%s: %s %s", index_id, library_id, resp.status_code, resp.text)
-            except requests.RequestException as exc:
-                logger.warning("Quickwit delete-tasks request failed for %s library_id=%s: %s", index_id, library_id, exc)
+        self._delete_where(self._every_index(tenant_id), "library_id", [library_id], what="library", timeout=10)

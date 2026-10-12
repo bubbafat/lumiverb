@@ -4,12 +4,15 @@ This module provides:
 - Document builders (shared between inline sync and maintenance sweep)
 - try_sync_asset / try_sync_scene: best-effort inline sync (never raises)
 - run_search_sync_sweep: maintenance sweep for stale/missing syncs
+- rebuild / advance_rebuilds: an index made again beside the live one
+  (src/server/search/indexes.py), filled by the sweep, then live
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 
 from sqlalchemy import text
@@ -17,6 +20,7 @@ from sqlmodel import Session
 
 from src.shared.utils import utcnow
 from src.server.models.tenant import Asset, AssetMetadata, VideoScene
+from src.server.search import indexes as search_indexes
 from src.server.search.quickwit_client import QuickwitClient
 
 logger = logging.getLogger(__name__)
@@ -54,24 +58,161 @@ _RECREATE_KEY = "search.recreate"
 
 
 def mark_recreate(conn) -> None:
-    """Record that the account's indexes must be remade, empty, and filled
-    again: a restore put back a database the index no longer matches. The
-    next sweep does it. In the caller's transaction (a Session or a Connection)."""
+    """Record that the account's indexes must be made again from the
+    database: a restore put back a database the indexes no longer match. The
+    next sweep starts it (rebuild). In the caller's transaction (a Session or a Connection)."""
     conn.execute(text(
         "INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, 'needed', now())"
         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"k": _RECREATE_KEY})
 
 
 def recreate_marked(session: Session, qw: QuickwitClient, tenant_id: str) -> bool:
-    """Remakes the account's indexes when marked (mark_recreate), and marks
-    everything for a reindex. True if it did. Commits."""
+    """Starts making the account's indexes again beside the live ones when
+    marked (mark_recreate). True if it did. Commits."""
     if not session.execute(text("SELECT 1 FROM system_metadata WHERE key = :k"), {"k": _RECREATE_KEY}).scalar():
         return False
-    qw.recreate_tenant_indexes(tenant_id)
+    rebuild(session, qw, tenant_id, search_indexes.KINDS)
     session.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": _RECREATE_KEY})
-    mark_reindex(session, list(REINDEX_RESETS))  # commits both
-    logger.info("Search indexes remade for %s (a restore): reindexing all of it", tenant_id)
+    session.commit()
+    logger.info("Search indexes of %s made again beside the live ones (a restore): search answers meanwhile",
+                tenant_id)
     return True
+
+
+# ---------------------------------------------------------------------------
+# An index made again beside the live one (indexes.py)
+# ---------------------------------------------------------------------------
+
+# Clips put into a rebuild's index a request, and how long one sweep fills
+# for (an account's): the old index answers searches meanwhile.
+FILL_BATCH = {"assets": 500, "scenes": 100, "transcripts": 200}
+FILL_SEC = 60.0
+
+
+def rebuild(session: Session, qw: QuickwitClient, tenant_id: str, kinds) -> None:
+    """Make these kinds' indexes again beside the live ones: an empty index
+    each, which every write goes to from now on and the sweep fills from the
+    database (advance_rebuilds), then live. One already being made is filled
+    again from the start. Commits."""
+    where = search_indexes.read(session, tenant_id)
+    for kind in kinds:
+        w = where[kind]
+        if w.building is None:
+            w.building = search_indexes.next_id(tenant_id, kind, w)
+            qw.make_index(w.building, kind)
+        w.cursor = None
+        logger.info("Search: %s's %s index made again beside the live one (%s)", tenant_id, kind, w.building)
+    search_indexes.write(session, tenant_id, where)
+    session.commit()
+
+
+def _fill_assets(session: Session, qw: QuickwitClient, index_id: str, after: str) -> str | None:
+    """The next clips after `after` (by id) into a rebuild's asset index; the last id put in, None when none are left."""
+    from src.server.repository.tenant import AssetMetadataRepository
+
+    rows = session.execute(text(
+        "SELECT a.asset_id, COALESCE(o.text, '') AS ocr_text, c.description AS c_description,"
+        "       c.ocr_text AS c_ocr_text, c.asset_id AS c_asset_id, c.tags AS c_tags"
+        " FROM active_assets a"
+        " LEFT JOIN asset_ocr o ON o.asset_id = a.asset_id"
+        " LEFT JOIN asset_corrections c ON c.asset_id = a.asset_id"
+        " WHERE a.asset_id > :after ORDER BY a.asset_id LIMIT :n"), {"after": after, "n": FILL_BATCH["assets"]}).all()
+    if not rows:
+        return None
+    meta_repo = AssetMetadataRepository(session)
+    docs = []
+    for r in rows:
+        asset = session.get(Asset, r.asset_id)
+        if asset is None:
+            continue
+        corrections = ({"description": r.c_description, "ocr_text": r.c_ocr_text, "tags": r.c_tags}
+                       if r.c_asset_id is not None else None)
+        docs.append(build_asset_document(asset, meta_repo.get_latest(asset_id=r.asset_id), r.ocr_text, corrections))
+    ids = [r.asset_id for r in rows]
+    qw.delete_from(index_id, "asset_id", ids)  # a write meanwhile may have put one in already
+    qw.ingest_into(index_id, docs)
+    return ids[-1]
+
+
+def _fill_scenes(session: Session, qw: QuickwitClient, index_id: str, after: str) -> str | None:
+    """The next clips' described scenes, after `after` (by clip id), into a rebuild's scene index."""
+    clips = session.execute(text(
+        "SELECT DISTINCT s.asset_id FROM video_scenes s JOIN active_assets a ON a.asset_id = s.asset_id"
+        " WHERE s.description IS NOT NULL AND s.asset_id > :after"
+        " ORDER BY s.asset_id LIMIT :n"), {"after": after, "n": FILL_BATCH["scenes"]}).scalars().all()
+    if not clips:
+        return None
+    docs = []
+    for scene_id, asset_id in session.execute(text(
+            "SELECT scene_id, asset_id FROM video_scenes WHERE asset_id = ANY(:ids)"
+            " AND description IS NOT NULL ORDER BY asset_id, start_ms"), {"ids": list(clips)}).all():
+        scene, asset = session.get(VideoScene, scene_id), session.get(Asset, asset_id)
+        if scene is not None and asset is not None:
+            docs.append(build_scene_document(scene, asset))
+    qw.delete_from(index_id, "asset_id", list(clips))
+    qw.ingest_into(index_id, docs)
+    return clips[-1]
+
+
+def _fill_transcripts(session: Session, qw: QuickwitClient, index_id: str, after: str) -> str | None:
+    """The next clips' transcript segments, after `after` (by id), into a rebuild's transcript index."""
+    clips = session.execute(text(
+        "SELECT asset_id FROM active_assets WHERE transcript_srt IS NOT NULL AND asset_id > :after"
+        " ORDER BY asset_id LIMIT :n"), {"after": after, "n": FILL_BATCH["transcripts"]}).scalars().all()
+    if not clips:
+        return None
+    docs = []
+    for asset_id in clips:
+        asset = session.get(Asset, asset_id)
+        if asset is not None:
+            docs.extend(_transcript_documents(asset, asset.transcript_srt))
+    qw.delete_from(index_id, "asset_id", list(clips))
+    qw.ingest_into(index_id, docs)
+    return clips[-1]
+
+
+_FILL = {"assets": _fill_assets, "scenes": _fill_scenes, "transcripts": _fill_transcripts}
+
+
+def advance_rebuilds(session: Session, qw: QuickwitClient, tenant_id: str) -> list[str]:
+    """One sweep's part of each rebuild: an index retired at the last one
+    goes; one begun at the last one starts filling (writes go to it now,
+    whatever a process read before); one filling goes on for FILL_SEC, and
+    once full is live, the old one taking writes for one more sweep.
+    Returns what happened, for the log. Commits as it goes."""
+    where = search_indexes.read(session, tenant_id)
+    if not any(w.building or w.retired for w in where.values()):
+        return []
+    done: list[str] = []
+    deadline = time.monotonic() + FILL_SEC
+    for kind in search_indexes.KINDS:
+        w = where[kind]
+        try:  # one kind's trouble doesn't hold up the others'
+            if w.retired:
+                qw.drop_index(w.retired)
+                done.append(f"{kind}: {w.retired} dropped")
+                w.retired = None
+            if w.building and w.cursor is None:
+                w.cursor = ""  # from the next sweep: every process writes to it by then
+            elif w.building:
+                if qw.make_index(w.building, kind):  # it went missing: filled again from the start
+                    w.cursor = ""
+                while time.monotonic() < deadline:
+                    last = _FILL[kind](session, qw, w.building, w.cursor)
+                    if last is None:
+                        w.retired, w.live, w.building, w.cursor = w.live, w.building, None, None
+                        done.append(f"{kind}: {w.live} live")
+                        break
+                    w.cursor = last
+                    search_indexes.write(session, tenant_id, where)
+                    session.commit()
+            search_indexes.write(session, tenant_id, where)
+            session.commit()
+        except Exception as exc:  # noqa: BLE001 — Quickwit or a query: this kind goes on next sweep
+            session.rollback()
+            where = search_indexes.read(session, tenant_id)  # as it was last recorded
+            done.append(f"{kind}: not taken on this sweep ({exc})")
+    return done
 
 
 def reset_marked(session: Session) -> list[str]:
@@ -341,6 +482,9 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     Uses per-tenant indexes. tenant_id is required for Quickwit sync.
     First makes any missing index, and clears the sync times of every index
     marked for a reindex (mark_reindex), so what a lost index held goes back.
+    One whose schema changed is made again beside the live one (rebuild),
+    and every rebuild is taken a step on (advance_rebuilds): search keeps
+    answering from the live index meanwhile.
     Returns {"synced", "failed", "scenes_synced", "scenes_failed",
     "transcripts_synced", "transcripts_failed"}.
     """
@@ -369,6 +513,16 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
             ready.add(kind)
         except Exception as exc:
             logger.warning("Cannot ensure tenant Quickwit %s index for %s: %s", kind, tenant_id, exc)
+    try:
+        where = search_indexes.read(session, tenant_id)
+        outdated = [kind for kind in sorted(ready) if not where[kind].building and qw.outdated(where[kind].live, kind)]
+        if outdated:
+            rebuild(session, qw, tenant_id, outdated)
+        for step in advance_rebuilds(session, qw, tenant_id):
+            logger.info("Search: %s's %s", tenant_id, step)
+    except Exception as exc:  # noqa: BLE001 — Quickwit away: the rebuild goes on next sweep
+        session.rollback()
+        logger.warning("Search rebuild for %s didn't go on this sweep: %s", tenant_id, exc)
     for kind in reset_marked(session):
         logger.info("Search sync times cleared for %s's %s: reindexing", tenant_id, kind)
 
