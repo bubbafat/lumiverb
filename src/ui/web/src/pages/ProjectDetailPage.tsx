@@ -23,6 +23,7 @@ import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
 import { useLocalStorage } from "../lib/useLocalStorage";
+import { useRole } from "../lib/useCanEdit";
 import type { VirtualRowKind } from "../lib/virtualRows";
 
 const PAGE_SIZE = 200;
@@ -253,7 +254,8 @@ export default function ProjectDetailPage() {
       name: editName.trim(),
       description: editDesc.trim() || null,
       sort_order: editSort,
-      visibility: editVisibility,
+      // Only when changed: "public" is an admin's to send, even unchanged.
+      ...(editVisibility !== project?.visibility ? { visibility: editVisibility } : {}),
     });
   };
 
@@ -263,6 +265,11 @@ export default function ProjectDetailPage() {
   const archivedClips = project?.archived_asset_count ?? 0;
   // A project from before ownership belongs to everyone.
   const isOwner = project?.ownership !== "shared" || project?.owner_user_id == null;
+  // Making a project public is an admin's, as for a library. Anyone else sees
+  // Public only on a project that is public already, to take it down from.
+  const role = useRole();
+  const isAdmin = role === "admin";
+  const wasPublic = project?.visibility === "public";
 
   if (isProjectLoading) {
     return (
@@ -580,11 +587,19 @@ export default function ProjectDetailPage() {
                 >
                   <option value="private">Private (only you)</option>
                   <option value="shared">Shared (all team members)</option>
-                  <option value="public">Public (anyone with link)</option>
+                  {(isAdmin || wasPublic) && (
+                    <option value="public" disabled={!isAdmin}>Public (anyone with link)</option>
+                  )}
                 </select>
                 {editVisibility === "public" && (
                   <p className="mt-1 text-xs text-amber-400">
                     Anyone with the link can view this project without signing in.
+                  </p>
+                )}
+                {role !== undefined && !isAdmin && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Only an admin can make a project public
+                    {wasPublic ? ", so you can't make it public again once you change this" : ""}.
                   </p>
                 )}
               </div>

@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   listProjectAssets: vi.fn(),
   trashProject: vi.fn(),
   restoreProjectClips: vi.fn(),
+  updateProject: vi.fn(),
+  getCurrentUser: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -54,6 +56,9 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(800);
   api.trashProject.mockResolvedValue(undefined);
   api.restoreProjectClips.mockResolvedValue({ restored: 1, missing: 0 });
+  api.updateProject.mockReset(); // each test reads the calls it made
+  api.updateProject.mockImplementation(async (_id: string, body: Record<string, unknown>) => ({ ...baseProject, ...body }));
+  api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
   api.getProject.mockResolvedValue(baseProject);
   api.listProjectAssets.mockResolvedValue({
     items: ["camA.mov", "camB.mov"].map((name, i) => ({
@@ -188,5 +193,57 @@ describe("ProjectDetailPage", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     expect(screen.getByRole("button", { name: "Move to trash" })).toBeTruthy();
+  });
+});
+
+describe("ProjectDetailPage visibility", () => {
+  async function openSettingsAs(role: string) {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    return screen.getByLabelText("Visibility") as HTMLSelectElement;
+  }
+
+  it("offers an editor no way to make a project public", async () => {
+    const select = await openSettingsAs("editor");
+    expect(await screen.findByText("Only an admin can make a project public.")).toBeTruthy(); // the role is known
+    expect(within(select).queryByRole("option", { name: /Public/ })).toBeNull();
+    expect(within(select).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual(["private", "shared"]);
+  });
+
+  it("lets an admin make a project public", async () => {
+    const select = await openSettingsAs("admin");
+    const option = (await within(select).findByRole("option", { name: /Public/ })) as HTMLOptionElement;
+    expect(option.disabled).toBe(false);
+    expect(screen.queryByText(/Only an admin can make a project public/)).toBeNull();
+    fireEvent.change(select, { target: { value: "public" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.updateProject).toHaveBeenCalled());
+    expect(api.updateProject.mock.calls[0][1]).toMatchObject({ visibility: "public" });
+  });
+
+  it("lets an editor take their public project down, but not put it back up", async () => {
+    withProject({ visibility: "public" });
+    const select = await openSettingsAs("editor");
+    expect(await screen.findByText(/so you can't make it public again once you change this/)).toBeTruthy();
+    const option = within(select).getByRole("option", { name: /Public/ }) as HTMLOptionElement;
+    expect(option.disabled).toBe(true); // shown, as it's the project's now, but not choosable
+    expect(select.value).toBe("public");
+    fireEvent.change(select, { target: { value: "private" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.updateProject).toHaveBeenCalled());
+    expect(api.updateProject.mock.calls[0][1]).toMatchObject({ visibility: "private" });
+  });
+
+  it("leaves visibility out when an editor saves other settings of a public project", async () => {
+    // The API refuses "public" from an editor even unchanged, so a rename mustn't send it.
+    withProject({ visibility: "public" });
+    await openSettingsAs("editor");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.updateProject).toHaveBeenCalled());
+    const body = api.updateProject.mock.calls[0][1];
+    expect(body).toMatchObject({ name: "Renamed" });
+    expect(body).not.toHaveProperty("visibility");
   });
 });

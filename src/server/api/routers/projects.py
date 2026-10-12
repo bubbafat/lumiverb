@@ -10,7 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_tenant_admin,
+)
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.database import get_control_session
@@ -209,6 +214,15 @@ def _sync_public_index(request: Request, project_id: str, *, public: bool) -> No
             pub_repo.delete(project_id)
 
 
+def _require_admin_to_publish(request: Request, visibility: str | None) -> None:
+    """Making a project public is a tenant admin's, as making a library public
+    is (libraries.require_admin_for): 403 for anyone else whose body asks for
+    "public". Private and shared stay the owner's, so an editor can still take
+    a public project down."""
+    if visibility == "public":
+        require_tenant_admin(request)
+
+
 def _get_project_or_404(repo: ProjectRepository, project_id: str):
     col = repo.get_by_id(project_id)
     if col is None:
@@ -268,7 +282,9 @@ def create_project(
 ) -> ProjectItem:
     """Create a project owned by the current user: with asset_ids, or with
     the clips that match a search now (from_search; 422 search_too_big past
-    10,000). A project is an explicit list either way (Robert, Oct 9)."""
+    10,000). A project is an explicit list either way (Robert, Oct 9). Only
+    an admin creates one public."""
+    _require_admin_to_publish(request, body.visibility)
     if body.asset_ids and body.from_search is not None:
         raise HTTPException(status_code=400, detail="Give asset_ids or from_search, not both")
     asset_ids = body.asset_ids
@@ -385,10 +401,12 @@ def update_project(
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> ProjectItem:
-    """Update project metadata. Only the owner can update."""
+    """Update project metadata. Only the owner can update, and only an admin
+    makes a project public."""
     repo = ProjectRepository(session)
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
+    _require_admin_to_publish(request, body.visibility)
 
     old_visibility = col.visibility
 

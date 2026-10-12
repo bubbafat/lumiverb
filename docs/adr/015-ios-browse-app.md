@@ -708,7 +708,10 @@ promote to shared/public via the detail view's share action (M5).
 
 **Decision.** Sharing is a visibility change: PATCH the collection with
 `visibility: "shared"` (tenant-wide) or `visibility: "public"` (public URL).
-Reverting is PATCH with `visibility: "private"`.
+Reverting is PATCH with `visibility: "private"`. Only an admin may set
+`public` (403 for anyone else, as for a library's `is_public`), so the
+picker offers it to admins only; any owner can take a project back to
+private or shared.
 
 **Share URL format.** Defined by the **web UI**, not the API. Native clients
 compose the URL by concatenating the configured server base URL with the
