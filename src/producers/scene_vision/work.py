@@ -62,7 +62,9 @@ class SceneVision(Work):
         source = self.acct.analysis_cache.get(clip["asset_id"])
         if source is None or not source.is_file():
             raise Waits("no analysis proxy")
-        scenes = self.client.get(f"/v1/video/{clip['asset_id']}/scenes").json().get("scenes", [])
+        # A redo's found scenes while it has them (the last described swaps them in), else the ones shown.
+        scenes = self.client.get(f"/v1/video/{clip['asset_id']}/scenes",
+                                 params={"describing": "true"}).json().get("scenes", [])
         lineage = self.lineage(clip, used=self.used)
         # A redo's video with every scene described as this job would: what's
         # stale is the video's own record (made before its file had a hash,

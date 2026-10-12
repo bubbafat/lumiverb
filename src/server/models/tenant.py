@@ -218,8 +218,10 @@ class Asset(SQLModel, table=True):
 
 class VideoScene(SQLModel, table=True):
     __tablename__ = "video_scenes"
-    # The server numbers a clip's scenes as its chunks complete (complete_chunk).
-    __table_args__ = (UniqueConstraint("asset_id", "scene_index", name="uq_video_scenes_asset_scene_index"),)
+    # The server numbers a clip's scenes as its chunks complete (complete_chunk),
+    # each set (shown, or staged) on its own.
+    __table_args__ = (UniqueConstraint("asset_id", "staged", "scene_index", name="uq_video_scenes_asset_scene_index",
+                                       postgresql_nulls_not_distinct=True),)
 
     scene_id: str = Field(primary_key=True)
     asset_id: str = Field(foreign_key="assets.asset_id", nullable=False)
@@ -237,6 +239,11 @@ class VideoScene(SQLModel, table=True):
     phash: str | None = Field(default=None, nullable=True)
     # How its description was made: {producer, version, settings_hash}.
     lineage: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    # None: one of the scenes the video shows. A redo finds new scenes beside
+    # them ("finding"; "found" once its run is merged, while they're
+    # described), and the last one described swaps them in: the video keeps
+    # its scenes, described, until the new ones are (ADR-016, principle 11).
+    staged: str | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -273,6 +280,9 @@ class VideoIndexChunk(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     error_message: str | None = Field(default=None, nullable=True)
+    # How this run finds its scenes (the lineage recorded when it's found):
+    # a redo sent again resumes its own run. None: before runs said so.
+    run: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

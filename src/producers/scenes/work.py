@@ -38,8 +38,9 @@ def index_video_scenes(*, client: Any, source_path: Path, asset_id: str, duratio
     """Find a video's scenes at a detail, chunk by chunk, and save them as
     each chunk is done. lineage: their record (with the level they're found
     at), sent with every chunk and recorded when the last completes. redo:
-    the clip's scenes were found another way; the server starts it over
-    (its old scenes and their descriptions go).
+    the clip's scenes were found another way; the server finds the new ones
+    beside them, and the clip shows its old ones until the new ones are
+    described too.
 
     Once stopping is set no more chunks are claimed (Stopped). A chunk that
     fails raises ChunkFailed. Returns {"scenes", "chunks", "elapsed"}."""

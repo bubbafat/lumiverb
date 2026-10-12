@@ -2108,12 +2108,19 @@ class VideoSceneRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get_scenes_for_asset(self, asset_id: str) -> list[VideoScene]:
-        """Return all scenes for an asset ordered by start_ms."""
+    def get_scenes_for_asset(self, asset_id: str, *, describing: bool = False) -> list[VideoScene]:
+        """The scenes a video shows, ordered by start_ms. describing: the ones
+        to describe next, which are a redo's found scenes while it has them
+        (they're swapped in once described), else the ones shown."""
+        staged = None
+        if describing and self._session.execute(text(
+                "SELECT 1 FROM video_scenes WHERE asset_id = :a AND staged = 'found' LIMIT 1"), {"a": asset_id}).first():
+            staged = "found"
+        where = VideoScene.staged.is_(None) if staged is None else VideoScene.staged == staged  # type: ignore[union-attr]
         return list(
             self._session.exec(
                 select(VideoScene)
-                .where(VideoScene.asset_id == asset_id)
+                .where(VideoScene.asset_id == asset_id, where)
                 .order_by(VideoScene.start_ms)
             ).all()
         )
@@ -2165,11 +2172,12 @@ class VideoIndexChunkRepository:
         asset_id: str,
         duration_sec: float,
         scene_sec: float,
+        run: dict | None = None,
     ) -> int:
         """
         Pre-generate all pending chunks for a video asset: whole scene windows
         of about scene_sec each (src/producers/scenes/detail.py chunk_grid),
-        so no chunk ends inside a scene.
+        so no chunk ends inside a scene. run: how they find its scenes (a redo's).
         Idempotent — skips creation if chunks already exist for this asset.
         Returns count of chunks created.
         """
@@ -2189,6 +2197,7 @@ class VideoIndexChunkRepository:
             "start_ms": start_ms,
             "end_ms": end_ms,
             "status": "pending",
+            "run": run,
             "created_at": now,
         } for index, (start_ms, end_ms) in enumerate(chunk_grid(duration_sec, scene_sec))]
 
@@ -2286,10 +2295,12 @@ class VideoIndexChunkRepository:
         chunk_id: str,
         worker_id: str,
         scenes: list[dict],
+        staged: str | None = None,
     ) -> bool:
         """
         Complete a chunk: persist its scenes and mark it complete. Flushed,
         not committed: the caller commits (with what the last chunk finishes).
+        staged: "finding" for a redo's scenes, found beside the ones shown.
         Returns False if chunk not found or not owned by worker_id.
         """
         chunk = self._session.exec(
@@ -2300,13 +2311,15 @@ class VideoIndexChunkRepository:
 
         now = utcnow()
 
-        # The clip's scenes are numbered here, after those already stored
-        # (chunks complete in order), so a resumed clip goes on counting.
-        # The clip is locked meanwhile; (asset_id, scene_index) is unique.
+        # The clip's scenes are numbered here, after those of the same set
+        # already stored (chunks complete in order), so a resumed clip goes on
+        # counting. The clip is locked meanwhile; (asset_id, staged,
+        # scene_index) is unique.
         self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": chunk.asset_id})
         first = int(self._session.execute(
-            text("SELECT COALESCE(max(scene_index) + 1, 0) FROM video_scenes WHERE asset_id = :a"),
-            {"a": chunk.asset_id}).scalar() or 0)
+            text("SELECT COALESCE(max(scene_index) + 1, 0) FROM video_scenes WHERE asset_id = :a"
+                 " AND staged IS NOT DISTINCT FROM CAST(:st AS text)"),
+            {"a": chunk.asset_id, "st": staged}).scalar() or 0)
 
         for i, s in enumerate(scenes):
             self._session.add(VideoScene(
@@ -2324,6 +2337,7 @@ class VideoIndexChunkRepository:
                 sharpness_score=s.get("sharpness_score"),
                 keep_reason=s.get("keep_reason"),
                 phash=s.get("phash"),
+                staged=staged,
                 created_at=now,
             ))
 
@@ -2333,18 +2347,20 @@ class VideoIndexChunkRepository:
         self._session.flush()
         return True
 
-    def merge_alike(self, asset_id: str, within: int) -> tuple[int, int]:
+    def merge_alike(self, asset_id: str, within: int, staged: str | None = None) -> tuple[int, int]:
         """The discard pass, once every chunk of the clip is found: one pass
         left to right (src/producers/scenes/detail.py merge_runs), each run of
         scenes alike kept as its first, which takes the run's whole span; the
         rest go, and the scenes are numbered again in order. Scenes hold no
         human data (and aren't described yet: the clip isn't found until
-        this is done). Doesn't commit. Returns (found, kept)."""
+        this is done). staged: the set found ("finding" for a redo's; None,
+        the ones shown, for a first run). Doesn't commit. Returns (found, kept)."""
         from src.producers.scenes.detail import merge_runs
 
+        one_set = "asset_id = :a AND staged IS NOT DISTINCT FROM CAST(:st AS text)"
         rows = self._session.execute(text(
-            "SELECT scene_id, end_ms, phash FROM video_scenes WHERE asset_id = :a ORDER BY start_ms, scene_index"
-        ), {"a": asset_id}).all()
+            f"SELECT scene_id, end_ms, phash FROM video_scenes WHERE {one_set} ORDER BY start_ms, scene_index"
+        ), {"a": asset_id, "st": staged}).all()
         runs = merge_runs([r.phash for r in rows], within)
         gone = [rows[k].scene_id for first, last in runs for k in range(first + 1, last + 1)]
         if gone:
@@ -2354,9 +2370,9 @@ class VideoIndexChunkRepository:
                     self._session.execute(text("UPDATE video_scenes SET end_ms = :e WHERE scene_id = :s"),
                                           {"e": rows[last].end_ms, "s": rows[first].scene_id})
         kept = [rows[first].scene_id for first, _ in runs]
-        # Numbered again, 0 up: through negatives, as (asset_id, scene_index) is unique.
+        # Numbered again, 0 up: through negatives, as (asset_id, staged, scene_index) is unique.
         self._session.execute(text(
-            "UPDATE video_scenes SET scene_index = -1 - scene_index WHERE asset_id = :a"), {"a": asset_id})
+            f"UPDATE video_scenes SET scene_index = -1 - scene_index WHERE {one_set}"), {"a": asset_id, "st": staged})
         self._session.execute(text(
             "UPDATE video_scenes v SET scene_index = k.n - 1"
             " FROM unnest(CAST(:ids AS text[])) WITH ORDINALITY AS k(scene_id, n) WHERE v.scene_id = k.scene_id"

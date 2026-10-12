@@ -1,10 +1,13 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
 """Scenes are found again when their settings change (ADR-016 phase 4).
 
-A clip whose scenes were found another way is started over: the scheduler
-asks POST /v1/video/{id}/chunks with redo and how it will find them, and
-the server drops the clip's scenes, their descriptions, images and search
-entries, so new ones are found and described. Scenes hold no human data.
+A clip whose scenes were found another way gets new ones beside them: the
+scheduler asks POST /v1/video/{id}/chunks with redo and how it will find
+them. The clip shows its old scenes, described, with their images and
+search entries, while the new ones are found and then described; the last
+one described swaps them in, and only then do the old ones go (ADR-016,
+principle 11). With no model to describe them, they're swapped in once
+found. Scenes hold no human data.
 """
 
 from __future__ import annotations
@@ -66,9 +69,41 @@ def _video_found_the_old_way(lib) -> tuple[str, str]:
     return vid, sha
 
 
-def _scenes(lib, vid: str) -> list[dict]:
+def _scenes(lib, vid: str, describing: bool = False) -> list[dict]:
     client, headers, *_ = lib
-    return client.get(f"/v1/video/{vid}/scenes", headers=headers).json()["scenes"]
+    return client.get(f"/v1/video/{vid}/scenes", params={"describing": describing},
+                      headers=headers).json()["scenes"]
+
+
+def _describe(lib, vid: str, sha: str, scenes: list[dict], text_: str = "a cat") -> list:
+    """Describe scenes as the describer does: each one's image, then what the model said."""
+    client, headers, library_id, storage, tenant_id, _ = lib
+    answers = []
+    for scene in scenes:
+        storage.write(storage.scene_rep_key(tenant_id, library_id, vid, scene["rep_frame_ms"]), b"new jpeg")
+        answers.append(client.patch(f"/v1/video/scenes/{scene['scene_id']}", json={
+            "model_id": "m", "model_version": "1", "description": text_, "tags": [],
+            "lineage": _want(lib, "scene_vision", sha)}, headers=headers))
+    return answers
+
+
+@pytest.fixture
+def describer(monkeypatch):
+    """The account has a model describing scenes (the tests' accounts have none)."""
+    from src.server.api.routers import video
+
+    monkeypatch.setattr(video, "_described_here", lambda request: True)
+
+
+@pytest.fixture
+def search_drops(monkeypatch) -> list[list[str]]:
+    """The scene search entries dropped, by scene id (and never all of a clip's)."""
+    dropped: list[list[str]] = []
+    monkeypatch.setattr(QuickwitClient, "delete_scene_index_documents_by_scene_ids",
+                        lambda self, tenant, ids: dropped.append(sorted(ids)))
+    monkeypatch.setattr(QuickwitClient, "delete_scene_index_documents_by_asset_ids",
+                        lambda self, tenant, ids: pytest.fail("a clip's scene entries all dropped"))
+    return dropped
 
 
 def _lineage(lib, vid: str) -> set[str]:
@@ -97,48 +132,109 @@ def test_scene_descriptions_and_video_faces_say_they_need_scenes(env):
     assert listed["vision"]["needs"] == ["proxy"]
 
 
-def test_a_redo_starts_the_clip_over_and_new_scenes_are_found_and_described(env, monkeypatch):
+def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_described(
+        env, describer, search_drops):
     lib = _library(env, "SceneRedo")
     client, headers, library_id, storage, tenant_id, _ = lib
     vid, sha = _video_found_the_old_way(lib)
-    old_images = [storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, s["rep_frame_ms"]))
-                  for s in _scenes(lib, vid)]
-    assert all(p.exists() for p in old_images)
-    dropped: list[list[str]] = []
-    monkeypatch.setattr(QuickwitClient, "delete_scene_index_documents_by_asset_ids",
-                        lambda self, tenant, ids: dropped.append(list(ids)))
+    old = _scenes(lib, vid)
+    image = {s["rep_frame_ms"]: storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, s["rep_frame_ms"]))
+             for s in old}
+    assert all(p.exists() for p in image.values())
     assert _due(lib, "redo_scenes") == [vid]
 
     new = _want(lib, "scenes", sha)
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is False, r.text
-    assert _scenes(lib, vid) == [] and _lineage(lib, vid) == set()
-    assert not any(p.exists() for p in old_images) and dropped == [[vid]]
-    assert _counts(lib, "scenes")["missing"] == 1  # due as missing now, first among its kind
     _find(lib, vid, new, [(0, 30000)])
-    assert len(_scenes(lib, vid)) == 1 and _counts(lib, "scenes")["current"] == 1
+    # Found: the clip still shows its old scenes, described, with their images.
+    assert _scenes(lib, vid) == old and all(p.exists() for p in image.values())
+    assert _counts(lib, "scenes")["current"] == 1 and _lineage(lib, vid) == {"scenes"}
     assert _counts(lib, "scene_vision")["missing"] == 1  # the new scene is described next
+    (found,) = _scenes(lib, vid, describing=True)
+    assert (found["start_ms"], found["end_ms"], found["description"]) == (0, 30000, None)
+    assert search_drops == []
+
+    (r,) = _describe(lib, vid, sha, [found])
+    assert r.status_code == 200, r.text
+    # Described: swapped in, in one step; the old ones' images go, but not
+    # the one at the moment a new scene shares (0 ms), and their search entries.
+    assert [(s["scene_id"], s["description"]) for s in _scenes(lib, vid)] == [(found["scene_id"], "a cat")]
+    assert image[0].read_bytes() == b"new jpeg" and not image[12000].exists()
+    assert search_drops == [sorted(s["scene_id"] for s in old)]
+    assert _lineage(lib, vid) == {"scenes", "scene_vision"}
+    assert _counts(lib, "scene_vision")["current"] == 1 and _counts(lib, "scenes")["current"] == 1
 
 
-def test_a_redo_sent_again_changes_nothing(env):
-    lib = _library(env, "SceneRedoTwice")
+def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env, search_drops):
+    lib = _library(env, "SceneRedoNoModel")
     vid, sha = _video_found_the_old_way(lib)
+    old = _scenes(lib, vid)
     new = _want(lib, "scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
-    # Started over and under way: a second redo leaves the chunks to finish.
+    _find(lib, vid, new, [(0, 30000)])
+    (shown,) = _scenes(lib, vid)
+    assert (shown["start_ms"], shown["end_ms"], shown["description"]) == (0, 30000, None)
+    assert search_drops == [sorted(s["scene_id"] for s in old)]
+    assert _lineage(lib, vid) == {"scenes"}  # described once a model is set
+
+
+def test_a_failed_redo_leaves_the_scenes_shown(env, describer):
+    lib = _library(env, "SceneRedoFails")
+    client, headers, *_ = lib
+    vid, sha = _video_found_the_old_way(lib)
+    old = _scenes(lib, vid)
+    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
+    w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
+    r = client.post(f"/v1/video/chunks/{w['chunk_id']}/fail", json={"worker_id": w["worker_id"],
+                                                                    "error_message": "no frames"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert _scenes(lib, vid) == old and _lineage(lib, vid) == {"scenes", "scene_vision"}
+
+
+def test_a_redo_sent_again_changes_nothing(env, describer):
+    lib = _library(env, "SceneRedoTwice")
+    vid, sha = _video_found_the_old_way(lib)
+    old = _scenes(lib, vid)
+    new = _want(lib, "scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    # Under way beside the old ones: a second redo leaves the chunks to finish.
     client, headers, *_ = lib
     assert client.post(f"/v1/video/{vid}/chunks/next", headers=headers).status_code == 200
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is True, r.text
-    # Found this way already: nothing to start over.
     with _db(lib) as s:
         s.execute(text("UPDATE video_index_chunks SET status = 'pending', worker_id = NULL WHERE asset_id = :a"),
                   {"a": vid})
         s.commit()
     _find(lib, vid, new, [(0, 30000)])
+    # Found this way already, waiting to be described: nothing to start again.
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is True, r.text
-    assert len(_scenes(lib, vid)) == 1 and _lineage(lib, vid) == {"scenes"}
+    assert _scenes(lib, vid) == old and len(_scenes(lib, vid, describing=True)) == 1
+    assert _lineage(lib, vid) == {"scenes"}
+
+
+def test_another_redo_drops_the_last_ones_staged_never_the_ones_shown(env, describer):
+    lib = _library(env, "SceneRedoAgain")
+    vid, sha = _video_found_the_old_way(lib)
+    old = _scenes(lib, vid)
+    new = _want(lib, "scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)])
+    # Found by a run with settings that aren't the account's now (then changed again).
+    with _db(lib) as s:
+        s.execute(text("UPDATE video_index_chunks SET run = jsonb_set(run, '{settings_hash}', '\"0ther\"')"
+                       " WHERE asset_id = :a"), {"a": vid})
+        s.execute(text("UPDATE artifact_lineage SET settings_hash = '0ther' WHERE asset_id = :a"
+                       " AND artifact = 'scenes'"), {"a": vid})
+        s.commit()
+    r = _start(lib, vid, redo=True, lineage=new)
+    assert r.status_code == 200 and r.json()["already_initialized"] is False, r.text
+    assert _scenes(lib, vid) == old and _scenes(lib, vid, describing=True) == old
+    with _db(lib) as s:
+        assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a AND staged IS NOT NULL"),
+                         {"a": vid}).scalar() == 0
 
 
 def test_a_redo_must_say_how_the_scenes_will_be_found(env):
@@ -289,12 +385,13 @@ def test_only_editors_start_a_clip_over(env):
     assert len(_scenes(lib, vid)) == 2
 
 
-def test_a_chunk_from_before_the_start_over_saves_nothing(env):
+def test_a_chunk_from_before_the_redo_saves_nothing(env):
     lib = _library(env, "SceneRedoLate")
     client, headers, *_ = lib
     vid, sha = _video_found_the_old_way(lib)
+    shown = _scenes(lib, vid)
     old = {**_want(lib, "scenes", sha), "settings_hash": OLD}
-    # An old run's chunk, claimed again before the clip was started over.
+    # An old run's chunk, claimed again before the redo began.
     with _db(lib) as s:
         s.execute(text("UPDATE video_index_chunks SET status = 'pending', worker_id = NULL WHERE asset_id = :a"),
                   {"a": vid})
@@ -308,26 +405,52 @@ def test_a_chunk_from_before_the_start_over_saves_nothing(env):
         "worker_id": w["worker_id"], "lineage": old,
         "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 0}]})
     assert r.status_code == 404, r.text
-    assert _scenes(lib, vid) == []
+    assert _scenes(lib, vid) == shown and _scenes(lib, vid, describing=True) == shown
 
 
-def test_describing_a_scene_that_was_dropped_says_its_gone(env):
+def _found_again_and_described(lib) -> tuple[str, str, list[dict]]:
+    """A video whose scenes were found again and the new ones described, so
+    they're shown: its id, its hash, and the old scenes, gone now."""
+    vid, sha = _video_found_the_old_way(lib)
+    old = _scenes(lib, vid)
+    new = _want(lib, "scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)])
+    assert all(r.status_code == 200 for r in _describe(lib, vid, sha, _scenes(lib, vid, describing=True)))
+    assert [s["start_ms"] for s in _scenes(lib, vid)] == [0] and _scenes(lib, vid)[0]["end_ms"] == 30000
+    return vid, sha, old
+
+
+def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer, search_drops):
     lib = _library(env, "SceneGone")
     client, headers, *_ = lib
-    vid, sha = _video_found_the_old_way(lib)
-    gone = _scenes(lib, vid)[0]["scene_id"]
-    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
-    r = client.patch(f"/v1/video/scenes/{gone}", json={
+    vid, sha, old = _found_again_and_described(lib)
+    r = client.patch(f"/v1/video/scenes/{old[0]['scene_id']}", json={
         "model_id": "m", "model_version": "1", "description": "late", "tags": [],
         "lineage": _want(lib, "scene_vision", sha)}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "scene_gone", r.text
-    assert _lineage(lib, vid) == set()  # nothing recorded for it
+    assert _scenes(lib, vid)[0]["description"] == "a cat"
 
 
-def test_a_start_over_deletes_only_images_at_keys_the_server_makes(env, tmp_path):
+def test_a_scene_found_again_is_searchable_once_its_shown(env, describer):
+    lib = _library(env, "SceneStagedSync")
+    client, headers, *_ = lib
+    vid, sha = _video_found_the_old_way(lib)
+    new = _want(lib, "scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 20000), (20000, 30000)])
+    first, _ = _scenes(lib, vid, describing=True)
+    (r,) = _describe(lib, vid, sha, [first])
+    assert r.status_code == 200, r.text
+    r = client.post(f"/v1/video/scenes/{first['scene_id']}/sync", json={"asset_id": vid}, headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "deferred", r.text  # not shown yet
+    assert len(_scenes(lib, vid)) == 2 and _scenes(lib, vid)[0]["description"] == "a dog"
+
+
+def test_found_again_deletes_only_images_at_keys_the_server_makes(env, tmp_path, describer, search_drops):
     """A scene's proxy_key and thumbnail_key are what a client sent: never paths to delete."""
     lib = _library(env, "SceneRedoKeys")
-    client, headers, _, storage, *_ = lib
+    client, headers, library_id, storage, tenant_id, _ = lib
     sha = _sha()
     vid = _ingest_with(lib, "v.mov", sha, None, media_type="video")
     with _db(lib) as s:
@@ -342,18 +465,22 @@ def test_a_start_over_deletes_only_images_at_keys_the_server_makes(env, tmp_path
     w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
         "worker_id": w["worker_id"], "lineage": {**_want(lib, "scenes", sha), "settings_hash": OLD},
-        "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 0,
+        "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 5000,
                     "thumbnail_key": str(outside), "proxy_key": f"../{beside.name}"}]})
     assert r.status_code == 200, r.text
-    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
-    assert _scenes(lib, vid) == [] and outside.read_text() == "keep me" and beside.read_text() == "keep me too"
+    image = storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, 5000))
+    storage.write(storage.scene_rep_key(tenant_id, library_id, vid, 5000), b"jpeg")
+    new = _want(lib, "scenes", sha)
+    assert _start(lib, vid, redo=True, lineage=new).status_code == 200
+    _find(lib, vid, new, [(0, 30000)])
+    assert all(r.status_code == 200 for r in _describe(lib, vid, sha, _scenes(lib, vid, describing=True)))
+    assert [s["rep_frame_ms"] for s in _scenes(lib, vid)] == [0] and not image.exists()
+    assert outside.read_text() == "keep me" and beside.read_text() == "keep me too"
 
 
-def test_syncing_a_scene_that_was_dropped_says_its_gone(env):
+def test_syncing_a_scene_that_was_dropped_says_its_gone(env, describer, search_drops):
     lib = _library(env, "SceneGoneSync")
     client, headers, *_ = lib
-    vid, sha = _video_found_the_old_way(lib)
-    gone = _scenes(lib, vid)[0]["scene_id"]
-    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
-    r = client.post(f"/v1/video/scenes/{gone}/sync", json={"asset_id": vid}, headers=headers)
+    vid, _, old = _found_again_and_described(lib)
+    r = client.post(f"/v1/video/scenes/{old[0]['scene_id']}/sync", json={"asset_id": vid}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "scene_gone", r.text

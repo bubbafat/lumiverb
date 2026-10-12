@@ -434,15 +434,16 @@ def run_search_sync_sweep(session: Session, tenant_id: str | None = None) -> dic
     # A clip's scene documents are deleted together (by clip: that also takes
     # those of scenes found again under new ids), so every described scene of
     # a clip with a stale one goes in again, not only the stale ones; and the
-    # limit is on clips, so none is split.
+    # limit is on clips, so none is split. Only the scenes a clip shows: a
+    # redo's are searchable once they're swapped in.
     scene_rows = session.execute(text("""
         SELECT vs.scene_id, vs.asset_id, vs.xmin::text AS row_xmin
         FROM video_scenes vs
-        WHERE vs.description IS NOT NULL
+        WHERE vs.description IS NOT NULL AND vs.staged IS NULL
           AND vs.asset_id IN (
               SELECT DISTINCT s.asset_id FROM video_scenes s
               JOIN active_assets a ON a.asset_id = s.asset_id
-              WHERE s.description IS NOT NULL
+              WHERE s.description IS NOT NULL AND s.staged IS NULL
                 AND (s.search_synced_at IS NULL OR s.search_synced_at < s.created_at)
               ORDER BY s.asset_id
               LIMIT 100)
