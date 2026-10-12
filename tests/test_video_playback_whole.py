@@ -26,5 +26,18 @@ def test_whole_clip(source, duration, whole):
     assert whole_clip(source, duration) is whole
 
 
-def test_a_preview_is_the_scans_length():
-    assert PRODUCERS["video_preview"].defaults["seconds"] == 10
+def test_every_preview_is_the_length_whole_clip_goes_by():
+    # whole_clip compares a clip with video_preview's default length. That's
+    # exact only while every preview is made at it: the scan renders the
+    # default (test_producer_settings_client.py holds it there), and the
+    # setting can't be changed. When it can, this fails: whole_clip must then
+    # go by the length each preview was made at (its lineage), not the default.
+    import inspect
+
+    from src.processing import ingest
+    from src.producers import registry
+
+    seconds = PRODUCERS["video_preview"].defaults["seconds"]
+    assert f"PREVIEW_DURATION_SEC = {seconds}" in inspect.getsource(ingest._generate_video_preview)
+    setting = next(s for s in registry()["video_preview"].settings if s.key == "seconds")
+    assert setting.fixed, "the preview length can be changed now: make whole_clip use each preview's own"
