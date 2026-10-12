@@ -88,14 +88,14 @@ def detect_faces_in_image(image_bytes: bytes) -> "list[FaceDetection]":
     """Decode bytes → PIL → run InsightFace, returning the same
     `FaceDetection` list the worker pipeline produces. Used by the
     hybrid similarity endpoint to enrich a query image with face
-    embeddings before fanning out to per-face vector search."""
-    import io
+    embeddings before fanning out to per-face vector search.
+    NotAnImageError (before the model loads) unless it's an image the
+    server reads (src/server/images.py)."""
+    from src.server.images import rgb
 
-    from PIL import Image as PILImage
-
-    provider = get_provider()
-    img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = rgb(image_bytes)
     try:
+        provider = get_provider()
         return provider.detect_faces(img)
     finally:
         img.close()

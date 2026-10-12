@@ -10,24 +10,17 @@ import io
 
 from PIL import Image, ImageOps
 
-FORMATS = ["JPEG", "PNG", "WEBP"]  # what clients send previews as
+from src.server.images import NotAnImageError, decoded  # noqa: F401 — what these raise
+
 THUMBNAIL_LONG_EDGE = 512
 THUMBNAIL_WEBP_QUALITY = 80
-
-
-class NotAnImageError(ValueError):
-    """Not a JPEG, PNG or WebP image."""
 
 
 def thumbnail(proxy: bytes) -> bytes:
     """A clip's thumbnail, made from its stored preview (already upright and
     clean): WebP, at most THUMBNAIL_LONG_EDGE on its long side. At ingest, and
     again when the thumbnail's file is lost (src/server/missing_artifacts.py)."""
-    try:
-        img = Image.open(io.BytesIO(proxy), formats=FORMATS)
-        img.load()
-    except (OSError, Image.DecompressionBombError) as exc:
-        raise NotAnImageError(str(exc)) from None
+    img = decoded(proxy)  # NotAnImageError unless it's an image the server reads (images.py)
     try:
         rgb = img.convert("RGB")
         w, h = rgb.size
@@ -44,11 +37,7 @@ def thumbnail(proxy: bytes) -> bytes:
 def reencoded(data: bytes, *, fmt: str, quality: int, max_long_edge: int | None = None) -> tuple[bytes, int, int]:
     """(bytes, width, height) of `data` as `fmt`, at most `max_long_edge` on
     its long side."""
-    try:
-        img = Image.open(io.BytesIO(data), formats=FORMATS)
-        img.load()
-    except (OSError, Image.DecompressionBombError) as exc:
-        raise NotAnImageError(str(exc)) from None
+    img = decoded(data)
     try:
         icc = img.info.get("icc_profile")
         upright = ImageOps.exif_transpose(img) or img  # the rotation into the pixels; the tag goes with the rest
