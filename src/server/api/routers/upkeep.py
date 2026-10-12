@@ -29,6 +29,8 @@ account and has no every-account periodic task to give them to.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
@@ -229,18 +231,37 @@ def _tenant_session(scope: UpkeepScope):
     return TenantSession(get_engine_for_url(scope.connection_string))
 
 
-def _upkeep_paused(session) -> bool:
+# A paused switch is said (INFO) when first seen and once a day after, not
+# every 5-minute tick, for as long as it stays paused: (account, what) ->
+# when this process last said it. Forgotten when the switch is on again.
+PAUSE_SAID_EVERY_SEC = 24 * 3600
+_pause_said: dict[tuple[str, str], float] = {}
+_pause_said_lock = threading.Lock()
+
+
+def _upkeep_paused(session, tenant_id: str) -> bool:
     """An admin paused the account's Upkeep switch: upkeep that changes data
     waits; search sync goes on (Robert, Oct 9)."""
     from src.server.repository import lineage
 
-    return lineage.upkeep_paused(session)
+    paused = lineage.upkeep_paused(session)
+    if not paused:
+        with _pause_said_lock:
+            for key in [k for k in _pause_said if k[0] == tenant_id]:
+                del _pause_said[key]
+    return paused
 
 
 def _skipped(what: str, tenant_id: str, paused: list[str] | None = None) -> dict:
     """An account's upkeep skipped for its paused Upkeep switch: logged, and said in the result
     (paused), so it reads apart from a run with nothing to do."""
-    logger.info("%s for tenant %s: upkeep is paused", what, tenant_id)
+    now = time.monotonic()
+    with _pause_said_lock:
+        said = _pause_said.get((tenant_id, what))
+        news = said is None or now - said >= PAUSE_SAID_EVERY_SEC
+        if news:
+            _pause_said[(tenant_id, what)] = now
+    logger.log(logging.INFO if news else logging.DEBUG, "%s for tenant %s: upkeep is paused", what, tenant_id)
     if paused is not None:
         paused.append(tenant_id)
     return {"paused": True, "paused_tenants": [tenant_id]}
@@ -261,7 +282,7 @@ def _propagate_faces_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
-                if _upkeep_paused(session):
+                if _upkeep_paused(session, tenant.tenant_id):
                     _skipped("Face names aren't spread", tenant.tenant_id, paused)
                     continue
                 result = FaceRepository(session).propagate_assignments()
@@ -278,7 +299,7 @@ def _propagate_faces_single_tenant(scope: UpkeepScope) -> dict:
     from src.server.repository.tenant import FaceRepository
 
     with _tenant_session(scope) as session:
-        if _upkeep_paused(session):
+        if _upkeep_paused(session, scope.tenant_id):
             return {"assigned": 0, "scanned": 0, **_skipped("Face names aren't spread", scope.tenant_id)}
         return FaceRepository(session).propagate_assignments()
 
@@ -296,7 +317,7 @@ def _purge_expired_trash_all_tenants() -> dict:
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
-                if _upkeep_paused(session):
+                if _upkeep_paused(session, tenant.tenant_id):
                     _skipped("The expired trash isn't emptied", tenant.tenant_id, paused)
                     continue
                 for key, n in purge_expired_trash(session, tenant.tenant_id).items():
@@ -312,7 +333,7 @@ def _purge_expired_trash_single_tenant(scope: UpkeepScope) -> dict:
 
     try:
         with _tenant_session(scope) as session:
-            if _upkeep_paused(session):
+            if _upkeep_paused(session, scope.tenant_id):
                 return _skipped("The expired trash isn't emptied", scope.tenant_id)
             return purge_expired_trash(session, scope.tenant_id)
     except Exception as exc:
@@ -330,7 +351,7 @@ def _each_account(scope: UpkeepScope, what: str, work, *, pausable: bool) -> dic
     for tenant_id in _tenant_ids(scope):
         try:
             with (get_tenant_session(tenant_id) if scope.all_tenants else _tenant_session(scope)) as session:
-                if pausable and _upkeep_paused(session):
+                if pausable and _upkeep_paused(session, tenant_id):
                     _skipped(what, tenant_id, paused)
                     continue
                 for key, n in work(session).items():

@@ -18,6 +18,14 @@ pytestmark = pytest.mark.fast
 PAUSED, BROKEN, RUNNING = "ten_paused", "ten_broken", "ten_running"
 
 
+@pytest.fixture(autouse=True)
+def _nothing_said_yet(monkeypatch):
+    """Each test starts as a fresh API process: no pause said yet."""
+    from src.server.api.routers import upkeep
+
+    monkeypatch.setattr(upkeep, "_pause_said", {})
+
+
 @contextmanager
 def _accounts():
     """Three accounts: one paused, one whose pause can't be read, one running."""
@@ -107,3 +115,34 @@ def test_nothing_paused_says_so():
             patch("src.server.api.routers.trash.purge_expired_trash", return_value={"clips": 0}):
         assert _purge_expired_trash_all_tenants() == {"clips": 0, "libraries": 0, "projects": 0, "paused": False,
                                                       "paused_tenants": []}
+
+
+def test_a_pause_is_said_when_first_seen_then_once_a_day_and_again_after_a_resume(caplog, monkeypatch):
+    # The 5-minute upkeep said it every tick, for every paused account, for as
+    # long as the switch stayed paused (Linux review of #151).
+    from src.server.api.routers import upkeep
+
+    clock = [1000.0]
+    monkeypatch.setattr(upkeep, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    paused = {PAUSED: True}
+
+    def tick(after_sec: float) -> list[str]:
+        clock[0] += after_sec
+        caplog.clear()
+        with _accounts(), patch("src.server.repository.lineage.upkeep_paused",
+                                lambda session: paused.get(session.tenant_id, False)), \
+                patch("src.server.api.routers.trash.purge_expired_trash", return_value={}), \
+                caplog.at_level("DEBUG", logger="src.server.api.routers.upkeep"):
+            assert upkeep._purge_expired_trash_all_tenants()["paused_tenants"] == [PAUSED]
+        return [r.levelname for r in caplog.records if "upkeep is paused" in r.getMessage()]
+
+    assert tick(0) == ["INFO"]
+    assert tick(300) == ["DEBUG"]
+    assert tick(upkeep.PAUSE_SAID_EVERY_SEC - 300) == ["INFO"], "a day on, still paused: said again"
+    assert tick(300) == ["DEBUG"]
+    paused[PAUSED] = False
+    with _accounts(), patch("src.server.repository.lineage.upkeep_paused", return_value=False), \
+            patch("src.server.api.routers.trash.purge_expired_trash", return_value={}):
+        upkeep._purge_expired_trash_all_tenants()
+    paused[PAUSED] = True
+    assert tick(300) == ["INFO"], "paused again: a new pause, said at once"
