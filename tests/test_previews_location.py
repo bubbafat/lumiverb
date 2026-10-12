@@ -313,7 +313,7 @@ def test_missing_files_aren_t_repaired_during_a_move(install, monkeypatch):
     monkeypatch.setattr(missing_artifacts, "get_storage", lambda: LocalStorage(str(data)))
     session = MagicMock()
     session.execute.return_value.scalar.return_value = json.dumps(["ast_1:proxy"])
-    assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0}
+    assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0, "remade": 0}
     session.rollback.assert_called_once()
 
 
