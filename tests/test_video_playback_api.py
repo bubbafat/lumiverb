@@ -321,6 +321,20 @@ def test_a_short_clips_preview_is_the_whole_clip(env, media):
 
 
 @pytest.mark.slow
+def test_the_page_says_whether_a_videos_preview_is_there(env, media):
+    # The scan makes one again when it isn't (its upload failed after the clip was made).
+    client, admin, library_id, *_ = env
+    with_preview = _video(env, media, "has-preview", proxy=False)
+    without = _video(env, media, "lost-preview", proxy=False, preview=False)
+    photo = _ingest(env, "still.jpg", media_type="image")
+    items = {i["asset_id"]: i for i in client.get("/v1/assets/page", params={"library_id": library_id, "limit": "500"},
+                                                   headers=admin).json()["items"]}
+    assert items[with_preview]["has_video_preview"] is True
+    assert items[without]["has_video_preview"] is False
+    assert items[photo]["has_video_preview"] is None
+
+
+@pytest.mark.slow
 def test_nothing_to_play(env, media):
     asset_id = _video(env, media, "nothing", proxy=False, preview=False)
     assert _playback(env, asset_id).status_code == 404

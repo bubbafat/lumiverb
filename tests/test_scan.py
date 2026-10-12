@@ -19,6 +19,7 @@ from src.processing.scan import (
     _detect_deletions,
     _fetch_existing_assets_with_sha,
     _populate_cache_for_unchanged,
+    _preview_missing,
     _split_files,
 )
 
@@ -117,6 +118,36 @@ class TestSplitFiles:
 
         _, needs_hash, fast_unchanged = _split_files([f], existing)
         assert len(fast_unchanged) == 1
+
+    def test_a_video_whose_preview_never_arrived_is_scanned_again(self):
+        # Its upload failed after the clip was made (a dropped connection):
+        # unchanged on disk, but only a scan makes a preview, so it goes
+        # through as a changed file does.
+        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        f = {"rel_path": "a.mov", "media_type": "video", "file_size": 5000, "file_mtime": mtime}
+
+        def split(has_preview, media_type="video"):
+            server = _ServerAsset(asset_id="id-1", sha256="abc", file_size=5000, file_mtime=mtime.isoformat(),
+                                  media_type=media_type, has_video_preview=has_preview)
+            _, needs_hash, fast = _split_files([dict(f, media_type=media_type)], {"a.mov": server})
+            return len(needs_hash), len(fast)
+
+        assert split(False) == (1, 0)
+        assert _preview_missing(_ServerAsset(asset_id="id-1", sha256="abc", media_type="video",
+                                             has_video_preview=False))
+        assert split(True) == (0, 1)
+        assert split(None) == (0, 1), "an older server doesn't say: as before"
+        assert split(None, "image") == (0, 1)
+
+    def test_the_server_says_whether_a_videos_preview_is_there(self):
+        client = MagicMock()
+        client.get.return_value.json.side_effect = [
+            {"items": [{"asset_id": "a", "rel_path": "a.mov", "media_type": "video", "has_video_preview": False},
+                       {"asset_id": "b", "rel_path": "b.jpg", "media_type": "image"}], "next_cursor": None},
+        ]
+        existing = _fetch_existing_assets_with_sha(client, "lib_1")
+        assert existing["a.mov"].has_video_preview is False
+        assert existing["b.jpg"].has_video_preview is None
 
     def test_an_unreadable_server_mtime_needs_hash(self):
         mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)

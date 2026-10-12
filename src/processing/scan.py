@@ -94,6 +94,7 @@ class _ServerAsset:
     file_size: int | None = None
     file_mtime: str | None = None  # ISO8601 string from server
     media_type: str | None = None
+    has_video_preview: bool | None = None  # None: the server didn't say (an older one)
 
 
 def _fetch_existing_assets_with_sha(
@@ -121,6 +122,7 @@ def _fetch_existing_assets_with_sha(
                 file_size=a.get("file_size"),
                 file_mtime=a.get("file_mtime"),
                 media_type=a.get("media_type"),
+                has_video_preview=a.get("has_video_preview"),
             )
         cursor = data.get("next_cursor")
         if not cursor:
@@ -191,13 +193,21 @@ def _split_files(
         server = existing.get(f["rel_path"])
         if server is None:
             new_files.append(f)
-        elif not thorough and _mtime_size_match(f, server):
+        elif not thorough and _mtime_size_match(f, server) and not _preview_missing(server):
             f["asset_id"] = server.asset_id
             fast_unchanged.append(f)
         else:
             f["_server"] = server
             needs_hash.append(f)
     return new_files, needs_hash, fast_unchanged
+
+
+def _preview_missing(server: _ServerAsset) -> bool:
+    """A video whose 10-second preview never reached the server (its upload
+    failed after the clip was made, a dropped connection, say): it's scanned
+    again, as a changed file is, so it gets one. Previews are made only by a
+    scan."""
+    return server.media_type == "video" and server.has_video_preview is False
 
 
 def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
@@ -946,7 +956,7 @@ def run_scan(
                 for f in needs_hash:
                     server = f.pop("_server")
                     source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
-                    if force or (source_sha and server.sha256 != source_sha):
+                    if force or _preview_missing(server) or (source_sha and server.sha256 != source_sha):
                         changed_files.append(f)
                     else:
                         unchanged_files.append(f)
@@ -1040,7 +1050,7 @@ def run_scan(
             source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
             f["source_sha256"] = source_sha
 
-            if force or (source_sha and server.sha256 != source_sha):
+            if force or _preview_missing(server) or (source_sha and server.sha256 != source_sha):
                 f["asset_id"] = server.asset_id
                 inflight = _submit(f, "changed", pool, inflight, tid)
             else:
