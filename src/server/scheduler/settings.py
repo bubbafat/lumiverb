@@ -11,7 +11,8 @@
                                    (lumiverb-server run sets the install's settings folder)
     LUMIVERB_ANALYSIS_PROXY_ENCODER  libx264
     LUMIVERB_ANALYSIS_PROXY_DECODER  auto (Vulkan, else a Mac's VideoToolbox) | cpu | an ffmpeg hwaccel (cuda)
-    LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1; a Mac's VideoToolbox takes every render; 0: none)
+    LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1; a Mac's VideoToolbox takes every render; 0: none);
+                                   AI machines sharing the GPU give up requests only for those (Machine.gpu_decodes_here)
     LUMIVERB_RENDER_CONCURRENCY    analysis proxies rendered at once (0: one per six cores, at most three)
     LUMIVERB_ANALYSIS_CACHE_GB     the analysis proxies kept here (50)
     LUMIVERB_FACE_BATCHES_PER_PROCESS  face batches before a fresh detection process (20)

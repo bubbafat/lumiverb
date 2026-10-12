@@ -69,8 +69,15 @@ class Machine:
 
     @property
     def gpu_decodes_here(self) -> int:
-        """Renders decoding on this machine's GPU at once (0 when they decode on the CPU)."""
-        return self.gpu_decodes if self.analysis_proxy_decoder != "cpu" else 0
+        """Renders decoding on this machine's GPU at once: 0 when they don't,
+        on the CPU ("cpu", or "auto" finding no GPU decoder) or on a Mac's
+        media engine, which leaves the GPU to the models (ffmpeg_run.decoded_by,
+        SHARED_MEMORY). The scheduler's GPU hold goes by it: AI machines sharing
+        this GPU (a Mac's Ollama) give up no requests for renders that don't use it."""
+        from src.processing.video import ffmpeg_run
+
+        decoder = ffmpeg_run.decoded_by(self.analysis_proxy_decoder)
+        return self.gpu_decodes if decoder and decoder not in ffmpeg_run.SHARED_MEMORY else 0
 
     def slots(self, setting: str) -> int:
         """A pool's slots, sized by one of these (a Pool's sized_by)."""
