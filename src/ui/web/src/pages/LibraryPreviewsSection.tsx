@@ -36,6 +36,11 @@ export default function LibraryPreviewsSection({ libraryId }: { libraryId: strin
       ) : (
         <p className="text-xs text-gray-500">{free(data.free, data.total)}</p>
       )}
+      {data.write_error && (
+        <p role="alert" className="text-sm text-red-300">
+          {data.write_error} Until it can, this library&apos;s previews aren&apos;t made.
+        </p>
+      )}
       {data.own && data.same_drive_as_originals && (
         <p className="text-sm text-amber-200">
           On the same drive as its originals: when that drive is unplugged, the library can&apos;t be browsed.

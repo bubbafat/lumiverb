@@ -13,6 +13,7 @@ leaves a folder on the system disk in its place, or nothing at all.
 from __future__ import annotations
 
 import os
+import pwd
 from pathlib import Path
 
 from src.processing import roots
@@ -39,10 +40,21 @@ def missing(path: Path) -> str | None:
     there = nearest(path)
     if there == path:
         return None
-    drive = there / path.relative_to(there).parts[0]
+    below = path.relative_to(there).parts
+    drive = there / below[0]
+    if there in USER_DRIVE_FOLDERS and len(below) > 1 and _is_user(below[0]):
+        drive = drive / below[1]  # /media/<user> isn't made until a drive is: name the drive
     if there == Path("/"):
         return f"There's no drive at {drive}. Is it plugged in?"
     where_drives_go = there in DRIVE_FOLDERS or there.parent in USER_DRIVE_FOLDERS
     if where_drives_go and not os.path.ismount(there):
         return f"There's no drive at {drive}. Is it plugged in?"
     return None
+
+
+def _is_user(name: str) -> bool:
+    try:
+        pwd.getpwnam(name)
+        return True
+    except KeyError:
+        return False

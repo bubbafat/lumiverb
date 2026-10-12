@@ -50,7 +50,7 @@ from time import monotonic, sleep
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.server import drives
+from src.server import drives, write_check
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +153,8 @@ def check_folder(path: str | Path) -> Path:
         raise BackupError(why)
     if not chosen.is_dir():
         raise BackupError(f"There's no folder at {chosen}.")
-    try:
-        probe = chosen / f".lumiverb-write-check-{os.getpid()}"
-        probe.write_bytes(b"")
-        probe.unlink()
-    except OSError:
-        raise BackupError(f"Lumiverb can't write to {chosen}.") from None
+    if (why := write_check.try_write(chosen)) is not None:
+        raise BackupError(why)
     return chosen
 
 

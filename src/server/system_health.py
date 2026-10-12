@@ -321,11 +321,13 @@ def _space(free: int, total: int) -> tuple[str, str]:
 
 
 def disk_row(*, free: int | None, total: int | None, now: datetime, error: str | None = None,
-             previews: Mapping[str, Any] | None = None) -> Row:
+             previews: Mapping[str, Any] | None = None, unwritable: Sequence[str] = ()) -> Row:
     """The data disk (DATA_DIR) and, when they're elsewhere, the previews'
     (`previews`: folder, available, free, total, same_disk, moving: share
     moved, missing: libraries' own folders whose drive is unplugged): red
-    under 5% free or a previews drive unplugged, yellow under 15%."""
+    under 5% free, a previews drive unplugged or a previews folder Lumiverb
+    can't write (`unwritable`: why, src/server/write_check.py), yellow
+    under 15%."""
     row = Row("disk", "Disk", GREEN, "", checked_at=now)
     if error or not total or free is None:
         row.state, row.reason = YELLOW, f"Couldn't read the data disk: {error or 'no size'}"
@@ -351,6 +353,9 @@ def disk_row(*, free: int | None, total: int | None, now: datetime, error: str |
             row.link = "/settings/storage"
         elif doing:
             row.reason += doing
+    if unwritable:
+        row.state, row.link = RED, "/settings/storage"
+        row.reason = " ".join(unwritable)
     return row
 
 
@@ -359,10 +364,15 @@ def disk_row(*, free: int | None, total: int | None, now: datetime, error: str |
 
 def backups_row(*, newest: datetime | None, newest_bytes: int = 0, last_error: str | None = None,
                 last_failed_at: datetime | None = None, running: Mapping[str, Any] | None = None,
-                now: datetime) -> Row:
+                folder_error: str | None = None, now: datetime) -> Row:
     """The databases' backups (src/server/backups.py): red with none for 2
-    days, yellow when the last one failed or none is made yet."""
+    days or a folder Lumiverb can't write (`folder_error`: why,
+    src/server/write_check.py), yellow when the last one failed or none is
+    made yet."""
     row = Row("backups", "Backups", GREEN, "", link="/settings/backups", checked_at=now)
+    if folder_error:
+        row.state, row.reason = RED, f"{folder_error} The next backup can't be made."
+        return row
     failed = bool(last_error) and last_failed_at is not None and (newest is None or last_failed_at > newest)
     doing = ""
     if running:

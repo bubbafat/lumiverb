@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.server import drives
+from src.server import drives, write_check
 from src.shared import previews_location
 from src.shared.previews_location import Location
 
@@ -157,12 +157,8 @@ def check_target(data_dir: Path, to: str | Path, need: Size | None = None, *, cu
             first = chosen.relative_to(root).parts[:1]
             if first and first[0].startswith(ACCOUNT_PREFIX):
                 raise MoveError("That folder is inside the previews themselves.")
-    try:
-        probe = chosen / f".lumiverb-write-check-{os.getpid()}"
-        probe.write_bytes(b"")
-        probe.unlink()
-    except OSError:
-        raise MoveError(f"Lumiverb can't write to {chosen}.") from None
+    if (why := write_check.try_write(chosen)) is not None:
+        raise MoveError(why)
     if need is not None and not same_disk(chosen, current):
         free = shutil.disk_usage(chosen).free
         wanted = int(need.bytes * (1 + SPARE_FRACTION)) + SPARE_BYTES

@@ -121,6 +121,13 @@ describe("LibraryPreviewsSection", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Is its drive plugged in?");
   });
 
+  it("says when Lumiverb can't write to its folder any more", async () => {
+    state = previews({ folder: VIDEO, own: true, write_error: `Lumiverb can't write to ${VIDEO}: no permission.` });
+    renderSection();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      `Lumiverb can't write to ${VIDEO}: no permission. Until it can, this library's previews aren't made.`);
+  });
+
   it("isn't shown to someone who isn't an admin", async () => {
     role = "editor";
     renderSection();

@@ -156,6 +156,15 @@ describe("StorageSection", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Is its drive plugged in?");
   });
 
+  it("says when Lumiverb can't write to the previews folder any more", async () => {
+    state = info({ previews: DRIVE, same_disk: false,
+                   previews_write_error: `Lumiverb can't write to ${DRIVE}: it's read-only.` });
+    renderSection();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      `Lumiverb can't write to ${DRIVE}: it's read-only. Until it can, no previews are made.`);
+    expect(storageHasProblem(state)).toBe(true);
+  });
+
   it("from another device, they aren't moved here", async () => {
     state = info({ changeable_here: false });
     renderSection();
@@ -194,6 +203,10 @@ describe("storageHasProblem", () => {
   it("flags an unplugged drive or a stopped move", () => {
     expect(storageHasProblem(info())).toBe(false);
     expect(storageHasProblem(info({ previews_available: false }))).toBe(true);
+    expect(storageHasProblem(info({ previews_write_error: "Lumiverb can't write to x: no permission." }))).toBe(true);
+    expect(storageHasProblem(info({ libraries: [{ library_id: "l", name: "V", folder: "/v", available: true,
+                                                  write_error: "Lumiverb can't write to /v: no permission." }] })))
+      .toBe(true);
     expect(storageHasProblem(info({ moving: { from_folder: DATA, to_folder: DRIVE, done_files: 0, total_files: 1,
                                                done_bytes: 0, total_bytes: 1, running: false, error: "x",
                                                started_at: null } }))).toBe(true);

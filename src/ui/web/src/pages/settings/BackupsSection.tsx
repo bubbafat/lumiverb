@@ -29,9 +29,10 @@ const KIND: Record<string, string> = {
   "before-restore": "Before a restore",
 };
 
-/** The last one failed (after the newest made), or none for two days: Settings flags it. */
+/** The last one failed (after the newest made), none for two days, or a folder Lumiverb can't write: Settings flags it. */
 export function backupsHaveProblem(b: Backups | undefined, now: number = Date.now()): boolean {
   if (!b) return false;
+  if (b.folder_write_error) return true;
   const newest = b.backups[0] ? new Date(b.backups[0].made_at).getTime() : null;
   const failed = b.last_failed_at ? new Date(b.last_failed_at).getTime() : null;
   if (failed !== null && (newest === null || failed > newest)) return true;
@@ -201,6 +202,11 @@ export function FolderChoice({ backups }: { backups: Backups }) {
       ) : !editing ? (
         <>
           <p className="break-all font-mono text-sm text-gray-200">{backups.folder}</p>
+          {backups.folder_write_error && (
+            <p role="alert" className="text-sm text-red-300">
+              {backups.folder_write_error} The next backup can&apos;t be made.
+            </p>
+          )}
           {isDefault && (
             <p className="text-xs text-gray-500">
               On the same drive as Lumiverb&apos;s data. A folder on another drive keeps them if this one fails.

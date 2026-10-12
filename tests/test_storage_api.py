@@ -9,6 +9,7 @@ The rules on real folders: tests/test_previews_location.py."""
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -188,3 +189,21 @@ def test_upkeep_goes_on_with_a_move_that_stopped(mac, monkeypatch):
     monkeypatch.setattr(move, "go_on", lambda d, **k: called.append((Path(d), k)) or "started")
     assert upkeep._previews_move() == "started"
     assert called == [(data, {"waits": True})]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes anywhere")
+def test_a_previews_folder_it_cant_write_any_more_is_flagged(mac):
+    data, drive, control_url = mac
+    (drive / previews_location.MARKER).write_text("")
+    previews_location.write(data, drive, None)  # chosen when it could be written
+    drive.chmod(0o500)  # then it can't
+    try:
+        with TestClient(app, client=HERE) as client:
+            auth, _ = real_account.admin_with_database(client, control_url)
+            body = client.get("/v1/system/storage", headers=auth).json()
+            rows = {r["key"]: r for r in client.get("/v1/system/health", headers=auth).json()["rows"]}
+    finally:
+        drive.chmod(0o700)
+    said = f"Lumiverb can't write to {drive}: no permission."
+    assert body["previews_available"] is True and body["previews_write_error"] == said
+    assert (rows["disk"]["state"], rows["disk"]["reason"], rows["disk"]["link"]) == ("red", said, "/settings/storage")

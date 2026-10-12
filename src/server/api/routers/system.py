@@ -231,7 +231,22 @@ def _disk(now: datetime) -> h.Row:
         usage = shutil.disk_usage(get_settings().data_dir)
     except OSError as exc:
         return h.disk_row(free=None, total=None, now=now, error=_short(exc))
-    return h.disk_row(free=usage.free, total=usage.total, now=now, previews=_previews_disk())
+    return h.disk_row(free=usage.free, total=usage.total, now=now, previews=_previews_disk(),
+                      unwritable=_previews_unwritable())
+
+
+def _previews_unwritable() -> list[str]:
+    """Why Lumiverb can't write to the previews folder or a library's own,
+    of those whose drive is there (an unplugged one is said already)."""
+    from src.server import write_check
+    from src.server.config import get_settings
+    from src.shared import previews_location
+
+    data = Path(get_settings().data_dir).absolute()
+    location = previews_location.read(data)
+    folders = [location.previews, *location.libraries.values()]
+    return [why for folder in dict.fromkeys(folders)
+            if location.available(data, folder) and (why := write_check.why_not(folder)) is not None]
 
 
 def _previews_disk() -> dict | None:
@@ -270,8 +285,20 @@ def _backups_row(now: datetime) -> h.Row:
     return h.backups_row(
         newest=made[0].made_at if made else None, newest_bytes=made[0].bytes if made else 0,
         last_error=state.get("last_error"), last_failed_at=backups.parse_time(state.get("last_failed_at")),
-        running=state.get("running") if backups.running(data) else None, now=now,
+        running=state.get("running") if backups.running(data) else None, folder_error=_backups_unwritable(data),
+        now=now,
     )
+
+
+def _backups_unwritable(data: Path) -> str | None:
+    """Why Lumiverb can't write to the backups folder; the default one isn't
+    there until the first backup makes it."""
+    from src.server import backups, write_check
+
+    folder = backups.folder(data)
+    if folder == backups.default_folder(data) and not folder.is_dir():
+        return None
+    return write_check.why_not(folder)
 
 
 class Network(BaseModel):
@@ -344,6 +371,7 @@ class BackupRunning(BaseModel):
 
 class Backups(BaseModel):
     folder: str
+    folder_write_error: str | None = None  # Lumiverb can't write there now: why (src/server/write_check.py)
     default_folder: str
     changeable_here: bool  # the folder is chosen on the machine itself
     running: BackupRunning | None
@@ -390,7 +418,8 @@ def _backups(request: Request) -> Backups:
     made = backups.list_backups(backups.folder(data))
     failed = backups.parse_time(state.get("last_failed_at"))
     return Backups(
-        folder=str(backups.folder(data)), default_folder=str(backups.default_folder(data)),
+        folder=str(backups.folder(data)), folder_write_error=_backups_unwritable(data),
+        default_folder=str(backups.default_folder(data)),
         changeable_here=on_this_machine(request),
         running=BackupRunning(**running) if isinstance(running, dict) else None,
         last_error=state.get("last_error"), last_failed_at=failed,
@@ -458,6 +487,7 @@ class LibraryFolder(BaseModel):
     name: str
     folder: str
     available: bool  # its drive is plugged in
+    write_error: str | None = None  # Lumiverb can't write there now: why
 
 
 class StorageMove(BaseModel):
@@ -478,6 +508,7 @@ class Storage(BaseModel):
     previews: str  # the folder the previews are in
     data: str  # DATA_DIR: the database, the search index, backups, caches and the search and transcript models (they don't move)
     previews_available: bool  # its drive is plugged in
+    previews_write_error: str | None = None  # Lumiverb can't write there now: why (src/server/write_check.py)
     previews_free: int | None
     previews_total: int | None
     data_free: int | None
@@ -499,6 +530,7 @@ STORAGE_ELSEWHERE = "Move the previews on the computer Lumiverb is installed on.
 
 
 def _storage(request: Request, session: Session) -> Storage:
+    from src.server import write_check
     from src.server.api.client_address import on_this_machine
     from src.server.config import get_settings
     from src.server.repository.tenant import LibraryRepository
@@ -507,6 +539,9 @@ def _storage(request: Request, session: Session) -> Storage:
 
     data = Path(get_settings().data_dir).absolute()
     location = previews_location.read(data)
+
+    def unwritable(path: Path, available: bool) -> str | None:
+        return write_check.why_not(path) if available else None
 
     def usage(path: Path) -> tuple[int | None, int | None]:
         try:
@@ -534,14 +569,17 @@ def _storage(request: Request, session: Session) -> Storage:
             running=move.running(data), error=state.get("error"),
             started_at=state.get("started_at"),
         )
+    own = []
+    for lib, root in sorted(location.libraries.items(), key=lambda i: names.get(i[0], "")):
+        if lib in names:
+            there = location.available(data, root)
+            own.append(LibraryFolder(library_id=lib, name=names[lib], folder=str(root), available=there,
+                                     write_error=unwritable(root, there)))
     return Storage(previews=str(location.previews), data=str(data), previews_available=available,
-                   previews_free=previews_free, previews_total=previews_total, data_free=data_free,
-                   data_total=data_total, same_disk=move.same_disk(location.previews, data), moving=moving,
-                   changeable_here=on_this_machine(request),
-                   libraries=[LibraryFolder(library_id=lib, name=names[lib], folder=str(root),
-                                            available=location.available(data, root))
-                              for lib, root in sorted(location.libraries.items(), key=lambda i: names.get(i[0], ""))
-                              if lib in names])
+                   previews_write_error=unwritable(location.previews, available), previews_free=previews_free,
+                   previews_total=previews_total, data_free=data_free, data_total=data_total,
+                   same_disk=move.same_disk(location.previews, data), moving=moving,
+                   changeable_here=on_this_machine(request), libraries=own)
 
 
 @router.get("/storage", response_model=Storage, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])

@@ -75,6 +75,20 @@ def test_where_a_mac_or_a_linux_desktop_puts_drives_one_not_plugged_in_has_none(
         assert drives.missing(drive / "Lumiverb" / "previews") is None
 
 
+def test_a_linux_desktop_user_with_no_drive_yet_is_said_by_the_drive(tmp_path, monkeypatch, mounts):
+    import getpass
+
+    media = tmp_path / "media"
+    media.mkdir()  # udisks makes /media/<user> only when a drive is first mounted
+    monkeypatch.setattr(drives, "DRIVE_FOLDERS", (media,))
+    monkeypatch.setattr(drives, "USER_DRIVE_FOLDERS", (media,))
+    user = getpass.getuser()
+    assert drives.missing(media / user / "USB" / "previews") == f"There's no drive at {media / user / 'USB'}. Is it plugged in?"
+    # Not a user: a drive mounted right in /media.
+    assert drives.missing(media / "LumiverbNoSuchUserUSB" / "previews") == (
+        f"There's no drive at {media / 'LumiverbNoSuchUserUSB'}. Is it plugged in?")
+
+
 def test_nothing_is_made_right_in_the_root(mounts):
     assert drives.missing(Path("/lumiverb-no-such-drive/previews")) == (
         "There's no drive at /lumiverb-no-such-drive. Is it plugged in?")

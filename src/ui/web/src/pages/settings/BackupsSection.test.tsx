@@ -146,6 +146,15 @@ describe("BackupsSection", () => {
       { folder: "/Volumes/Backup/New", make_folder: false }, { folder: "/Volumes/Backup/New", make_folder: true }]);
   });
 
+  it("says when Lumiverb can't write to the folder any more", async () => {
+    state = backups({ folder: "/Volumes/Backup/Lumiverb",
+                      folder_write_error: "Lumiverb can't write to /Volumes/Backup/Lumiverb: it's read-only." });
+    renderSection();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Lumiverb can't write to /Volumes/Backup/Lumiverb: it's read-only. The next backup can't be made.");
+    expect(backupsHaveProblem(state)).toBe(true);
+  });
+
   it("from another device, the folder isn't changed here", async () => {
     state = backups({ changeable_here: false });
     renderSection();
