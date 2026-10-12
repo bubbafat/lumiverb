@@ -135,17 +135,19 @@ def _fill_assets(session: Session, qw: QuickwitClient, index_id: str, after: str
 
 
 def _fill_scenes(session: Session, qw: QuickwitClient, index_id: str, after: str) -> str | None:
-    """The next clips' described scenes, after `after` (by clip id), into a rebuild's scene index."""
+    """The scenes the next clips show (described), after `after` (by clip id),
+    into a rebuild's scene index: not a redo's, searchable once swapped in."""
     clips = session.execute(text(
         "SELECT DISTINCT s.asset_id FROM video_scenes s JOIN active_assets a ON a.asset_id = s.asset_id"
-        " WHERE s.description IS NOT NULL AND s.asset_id > :after"
+        " WHERE s.description IS NOT NULL AND s.staged IS NULL AND s.asset_id > :after"
         " ORDER BY s.asset_id LIMIT :n"), {"after": after, "n": FILL_BATCH["scenes"]}).scalars().all()
     if not clips:
         return None
     docs = []
     for scene_id, asset_id in session.execute(text(
             "SELECT scene_id, asset_id FROM video_scenes WHERE asset_id = ANY(:ids)"
-            " AND description IS NOT NULL ORDER BY asset_id, start_ms"), {"ids": list(clips)}).all():
+            " AND description IS NOT NULL AND staged IS NULL ORDER BY asset_id, start_ms"),
+            {"ids": list(clips)}).all():
         scene, asset = session.get(VideoScene, scene_id), session.get(Asset, asset_id)
         if scene is not None and asset is not None:
             docs.append(build_scene_document(scene, asset))
