@@ -37,6 +37,24 @@ def test_the_schedulers_settings_come_from_its_environment(monkeypatch) -> None:
     assert Machine(analysis_proxy_decoder="cpu").gpu_decodes_here == 0
 
 
+@pytest.mark.parametrize("decoder,vulkan,videotoolbox,decodes", [
+    ("auto", True, False, 1),  # a Linux GPU: renders take requests from the AI machines sharing it
+    ("auto", False, True, 0),  # a Mac: the media engine decodes, the GPU is the models' (Ollama's)
+    ("auto", False, False, 0),  # the CPU decodes
+    ("videotoolbox", False, False, 0),
+    ("vulkan", False, False, 1),
+    ("cpu", True, True, 0),
+])
+def test_renders_hold_the_gpu_only_where_they_decode_on_it(monkeypatch, decoder, vulkan, videotoolbox,
+                                                           decodes) -> None:
+    from src.processing.video import ffmpeg_run
+
+    monkeypatch.setattr(ffmpeg_run, "vulkan_decodes", lambda: vulkan)
+    monkeypatch.setattr(ffmpeg_run, "videotoolbox_decodes", lambda: videotoolbox)
+    assert Machine(analysis_proxy_decoder=decoder).gpu_decodes_here == decodes
+    assert Machine(analysis_proxy_decoder=decoder, gpu_decodes=0).gpu_decodes_here == 0
+
+
 def test_render_concurrency_follows_the_cores(monkeypatch) -> None:
     for cores, renders in ((4, 1), (12, 2), (32, 3)):
         monkeypatch.setattr("os.cpu_count", lambda c=cores: c)
