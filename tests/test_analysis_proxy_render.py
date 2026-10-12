@@ -556,11 +556,12 @@ def test_room_on_the_gpu_is_its_free_memory(monkeypatch: pytest.MonkeyPatch, ans
 @needs_vulkan
 @pytest.mark.fast
 def test_the_gpu_makes_the_same_proxy_as_the_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 10-bit HEVC turned on its side, like prod's camera and phone files.
-    if not _real_gpu_has_room():
-        pytest.skip("the GPU is too full right now to decode beside what's on it")
-    flat = _make(tmp_path / "flat.mp4", extra=["-c:v", "libx265", "-pix_fmt", "yuv420p10le",
-                                               "-x265-params", "log-level=error"])
+    # 10-bit HEVC turned on its side, like prod's camera and phone files. A
+    # second of 720p: decoding it fits beside whatever holds the GPU's memory
+    # (an AI model). The room check is the renderer's policy, tested on its own
+    # (test_room_on_the_gpu_is_its_free_memory), not a reason to skip this one.
+    flat = _make(tmp_path / "flat.mp4", seconds=1.0,
+                 extra=["-c:v", "libx265", "-pix_fmt", "yuv420p10le", "-x265-params", "log-level=error"])
     src = tmp_path / "portrait.mov"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-display_rotation", "90",
                     "-i", str(flat), "-c", "copy", str(src)], check=True)
