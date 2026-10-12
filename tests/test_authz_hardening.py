@@ -7,6 +7,7 @@
 - Passwords past bcrypt's 72 bytes are refused, not a 500.
 - Routes only the scheduler calls are admin-only.
 - A trashed library stops being public.
+- Choosing a library's folder (so making a library) and making one public are an admin's.
 """
 
 from __future__ import annotations
@@ -344,7 +345,7 @@ def test_a_trashed_library_isnt_public(public_lib_client):
 
 
 # ---------------------------------------------------------------------------
-# Making a library public, or re-rooting one, is a tenant admin's call
+# Choosing a library's folder, or making one public, is a tenant admin's call
 # ---------------------------------------------------------------------------
 
 
@@ -353,8 +354,8 @@ def test_only_admins_make_a_library_public_or_move_its_root(public_lib_client):
     client, api_key, _, _ = public_lib_client
     admin = _bearer(api_key)
     _, ed = _user(client, admin, "lib-editor@example.com", "editor")
-    lib = client.post("/v1/libraries", json={"name": "EdLib", "root_path": "/ed"}, headers=ed)
-    assert lib.status_code == 200, lib.text  # creating stays an editor's
+    lib = client.post("/v1/libraries", json={"name": "EdLib", "root_path": "/ed"}, headers=admin)
+    assert lib.status_code == 200, lib.text
     lib = lib.json()["library_id"]
 
     for body in ({"is_public": True}, {"is_public": False}, {"root_path": "/elsewhere"},
@@ -368,13 +369,61 @@ def test_only_admins_make_a_library_public_or_move_its_root(public_lib_client):
     assert client.get(f"/v1/libraries/{lib}").status_code == 200  # public now
 
 
-@pytest.mark.slow
-def test_an_editors_create_cant_make_it_public(public_lib_client):
-    client, api_key, _, _ = public_lib_client
+def _library_names(client: TestClient, admin: dict) -> set[str]:
+    return {lib["name"] for lib in client.get("/v1/libraries", headers=admin).json()}
+
+
+def _refused_a_library_folder(client: TestClient, api_key: str, role: str) -> None:
+    # A library is made with its folder, so only an admin makes one, as only
+    # an admin changes its folder.
     admin = _bearer(api_key)
-    _, ed = _user(client, admin, "lib-creator@example.com", "editor")
-    r = client.post("/v1/libraries", json={"name": "EdPub", "root_path": "/edpub", "is_public": True}, headers=ed)
+    _, person = _user(client, admin, f"lib-chooser-{role}@example.com", role)
+    r = client.post("/v1/libraries", json={"name": f"Chosen-{role}", "root_path": "/chosen"}, headers=person)
     assert r.status_code == 403
+    assert r.json()["error"]["code"] == "forbidden"
+    assert r.json()["error"]["message"]
+    assert f"Chosen-{role}" not in _library_names(client, admin)
+
+
+@pytest.mark.slow
+def test_an_editor_cannot_choose_a_library_folder(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    _refused_a_library_folder(client, api_key, "editor")
+
+
+@pytest.mark.slow
+def test_a_viewer_cannot_choose_a_library_folder(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    _refused_a_library_folder(client, api_key, "viewer")
+
+
+@pytest.mark.slow
+def test_an_admin_chooses_a_library_folder(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    _, admin = _user(client, _bearer(api_key), "lib-admin@example.com", "admin")
+    r = client.post("/v1/libraries", json={"name": "AdLib", "root_path": "/adlib"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert r.json()["root_path"] == "/adlib" and r.json()["is_public"] is False
+
     r = client.post("/v1/libraries", json={"name": "AdPub", "root_path": "/adpub", "is_public": True}, headers=admin)
     assert r.status_code == 200 and r.json()["is_public"] is True
     assert client.get(f"/v1/libraries/{r.json()['library_id']}").status_code == 200  # public, signed out
+
+
+@pytest.mark.slow
+def test_an_editor_is_refused_a_library_folder_before_where_it_is_chosen(public_lib_client, monkeypatch):
+    # A Mac whose scheduler reads every folder chooses folders on the Mac only
+    # (dependencies.require_folder_chosen_here); an editor chooses none anywhere.
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    lib = client.post("/v1/libraries", json={"name": "Elsewhere", "root_path": "/elsewhere-lib"}, headers=admin)
+    assert lib.status_code == 200, lib.text
+    _, ed = _user(client, admin, "lib-elsewhere@example.com", "editor")
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", '{"/": "/"}')  # TestClient's requests aren't from this machine
+
+    made = client.post("/v1/libraries", json={"name": "EdElsewhere", "root_path": "/x"}, headers=ed)
+    moved = client.patch(f"/v1/libraries/{lib.json()['library_id']}", json={"root_path": "/x"}, headers=ed)
+    for r in (made, moved):
+        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", r.text
+    r = client.post("/v1/libraries", json={"name": "AdElsewhere", "root_path": "/x"}, headers=admin)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "folder_elsewhere", r.text

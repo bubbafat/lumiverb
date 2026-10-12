@@ -285,14 +285,26 @@ def test_viewer_cannot_create_library(hybrid_env: TestClient) -> None:
 
 
 @pytest.mark.slow
-def test_editor_can_create_library(hybrid_env: TestClient) -> None:
+def test_editor_cannot_create_library(hybrid_env: TestClient) -> None:
+    # A library is made with its folder, and choosing one is an admin's.
     token = _make_jwt(USR_EDITOR, "editor")
     r = hybrid_env.post(
         "/v1/libraries",
         json={"name": "editor-lib", "root_path": "/tmp/editor-test"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert r.status_code in (200, 201), f"Expected 200/201 but got {r.status_code}: {r.text}"
+    assert r.status_code == 403
+
+
+@pytest.mark.slow
+def test_admin_can_create_library(hybrid_env: TestClient) -> None:
+    token = _make_jwt(USR_ADMIN, "admin")
+    r = hybrid_env.post(
+        "/v1/libraries",
+        json={"name": "admin-lib", "root_path": "/tmp/admin-test"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.slow
@@ -400,10 +412,10 @@ def test_refresh_takes_the_role_from_the_database(hybrid_env: TestClient) -> Non
 def test_middleware_takes_the_role_from_the_database(hybrid_env: TestClient) -> None:
     from src.server.database import get_control_session
 
-    uid, email = _new_user("editor")
+    uid, email = _new_user("admin")
     token = _login(hybrid_env, email)
     with get_control_session() as session:  # a role changed without a version bump
-        session.execute(text("UPDATE users SET role = 'viewer' WHERE user_id = :u"), {"u": uid})
+        session.execute(text("UPDATE users SET role = 'editor' WHERE user_id = :u"), {"u": uid})
         session.commit()
     r = hybrid_env.post("/v1/libraries", json={"name": f"nope-{uid}", "root_path": "/x"}, headers=_bearer(token))
     assert r.status_code == 403

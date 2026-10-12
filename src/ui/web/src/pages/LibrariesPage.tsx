@@ -94,7 +94,9 @@ export default function LibrariesPage() {
   const trashDays = settings?.trash_days === undefined ? 30 : settings.trash_days;
   const canEdit = useCanEdit();
   // Deleting media for good right away is an admin's; editors trash and restore.
-  const isAdmin = useRole() === "admin";
+  // Choosing a library's folder is an admin's too, so adding a library is.
+  const role = useRole();
+  const isAdmin = role === "admin";
   // Archived clips aren't deleted on their own, but they go with their library: say how many.
   const { data: archivedInDeleting } = useQuery({
     queryKey: ["archive", deleteConfirmId, null, "all", "count"],
@@ -219,13 +221,15 @@ export default function LibrariesPage() {
                 Empty trash ({trashedCount})
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setAddOpen(true)}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-indigo-500"
-            >
-              Add library
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setAddOpen(true)}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-indigo-500"
+              >
+                Add library
+              </button>
+            )}
           </div>
         </div>
 
@@ -265,7 +269,7 @@ export default function LibrariesPage() {
           <div className="space-y-4">
             {libraries?.length === 0 ? (
               <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-8 text-center text-gray-400">
-                No libraries yet. Add one to get started.
+                No libraries yet.{isAdmin ? " Add one to get started." : role ? " An admin adds them." : ""}
               </div>
             ) : (
               libraries?.map((lib) => (
