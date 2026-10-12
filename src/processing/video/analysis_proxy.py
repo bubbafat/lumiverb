@@ -176,8 +176,8 @@ def source_pix_fmt(source: Path) -> str | None:
     try:
         result = subprocess.run(
             # Values alone: csv adds a field for side data (a rotated phone clip's).
-            ["ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries", "stream=pix_fmt",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(source)],
+            ["ffprobe", "-v", "error", *ffmpeg_run.input_args(), "-select_streams", "V:0",
+             "-show_entries", "stream=pix_fmt", "-of", "default=noprint_wrappers=1:nokey=1", str(source)],
             capture_output=True, text=True, timeout=60, check=False,
         )
     except (subprocess.SubprocessError, OSError):
@@ -215,6 +215,7 @@ def build_command(
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
         *ffmpeg_run.hwaccel_args(hwaccel),
+        *ffmpeg_run.input_args(),
         "-i", str(source),
         "-map", "0:V:0",
         "-vf", scale, "-fpsmax", str(s.fps_max), "-pix_fmt", "yuv420p",

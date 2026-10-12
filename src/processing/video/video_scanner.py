@@ -19,6 +19,8 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import Iterator
 
+from src.processing.video import ffmpeg_run
+
 _log = logging.getLogger(__name__)
 logger = _log
 
@@ -49,6 +51,7 @@ def _get_video_size(source: Path) -> tuple[int, int]:
         "ffprobe",
         "-v",
         "error",
+        *ffmpeg_run.input_args(),
         "-select_streams",
         "v:0",
         "-show_entries",
@@ -158,6 +161,7 @@ class VideoScanner:
             "info",
             "-skip_frame",
             "nokey",
+            *ffmpeg_run.input_args(),
             "-ss",
             str(start_ts),
             "-i",

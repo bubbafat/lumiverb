@@ -12,7 +12,10 @@ Vulkan where it works (a Linux GPU), else VideoToolbox (a Mac's media
 engine), else the CPU. H.264 and HEVC decoding is exact: the pictures
 are the same whichever decodes them, where the hardware decodes them at
 all. One that fails on a picture is stopped there (hwaccel_args), and the
-caller decodes on the CPU instead."""
+caller decodes on the CPU instead.
+
+Every ffmpeg and ffprobe that opens a video opens it with input_args: a
+local file only, read only as one of the containers Lumiverb takes in."""
 
 from __future__ import annotations
 
@@ -23,10 +26,20 @@ import threading
 import time
 from dataclasses import dataclass
 
+from src.shared.file_extensions import VIDEO_EXTENSIONS
+
 STALL_SEC = 300.0
 # Decoders that need no room on a GPU beside the models: a Mac's media
 # engine shares the machine's memory. Every render may decode there at once.
 SHARED_MEMORY = ("videotoolbox",)
+
+# The ffmpeg demuxer that reads each video extension Lumiverb takes in
+# (src/shared/file_extensions.py; an extension added there needs its demuxer
+# here). A whitelist matches any of a demuxer's names: "mov" is the one named
+# "mov,mp4,m4a,3gp,3g2,mj2", "matroska" the one named "matroska,webm".
+# Twin: LumiverbKit's FFmpegInput.swift.
+DEMUXERS = {".mov": "mov", ".mp4": "mov", ".mkv": "matroska"}
+INPUT_FORMATS = ",".join(sorted({DEMUXERS[ext] for ext in VIDEO_EXTENSIONS}))
 
 
 class StalledError(Exception):
@@ -112,6 +125,16 @@ def hwaccel_args(hwaccel: str | None) -> list[str]:
     caller makes it again on the CPU, which goes on past an error as it
     always did: the same pictures, every one of them."""
     return ["-xerror", "-hwaccel", hwaccel] if hwaccel else []
+
+
+def input_args() -> list[str]:
+    """ffmpeg's arguments for opening a video, before its -i (ffprobe's:
+    before the file): a local file only, read only by the demuxers of the
+    containers Lumiverb takes in (DEMUXERS). A file whose content is in any
+    other format (a playlist, a list of other files), whatever its name, is
+    refused, not read as that format. Lumiverb's own videos (analysis
+    proxies, previews) are MP4s and open the same way."""
+    return ["-protocol_whitelist", "file", "-format_whitelist", INPUT_FORMATS]
 
 
 def decoded_by(choice: str) -> str | None:

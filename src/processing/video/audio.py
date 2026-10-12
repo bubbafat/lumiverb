@@ -14,6 +14,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.processing.video import ffmpeg_run
+
 logger = logging.getLogger(__name__)
 
 # handler_name of the analysis proxy's mixed first track.
@@ -56,7 +58,7 @@ def decodable_audio() -> frozenset[str] | None:
 def audio_tracks(path: Path, *, timeout: float = 60.0) -> list[AudioTrack]:
     """The audio tracks ffmpeg can decode, in order. Raises if ffprobe can't read the file."""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a",
+        ["ffprobe", "-v", "error", *ffmpeg_run.input_args(), "-select_streams", "a",
          "-show_entries", "stream=codec_name,channels:stream_tags=handler_name", "-of", "json", str(path)],
         capture_output=True, text=True, timeout=timeout, check=True,
     ).stdout
@@ -120,5 +122,5 @@ def speech_wav_command(source: Path, wav: Path, tracks: list[AudioTrack]) -> lis
         audio = ["-filter_complex", mix_filter(tracks, "speech"), "-map", "[speech]"]
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-        "-i", str(source), *audio, "-ar", "16000", "-ac", "1", "-f", "wav", str(wav),
+        *ffmpeg_run.input_args(), "-i", str(source), *audio, "-ar", "16000", "-ac", "1", "-f", "wav", str(wav),
     ]
