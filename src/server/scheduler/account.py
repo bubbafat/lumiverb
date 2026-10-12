@@ -40,7 +40,10 @@ RETRY_SEC = 15.0
 
 class Account:
     def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *, models: Any = None,
-                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None) -> None:
+                 clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None,
+                 stored: Callable[[str], Path | None] | None = None) -> None:
+        """`stored`: the analysis proxy the API keeps for a clip, read on this
+        machine's disk (stored_analysis_proxy), so the cache holds no copy."""
         from src.processing.failure_report import FailureReport
         from src.processing.machine import current
         from src.processing.producer_settings import ProducerSettings
@@ -62,7 +65,7 @@ class Account:
         self.producers = ProducerSettings(client, fetch=False)  # read by refresh()
         # Each AI job's machines (Settings → AI), checked and called by its guard.
         self.guards: dict[str, Any] = {name: load(job.guard)(client) for name, job in AI_JOBS.items()}
-        self.analysis_cache = AnalysisProxyCache(client)
+        self.analysis_cache = AnalysisProxyCache(client, stored=stored)
         # Set when the scheduler stops: jobs in hand save nothing more.
         self.stopping = threading.Event()
         # The server's settings were read at least once: its jobs can go.

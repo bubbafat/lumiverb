@@ -128,3 +128,17 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
     assert "a red square" in r.text
     with _db(env) as session:
         assert photo not in [i["asset_id"] for i in candidates(session, KINDS["vision"], [lib[2]])]
+
+
+def test_the_scheduler_reads_the_stored_analysis_proxy_where_the_api_keeps_it(env) -> None:
+    # Beside the API, sharing its database and disk: no second copy in its cache.
+    from src.server.scheduler.service import stored_analysis_proxy
+    from tests.test_analysis_proxy_api import _ingest, _upload
+
+    with_proxy = _ingest(env, "stored/a.mov")
+    body = b"\x00\x00\x00\x18ftypmp42 stored here"
+    assert _upload(env, with_proxy, body).status_code == 200
+    without = _ingest(env, "stored/b.mov")
+    find = stored_analysis_proxy(env[4], storage=env[3])
+    assert find(with_proxy).read_bytes() == body
+    assert find(without) is None

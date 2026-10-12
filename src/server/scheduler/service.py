@@ -444,6 +444,43 @@ def tenant_url(tenant_id: str) -> str:
     return _tenant_urls[tenant_id]
 
 
+def stores_here() -> bool:
+    """Whether the API keeps the previews on this machine's disk: the
+    scheduler runs beside it, sharing its env (DATA_DIR, STORAGE_PROVIDER)."""
+    from src.server.config import get_settings
+
+    settings = get_settings()
+    return settings.storage_provider == "local" and bool(settings.data_dir)
+
+
+def stored_analysis_proxy(tenant_id: str, storage: Any = None) -> Callable[[str], Any]:
+    """The account's clip's analysis proxy as the API stored it, read where
+    it is on this disk (src/server/storage/local.py: during a move, either
+    folder): the scheduler's cache then holds no second copy. None when the
+    clip has none, or its file isn't there (a drive unplugged): the cache
+    downloads it then, as before."""
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+
+    def find(asset_id: str):
+        nonlocal storage
+        with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+            key = session.execute(text("SELECT analysis_proxy_key FROM assets WHERE asset_id = :a"),
+                                  {"a": asset_id}).scalar()
+        if not key:
+            return None
+        if storage is None:
+            from src.server.storage.local import get_storage
+
+            storage = get_storage()
+        path = storage.abs_path(key)
+        return path if path.is_file() else None
+
+    return find
+
+
 def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict] | None:
     """The kind's due clips, oldest first; None when it was paused (or its
     redo stopped) since the scheduler last looked."""
@@ -641,7 +678,8 @@ class Accounts:
                 continue
             try:
                 client = scheduler_client(self._url, scheduler_key(tenant_id))
-                self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state, models=self._models)
+                self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state, models=self._models,
+                                                    stored=stored_analysis_proxy(tenant_id) if stores_here() else None)
                 logger.info("scheduler: working for %s", tenant_id)
             except Exception:  # noqa: BLE001 — tried again at the next listing
                 logger.exception("scheduler: couldn't start work for %s", tenant_id)
