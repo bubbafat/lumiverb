@@ -230,13 +230,6 @@ if [[ -f "$API_UNIT" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Admin › Logs reads the journal as the service user (the restart below picks it up).
-if getent group systemd-journal >/dev/null && ! id -nG "$SVC_USER" | grep -qw systemd-journal; then
-  usermod -aG systemd-journal "$SVC_USER"
-  ok "The API may read Lumiverb's journal (Admin › Logs)"
-fi
-
-# ---------------------------------------------------------------------------
 step "Installing the scheduler (all processing; it replaces the worker)"
 if [[ "$PROCESSING" == "true" ]]; then
   DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"

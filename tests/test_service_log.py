@@ -212,10 +212,12 @@ def test_journal_pages_lose_and_repeat_nothing(monkeypatch):
         assert joined.count(record["MESSAGE"]) == 1, record["MESSAGE"]
 
 
-def test_a_service_user_that_cant_read_the_journal_is_told_how(monkeypatch):
+def test_a_service_user_that_cant_read_the_journal_is_told_how_and_what_it_opens(monkeypatch):
     hint = "Hint: You are currently not seeing messages from other users and the system."
-    with pytest.raises(LogUnavailableError, match="systemd-journal"):
+    with pytest.raises(LogUnavailableError) as told:
         journal_page(run=_journalctl([], [], stderr=hint))
+    assert "sudo usermod -aG systemd-journal lumiverb" in str(told.value)
+    assert "the whole system journal" in str(told.value), "the grant is said for what it is"
 
 
 def test_a_journalctl_that_fails_says_why():

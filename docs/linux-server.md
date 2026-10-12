@@ -153,7 +153,7 @@ Useful:
 journalctl -u lumiverb-scheduler -f
 ```
 
-Ctrl-C there only stops watching the log; the scheduler keeps going. The web app shows the same journal, every Lumiverb unit's, at Admin › Logs: the API reads it as the `lumiverb` user, which deploy-api.sh and the update add to `systemd-journal`. With more than one account it shows only on the machine itself. To pause all processing:
+Ctrl-C there only stops watching the log; the scheduler keeps going. The web app shows the same journal, every Lumiverb unit's, at Admin › Logs: the API reads it as the `lumiverb` user, once you add that user to `systemd-journal` (`sudo usermod -aG systemd-journal lumiverb`, then restart lumiverb-api). Neither the install nor an update does it for you: the group reads the whole system journal (every service, sudo's command lines), not only Lumiverb's lines. With more than one account it shows only on the machine itself. To pause all processing:
 
 ```bash
 sudo systemctl stop lumiverb-scheduler

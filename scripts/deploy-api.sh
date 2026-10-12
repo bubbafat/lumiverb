@@ -257,8 +257,6 @@ step "Creating service user and directories"
 
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
-# Admin › Logs reads the journal as the service user.
-getent group systemd-journal >/dev/null && usermod -aG systemd-journal "$SVC_USER"
 
 mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp "$BACKUP_DIR"
 chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"

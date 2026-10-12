@@ -1100,11 +1100,9 @@ def test_a_real_run_proxies_to_the_port_the_api_half_wrote_and_says_what_next(tm
     assert "update-vps.sh" not in out.stdout
 
 
-def test_the_service_user_may_read_lumiverbs_journal_after_an_install_or_an_update():
-    # Admin › Logs runs journalctl as the API's user (src/server/service_log.py).
-    deploy = DEPLOY_API.read_text()
-    assert 'usermod -aG systemd-journal "$SVC_USER"' in deploy
-    assert deploy.index("useradd --system") < deploy.index("systemd-journal")
-    update = UPDATE_API.read_text()
-    assert 'usermod -aG systemd-journal "$SVC_USER"' in update
-    assert update.index("systemd-journal") < update.index('step "Restarting services"'), "the restart picks it up"
+def test_neither_an_install_nor_an_update_lets_lumiverb_read_the_whole_journal():
+    # systemd-journal reads every service's lines and sudo's command lines, not
+    # only Lumiverb's: whoever runs the server grants it, told so by Admin ›
+    # Logs (src/server/service_log.py), never these scripts (Robert, Oct 11).
+    for script in (DEPLOY_API, UPDATE_API, REPO / "scripts" / "update.sh", DEPLOY_VPS):
+        assert "systemd-journal" not in script.read_text(), script.name

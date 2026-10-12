@@ -7,8 +7,10 @@ Where it is depends on how Lumiverb runs:
   where it is (LUMIVERB_LOG_FILE). Each line says whose it is: "api | ...",
   run's own "lumiverb-server: ...".
 - Linux (systemd units): the journal, for Lumiverb's units (UNITS), read with
-  journalctl. The service user may read it as a member of systemd-journal
-  (deploy-api.sh, update-api.sh).
+  journalctl, once whoever runs the server adds the service user to
+  systemd-journal. Never done for them: that group reads the whole system
+  journal (every service, sudo's command lines), not only Lumiverb's lines
+  (Robert, Oct 11). Until then the page says how, and what it opens.
 - Started from a terminal: the terminal has it; nothing here.
 
 An entry is a line and the lines that continue it (a traceback): a line that
@@ -50,6 +52,10 @@ COMPLETE_LINES = 500  # a full page reads on this far for the records its traceb
 JOURNAL_BATCH = 1000
 JOURNAL_TIMEOUT_SEC = 10
 BLOCK = 64 * 1024
+JOURNAL_NOT_READABLE = (
+    "Lumiverb can't read the journal. To show its log here: sudo usermod -aG systemd-journal lumiverb, "
+    "then sudo systemctl restart lumiverb-api. That lets Lumiverb read the whole system journal "
+    "(every service, sudo's command lines), not only its own lines.")
 
 _NAMED = re.compile(r"^([a-z][a-z0-9-]*) \| (.*)$")
 _RUNS_OWN = re.compile(rf"^{RUN}: (.*)$")
@@ -284,8 +290,7 @@ class _JournalReader:
             except ValueError:
                 continue
         if not records and after is None and "not seeing messages" in (out.stderr or ""):
-            raise LogUnavailableError("Lumiverb's service user can't read the journal. Run the update "
-                                 "(sudo bash /opt/lumiverb/scripts/update.sh): it adds the user to systemd-journal.")
+            raise LogUnavailableError(JOURNAL_NOT_READABLE)
         if out.returncode != 0 and not records:
             raise LogUnavailableError(f"journalctl failed: {(out.stderr or '').strip()[:300]}")
         return records
