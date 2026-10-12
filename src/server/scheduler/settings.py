@@ -13,7 +13,8 @@
     LUMIVERB_ANALYSIS_PROXY_DECODER  auto (Vulkan, else a Mac's VideoToolbox) | cpu | an ffmpeg hwaccel (cuda)
     LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1; a Mac's VideoToolbox takes every render; 0: none)
     LUMIVERB_RENDER_CONCURRENCY    analysis proxies rendered at once (0: one per six cores, at most three)
-    LUMIVERB_ANALYSIS_CACHE_GB     the analysis proxies kept here (50)
+    LUMIVERB_ANALYSIS_CACHE_GB     the analysis proxies kept here (50): only those the API doesn't
+                                   keep on this disk (they're read where it stores them)
     LUMIVERB_FACE_BATCHES_PER_PROCESS  face batches before a fresh detection process (20)
     LUMIVERB_API_URL               the API (else the API's API_PORT on API_LISTEN_HOST)
 
