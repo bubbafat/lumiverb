@@ -3,7 +3,8 @@ ingest.py _generate_video_preview): on a Mac's media engine where there is
 one, else on the CPU; again on the CPU when the hardware fails at it, and
 again without audio when a track is broken; through ffmpeg_run, so it's
 stopped only when stuck. A Linux GPU's decoder is left to the analysis
-proxies (its turns keep room for the models)."""
+proxies (its turns keep room for the models). The engine's own decoding is
+tested where it is (test_analysis_proxy_render.py, on a Mac)."""
 
 from __future__ import annotations
 
@@ -26,7 +27,10 @@ def _clip(path: Path) -> Path:
 
 
 def _ran(monkeypatch, *, engine: str | None, fails=lambda cmd: False) -> list[list[str]]:
-    """The commands the preview runs (for real, unless `fails` says this one fails)."""
+    """The commands the preview runs, for real unless `fails` says this one
+    fails. A decision test, so it runs on any machine: a command asking for
+    the engine is run by the CPU (an engine this machine's ffmpeg may not
+    have), as if the engine had decoded it."""
     ran: list[list[str]] = []
     real = ffmpeg_run.run
 
@@ -34,6 +38,9 @@ def _ran(monkeypatch, *, engine: str | None, fails=lambda cmd: False) -> list[li
         ran.append(cmd)
         if fails(cmd):
             return ffmpeg_run.Finished(1, "Error while decoding")
+        if "-hwaccel" in cmd:
+            at = cmd.index("-hwaccel")
+            cmd = cmd[:at] + cmd[at + 2:]
         return real(cmd, **kwargs)
 
     monkeypatch.setattr(ffmpeg_run, "decoded_by", lambda choice: engine)
