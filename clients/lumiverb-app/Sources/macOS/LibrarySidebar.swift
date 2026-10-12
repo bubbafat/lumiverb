@@ -125,14 +125,18 @@ struct LibrarySidebar: View {
                     HStack(spacing: 4) {
                         Text("Libraries")
                         Spacer()
-                        Button {
-                            showNewLibrarySheet = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption)
+                        // Choosing a library's folder is a tenant admin's, so
+                        // adding a library is (403 for an editor).
+                        if appState.currentUser?.role == "admin" {
+                            Button {
+                                showNewLibrarySheet = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Add a new library")
                         }
-                        .buttonStyle(.borderless)
-                        .help("Add a new library")
                     }
                 }
             }

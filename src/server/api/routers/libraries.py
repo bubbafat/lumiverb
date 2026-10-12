@@ -35,9 +35,9 @@ class CreateLibraryRequest(BaseModel):
 
 
 def require_admin_for(request: Request, body: BaseModel, fields: set[str]) -> None:
-    """Library fields only a tenant admin may set (is_public, and root_path
-    once a library exists): 403 for anyone else who sends them. The one place
-    to swap in a per-library admin role."""
+    """Library fields only a tenant admin may change (is_public and root_path):
+    403 for anyone else who sends them. The one place to swap in a per-library
+    admin role."""
     if fields & body.model_fields_set:
         require_tenant_admin(request)
 
@@ -128,17 +128,18 @@ def create_library(
     request: Request,
     body: CreateLibraryRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
+    _: Annotated[None, Depends(require_tenant_admin)],
 ) -> LibraryResponse:
     """
-    Create a library. Name must be unique for this tenant.
+    Create a library. Admins only: a library is made with its folder, and
+    choosing a library's folder is an admin's, as changing it is (PATCH).
+    Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     New libraries inherit tenant path filter defaults at creation time.
     """
     root_path = checked_root_path(body.root_path)
     require_folder_chosen_here(request)
     repo = LibraryRepository(session)
-    require_admin_for(request, body, {"is_public"})
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
@@ -339,6 +340,7 @@ def update_library(
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
     """Update library name, root_path and/or is_public."""
+    require_admin_for(request, body, {"is_public", "root_path"})
     if body.root_path is not None:
         checked_root_path(body.root_path)
         require_folder_chosen_here(request)
@@ -346,7 +348,6 @@ def update_library(
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    require_admin_for(request, body, {"is_public", "root_path"})
     if body.name is not None:
         library.name = body.name
     if body.root_path is not None:

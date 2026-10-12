@@ -63,6 +63,29 @@ def test_library_create_prints_id() -> None:
 
 
 @pytest.mark.fast
+def test_library_create_says_why_an_editor_is_refused() -> None:
+    """The API's 403 (choosing a library's folder is an admin's) is said on stderr, and nothing claims a library."""
+    import httpx
+
+    from src.client.cli.client import LumiverbAPIError, LumiverbClient
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/libraries"
+        return httpx.Response(403, json={"error": {"code": "forbidden", "message": "Admin API key required",
+                                                   "details": {}}})
+
+    client = LumiverbClient(base_url="http://localhost:8000", token="editor-key")
+    client._client = httpx.Client(transport=httpx.MockTransport(refuse))
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = runner.invoke(app, ["library", "create", "--name", "Mine", "--path", "/photos"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, LumiverbAPIError) and result.exception.status_code == 403
+    assert "Error [forbidden]: Admin API key required" in result.stderr
+    assert "Library created" not in result.output
+
+
+@pytest.mark.fast
 def test_library_list_shows_table() -> None:
     """Mock client.get returning two libraries; assert both names appear in output."""
     mock_response = MagicMock()

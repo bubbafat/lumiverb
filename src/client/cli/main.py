@@ -182,7 +182,8 @@ def library_create(
     name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
     path: Annotated[str, typer.Option("--path", "-p", help="Root path on disk.")],
 ) -> None:
-    """Create a library with the given name and root path."""
+    """Create a library with the given name and root path. Needs an admin's key:
+    choosing a library's folder is an admin's."""
     client = LumiverbClient()
     resp = client.post("/v1/libraries", json={"name": name, "root_path": path})
     data = resp.json()

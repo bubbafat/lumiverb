@@ -6,6 +6,7 @@ import { ApiError } from "../api/client";
 import LibrariesPage from "./LibrariesPage";
 
 const api = vi.hoisted(() => ({
+  createLibrary: vi.fn(),
   listLibraries: vi.fn(),
   emptyTrash: vi.fn(),
   deleteLibrary: vi.fn(),
@@ -223,6 +224,30 @@ describe("LibrariesPage delete asks about projects", () => {
     await startDelete();
     expect((await screen.findByRole("alert")).textContent).toContain("Only an admin can delete libraries");
   });
+});
+
+describe("LibrariesPage adding a library", () => {
+  // Choosing a library's folder is an admin's, so adding a library is (403 for anyone else).
+  it("lets an admin add one with its folder", async () => {
+    api.createLibrary.mockResolvedValue({ library_id: "lib_9", name: "Footage", root_path: "/Volumes/Footage" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Footage" } });
+    fireEvent.change(screen.getByLabelText("Root path"), { target: { value: "/Volumes/Footage" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create library" }));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Footage", "/Volumes/Footage"));
+  });
+
+  for (const [who, role] of [["an editor", "editor"], ["a viewer", "viewer"]]) {
+    it(`offers ${who} no way to add one`, async () => {
+      api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role });
+      api.listLibraries.mockResolvedValue([]);
+      renderPage();
+      expect(await screen.findByText("No libraries yet. An admin adds them.")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Add library" })).toBeNull();
+      expect(screen.queryByText(/Add one to get started/)).toBeNull();
+    });
+  }
 });
 
 describe("LibrariesPage a library's card", () => {
