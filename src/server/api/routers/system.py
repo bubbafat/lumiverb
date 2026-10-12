@@ -29,6 +29,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server import system_health as h
+from src.server.version import running
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
 from src.shared.producers import PAUSE_SCANS
 from src.shared.utils import utcnow
@@ -81,6 +82,7 @@ class SystemHealth(BaseModel):
     state: str  # the worst row's
     rows: list[HealthRow]
     libraries: list[LibraryReach]
+    version: str = "unknown"  # the Lumiverb running (src/server/version.py)
 
 
 @router.get("/health", response_model=SystemHealth,
@@ -135,6 +137,7 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         libraries=[LibraryReach(library_id=i, name=n, seen_at=(seen.get(i) or {}).get("seen_at"),
                                 reachable=h.library_reachable(seen.get(i), at=at, now=now, scans_paused=scans_paused))
                    for i, n in libraries],
+        version=running(),
     )
 
 

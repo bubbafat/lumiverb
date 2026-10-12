@@ -147,6 +147,11 @@ export default function AdminPage() {
           <p className="mt-1 text-sm text-gray-500">
             How the system is doing. Refreshes every 10 seconds.
           </p>
+          {health.data?.version && (
+            <p className="mt-1 text-xs text-gray-500">
+              Lumiverb {health.data.version.replace(/^v(?=\d)/, "")}
+            </p>
+          )}
         </div>
         <Link to="/admin/users" className="shrink-0 text-sm text-indigo-400 hover:text-indigo-300">
           Manage users →
