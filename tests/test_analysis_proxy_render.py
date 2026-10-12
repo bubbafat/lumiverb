@@ -671,15 +671,15 @@ def test_a_picture_the_hardware_cant_decode_sends_the_render_to_the_cpu(
     src = _damaged(tmp_path / "damaged.mp4")
     ran = _recording_ffmpeg(monkeypatch)
 
-    engine, cpu = tmp_path / "engine.mp4", tmp_path / "cpu.mp4"
-    render_analysis_proxy(src, engine, AnalysisProxySettings(decoder="videotoolbox"))
-    render_analysis_proxy(src, cpu, AnalysisProxySettings(decoder="cpu"))
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out, AnalysisProxySettings(decoder="videotoolbox"))
 
-    # The media engine's try stopped at its first failed picture; the CPU made it.
+    # The media engine's try stopped at its first failed picture; the CPU made
+    # it, every picture. Not compared with another CPU render: ffmpeg's threaded
+    # decoder hides a damaged picture differently from one run to the next.
     assert [cmd[cmd.index("-hwaccel") + 1] if "-hwaccel" in cmd else None for cmd in ran] == [
-        "videotoolbox", None, None]
-    assert len(_frame_hashes(engine)) == 90
-    assert _frame_hashes(engine) == _frame_hashes(cpu)
+        "videotoolbox", None]
+    assert len(_frame_hashes(out)) == 90
 
 
 # ---------------------------------------------------------------------------
