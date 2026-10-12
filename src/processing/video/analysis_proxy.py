@@ -152,21 +152,48 @@ def _audio_args(tracks: list[AudioTrack], settings: AnalysisProxySettings) -> li
     return [*graph, *maps, "-c:a", "aac", "-ar", "48000", *per_track]
 
 
+def source_pix_fmt(source: Path) -> str | None:
+    """The pixel format the CPU decodes the source's video into (None when
+    ffprobe can't say)."""
+    try:
+        result = subprocess.run(
+            # Values alone: csv adds a field for side data (a rotated phone clip's).
+            ["ffprobe", "-v", "error", "-select_streams", "V:0", "-show_entries", "stream=pix_fmt",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(source)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    found = result.stdout.split()
+    if result.returncode != 0 or not found:
+        return None
+    return found[0]
+
+
 def build_command(
     source: Path,
     dest: Path,
     settings: AnalysisProxySettings | None = None,
     tracks: list[AudioTrack] = (),
     hwaccel: str | None = None,
+    pix_fmt: str | None = None,
 ) -> list[str]:
     """`tracks`: the source's decodable audio tracks (audio_tracks);
-    `hwaccel`: decode on the GPU with it (frames come back for the CPU's filters)."""
+    `hwaccel`: decode on the GPU with it (frames come back for the CPU's
+    filters); `pix_fmt`: the source's (source_pix_fmt), which those frames
+    are first put back into. Hardware hands frames back in its own layout
+    (a 10-bit clip as p010, not yuv420p10le), and a clip already within
+    max_edge, so not resized, was made 8-bit along another path: the
+    pictures differed from the CPU's (a 640x360 10-bit HEVC clip, on Vulkan
+    and VideoToolbox alike). Repacked, the rest sees the same frames."""
     s = settings or AnalysisProxySettings()
     edge = s.max_edge
     scale = (
         f"scale=w='min(iw,{edge})':h='min(ih,{edge})'"
         f":force_original_aspect_ratio=decrease:force_divisible_by=2"
     )
+    if hwaccel and pix_fmt:
+        scale = f"format={pix_fmt},{scale}"
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
         *(["-hwaccel", hwaccel] if hwaccel else []),
@@ -183,7 +210,7 @@ def build_command(
 
 def _run(source: Path, part: Path, settings: AnalysisProxySettings | None, tracks: list[AudioTrack],
          stall_after: float, hwaccel: str | None = None) -> None:
-    cmd = build_command(source, part, settings, tracks, hwaccel)
+    cmd = build_command(source, part, settings, tracks, hwaccel, source_pix_fmt(source) if hwaccel else None)
     try:
         result = ffmpeg_run.run(cmd, stall_after=stall_after)
     except ffmpeg_run.StalledError as exc:

@@ -255,9 +255,9 @@ def test_a_render_that_fails_on_several_tracks_retries_with_the_first(
     real = analysis_proxy.build_command
     tried: list[tuple[int, str | None]] = []
 
-    def flaky(source, dest, settings=None, tracks=(), hwaccel=None):
+    def flaky(source, dest, settings=None, tracks=(), hwaccel=None, pix_fmt=None):
         tried.append((len(tracks), hwaccel))
-        cmd = real(source, dest, settings, tracks, hwaccel)
+        cmd = real(source, dest, settings, tracks, hwaccel, pix_fmt)
         return cmd if len(tracks) == 1 else [*cmd[:-1], "-c:a", "no_such_encoder", cmd[-1]]
 
     monkeypatch.setattr(analysis_proxy, "build_command", flaky)
