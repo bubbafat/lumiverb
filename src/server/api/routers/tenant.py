@@ -169,7 +169,7 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
     from src.server.database import get_control_session
     from src.server.repository.control_plane import TenantRepository
 
-    from src.server.repository.ai_machines import first_vision_machine, job_model
+    from src.server.repository.ai_machines import first_vision_machine, job_model, key_for
 
     tenant_id = request.state.tenant_id
     with get_control_session() as session:
@@ -177,12 +177,11 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
         # Clients that know one endpoint (the Mac app) get the first machine doing vision (/v1/ai).
         machine = first_vision_machine(session, tenant_id)
 
-    # The key is for whoever does vision work (the worker, an editor's key); never a viewer's.
-    may_see_key = getattr(request.state, "role", None) in ("admin", "editor")
     return TenantContextResponse(
         tenant_id=tenant_id,
         vision_api_url=machine.api_url if machine else "",
-        vision_api_key=(machine.api_key if machine and may_see_key else "") or "",
+        # Only an admin's; the Mac app keeps its own key and never reads this.
+        vision_api_key=key_for(machine, getattr(request.state, "role", None)),
         vision_model_id=job_model(tenant, "vision"),
     )
 
