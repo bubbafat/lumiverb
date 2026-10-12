@@ -22,11 +22,12 @@ from src.server.api.errors import (
     validation_error_handler,
 )
 from src.server.api.middleware import TenantResolutionMiddleware
-from src.shared.logging_config import escape_log_lines, hide_stream_links
+from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
 
 # uvicorn has set up its loggers by the time it imports the app.
 hide_stream_links()
 escape_log_lines()
+configure_api_logging()
 
 
 SECURITY_HEADERS = {

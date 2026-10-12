@@ -27,6 +27,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +82,15 @@ def _signal_group(process: subprocess.Popen, sig: int) -> None:
 
 class Supervisor:
     def __init__(self, children: list[Child], *, clock: Callable[[], float] = time.monotonic,
-                 spawn: Callable[..., subprocess.Popen] = subprocess.Popen) -> None:
+                 spawn: Callable[..., subprocess.Popen] = subprocess.Popen,
+                 relay: Callable[[str, Any], None] | None = None) -> None:
+        """`relay`: each child's output comes through it (log.relay: named,
+        into the service's rotated log), else the child writes where this
+        process does."""
         self.children = children
         self._clock = clock
         self._spawn = spawn
+        self._relay = relay
         self._restarts: set[str] = set()
         self._restarts_lock = threading.Lock()
 
@@ -107,7 +113,14 @@ class Supervisor:
     def _start(self, child: Child) -> None:
         if child.empty_first is not None:
             _empty(child.empty_first)
-        child.process = self._spawn(child.argv, env=child.env, cwd=child.cwd, start_new_session=True)
+        if self._relay is None:
+            child.process = self._spawn(child.argv, env=child.env, cwd=child.cwd, start_new_session=True)
+        else:
+            child.process = self._spawn(child.argv, env=child.env, cwd=child.cwd, start_new_session=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if child.process.stdout is not None:
+                threading.Thread(target=self._relay, args=(child.name, child.process.stdout),
+                                 name=f"log-{child.name}", daemon=True).start()
         child.started = True
         child.started_at = self._clock()
         child.restart_at = None

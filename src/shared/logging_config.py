@@ -23,6 +23,25 @@ def configure_logging() -> None:
     escape_log_lines()
 
 
+def configure_api_logging() -> None:
+    """The API's own messages ("Backed up …", "Moving the previews to …") at
+    LOG_LEVEL (WARNING unless set; an install's env file says INFO), in the
+    scheduler's format. uvicorn sets up only its own loggers: without this
+    they went to Python's last resort, which says warnings only.
+
+    Only where nothing set up logging before (uvicorn's process): a process
+    that did (the scheduler, the CLI, a test) imports the app and keeps its
+    own, levels too."""
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    level = getattr(logging, os.environ.get("LOG_LEVEL", "WARNING").upper(), logging.WARNING)
+    logging.getLogger("src").setLevel(level)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)  # root stays at WARNING: libraries' info lines don't come through
+
+
 # CR, LF and the other control characters (not tab): a value logged with one,
 # a file name say, can't forge a line of its own or drive a terminal.
 _CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")

@@ -87,7 +87,7 @@ def test_run_stops_everything_then_starts_the_new_install(homebrew, tmp_path, mo
     stopped: list[bool] = []
 
     class Supervising:
-        def __init__(self, children):
+        def __init__(self, children, **kwargs):
             pass
 
         def run(self, stop):

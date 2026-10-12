@@ -460,7 +460,7 @@ def _search_by_vector(
                         per_asset_best[aid] = dist
 
             face_candidates = sorted(per_asset_best.items(), key=lambda kv: kv[1])
-            logger.info(
+            logger.debug(  # every similar-photos request
                 "hybrid similarity: %d faces detected, %d face-candidate assets",
                 len(detections), len(face_candidates),
             )

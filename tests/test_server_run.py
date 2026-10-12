@@ -31,7 +31,7 @@ def test_the_children_are_linux_s_units(tmp_path):
     env = {"DATA_DIR": str(tmp_path), "API_PORT": "8100", "API_LISTEN_HOST": "0.0.0.0", "ADMIN_KEY": "k"}
     api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
 
-    assert api.argv == ["/py", "-m", "uvicorn", "src.server.api.main:app",
+    assert api.argv == ["/py", "-m", "uvicorn", "src.server.api.main:app", "--no-access-log",
                         "--host", "0.0.0.0", "--port", "8100", "--workers", "2"]
     assert api.env["TMPDIR"] == str(tmp_path / "tmp") and api.empty_first == tmp_path / "tmp"
     assert (api.restart_after, api.stop_within, api.term_main_only) == (5, 90, False)
@@ -60,6 +60,8 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
     assert postgres.stop_signal == signal.SIGINT, "a fast shutdown: its clients have gone"
     assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
     assert quickwit.argv == ["/qw/quickwit", "run", "--config", "/etc/quickwit.yaml"]
+    # Its warnings and errors only, without colour codes (a sixth of the log was its info lines).
+    assert (quickwit.env["NO_COLOR"], quickwit.env["RUST_LOG"]) == ("1", "warn")
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
     assert all(c.start_after is None for c in (postgres, quickwit, nginx))
     assert api.start_after is migrated and scheduler.start_after is migrated
