@@ -495,3 +495,46 @@ def test_video_preview_drops_where_it_was_shot(tmp_path):
     tags = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags:stream_tags",
                                       "-of", "json", str(out)], capture_output=True, text=True, check=True).stdout)
     assert "location" not in json.dumps(tags).lower()
+
+
+def _frames(path):
+    import subprocess
+
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
+                          "-map", "0:v:0", "-f", "framemd5", "-"], check=True, capture_output=True, text=True).stdout
+    return [line.rsplit(",", 1)[1].strip() for line in out.splitlines() if not line.startswith("#")]
+
+
+@pytest.mark.fast
+@_skip_no_ffprobe
+def test_a_preview_the_hardware_cant_decode_is_made_on_the_cpu_whole(tmp_path, monkeypatch):
+    # A Mac's media engine fails on some pictures of some clips (a Sony 4:2:2
+    # 10-bit H.264 one); ffmpeg, left to itself, leaves them out and finishes.
+    # Here: H.264 with three runs of bytes garbled, which the CPU goes on past.
+    import subprocess
+
+    from src.processing import ingest
+    from src.processing.video import ffmpeg_run
+
+    if not ffmpeg_run.videotoolbox_decodes():
+        pytest.skip("no VideoToolbox here (not a Mac)")
+    ok = tmp_path / "ok.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=1280x720:rate=30:duration=3", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-g", "30", "-movflags", "+faststart", str(ok)], check=True)
+    data = bytearray(ok.read_bytes())
+    start = data.find(b"mdat") + 8
+    for share in (0.45, 0.62, 0.8):
+        at = start + int((len(data) - start) * share)
+        data[at:at + 64] = bytes(b ^ 0x5A for b in data[at:at + 64])
+    src = tmp_path / "damaged.mp4"
+    src.write_bytes(bytes(data))
+
+    engine = tmp_path / "engine.mp4"
+    engine.write_bytes(ingest._generate_video_preview(src))
+    monkeypatch.setattr(ffmpeg_run, "decoded_by", lambda choice: None)
+    cpu = tmp_path / "cpu.mp4"
+    cpu.write_bytes(ingest._generate_video_preview(src))
+
+    assert len(_frames(engine)) == 90
+    assert _frames(engine) == _frames(cpu)

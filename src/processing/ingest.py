@@ -146,8 +146,9 @@ def _generate_video_preview(source_path: Path) -> bytes:
 
     Decoded by a Mac's media engine where there is one (ffmpeg_run.SHARED_MEMORY:
     a fifth of the CPU's work on a 4K or 5.3K original, and a scan makes
-    several at once), else on the CPU; one the hardware fails at is made
-    again on the CPU, and one with a broken audio track (some camera MOVs)
+    several at once), else on the CPU; one the hardware fails at, at the
+    start or on any picture (ffmpeg_run.hwaccel_args), is made again on the
+    CPU, and one with a broken audio track (some camera MOVs)
     again without audio. ffmpeg is stopped only when it makes no progress."""
     import tempfile
 
@@ -162,7 +163,7 @@ def _generate_video_preview(source_path: Path) -> bytes:
     def command(hwaccel: str | None, audio: bool) -> list[str]:
         return [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            *(["-hwaccel", hwaccel] if hwaccel else []),
+            *ffmpeg_run.hwaccel_args(hwaccel),
             "-ss", "0", "-i", str(source_path),
             "-t", str(PREVIEW_DURATION_SEC),
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
