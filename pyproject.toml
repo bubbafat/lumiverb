@@ -31,7 +31,7 @@ dependencies = [
     "python-ulid>=2.0",
     "requests>=2.25",
     # Image normalization (proxy → WebP, thumbnail generation)
-    "pillow>=11.1",
+    "pillow>=12.3.0",
     "scikit-learn>=1.3",
 ]
 
