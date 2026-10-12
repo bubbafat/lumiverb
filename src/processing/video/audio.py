@@ -7,6 +7,7 @@ play, and what transcription hears), then each track as it was.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import subprocess
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # handler_name of the analysis proxy's mixed first track.
 MIX_HANDLER = "Lumiverb mix"
-# Codecs ffprobe names for audio it can't decode (e.g. iPhone spatial audio).
+# Codecs ffprobe names for audio it doesn't know at all.
 _UNDECODABLE = {"", "none", "unknown"}
 # Lays a track out from the clip's start: silence where it starts late or skips.
 _FROM_START = "aresample=async=1:first_pts=0"
@@ -31,6 +32,27 @@ class AudioTrack:
     handler: str = ""
 
 
+@functools.cache
+def decodable_audio() -> frozenset[str] | None:
+    """The audio codecs this ffmpeg can decode, by the names ffprobe gives
+    them (`ffmpeg -codecs`, whose first flag is D); None when it can't say.
+
+    A codec ffmpeg knows isn't one it can decode: ffmpeg 9 names iPhone
+    spatial audio (apple_apac) and has no decoder for it, so a track of it
+    in a render fails the render."""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-codecs"], capture_output=True, text=True,
+                             timeout=30, check=True).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    found = set()
+    for line in out.splitlines():
+        flags, _, rest = line.strip().partition(" ")
+        if len(flags) == 6 and flags[0] == "D" and flags[2] == "A" and rest.split():
+            found.add(rest.split()[0])
+    return frozenset(found) or None
+
+
 def audio_tracks(path: Path, *, timeout: float = 60.0) -> list[AudioTrack]:
     """The audio tracks ffmpeg can decode, in order. Raises if ffprobe can't read the file."""
     out = subprocess.run(
@@ -38,10 +60,11 @@ def audio_tracks(path: Path, *, timeout: float = 60.0) -> list[AudioTrack]:
          "-show_entries", "stream=codec_name,channels:stream_tags=handler_name", "-of", "json", str(path)],
         capture_output=True, text=True, timeout=timeout, check=True,
     ).stdout
+    decodable = decodable_audio()
     tracks = []
     for i, s in enumerate(json.loads(out or "{}").get("streams", [])):
         codec, channels = s.get("codec_name") or "", int(s.get("channels") or 0)
-        if codec in _UNDECODABLE or channels <= 0:
+        if codec in _UNDECODABLE or channels <= 0 or (decodable is not None and codec not in decodable):
             logger.info("%s: leaving out audio track %d (%s, %d channels): ffmpeg can't decode it",
                         path.name, i, codec or "unknown codec", channels)
             continue
