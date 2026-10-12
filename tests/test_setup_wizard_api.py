@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from src.server.api.main import app
 from src.server.config import get_settings
 from tests import real_account
-from tests.test_first_run_setup import HERE, control  # noqa: F401 (control: a fixture)
+from tests.test_first_run_setup import HERE, LOCALHOST, control  # noqa: F401 (control: a fixture)
 
 pytestmark = pytest.mark.slow
 
@@ -31,7 +31,7 @@ def account(control, tmp_path, monkeypatch):  # noqa: F811
 
 
 def test_steps_are_kept_in_order_and_it_can_be_put_away(account):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, account)
         assert client.get("/v1/tenant/setup", headers=auth).json() == {
             "steps": STEPS, "done": [], "dismissed": False, "finished": False}
@@ -45,7 +45,7 @@ def test_steps_are_kept_in_order_and_it_can_be_put_away(account):
 
 
 def test_a_step_there_isn_t_is_refused(account):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, account)
         r = client.put("/v1/tenant/setup", json={"done": ["storage", "backups"]}, headers=auth)
     assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_step"
@@ -54,7 +54,7 @@ def test_a_step_there_isn_t_is_refused(account):
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_only_admins(account, role):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         _, tenant_id = real_account.admin_with_database(client, account)
         auth = real_account.someone(client, tenant_id, role)
         assert client.get("/v1/tenant/setup", headers=auth).status_code == 403

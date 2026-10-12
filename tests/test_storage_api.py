@@ -21,7 +21,12 @@ from src.server.config import get_settings
 from src.server.storage import move
 from src.shared import previews_location
 from tests import real_account
-from tests.test_first_run_setup import HERE, LAN, control  # noqa: F401 (control: a fixture)
+from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
+    HERE,
+    LAN,
+    LOCALHOST,
+    control,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -65,7 +70,7 @@ def _settled(client: TestClient, auth: dict[str, str]) -> dict:
 
 def test_an_admin_on_the_mac_sees_what_moves_says_yes_and_it_moves(mac):
     data, drive, control_url = mac
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
         before = client.get("/v1/system/storage", headers=auth).json()
         assert before["previews"] == before["data"] == str(data)
@@ -87,7 +92,7 @@ def test_an_admin_on_the_mac_sees_what_moves_says_yes_and_it_moves(mac):
 
 def test_from_another_device_nothing_moves(mac):
     data, drive, control_url = mac
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth, _ = real_account.admin_with_database(here, control_url)
     with TestClient(app, client=LAN) as there:
         seen = there.get("/v1/system/storage", headers=auth).json()
@@ -99,7 +104,7 @@ def test_from_another_device_nothing_moves(mac):
 
 def test_a_folder_it_cant_use_says_why(mac, tmp_path):
     data, _, control_url = mac
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
         no_drive = client.put("/v1/system/storage/previews", json={"folder": "/lumiverb-no-such-drive/previews",
                                                                   "make_folder": True}, headers=auth)
@@ -116,7 +121,7 @@ def test_a_folder_it_cant_use_says_why(mac, tmp_path):
 def test_a_folder_not_there_is_made_when_the_user_says_so(mac):
     data, drive, control_url = mac
     wanted = drive / "Lumiverb" / "previews"
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
         asked = client.put("/v1/system/storage/previews", json={"folder": str(wanted)}, headers=auth)
         assert asked.status_code == 409, asked.text
@@ -141,7 +146,7 @@ def test_with_nothing_to_move_it_doesnt_ask(mac):
     data, drive, control_url = mac
     (data / KEY).unlink()
     wanted = drive / "previews"
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
         there = client.put("/v1/system/storage/previews", json={"folder": str(wanted), "make_folder": True},
                            headers=auth)
@@ -158,7 +163,7 @@ def test_one_move_at_a_time_and_try_again(mac):
     (drive / previews_location.MARKER).write_text("")
     previews_location.write(data, drive, data)  # a move that stopped
     move._update_state(data, error="The new drive is full.", failed_at="2026-10-11T00:00:00+00:00")
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, _ = real_account.admin_with_database(client, control_url)
         body = client.get("/v1/system/storage", headers=auth).json()
         assert body["moving"]["error"] == "The new drive is full." and body["moving"]["from_folder"] == str(data)
@@ -173,7 +178,7 @@ def test_one_move_at_a_time_and_try_again(mac):
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_only_admins(mac, role):
     _, drive, control_url = mac
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         _, tenant_id = real_account.admin_with_database(client, control_url)
         auth = real_account.someone(client, tenant_id, role)
         assert client.get("/v1/system/storage", headers=auth).status_code == 403
@@ -198,7 +203,7 @@ def test_a_previews_folder_it_cant_write_any_more_is_flagged(mac):
     previews_location.write(data, drive, None)  # chosen when it could be written
     drive.chmod(0o500)  # then it can't
     try:
-        with TestClient(app, client=HERE) as client:
+        with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
             auth, _ = real_account.admin_with_database(client, control_url)
             body = client.get("/v1/system/storage", headers=auth).json()
             rows = {r["key"]: r for r in client.get("/v1/system/health", headers=auth).json()["rows"]}

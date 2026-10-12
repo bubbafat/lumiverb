@@ -17,7 +17,12 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.shared import previews_location
 from tests import real_account
-from tests.test_first_run_setup import HERE, LAN, control  # noqa: F401 (control: a fixture)
+from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
+    HERE,
+    LAN,
+    LOCALHOST,
+    control,
+)
 
 pytestmark = pytest.mark.slow
 
@@ -68,7 +73,7 @@ def test_a_library_gets_a_folder_of_its_own_after_saying_yes_and_back(mac):
     data, originals, tmp, control_url = mac
     drive = tmp / "Video"
     drive.mkdir()
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, library_id, tenant_id = _library(client, control_url, originals)
         key = f"{tenant_id}/{library_id}/analysis/00/ast_1_a.mp4"
         (data / key).parent.mkdir(parents=True)
@@ -100,7 +105,7 @@ def test_a_library_gets_a_folder_of_its_own_after_saying_yes_and_back(mac):
 
 def test_from_another_device_and_for_others_nothing_moves(mac):
     data, originals, tmp, control_url = mac
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth, library_id, tenant_id = _library(here, control_url, originals)
     with TestClient(app, client=LAN) as there:
         seen = there.get(f"/v1/libraries/{library_id}/previews", headers=auth).json()
@@ -109,7 +114,7 @@ def test_from_another_device_and_for_others_nothing_moves(mac):
                             headers=auth)
         assert refused.status_code == 403 and refused.json()["error"]["code"] == "storage_elsewhere"
         assert there.get("/v1/libraries/lib_nope/previews", headers=auth).status_code == 404
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         viewer = real_account.someone(here, tenant_id, "viewer")
         assert here.get(f"/v1/libraries/{library_id}/previews", headers=viewer).status_code == 403
         assert here.put(f"/v1/libraries/{library_id}/previews", json={"folder": None},
@@ -119,7 +124,7 @@ def test_from_another_device_and_for_others_nothing_moves(mac):
 
 def test_a_folder_it_cant_use_says_why(mac):
     data, originals, tmp, control_url = mac
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, library_id, _ = _library(client, control_url, originals)
         bad = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": "/lumiverb-no-such-drive/x"},
                          headers=auth)
@@ -131,7 +136,7 @@ def test_a_folder_it_cant_use_says_why(mac):
 def test_a_folder_not_there_is_asked_about_then_made(mac):
     data, originals, tmp, control_url = mac
     wanted = tmp / "Video" / "Lumiverb"
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, library_id, _ = _library(client, control_url, originals)
         asked = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(wanted)}, headers=auth)
         assert asked.status_code == 409 and asked.json()["error"]["code"] == "make_folder"
@@ -158,7 +163,7 @@ def test_with_nothing_to_move_or_say_it_doesnt_ask(mac, monkeypatch):
     monkeypatch.setattr(libraries, "_same_device", lambda a, b: False)  # the originals on a drive of their own
     drive = tmp / "Video"
     drive.mkdir()
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, library_id, _ = _library(client, control_url, originals)
         there = client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(drive)}, headers=auth)
         assert there.status_code == 202, there.text
@@ -172,7 +177,7 @@ def test_its_own_folder_it_cant_write_any_more_is_flagged(mac):
     drive = tmp / "Video"
     drive.mkdir()
     (drive / previews_location.MARKER).write_text("")
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth, library_id, _ = _library(client, control_url, originals)
         previews_location.write(data, data, None, libraries={library_id: drive})
         drive.chmod(0o500)

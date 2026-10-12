@@ -21,6 +21,7 @@ from src.server.setup import create_first_admin
 from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
     HERE,
     LAN,
+    LOCALHOST,
     PASSWORD,
     control,
 )
@@ -59,7 +60,7 @@ def _signed_in(client: TestClient, role: str = "admin") -> dict[str, str]:
 
 
 def test_a_mac_starts_as_this_machine_only_and_an_admin_there_opens_it(mac):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
             "available": True, "other_devices": False, "addresses": ADDRESSES}
@@ -74,7 +75,7 @@ def test_a_mac_starts_as_this_machine_only_and_an_admin_there_opens_it(mac):
 
 def test_from_another_device_it_isn_t_changed(mac):
     """The Mac's owner decides how it's reached, as for a library's folder."""
-    with TestClient(app, client=HERE) as here:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
     network.set_other_devices(mac, True)
     with TestClient(app, client=LAN) as client:
@@ -86,7 +87,7 @@ def test_from_another_device_it_isn_t_changed(mac):
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_others_see_it_but_only_admins_change_it(mac, role):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client, role)
         assert client.get("/v1/system/network", headers=auth).json()["available"] is True
         assert client.put("/v1/system/network", json={"other_devices": True}, headers=auth).status_code == 403
@@ -94,7 +95,7 @@ def test_others_see_it_but_only_admins_change_it(mac, role):
 
 
 def test_signed_out_it_isn_t_said(mac):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         assert client.get("/v1/system/network").status_code == 401
 
 
@@ -103,7 +104,7 @@ def test_where_lumiverb_doesn_t_run_the_web_server_it_isn_t_changed_here(control
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
     get_settings.cache_clear()
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
             "available": False, "other_devices": False, "addresses": []}

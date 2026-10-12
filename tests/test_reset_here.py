@@ -21,6 +21,7 @@ from src.server.setup import create_first_admin
 from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
     HERE,
     LAN,
+    LOCALHOST,
     PASSWORD,
     _env_file,
     control,
@@ -64,7 +65,7 @@ def _login(client: TestClient, password: str) -> int:
 
 
 def test_on_the_mac_forgot_password_leads_straight_to_a_new_one(admin, mac):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         asked = client.post("/v1/auth/forgot-password", json={"email": f" {admin} "})
         assert asked.status_code == 200, asked.text
         reset_url = asked.json()["reset_url"]
@@ -76,8 +77,23 @@ def test_on_the_mac_forgot_password_leads_straight_to_a_new_one(admin, mac):
         assert again.status_code == 400, "a link works once"
 
 
+@pytest.mark.parametrize(("host", "origin"), [
+    ("rebind.example:6464", None),
+    ("rebind.example:6464", "http://rebind.example:6464"),
+    ("localhost:6464", "https://elsewhere.example"),
+])
+def test_on_the_mac_a_page_from_anywhere_else_gets_no_link(admin, mac, host, origin):
+    # Its requests can reach nginx from 127.0.0.1, but carry the page's own
+    # name or origin: not this machine, so no link, and nothing to read.
+    headers = {"Host": host, **({"Origin": origin} if origin else {})}
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        asked = client.post("/v1/auth/forgot-password", json={"email": admin}, headers=headers)
+        assert asked.status_code == 501 and "reset_url" not in asked.text, asked.text
+        assert _login(client, PASSWORD) == 200, "unchanged"
+
+
 def test_on_the_mac_an_unknown_email_is_said(admin, mac):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         asked = client.post("/v1/auth/forgot-password", json={"email": "nobody@example.com"})
     assert asked.status_code == 404 and asked.json()["error"]["code"] == "no_such_account"
 
@@ -92,7 +108,7 @@ def test_from_another_device_without_email_it_says_where_to_go(admin, mac):
 
 def test_on_a_server_its_own_machine_gets_no_link(admin):
     """Anything on the server could ask from loopback: the operator has the command line."""
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         asked = client.post("/v1/auth/forgot-password", json={"email": admin})
     assert asked.status_code == 501 and asked.json()["error"] == {
         "code": "reset_not_set_up", "message": "Password reset isn't set up here. Ask whoever looks after Lumiverb.",
@@ -101,7 +117,7 @@ def test_on_a_server_its_own_machine_gets_no_link(admin):
 
 
 def test_on_a_server_with_email_its_own_machine_is_emailed_like_anyone(admin, email_set_up):
-    with TestClient(app, client=HERE) as client:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         asked = client.post("/v1/auth/forgot-password", json={"email": admin})
         unknown = client.post("/v1/auth/forgot-password", json={"email": "nobody@example.com"})
     assert (asked.status_code, asked.text) == (204, "") and unknown.status_code == 204, "no enumeration"

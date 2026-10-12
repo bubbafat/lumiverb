@@ -412,7 +412,7 @@ LAN = ("192.168.86.20", 50000)
 
 
 def _from(address, api_key: str):
-    client = TestClient(app, client=address)
+    client = TestClient(app, client=address, base_url="http://localhost:6464")  # as a browser there
     client.headers["Authorization"] = f"Bearer {api_key}"
     return client
 
