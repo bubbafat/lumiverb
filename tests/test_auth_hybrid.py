@@ -479,7 +479,7 @@ def test_password_reset_revokes_tokens(hybrid_env: TestClient) -> None:
         PasswordResetTokenRepository(session).create(uid, "reset-me-please", utcnow() + timedelta(hours=1))
     r = hybrid_env.post("/v1/auth/reset-password",
                         json={"token": "reset-me-please", "password": "another-long-password"})
-    assert r.status_code == 204, r.text
+    assert r.status_code == 200, r.text
     assert hybrid_env.get("/v1/libraries", headers=_bearer(token)).status_code == 401
     assert hybrid_env.post("/v1/auth/refresh", headers=_bearer(token)).status_code == 401
 

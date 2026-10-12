@@ -331,14 +331,17 @@ class UserRepository:
             except Exception:
                 self._session.rollback()
 
-    def update_password(self, user_id: str, password_hash: str) -> None:
-        user = self.get_by_id(user_id)
+    def update_password(self, user_id: str, password_hash: str) -> int:
+        """A new password (the operator's `lumiverb-server reset-password`),
+        ending what the old one could have made. Returns how many of the
+        user's API keys it revoked."""
+        user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
         if user is None:
             raise ValueError(f"User not found: {user_id}")
         user.password_hash = password_hash
-        user.token_version += 1  # a new password signs out every session
-        self._session.add(user)
+        revoked = _end_what_the_old_password_made(self._session, user)
         self._session.commit()
+        return revoked
 
     def delete(self, user_id: str) -> None:
         user = self.get_by_id(user_id)
@@ -380,7 +383,8 @@ class PasswordResetTokenRepository:
             self._session.commit()
 
     def void_unused(self, user_id: str) -> None:
-        """Every link the user hasn't used stops working (a new one replaces them)."""
+        """Every link the user hasn't used stops working (a new one, or a new
+        password, replaces them). Uncommitted: it goes with what replaces them."""
         now = utcnow()
         stmt = (
             select(PasswordResetToken)
@@ -390,18 +394,29 @@ class PasswordResetTokenRepository:
         for token in self._session.exec(stmt).all():
             token.used_at = now
             self._session.add(token)
-        self._session.commit()
 
-    def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> User | None:
+    def consume_valid_and_update_password(self, plaintext_token: str, password_hash: str) -> tuple[User, int] | None:
         """
-        Atomically consume a valid reset token and update the user's password.
+        Atomically consume a valid reset token and update the user's password,
+        ending what the old one could have made.
 
-        Returns the user when the token was valid and consumed; None when
-        invalid, expired, or already used.
+        Returns the user and how many of their API keys were revoked when the
+        token was valid and consumed; None when invalid, expired, or already used.
         """
         token_hash = self._hash_token(plaintext_token)
-        now = utcnow()
+        user_id = self._session.exec(
+            select(PasswordResetToken.user_id).where(PasswordResetToken.token_hash == token_hash)
+        ).first()
+        if user_id is None:
+            return None
+        # The user first, then the link: of two of their links used at once,
+        # one sets the password and the other finds itself void.
+        user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
+        if user is None:
+            self._session.rollback()
+            return None
 
+        now = utcnow()
         stmt = (
             select(PasswordResetToken)
             .where(PasswordResetToken.token_hash == token_hash)
@@ -411,20 +426,27 @@ class PasswordResetTokenRepository:
         )
         token = self._session.exec(stmt).first()
         if token is None:
-            return None
-
-        user = self._session.get(User, token.user_id)
-        if user is None:
             self._session.rollback()
             return None
 
         user.password_hash = password_hash
-        user.token_version += 1  # a reset signs out every session
         token.used_at = now
-        self._session.add(user)
         self._session.add(token)
+        revoked = _end_what_the_old_password_made(self._session, user)
         self._session.commit()
-        return user
+        return user, revoked
+
+
+def _end_what_the_old_password_made(session: Session, user: User) -> int:
+    """A new password ends everything the old one could have made: every
+    session (the token version moves on), the API keys the user made (and
+    keys made with those), and their links not yet used, reset and invite
+    links alike. Keys nobody made (the scheduler's, the operator's) stay.
+    Uncommitted: it goes with the new password. Returns how many keys."""
+    user.token_version += 1
+    session.add(user)
+    PasswordResetTokenRepository(session).void_unused(user.user_id)
+    return ApiKeyRepository(session).revoke_created_by(user.tenant_id, user.user_id)
 
 
 class PublicLibraryRepository:

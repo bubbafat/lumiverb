@@ -15,6 +15,8 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [done, setDone] = useState(false);
+  // The API keys they made go with the old password (they make new ones).
+  const [keysRevoked, setKeysRevoked] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +39,9 @@ export default function ResetPasswordPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, password }),
       });
-      if (res.status === 204 || res.ok) {
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setKeysRevoked(typeof data.api_keys_revoked === "number" ? data.api_keys_revoked : 0);
         setDone(true);
       } else if (res.status === 400) {
         setError("This reset link is invalid, expired, or already used.");
@@ -77,6 +81,13 @@ export default function ResetPasswordPage() {
         {done ? (
           <div className="space-y-4 text-center">
             <p className="text-sm text-gray-300">Password updated. You can now sign in.</p>
+            {keysRevoked > 0 && (
+              <p className="text-sm text-gray-300">
+                {keysRevoked === 1
+                  ? "The API key you made was revoked. Make a new one in Settings › API Keys."
+                  : `The ${keysRevoked} API keys you made were revoked. Make new ones in Settings › API Keys.`}
+              </p>
+            )}
             <Link
               to="/login"
               className="block text-sm text-indigo-400 hover:text-indigo-300"
