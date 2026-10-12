@@ -23,6 +23,17 @@ PROXY_LONG_EDGE = 2048
 PROXY_JPEG_QUALITY = 75
 FACE_PROXY_LONG_EDGE = 1280  # InsightFace uses 640x640 internally; 1280 is plenty
 
+
+def _keep() -> str:
+    """What a saved preview keeps of the original's metadata: its colour
+    profile only, so no EXIF (where, when, which camera), XMP or IPTC.
+    libvips before 8.15 has no keep option: strip, the profile too."""
+    return "keep=icc" if (pyvips.version(0), pyvips.version(1)) >= (8, 15) else "strip"
+
+
+KEEP = _keep()
+PROXY_JPEG = f".jpg[Q={PROXY_JPEG_QUALITY},{KEEP}]"
+
 # TIFFs may exceed libvips/libtiff's 50MB cumulative allocation cap, forcing a
 # Pillow fallback. Pillow decodes the full pixel array before resizing, so a
 # guard prevents OOM on very large TIFFs. Applied only on the Pillow fallback
@@ -133,7 +144,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                         max_long_edge, height=max_long_edge,
                         size=pyvips.enums.Size.DOWN,
                     )
-                    proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+                    proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
                     logger.info("proxy: %s — embedded JPEG %dx%d → %dpx (%d bytes)",
                                 source_path.name, img.width, img.height, max_long_edge, len(proxy_bytes))
                     return proxy_bytes, width_orig, height_orig
@@ -156,7 +167,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                 max_long_edge, height=max_long_edge,
                 size=pyvips.enums.Size.DOWN,
             )
-            proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+            proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
             return proxy_bytes, width_orig, height_orig
         except Exception:
             # rawpy can't handle this file (e.g. Adobe-generated DNG) —
@@ -173,7 +184,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                 height=max_long_edge,
                 size=pyvips.enums.Size.DOWN,
             ).copy_memory()
-            proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+            proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
             return proxy_bytes, width_orig, height_orig
 
     elif ext in TIFF_EXTENSIONS:
@@ -186,7 +197,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             height_orig=height_orig,
             max_long_edge=max_long_edge,
         )
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
         return proxy_bytes, width_orig, height_orig
 
     else:
@@ -202,7 +213,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             height=max_long_edge,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
         return proxy_bytes, width_orig, height_orig
 
 

@@ -33,7 +33,7 @@ from src.processing.workers.exif_extract import (
 logger = logging.getLogger(__name__)
 
 
-from src.processing.proxy.proxy_gen import PROXY_LONG_EDGE, PROXY_JPEG_QUALITY
+from src.processing.proxy.proxy_gen import KEEP, PROXY_JPEG, PROXY_LONG_EDGE
 
 PROXY_WEBP_QUALITY = 80
 SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
@@ -44,7 +44,7 @@ def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
     import pyvips
 
     img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
-    return img.write_to_buffer(".webp[Q=%d]" % PROXY_WEBP_QUALITY)
+    return img.write_to_buffer(f".webp[Q={PROXY_WEBP_QUALITY},{KEEP}]")
 
 
 def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
@@ -135,7 +135,7 @@ def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
             height=PROXY_LONG_EDGE,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
-        proxy_bytes = proxy_img.write_to_buffer(".jpg[Q=%d]" % PROXY_JPEG_QUALITY)
+        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
         return proxy_bytes, width_orig, height_orig
     finally:
         tmp_path.unlink(missing_ok=True)

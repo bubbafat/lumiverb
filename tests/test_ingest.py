@@ -532,20 +532,20 @@ def test_create_on_ingest_blocked_by_library_exclude_filter(ingest_env) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _normalize_proxy unit tests (WebP fast path)
+# _normalize_proxy unit tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.fast
-def test_normalize_proxy_webp_fast_path() -> None:
-    """_normalize_proxy returns input bytes unchanged for valid WebP within size limits."""
+def test_normalize_proxy_keeps_a_webp_as_webp() -> None:
+    """A WebP within size limits stays WebP at its size. It's re-encoded, not
+    kept as sent (without the original's metadata: tests/test_preview_metadata.py)."""
     from src.server.api.routers.ingest import _normalize_proxy
 
     webp_bytes = _make_test_image(800, 600, fmt="WEBP")
     result_bytes, w, h = _normalize_proxy(webp_bytes)
-    assert result_bytes is webp_bytes  # exact same object — no re-encoding
-    assert w == 800
-    assert h == 600
+    assert Image.open(io.BytesIO(result_bytes)).format == "WEBP"
+    assert (w, h) == (800, 600)
 
 
 @pytest.mark.fast
