@@ -293,6 +293,40 @@ def test_high_frame_rates_are_capped_at_30(tmp_path: Path) -> None:
     assert float(_probe(out)["format"]["duration"]) == pytest.approx(2.0, abs=0.15)
 
 
+def _keyframe_times(path: Path) -> list[float]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-skip_frame", "nokey", "-select_streams", "v:0",
+                          "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(path)],
+                         check=True, capture_output=True, text=True).stdout
+    return [float(t.strip(",")) for t in out.split() if t.strip(",")]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("rate", ["24000/1001", "25", "30000/1001", "60"])
+def test_a_keyframe_every_two_seconds_and_nowhere_else(tmp_path: Path, rate: str) -> None:
+    # Scenes are found from the keyframes alone: a cut in the picture (at
+    # 2.7 s here) mustn't get one of its own, and 24 fps footage mustn't get
+    # them 2.5 s apart.
+    src = tmp_path / "cut.mov"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"testsrc2=size=640x360:rate={rate}:duration=2.7",
+                    "-f", "lavfi", "-i", f"smptebars=size=640x360:rate={rate}:duration=4.3",
+                    "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map", "[v]",
+                    "-c:v", "libx264", "-preset", "ultrafast", str(src)], check=True)
+    out = tmp_path / "out.mp4"
+    render_analysis_proxy(src, out)
+    assert _keyframe_times(out) == pytest.approx([0.0, 2.0, 4.0, 6.0], abs=0.05)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("encoder,own", [("libx264", ["-sc_threshold", "0"]),
+                                         ("h264_nvenc", ["-no-scenecut", "1", "-forced-idr", "1"])])
+def test_every_encoder_is_told_where_the_keyframes_go(encoder: str, own: list[str]) -> None:
+    cmd = build_command(Path("/in.mov"), Path("/out.mp4"), AnalysisProxySettings(encoder=encoder))
+    joined = " ".join(cmd)
+    assert " ".join(own) in joined
+    assert cmd[cmd.index("-force_key_frames") + 1] == "expr:gte(t,n_forced*2)"
+
+
 @pytest.mark.fast
 def test_small_videos_are_not_upscaled_and_stay_even(tmp_path: Path) -> None:
     src = _make(tmp_path / "small.mov", size="322x242")

@@ -49,7 +49,8 @@ SAMPLES = 5
 # same_within, so a cut is a stronger change than anything merged)...
 CUT_BITS = 76
 # ...whose picture then holds: the keyframe after it within this many bits.
-# Keyframes are ~2 s apart, and a moving camera changes as much in 2 s as a
+# Keyframes are 2 s apart (the analysis proxy places them: its KEYFRAME_SEC),
+# and a moving camera changes as much in 2 s as a
 # cut does (measured on handheld and gimbal clips: 110 to 140 bits between
 # neighbouring keyframes, as between unrelated pictures), so a change alone
 # isn't a cut; a moving shot never holds, a shot cut to does.

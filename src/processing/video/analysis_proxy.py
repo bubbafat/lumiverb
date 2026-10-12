@@ -6,7 +6,8 @@ sleeps (ADR-016 phase 2). They are for analysis, not editing: Resolve's
 proxies stay outside the DAM.
 
 The proxy is upright (rotation applied), at most `max_edge` pixels on its
-long side, at most 30 fps, H.264, and keeps every audio track ffmpeg can
+long side, at most 30 fps, H.264 with a keyframe every KEYFRAME_SEC of video
+and nowhere else, and keeps every audio track ffmpeg can
 decode, in order, each as AAC at 48 kHz, at most stereo, at a low bitrate.
 With several tracks a stereo mix of them comes first (handler "Lumiverb mix"):
 browsers play only the first track, and a lav may be on any. It starts at 0
@@ -117,10 +118,27 @@ def gpu_decoder(choice: str) -> str | None:
     return ffmpeg_run.decoded_by(choice)
 
 
+# A keyframe every this many seconds of video, and no others, whichever
+# encoder makes it. Scenes are found from the keyframes alone, with
+# thresholds measured on keyframes this far apart (src/producers/scenes/
+# detail.py), so where they fall can't be the encoder's choice: x264 adds one
+# at every big change of picture (50 in a minute of a fast clip, as close as
+# 0.23 s), and -g counts frames, so 2.5 s apart at 24 fps.
+KEYFRAME_SEC = 2
+
+
 def _video_codec_args(settings: AnalysisProxySettings) -> list[str]:
+    """The encoder, its quality, and no keyframes of its own choosing (_keyframes places them)."""
     if settings.encoder == "h264_nvenc":
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(settings.crf + 2), "-b:v", "0"]
-    return ["-c:v", settings.encoder, "-preset", "veryfast", "-crf", str(settings.crf)]
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(settings.crf + 2), "-b:v", "0",
+                "-no-scenecut", "1", "-forced-idr", "1"]
+    return ["-c:v", settings.encoder, "-preset", "veryfast", "-crf", str(settings.crf), "-sc_threshold", "0"]
+
+
+def _keyframes(settings: AnalysisProxySettings) -> list[str]:
+    """A keyframe at 0 and every KEYFRAME_SEC of video time after, at any frame rate."""
+    return ["-force_key_frames", f"expr:gte(t,n_forced*{KEYFRAME_SEC})",
+            "-g", str(settings.fps_max * KEYFRAME_SEC)]
 
 
 def _audio_args(tracks: list[AudioTrack], settings: AnalysisProxySettings) -> list[str]:
@@ -200,7 +218,7 @@ def build_command(
         "-i", str(source),
         "-map", "0:V:0",
         "-vf", scale, "-fpsmax", str(s.fps_max), "-pix_fmt", "yuv420p",
-        *_video_codec_args(s), "-g", str(s.fps_max * 2),
+        *_video_codec_args(s), *_keyframes(s),
         *_audio_args(list(tracks), s),
         "-map_metadata", "-1", "-map_chapters", "-1",
         "-movflags", "+faststart", "-f", "mp4",

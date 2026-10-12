@@ -4,8 +4,10 @@ are made from (src/processing/video/analysis_proxy.py)."""
 from src.producers.contract import PREPARE, VIDEO, ProducerSpec, Setting
 from src.producers.pools import RENDERS
 
+# 2: a keyframe every 2 s of video and nowhere else (analysis_proxy.KEYFRAME_SEC).
+# 1 let the encoder add them at changes of picture, and spaced them by frames.
 PRODUCER = ProducerSpec(
-    artifact="analysis_proxy", producer="analysis-proxy", version="1", media=VIDEO, unit="second", title="Analysis proxies",
+    artifact="analysis_proxy", producer="analysis-proxy", version="2", media=VIDEO, unit="second", title="Analysis proxies",
     order=40,
     applies="a.media_type = 'video'",
     made="a.analysis_proxy_key IS NOT NULL",
