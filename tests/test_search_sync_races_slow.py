@@ -8,6 +8,8 @@ stays cleared. And a scene described again is stale until search has it.
 
 from __future__ import annotations
 
+import json
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -47,8 +49,23 @@ def _stale(session, asset_id: str) -> bool:
         {"a": asset_id}).scalar())
 
 
+def _save(other, write: str, clip: str) -> None:
+    """A write as the API saves it: a vision or OCR save whose inline sync
+    failed (the real repositories, so their own clock and locking), or a
+    note (PUT /note clears the sync time)."""
+    from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository
+
+    if write == "description":
+        AssetMetadataRepository(other).upsert(clip, "m", "1", {"description": "new words", "tags": []})
+    elif write == "ocr":
+        AssetOcrRepository(other).upsert(clip, "new words", "m")
+    else:
+        other.execute(text("UPDATE assets SET note = 'new words', search_synced_at = NULL WHERE asset_id = :a"),
+                      {"a": clip})
+
+
 @pytest.mark.slow
-@pytest.mark.parametrize("write", ["description", "note"])
+@pytest.mark.parametrize("write", ["description", "ocr", "note"])
 def test_a_write_during_the_sweep_stays_stale(env, write):
     lib = _library(env, f"SweepRace-{write}")
     clip = _ingest_with(lib, f"{write}.jpg", _sha(), None)
@@ -57,19 +74,38 @@ def test_a_write_during_the_sweep_stays_stale(env, write):
         s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
 
-        def meanwhile(other):
-            if write == "description":  # a vision save whose inline sync failed
-                other.execute(text("INSERT INTO asset_metadata (metadata_id, asset_id, model_id, model_version,"
-                                   " generated_at, data) VALUES (:id, :a, 'm', '1', now(),"
-                                   " '{\"description\": \"new words\"}')"), {"id": f"meta_{_sha()[:12]}", "a": clip})
-            else:  # a note, as PUT /note saves it: the sync time cleared
-                other.execute(text("UPDATE assets SET note = 'new words', search_synced_at = NULL"
-                                   " WHERE asset_id = :a"), {"a": clip})
-
-        qw = _sweep_while(env, s, meanwhile)
+        qw = _sweep_while(env, s, lambda other: _save(other, write, clip))
         sent = [d for d in qw.ingest_tenant_documents.call_args.args[1] if d["asset_id"] == clip]
-        assert len(sent) == 1 and "new words" not in (sent[0]["description"], sent[0]["note"])
+        assert len(sent) == 1 and "new words" not in json.dumps(sent[0])
         assert _stale(s, clip), "the sweep marked synced a write it never indexed"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("write", ["description", "ocr"])
+def test_a_save_timed_before_the_sweep_began_and_committed_after_it_read_stays_stale(env, write):
+    """A save takes its time, then commits: a sweep that begins in between
+    and reads before the commit is later than the save's time, yet never saw
+    it. Its time can't say it's newer; its row can (it's no longer as the
+    sweep read it). The save's clock is put a minute back to open the gap,
+    whatever the machine's speed or clocks."""
+    from src.server.repository import tenant
+
+    lib = _library(env, f"SweepGap-{write}")
+    clip = _ingest_with(lib, f"gap-{write}.jpg", _sha(), None)
+    real_utcnow = tenant.utcnow
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET search_synced_at = now()"))
+        s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
+        s.commit()
+
+        def save_timed_earlier(other):
+            with patch.object(tenant, "utcnow", lambda: real_utcnow() - timedelta(minutes=1)):
+                _save(other, write, clip)
+
+        qw = _sweep_while(env, s, save_timed_earlier)
+        sent = [d for d in qw.ingest_tenant_documents.call_args.args[1] if d["asset_id"] == clip]
+        assert len(sent) == 1 and "new words" not in json.dumps(sent[0]), "the sweep read before the save"
+        assert _stale(s, clip), "the sweep marked synced a save it never indexed"
 
 
 @pytest.mark.slow

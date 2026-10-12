@@ -1854,6 +1854,17 @@ class AssetRepository:
         return list(self._session.exec(stmt).all())
 
 
+def _unsynced(session: Session, asset_id: str) -> None:
+    """Before a machine's description or reading of the clip is saved, in
+    its transaction: the clip's row is locked (a person's save waits for
+    this one, and this for theirs: no copy lands under it), and stale for
+    search until it's indexed. The search sweep marks a clip synced only if
+    its row is as the sweep read it (search/sync.py), so this save, read or
+    not, is never marked synced unseen: its time is taken before it commits,
+    and a sweep that began in between would count it as older than itself."""
+    session.execute(sa_text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": asset_id})
+
+
 class AssetOcrRepository:
     """The text read in each clip's image (one row per clip)."""
 
@@ -1865,8 +1876,7 @@ class AssetOcrRepository:
         one copy: the machine's isn't kept under it (Robert, Oct 9)."""
         from src.server.repository.corrections import persons_fields
 
-        # A person's save waits for this one (and this for theirs): no copy lands under it.
-        self._session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR SHARE"), {"a": asset_id})
+        _unsynced(self._session, asset_id)
         if "ocr_text" in persons_fields(self._session, asset_id):
             text = ""
         self._session.execute(sa_text(
@@ -1903,8 +1913,7 @@ class AssetMetadataRepository:
         """
         from src.server.repository.corrections import without_persons
 
-        # A person's save waits for this one (and this for theirs): no copy lands under it.
-        self._session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR SHARE"), {"a": asset_id})
+        _unsynced(self._session, asset_id)
         data = without_persons(self._session, asset_id, data)
         now = utcnow()
         stmt = pg_insert(AssetMetadata).values(
