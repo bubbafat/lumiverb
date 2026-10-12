@@ -76,7 +76,10 @@ def _empty(directory: Path) -> None:
 
 
 def _signal_group(process: subprocess.Popen, sig: int) -> None:
-    with contextlib.suppress(ProcessLookupError):
+    """`sig` to the child's process group, if anything is left in it. macOS
+    answers EPERM, not ESRCH, when all that's left is exiting (processes not
+    yet reaped by launchd): nothing to signal either."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(process.pid, sig)
 
 
