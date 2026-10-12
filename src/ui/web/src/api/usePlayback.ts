@@ -11,7 +11,8 @@ type Source = "analysis_proxy" | "preview";
  * as a blob when no link is available.
  *
  * While only the preview exists it asks again every `pollMs`, so the player
- * switches to the whole video as soon as it's processed. While the capped
+ * switches to the whole video as soon as it's processed (not when the preview
+ * is the whole clip already: `whole`, a clip no longer than it). While the capped
  * copy is made (ready false) it asks again every `preparingMs` and plays
  * nothing yet. Each answer carries
  * a fresh link; the first link for a source is kept, since a new src would
@@ -38,6 +39,8 @@ export function usePlayback(
 ): {
   src: string | null;
   source: Source | null;
+  /** What plays is the whole clip (the analysis proxy, or the preview of a short clip). */
+  whole: boolean;
   maxSeconds: number | null;
   isLoading: boolean;
   renew: () => void;
@@ -59,7 +62,7 @@ export function usePlayback(
         ? false
         : query.state.data && !query.state.data.ready
         ? preparingMs
-        : query.state.data?.source === "preview"
+        : query.state.data?.source === "preview" && !query.state.data.whole
           ? pollMs
           : false,
   });
@@ -77,32 +80,35 @@ export function usePlayback(
   };
 
   const failed = playback.isRefetchError;
-  if (!enabled) return { src: null, source: null, maxSeconds: null, isLoading: false, renew, failed: false };
+  if (!enabled) return { src: null, source: null, whole: false, maxSeconds: null, isLoading: false, renew, failed: false };
   if (playback.data && !playback.data.ready && !playback.isError) {
     // A link already playing keeps playing until the new one is ready.
     if (kept.current?.assetId === assetId) {
-      return { src: kept.current.url, source: kept.current.source, maxSeconds: null, isLoading: false, renew, failed };
+      return { src: kept.current.url, source: kept.current.source, whole: kept.current.source === "analysis_proxy",
+               maxSeconds: null, isLoading: false, renew, failed };
     }
-    return { src: null, source: null, maxSeconds: null, isLoading: true, renew, failed: false };
+    return { src: null, source: null, whole: false, maxSeconds: null, isLoading: true, renew, failed: false };
   }
   if (playback.data && playback.data.ready) {
     const { source, url, max_seconds } = playback.data;
+    const whole = playback.data.whole ?? source === "analysis_proxy";
     const stale = !kept.current || kept.current.assetId !== assetId || kept.current.source !== source;
     if (stale || (renewing.current && kept.current?.url !== url)) {
       kept.current = { assetId, source, url };
       renewing.current = false;
     }
-    return { src: kept.current!.url, source, maxSeconds: max_seconds, isLoading: false, renew, failed };
+    return { src: kept.current!.url, source, whole, maxSeconds: max_seconds, isLoading: false, renew, failed };
   }
   if (playback.isError) {
     return {
       src: fallback.url,
       source: fallback.url ? "preview" : null,
+      whole: false,
       maxSeconds: null,
       isLoading: fallback.isLoading,
       renew,
       failed: false,
     };
   }
-  return { src: null, source: null, maxSeconds: null, isLoading: canAsk, renew, failed: false };
+  return { src: null, source: null, whole: false, maxSeconds: null, isLoading: canAsk, renew, failed: false };
 }

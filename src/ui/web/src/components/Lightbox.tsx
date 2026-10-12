@@ -368,7 +368,7 @@ export function Lightbox({
   const generating = !isVideo && image.generating;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const seekVideo =
-    isVideo && playback.source === "analysis_proxy"
+    isVideo && playback.whole
       ? (seconds: number) => {
           const video = videoRef.current;
           if (!video) return;
@@ -995,6 +995,7 @@ export function Lightbox({
                 src={mediaUrl}
                 poster={image.url ?? undefined}
                 source={playback.source}
+                whole={playback.whole}
                 maxSeconds={playback.maxSeconds}
                 videoRef={videoRef}
                 onRenew={playback.renew}

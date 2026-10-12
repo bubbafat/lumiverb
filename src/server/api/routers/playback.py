@@ -68,6 +68,26 @@ class PlaybackResponse(BaseModel):
     # False while the capped copy is made in the background: ask again in a
     # couple of seconds (the link answers 503 playback_preparing until then).
     ready: bool
+    # What's served is the whole clip: the analysis proxy, or a preview as
+    # long as a clip no longer than it (whole_clip). Players say so, rather
+    # than "a short preview" until it's processed (Robert, a 1-second clip).
+    whole: bool = False
+
+
+def whole_clip(source: str, duration_sec: float | None) -> bool:
+    """Whether `source` holds the whole clip: the analysis proxy does; a
+    preview is the clip's first seconds (the scan's, video_preview's length),
+    so a clip no longer than that is whole in it."""
+    from src.shared.producers import PRODUCERS
+
+    if source == "analysis_proxy":
+        return True
+    preview_seconds = PRODUCERS["video_preview"].defaults["seconds"]
+    return duration_sec is not None and duration_sec <= preview_seconds + WHOLE_SLACK_SEC
+
+
+# A clip's length and its preview's differ by a frame or two (rounding).
+WHOLE_SLACK_SEC = 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +532,7 @@ def get_playback(
         source=source,
         max_seconds=max_seconds,
         ready=ready,
+        whole=whole_clip(source, asset.duration_sec),
     )
 
 

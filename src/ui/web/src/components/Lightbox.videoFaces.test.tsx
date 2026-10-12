@@ -31,7 +31,7 @@ vi.mock("../api/useAuthenticatedImage", () => ({
   useAuthenticatedImage: () => ({ url: "blob:x", isLoading: false, error: null, generating: false }),
 }));
 vi.mock("../api/usePlayback", () => ({
-  usePlayback: () => ({ src: "/v1/stream/party", source: "analysis_proxy", maxSeconds: null, isLoading: false,
+  usePlayback: () => ({ src: "/v1/stream/party", source: "analysis_proxy", whole: true, maxSeconds: null, isLoading: false,
                         renew: () => {}, failed: false }),
 }));
 vi.mock("../api/useFaceCrop", () => ({ useFaceCrop: () => ({ url: null, isLoading: false }) }));

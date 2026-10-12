@@ -754,6 +754,8 @@ export interface Playback {
   max_seconds: number | null;
   /** False while the capped copy is made: ask again shortly (the link answers 503 until then). */
   ready: boolean;
+  /** It's the whole clip: the analysis proxy, or the preview of a clip no longer than it. Older servers leave it out. */
+  whole?: boolean;
 }
 
 export async function getPlayback(assetId: string, publicLibraryId?: string, publicProjectId?: string): Promise<Playback> {

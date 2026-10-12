@@ -108,4 +108,10 @@ public struct PlaybackLink: Decodable, Sendable {
     public let maxSeconds: Int?
     /// False while the capped copy is made: ask again shortly.
     public let ready: Bool
+    /// It's the whole clip: the analysis proxy, or the preview of a clip no
+    /// longer than it. Older servers leave it out.
+    public let whole: Bool?
+
+    /// Whether what plays is the whole clip (a short clip's preview is).
+    public var isWhole: Bool { whole ?? (source == "analysis_proxy") }
 }

@@ -25,7 +25,7 @@ vi.mock("../api/useAuthenticatedImage", () => ({
   useAuthenticatedImage: () => ({ url: "blob:x", isLoading: false, error: null, generating: false }),
 }));
 vi.mock("../api/usePlayback", () => ({
-  usePlayback: () => ({ src: "/v1/stream/t", source: "analysis_proxy", maxSeconds: 10, isLoading: false, renew: () => {}, failed: false }),
+  usePlayback: () => ({ src: "/v1/stream/t", source: "analysis_proxy", whole: true, maxSeconds: 10, isLoading: false, renew: () => {}, failed: false }),
 }));
 
 afterEach(() => {

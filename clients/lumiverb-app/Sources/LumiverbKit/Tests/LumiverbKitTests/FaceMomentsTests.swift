@@ -74,6 +74,19 @@ final class FaceMomentsTests: XCTestCase {
         XCTAssertEqual(link.url, "/v1/stream/tok")
         XCTAssertTrue(link.ready)
         XCTAssertNil(link.maxSeconds)
+        XCTAssertTrue(link.isWhole)  // an older server's: the analysis proxy is the whole clip
+    }
+
+    func testAShortClipsPreviewIsTheWholeClip() throws {
+        func link(_ json: String) throws -> PlaybackLink {
+            try decoder.decode(PlaybackLink.self, from: Data(json.utf8))
+        }
+        let short = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true, "whole": true}"#)
+        XCTAssertTrue(short.isWhole)  // a 1-second clip: no "10s preview" badge
+        let long = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true, "whole": false}"#)
+        XCTAssertFalse(long.isWhole)
+        let older = try link(#"{"url": "/v1/stream/t", "source": "preview", "max_seconds": null, "ready": true}"#)
+        XCTAssertFalse(older.isWhole)
     }
 
     func testEachAskToPlayAMomentIsItsOwn() {
