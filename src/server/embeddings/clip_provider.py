@@ -102,9 +102,10 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         return np.asarray(vec, dtype=float).tolist()
 
     def embed(self, proxy_path: Path) -> list[float]:
-        from PIL import Image as PILImage
+        """NotAnImageError unless the file is an image the server reads (src/server/images.py)."""
+        from src.server.images import rgb
 
-        img = PILImage.open(proxy_path).convert("RGB")
+        img = rgb(proxy_path.read_bytes())
         try:
             return self.embed_image(img)
         finally:

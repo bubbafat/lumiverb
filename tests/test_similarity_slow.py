@@ -1,3 +1,4 @@
+# ruff: noqa: F811 — pytest fixtures are named as parameters
 from __future__ import annotations
 
 import os
@@ -19,6 +20,8 @@ from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.test_server_images import NOT_READ, OVERSIZED, READ, sample, sparse_png
+from tests.test_server_images import no_decoding, other_readers  # noqa: F401 — fixtures
 
 
 def _asset_vectors(dim: int = 512) -> tuple[list[float], list[float], list[float]]:
@@ -853,3 +856,110 @@ def test_search_by_image_that_isnt_an_image_is_a_422(similarity_client: Tuple[_A
     r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": "aGVsbG8="})
     assert r.status_code == 422, r.text
     assert r.json()["error"]["code"] == "invalid_image"
+
+
+# ---------------------------------------------------------------------------
+# The picture a search is by: a JPEG, PNG or WebP of at most 120 megapixels
+# (src/server/images.py); anything else is a 422 invalid_image, never decoded.
+# ---------------------------------------------------------------------------
+
+REFUSED_DETAILS = {"formats": ["JPEG", "PNG", "WEBP"], "max_pixels": 120_000_000}
+
+
+def _b64(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(data).decode()
+
+
+@pytest.fixture
+def clip_sees(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, tuple[int, int]]]:
+    """What search by image embeds, (mode, size) a picture: CLIP's stand-in."""
+    seen: list[tuple[str, tuple[int, int]]] = []
+
+    class _Clip:
+        def embed_image(self, img):
+            seen.append((img.mode, img.size))
+            return _asset_vectors()[0]
+
+    monkeypatch.setattr("src.server.embeddings.clip_provider.CLIPEmbeddingProvider", _Clip)
+    return seen
+
+
+@pytest.fixture
+def faces_looked_for(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """The pictures search by vector looked for faces in: InsightFace's stand-in."""
+    looked: list[bytes] = []
+    monkeypatch.setattr("src.server.faces.server_face_provider.detect_faces_in_image",
+                        lambda data: looked.append(data) or [])
+    return looked
+
+
+def _by_vector(auth_client: _AuthClient, library_id: str, picture: bytes):
+    return auth_client.post("/v1/similar/search-by-vector", json={
+        "library_id": library_id, "vector": _asset_vectors(dim=768)[0], "model_id": "apple_vision",
+        "model_version": "feature_print_v1", "image_b64": _b64(picture)})
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("fmt", READ)
+def test_image_search_reads_jpeg_png_and_webp(similarity_client: Tuple[_AuthClient, str, str], clip_sees, fmt) -> None:
+    auth_client, library_id, _ = similarity_client
+    r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": _b64(sample(fmt))})
+    assert r.status_code == 200, r.text
+    assert clip_sees == [("RGB", (64, 48))]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("fmt", NOT_READ)
+def test_image_search_reads_only_jpeg_png_and_webp(
+    similarity_client: Tuple[_AuthClient, str, str], clip_sees, other_readers, fmt,
+) -> None:
+    auth_client, library_id, _ = similarity_client
+    r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": _b64(sample(fmt))})
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "invalid_image" and error["message"] == "image_b64 isn't a JPEG, PNG or WebP image."
+    assert error["details"] == REFUSED_DETAILS
+    assert clip_sees == [] and other_readers == [], "no other format's reader looks at it"
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
+def test_image_search_refuses_an_image_over_the_pixel_limit_before_decoding_it(
+    similarity_client: Tuple[_AuthClient, str, str], clip_sees, no_decoding,
+) -> None:
+    auth_client, library_id, _ = similarity_client
+    big = sparse_png(*OVERSIZED)  # ~170 MP in a few KB
+    r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": _b64(big)})
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "invalid_image"
+    assert error["message"] == "image_b64 is 13040 x 13040 pixels, more than the 120 megapixels the server reads."
+    assert error["details"] == REFUSED_DETAILS
+    assert clip_sees == []
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("fmt", READ)
+def test_search_by_vector_looks_for_faces_in_a_jpeg_png_or_webp(
+    similarity_client: Tuple[_AuthClient, str, str], faces_looked_for, fmt,
+) -> None:
+    auth_client, library_id, _ = similarity_client
+    r = _by_vector(auth_client, library_id, sample(fmt))
+    assert r.status_code == 200, r.text
+    assert faces_looked_for == [sample(fmt)]
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
+@pytest.mark.parametrize("picture", [*NOT_READ, "oversized"])
+def test_search_by_vector_reads_only_jpeg_png_and_webp_up_to_the_pixel_limit(
+    similarity_client: Tuple[_AuthClient, str, str], faces_looked_for, other_readers, picture,
+) -> None:
+    auth_client, library_id, _ = similarity_client
+    r = _by_vector(auth_client, library_id, sparse_png(*OVERSIZED) if picture == "oversized" else sample(picture))
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "invalid_image" and error["details"] == REFUSED_DETAILS
+    assert faces_looked_for == [] and other_readers == []

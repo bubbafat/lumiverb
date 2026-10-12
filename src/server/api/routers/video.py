@@ -561,16 +561,13 @@ class VideoFacesResponse(BaseModel):
 
 
 def _webp(data: bytes) -> bool:
-    import io
-
-    from PIL import Image
+    """A WebP the server reads (src/server/images.py): only the WebP reader looks at it."""
+    from src.server.images import opened
 
     try:
-        with Image.open(io.BytesIO(data)) as img:
-            if img.format != "WEBP":
-                return False
+        with opened(data, formats=("WEBP",)) as img:
             img.verify()
-    except Exception:  # noqa: BLE001 — not an image PIL reads
+    except Exception:  # noqa: BLE001 — not a WebP the server reads
         return False
     return True
 

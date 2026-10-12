@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from src.server import images
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
@@ -34,6 +35,12 @@ def _decode_image(image_b64: str) -> bytes:
         raise ApiError(422, "invalid_image", "image_b64 isn't base64.") from None
 
 
+def _invalid_image(exc: images.NotAnImageError) -> ApiError:
+    """422 invalid_image for an image the server doesn't read (src/server/images.py)."""
+    return ApiError(422, "invalid_image", f"image_b64 {exc}.",
+                    {"formats": list(images.FORMATS), "max_pixels": images.MAX_PIXELS})
+
+
 class SimilarHit(BaseModel):
     asset_id: str
     rel_path: str
@@ -55,8 +62,9 @@ class SimilarityResponse(BaseModel):
 
 class ImageSimilarityRequest(BaseModel):
     library_id: str
-    # base64-encoded JPEG/PNG, already resized by client; not base64 or not
-    # an image is a 422 invalid_image.
+    # base64-encoded JPEG, PNG or WebP, already resized by client; not base64,
+    # or not an image the server reads (src/server/images.py), is a 422
+    # invalid_image.
     image_b64: str = Field(min_length=1, max_length=MAX_IMAGE_B64)
     model_id: str | None = None  # defaults to "clip"
     model_version: str | None = None  # defaults to server CLIP version
@@ -89,7 +97,8 @@ class VectorSimilarityRequest(BaseModel):
     to_ts: float | None = None
     asset_types: list[Literal["image", "video"]] | None = None
     cameras: list[CameraSpec] | None = None
-    # optional JPEG/PNG bytes for hybrid identity search; not base64 is a 422
+    # optional JPEG, PNG or WebP for hybrid identity search; a 422 invalid_image
+    # as by image
     image_b64: str | None = Field(default=None, min_length=1, max_length=MAX_IMAGE_B64)
 
 
@@ -292,8 +301,6 @@ def search_by_image(
     body: ImageSimilarityRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ImageSimilarityResponse:
-    import io
-    from PIL import Image as PILImage
     from src.server.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
 
     resolved_model_id = body.model_id or "clip"
@@ -311,9 +318,9 @@ def search_by_image(
         )
 
     try:
-        pil_image = PILImage.open(io.BytesIO(_decode_image(body.image_b64))).convert("RGB")
-    except (OSError, PILImage.DecompressionBombError):
-        raise ApiError(422, "invalid_image", "image_b64 isn't a JPEG or PNG image.") from None
+        pil_image = images.rgb(_decode_image(body.image_b64))
+    except images.NotAnImageError as exc:
+        raise _invalid_image(exc) from None
     try:
         provider = CLIPEmbeddingProvider()
         vector = provider.embed_image(pil_image)
@@ -343,10 +350,18 @@ def search_by_vector(
     if body.from_ts is not None and body.to_ts is not None and body.from_ts > body.to_ts:
         raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
 
+    image_bytes = None
+    if body.image_b64 is not None:
+        image_bytes = _decode_image(body.image_b64)
+        try:  # refused here, as by image, rather than skipped by the face path
+            images.opened(image_bytes).close()
+        except images.NotAnImageError as exc:
+            raise _invalid_image(exc) from None
+
     return _search_by_vector(
         session, body.library_id, body.vector, body.model_id, body.model_version,
         body.limit, body.offset, body.from_ts, body.to_ts, body.asset_types, body.cameras,
-        image_bytes=_decode_image(body.image_b64) if body.image_b64 is not None else None,
+        image_bytes=image_bytes,
     )
 
 

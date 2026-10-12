@@ -1956,8 +1956,7 @@ def _generate_face_crops(
 ) -> None:
     """Generate 128x128 WebP face crop thumbnails from the asset proxy (a
     photo's: a video's faces bring their crops, cut from their frames)."""
-    from PIL import Image
-
+    from src.server.images import rgb
     from src.shared.face_crop import face_crop
 
     storage = get_storage()
@@ -1970,9 +1969,9 @@ def _generate_face_crops(
         return
 
     try:
-        img = Image.open(proxy_path).convert("RGB")
-    except Exception:
-        logger.warning("Cannot open proxy for face crops: %s", proxy_key)
+        img = rgb(proxy_path.read_bytes())  # an image the server reads (src/server/images.py)
+    except Exception as exc:
+        logger.warning("Cannot open proxy for face crops: %s (%s)", proxy_key, exc)
         return
 
     try:
