@@ -179,7 +179,7 @@ class ProxyCache:
     def _ensure_size(self, image_bytes: bytes) -> bytes:
         """Downscale JPEG if it exceeds max_edge. Never scales up."""
         try:
-            import pyvips
+            from src.processing.libvips import pyvips
             img = pyvips.Image.new_from_buffer(image_bytes, "")
             if max(img.width, img.height) <= self._max_edge:
                 return image_bytes

@@ -41,7 +41,7 @@ SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
     """Convert JPEG bytes to WebP using pyvips. Fast — no resize needed."""
-    import pyvips
+    from src.processing.libvips import pyvips
 
     img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
     return img.write_to_buffer(f".webp[Q={PROXY_WEBP_QUALITY},{KEEP}]")
@@ -117,8 +117,9 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
 def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
     """Extract a poster frame (first frame) from a video. Returns (jpeg_bytes, width, height)."""
     import tempfile
+
+    from src.processing.libvips import pyvips, thumbnail_file
     from src.processing.video.clip_extractor import extract_video_frame
-    import pyvips
 
     width_orig, height_orig = _probe_video_dimensions(source_path)
 
@@ -130,8 +131,8 @@ def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
         if not ok or not tmp_path.exists() or tmp_path.stat().st_size == 0:
             raise RuntimeError(f"Failed to extract poster frame from {source_path}")
 
-        proxy_img = pyvips.Image.thumbnail(
-            str(tmp_path), PROXY_LONG_EDGE,
+        proxy_img = thumbnail_file(
+            tmp_path, PROXY_LONG_EDGE,
             height=PROXY_LONG_EDGE,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
