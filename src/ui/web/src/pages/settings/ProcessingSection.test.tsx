@@ -795,6 +795,48 @@ describe("Scene descriptions' Detail", () => {
   });
 });
 
+describe("Waiting for what it's made from", () => {
+  // Scene descriptions apply only to videos whose scenes are found: with
+  // Scenes paused, they count nothing, which isn't being caught up.
+  const sceneRow = (scenesPaused: boolean, missing: number, described = 0) => {
+    if (scenesPaused) paused.add("scenes");
+    return sceneProducers(missing, described, scenesPaused);
+  };
+  const sceneProducers = (missing: number, described: number, scenesPaused: boolean) => [
+    producer({ artifact: "scenes", title: "Scenes", media: ["video"], part_of: "scene_vision", paused: scenesPaused,
+               counts: { applicable: 1500, current: 1500 - missing, stale: 0, missing, failing: 0 } }),
+    producer({ artifact: "scene_vision", title: "Scene descriptions", media: ["video"], needs: ["analysis_proxy", "scenes"],
+               counts: { applicable: described, current: described, stale: 0, missing: 0, failing: 0 } }),
+    producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"],
+               counts: { applicable: 1500, current: 1500, stale: 0, missing: 0, failing: 0 } }),
+  ];
+
+  it("says the videos wait for Scenes, paused, not that there's nothing to make", async () => {
+    producers = sceneRow(true, 1500);
+    renderSection();
+    const li = await row("Scene descriptions");
+    expect(within(li).getByText("1,500 videos wait for Scenes, which is paused.")).toBeTruthy();
+    expect(within(li).queryByText("Nothing to make yet.")).toBeNull();
+    // Analysis proxies are all made: nothing waits for them.
+    expect(within(li).queryByText(/wait for Analysis proxies/)).toBeNull();
+  });
+
+  it("says they wait for Scenes first while Scenes runs, beside what's made", async () => {
+    producers = sceneRow(false, 400, 900);
+    renderSection();
+    const li = await row("Scene descriptions");
+    expect(within(li).getByText("400 videos wait for Scenes first.")).toBeTruthy();
+    expect(within(li).getByText("900")).toBeTruthy();  // its own counts, as ever
+  });
+
+  it("says nothing of Scenes once every video has them", async () => {
+    producers = sceneRow(false, 0, 1500);
+    renderSection();
+    const li = await row("Scene descriptions");
+    expect(within(li).queryByText(/wait for/)).toBeNull();
+  });
+});
+
 describe("Face detection's levels", () => {
   const level = (label: string, value: string, fallback: string) => ({ key: "detail", label, kind: "level" as const,
     value, default: fallback, minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false,

@@ -23,7 +23,7 @@ PRODUCER = ProducerSpec(
         # Shown in the Faces row (part_of), so it's named for what it's the detail of.
         Setting("detail", DEFAULT, "Videos", kind="level", choices=DETAILS, remakes=False),
     ),
-    needs=("analysis_proxy",),
+    needs=("analysis_proxy", "scenes"),
     # Its frames are the analysis proxy's: a file changed in place is a new clip (#37).
     redo_on_source_change=False,
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "

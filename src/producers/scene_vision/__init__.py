@@ -13,7 +13,7 @@ PRODUCER = ProducerSpec(
     applies=("a.media_type = 'video' AND a.video_indexed"
              " AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id)"),
     made="NOT EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id AND s.description IS NULL)",
-    settings=ai_settings(VISION_PROMPT, fixed=NOT_OFFERED), needs=("analysis_proxy",),
+    settings=ai_settings(VISION_PROMPT, fixed=NOT_OFFERED), needs=("analysis_proxy", "scenes"),
     redo_on_source_change=False,
     kind="scene_vision", flag="missing_scene_vision", run="src.producers.scene_vision.work:SceneVision",
     pool=VISION,
