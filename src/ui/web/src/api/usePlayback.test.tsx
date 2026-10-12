@@ -69,9 +69,34 @@ describe("usePlayback", () => {
     const { result } = renderHook(() => usePlayback("ast_1", { enabled: true }), { wrapper });
     await waitFor(() => expect(result.current.src).toBe("/v1/stream/abc.def"));
     expect(result.current.source).toBe("analysis_proxy");
+    expect(result.current.whole).toBe(true);  // an older server leaves it out: the proxy is whole
     expect(result.current.maxSeconds).toBeNull();
     // The 10-second preview isn't downloaded as well.
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/preview"))).toBe(false);
+  });
+
+  it("a short clip's preview is the whole clip: said so, and not asked again for the full video", async () => {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ url: "/v1/stream/s", expires_at: "x", source: "preview", max_seconds: null,
+                                    ready: true, whole: true }), { status: 200 }),
+    );
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, pollMs: 20 }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/s"));
+    expect(result.current.whole).toBe(true);
+    const asked = fetchMock.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 100));  // five polls' worth: none comes
+    expect(fetchMock.mock.calls.length).toBe(asked);
+  });
+
+  it("a longer clip's preview isn't the whole clip, and it asks again for the full video", async () => {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ url: "/v1/stream/l", expires_at: "x", source: "preview", max_seconds: null,
+                                    ready: true, whole: false }), { status: 200 }),
+    );
+    const { result } = renderHook(() => usePlayback("ast_1", { enabled: true, pollMs: 20 }), { wrapper });
+    await waitFor(() => expect(result.current.src).toBe("/v1/stream/l"));
+    expect(result.current.whole).toBe(false);
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
   });
 
   it("passes the public library along", async () => {

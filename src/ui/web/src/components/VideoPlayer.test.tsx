@@ -32,6 +32,26 @@ describe("VideoPlayer", () => {
     expect(screen.getByText("Full video").className).toMatch(/emerald/);
   });
 
+  it("a short clip's preview is the whole clip: green, not a short preview", () => {
+    // The server says so (whole): a 1-second clip's 10-second preview is all of it.
+    render(<VideoPlayer src="/v1/stream/w" source="preview" whole maxSeconds={null} />);
+    expect(frame().dataset.playback).toBe("full");
+    expect(frame().className).toMatch(/emerald/);
+    expect(screen.getByText("Full video").className).toMatch(/emerald/);
+    expect(screen.queryByText(/Short preview/)).toBeNull();
+  });
+
+  it("says one second, not one seconds", () => {
+    const { container } = render(<VideoPlayer src="/v1/stream/o" source="preview" maxSeconds={1} />);
+    const video = container.querySelector("video") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { value: 1.0, configurable: true });
+    fireEvent.loadedMetadata(video);
+    screen.getByText("Short preview: first 1 second.");
+    cleanup();
+    render(<VideoPlayer src="/v1/stream/p" source="analysis_proxy" maxSeconds={1} />);
+    screen.getByText("Plays the first 1 second");
+  });
+
   it("names the cap when the account has one", () => {
     render(<VideoPlayer src="/v1/stream/c" source="analysis_proxy" maxSeconds={30} />);
     expect(frame().className).toMatch(/emerald/);

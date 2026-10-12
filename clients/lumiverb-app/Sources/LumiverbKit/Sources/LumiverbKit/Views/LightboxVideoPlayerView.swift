@@ -204,7 +204,8 @@ final class VideoPlayerViewModel: ObservableObject {
     @Published var source: PlaybackSource = .loading
     @Published var hasStartedPlaying = false
 
-    /// The stream is the scan's 10-second clip, not the whole video.
+    /// The stream is the scan's 10-second clip, not the whole video (a
+    /// shorter clip's is the whole of it: not a preview).
     @Published var streamIsPreview = false
     /// A moment asked for that this source doesn't reach (past the short
     /// preview, or the account's playback cap): said where the video is.
@@ -302,7 +303,7 @@ final class VideoPlayerViewModel: ObservableObject {
             // Under the server's address as every request is (a server under a path keeps it).
             let url = client.baseURL.appendingPathComponent(link.url)
             player = AVPlayer(url: url)
-            streamIsPreview = link.source != "analysis_proxy"
+            streamIsPreview = !link.isWhole
             source = .stream
             return
         }

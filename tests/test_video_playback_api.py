@@ -128,7 +128,7 @@ def _defaults(env):
     yield
 
 
-def _ingest(env, rel_path: str, media_type: str = "video") -> str:
+def _ingest(env, rel_path: str, media_type: str = "video", duration: float | None = None) -> str:
     client, headers, library_id, *_ = env
     from PIL import Image
 
@@ -136,7 +136,8 @@ def _ingest(env, rel_path: str, media_type: str = "video") -> str:
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex()}),
+            "width": "64", "height": "36",
+            "exif": json.dumps({"sha256": os.urandom(32).hex(), **({"duration_sec": duration} if duration else {})}),
             "lineage": ingest_made()}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
@@ -151,8 +152,9 @@ def _upload(env, asset_id: str, artifact_type: str, body: bytes) -> None:
     assert r.status_code == 200, r.text
 
 
-def _video(env, media, name: str, *, proxy: bool = True, preview: bool = True, long: bool = False) -> str:
-    asset_id = _ingest(env, f"{name}.mov")
+def _video(env, media, name: str, *, proxy: bool = True, preview: bool = True, long: bool = False,
+           duration: float | None = None) -> str:
+    asset_id = _ingest(env, f"{name}.mov", duration=duration)
     if preview:
         _upload(env, asset_id, "video_preview", media["preview"])
     if proxy:
@@ -300,10 +302,22 @@ def test_the_link_seeks(env, media):
 @pytest.mark.slow
 def test_before_the_proxy_exists_the_preview_plays(env, media):
     client, *_ = env
-    asset_id = _video(env, media, "early", proxy=False)
+    asset_id = _video(env, media, "early", proxy=False, duration=14.0)
     body = _playback(env, asset_id).json()
-    assert body["source"] == "preview"
+    assert body["source"] == "preview" and body["whole"] is False
     assert _fetch(client, _path(body["url"])).content == media["preview"]
+
+
+@pytest.mark.slow
+def test_a_short_clips_preview_is_the_whole_clip(env, media):
+    # A preview is a clip's first 10 seconds: a 3-second clip's is all of it,
+    # so players say "Full video", not "a short preview" (Robert: a 1-second clip).
+    short = _playback(env, _video(env, media, "short", proxy=False, duration=3.0)).json()
+    assert (short["source"], short["whole"]) == ("preview", True)
+    unknown = _playback(env, _video(env, media, "unprobed", proxy=False)).json()
+    assert (unknown["source"], unknown["whole"]) == ("preview", False)
+    full = _playback(env, _video(env, media, "processed", duration=6.0)).json()
+    assert (full["source"], full["whole"]) == ("analysis_proxy", True)
 
 
 @pytest.mark.slow

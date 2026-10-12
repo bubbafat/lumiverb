@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
 
 /**
  * The lightbox's video, framed by how much of it plays: amber while it's the
- * short preview, green once the whole video is ready. The note under it says
+ * short preview, green once the whole video is ready (or the preview is the
+ * whole clip: a short one, `whole`). The note under it says
  * the same in words. When the source changes mid-play (the whole video
  * arrives, or a failed link is renewed), it carries on from the same moment.
  *
@@ -12,10 +13,15 @@ import { useLayoutEffect, useRef, useState, type MutableRefObject } from "react"
  * startAt (a person's moment, from People) is where it opens: once a source
  * reaches it, so past the short preview it waits for the whole video.
  */
+function seconds(n: number): string {
+  return n === 1 ? "1 second" : `${n} seconds`;
+}
+
 export default function VideoPlayer({
   src: link,
   poster,
   source,
+  whole = false,
   maxSeconds,
   videoRef,
   onRenew,
@@ -27,6 +33,8 @@ export default function VideoPlayer({
   /** The clip's still, shown before it plays. */
   poster?: string;
   source: "analysis_proxy" | "preview" | null;
+  /** What plays is the whole clip (the server says: a short clip's preview is). */
+  whole?: boolean;
   maxSeconds: number | null;
   videoRef?: MutableRefObject<HTMLVideoElement | null>;
   /** Ask for a fresh link: this one failed (expired, say). */
@@ -59,7 +67,7 @@ export default function VideoPlayer({
     }
   }, [src]);
 
-  const full = source === "analysis_proxy";
+  const full = whole || source === "analysis_proxy";
   const previewSeconds = Math.min(10, maxSeconds ?? 10, duration ? Math.round(duration) : 10);
   const ring = full ? "ring-emerald-500/60" : "ring-amber-500/60";
 
@@ -121,11 +129,11 @@ export default function VideoPlayer({
         <p className="text-xs text-red-300">This video can't play right now. Try again later.</p>
       ) : full ? (
         <p className="text-xs text-emerald-300/90">
-          {maxSeconds != null ? `Plays the first ${maxSeconds} seconds` : "Full video"}
+          {maxSeconds != null ? `Plays the first ${seconds(maxSeconds)}` : "Full video"}
         </p>
       ) : (
         <p className="text-xs text-amber-300/90">
-          Short preview: first {previewSeconds} seconds.
+          Short preview: first {seconds(previewSeconds)}.
           {maxSeconds == null || maxSeconds > 10 ? " The full video plays once it's processed." : null}
         </p>
       )}
