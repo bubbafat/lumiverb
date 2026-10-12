@@ -62,7 +62,9 @@ def project_list(
 def project_create(
     name: Annotated[str, typer.Option("--name", "-n", help="Project name.")],
     description: Annotated[str | None, typer.Option("--description", "-d", help="Optional description.")] = None,
-    visibility: Annotated[str, typer.Option("--visibility", help="private, shared, or public.")] = "private",
+    visibility: Annotated[
+        str, typer.Option("--visibility", help="private, shared, or public (public: admins only).")
+    ] = "private",
 ) -> None:
     """Create a new project."""
     if visibility not in ("private", "shared", "public"):

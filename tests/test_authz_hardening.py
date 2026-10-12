@@ -8,6 +8,7 @@
 - Routes only the scheduler calls are admin-only.
 - A trashed library stops being public.
 - Choosing a library's folder (so making a library) and making one public are an admin's.
+- Only an admin makes a project public too; its owner can still take it down.
 """
 
 from __future__ import annotations
@@ -427,3 +428,112 @@ def test_an_editor_is_refused_a_library_folder_before_where_it_is_chosen(public_
         assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", r.text
     r = client.post("/v1/libraries", json={"name": "AdElsewhere", "root_path": "/x"}, headers=admin)
     assert r.status_code == 403 and r.json()["error"]["code"] == "folder_elsewhere", r.text
+
+
+# ---------------------------------------------------------------------------
+# Making a project public is a tenant admin's call too
+# ---------------------------------------------------------------------------
+
+
+def _public_link_works(client: TestClient, project_id: str) -> bool:
+    return client.get(f"/v1/public/projects/{project_id}").status_code == 200  # signed out
+
+
+def _refused_for_not_admin(r) -> bool:
+    return r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+
+
+def _editor_key(client: TestClient, editor: dict) -> dict:
+    """The editor's own API key: a key is refused the same as a sign-in."""
+    return _bearer(client.post("/v1/keys", json={"label": "ed", "role": "editor"}, headers=editor).json()["plaintext"])
+
+
+@pytest.mark.slow
+def test_an_editor_cannot_create_a_public_project(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, ed = _user(client, admin, "prj-creator@example.com", "editor")
+    for who in (ed, _editor_key(client, ed)):
+        r = client.post("/v1/projects", json={"name": "EdPublic", "visibility": "public"}, headers=who)
+        assert _refused_for_not_admin(r), r.text
+    names = {p["name"] for p in client.get("/v1/projects", headers=ed).json()["items"]}
+    assert "EdPublic" not in names  # refused before anything was made
+
+    for visibility in ("private", "shared"):  # the rest stay an editor's
+        r = client.post("/v1/projects", json={"name": f"Ed-{visibility}", "visibility": visibility}, headers=ed)
+        assert r.status_code == 201 and r.json()["visibility"] == visibility
+
+
+@pytest.mark.slow
+def test_an_editor_cannot_make_a_project_public(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, ed = _user(client, admin, "prj-editor@example.com", "editor")
+    project = client.post("/v1/projects", json={"name": "EdOwn"}, headers=ed).json()["project_id"]
+
+    for who in (ed, _editor_key(client, ed)):
+        for body in ({"visibility": "public"}, {"name": "EdOwn2", "visibility": "public"}):
+            r = client.patch(f"/v1/projects/{project}", json=body, headers=who)
+            assert _refused_for_not_admin(r), (body, r.text)
+    after = client.get(f"/v1/projects/{project}", headers=ed).json()
+    assert after["visibility"] == "private" and after["name"] == "EdOwn"  # nothing of a refused body is kept
+    assert not _public_link_works(client, project)
+
+    r = client.patch(f"/v1/projects/{project}", json={"visibility": "shared"}, headers=ed)
+    assert r.status_code == 200 and r.json()["visibility"] == "shared"
+
+
+@pytest.mark.slow
+def test_an_admin_makes_a_project_public(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, signed_in_admin = _user(client, admin, "prj-admin@example.com", "admin")
+    for who in (admin, signed_in_admin):
+        r = client.post("/v1/projects", json={"name": "BornPublic", "visibility": "public"}, headers=who)
+        assert r.status_code == 201 and r.json()["visibility"] == "public"
+        assert _public_link_works(client, r.json()["project_id"])
+
+        project = client.post("/v1/projects", json={"name": "MadePublic"}, headers=who).json()["project_id"]
+        r = client.patch(f"/v1/projects/{project}", json={"visibility": "public"}, headers=who)
+        assert r.status_code == 200 and r.json()["visibility"] == "public"
+        assert _public_link_works(client, project)
+
+
+@pytest.mark.slow
+def test_an_editor_can_take_their_public_project_down(public_lib_client):
+    """An admin's public project stays public when they become an editor. As
+    its owner they can still rename it and take it down, but never put it
+    back up."""
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    uid, was_admin = _user(client, admin, "prj-demoted@example.com", "admin")
+    _user(client, admin, "prj-other-admin@example.com", "admin")  # so they aren't the last admin
+    project = client.post("/v1/projects", json={"name": "Up", "visibility": "public"}, headers=was_admin)
+    project = project.json()["project_id"]
+    assert client.patch(f"/v1/users/{uid}", json={"role": "editor"}, headers=admin).status_code == 200
+    ed = _bearer(_login(client, "prj-demoted@example.com").json()["access_token"])
+
+    r = client.patch(f"/v1/projects/{project}", json={"name": "Still up"}, headers=ed)
+    assert r.status_code == 200 and r.json()["visibility"] == "public"
+    assert _refused_for_not_admin(client.patch(f"/v1/projects/{project}", json={"visibility": "public"}, headers=ed))
+
+    r = client.patch(f"/v1/projects/{project}", json={"visibility": "private"}, headers=ed)
+    assert r.status_code == 200 and r.json()["visibility"] == "private"
+    assert not _public_link_works(client, project)
+    assert _refused_for_not_admin(client.patch(f"/v1/projects/{project}", json={"visibility": "public"}, headers=ed))
+    assert not _public_link_works(client, project)
+
+
+@pytest.mark.slow
+def test_a_viewer_still_cannot_create_or_change_a_project(public_lib_client):
+    client, api_key, _, _ = public_lib_client
+    admin = _bearer(api_key)
+    _, viewer = _user(client, admin, "prj-viewer@example.com", "viewer")
+    shared = client.post("/v1/projects", json={"name": "Shared", "visibility": "shared"}, headers=admin)
+    shared = shared.json()["project_id"]
+    for visibility in ("private", "public"):
+        r = client.post("/v1/projects", json={"name": "ViewerMade", "visibility": visibility}, headers=viewer)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+        r = client.patch(f"/v1/projects/{shared}", json={"visibility": visibility}, headers=viewer)
+        assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
+    assert client.get(f"/v1/projects/{shared}", headers=admin).json()["visibility"] == "shared"

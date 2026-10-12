@@ -27,6 +27,7 @@ from tests.test_public_library_middleware import public_lib_client  # noqa: F401
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 EDITOR = "seed.editor@example.com"
+OWNER = "seed.owner@example.com"  # the public project's
 ARTIST = "photographer@example.org"
 
 
@@ -60,12 +61,17 @@ def _ingest(client, auth, library_id: str, rel_path: str, media_type: str) -> st
 def seeded(public_lib_client):
     client, api_key, library_id, private_library_id = public_lib_client
     admin = {"Authorization": f"Bearer {api_key}"}
-    r = client.post("/v1/users", json={"email": EDITOR, "password": "correct-horse-battery-staple", "role": "editor"},
-                    headers=admin)
-    assert r.status_code == 201, r.text
-    r = client.post("/v1/auth/login", json={"email": EDITOR, "password": "correct-horse-battery-staple"})
-    assert r.status_code == 200, r.text
-    editor = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def signed_in(email: str, role: str) -> dict:
+        r = client.post("/v1/users", json={"email": email, "password": "correct-horse-battery-staple", "role": role},
+                        headers=admin)
+        assert r.status_code == 201, r.text
+        r = client.post("/v1/auth/login", json={"email": email, "password": "correct-horse-battery-staple"})
+        assert r.status_code == 200, r.text
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    editor = signed_in(EDITOR, "editor")
+    owner = signed_in(OWNER, "admin")  # only an admin makes a project public
 
     photo = _ingest(client, admin, library_id, "emails/photo.jpg", "image")
     clip = _ingest(client, admin, library_id, "emails/clip.mov", "video")
@@ -82,7 +88,7 @@ def seeded(public_lib_client):
     assert client.post(f"/v1/assets/{clip}/transcript", json={"source": "manual", "srt": srt, "language": "en"},
                        headers=editor).status_code == 200
     r = client.post("/v1/projects", json={"name": "Reel", "asset_ids": [shared, photo], "visibility": "public"},
-                    headers=editor)
+                    headers=owner)
     assert r.status_code == 201, r.text
     # Signed in, the email is there to find (the test would prove nothing otherwise).
     detail = client.get(f"/v1/assets/{photo}", headers=editor).json()
@@ -137,7 +143,7 @@ def test_no_public_response_holds_an_email(seeded):
                             s = client.get(link)
                             seen += [f"{k}: {v}" for k, v in s.headers.items()]
                     for text in seen:
-                        if EMAIL.search(text) or EDITOR in text or ARTIST in text:
+                        if EMAIL.search(text) or EDITOR in text or OWNER in text or ARTIST in text:
                             leaks.append(f"{url} {params} -> {r.status_code}: {EMAIL.search(text)}")
     assert not leaks, "Emails on public responses:\n" + "\n".join(leaks)
     # The routes that matter answered the visitor (a test of 401s would prove nothing).
