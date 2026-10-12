@@ -212,6 +212,10 @@ actor ScanPipeline {
     /// likely still being written (renders, copies, screenshots) and would
     /// produce a half-written upload if processed now. They'll be picked up
     /// on a subsequent pass once the writer has been quiet long enough.
+    ///
+    /// A file or folder whose name has a control character (a newline, a
+    /// tab) is never scanned, nor anything in a folder so named: the server
+    /// refuses the name. It's logged once, as a warning, not counted as an error.
     private func discoverFiles() -> [DiscoveredFile] {
         var files: [DiscoveredFile] = []
         let rootURL = URL(fileURLWithPath: rootPath)
@@ -220,11 +224,22 @@ actor ScanPipeline {
 
         guard let enumerator = fm.enumerator(
             at: rootURL,
-            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey, .isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
         for case let fileURL as URL in enumerator {
+            if PathFilter.hasControlCharacter(fileURL.lastPathComponent) {
+                let isFolder = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                if isFolder { enumerator.skipDescendants() }
+                if isFolder || FileExtensions.isSupported(fileURL.path) {
+                    // String(reflecting:) escapes the name: "a\nb.jpg".
+                    let shown = String(reflecting: String(fileURL.path.dropFirst(rootURL.path.count + 1)))
+                    scanLogger.warning("Not scanning \(shown, privacy: .public): its name has a control character")
+                }
+                continue
+            }
+
             guard let resourceValues = try? fileURL.resourceValues(forKeys: [
                 .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
             ]) else { continue }

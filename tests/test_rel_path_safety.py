@@ -41,6 +41,25 @@ def test_check_rel_path_takes_canonical_paths(rel_path: str) -> None:
     assert check_rel_path(rel_path) == rel_path
 
 
+# Every C0 control (U+0000-U+001F: a newline, a tab, NUL) and DEL, in a
+# file's name and in a folder's.
+CONTROL_CHARACTERS = [chr(c) for c in range(0x20)] + ["\x7f"]
+
+
+@pytest.mark.parametrize("control", CONTROL_CHARACTERS, ids=lambda c: f"U+{ord(c):04X}")
+def test_check_rel_path_refuses_a_control_character_in_any_name(control: str) -> None:
+    for rel_path in (f"a{control}b.jpg", f"Shoots/a{control}b/c.jpg", f"{control}.jpg", f"a.jpg{control}"):
+        with pytest.raises(UnsafeRelPathError):
+            check_rel_path(rel_path)
+
+
+@pytest.mark.parametrize("rel_path", [
+    "Shoots/Day 1/A001.mov", "café/résumé.jpg", "🎉 party/🎂.jpg", "日本/写真.jpg", "a b.jpg",
+])
+def test_check_rel_path_takes_ordinary_unicode_names(rel_path: str) -> None:
+    assert check_rel_path(rel_path) == rel_path
+
+
 def test_resolve_source_path_refuses_a_symlink_out_of_the_root(tmp_path: Path) -> None:
     root = tmp_path / "library"
     root.mkdir()
@@ -113,9 +132,20 @@ def test_api_refuses_rel_paths_not_in_their_one_form() -> None:
         assert exc.value.status_code == 400
 
 
+def test_api_refuses_a_rel_path_with_a_control_character() -> None:
+    from fastapi import HTTPException
+
+    from src.server.api.dependencies import checked_rel_path
+
+    for bad in ("a\nb.jpg", "Shoots\t/a.jpg", "a\x7f.jpg"):
+        with pytest.raises(HTTPException) as exc:
+            checked_rel_path(bad)
+        assert exc.value.status_code == 400
+
+
 BAD_ROOTS = ["", "/", "Media", "./Media", "~/Media", "/Volumes/media-01/../../etc", "/Volumes/./media-01",
              "/Volumes//media-01", "/Volumes/media-01/", "/Volumes/a\x00b", "\\\\nas\\share", "C:\\Media",
-             "/Volumes/a\\..\\b"]
+             "/Volumes/a\\..\\b", "/Volumes/a\nb", "/Volumes/media-01/Day\t1", "/Volumes/a\x7fb"]
 
 
 @pytest.mark.parametrize("root_path", BAD_ROOTS)
@@ -129,7 +159,8 @@ def test_api_refuses_library_roots_not_absolute_and_canonical(root_path: str) ->
     assert exc.value.status_code == 400
 
 
-@pytest.mark.parametrize("root_path", ["/Volumes/media-01/Media", "/Users/me/Photos 2024", "/mnt/a..b"])
+@pytest.mark.parametrize("root_path", ["/Volumes/media-01/Media", "/Users/me/Photos 2024", "/mnt/a..b",
+                                       "/Users/me/Photos café 🎉"])
 def test_api_takes_absolute_canonical_library_roots(root_path: str) -> None:
     from src.server.api.dependencies import checked_root_path
 

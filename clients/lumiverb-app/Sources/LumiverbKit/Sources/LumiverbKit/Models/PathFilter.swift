@@ -41,6 +41,14 @@ public struct PathFilter: Sendable {
         self.libraryExcludes = library.excludes.map(\.pattern)
     }
 
+    /// True when `name` (a file or folder name, or a path) has a control
+    /// character: C0 (U+0000–U+001F: a newline, a tab, NUL) or DEL (U+007F).
+    /// No library takes such a name: scans skip it and the server refuses
+    /// it. Twin of `has_control_character` in `src/shared/path_filter.py`.
+    public static func hasControlCharacter(_ name: String) -> Bool {
+        name.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
+    }
+
     /// Check if a relative path is allowed by the filter rules.
     public func isAllowed(_ relPath: String) -> Bool {
         let normalized = relPath.replacingOccurrences(of: "\\", with: "/")

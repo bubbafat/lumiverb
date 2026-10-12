@@ -7,6 +7,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+from src.shared.path_filter import has_control_character
+
 # A stat failing with these means the path isn't there.
 _ABSENT = (errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP)
 
@@ -68,10 +70,11 @@ class UnsafeRelPathError(ValueError):
 def check_rel_path(rel_path: str, *, allow_root: bool = False) -> str:
     """rel_path as stored (NFC), or UnsafeRelPathError unless it stays inside
     the library in its one form: relative, no "." or ".." part, no empty part,
-    no backslash, no drive letter, no NUL. "" is the library root, allowed
-    only with allow_root. Every write that takes a rel_path checks it here,
-    and resolve_source_path does too."""
-    if not isinstance(rel_path, str) or "\x00" in rel_path:
+    no backslash, no drive letter, no control character (a newline, a tab,
+    NUL: has_control_character). "" is the library root, allowed only with
+    allow_root. Every write that takes a rel_path checks it here, and
+    resolve_source_path does too."""
+    if not isinstance(rel_path, str) or has_control_character(rel_path):
         raise UnsafeRelPathError(f"Invalid rel_path: {rel_path!r}")
     if rel_path == "":
         if allow_root:

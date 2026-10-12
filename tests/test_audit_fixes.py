@@ -335,7 +335,8 @@ def test_library_trash_soft_deletes_assets(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("root_path", ["data", "/Volumes/media-01/../../etc", "/a//b", "/a/./b", "/a/", "C:\\Media"])
+@pytest.mark.parametrize("root_path", ["data", "/Volumes/media-01/../../etc", "/a//b", "/a/./b", "/a/", "C:\\Media",
+                                       "/Volumes/new\nline", "/Volumes/Day\t1"])
 def test_library_root_must_be_absolute_and_canonical(
     audit_fixes_client: tuple[TestClient, str, str, str], root_path: str,
 ) -> None:

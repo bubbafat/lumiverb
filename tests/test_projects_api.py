@@ -1631,3 +1631,34 @@ def test_writes_refuse_rel_paths_outside_the_library(projects_env, bad):
     assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("relpath/")
     with pytest.raises(AssertionError, match="400"):
         _ingest_asset(client, api_key, library_id, bad)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad", ["new\nline.jpg", "Shoots\t/a.jpg", "a\x7f.jpg"])
+def test_writes_refuse_a_name_with_a_control_character(projects_env, bad):
+    """A control character in any name (a newline, a tab, DEL): upsert,
+    batch-moves and ingest answer 400 in the error envelope, and keep nothing."""
+    from PIL import Image as PILImage
+
+    client, api_key, library_id = projects_env
+    h = _headers(api_key)
+
+    def refused(r) -> bool:
+        return r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+
+    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": bad, "file_size": 1,
+                                               "file_mtime": None, "media_type": "image"}, headers=h)
+    assert refused(r), r.text
+    clip = _ingest_asset(client, api_key, library_id, f"control/{bad.encode().hex()}.jpg")
+    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": clip, "rel_path": bad}]}, headers=h)
+    assert refused(r), r.text
+    assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("control/")
+    buf = io.BytesIO()
+    PILImage.new("RGB", (16, 16)).save(buf, format="JPEG")
+    buf.seek(0)
+    r = client.post("/v1/ingest", data={"lineage": ingest_made(), "library_id": library_id, "rel_path": bad,
+                                        "file_size": "1000", "media_type": "image"},
+                    files={"proxy": ("proxy.jpg", buf, "image/jpeg")}, headers=h)
+    assert refused(r), r.text
+    r = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": bad}, headers=h)
+    assert r.status_code == 404

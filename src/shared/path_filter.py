@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass
 from typing import Literal
+
+# C0 controls (U+0000-U+001F: a newline, a tab, NUL) and DEL (U+007F).
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def has_control_character(name: str) -> bool:
+    """name (a file or folder name, or a path) has a control character: C0
+    (U+0000-U+001F: a newline, a tab, NUL) or DEL (U+007F). No library takes
+    such a name: scans skip it and the server refuses it (check_rel_path).
+    Twin: PathFilter.hasControlCharacter in LumiverbKit."""
+    return _CONTROL.search(name) is not None
 
 
 @dataclass

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import unicodedata
 from pathlib import Path
@@ -588,6 +589,68 @@ def test_walk_of_a_symlinked_prefix_lists_nothing_and_deletes_nothing(tmp_path: 
     unlisted: list[str] = []
     assert _walk_library(root, "linked", unlisted=unlisted) == []
     assert unlisted == ["linked"]
+
+
+# ---------------------------------------------------------------------------
+# A file or folder whose name has a control character (a newline, a tab) is
+# never scanned: the server refuses the name. Said once, never a failure.
+# ---------------------------------------------------------------------------
+
+CONTROL_NAMED = ["new\nline.jpg", "tab\there.jpg", "Shoots\x1b"]
+
+
+def _photo(root: Path, rel: str) -> None:
+    from PIL import Image
+
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 48), (200, 80, 40)).save(path, format="JPEG")
+    os.utime(path, (1_700_000_000, 1_700_000_000))  # settled long ago, not still copying
+
+
+@pytest.mark.fast
+def test_a_name_with_a_newline_is_never_scanned(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    root = tmp_path / "lib"
+    for rel in ("keep.jpg", "new\nline.jpg", "tab\there.jpg", "Shoots\x1b/inside.jpg", "Shoots/ok.jpg"):
+        _photo(root, rel)
+    client = MagicMock()
+    client.post.return_value.json.return_value = {"asset_id": "ast_new"}
+    with (
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._fetch_existing_assets_with_sha", return_value={}),
+        patch("src.processing.scan._fetch_ignored_paths", return_value={}),
+        patch("src.processing.scan.ProxyCache"),
+        caplog.at_level(logging.WARNING, logger="src.processing.ingest"),
+    ):
+        stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
+                         console=Console(quiet=True), skip_moves=True)
+
+    ingested = [c.kwargs["data"]["rel_path"] for c in client.post.call_args_list if c.args[0] == "/v1/ingest"]
+    assert sorted(ingested) == ["Shoots/ok.jpg", "keep.jpg"]
+    assert stats.new == 2
+    # Skipped, not failed: nothing for the scheduler to try again, nothing held back.
+    assert (stats.failed, stats.failed_paths, stats.unlisted) == (0, [], [])
+    said = sorted(r.getMessage() for r in caplog.records if "control character" in r.getMessage())
+    assert said == sorted(f"Not scanning {name!r}: its name has a control character" for name in CONTROL_NAMED)
+
+
+@pytest.mark.fast
+def test_a_clip_already_at_a_name_with_a_control_character_is_archived_as_missing(tmp_path: Path) -> None:
+    """Ingested before names were checked: the scan no longer takes it, so it's
+    archived (kept, with what people wrote), never deleted."""
+    root = tmp_path / "lib"
+    for rel in ("keep.jpg", "new\nline.jpg", "Shoots\x1b/inside.jpg"):
+        _write(root, rel)
+    client = _scan_disk(root, _assets("keep.jpg", "new\nline.jpg", "Shoots\x1b/inside.jpg"))
+    assert sorted(_deleted_ids(client)) == ["ast_Shoots\x1b/inside.jpg", "ast_new\nline.jpg"]
+
+
+@pytest.mark.fast
+def test_the_walk_never_lists_a_name_with_a_control_character(tmp_path: Path) -> None:
+    for rel in ("a.jpg", "a\rb.jpg", "Day\x7f/c.jpg", "Day/d.jpg", "Deep/e\x01/f.jpg"):
+        _write(tmp_path, rel)
+    assert [f["rel_path"] for f in _walk_library(tmp_path)] == ["Day/d.jpg", "a.jpg"]
 
 
 # ---------------------------------------------------------------------------
