@@ -163,6 +163,9 @@ class AssetPageItem(BaseModel):
     face_count: int | None = None
     created_at: str | None = None  # ISO8601
     has_analysis_proxy: bool = False
+    # A video's 10-second preview is on the server (None: not said here). The
+    # scan makes it again when it isn't: its upload failed after the clip was made.
+    has_video_preview: bool | None = None
 
 
 class AssetPageResponse(BaseModel):
@@ -472,6 +475,7 @@ def page_assets(
             face_count=a.face_count,
             created_at=a.created_at.isoformat() if a.created_at else None,
             has_analysis_proxy=a.analysis_proxy_key is not None,
+            has_video_preview=a.video_preview_key is not None if a.media_type == "video" else None,
         )
         for a in assets
     ]

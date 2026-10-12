@@ -3,6 +3,12 @@ and a key given (the scheduler's per-account key, or the CLI's config).
 
 Errors come back as LumiverbAPIError with the envelope's code and the
 status, so whoever called can judge whose they are (src/producers/runner.py).
+
+An idle connection is dropped after KEEPALIVE_SEC, well before the API's
+server closes one (uvicorn: 5 s idle). With the two the same, a request sent
+on a kept-alive connection just as the server closed it was reset
+("Connection reset by peer"), on a busy machine twice in two hours: a vision
+save lost, and a scan's preview upload (the clip made, its preview never).
 """
 
 from __future__ import annotations
@@ -12,6 +18,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import httpx
+
+# Under the API server's keep-alive (uvicorn's timeout_keep_alive, 5 s), by
+# more than a busy machine's pause between taking a connection and sending.
+KEEPALIVE_SEC = 2.0
 
 
 class LumiverbAPIError(Exception):
@@ -47,7 +57,8 @@ class ApiClient:
         self._base_url = base_url.rstrip("/")
         self._api_key = token
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        self._client = httpx.Client(headers=headers, timeout=timeout)
+        self._client = httpx.Client(headers=headers, timeout=timeout,
+                                    limits=httpx.Limits(keepalive_expiry=KEEPALIVE_SEC))
 
     @property
     def base_url(self) -> str:
