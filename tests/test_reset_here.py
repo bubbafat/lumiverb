@@ -71,7 +71,7 @@ def test_on_the_mac_forgot_password_leads_straight_to_a_new_one(admin, mac):
         reset_url = asked.json()["reset_url"]
         assert reset_url.startswith("/reset-password?token=")
         token = reset_url.split("token=", 1)[1]
-        assert client.post("/v1/auth/reset-password", json={"token": token, "password": NEW}).status_code == 204
+        assert client.post("/v1/auth/reset-password", json={"token": token, "password": NEW}).status_code == 200
         assert _login(client, NEW) == 200 and _login(client, PASSWORD) == 401
         again = client.post("/v1/auth/reset-password", json={"token": token, "password": NEW + "!"})
         assert again.status_code == 400, "a link works once"

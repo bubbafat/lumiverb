@@ -30,8 +30,10 @@ same as the web app's setup page (src/server/setup.py), while nobody can
 log in yet.
 
 reset-password: someone's new password, asked for twice, signing them out
-everywhere: what Forgot password on a Mac itself does (no email needed), on
-any install. The env file is the operator's, so this needs no other proof.
+everywhere and revoking the API keys they made, and voiding their unused
+reset and invite links: what Forgot password on a Mac itself does (no email
+needed), on any install. The env file is the operator's, so this needs no
+other proof.
 
 backup: every database backed up now, into the install's backups folder
 (src/server/backups.py), as Settings › Backups' Back up now does. Run as
@@ -471,12 +473,14 @@ def _reset_password(args: argparse.Namespace) -> int:
             return 1
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
         with get_control_session() as session:
-            UserRepository(session).update_password(user.user_id, password_hash)
+            revoked = UserRepository(session).update_password(user.user_id, password_hash)
     except SQLAlchemyError as exc:
         first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
         print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
         return 1
-    print(f"✓ A new password for {email}; they're signed out everywhere else")
+    keys = ("" if not revoked else ", and the API key they made is revoked" if revoked == 1
+            else f", and the {revoked} API keys they made are revoked")
+    print(f"✓ A new password for {email}; they're signed out everywhere else{keys}")
     return 0
 
 
@@ -620,7 +624,8 @@ def main(argv: list[str] | None = None) -> int:
     setup_command.add_argument("--email", help="the admin's email (asked if not given)")
     setup_command.add_argument("--account-name", help="a new account's name (\"Lumiverb\" if not given)")
     reset_command = commands.add_parser(
-        "reset-password", help="set someone's new password, signing them out everywhere (no email needed)")
+        "reset-password",
+        help="set someone's new password, signing them out everywhere and revoking their API keys (no email needed)")
     _env_option(reset_command, argparse.SUPPRESS)
     reset_command.add_argument("--email", help="theirs (asked if not given)")
     backup_command = commands.add_parser("backup", help="back up every database now, into the backups folder")
