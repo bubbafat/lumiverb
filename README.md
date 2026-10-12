@@ -44,7 +44,7 @@ It's one service that starts again at login: Lumiverb runs its own
 PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
 another PostgreSQL you run. It also brings ffmpeg, exiftool, libvips and
 Python 3.12. Its log is `$(brew --prefix)/var/log/lumiverb.log`, each line
-saying which part wrote it (`api | …`, `scheduler | …`), kept to 50 MB. The web app is for that Mac only to begin with; to use it from
+saying which part wrote it (`api | …`, `scheduler | …`), kept to 50 MB; Admin › Logs shows it. The web app is for that Mac only to begin with; to use it from
 a phone or another computer, an admin turns on Settings › Network on that
 Mac. To add people, Admin › Manage users › Invite someone gives you a link to
 send them; they choose their own password there. Details, ports

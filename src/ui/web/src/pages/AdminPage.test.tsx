@@ -154,6 +154,11 @@ describe("AdminPage", () => {
     renderPage();
     expect((await screen.findByRole("link", { name: /Manage users/ })).getAttribute("href")).toBe("/admin/users");
   });
+
+  it("links to the service's log", async () => {
+    renderPage();
+    expect((await screen.findByRole("link", { name: /Logs/ })).getAttribute("href")).toBe("/admin/logs");
+  });
 });
 
 

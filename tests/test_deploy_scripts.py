@@ -1098,3 +1098,13 @@ def test_a_real_run_proxies_to_the_port_the_api_half_wrote_and_says_what_next(tm
     assert f"sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env {conf}/env" in out.stdout
     assert "sudo bash /opt/lumiverb/scripts/update.sh" in out.stdout
     assert "update-vps.sh" not in out.stdout
+
+
+def test_the_service_user_may_read_lumiverbs_journal_after_an_install_or_an_update():
+    # Admin › Logs runs journalctl as the API's user (src/server/service_log.py).
+    deploy = DEPLOY_API.read_text()
+    assert 'usermod -aG systemd-journal "$SVC_USER"' in deploy
+    assert deploy.index("useradd --system") < deploy.index("systemd-journal")
+    update = UPDATE_API.read_text()
+    assert 'usermod -aG systemd-journal "$SVC_USER"' in update
+    assert update.index("systemd-journal") < update.index('step "Restarting services"'), "the restart picks it up"
