@@ -6,6 +6,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "
 import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
+import AdminLogsPage from "./pages/AdminLogsPage";
 import BrowsePage from "./pages/BrowsePage";
 import ProjectsPage from "./pages/ProjectsPage";
 import UnifiedBrowsePage from "./pages/UnifiedBrowsePage";
@@ -194,6 +195,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<AdminUsersPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="admin/logs"
+              element={
+                <RequireAuth>
+                  {<AdminLogsPage />}
                 </RequireAuth>
               }
             />

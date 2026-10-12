@@ -1098,3 +1098,11 @@ def test_a_real_run_proxies_to_the_port_the_api_half_wrote_and_says_what_next(tm
     assert f"sudo /opt/lumiverb/.venv/bin/lumiverb-server setup --env {conf}/env" in out.stdout
     assert "sudo bash /opt/lumiverb/scripts/update.sh" in out.stdout
     assert "update-vps.sh" not in out.stdout
+
+
+def test_neither_an_install_nor_an_update_lets_lumiverb_read_the_whole_journal():
+    # systemd-journal reads every service's lines and sudo's command lines, not
+    # only Lumiverb's: whoever runs the server grants it, told so by Admin ›
+    # Logs (src/server/service_log.py), never these scripts (Robert, Oct 11).
+    for script in (DEPLOY_API, UPDATE_API, REPO / "scripts" / "update.sh", DEPLOY_VPS):
+        assert "systemd-journal" not in script.read_text(), script.name

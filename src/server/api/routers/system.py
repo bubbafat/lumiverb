@@ -23,13 +23,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server import system_health as h
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
+from src.server.api.limits import MAX_PAGE
 from src.server.version import running
 from src.shared.producers import PAUSE_SCANS
 from src.shared.utils import utcnow
@@ -650,3 +651,60 @@ def go_on_moving(request: Request, session: Annotated[Session, Depends(get_tenan
             break
         time.sleep(0.05)
     return _storage(request, session)
+
+
+class LogEntry(BaseModel):
+    id: str
+    part: str | None  # api, scheduler, postgres, quickwit, nginx, upkeep, lumiverb-server (a Mac's run)
+    level: str  # error | warning | info
+    text: str  # a record and the lines continuing it (a traceback)
+    at: str | None = None  # the journal's time; a file's lines carry their own
+
+
+class ServiceLog(BaseModel):
+    source: str | None  # file (a Mac's, launchd's) | journal (Linux) | None: there's none to show
+    where: str | None
+    unavailable: str | None  # why there's nothing to show
+    entries: list[LogEntry]  # newest first
+    next_cursor: str | None
+
+
+LOG_ELSEWHERE = ("This server has more than one account and its log names every account's files: "
+                 "it's shown only on the machine Lumiverb runs on.")
+
+
+def _accounts() -> int:
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository
+
+    with get_control_session() as ctrl:
+        return len(TenantRepository(ctrl).list_all())
+
+
+@router.get("/logs", response_model=ServiceLog, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+def get_logs(
+    request: Request,
+    after: str | None = None,
+    part: str | None = None,
+    problems: bool = False,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE)] = 200,
+) -> ServiceLog:
+    """The service's log, newest first (src/server/service_log.py): a Mac's
+    file, Linux's journal. problems: warnings and errors only; q: lines with
+    this text. A server with more than one account shows it only on the
+    machine itself."""
+    from src.server import service_log
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+
+    if not on_this_machine(request) and _accounts() > 1:
+        raise ApiError(403, "logs_elsewhere", LOG_ELSEWHERE)
+    try:
+        found = service_log.page(after=after, limit=limit, part=part or None, problems=problems, text=q or None)
+    except service_log.LogUnavailableError as exc:
+        return ServiceLog(source=None, where=None, unavailable=str(exc), entries=[], next_cursor=None)
+    except ValueError as exc:
+        raise ApiError(400, "bad_cursor", str(exc)) from None
+    return ServiceLog(source=found.source, where=found.where, unavailable=None,
+                      entries=[LogEntry(**vars(e)) for e in found.entries], next_cursor=found.next_cursor)

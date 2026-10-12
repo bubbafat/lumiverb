@@ -153,9 +153,14 @@ export default function AdminPage() {
             </p>
           )}
         </div>
-        <Link to="/admin/users" className="shrink-0 text-sm text-indigo-400 hover:text-indigo-300">
-          Manage users →
-        </Link>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Link to="/admin/users" className="text-sm text-indigo-400 hover:text-indigo-300">
+            Manage users →
+          </Link>
+          <Link to="/admin/logs" className="text-sm text-indigo-400 hover:text-indigo-300">
+            Logs →
+          </Link>
+        </div>
       </div>
 
       <SetupCard />

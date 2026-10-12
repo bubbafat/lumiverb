@@ -1082,6 +1082,48 @@ export async function getNetworkAccess(): Promise<NetworkAccess> {
   return apiFetch<NetworkAccess>("/system/network");
 }
 
+/** One record of the service's log (Admin › Logs) and the lines continuing it (a traceback). */
+export interface LogEntry {
+  id: string;
+  /** api, scheduler, postgres, quickwit, nginx, upkeep, lumiverb-server (a Mac's service itself). */
+  part: string | null;
+  level: "error" | "warning" | "info";
+  text: string;
+  /** The journal's time (Linux); a Mac's lines carry their own. */
+  at: string | null;
+}
+
+export interface ServiceLog {
+  /** file: a Mac's (launchd's); journal: Linux's; null: none to show (unavailable says why). */
+  source: "file" | "journal" | null;
+  where: string | null;
+  unavailable: string | null;
+  /** Newest first. */
+  entries: LogEntry[];
+  next_cursor: string | null;
+}
+
+export interface LogQuery {
+  after?: string | null;
+  part?: string | null;
+  /** Warnings and errors only. */
+  problems?: boolean;
+  q?: string;
+  limit?: number;
+}
+
+/** Admins; a server with more than one account only on the machine itself (403 logs_elsewhere). */
+export async function getServiceLog(query: LogQuery = {}): Promise<ServiceLog> {
+  const qs = new URLSearchParams();
+  if (query.after) qs.set("after", query.after);
+  if (query.part) qs.set("part", query.part);
+  if (query.problems) qs.set("problems", "true");
+  if (query.q) qs.set("q", query.q);
+  if (query.limit) qs.set("limit", String(query.limit));
+  const s = qs.toString();
+  return apiFetch<ServiceLog>(`/system/logs${s ? `?${s}` : ""}`);
+}
+
 /** An admin's choice, on the machine itself (403 network_elsewhere otherwise). */
 export async function setNetworkAccess(otherDevices: boolean): Promise<NetworkAccess> {
   return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: { other_devices: otherDevices } });

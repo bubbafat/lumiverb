@@ -42,6 +42,16 @@ def test_the_children_are_linux_s_units(tmp_path):
     assert (scheduler.restart_after, scheduler.stop_within, scheduler.term_main_only) == (30, 40, True)
     assert api.env["PYTHONUNBUFFERED"] == scheduler.env["PYTHONUNBUFFERED"] == "1"
     assert scheduler.env["ADMIN_KEY"] == "k"  # the install's variables reach both
+    assert "LUMIVERB_LOG_FILE" not in api.env, "not launchd's: started from a terminal"
+
+
+@pytest.mark.fast
+def test_the_api_is_told_where_launchds_log_is(tmp_path):
+    # Admin › Logs reads it (src/server/service_log.py); the scheduler needn't.
+    log_file = tmp_path / "lumiverb.log"
+    api, scheduler = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path, log_file=log_file)
+    assert api.env["LUMIVERB_LOG_FILE"] == str(log_file)
+    assert "LUMIVERB_LOG_FILE" not in scheduler.env
 
 
 @pytest.mark.fast

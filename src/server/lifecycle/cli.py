@@ -135,14 +135,16 @@ def data_dir(env: dict[str, str]) -> Path:
 
 
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
-                    cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None) -> list[Child]:
+                    cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None,
+                    log_file: Path | None = None) -> list[Child]:
     """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
     API and the scheduler (once `migrated`), with a Linux install's units'
     environment, restart delays and stop times (deploy-api.sh). They stop in
     reverse: the scheduler first, PostgreSQL last. The scheduler never reads
     the install's own settings (config_dir: the env file's folder, its secrets).
     The API is told which env file is the install's (env_file), to say how to
-    restore a backup."""
+    restore a backup, and where the service's log is (log_file: launchd's, for
+    Admin › Logs)."""
     base = {**env, "PYTHONUNBUFFERED": "1"}
     data = data_dir(env)
     started_first: list[Child] = []
@@ -172,7 +174,8 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
          "--port", env.get("API_PORT") or DEFAULT_API_PORT,
          "--workers", env.get("LUMIVERB_API_WORKERS") or DEFAULT_API_WORKERS],
         # Large uploads (analysis proxies) are spooled on the data disk.
-        {**base, "TMPDIR": str(data / "tmp"), **({"LUMIVERB_ENV_FILE": str(env_file)} if env_file else {})}, cwd,
+        {**base, "TMPDIR": str(data / "tmp"), **({"LUMIVERB_ENV_FILE": str(env_file)} if env_file else {}),
+         **({"LUMIVERB_LOG_FILE": str(log_file)} if log_file else {})}, cwd,
         restart_after=5, stop_within=90, empty_first=data / "tmp", start_after=migrated,
     )
     # Which library folders it reads is the env file's to say (LUMIVERB_ROOT_MAP),
@@ -362,7 +365,7 @@ def _run(args: argparse.Namespace) -> int:
     named = _named_env_file(args.env)
     # Built first: a setting it can't use stops it before anything starts.
     children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None,
-                               env_file=named.absolute() if named else None)
+                               env_file=named.absolute() if named else None, log_file=log.file_of(2))
     log.configure()  # launchd's file, rotated, each child's lines named (log.py)
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
