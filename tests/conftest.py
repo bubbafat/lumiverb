@@ -355,17 +355,40 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
 # ignore a flaky test).
 FAILURES_LOG = Path(".pytest_cache") / "failures.log"
 _failures_log: Path | None = None
+# And every skip and xfail, one line each with its reason: a test that skips
+# itself only sometimes is coverage lost only sometimes, and two runs' lists
+# say which one it was.
+SKIPS_LOG = Path(".pytest_cache") / "skips.log"
+_skips_log: Path | None = None
+
+
+def _run_line(session: pytest.Session) -> str:
+    return (f"--- run {datetime.now().isoformat(timespec='seconds')} pid {os.getpid()}: "
+            f"{' '.join(session.config.invocation_params.args)}\n")
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    if _failures_log is not None:
-        _failures_log.parent.mkdir(parents=True, exist_ok=True)
-        with _failures_log.open("a") as out:
-            out.write(f"--- run {datetime.now().isoformat(timespec='seconds')} pid {os.getpid()}: "
-                      f"{' '.join(session.config.invocation_params.args)}\n")
+    for log in (_failures_log, _skips_log):
+        if log is not None:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a") as out:
+                out.write(_run_line(session))
+
+
+def _skip_reason(report: pytest.TestReport) -> str:
+    if hasattr(report, "wasxfail"):
+        return f"xfail: {report.wasxfail}"
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:  # (file, line, "Skipped: why")
+        where = os.path.relpath(longrepr[0]) if os.path.isabs(longrepr[0]) else longrepr[0]
+        return f"{where}:{longrepr[1]}: {str(longrepr[2]).removeprefix('Skipped: ')}"
+    return str(longrepr)
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if _skips_log is not None and report.skipped:
+        with _skips_log.open("a") as out:
+            out.write(f"SKIPPED {report.nodeid} ({report.when}): {_skip_reason(report)}\n")
     if _failures_log is None or not report.failed:
         return
     worker = getattr(report, "node", None)
@@ -382,9 +405,10 @@ def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Co
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    global _server, _failures_log
+    global _server, _failures_log, _skips_log
     if not hasattr(config, "workerinput"):  # the controller: workers' reports reach it too
         _failures_log = Path(config.rootpath) / FAILURES_LOG
+        _skips_log = Path(config.rootpath) / SKIPS_LOG
     shared = getattr(config, "workerinput", {}).get("lumiverb_pg")
     if shared:  # an xdist worker: the controller started the server
         _server = _Server(**shared)

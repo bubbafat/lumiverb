@@ -132,20 +132,23 @@ def test_init_chunks(video_api_client: tuple[TestClient, str, str, str, str]) ->
 
 @pytest.mark.slow
 def test_claim_next_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
-    """After init, POST /v1/video/{asset_id}/chunks/next returns 200 with chunk or 204 if none pending."""
+    """POST /v1/video/{asset_id}/chunks/next hands out a clip's chunks one at a time (its own
+    video: no other test claims them): 409 chunk_under_way while one is, the next once it's
+    done, then 204 when none is left."""
     client, api_key, library_id, _, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _video(client, auth, library_id, "claim.mp4", 60.0)
+    asset_id = _video(client, auth, library_id, "claim.mp4", 90.0)
 
-    r = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
-    assert r.status_code in (200, 204)
-    if r.status_code == 200:
-        body = r.json()
-        assert "chunk_id" in body
-        assert "worker_id" in body
-        assert "chunk_index" in body
-        assert "start_ts" in body
-        assert "end_ts" in body
+    claimed = []
+    while (r := client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)).status_code == 200:
+        work = r.json()
+        assert {"chunk_id", "worker_id", "chunk_index", "start_ts", "end_ts"} <= work.keys()
+        busy = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
+        assert busy.status_code == 409 and busy.json()["error"]["code"] == "chunk_under_way"
+        _complete(client, auth, work, [int(work["start_ts"] * 1000)])
+        claimed.append(work["chunk_index"])
+    assert r.status_code == 204, r.text
+    assert len(claimed) >= 2 and claimed == sorted(set(claimed)), "each chunk once, in order"
 
 
 @pytest.mark.slow
@@ -156,9 +159,7 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
     asset_id = _video(client, auth, library_id, "complete.mp4", 60.0)
 
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
-    if r_claim.status_code == 204:
-        pytest.skip("No pending chunks (all claimed/completed by other tests)")
-    assert r_claim.status_code == 200
+    assert r_claim.status_code == 200, r_claim.text  # its own video: never claimed by another test
     chunk = r_claim.json()
     chunk_id = chunk["chunk_id"]
     worker_id = chunk["worker_id"]
@@ -215,9 +216,7 @@ def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> 
     asset_id = _video(client, auth, library_id, "fail.mp4", 60.0)
 
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
-    if r_claim.status_code == 204:
-        pytest.skip("No pending chunks")
-    assert r_claim.status_code == 200
+    assert r_claim.status_code == 200, r_claim.text  # its own video: never claimed by another test
     chunk = r_claim.json()
     chunk_id = chunk["chunk_id"]
     worker_id = chunk["worker_id"]
@@ -330,76 +329,25 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
 @pytest.mark.slow
 def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """PATCH /v1/video/scenes/{scene_id} with {model_id, model_version, description, tags} returns updated scene."""
-    client, api_key, library_id, asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, _, _tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
+    asset_id = _video(client, auth, library_id, "vision.mp4", 60.0)  # its own: what other tests did doesn't matter
 
-    # Ensure we have a scene
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
-    if r_claim.status_code in (204, 409):
-        # Use a fresh asset and complete a chunk
-        client.post(
-            "/v1/assets/upsert",
-            json={
-                "library_id": library_id,
-                "rel_path": "vision.mp4",
-                "file_size": 3000,
-                "file_mtime": "2025-01-01T12:00:00Z",
-                "media_type": "video",
-            },
-            headers=auth,
-        )
-        r_asset = client.get(
-            "/v1/assets/by-path",
-            params={"library_id": library_id, "rel_path": "vision.mp4"},
-            headers=auth,
-        )
-        aid = r_asset.json()["asset_id"]
-        client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": 60.0, "scene_sec": 30.0}, headers=auth)
-        r_claim = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
-        if r_claim.status_code == 204:
-            pytest.skip("No chunks to claim")
-        chunk = r_claim.json()
-        client.post(
-            f"/v1/video/chunks/{chunk['chunk_id']}/complete",
-            json={
-                "worker_id": chunk["worker_id"],
-                "scenes": [
-                    {
-                        "scene_index": 0,
-                        "start_ms": 0,
-                        "end_ms": 5000,
-                        "rep_frame_ms": 2500,
-                        "description": "Initial",
-                        "tags": [],
-                    }
-                ],
-                "lineage": made("scenes"),
-            },
-            headers=auth,
-        )
-        r_scenes = client.get(f"/v1/video/{aid}/scenes", headers=auth)
-        asset_id = aid
-    else:
-        chunk = r_claim.json()
-        client.post(
-            f"/v1/video/chunks/{chunk['chunk_id']}/complete",
-            json={
-                "worker_id": chunk["worker_id"],
-                "scenes": [
-                    {
-                        "scene_index": 0,
-                        "start_ms": 0,
-                        "end_ms": 5000,
-                        "rep_frame_ms": 2500,
-                        "description": "Initial",
-                        "tags": [],
-                    }
-                ],
-                "lineage": made("scenes"),
-            },
-            headers=auth,
-        )
-        r_scenes = client.get(f"/v1/video/{asset_id}/scenes", headers=auth)
+    assert r_claim.status_code == 200, r_claim.text
+    chunk = r_claim.json()
+    r_done = client.post(
+        f"/v1/video/chunks/{chunk['chunk_id']}/complete",
+        json={
+            "worker_id": chunk["worker_id"],
+            "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 5000, "rep_frame_ms": 2500,
+                        "description": "Initial", "tags": []}],
+            "lineage": made("scenes"),
+        },
+        headers=auth,
+    )
+    assert r_done.status_code == 200, r_done.text
+    r_scenes = client.get(f"/v1/video/{asset_id}/scenes", headers=auth)
 
     assert r_scenes.status_code == 200
     scenes = r_scenes.json()["scenes"]
