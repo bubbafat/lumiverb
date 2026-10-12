@@ -1060,6 +1060,8 @@ export interface SystemHealth {
    * (null: not known now: not looked at since, Scans paused, or the scheduler isn't running),
    * and when it was last seen reachable (null: never). */
   libraries: { library_id: string; name: string; reachable: boolean | null; seen_at: string | null }[];
+  /** The Lumiverb running ("0.1.6", "v0.1.6-3-g1a2b3c4", "unknown"); older servers leave it out. */
+  version?: string;
 }
 
 export async function getSystemHealth(): Promise<SystemHealth> {

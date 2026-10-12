@@ -85,6 +85,12 @@ def test_seven_rows_in_order_with_the_worst_overall(env):
     assert {r["key"]: r["state"] for r in body["rows"]}["website"] == "green"
 
 
+def test_it_says_which_lumiverb_is_running(env):
+    from src.server.version import running
+
+    assert _health(env)["version"] == running() != ""  # this checkout: what git says
+
+
 def test_only_someone_signed_in_sees_it(env):
     client, headers, library_id, *_ = env
     assert client.get("/v1/system/health").status_code == 401

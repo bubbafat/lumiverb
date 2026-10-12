@@ -81,6 +81,21 @@ describe("AdminPage", () => {
     expect(within(items[1]).getByRole("img", { name: "OK" })).toBeTruthy();
   });
 
+  it("says which Lumiverb is running", async () => {
+    api.getSystemHealth.mockResolvedValue(health({ version: "0.1.6" }));
+    renderPage();
+    expect(await screen.findByText("Lumiverb 0.1.6")).toBeTruthy();
+    cleanup();
+    api.getSystemHealth.mockResolvedValue(health({ version: "v0.1.6-3-g1a2b3c4" }));  // a checkout past a tag
+    renderPage();
+    expect(await screen.findByText("Lumiverb 0.1.6-3-g1a2b3c4")).toBeTruthy();
+    cleanup();
+    api.getSystemHealth.mockResolvedValue(health());  // an older server leaves it out
+    renderPage();
+    await screen.findByRole("list", { name: "System health" });
+    expect(screen.queryByText(/^Lumiverb /)).toBeNull();
+  });
+
   it("links a row to where it's fixed", async () => {
     api.getSystemHealth.mockResolvedValue(health({
       state: "red",
