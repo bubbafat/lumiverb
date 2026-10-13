@@ -511,16 +511,45 @@ def test_a_failed_file_is_tried_again_with_back_off(das: Path) -> None:
 
 
 @pytest.mark.fast
-def test_a_full_scan_tries_failed_files_again_and_one_that_takes_them_ends_their_retries(das: Path) -> None:
+def test_scans_before_a_retry_is_due_leave_its_files_to_it(das: Path) -> None:
+    # Robert, Oct 13: a full scan every 15 minutes tried a broken file 96
+    # times a day on top of its back-off. The scan is told which files wait,
+    # with their size and time when they failed (test_scan_failing_files.py
+    # has the real scan leave them alone).
+    t = 100 * HOUR
+    when = (1, "2026-10-13T08:00:00+00:00")
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    failing = MagicMock(return_value=ScanStats(failed=1, failed_paths=["Day 1/A001.mov"],
+                                               failed_seen={"Day 1/A001.mov": when}))
+    _, state, _ = _pass(server, now=t, scan=failing, full_scan_every=2 * MIN)
+    assert failing.call_args.kwargs["waiting"] == {}
+    retry = state.retries["lib_1"]
+    assert retry.seen == {"Day 1/A001.mov": when} and retry.due == t + 5 * MIN
+    server.pending = {}
+    # A full scan before the retry is due: told the file waits; it left it alone, and the retry stands.
+    left_alone = MagicMock(return_value=ScanStats(waiting_paths=["Day 1/A001.mov"]))
+    _, state, _ = _pass(server, state, now=t + 2 * MIN, scan=left_alone, full_scan_every=2 * MIN)
+    assert left_alone.call_args.kwargs["path_prefix"] is None
+    assert left_alone.call_args.kwargs["waiting"] == {"Day 1/A001.mov": when}
+    assert state.retries["lib_1"] == retry
+    # The retry, when due: nothing waits, the file is tried.
+    scan, state, _ = _pass(server, state, now=t + 5 * MIN, scan=_failing("Day 1/A001.mov"), full_scan_every=2 * MIN)
+    assert scan.call_args.kwargs["waiting"] == {}
+
+
+@pytest.mark.fast
+def test_a_failed_file_whose_size_and_time_arent_on_record_is_tried_by_the_next_full_scan(das: Path) -> None:
+    # A retry saved before failures were remembered with them (or a file the
+    # scan couldn't name): whether it changed can't be told, so it's tried.
     t = 100 * HOUR
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
-    _, state, _ = _pass(server, now=t, scan=_failing("Day 1/A001.mov"), full_scan_every=15 * MIN)
+    _, state, _ = _pass(server, now=t, scan=_failing("Day 1/A001.mov"), full_scan_every=2 * MIN)
     server.pending = {}
-    scan, state, _ = _pass(server, state, now=t + 15 * MIN, scan=_failing("Day 1/A001.mov"), full_scan_every=15 * MIN)
-    assert scan.call_args.kwargs["path_prefix"] is None  # the whole library, the failed file with it
-    assert state.retries["lib_1"].paths == {"Day 1/A001.mov"} and state.retries["lib_1"].delay == 10 * MIN
-    scan, state, _ = _pass(server, state, now=t + 30 * MIN, full_scan_every=15 * MIN)
-    assert scan.call_args.kwargs["path_prefix"] is None and state.retries == {}
+    scan, state, _ = _pass(server, state, now=t + 2 * MIN, scan=_failing("Day 1/A001.mov"), full_scan_every=2 * MIN)
+    assert scan.call_args.kwargs["path_prefix"] is None and scan.call_args.kwargs["waiting"] == {}
+    assert state.retries["lib_1"].delay == 10 * MIN  # failed again
+    scan, state, _ = _pass(server, state, now=t + 4 * MIN, full_scan_every=2 * MIN)
+    assert scan.call_args.kwargs["path_prefix"] is None and state.retries == {}  # taken in: its retry ends
 
 
 @pytest.mark.fast
@@ -604,12 +633,21 @@ def test_full_scan_times_and_retries_survive_a_restart(tmp_path: Path) -> None:
     # Otherwise every deploy scans every library in full, and files waiting
     # for a retry wait for the next full scan instead.
     state = ScanState(last_full_scan={"lib_1": 123.0},
-                      retries={"lib_1": Retry({"Day 1/A001.mov", "Locked"}, 600.0, 1234.5, {"chg_1": 7})})
+                      retries={"lib_1": Retry({"Day 1/A001.mov", "Locked"}, 600.0, 1234.5, {"chg_1": 7},
+                                              {"Day 1/A001.mov": (5, "2026-10-13T08:00:00+00:00")})})
     path = tmp_path / "worker-state.json"
     save_state(path, saved_form(state))
     again = load_state(path)
     assert again.last_full_scan == {"lib_1": 123.0}
     assert again.retries == state.retries
+
+
+@pytest.mark.fast
+def test_retries_saved_before_failures_kept_their_size_and_time_still_load(tmp_path: Path) -> None:
+    path = tmp_path / "worker-state.json"
+    path.write_text('{"last_full_scan": {}, "retries": {"lib_1": {"paths": ["a.mov"], "delay": 300.0,'
+                    ' "due": 9.0, "held": {}}}}')
+    assert load_state(path).retries == {"lib_1": Retry({"a.mov"}, 300.0, 9.0, {}, {})}
 
 
 @pytest.mark.fast
