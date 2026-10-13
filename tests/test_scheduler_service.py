@@ -89,6 +89,9 @@ class FakeAccount:
     def capacity(self, job: str) -> int:
         return self.slots[job]
 
+    def job_error(self, job: str) -> str:
+        return f"No machine doing {job} is online."
+
     def library_ids(self, *, storage: bool) -> list[str]:
         return list(self.reachable if storage else self.libraries)
 

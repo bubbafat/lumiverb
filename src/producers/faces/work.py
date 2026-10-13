@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.producers.runner import Failed, Waits, Work
+from src.shared.waits import SCAN
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class Faces(Work):
 
         cache = self.acct.proxy_cache(clip["library_id"])
         if not face_proxy(clip, self.acct.root(clip["library_id"]), cache):
-            raise Waits("its file changed since it was hashed; its scan comes first")
+            raise Waits("its file changed since it was hashed; its scan comes first", reason=SCAN)
         image = cache.get(clip["asset_id"], clip.get("rel_path"))
         if image is None:
             raise Failed("no proxy")

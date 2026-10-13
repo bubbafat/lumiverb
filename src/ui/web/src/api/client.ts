@@ -943,8 +943,11 @@ export interface Producer {
   /** Its stale clips are made again (after anything missing); if they can't be yet, why_not says why. */
   redoable: boolean;
   why_not: string | null;
-  /** An admin stopped its redo: stale clips wait until it's resumed (or its model changes). */
+  /** An admin stopped its redo, or a new version of it did (new_version): stale clips wait until it's resumed
+   * (or its model changes). */
   redo_stopped: boolean;
+  /** Its redo was stopped by a new version of it, not an admin: an admin's resume makes them again. */
+  new_version?: boolean;
   /** Admins only. */
   redo_stopped_by: string | null;
   redo_stopped_at: string | null;
@@ -963,6 +966,31 @@ export interface Producer {
   part_of?: string | null;
   /** The artifacts it's made from: a clip lacking one waits for it, and isn't in its counts. */
   needs?: string[];
+  /** Why its due work waits now, each reason with how many clips (lib/waits.ts says each); null without counts. */
+  waits?: ProducerWait[] | null;
+}
+
+/** Why some of a producer's due work waits (src/shared/waits.py): only the fields its reason has are sent. */
+export interface ProducerWait {
+  /** One of lib/waits.ts WAIT_REASONS (a newer server may send one this page doesn't know). */
+  reason: string;
+  clips: number;
+  /** needs: the artifact it waits for. */
+  artifact?: string;
+  /** needs: what makes that is paused (Scans, for what scans make); scan: Scans is paused. */
+  paused?: boolean;
+  /** storage: the library, and what the scheduler's looks at its drive found. */
+  library_id?: string;
+  library_name?: string;
+  seen_at?: string;
+  away_since?: string;
+  checked?: boolean;
+  /** ai_machines: the job. */
+  job?: string;
+  /** ai_machines: "off" | "no_machine" | "offline" | "unusable"; scheduler: "not_running" | "starting" | "cant_list". */
+  why?: string;
+  /** ai_machines: why, in a sentence; scheduler (cant_list): the error. */
+  message?: string;
 }
 
 /** Make again what a producer made below its level now (admins): these clips (asset_ids) or every one

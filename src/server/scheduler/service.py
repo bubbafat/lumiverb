@@ -159,6 +159,8 @@ class Scheduler:
         self._hold_at: dict[str, float] = {}
         self._hold_unread: set[str] = set()
         self._hold_reads = itertools.count()  # which read of what's paused is newest
+        # Each account's kinds whose last listing failed, and the error (its status says).
+        self._unlisted: dict[str, dict[str, str]] = {}
 
     # -- one tick -----------------------------------------------------------
 
@@ -301,7 +303,7 @@ class Scheduler:
                 # the latest look, or not looked at since this start.
                 waits = sorted(set(acct.library_ids(storage=False)) - set(acct.library_ids(storage=True)))
                 self._write_status(tenant_id, {**self.status(tenant_id), "storage_waits": waits,
-                                               "storage": acct.storage_seen()})
+                                               "storage": acct.storage_seen(), **self._why_nothing(tenant_id, acct)})
             except Exception:  # noqa: BLE001 — only a view of it
                 logger.exception("scheduler: writing %s's status failed", tenant_id)
         for pool in account_pools():
@@ -329,29 +331,51 @@ class Scheduler:
                                   complete=False)
         if not acct.settings_ready:
             return  # nothing is made with settings the server hasn't said
+        # Each gate below holds a kind's due work back, and Processing says why
+        # (src/shared/waits.py): its AI machines (ai_waits), a pause, its
+        # libraries' storage (storage_waits), a listing that failed (unlisted).
+        unlisted = self._unlisted.setdefault(tenant_id, {})
         for kind in QUEUED:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
+                unlisted.pop(kind.name, None)
                 continue
             if kind.name in held:
+                unlisted.pop(kind.name, None)
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
             libraries = acct.library_ids(storage=kind.storage)
             if not libraries:  # nothing to ask yet (no storage reachable): not an empty answer to wait on
+                unlisted.pop(kind.name, None)
                 self.dispatcher.clear(tenant_id, kind.name)
                 continue
             try:
                 items = self._candidates(tenant_id, kind, libraries, self.dispatcher.held(tenant_id, kind.name))
-            except Exception:  # noqa: BLE001 — one kind's trouble doesn't hold up the others
+            except Exception as e:  # noqa: BLE001 — one kind's trouble doesn't hold up the others
                 logger.exception("scheduler: listing %s for %s failed", kind.name, tenant_id)
+                unlisted[kind.name] = (str(e).strip().splitlines() or [type(e).__name__])[0][:300]
                 items = []
+            else:
+                unlisted.pop(kind.name, None)
             if items is None:  # paused (or its redo stopped) since this refill looked: not an empty answer
                 self.dispatcher.clear(tenant_id, kind.name)
                 continue
             if kind.redo and items:
                 acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
+
+    def _why_nothing(self, tenant_id: str, acct: Any) -> dict[str, Any]:
+        """What its status says of work it hands out none of, for Processing
+        to say why (src/shared/waits.py): whether it has read the account's
+        settings (no job goes until then), each AI job whose machines it can't
+        use and why (ai_waits), and each kind whose listing failed (unlisted)."""
+        return {
+            "settings_ready": bool(acct.settings_ready),
+            "ai_waits": {pool.job.name: acct.job_error(pool.job.name)
+                         for pool in account_pools() if not acct.capacity(pool.job.name)},
+            "unlisted": dict(self._unlisted.get(tenant_id, {})),
+        }
 
     def _find_new_versions(self, tenant_id: str) -> None:
         """A producer's new version stops its redo until an admin resumes it
@@ -391,6 +415,7 @@ class Scheduler:
         clip's crashes in a row are counted, and the CRASHES_BEFORE_CHARGE-th
         is charged, so the back-off and giving up apply."""
         from src.producers.runner import NOT_TRIED, Crashed, Stopped, whose
+        from src.shared.waits import Waiting
 
         kind = KINDS[job.kind]
         try:
@@ -404,8 +429,11 @@ class Scheduler:
             if not kind.flag:  # a scan's
                 logger.exception("scheduler: %s for %s failed", job.kind, job.tenant_id)
                 return list(job.asset_ids)
-            crashed, others = (list(e.asset_ids), list(e.waiting)) if isinstance(e, Crashed) else (list(job.asset_ids), [])
-            cause = e.error if isinstance(e, Crashed) else e
+            # The clips that waited say why (a Waiting); the crashed ones are held (HELD).
+            if isinstance(e, Crashed):
+                crashed, others, cause = list(e.asset_ids), e.waiting, e.error
+            else:
+                crashed, others, cause = list(job.asset_ids), Waiting(), e
             names = ", ".join(crashed[:3])
             verdict = whose(cause)
             if verdict == "clip":
@@ -417,10 +445,10 @@ class Scheduler:
                 return others or None
             if verdict == "transient":
                 logger.warning("scheduler: %s for %s couldn't reach the server: %s", job.kind, names, cause)
-                return crashed + others  # none charged: each waits the long while
+                return Waiting(crashed + others, others.why)  # none charged: each waits the long while
             logger.error("scheduler: %s for %s crashed", job.kind, names, exc_info=cause)
             charged = self._charge_crashes(acct, job, crashed, cause)
-            return [i for i in crashed + others if i not in charged] or None
+            return Waiting([i for i in crashed + others if i not in charged], others.why) or None
 
     def _charge_crashes(self, acct: Any, job: Job, asset_ids: list[str], cause: object) -> set[str]:
         """Count one more crash in a row for each clip; charge a failure to

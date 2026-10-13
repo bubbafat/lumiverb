@@ -181,16 +181,18 @@ describe("ProcessingSection", () => {
 
   it("says why a producer's work waits (its AI job has no machine), linking to Settings → AI", async () => {
     // Robert, Oct 9: removing the last machine for a job never asks; this is where it shows.
+    const why = "No machine does descriptions & text: its work waits until an admin adds one in Settings → AI.";
     producers = [
-      producer({ waiting: "No machine does descriptions & text: its work waits until an admin adds one in Settings → AI." }),
-      producer({ artifact: "clip", title: "Visual search (CLIP)" }),
+      producer({ waiting: why, waits: [{ reason: "ai_machines", clips: 4, job: "vision", why: "no_machine", message: why }] }),
+      producer({ artifact: "clip", title: "Visual search (CLIP)", waits: [] }),
     ];
     renderSection();
     const vision = await row("Descriptions and tags");
-    const why = within(vision).getByRole("status");
-    expect(why.textContent).toContain("No machine does descriptions & text");
-    expect(within(why).getByRole("link", { name: "Settings → AI" }).getAttribute("href")).toBe("/settings/ai");
-    expect(within(await row("Visual search (CLIP)")).queryByRole("status")).toBeNull();
+    const line = within(within(vision).getByRole("list", { name: "Why Descriptions and tags waits" })).getByRole("listitem");
+    expect(line.textContent).toBe(`4 photos wait. ${why}`);
+    expect(line.className).toContain("amber");
+    expect(within(line).getByRole("link", { name: "Settings → AI" }).getAttribute("href")).toBe("/settings/ai");
+    expect(within(await row("Visual search (CLIP)")).queryByRole("list", { name: /Why/ })).toBeNull();
   });
 
   it("says the stale ones are being redone, with no Upgrade step", async () => {
@@ -797,7 +799,8 @@ describe("Scene descriptions' Detail", () => {
 
 describe("Waiting for what it's made from", () => {
   // Scene descriptions apply only to videos whose scenes are found: with
-  // Scenes paused, they count nothing, which isn't being caught up.
+  // Scenes paused, they count nothing, which isn't being caught up. The
+  // server says how many wait for Scenes (waits: needs), and whether it's paused.
   const sceneRow = (scenesPaused: boolean, missing: number, described = 0) => {
     if (scenesPaused) paused.add("scenes");
     return sceneProducers(missing, described, scenesPaused);
@@ -806,7 +809,8 @@ describe("Waiting for what it's made from", () => {
     producer({ artifact: "scenes", title: "Scenes", media: ["video"], part_of: "scene_vision", paused: scenesPaused,
                counts: { applicable: 1500, current: 1500 - missing, stale: 0, missing, failing: 0 } }),
     producer({ artifact: "scene_vision", title: "Scene descriptions", media: ["video"], needs: ["analysis_proxy", "scenes"],
-               counts: { applicable: described, current: described, stale: 0, missing: 0, failing: 0 } }),
+               counts: { applicable: described, current: described, stale: 0, missing: 0, failing: 0 },
+               waits: missing ? [{ reason: "needs", clips: missing, artifact: "scenes", paused: scenesPaused }] : [] }),
     producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"],
                counts: { applicable: 1500, current: 1500, stale: 0, missing: 0, failing: 0 } }),
   ];
@@ -834,6 +838,74 @@ describe("Waiting for what it's made from", () => {
     renderSection();
     const li = await row("Scene descriptions");
     expect(within(li).queryByText(/wait for/)).toBeNull();
+  });
+});
+
+describe("Why work waits (no silent waits)", () => {
+  // Robert, Oct 12: analysis proxies stopped for hours and the row said nothing.
+  // Each reason the server sends is said on the row, in one sentence.
+  const proxies = (waits: Producer["waits"], over: Partial<Producer> = {}) => producer({
+    artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"], settings: {}, fields: [],
+    counts: { applicable: 100, current: 60, stale: 0, missing: 40, failing: 0 }, waits, ...over });
+
+  const lines = async (title: string) => {
+    const list = within(await row(title)).queryByRole("list", { name: `Why ${title} waits` });
+    return list ? within(list).getAllByRole("listitem").map((li) => li.textContent) : [];
+  };
+
+  it("says which library's drive the analysis proxies wait for, and since when", async () => {
+    producers = [proxies([
+      { reason: "storage", clips: 40, library_id: "lib_1", library_name: "Empty Besters", checked: true,
+        away_since: "2026-10-12T18:20:00Z", seen_at: "2026-10-12T17:55:00Z" },
+      { reason: "storage", clips: 3, library_id: "lib_2", library_name: "Footage", checked: false },
+    ])];
+    renderSection();
+    const said = await lines("Analysis proxies");
+    expect(said).toHaveLength(2);
+    expect(said[0]).toMatch(/^40 videos in Empty Besters wait for its drive: it can't be reached since .+ \(last seen .+\)\.$/);
+    expect(said[1]).toBe("3 videos in Footage wait for its drive: it hasn't been looked at since the scheduler started.");
+  });
+
+  it("says each other reason in a sentence of its own", async () => {
+    producers = [proxies([
+      { reason: "paused", clips: 40 },
+      { reason: "scheduler", clips: 40, why: "not_running" },
+      { reason: "scan", clips: 2, paused: true },
+      { reason: "held", clips: 1 },
+      { reason: "retry_later", clips: 5 },
+      { reason: "given_up", clips: 1 },
+    ])];
+    renderSection();
+    expect(await lines("Analysis proxies")).toEqual([
+      "40 videos wait until it's resumed.",
+      "40 videos wait for the scheduler, which isn't running.",
+      "2 videos wait for a scan to see their file again, and Scans is paused.",
+      "1 video is tried again within the hour: its last try couldn't finish.",
+      "5 videos failed and wait to be tried again.",
+      "1 video failed too many times and isn't tried again until someone asks.",
+    ]);
+  });
+
+  it("says a new version waits for an admin's OK in the redo's box, with Resume", async () => {
+    producers = [proxies([{ reason: "new_version", clips: 7 }], {
+      counts: { applicable: 100, current: 93, stale: 7, missing: 0, failing: 0 }, redo_stopped: true, new_version: true })];
+    renderSection();
+    const li = await row("Analysis proxies");
+    expect(within(li).getByText(
+      "A new version of Analysis proxies is ready: 7 videos made by an older one are made again once an admin resumes it.",
+    )).toBeTruthy();
+    expect(within(li).queryByText(/Redo stopped/)).toBeNull();  // not an admin's stop
+    expect(within(li).getByRole("button", { name: "Resume redoing Analysis proxies" })).toBeTruthy();
+    expect(await lines("Analysis proxies")).toEqual([]);  // said once, in the redo's box
+  });
+
+  it("says why, not 'Nothing to make yet.', when nothing it applies to can be made yet", async () => {
+    producers = [proxies([{ reason: "needs", clips: 9, artifact: "probe", paused: false }], {
+      counts: { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0 } }),
+      producer({ artifact: "probe", title: "Video probes", media: ["video"], waits: [] })];
+    renderSection();
+    expect(await lines("Analysis proxies")).toEqual(["9 videos wait for Video probes first."]);
+    expect(within(await row("Analysis proxies")).queryByText("Nothing to make yet.")).toBeNull();
   });
 });
 

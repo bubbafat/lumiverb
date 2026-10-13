@@ -26,7 +26,8 @@ subclass that makes one clip's artifact (make) and saves what was made
   of the job waits.
 
 What a job says (dispatch.Outcome): NOT_TRIED, None (each clip saved or
-charged) or the clips that wait without either.
+charged) or the clips that wait without either (a Waiting: each with why,
+src/shared/waits.py, which Settings → Processing says).
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ import inspect
 import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
+
+from src.shared.waits import HELD, SCAN, Waiting, reasons_of
 
 if TYPE_CHECKING:
     from src.server.scheduler.dispatch import Job
@@ -68,7 +71,13 @@ class Failed(Exception):
 
 class Waits(Exception):
     """Nobody's fault (the GPU ran out of memory, the AI machines' trouble, the
-    file changed since it was hashed): uncharged, the clip waits the long while."""
+    file changed since it was hashed): uncharged, the clip waits the long while.
+    reason: why, as Settings → Processing says it (src/shared/waits.py):
+    SCAN when a scan comes first, HELD (the default) otherwise."""
+
+    def __init__(self, error: object = "", reason: str = HELD) -> None:
+        super().__init__(str(error))
+        self.reason = reason
 
 
 class Died(Exception):
@@ -82,7 +91,7 @@ class Crashed(Exception):
         super().__init__(str(error))
         self.asset_ids = list(asset_ids)
         self.error = error
-        self.waiting = list(waiting or [])
+        self.waiting = Waiting(waiting or [], reasons_of(waiting))
 
 
 def whose(error: object) -> str:
@@ -226,7 +235,7 @@ class Work:
                 acct.unreachable(library_id)
                 raise NotTried(clip["rel_path"])
             logger.warning("scheduler: %s isn't on its storage; it waits for the scan", clip["rel_path"])
-            raise Waits("missing")
+            raise Waits("missing", reason=SCAN)
         return source
 
 
@@ -236,7 +245,7 @@ class _Job:
     def __init__(self, work: Work, acct: Any, job: Job) -> None:
         self.work, self.acct, self.job = work, acct, job
         self.saving = Saving(acct.client, acct.stopping)
-        self.waiting: list[str] = []
+        self.waiting = Waiting()  # each with why (src/shared/waits.py)
         self.crashed: list[str] = []
         self.cause: object = None
         self.in_a_row = 0  # clips crashed in a row
@@ -247,9 +256,9 @@ class _Job:
         self.in_a_row = 0
         self.acct.failures.add(self.work.artifact, clip["asset_id"], error)
 
-    def wait(self, clip: dict) -> None:
+    def wait(self, clip: dict, reason: str = HELD) -> None:
         self.in_a_row = 0
-        self.waiting.append(clip["asset_id"])
+        self.waiting.add(clip["asset_id"], reason)
 
     def crash(self, clip: dict, error: object) -> None:
         logger.error("scheduler: %s for %s crashed", self.work.artifact, clip["rel_path"], exc_info=error
@@ -269,7 +278,7 @@ class _Job:
             self.charge(clip, error.error)
         elif isinstance(error, Waits):
             logger.info("scheduler: %s for %s waits: %s", self.work.artifact, clip["rel_path"], error)
-            self.wait(clip)
+            self.wait(clip, error.reason)
         elif isinstance(error, Died) or isinstance(error, OSError):
             self.crash(clip, error)
         elif out_of_memory(error):
@@ -339,7 +348,8 @@ class _Job:
                 if self.in_a_row >= 2:
                     # Two in a row crashing is the machine's trouble (a hung GPU): the rest wait.
                     logger.warning("scheduler: %s keeps crashing; the rest of the job waits", work.artifact)
-                    self.waiting.extend(c["asset_id"] for c in items[n:])
+                    for c in items[n:]:
+                        self.waiting.add(c["asset_id"])
                     break
                 self.one(clip, kept if together else None)
             if kept:

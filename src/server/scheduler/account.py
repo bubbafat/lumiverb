@@ -249,6 +249,11 @@ class Account:
             return 0
         return guard.capacity()
 
+    def job_error(self, job: str) -> str:
+        """Why the job's machines can't be used now, as its guard says it (the
+        scheduler's status carries it to Processing)."""
+        return self.guards[job].error or "Its machines haven't been checked yet."
+
     # -- caches and models --------------------------------------------------
 
     def proxy_cache(self, library_id: str) -> Any:
