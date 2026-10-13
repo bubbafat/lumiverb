@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.after_commit import AfterCommit
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cursor
 from src.server.api.errors import DecisionRequiredError
@@ -123,40 +125,58 @@ def empty_trash(
     )
 
 
-def hand_over_to_copies(session: Session, request: Request, archived_ids: list[str]) -> list[str]:
+def hand_over_to_copies(session: Session, request: Request, archived_ids: list[str], *,
+                        after: AfterCommit | None = None) -> list[str]:
     """Copy, then delete the original (when the account follows moves): each of
     these just-archived assets whose content has an empty, newer copy in the
     library moves to that copy's path, with its notes, ratings, projects and
     people, and the copy goes. Returns the ids that moved.
 
-    The archive has already committed: a handover that fails is logged and
-    rolled back, never a failed request (the scan would stop, and the original,
-    no longer listed, would never be tried again)."""
+    after given: in the caller's transaction, which the caller commits with
+    the archive (a scan's finish, DELETE /v1/assets: both, or neither, when
+    the API dies between them), then runs after: the copies' files, playback
+    cuts and search documents go then, and open grids reload. Without it
+    (ingest's, whose archive committed already): committed here, and those
+    go at once.
+
+    Each handover is its own savepoint: one that fails is logged and rolled
+    back, the asset staying archived, never a failed request (the scan would
+    stop, and the original, no longer listed, would never be tried again)."""
+    if not archived_ids:
+        return []
+    own = after is None
+    after = AfterCommit() if after is None else after
+    # A handover gives way to a person within 200 ms (_hand_over); the rest
+    # of the transaction waits as long as it ever did.
+    lock_timeout = session.execute(text("SELECT current_setting('lock_timeout')")).scalar_one()
     moved: list[str] = []
     libraries: set[str] = set()
     for asset_id in archived_ids:
+        steps = AfterCommit()
+        savepoint = session.begin_nested()
         try:
-            library_id = _hand_over(session, request, asset_id)
-            if library_id:
-                moved.append(asset_id)
-                libraries.add(library_id)
+            library_id = _hand_over(session, request, asset_id, steps)
         except Exception as exc:  # noqa: BLE001 — the asset stays archived, as without moves
-            session.rollback()
-            now = session.get(Asset, asset_id)
-            if now is not None and now.deleted_at is None:
-                # The move committed; a step after it failed.
-                logger.warning("Asset %s moved to its copy, but a step after failed: %s", asset_id, exc)
-                moved.append(asset_id)
-                libraries.add(now.library_id)
-            elif _lock_timeout(exc):
+            savepoint.rollback()
+            if _lock_timeout(exc):
                 logger.info("Asset %s stays archived: its copy was busy (a person working on it)", asset_id)
             else:
                 logger.exception("Couldn't move asset %s to its copy; it stays archived", asset_id)
+            continue
+        if library_id is None:
+            savepoint.rollback()
+            continue
+        savepoint.commit()
+        after.extend(steps)
+        moved.append(asset_id)
+        libraries.add(library_id)
+    session.execute(text("SELECT set_config('lock_timeout', :v, true)"), {"v": lock_timeout})
     for library_id in libraries:  # open grids drop the copies' tiles
-        try:
-            LibraryRepository(session).bump_revision(library_id)
-        except Exception as exc:  # noqa: BLE001 — the grid catches up on its next change
-            logger.warning("Couldn't bump library %s's revision after a handover: %s", library_id, exc)
+        after.add(f"Bumping library {library_id}'s revision after a handover",
+                  partial(LibraryRepository(session).bump_revision, library_id))
+    if own:
+        session.commit()
+        after.run()
     return moved
 
 
@@ -164,13 +184,15 @@ def _lock_timeout(exc: Exception) -> bool:
     return getattr(getattr(exc, "orig", None), "pgcode", None) == "55P03"  # lock_not_available
 
 
-def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
-    """Move one archived asset to its empty copy. Returns its library when it moved."""
+def _hand_over(session: Session, request: Request, asset_id: str, after: AfterCommit) -> str | None:
+    """Move one archived asset to its empty copy, in the caller's savepoint
+    (no commit); what follows outside the database goes into after. Returns
+    its library when it moved; None when there's nothing to move to (the
+    caller rolls its savepoint back)."""
     repo = AssetRepository(session)
     archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
     if (archived is None or not repo.lock_for_restore(archived, archived.rel_path)
             or archived.deleted_at is None or archived.deleted_reason != "missing"):
-        session.rollback()
         return None
     # The people routes lock faces first, as this does (tenant._lock_faces);
     # anything else a person does on the copy that locks in another order:
@@ -179,7 +201,6 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
     session.execute(text("SET LOCAL lock_timeout = '200ms'"))
     copy = repo.find_empty_newer_copy(archived)
     if copy is None:
-        session.rollback()
         return None
     path, copy_id, library_id = copy.rel_path, copy.asset_id, archived.library_id
     # Out of the way first: one clip in sight holds a path.
@@ -199,20 +220,19 @@ def _hand_over(session: Session, request: Request, asset_id: str) -> str | None:
         session.execute(text(f"UPDATE {table} SET cover_asset_id = :a WHERE cover_asset_id = :c"),
                         {"a": asset_id, "c": copy_id})
     session.flush()
-    # Deletes the copy for good and commits the move with it.
-    if purge_assets(session, getattr(request.state, "tenant_id", None), [copy], "",
-                    remove_from_projects=True, reason="handed_over") != 1:
-        session.rollback()  # nothing was deleted, so nothing committed
-        return None
-    logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
+    # Deletes the copy for good, committed with the move; its files go after.
     tenant_id = getattr(request.state, "tenant_id", None)
+    if purge_assets(session, tenant_id, [copy], "", remove_from_projects=True, reason="handed_over",
+                    after=after) != 1:
+        return None  # nothing was deleted: the caller rolls the move back
+    session.expunge(copy)  # its row is gone
+    logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
     if archived.transcript_srt and tenant_id:
-        try:
-            from src.server.search.sync import index_transcript_segments
+        from src.server.search.sync import index_transcript_segments
 
-            index_transcript_segments(session, tenant_id, archived)
-        except Exception as exc:  # noqa: BLE001 — the next search sync re-indexes it
-            logger.warning("Couldn't re-index %s's transcript after the move: %s", asset_id, exc)
+        # Reads the transcript as committed: the next search sync re-indexes it if this fails.
+        after.add(f"Re-indexing {asset_id}'s transcript after the move",
+                  partial(index_transcript_segments, session, tenant_id, archived))
     return library_id
 
 
@@ -225,13 +245,18 @@ def purge_assets(
     remove_from_projects: bool,
     reason: str = "user",
     before: datetime | None = None,
+    after: AfterCommit | None = None,
 ) -> int:
     """Delete these trashed assets for good: rows, files, playback cuts and search
     documents. 409 in_projects when any are in projects, unless remove_from_projects.
 
     Re-checked under a row lock: only those still deleted for `reason` (since
     before `before`) go. One restored, archived or trashed again since it was
-    listed keeps its files and everything else."""
+    listed keeps its files and everything else.
+
+    after given: the rows go in the caller's transaction (no commit), and the
+    files, playback cuts and search documents once the caller has committed
+    and runs after. Without it: committed here, and they go at once."""
     asset_repo = AssetRepository(session)
     still = set(asset_repo.lock_still_deleted([a.asset_id for a in to_delete], reason=reason, before=before))
     to_delete = [a for a in to_delete if a.asset_id in still]
@@ -261,29 +286,43 @@ def purge_assets(
             keys_to_remove.append(a.video_preview_key)
         if getattr(a, "analysis_proxy_key", None):
             keys_to_remove.append(a.analysis_proxy_key)
-    library_by_asset = {a.asset_id: a.library_id for a in to_delete}
-    deleted_count = asset_repo.permanently_delete(asset_ids)
+    deleted_count = asset_repo.permanently_delete(asset_ids, commit=after is None)
+    cleanup = AfterCommit() if after is None else after
+    cleanup.add("Removing deleted clips' files", partial(_remove_files, keys_to_remove))
+    if tenant_id:
+        cleanup.add("Removing deleted clips' playback cuts", partial(_clear_cuts, tenant_id, asset_ids))
+        cleanup.add("Dropping deleted clips from search", partial(_drop_documents, tenant_id, asset_ids))
+    if after is None:
+        cleanup.run()
+    return deleted_count
+
+
+def _remove_files(keys: list[str]) -> None:
     storage = get_storage()
-    for key in keys_to_remove:
+    for key in keys:
         try:
             storage.delete(key)  # wherever it is (a move may be under way)
         except (OSError, ValueError) as e:  # ValueError: a key outside the previews folder, never deleted
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
-    if tenant_id:
-        # Playback cuts are copies of the start of each video.
-        from src.server.api.routers.playback import clear_cuts
 
-        try:
-            clear_cuts(tenant_id, asset_ids)
-        except OSError as e:
-            logger.warning("Failed to remove playback cuts after empty trash: %s", e)
-        try:
-            from src.server.search.quickwit_client import QuickwitClient
 
-            QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, asset_ids)
-        except Exception as e:
-            logger.warning("Quickwit delete after empty trash failed: %s", e)
-    return deleted_count
+def _clear_cuts(tenant_id: str, asset_ids: list[str]) -> None:
+    """Playback cuts are copies of the start of each video."""
+    from src.server.api.routers.playback import clear_cuts
+
+    try:
+        clear_cuts(tenant_id, asset_ids)
+    except OSError as e:
+        logger.warning("Failed to remove playback cuts after empty trash: %s", e)
+
+
+def _drop_documents(tenant_id: str, asset_ids: list[str]) -> None:
+    try:
+        from src.server.search.quickwit_client import QuickwitClient
+
+        QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, asset_ids)
+    except Exception as e:
+        logger.warning("Quickwit delete after empty trash failed: %s", e)
 
 
 def purge_expired_trash(session: Session, tenant_id: str, *, limit: int = 500) -> dict[str, int]:

@@ -24,6 +24,14 @@ The rules are today's scanner's (src/processing/scan.py), each moved here:
 Every comparison is one statement over the whole listing, the found files
 joined with the library's clips, so planning 100,000 files is one round
 trip, and a batch of hashes a fixed handful.
+
+A client whose answer was lost (a dropped connection, the API restarting)
+sends the call again, so every call but the start is safe to repeat: files
+found take their latest size and time, a plan sent again for the same
+unlisted folders is the same plan, hashes keep their decisions, and moves
+and the finish give the answers they kept (ScanSession.answers). Scans a
+killed client left behind expire a day after their last call, and upkeep
+deletes them (delete_expired).
 """
 
 from __future__ import annotations
@@ -188,11 +196,17 @@ def _params(scan: ScanSession) -> dict:
             "media_type": scan.media_type, "started_at": scan.started_at, "unlisted": list(scan.unlisted or [])}
 
 
+def delete_expired(session: Session) -> int:
+    """Delete the scans expired by now, with their listings (no commit): how
+    many. A client killed mid-scan never comes back to drop its own."""
+    return session.execute(text("DELETE FROM scan_sessions WHERE expires_at < :now"), {"now": utcnow()}).rowcount
+
+
 def start(session: Session, library_id: str, *, scope: str, media_type: str, thorough: bool, force: bool,
           moves: str, dry_run: bool) -> ScanSession:
     """A new scan, started now. Scans expired by now go first, with their listings."""
+    delete_expired(session)
     now = utcnow()
-    session.execute(text("DELETE FROM scan_sessions WHERE expires_at < :now"), {"now": now})
     scan = ScanSession(scan_id="scan_" + str(ULID()), library_id=library_id, scope=scope, media_type=media_type,
                        thorough=thorough, force=force, moves=moves, dry_run=dry_run, started_at=now,
                        expires_at=now + TTL)
@@ -205,6 +219,18 @@ def start(session: Session, library_id: str, *, scope: str, media_type: str, tho
 def lock(session: Session, scan_id: str) -> ScanSession | None:
     """The scan, locked until the transaction ends: its calls take turns."""
     return session.exec(select(ScanSession).where(ScanSession.scan_id == scan_id).with_for_update()).first()
+
+
+def answered(scan: ScanSession, call: str) -> dict | None:
+    """What the scan answered to a call ("plan": its counts; "moves"; "finish"), or None."""
+    return (scan.answers or {}).get(call)
+
+
+def keep_answer(session: Session, scan: ScanSession, call: str, answer: dict) -> None:
+    """Keep what the scan answered to a call (no commit): the call sent again,
+    its answer lost on the way back, gets this one."""
+    scan.answers = {**(scan.answers or {}), call: answer}  # a new dict, so it's saved
+    session.add(scan)
 
 
 def drop(session: Session, scan_id: str) -> bool:
@@ -482,7 +508,7 @@ def with_newer_copies(session: Session, asset_ids: list[str]) -> list[str]:
 
 def close(session: Session, scan: ScanSession) -> None:
     """Finished: the listing goes; the scan stays until it expires, so a
-    finish sent again is told it's finished (no commit)."""
+    finish sent again gets the answer it kept (no commit)."""
     session.execute(text("DELETE FROM scan_found WHERE scan_id = :s"), {"s": scan.scan_id})
     now = utcnow()
     scan.finished_at = now

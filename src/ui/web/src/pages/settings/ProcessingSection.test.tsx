@@ -14,13 +14,15 @@ let failures: unknown[] = [];
 let queue: Record<string, unknown> = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
 // The pause switches paused, as the server keeps them (Scans, Upkeep, each producer the scheduler makes).
 let paused = new Set<string>();
+// Why the Scans switch's work waits, as the queue says it on its row.
+let scanWaits: unknown[] = [];
 
 /** As the server: each switch, and the state they make (running, partly, paused). */
 function switches() {
   const rows = [{ target: "scans", title: "Scans" }, { target: "upkeep", title: "Upkeep" },
                 ...producers.filter((p) => p.scheduled).map((p) => ({ target: p.artifact, title: p.title }))]
     .map((r) => ({ ...r, paused: paused.has(r.target), paused_at: paused.has(r.target) ? "2026-10-09T10:00:00Z" : null,
-                   paused_by: null }));
+                   paused_by: null, waits: r.target === "scans" ? scanWaits : [] }));
   const n = rows.filter((r) => r.paused).length;
   return { switches: rows, state: n === 0 ? "running" : n === rows.length ? "paused" : "partly" };
 }
@@ -112,6 +114,7 @@ afterEach(() => {
   failures = [];
   queue = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
   paused = new Set();
+  scanWaits = [];
   sent.length = 0;
 });
 
@@ -310,6 +313,19 @@ describe("ProcessingSection", () => {
     producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans");
+  });
+
+  it("the Scans row says a library whose scans keep failing, why, and when it's tried again", async () => {
+    scanWaits = [{ reason: "scan_failing", clips: 0, library_id: "lib_1", library_name: "Empty Besters",
+                   message: "[unknown]: the API said 500", since: "2026-10-13T13:50:00Z",
+                   next_try: "2026-10-13T14:20:00Z" }];
+    producers = [producer({})];
+    renderSection();
+    const why = await screen.findByRole("list", { name: "Why Scans waits" });
+    expect(why.textContent).toMatch(
+      /^Scans of Empty Besters keep failing \(\[unknown\]: the API said 500\); next try at .+\.$/);
+    expect(within(why).getByText(/keep failing/).getAttribute("data-wait")).toBe("scan_failing");
+    expect(screen.queryByRole("list", { name: "Why Upkeep waits" })).toBeNull();
   });
 
   it("says why the server refused a pause", async () => {

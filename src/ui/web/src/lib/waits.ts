@@ -15,6 +15,7 @@ export const WAIT_REASONS = [
   "held",
   "retry_later",
   "given_up",
+  "scan_failing",
 ] as const;
 
 export type WaitReason = (typeof WAIT_REASONS)[number];
@@ -102,6 +103,12 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const s = some(w, c);
     return `${s.count} failed too many times and ${s.are}n't tried again until someone asks.`;
   },
+  // The Scans row's: no clips, a library.
+  scan_failing: (w, c) => {
+    const why = w.message ? ` (${w.message})` : "";
+    const next = w.next_try ? `; next try at ${c.when(w.next_try)}` : "";
+    return `Scans of ${w.library_name || "a library"} keep failing${why}${next}.`;
+  },
 };
 
 /** The sentence for a wait; a reason this page doesn't know yet (a newer server) still says how many wait. */
@@ -115,5 +122,5 @@ export function waitSentence(w: ProducerWait, c: WaitContext): string {
 /** Reasons that stop its work until someone acts (shown amber); the rest only take a while. */
 export function waitIsLoud(w: ProducerWait): boolean {
   if (w.reason === "needs" || w.reason === "scan") return !!w.paused;
-  return ["paused", "scheduler", "ai_machines", "storage", "new_version", "given_up"].includes(w.reason);
+  return ["paused", "scheduler", "ai_machines", "storage", "new_version", "given_up", "scan_failing"].includes(w.reason);
 }

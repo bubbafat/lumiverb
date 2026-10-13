@@ -90,13 +90,22 @@ export default function ProcessingSection() {
       {status && (
         <ul className="space-y-2">
           {status.switches.filter((sw) => sw.target === "scans" || sw.target === "upkeep").map((sw) => (
-            <li key={sw.target}
-                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-2">
-              <span className="text-sm text-gray-100">
-                {sw.title}
-                <span className="ml-2 text-xs text-gray-500">{SWITCH_ABOUT[sw.target]}</span>
-              </span>
-              <Switch name={sw.title} target={sw.target} state={sw.paused ? "paused" : "running"} admin={admin} />
+            <li key={sw.target} className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-2 space-y-1">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span className="text-sm text-gray-100">
+                  {sw.title}
+                  <span className="ml-2 text-xs text-gray-500">{SWITCH_ABOUT[sw.target]}</span>
+                </span>
+                <Switch name={sw.title} target={sw.target} state={sw.paused ? "paused" : "running"} admin={admin} />
+              </div>
+              {/* Why its work waits (Scans: a library whose scans keep failing), as a producer's row says its own. */}
+              {(sw.waits ?? []).length > 0 && (
+                <ul className="space-y-0.5" aria-label={`Why ${sw.title} waits`}>
+                  {(sw.waits ?? []).map((w) => (
+                    <WaitLine key={waitKey(w)} wait={w} say={{ title: sw.title, media: [], titleOf: (a) => a, when }} />
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
         </ul>

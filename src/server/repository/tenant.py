@@ -908,7 +908,8 @@ class AssetRepository:
         trashed, _ = self.trash_many([asset_id], reason=reason)
         return bool(trashed)
 
-    def trash_many(self, asset_ids: list[str], *, reason: str = "missing") -> tuple[list[str], list[str]]:
+    def trash_many(self, asset_ids: list[str], *, reason: str = "missing",
+                   commit: bool = True) -> tuple[list[str], list[str]]:
         """Take clips out of sight with this reason. Returns (changed, unchanged), in the order given.
 
         "missing" (a scan no longer finds the file) takes only clips in sight.
@@ -916,6 +917,9 @@ class AssetRepository:
         by hand: deleting an archived clip moves it to the trash, and its
         trash days count from now. A clip trashed with its library stays
         with the library, and comes back with it.
+
+        commit=False: the caller commits, with what else must go with it (a
+        scan's finish: the handovers to copies and the scan's close).
         """
         if not asset_ids:
             return [], []
@@ -947,7 +951,8 @@ class AssetRepository:
                                   {"ids": list(changed)})
             self._session.execute(text("UPDATE libraries SET cover_asset_id = NULL WHERE cover_asset_id = ANY(:ids)"),
                                   {"ids": list(changed)})
-        self._session.commit()
+        if commit:
+            self._session.commit()
         return _split(asset_ids, changed)
 
     def trashable(self, asset_ids: list[str]) -> list[str]:
@@ -1476,10 +1481,11 @@ class AssetRepository:
             stmt = stmt.limit(limit)
         return list(self._session.exec(stmt).all())
 
-    def permanently_delete(self, asset_ids: list[str]) -> int:
+    def permanently_delete(self, asset_ids: list[str], *, commit: bool = True) -> int:
         """
         Hard delete trashed assets and all related rows in FK-safe order.
         Only deletes rows where deleted_at IS NOT NULL. Returns count of deleted asset rows.
+        commit=False: the caller commits (a handover to a copy, with its archive).
 
         Every table that holds an ``asset_id`` foreign key must be cleaned
         here — none of the FK constraints are declared with
@@ -1602,7 +1608,8 @@ class AssetRepository:
             params,
         )
         deleted_count = len(result.fetchall())
-        self._session.commit()
+        if commit:
+            self._session.commit()
         return deleted_count
 
     def update_proxy(

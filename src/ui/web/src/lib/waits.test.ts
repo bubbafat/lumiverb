@@ -10,7 +10,12 @@ const DETAILS: Record<string, Partial<ProducerWait>> = {
   storage: { library_id: "lib_1", library_name: "Empty Besters", checked: true, away_since: "2026-10-12T18:20:00Z",
              seen_at: "2026-10-12T17:55:00Z" },
   scan: { paused: false },
+  scan_failing: { library_id: "lib_1", library_name: "Empty Besters", message: "[unknown]: the API said 500",
+                  since: "2026-10-13T13:50:00Z", next_try: "2026-10-13T14:20:00Z" },
 };
+
+// The Scans row's waits are a library's, not clips (GET /v1/producers/queue, the scans switch's waits).
+const NOT_COUNTED = new Set(["scan_failing"]);
 
 const say: WaitContext = {
   title: "Analysis proxies",
@@ -33,7 +38,13 @@ describe("Why work waits", () => {
       expect(text.trim().endsWith(".")).toBe(true);
     }
     // The count is said (a stopped redo counts clips, not videos).
-    expect(waitSentence({ reason, clips: 1500, ...DETAILS[reason] }, say)).toContain("1,500");
+    if (!NOT_COUNTED.has(reason)) expect(waitSentence({ reason, clips: 1500, ...DETAILS[reason] }, say)).toContain("1,500");
+  });
+
+  it("says which library's scans keep failing, why, and when they're tried again", () => {
+    expect(waitSentence({ reason: "scan_failing", clips: 0, ...DETAILS.scan_failing }, say)).toBe(
+      "Scans of Empty Besters keep failing ([unknown]: the API said 500); next try at <2026-10-13T14:20:00Z>.");
+    expect(waitIsLoud({ reason: "scan_failing", clips: 0 })).toBe(true);
   });
 
   it("agrees with the count", () => {

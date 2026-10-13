@@ -823,11 +823,14 @@ def test_a_finished_scan_cant_be_used_again(env):
     lib = _library(env)
     run = _scan(env, lib, [File("a.jpg", "a")])
     c, h, s = env.client, env.editor, run.scan_id
-    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 409, "scan_finished")
     _error(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=h), 409, "scan_finished")
     _error(c.get(f"/v1/scans/{s}/plan", headers=h), 409, "scan_finished")
+    _error(c.post(f"/v1/scans/{s}/plan", json={}, headers=h), 409, "scan_finished")
+    _error(c.post(f"/v1/scans/{s}/hashes", json={"files": []}, headers=h), 409, "scan_finished")
+    _error(c.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=h), 409, "scan_finished")
     _ok(c.delete(f"/v1/scans/{s}", headers=h), 204)
     _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 404, "not_found")
+    _error(c.delete(f"/v1/scans/{s}", headers=h), 404, "not_found")  # sent again: it's gone
 
 
 @pytest.mark.slow
@@ -840,7 +843,186 @@ def test_each_step_comes_in_its_turn(env):
     _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 409, "scan_not_planned")
     _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
     _error(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=h), 409, "scan_planned")
-    _error(c.post(f"/v1/scans/{s}/plan", json={}, headers=h), 409, "scan_planned")
+    # A plan sent again is the same plan; for another listing (other folders unlisted), it's too late.
+    _error(c.post(f"/v1/scans/{s}/plan", json={"unlisted": ["Day 1"]}, headers=h), 409, "scan_planned")
+
+
+# ---------------------------------------------------------------------------
+# Sent again: an answer lost on the way back (a dropped connection, the API
+# restarting) and the client tries the call again (src/processing/api.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_finish_sent_again_gets_the_answer_the_first_got(env):
+    """Review, Oct 13: a finish whose answer was lost was 409 scan_finished
+    when sent again, and the client skipped that run's uploads."""
+    lib = _library(env)
+    a, gone = File("a.jpg", "a"), File("gone.jpg", "gone")
+    _ingest(env, lib, a)
+    gone_asset = _ingest(env, lib, gone)
+    original = _ingest(env, lib, File("Ingest/b.jpg", "b"))
+    copy = _ingest(env, lib, File("Projects/b.jpg", "b"))
+    run = _scan(env, lib, [a, File("Projects/b.jpg", "b")])
+    assert run.finish == {"archived": 1, "moved": 1, "handed_over": 1, "unchanged": 2, "skipped": 0,
+                          "held_back": 0, "held_back_reason": None, "dry_run": False}
+    clips = _clips(env, lib)
+    again = _ok(env.client.post(f"/v1/scans/{run.scan_id}/finish", json={}, headers=env.editor))
+    assert again == run.finish
+    # And it did nothing again: the clips are as the first left them.
+    assert _clips(env, lib) == clips == {"a.jpg": clips["a.jpg"], "Projects/b.jpg": original}
+    assert _clip(env, gone_asset)["deleted_reason"] == "missing"
+    with env.db.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM assets WHERE asset_id = :a"), {"a": copy}).scalar() == 0
+    # Whatever it's sent with: the first one's answer stands.
+    assert _ok(env.client.post(f"/v1/scans/{run.scan_id}/finish", json={"allow_mass_missing": True},
+                               headers=env.editor)) == run.finish
+
+
+@pytest.mark.slow
+def test_a_dry_runs_finish_sent_again_gets_the_same_answer(env):
+    lib = _library(env)
+    _ingest(env, lib, File("a.jpg", "a"))
+    run = _scan(env, lib, [], scope="", dry_run=True, force=True)  # force: an empty listing still archives
+    assert _ok(env.client.post(f"/v1/scans/{run.scan_id}/finish", json={}, headers=env.editor)) == run.finish
+    assert run.finish["archived"] == 1 and set(_clips(env, lib)) == {"a.jpg"}
+
+
+@pytest.mark.slow
+def test_a_plan_sent_again_for_the_same_listing_is_the_same_plan(env):
+    lib = _library(env)
+    a, b = File("a/1.jpg", "one"), File("a/2.jpg", "two")
+    asset = _ingest(env, lib, a)
+    _ingest(env, lib, b)
+    c, h = env.client, env.editor
+    s = _start(env, lib, moves="apply")
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([a.at("b/1.jpg"), File("new.jpg", "new")])},
+               headers=h))
+    first = _ok(c.post(f"/v1/scans/{s}/plan", params={"limit": 1}, json={"unlisted": ["x", "x"]}, headers=h))
+    assert first["counts"]["gone"] == 2 and first["next_cursor"]
+    assert _ok(c.post(f"/v1/scans/{s}/plan", params={"limit": 1}, json={"unlisted": ["x"]}, headers=h)) == first
+    _error(c.post(f"/v1/scans/{s}/plan", json={"unlisted": []}, headers=h), 409, "scan_planned")
+    # The plan made once: the scan goes on as if it had been sent once.
+    moved = _ok(c.post(f"/v1/scans/{s}/hashes", json={"files": [{"rel_path": "b/1.jpg", "sha256": a.sha}]},
+                       headers=h))
+    assert moved["files"][0]["decision"] == "moved" and _clips(env, lib)["b/1.jpg"] == asset
+    # Sent again after that, still the counts it answered (the move made since isn't a clip gone less).
+    assert _ok(c.post(f"/v1/scans/{s}/plan", json={"unlisted": ["x"]}, headers=h))["counts"] == first["counts"]
+
+
+@pytest.mark.slow
+def test_moves_answered_again_get_the_answer_the_first_got(env):
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="ask")  # its finish asks about the move first
+    c, h, s = env.client, env.editor, run.scan_id
+    first = _ok(c.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=h))
+    assert first == {"moved": 1, "skipped": 0, "upload": []}
+    again = _ok(c.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=h))
+    assert again == first  # was {"moved": 0, ...}: nothing left waiting
+    assert _ok(c.post(f"/v1/scans/{s}/finish", json={}, headers=h))["moved"] == 1
+    assert _clips(env, lib) == {"b/1.jpg": asset}
+
+
+@pytest.mark.slow
+def test_moves_that_couldnt_be_made_are_named_again_when_answered_again(env):
+    """The upload list is the client's only word that a move fell through:
+    lost, those files would never be uploaded."""
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run_moves = _scan(env, lib, [a.at("b/1.jpg")], moves="ask")
+    s = run_moves.scan_id
+    with env.db.begin() as conn:  # meanwhile the clip moved elsewhere (another scan)
+        conn.execute(text("UPDATE assets SET rel_path = 'c/1.jpg' WHERE asset_id = :a"), {"a": asset})
+    first = _ok(env.client.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=env.editor))
+    assert first == {"moved": 0, "skipped": 0, "upload": ["b/1.jpg"]}
+    assert _ok(env.client.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=env.editor)) == first
+
+
+# ---------------------------------------------------------------------------
+# A finish is one transaction: an API that dies halfway leaves nothing done
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_finish_that_dies_handing_over_archives_nothing_and_can_finish_again(env):
+    """Review, Oct 13: the archive (and the scan's close) committed before the
+    handover to a copy. An API that died between them left the clip archived,
+    its notes, people and projects with it, and the empty copy in its place;
+    nothing later put that right, and the scan couldn't be finished again."""
+    lib = _library(env)
+    original = _ingest(env, lib, File("Ingest/b.jpg", "b"))
+    copy = _ingest(env, lib, File("Projects/b.jpg", "b"))
+    gone = _ingest(env, lib, File("gone.jpg", "gone"))
+    c, h = env.client, env.editor
+    s = _start(env, lib, moves="apply")
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([File("Projects/b.jpg", "b")])}, headers=h))
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    with (patch("src.server.api.routers.scans.hand_over_to_copies", side_effect=RuntimeError("the API died")),
+          pytest.raises(RuntimeError, match="the API died")):
+        c.post(f"/v1/scans/{s}/finish", json={}, headers=h)
+    # Nothing archived, nothing handed over, the scan still open.
+    assert _clips(env, lib) == {"Ingest/b.jpg": original, "Projects/b.jpg": copy, "gone.jpg": gone}
+    with env.db.connect() as conn:
+        assert conn.execute(text("SELECT finished_at FROM scan_sessions WHERE scan_id = :s"), {"s": s}).scalar() is None
+    finish = _ok(c.post(f"/v1/scans/{s}/finish", json={}, headers=h))
+    assert (finish["archived"], finish["handed_over"]) == (1, 1)
+    assert _clips(env, lib) == {"Projects/b.jpg": original}
+
+
+@pytest.mark.slow
+def test_a_handover_that_fails_on_its_own_leaves_that_clip_archived_and_the_rest_done(env):
+    """One clip's handover failing (its copy busy, say) is no failed finish:
+    that clip stays archived, as without moves, and the others go ahead."""
+    lib = _library(env)
+    first = _ingest(env, lib, File("Ingest/b.jpg", "b"))
+    _ingest(env, lib, File("Projects/b.jpg", "b"))
+    second = _ingest(env, lib, File("Ingest/c.jpg", "c"))
+    c_copy = _ingest(env, lib, File("Projects/c.jpg", "c"))
+    from src.server.api.routers import trash
+
+    real = trash._hand_over
+
+    def hand_over(session, request, asset_id, after):
+        if asset_id == first:
+            raise RuntimeError("its copy was busy")
+        return real(session, request, asset_id, after)
+
+    with patch.object(trash, "_hand_over", side_effect=hand_over):
+        run = _scan(env, lib, [File("Projects/b.jpg", "b"), File("Projects/c.jpg", "c")])
+    assert (run.finish["archived"], run.finish["handed_over"]) == (1, 1)
+    clips = _clips(env, lib)
+    assert clips["Projects/c.jpg"] == second and c_copy not in clips.values()
+    assert _clip(env, first)["deleted_reason"] == "missing" and clips["Projects/b.jpg"] != first
+
+
+# ---------------------------------------------------------------------------
+# Scans a killed client left behind
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_upkeep_deletes_expired_scans_and_what_they_found(env):
+    """A client killed mid-scan (SIGKILL, the power cut) never drops its own:
+    upkeep deletes it once it has expired, a day after its last call."""
+    lib = _library(env)
+    c, h = env.client, env.editor
+    stale, live = _start(env, lib), _start(env, lib)
+    for s in (stale, live):
+        _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([File("a.jpg", "a")])}, headers=h))
+    with env.db.begin() as conn:
+        conn.execute(text("UPDATE scan_sessions SET expires_at = now() - interval '1 minute' WHERE scan_id = :s"),
+                     {"s": stale})
+    r = _ok(c.post("/v1/upkeep", headers=env.admin))
+    assert r["expired_scans"]["deleted"] >= 1
+    with env.db.connect() as conn:
+        left = dict(conn.execute(text(
+            "SELECT s.scan_id, (SELECT count(*) FROM scan_found f WHERE f.scan_id = s.scan_id)"
+            " FROM scan_sessions s WHERE s.scan_id = ANY(:s)"), {"s": [stale, live]}).all())
+        found = conn.execute(text("SELECT count(*) FROM scan_found WHERE scan_id = :s"), {"s": stale}).scalar()
+    assert left == {live: 1} and found == 0
 
 
 @pytest.mark.slow
