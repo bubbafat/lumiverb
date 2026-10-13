@@ -18,15 +18,17 @@ if TYPE_CHECKING:
 
 def scan(acct: Account, job: Job, *, now: float) -> None:
     """Look for new and changed files in the account's libraries: scan what's
-    due. Each library's storage is looked at right before its scan, and
-    what that finds goes into the account's record as it's found (on_roots),
-    beside the scheduler's own looks (Account.look_at_storage)."""
+    due, each library in full as often as this machine's setting says
+    (LUMIVERB_FULL_SCAN_EVERY_MIN). Each library's storage is looked at right
+    before its scan, and what that finds goes into the account's record as
+    it's found (on_roots), beside the scheduler's own looks (Account.look_at_storage)."""
     from src.server.scheduler.scans import scan_pass
 
     libraries = acct.client.get("/v1/libraries").json()
     acct.set_libraries(libraries)
     # Saved like a producer's work: no NUL (a file's EXIF can have one).
-    scan_pass(Saving(acct.client), libraries, acct.scan_state, now=now, on_roots=acct.set_reachable)
+    scan_pass(Saving(acct.client), libraries, acct.scan_state, now=now,
+              full_scan_every=acct.machine.full_scan_every_min * 60, on_roots=acct.set_reachable)
 
 
 def runners() -> dict[str, Callable[[Account, Job], Outcome]]:

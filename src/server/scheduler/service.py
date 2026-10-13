@@ -894,13 +894,19 @@ def main() -> int:
         saved_form,
     )
 
-    from src.server.scheduler.settings import SchedulerSettings
+    from src.server.scheduler.settings import SettingError, read_settings
 
     from src.server.database import set_application_name
 
     configure_logging()
     set_application_name("lumiverb-scheduler")  # its connections, as PostgreSQL shows them
-    here = SchedulerSettings().machine()
+    try:
+        settings = read_settings()
+    except SettingError as exc:
+        # Said here: entry()'s exit would otherwise end it with nothing said.
+        logger.error("scheduler: not starting, a setting is wrong: %s", exc)
+        return 1
+    here = settings.machine()
     machine.use(here)  # never the CLI's config
     lock = ServiceLock()
     if not lock.acquire():

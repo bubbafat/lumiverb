@@ -25,7 +25,9 @@ of the conversation but its start is safe to send twice (the server answers
 a repeat as it answered the first), so each is tried again
 (src/processing/api.py). Starting isn't (a repeat would leave a scan behind:
 this one fails before its walk), nor is an upload (a file that fails is
-tried again on its own by the scheduler's back-off).
+tried again on its own by the scheduler's back-off). Until then a scan
+leaves it alone (run_scan's waiting): found, so never gone, but neither
+read nor uploaded, unless it changed since it failed.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ import json
 import logging
 import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -120,6 +122,10 @@ class ScanStats:
     unlisted: list[str] = field(default_factory=list)
     # Clips the server asked about (409 mass_missing) and that weren't archived.
     mass_missing: int = 0
+    # Each failed file's size and modified time as this scan tried it (_as_seen).
+    failed_seen: dict[str, tuple[int, str | None]] = field(default_factory=dict)
+    # Files left for their retry, unchanged since they failed (run_scan's waiting).
+    waiting_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -499,6 +505,12 @@ def _found(f: dict) -> dict:
             "settling": f["settling"]}
 
 
+def _as_seen(f: dict) -> tuple[int, str | None]:
+    """A file's size and modified time, as a failure is remembered with them:
+    the same again, it hasn't changed since."""
+    return f["file_size"], f["file_mtime"].isoformat() if f.get("file_mtime") else None
+
+
 def _send_found(client: ApiClient, scan_id: str, files: list[dict], console: Console) -> None:
     """Every media file the walk saw, FILES_PER_CALL at a time."""
     progress = _progress(console, "Listing")
@@ -682,6 +694,7 @@ def run_scan(
     skip_moves: bool = False,
     thorough: bool = False,
     allow_mass_delete: bool = False,
+    waiting: Mapping[str, tuple[int, str | None]] | None = None,
     console: Console,
 ) -> ScanStats:
     """Walk the library, tell the server what's there, read what it asks
@@ -691,6 +704,11 @@ def run_scan(
     none (and so archives nothing: anything gone may be half a move), else
     the server asks and so does this (the CLI's prompt). allow_mass_delete
     answers the server's question when most of a library looks gone.
+    waiting: files that failed and wait for their retry (the scheduler's
+    back-off), with the size and modified time each had then (_as_seen,
+    ScanStats.failed_seen). One still so is found, so it's never gone, but
+    it's neither read nor uploaded (ScanStats.waiting_paths); one that
+    changed (replaced, say) is tried now.
     """
     library_id = library["library_id"]
     root_path = reachable_root(library)
@@ -748,7 +766,7 @@ def run_scan(
                     follow_moves=scan.get("follow_moves", True), moves=moves, force=force,
                     media_type_filter=media_type_filter, dry_run=dry_run, allow_mass_delete=allow_mass_delete,
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
-                    console=console)
+                    waiting=waiting or {}, console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -757,7 +775,8 @@ def run_scan(
 def _run(
     client: ApiClient, library: dict, root_path: Path, scan_id: str, stats: ScanStats, *,
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
-    allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int, console: Console,
+    allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
+    waiting: Mapping[str, tuple[int, str | None]], console: Console,
 ) -> ScanStats:
     """run_scan once its scan is started: walk, list, plan, hash, finish, upload."""
     library_id = library["library_id"]
@@ -799,6 +818,9 @@ def _run(
         if planned is None:  # still being written, or empty
             continue
         action = planned["action"]
+        if action in ("upload", "hash") and waiting.get(f["rel_path"]) == _as_seen(f):
+            stats.waiting_paths.append(f["rel_path"])  # unchanged since it failed: its retry tries it
+            continue
         if action == "upload" and planned["asset_id"]:  # a video's preview never arrived, or --force
             f["asset_id"] = planned["asset_id"]
             work.changed.append(f)
@@ -813,6 +835,8 @@ def _run(
         elif action == "skipped":
             work.skipped += 1
     stats.unchanged += len(work.unchanged)
+    if stats.waiting_paths:
+        console.print(f"{len(stats.waiting_paths):,} file(s) that failed wait for their retry")
     console.print(
         f"{len(work.new):,} new, "
         f"{len(to_hash):,} to check, "
@@ -921,5 +945,6 @@ def _run(
     # comes back at its new path.
     proxy_cache = ProxyCache(root_path=root_path, client=client)
     _upload(client, library_id, root_path, work, proxy_cache, stats, concurrency=concurrency, console=console)
+    stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
     _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
     return stats

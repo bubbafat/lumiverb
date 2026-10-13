@@ -17,17 +17,23 @@
     LUMIVERB_ANALYSIS_CACHE_GB     the analysis proxies kept here (50): only those the API doesn't
                                    keep on this disk (they're read where it stores them)
     LUMIVERB_FACE_BATCHES_PER_PROCESS  face batches before a fresh detection process (20)
+    LUMIVERB_FULL_SCAN_EVERY_MIN   each library scanned in full this often, in minutes (15): where nothing
+                                   reports changes (a Mac running the server), how new files are found;
+                                   a big library on a network share can raise it
     LUMIVERB_API_URL               the API (else the API's API_PORT on API_LISTEN_HOST)
 
-Caches go under XDG_CACHE_HOME (the unit sets it to the data disk).
+Caches go under XDG_CACHE_HOME (the unit sets it to the data disk). A
+setting the scheduler can't run with stops it at its start, saying which
+(read_settings).
 """
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsError as UnparsedSetting
 
-from src.processing.machine import Machine
+from src.processing.machine import FULL_SCAN_EVERY_MIN, Machine
 
 
 class SchedulerSettings(BaseSettings):
@@ -39,6 +45,8 @@ class SchedulerSettings(BaseSettings):
     render_concurrency: int = Field(default=0, ge=0)
     analysis_cache_gb: float = Field(default=50.0, gt=0)
     face_batches_per_process: int = Field(default=20, ge=1)
+    # Minutes; never infinite ("inf" would mean no full scan after the first).
+    full_scan_every_min: float = Field(default=FULL_SCAN_EVERY_MIN, gt=0, allow_inf_nan=False)
     api_url: str = ""
 
     model_config = SettingsConfigDict(env_prefix="LUMIVERB_", env_file=(".env", ".env.local"),
@@ -55,7 +63,25 @@ class SchedulerSettings(BaseSettings):
                        analysis_proxy_encoder=self.analysis_proxy_encoder,
                        analysis_proxy_decoder=self.analysis_proxy_decoder, gpu_decodes=self.gpu_decodes,
                        render_concurrency=self.render_concurrency, analysis_cache_gb=self.analysis_cache_gb,
-                       face_batches_per_process=self.face_batches_per_process)
+                       face_batches_per_process=self.face_batches_per_process,
+                       full_scan_every_min=self.full_scan_every_min)
+
+
+class SettingError(ValueError):
+    """A setting in the scheduler's environment it can't run with."""
+
+
+def read_settings() -> SchedulerSettings:
+    """The scheduler's settings from its environment. SettingError names
+    each one it can't run with: the variable, what's wrong and what it says."""
+    try:
+        return SchedulerSettings()
+    except ValidationError as exc:
+        raise SettingError("; ".join(
+            f"LUMIVERB_{str(e['loc'][0]).upper() if e['loc'] else ''}: {e['msg']} (it says {e['input']!r})"
+            for e in exc.errors())) from None
+    except UnparsedSetting as exc:  # names the field: "root_map" is LUMIVERB_ROOT_MAP
+        raise SettingError(f"{exc}: it isn't JSON") from None
 
 
 def api_url(settings: SchedulerSettings | None = None) -> str:

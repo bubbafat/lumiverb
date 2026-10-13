@@ -1,4 +1,4 @@
-"""Scanning: what changed on storage, and each library in full once a day (ADR-016 phase 4).
+"""Scanning: what changed on storage, and each library in full every 15 minutes (ADR-016 phase 4).
 
 The scheduler looks at each account's libraries every 30 seconds:
 
@@ -6,16 +6,26 @@ The scheduler looks at each account's libraries every 30 seconds:
    reported changes (or a full scan is due), scan the one folder that
    covers them, then acknowledge the changes the scan saw. A file that
    fails to scan doesn't hold its changes back; it's tried again on its
-   own, after 5 minutes, then 10, 20 and so on up to a day. A folder that
-   can't be listed (no permission, or the CIFS mount timing out) keeps the
-   changes, which wait for the same back-off, and nothing is taken for
-   missing.
+   own, after 5 minutes, then 10, 20 and so on up to a day. Until then
+   other scans, full scans too, leave it alone (found, so never missing,
+   but not read), unless its size or modified time changed since it
+   failed: replaced, say, it's tried at once. A folder that can't be listed
+   (no permission, or the CIFS mount timing out) keeps the changes, which
+   wait for the same back-off, and nothing is taken for missing.
 2. Each library's storage is looked at again right before its scan (an
    unmounted mount point is an empty folder, and scanning it would mark
    every file missing). What each look finds goes into the account's
    record of its storage (on_roots), which the scheduler otherwise keeps
    itself, every 30 seconds whatever is paused but Pause all
    (account.py look_at_storage): pausing scans stops no other work.
+
+Each library is scanned in full every 15 minutes, unless this machine's
+setting says otherwise (LUMIVERB_FULL_SCAN_EVERY_MIN, settings.py): nothing
+reports changes on a Mac running the server (no file-system watching), so a
+full scan is how its new files are found, and elsewhere it catches a report
+that was missed. Each is a plain full scan (Robert, Oct 13): "modified since
+the last scan" would miss copies, which keep the camera's time, renames,
+which keep theirs, and deletions, which have none.
 
 A library is skipped, never failed: the next look tries again. A library
 whose scan itself keeps failing (not one file: the scan raised) is tried
@@ -42,6 +52,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from src.processing.cache_dir import cache_dir
+from src.processing.machine import FULL_SCAN_EVERY_MIN
 from src.processing.roots import reachable_root
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
@@ -50,7 +61,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
+# Unless the scheduler's setting says otherwise (runners.scan passes it).
+DEFAULT_FULL_SCAN_EVERY_SEC = FULL_SCAN_EVERY_MIN * 60
 # Files that failed to scan are tried again after this, doubling up to a day.
 RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0
@@ -96,6 +108,10 @@ class Retry:
     # Changes kept un-acked meanwhile (change_id -> version): they wait for
     # the retry instead of being rescanned every cycle.
     held: dict[str, int] = field(default_factory=dict)
+    # Each failed file's size and modified time when it failed: still so, it
+    # waits for this retry whatever scan comes first (a full scan every 15
+    # minutes would otherwise try a broken file 96 times a day).
+    seen: dict[str, tuple[int, str | None]] = field(default_factory=dict)
 
 
 @dataclass
@@ -134,7 +150,9 @@ def load_state(path: Path) -> ScanState:
     with contextlib.suppress(*unreadable):
         state.retries = {
             str(lib): Retry({str(p) for p in r["paths"]}, float(r["delay"]), float(r["due"]),
-                            {str(c): int(v) for c, v in r["held"].items()})
+                            {str(c): int(v) for c, v in r["held"].items()},
+                            {str(p): (int(size), None if mtime is None else str(mtime))
+                             for p, (size, mtime) in r.get("seen", {}).items()})
             for lib, r in saved.get("retries", {}).items()
         }
     return state
@@ -145,7 +163,8 @@ def saved_form(state: ScanState) -> dict:
     retries = dict(state.retries)
     return {
         "last_full_scan": dict(state.last_full_scan),
-        "retries": {lib: {"paths": sorted(r.paths), "delay": r.delay, "due": r.due, "held": dict(r.held)}
+        "retries": {lib: {"paths": sorted(r.paths), "delay": r.delay, "due": r.due, "held": dict(r.held),
+                          "seen": {p: list(s) for p, s in r.seen.items()}}
                     for lib, r in retries.items()},
     }
 
@@ -230,9 +249,12 @@ def scan_library(
         library["name"], f" / {prefix}" if prefix else "", len(changes),
         ", retrying what failed" if retry_due else "", ", full scan due" if full_due else "",
     )
+    # Files waiting for a retry that isn't due are left to it, unless they changed.
+    waiting = {} if retry is None or retry_due else {p: s for p, s in retry.seen.items() if p in retry.paths}
     # When most of a library looks gone the server asks first (409
     # mass_missing, ADR-016): a person answers, never the scheduler.
-    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False, console=console)
+    stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False,
+                    waiting=waiting, console=console)
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return
@@ -266,11 +288,13 @@ def scan_library(
 def _note_failures(
     state: ScanState, library: dict, prefix: str | None, stats: ScanStats, changes: list[dict], now: float,
 ) -> None:
-    """Remember files that failed to scan and folders that couldn't be listed,
-    to try them again with back-off. A folder that couldn't be listed also
-    holds back the changes the scan covered.
+    """Remember files that failed to scan (with their size and modified time
+    then) and folders that couldn't be listed, to try them again with
+    back-off. A folder that couldn't be listed also holds back the changes
+    the scan covered.
 
-    A scan covering a path clears it unless it fails again.
+    A scan covering a path clears it unless it fails again, or the scan left
+    it for its retry (unchanged since it failed).
     """
     library_id = library["library_id"]
     failed = set(stats.failed_paths) | set(stats.unlisted)
@@ -278,17 +302,22 @@ def _note_failures(
         failed.add(prefix or "")
     old = state.retries.pop(library_id, None)
     scanned = {c["change_id"] for c in changes}
-    left = {p for p in old.paths if not is_within(p, prefix)} if old else set()
+    waiting = set(stats.waiting_paths)
+    left = {p for p in old.paths if not is_within(p, prefix) or p in waiting} if old else set()
     held = {cid: v for cid, v in old.held.items() if cid not in scanned} if old else {}
     if stats.unlisted:
         held |= {c["change_id"]: c["version"] for c in changes}
+    seen = {**(old.seen if old else {}), **stats.failed_seen}  # as each last failed
     if failed:
         delay = min(old.delay * 2, RETRY_MAX_SEC) if old else RETRY_FIRST_SEC
-        state.retries[library_id] = Retry(left | failed, delay, now + delay, held)
+        paths = left | failed
+        state.retries[library_id] = Retry(paths, delay, now + delay, held,
+                                          {p: s for p, s in seen.items() if p in paths})
         logger.warning("scheduler: in %s, %d file(s) or folder(s) failed to scan; trying again in %.0f min",
                        library["name"], len(failed), delay / 60)
     elif old and (left or held):
-        state.retries[library_id] = Retry(left, old.delay, old.due, held)
+        state.retries[library_id] = Retry(left, old.delay, old.due, held,
+                                          {p: s for p, s in seen.items() if p in left})
 
 
 # Whether this process has said its root map is empty (once per start).

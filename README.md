@@ -34,7 +34,7 @@ Then open <http://localhost:6464> on that Mac and create your account. Setting
 up follows: where previews go, who can open Lumiverb, what to find, AI,
 people and your first library (a name and the folder your photos and videos
 are in), each saying what skipping it costs. Lumiverb then scans and
-processes the library. Descriptions, tags and
+processes the library, and looks for new files in it every 15 minutes. Descriptions, tags and
 text in photos need an AI machine: [AI descriptions with Ollama](#ai-descriptions-with-ollama). The previews it makes (thumbnails,
 video copies for analysis) grow with your libraries: Settings › Storage moves
 them to another drive, Lumiverb working meanwhile, and a library can have a
