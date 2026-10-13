@@ -136,6 +136,53 @@ def test_a_hung_mount_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 @pytest.mark.fast
+def test_a_hung_mount_gets_one_stuck_probe_not_one_per_look(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    release = threading.Event()
+    probes: list[Path] = []
+
+    def hang(path: Path, require_entries: bool) -> Path:
+        probes.append(path)
+        release.wait(5)
+        return path
+
+    monkeypatch.setattr(roots, "_probe", hang)
+    lib = {"library_id": "lib_1", "root_path": str(tmp_path)}
+    try:
+        assert reachable_root(lib, root_map={}, timeout=0.2) is None
+        assert reachable_root(lib, root_map={}, timeout=0.2) is None  # at once: still not answering
+        assert len(probes) == 1
+    finally:
+        release.set()
+
+
+@pytest.mark.fast
+def test_a_folder_looked_at_twice_at_once_is_reachable_for_both(monkeypatch: pytest.MonkeyPatch,
+                                                                tmp_path: Path) -> None:
+    # Oct 12: the scheduler looks at each library's storage itself, and a
+    # scan looks again before it walks one. The second look at a folder
+    # took the first, still listing it, for a hung mount: unreachable, and
+    # the library's storage work stopped until the next look.
+    listing = threading.Event()
+    slow = roots._probe
+
+    def probe(path: Path, require_entries: bool) -> Path | None:
+        listing.set()
+        threading.Event().wait(0.3)  # a share that answers, slowly
+        return slow(path, require_entries)
+
+    monkeypatch.setattr(roots, "_probe", probe)
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    lib = {"library_id": "lib_1", "root_path": str(tmp_path)}
+    first: list[Path | None] = []
+    looking = threading.Thread(target=lambda: first.append(reachable_root(lib, root_map={}, require_entries=True)))
+    looking.start()
+    assert listing.wait(5)
+    second = reachable_root(lib, root_map={}, require_entries=True)
+    looking.join(5)
+    assert first == [tmp_path.resolve()] and second == tmp_path.resolve()
+
+
+@pytest.mark.fast
 def test_an_unreadable_folder_is_unreachable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def broken(path: Path, require_entries: bool) -> Path:
         raise OSError(112, "Host is down")

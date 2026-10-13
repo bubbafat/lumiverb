@@ -32,7 +32,6 @@ from src.server import system_health as h
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.limits import MAX_PAGE
 from src.server.version import running
-from src.shared.producers import PAUSE_SCANS
 from src.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -73,8 +72,8 @@ class LibraryReach(BaseModel):
     library_id: str
     name: str
     # Whether the scheduler's latest look since it started reached its storage;
-    # None when that isn't known now (not looked at since, Scans paused, or the
-    # scheduler isn't running).
+    # None when that isn't known now (not looked at since, all processing
+    # paused, or the scheduler isn't running).
     reachable: bool | None
     seen_at: datetime | None = None  # last seen reachable
 
@@ -100,12 +99,15 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         session.rollback()
         db_error = _short(exc)
 
-    status, unreadable = None, False
+    status, unreadable, stopped = None, False, False
     if db_error is None:
         try:
             from src.server.api.routers.producers import scheduler_status
+            from src.server.repository import lineage
 
             status = scheduler_status(request, session)
+            # Pause all: nothing looks at the libraries' storage, so what's known of it is stale.
+            stopped = lineage.pauses(session).everything
         except Exception:  # noqa: BLE001
             logger.exception("system health: reading the scheduler's status failed")
             session.rollback()
@@ -120,13 +122,12 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
     libraries: list[tuple[str, str]] = []
     at = status.at if status else None
     seen = {i: r.model_dump() for i, r in status.storage.items()} if status else {}
-    scans_paused = bool(status and any(sw.target == PAUSE_SCANS and sw.paused for sw in status.switches))
 
     def storage() -> h.Row:
         from src.server.repository.tenant import LibraryRepository
 
         libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all())
-        return h.storage_row(libraries=libraries, storage=seen, scans_paused=scans_paused, at=at, now=now)
+        return h.storage_row(libraries=libraries, storage=seen, stopped=stopped, at=at, now=now)
 
     rows.append(_row("storage", "Storage", storage, db_error, session))
     rows.append(_row("disk", "Disk", lambda: _disk(now)))
@@ -136,7 +137,7 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         state=h.overall(rows),
         rows=[HealthRow(**r.as_dict()) for r in rows],
         libraries=[LibraryReach(library_id=i, name=n, seen_at=(seen.get(i) or {}).get("seen_at"),
-                                reachable=h.library_reachable(seen.get(i), at=at, now=now, scans_paused=scans_paused))
+                                reachable=h.library_reachable(seen.get(i), at=at, now=now, stopped=stopped))
                    for i, n in libraries],
         version=running(),
     )

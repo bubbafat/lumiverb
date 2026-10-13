@@ -1059,7 +1059,7 @@ export interface SystemHealth {
   state: HealthState;
   rows: HealthRow[];
   /** Whether the scheduler's latest look since it started reached each library's storage
-   * (null: not known now: not looked at since, Scans paused, or the scheduler isn't running),
+   * (null: not known now: not looked at since, all processing paused, or the scheduler isn't running),
    * and when it was last seen reachable (null: never). */
   libraries: { library_id: string; name: string; reachable: boolean | null; seen_at: string | null }[];
   /** The Lumiverb running ("0.1.6", "v0.1.6-3-g1a2b3c4", "unknown"); older servers leave it out. */

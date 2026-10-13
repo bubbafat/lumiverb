@@ -229,8 +229,9 @@ def seen(minutes: float | None = 1, *, away_minutes: float | None = None, checke
             "checked": checked}
 
 
-def storage(storage: dict, *, scans_paused: bool = False, at=None, libraries=LIBS) -> h.Row:
-    return h.storage_row(libraries=libraries, storage=storage, scans_paused=scans_paused,
+def storage(storage: dict, *, stopped: bool = False, at=None, libraries=LIBS) -> h.Row:
+    """stopped: all processing paused (Pause all)."""
+    return h.storage_row(libraries=libraries, storage=storage, stopped=stopped,
                          at=at or ago(seconds=5), now=NOW)
 
 
@@ -262,33 +263,32 @@ def test_storage_ignores_records_of_libraries_that_are_gone():
     assert row.state == h.GREEN
 
 
-def test_storage_while_scans_are_paused_is_yellow_with_when_each_was_last_seen():
-    # Proposed (Robert, Oct 9): paused, nothing looks, so what's known is stale, not broken.
-    row = storage({"lib_a": seen(120), "lib_b": seen(5)}, scans_paused=True)
-    assert row.state == h.YELLOW and row.reason == "Scans paused. Photos last seen 2 hours ago, Footage 5 minutes ago."
-    one = storage({"lib_a": seen(120, checked=False)}, scans_paused=True, libraries=LIBS[:1])
-    assert one.state == h.YELLOW and one.reason == "Scans paused. Photos last seen 2 hours ago."
+PAUSED = "All processing paused, so storage isn't checked."
 
 
-def test_storage_while_scans_are_paused_after_a_restart_isnt_red_for_an_old_record():
-    # Unreachable when the scheduler last looked, before a restart: not looked at since.
-    row = storage({"lib_a": seen(120, checked=False), "lib_b": seen(300, away_minutes=200, checked=False)},
-                  scans_paused=True)
-    assert row.state == h.YELLOW and row.reason == "Scans paused. Photos last seen 2 hours ago, Footage 5 hours ago."
+def test_storage_while_all_processing_is_paused_is_yellow_with_when_each_was_last_seen():
+    # Pause all (Robert, Oct 12): nothing touches the drives, so what's known is stale, not broken.
+    row = storage({"lib_a": seen(120), "lib_b": seen(5)}, stopped=True)
+    assert row.state == h.YELLOW and row.reason == f"{PAUSED} Photos last seen 2 hours ago, Footage 5 minutes ago."
+    one = storage({"lib_a": seen(120, checked=False)}, stopped=True, libraries=LIBS[:1])
+    assert one.state == h.YELLOW and one.reason == f"{PAUSED} Photos last seen 2 hours ago."
 
 
-def test_storage_while_scans_are_paused_with_many_libraries_says_the_oldest():
+def test_storage_while_all_processing_is_paused_isnt_red_for_a_look_from_before():
+    # Unreachable when the scheduler last looked, before the pause or a restart: not looked at since.
+    row = storage({"lib_a": seen(120), "lib_b": seen(300, away_minutes=200)}, stopped=True)
+    assert row.state == h.YELLOW and row.reason == f"{PAUSED} Photos last seen 2 hours ago, Footage 5 hours ago."
+    row = storage({"lib_a": seen(120, checked=False), "lib_b": seen(None, away_minutes=200, checked=False)},
+                  stopped=True)
+    assert row.state == h.YELLOW and row.reason == f"{PAUSED} Photos last seen 2 hours ago. Footage never seen."
+
+
+def test_storage_while_all_processing_is_paused_with_many_libraries_says_the_oldest():
     libs = [("a", "A"), ("b", "B"), ("c", "C")]
-    row = storage({"a": seen(1), "b": seen(30), "c": seen(180)}, scans_paused=True, libraries=libs)
-    assert row.state == h.YELLOW and row.reason == "Scans paused. All last seen within 3 hours."
-    row = storage({"a": seen(1), "b": seen(30)}, scans_paused=True, libraries=libs)
-    assert row.reason == "Scans paused. C never seen. The others last seen within 30 minutes."
-
-
-def test_storage_while_scans_are_paused_is_red_when_a_job_found_it_gone():
-    # Looked at since the restart (a job found the storage gone): that's known now.
-    row = storage({"lib_a": seen(120), "lib_b": seen(120, away_minutes=3)}, scans_paused=True)
-    assert row.state == h.RED and row.reason == "Can't reach Footage. Last seen 2 hours ago."
+    row = storage({"a": seen(1), "b": seen(30), "c": seen(180)}, stopped=True, libraries=libs)
+    assert row.state == h.YELLOW and row.reason == f"{PAUSED} All last seen within 3 hours."
+    row = storage({"a": seen(1), "b": seen(30)}, stopped=True, libraries=libs)
+    assert row.reason == f"{PAUSED} C never seen. The others last seen within 30 minutes."
 
 
 def test_storage_not_looked_at_since_a_restart_with_a_record_is_yellow():
@@ -308,27 +308,29 @@ def test_storage_not_looked_at_since_a_restart_without_a_record_is_never_seen():
 def test_storage_is_yellow_when_nothing_has_checked_lately():
     row = storage({"lib_a": seen(), "lib_b": seen()}, at=ago(minutes=10))
     assert row.state == h.YELLOW and row.reason == "Last checked 10 minutes ago: the scheduler isn't running."
-    row = h.storage_row(libraries=LIBS, storage={}, scans_paused=False, at=None, now=NOW)
+    row = h.storage_row(libraries=LIBS, storage={}, stopped=False, at=None, now=NOW)
     assert row.state == h.YELLOW and row.reason == "Not checked: the scheduler isn't running."
     row = storage({"lib_a": seen(), "lib_b": seen(20, away_minutes=15)}, at=ago(minutes=10))
     assert row.state == h.YELLOW and row.reason.endswith(" Then Footage couldn't be reached.")
+    row = storage({"lib_a": seen(), "lib_b": seen()}, at=ago(minutes=10), stopped=True)
+    assert row.reason == "Last checked 10 minutes ago: the scheduler isn't running."
 
 
 def test_storage_is_green_with_no_libraries():
-    row = h.storage_row(libraries=[], storage={}, scans_paused=True, at=None, now=NOW)
+    row = h.storage_row(libraries=[], storage={}, stopped=True, at=None, now=NOW)
     assert row.state == h.GREEN and row.reason == "No libraries."
 
 
 def test_a_librarys_dot_follows_the_same_looks():
     reach = h.library_reachable
-    live = dict(at=ago(seconds=5), now=NOW, scans_paused=False)
+    live = dict(at=ago(seconds=5), now=NOW, stopped=False)
     assert reach(seen(), **live) is True
     assert reach(seen(away_minutes=3), **live) is False
     assert reach(seen(checked=False), **live) is None  # not looked at since the restart
     assert reach(None, **live) is None
-    assert reach(seen(), at=ago(seconds=5), now=NOW, scans_paused=True) is None  # stale while paused
-    assert reach(seen(away_minutes=3), at=ago(seconds=5), now=NOW, scans_paused=True) is False
-    assert reach(seen(), at=ago(minutes=5), now=NOW, scans_paused=False) is None  # the scheduler isn't running
+    assert reach(seen(), at=ago(seconds=5), now=NOW, stopped=True) is None  # stale while all is paused
+    assert reach(seen(away_minutes=3), at=ago(seconds=5), now=NOW, stopped=True) is None
+    assert reach(seen(), at=ago(minutes=5), now=NOW, stopped=False) is None  # the scheduler isn't running
 
 
 # -- Disk -------------------------------------------------------------------------

@@ -4,9 +4,11 @@ One process beside the API (systemd: lumiverb-scheduler), sharing its
 database. Every second or so it:
 
 1. has each account's queue topped up, off this thread (refill): its
-   settings and AI machines read again when due, and each kind's due clips
-   listed from its database (queue.py), less those in hand or just tried;
-   each account's scan look is offered every 30 seconds;
+   settings and AI machines read again when due, each library's storage
+   looked at every 30 seconds (account.py look_at_storage: whatever is
+   paused but Pause all), a new producer version's hold found, and each
+   kind's due clips listed from its database (queue.py), less those in
+   hand or just tried; each account's scan is offered every 30 seconds;
 2. fills every free slot of every pool with the best job for it
    (dispatch.py: tier, then oldest first), run on a thread;
 3. collects finished jobs.
@@ -58,6 +60,9 @@ HOLD_EVERY_SEC = 1.0
 # never runs beside the one that took it.
 LOCK_ID = 0x6C756D76
 LOCK_CHECK_SEC = 0.0
+# Each account's new producer versions are looked for this often (and at
+# its first refill, before any redo is listed).
+NEW_VERSIONS_EVERY_SEC = 60.0
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
@@ -107,6 +112,7 @@ class Scheduler:
         last_status: Callable[[str], dict | None] | None = None,
         crashed: Callable[[str, str, list[str], str], list[str]] | None = None,
         models: Any = None,
+        new_versions: Callable[[str], Any] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -118,6 +124,10 @@ class Scheduler:
         self._retry_requested = retry_requested or _retry_requested_in_database
         # Counts each clip's crashes in a row; returns those to charge now.
         self._crashed = crashed or _crashed_in_database
+        # A producer's new version stops its redo until an admin resumes it
+        # (lineage.hold_new_version): looked for in every producer made again.
+        self._new_versions = new_versions or _hold_new_versions_in_database
+        self._versions_at: dict[str, float] = {}
         self._retry_seen: dict[str, str | None] = {}
         # Each account's last status, read once: its paces start there.
         self._last_status = last_status or _status_from_database
@@ -214,15 +224,18 @@ class Scheduler:
             self._hold_at[tenant_id] = self._clock()
             self._holding[tenant_id] = self._hold_pool.submit(self._read_hold, tenant_id)
 
-    def _read_hold(self, tenant_id: str) -> set[str]:
+    def _read_hold(self, tenant_id: str) -> tuple[set[str], bool]:
         """What an admin paused, in one read (lineage.pauses): a switch's work
         (Scans, or a producer's: its kinds, and its redo's) and a producer's
         redo alone (its redo kind). The dispatcher hands out none of those
         kinds from now on; what's running finishes. Until it can be read, as
-        if everything is paused. Returns the kinds held."""
+        if everything is paused. Returns the kinds held, and whether Pause
+        all is on (or what's paused can't be read): then nothing touches
+        the library drives, the storage look included."""
         seq = next(self._hold_reads)
         try:
-            held = held_kinds(self._on_hold(tenant_id))
+            paused = self._on_hold(tenant_id)
+            held, everything = held_kinds(paused), paused.everything
             if tenant_id in self._hold_unread:
                 self._hold_unread.discard(tenant_id)
                 logger.warning("scheduler: what %s paused can be read again", tenant_id)
@@ -230,9 +243,9 @@ class Scheduler:
             if tenant_id not in self._hold_unread:  # once, not every second
                 self._hold_unread.add(tenant_id)
                 logger.exception("scheduler: reading what %s paused failed; nothing starts until it can be", tenant_id)
-            held = set(KINDS)
+            held, everything = set(KINDS), True
         self.dispatcher.hold(tenant_id, held, seq=seq)
-        return held
+        return held, everything
 
     def _refill_soon(self, tenant_id: str, acct: Any) -> None:
         if self._inline_refill:
@@ -243,11 +256,20 @@ class Scheduler:
             self._refilling[tenant_id] = self._refill_pool.submit(self._refill, tenant_id, acct)
 
     def _refill(self, tenant_id: str, acct: Any) -> None:
-        """Read the account's settings and machines when due, size its AI
-        pools, list what's due for each kind that wants more, and say what's
-        running (every few seconds). What an admin paused (a switch, or a
-        producer's redo) hands out nothing more, at once; what's running finishes."""
-        held = self._read_hold(tenant_id)
+        """Read the account's settings and machines when due, look at its
+        libraries' storage and for new producer versions when due, size its
+        AI pools, list what's due for each kind that wants more, and say
+        what's running (every few seconds). What an admin paused (a switch,
+        or a producer's redo) hands out nothing more, at once; what's
+        running finishes.
+
+        A pause stops its own work only. What other work depends on (whether
+        a library's storage can be read, a new version's hold) is found out
+        here, whatever is paused, never by a job: pausing Scans stops only
+        looking for new and changed files. Pause all touches no library
+        drive, so nothing looks at their storage then; on resuming, the
+        look comes before any storage work is listed."""
+        held, everything = self._read_hold(tenant_id)
         try:
             acct.refresh()
         except Exception:  # noqa: BLE001 — tried again at the next tick
@@ -264,6 +286,14 @@ class Scheduler:
                 acct.seed_storage(last.get("storage"))
             except Exception:  # noqa: BLE001 — it learns them again
                 logger.exception("scheduler: reading %s's last status failed", tenant_id)
+        if not everything:
+            # After the record from before a restart is in, so a library
+            # unreachable now keeps when it was last seen.
+            try:
+                acct.look_at_storage()
+            except Exception:  # noqa: BLE001 — looked at again at the next refill
+                logger.exception("scheduler: looking at %s's storage failed", tenant_id)
+        self._find_new_versions(tenant_id)
         if self._clock() - self._status_at.get(tenant_id, float("-inf")) >= STATUS_EVERY_SEC:
             self._status_at[tenant_id] = self._clock()
             try:
@@ -322,6 +352,22 @@ class Scheduler:
             if kind.redo and items:
                 acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
+
+    def _find_new_versions(self, tenant_id: str) -> None:
+        """A producer's new version stops its redo until an admin resumes it
+        (lineage.hold_new_version): looked for in every producer made again,
+        paused or not, at the account's first refill (before any redo is
+        listed) and every NEW_VERSIONS_EVERY_SEC, so Processing shows it
+        whatever can be listed. Only the database is asked, so Pause all
+        doesn't stop it. Listing a redo looks too (_from_database)."""
+        if self._clock() - self._versions_at.get(tenant_id, float("-inf")) < NEW_VERSIONS_EVERY_SEC:
+            return
+        try:
+            self._new_versions(tenant_id)
+        except Exception:  # noqa: BLE001 — tried again at the next refill
+            logger.exception("scheduler: looking for %s's new producer versions failed", tenant_id)
+            return
+        self._versions_at[tenant_id] = self._clock()
 
     def _run_job(self, acct: Any, job: Job) -> tuple[Outcome, set[str]]:
         """Run the job; its outcome, and which of its clips failures were
@@ -496,11 +542,29 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[s
             return None
         if not kind.redo:
             return candidates(session, kind, libraries, skip=skip)
-        # A new producer version stops its redo until an admin resumes it.
+        # A new producer version stops its redo until an admin resumes it
+        # (each refill looks first, _find_new_versions; this is its guard).
         if kind.artifact in paused.redo or lineage.hold_new_version(session, kind.artifact):
             return None
         return candidates(session, kind, libraries, skip=skip,
                           want=lineage.desired(session, kind.artifact, _job_models(tenant_id)))
+
+
+# The producers whose redo the scheduler lists (a redo kind each).
+REDONE = tuple(dict.fromkeys(k.artifact for k in KINDS.values() if k.redo))
+
+
+def _hold_new_versions_in_database(tenant_id: str) -> None:
+    """lineage.hold_new_version for each producer made again, in the
+    account's database (one read each once its version was seen)."""
+    from sqlmodel import Session
+
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        for artifact in REDONE:
+            lineage.hold_new_version(session, artifact)
 
 
 def _job_models(tenant_id: str) -> dict[str, str]:
