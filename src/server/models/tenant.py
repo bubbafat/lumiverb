@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, JSON, SmallInteger, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, JSON, SmallInteger, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
@@ -63,6 +63,60 @@ class LibraryChange(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
     version: int = Field(sa_column=Column(BigInteger, nullable=False))
+
+
+class ScanSession(SQLModel, table=True):
+    """A scan of a library, or a folder of it, while it runs (ADR-018 decision
+    12): the client says what it found, the server decides (src/server/scans.py).
+    Deleted when it expires; a finished one is kept until then, so a retried
+    finish is told it's finished."""
+
+    __tablename__ = "scan_sessions"
+    __table_args__ = (
+        CheckConstraint("media_type IN ('all', 'image', 'video')", name="ck_scan_sessions_media_type"),
+        CheckConstraint("moves IN ('apply', 'skip', 'ask')", name="ck_scan_sessions_moves"),
+    )
+
+    scan_id: str = Field(primary_key=True)
+    library_id: str = Field(foreign_key="libraries.library_id", nullable=False, index=True)
+    scope: str = Field(default="", nullable=False)  # a folder's rel_path; "" is the whole library
+    media_type: str = Field(default="all", nullable=False)
+    thorough: bool = Field(default=False, nullable=False)
+    force: bool = Field(default=False, nullable=False)
+    moves: str = Field(default="ask", nullable=False)
+    dry_run: bool = Field(default=False, nullable=False)
+    # A clip made or changed since then is never taken for gone by this scan.
+    started_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, index=True))
+    planned_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # Folders the walk couldn't list: nothing under them is gone.
+    unlisted: list[str] | None = Field(default=None, sa_column=Column(ARRAY(Text()), nullable=True))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+
+
+class ScanFound(SQLModel, table=True):
+    """A file a scan found on disk, with what the server planned for it
+    (action, reason) and decided once it had its content (decision)."""
+
+    __tablename__ = "scan_found"
+    __table_args__ = (
+        Index("ix_scan_found_moving", "scan_id", "asset_id",
+              postgresql_where=text("decision IN ('moved', 'move_candidate', 'move_skipped')")),
+    )
+
+    scan_id: str = Field(foreign_key="scan_sessions.scan_id", primary_key=True)
+    rel_path: str = Field(primary_key=True)
+    file_size: int = Field(sa_column=Column(BigInteger, nullable=False))
+    file_mtime: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    media_type: str = Field(nullable=False)  # from its extension
+    settling: bool = Field(default=False, nullable=False)  # written moments ago: present, nothing planned
+    action: str | None = Field(default=None, nullable=True)  # upload | hash | unchanged | skipped
+    reason: str | None = Field(default=None, nullable=True)
+    # The clip at this path when planned; for a move, the clip moving here.
+    asset_id: str | None = Field(default=None, nullable=True)
+    sha256: str | None = Field(default=None, nullable=True)
+    decision: str | None = Field(default=None, nullable=True)
+    moved_from: str | None = Field(default=None, nullable=True)
 
 
 class LibraryPathFilter(SQLModel, table=True):

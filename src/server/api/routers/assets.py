@@ -209,11 +209,14 @@ MASS_MISSING_MIN_FILES = 50
 MASS_MISSING_MIN_FRACTION = 0.5
 
 
-def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: int | None) -> None:
+def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: int | None,
+                            *, answer: str | None = None) -> None:
     """409 mass_missing when marking these missing would take more than
     MASS_MISSING_MIN_FILES clips and more than half of any library's clips in
     sight, unless confirmed is the number of clips it would take. Clients
-    send a scan's missing clips in one request, so the rule sees them all."""
+    send a scan's missing clips in one request, so the rule sees them all.
+    answer: what to send to go ahead, when it isn't confirm_missing (a
+    scan's finish, routers/scans.py)."""
     from sqlalchemy import text as sa_text
 
     rows = session.execute(sa_text(
@@ -237,7 +240,7 @@ def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: i
         "mass_missing",
         f"{going} clips would be archived as missing, {round(100 * worst.going / worst.in_sight)}% of a "
         "library's clips: that usually means its storage isn't fully mounted. If the files really are gone, "
-        f"send confirm_missing: {going}.",
+        f"send {answer or f'confirm_missing: {going}'}.",
         {"count": going, "libraries": [{"library_id": r.library_id, "missing": r.going, "in_sight": r.in_sight}
                                        for r in tripped]},
     )

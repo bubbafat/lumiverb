@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. From a design discussion with Robert on 2026-10-12. Nothing is built.
+Proposed. From a design discussion with Robert on 2026-10-12. Under way: see Progress.
 
 The order of the work (Progress) follows decision 12: today's scan moves onto this protocol first, so a library this server reads exercises every call a device will make, before there is a device.
 
@@ -11,7 +11,7 @@ The order of the work (Progress) follows decision 12: today's scan moves onto th
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Each library names its reader (this server unless a device is chosen); the scan's pause becomes the library's | Not started |
-| 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | Not started |
+| 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | In progress: the server compares (PR #183); the scanner switches next |
 | 3 | What's due for the originals is one computed list (decision 3): the scan's missing previews and the scheduler's probe, capture and analysis proxies come from it | Not started |
 | 4 | Sync by a high-water mark per library; the reader checks in (decision 4) | Not started |
 | 5 | Resumable uploads; videos from a client checked and rewritten; device keys limited to their libraries; the server admin as a person who signs in | Not started |
