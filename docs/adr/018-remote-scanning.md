@@ -4,17 +4,21 @@
 
 Proposed. From a design discussion with Robert on 2026-10-12. Nothing is built.
 
+The order of the work (Progress) follows decision 12: today's scan moves onto this protocol first, so a library this server reads exercises every call a device will make, before there is a device.
+
 ## Progress
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Each library names its reader; the reader checks in; the processing page says who scans | Not started |
-| 2 | The client: the scan plus analysis proxies, against a remote server; what's due after a change on the server | Not started |
-| 3 | Resumable uploads; videos from a client checked and rewritten | Not started |
-| 4 | Device keys limited to their libraries; the server admin as a person who signs in | Not started |
-| 5 | Quality as notches; the remake choice; changes that keep what exists until it's replaced | Not started |
-| 6 | Library admins (roles per library) | Not started |
-| 7 | A client that works offline (its own database, synced) | Not started |
+| 1 | Each library names its reader (this server unless a device is chosen); the scan's pause becomes the library's | Not started |
+| 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | Not started |
+| 3 | What's due for the originals is one computed list (decision 3): the scan's missing previews and the scheduler's probe, capture and analysis proxies come from it | Not started |
+| 4 | Sync by a high-water mark per library; the reader checks in (decision 4) | Not started |
+| 5 | Resumable uploads; videos from a client checked and rewritten; device keys limited to their libraries; the server admin as a person who signs in | Not started |
+| 6 | Libraries a device reads: the scheduler leaves their file work alone; the client (the scan plus analysis proxies) against a remote server; the processing page says who scans | Not started |
+| 7 | Quality as notches; the remake choice | Not started |
+| 8 | Library admins (roles per library) | Not started |
+| 9 | A client that works offline (its own database, synced) | Not started |
 
 ## Overview
 
@@ -142,6 +146,31 @@ The client may send H.264 or HEVC. Measured on 17 clips of a real library (2026-
 **Keyframes are set, not left to the encoder.** Scenes are found from the analysis proxy's keyframes alone, with thresholds tuned for keyframes about 2 seconds apart (`src/producers/scenes/detail.py`). Left to themselves, encoders add keyframes at changes of picture: in 60 seconds of a fast-moving clip, x264 as configured placed 50 (as close as 0.23 s apart), x265 38, VideoToolbox 30. Told to place one every 2 seconds and no others, x264 and x265 both give 30. Every analysis proxy, whichever encoder or machine makes it, has keyframes every 2 seconds and nowhere else, so scenes don't depend on who rendered it.
 
 **Downstream, the codec doesn't matter otherwise.** At the same quality the models see the same detail; transcripts hear the AAC either way; a server decodes only keyframes for scenes and a few frames for faces, and a GPU decodes both codecs.
+
+### 12. Today's scan moves onto this protocol
+
+Robert agreed all three (2026-10-12). Today's scan already works only through the API: the scheduler's scan pass (`src/server/scheduler/scans.py`) calls the same `run_scan` as `lumiverb scan` (`src/processing/scan.py`), over HTTP. What changes is the shape of the conversation and which side decides.
+
+- **One protocol, and this server is one of its readers.** A library this server reads makes exactly the calls a device makes, so every one of them runs every day on a Mac and on Linux before there is a device. The Python scanner is the reference client, for the scheduler and for `lumiverb scan`.
+- **The client says what it found; the server decides.** The client sends each file's path, size, modified time and content hash, with what it read from the file (EXIF, probe facts). The server decides what's new, changed, moved (with "follow moves"), missing (archived, with the guard against taking most of a library for missing), and what's skipped because a person removed it. Today the client works these out itself (`_detect_moves`, `_detect_deletions`, `_preview_missing` in `src/processing/scan.py`); every client would need that logic, and it's the part a less trusted client shouldn't own (decision 10). `lumiverb scan`'s prompt about moved files becomes the server's question, the 409 every client must ask (`DecisionRequiredError`).
+- **On this server, probing, capture and analysis proxies stay the scheduler's producers**, which already share the GPU, the decoders and the pace. They take their work from the same computed list a device does (decision 3), so the rules are in one place either way.
+
+**Behaviours carried over**, each with its new home:
+
+| Today | Decided by | Under this protocol |
+|---|---|---|
+| The walk: path filters, hidden files, no symlinks, control characters, folders the server never reads, names in NFC | the client | the client; filters and refused folders from the server |
+| Unchanged when size and modified time match; `--thorough` hashes everything | the client, against the library's whole listing | the client, against its own record (phase 4) |
+| Files a person trashed, archived or deleted for good, by content | the client (`/ignored-paths`) | the client skips them; the server refuses them anyway (decision 5) |
+| Moves: the same content at a new path | the client | the server |
+| Missing files archived; restored when they come back; the mass-missing guard | the client, the guard on the server | the server |
+| A video preview that never arrived is made again | the client | the server's list (decision 3) |
+| Previews, thumbnails, video previews, EXIF | the client | the client; the server re-encodes and checks (decision 10) |
+| Probing, capture, analysis proxies | the server's producers, reading the originals | the library's reader, from the list |
+| Changes a Mac reports, a full scan once a day, a file's retries backing off, a folder that can't be listed never taken for deleted | the server's scheduler | the reader (for this server's libraries, its scheduler) |
+| Whether the drive is there | the scheduler's own look (since #179) | the reader, in its check-in |
+
+**Phase 2 is the risk**, since it's where moves and missing files change sides. Its tests run the old and new comparisons over the same folders and server listings, and must agree.
 
 ## Alternatives considered
 
