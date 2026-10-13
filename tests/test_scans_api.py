@@ -1108,6 +1108,69 @@ def test_abandoning_a_scan_changes_nothing(env):
 
 
 # ---------------------------------------------------------------------------
+# What a scan leaves behind: the scheduler scans each library in full every
+# 15 minutes, and each scan lists every file it found
+# ---------------------------------------------------------------------------
+
+
+def _listed(env, scan_id: str) -> int:
+    """Rows in the scan's listing."""
+    with env.db.connect() as conn:
+        return conn.execute(text("SELECT count(*) FROM scan_found WHERE scan_id = :s"), {"s": scan_id}).scalar()
+
+
+def _scans_kept(env, scan_id: str) -> int:
+    with env.db.connect() as conn:
+        return conn.execute(text("SELECT count(*) FROM scan_sessions WHERE scan_id = :s"), {"s": scan_id}).scalar()
+
+
+@pytest.mark.slow
+def test_a_finished_scans_listing_goes_at_once_and_the_scan_stays_until_it_expires(env):
+    """Robert, Oct 13: a full scan every 15 minutes lists every file each time
+    (14,608 on his Mac); kept until each scan expired, a day after its last
+    call, that would be 1.4 million rows a day. The finish deletes them; the
+    scan stays, with its answer, so a finish sent again still gets it."""
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    _ingest(env, lib, a)
+    _ingest(env, lib, File("gone.jpg", "gone"))
+    c, h = env.client, env.editor
+    s = _start(env, lib)
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([a, File("new.jpg", "new")])}, headers=h))
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    assert _listed(env, s) == 2
+    finish = _ok(c.post(f"/v1/scans/{s}/finish", json={}, headers=h))
+    assert finish["archived"] == 1 and _listed(env, s) == 0
+    with env.db.connect() as conn:
+        finished, left = conn.execute(text("SELECT finished_at, expires_at - now() FROM scan_sessions"
+                                           " WHERE scan_id = :s"), {"s": s}).one()
+    assert finished is not None and left > timedelta(hours=23)
+    # Sent again, its answer is the scan's, never worked out again from a
+    # listing that's gone (every clip would look missing).
+    assert _ok(c.post(f"/v1/scans/{s}/finish", json={}, headers=h)) == finish
+    assert set(_clips(env, lib)) == {"a.jpg"}
+    # Expired, the scan goes too (starting one deletes the account's expired scans; so does upkeep).
+    with env.db.begin() as conn:
+        conn.execute(text("UPDATE scan_sessions SET expires_at = now() - interval '1 minute' WHERE scan_id = :s"),
+                     {"s": s})
+    _start(env, lib)
+    assert _scans_kept(env, s) == 0
+
+
+@pytest.mark.slow
+def test_an_abandoned_scan_leaves_neither_itself_nor_its_listing(env):
+    lib = _library(env)
+    c, h = env.client, env.editor
+    s = _start(env, lib)
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([File("a.jpg", "a"), File("b.jpg", "b")])},
+               headers=h))
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    assert _listed(env, s) == 2
+    _ok(c.delete(f"/v1/scans/{s}", headers=h), 204)
+    assert (_scans_kept(env, s), _listed(env, s)) == (0, 0)
+
+
+# ---------------------------------------------------------------------------
 # Who may scan
 # ---------------------------------------------------------------------------
 

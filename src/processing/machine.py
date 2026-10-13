@@ -1,6 +1,7 @@
 """This machine's way of processing: where libraries' files are, where caches
-go, and how video is rendered here. None of it changes what's made (that's
-the account's, on the server: src/producers/).
+go, how video is rendered here and how often libraries are scanned in full.
+None of it changes what's made (that's the account's, on the server:
+src/producers/).
 
 Whatever runs processing says once, at its start, where these come from
 (use): the scheduler from its environment (src/server/scheduler/settings.py;
@@ -14,6 +15,13 @@ import os
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+
+# Each library is scanned in full this often, in minutes, unless set
+# (LUMIVERB_FULL_SCAN_EVERY_MIN). Where nothing reports changes (a Mac running
+# the server) it's how new files are found. Robert, Oct 13: his 14,608 files
+# on the Mac's own disk walk in 0.4 s, and a full scan finding nothing new
+# takes about 3 s.
+FULL_SCAN_EVERY_MIN = 15.0
 
 
 def default_render_concurrency() -> int:
@@ -51,6 +59,9 @@ class Machine:
     # Face batches a detection process does before a fresh one takes over
     # (ONNX Runtime leaks: src/producers/faces/detect.py).
     face_batches_per_process: int = 20
+    # How often the scheduler scans each library in full, in minutes. A big
+    # library on a network share can take longer to walk: raise it there.
+    full_scan_every_min: float = FULL_SCAN_EVERY_MIN
 
     def refused_here(self) -> tuple[str, ...]:
         """Folders never read as a library's, nor walked into inside one:

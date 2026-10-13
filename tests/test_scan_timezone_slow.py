@@ -80,7 +80,7 @@ def test_the_server_talks_to_postgres_in_utc(env) -> None:
 
 @pytest.mark.slow
 def test_a_second_scan_doesnt_hash_an_unchanged_file(env, tmp_path: Path) -> None:
-    """What the server's daily full scan does with a file it already has: its
+    """What the server's full scan (every 15 minutes) does with a file it already has: its
     mtime and size match what the server stored, so it isn't read again."""
     (tmp_path / "tz").mkdir()
     clip = tmp_path / "tz" / "clip.jpg"

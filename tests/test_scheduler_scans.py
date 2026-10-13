@@ -1,14 +1,15 @@
-"""Scanning what changed, and each library in full once a day (ADR-016 phase 4).
+"""Scanning what changed, and each library in full every 15 minutes (ADR-016 phase 4).
 
 The scheduler looks at each library every 30 seconds: it scans the folders
-the storage machine reported changed (and each library in full once a day),
-then acknowledges what the scan saw. Libraries whose storage is asleep
+the storage machine reported changed (and each library in full every 15
+minutes, unless set), then acknowledges what the scan saw. Libraries whose storage is asleep
 aren't scanned; probing and rendering wait for them. (Moved from the
 worker's tests: the scheduler took over its scanning.)
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,8 @@ from src.processing import roots
 from src.processing import machine
 from src.processing.machine import Machine
 from src.processing.scan import ScanStats
+from src.server.scheduler import runners
+from src.server.scheduler.dispatch import Job
 from src.server.scheduler.scans import (
     Retry,
     ScanState,
@@ -96,7 +99,9 @@ class FakeServer:
 
         def get(url: str, **kw):
             resp = MagicMock()
-            if url.endswith("/changes"):
+            if url == "/v1/libraries":
+                resp.json.return_value = self.libraries
+            elif url.endswith("/changes"):
                 lib = url.split("/")[3]
                 resp.json.return_value = {"changes": self.pending.get(lib, []), "truncated": lib in self.truncated}
             else:
@@ -165,7 +170,7 @@ def test_the_server_asking_about_mass_missing_is_left_for_a_person(das: Path, ca
     [warning] = [r for r in caplog.records if r.levelname == "WARNING"]
     assert "Footage" in warning.getMessage() and "90 clip(s)" in warning.getMessage()
     assert "lumiverb scan --library Footage --allow-mass-delete" in warning.getMessage()
-    assert server.acks  # the rest of the scan is done; the daily full scan asks again
+    assert server.acks  # the rest of the scan is done; the next full scan asks again
 
 
 @pytest.mark.fast
@@ -255,6 +260,54 @@ def test_a_full_scan_runs_when_due_and_is_remembered(das: Path) -> None:
     scan, state, _ = _pass(FakeServer([LIB]), state, now=30 * HOUR, full_scan_every=24 * HOUR)
     assert scan.call_args.kwargs["path_prefix"] is None
     assert state.last_full_scan["lib_1"] == 30 * HOUR
+
+
+class ScanningAccount:
+    """What the scan job reads of an account (Account)."""
+
+    def __init__(self, server: FakeServer) -> None:
+        self.client = server.client()
+        self.scan_state = ScanState()
+        self.machine = machine.current()
+
+    def set_libraries(self, libraries: list[dict]) -> None:
+        pass
+
+    def set_reachable(self, roots: dict) -> None:
+        pass
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("setting,full_at", [
+    (None, [0, 15, 30, 45]),  # unset: every 15 minutes
+    ("40", [0, 40]),
+])
+def test_a_library_is_scanned_in_full_again_once_its_interval_has_passed_and_not_before(
+        das: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str | None, full_at: list) -> None:
+    # Robert, Oct 13: nothing reports changes on a Mac running the server, so
+    # its full scans are how new files are found (once a day before). The
+    # scan job as the scheduler runs it, with the scheduler's own settings.
+    from src.server.scheduler.settings import read_settings
+
+    monkeypatch.chdir(tmp_path)  # no .env or .env.local of this checkout's
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", json.dumps({MAC: str(das)}))
+    if setting is None:
+        monkeypatch.delenv("LUMIVERB_FULL_SCAN_EVERY_MIN", raising=False)
+    else:
+        monkeypatch.setenv("LUMIVERB_FULL_SCAN_EVERY_MIN", setting)
+    machine.use(read_settings().machine())
+    prefixes: list = []
+    monkeypatch.setattr("src.processing.scan.run_scan",
+                        lambda client, library, **kw: (prefixes.append(kw["path_prefix"]), ScanStats())[1])
+    acct = ScanningAccount(FakeServer([LIB]))
+    scanned = []
+    for minute in (0, 1, 14, 14.99, 15, 16, 29.99, 30, 39.99, 40, 44.99, 45):
+        before = len(prefixes)
+        runners.scan(acct, Job("t1", "scan", 1, ()), now=100 * HOUR + minute * MIN)
+        if len(prefixes) > before:
+            scanned.append(minute)
+    assert scanned == full_at
+    assert prefixes == [None] * len(full_at)  # each one the whole library
 
 
 @pytest.mark.fast
@@ -448,12 +501,26 @@ def test_a_failed_file_is_tried_again_with_back_off(das: Path) -> None:
     _, state, _ = _pass(server, now=t, scan=_failing("Day 1/A001.mov"))
     server.pending = {}
     tries = []
-    for minute in range(1, 40):
-        scan, state, _ = _pass(server, state, now=t + minute * MIN, scan=_failing("Day 1/A001.mov"))
+    for minute in range(1, 40):  # no full scan meanwhile (the next test has one)
+        scan, state, _ = _pass(server, state, now=t + minute * MIN, scan=_failing("Day 1/A001.mov"),
+                               full_scan_every=1e9)
         if scan.called:
             assert scan.call_args.kwargs["path_prefix"] == "Day 1"
             tries.append(minute)
     assert tries == [5, 15, 35]
+
+
+@pytest.mark.fast
+def test_a_full_scan_tries_failed_files_again_and_one_that_takes_them_ends_their_retries(das: Path) -> None:
+    t = 100 * HOUR
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    _, state, _ = _pass(server, now=t, scan=_failing("Day 1/A001.mov"), full_scan_every=15 * MIN)
+    server.pending = {}
+    scan, state, _ = _pass(server, state, now=t + 15 * MIN, scan=_failing("Day 1/A001.mov"), full_scan_every=15 * MIN)
+    assert scan.call_args.kwargs["path_prefix"] is None  # the whole library, the failed file with it
+    assert state.retries["lib_1"].paths == {"Day 1/A001.mov"} and state.retries["lib_1"].delay == 10 * MIN
+    scan, state, _ = _pass(server, state, now=t + 30 * MIN, full_scan_every=15 * MIN)
+    assert scan.call_args.kwargs["path_prefix"] is None and state.retries == {}
 
 
 @pytest.mark.fast
@@ -477,7 +544,7 @@ def test_a_clean_scan_of_the_folder_ends_the_retries(das: Path) -> None:
     _, state, _ = _pass(server, state, now=t + MIN)
     assert state.retries == {}
     server.pending = {}
-    scan, _, _ = _pass(server, state, now=t + HOUR)
+    scan, _, _ = _pass(server, state, now=t + HOUR, full_scan_every=1e9)  # no full scan due either
     scan.assert_not_called()
 
 

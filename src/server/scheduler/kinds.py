@@ -24,7 +24,8 @@ from src.server.scheduler.dispatch import KindSpec
 from src.shared.producers import MISSING_FLAGS, PRODUCERS
 
 # Scans aren't in the database's queue: each account's libraries are
-# looked at this often (reported changes; a full scan once a day).
+# looked at this often (reported changes; a full scan every 15 minutes
+# unless set: LUMIVERB_FULL_SCAN_EVERY_MIN).
 SCAN_EVERY_SEC = 30.0
 
 

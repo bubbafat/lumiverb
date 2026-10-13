@@ -1,4 +1,4 @@
-"""Scanning: what changed on storage, and each library in full once a day (ADR-016 phase 4).
+"""Scanning: what changed on storage, and each library in full every 15 minutes (ADR-016 phase 4).
 
 The scheduler looks at each account's libraries every 30 seconds:
 
@@ -6,16 +6,24 @@ The scheduler looks at each account's libraries every 30 seconds:
    reported changes (or a full scan is due), scan the one folder that
    covers them, then acknowledge the changes the scan saw. A file that
    fails to scan doesn't hold its changes back; it's tried again on its
-   own, after 5 minutes, then 10, 20 and so on up to a day. A folder that
-   can't be listed (no permission, or the CIFS mount timing out) keeps the
-   changes, which wait for the same back-off, and nothing is taken for
-   missing.
+   own, after 5 minutes, then 10, 20 and so on up to a day, and by every
+   full scan. A folder that can't be listed (no permission, or the CIFS
+   mount timing out) keeps the changes, which wait for the same back-off,
+   and nothing is taken for missing.
 2. Each library's storage is looked at again right before its scan (an
    unmounted mount point is an empty folder, and scanning it would mark
    every file missing). What each look finds goes into the account's
    record of its storage (on_roots), which the scheduler otherwise keeps
    itself, every 30 seconds whatever is paused but Pause all
    (account.py look_at_storage): pausing scans stops no other work.
+
+Each library is scanned in full every 15 minutes, unless this machine's
+setting says otherwise (LUMIVERB_FULL_SCAN_EVERY_MIN, settings.py): nothing
+reports changes on a Mac running the server (no file-system watching), so a
+full scan is how its new files are found, and elsewhere it catches a report
+that was missed. Each is a plain full scan (Robert, Oct 13): "modified since
+the last scan" would miss copies, which keep the camera's time, renames,
+which keep theirs, and deletions, which have none.
 
 A library is skipped, never failed: the next look tries again. A library
 whose scan itself keeps failing (not one file: the scan raised) is tried
@@ -42,6 +50,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from src.processing.cache_dir import cache_dir
+from src.processing.machine import FULL_SCAN_EVERY_MIN
 from src.processing.roots import reachable_root
 from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
 
@@ -50,7 +59,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
+# Unless the scheduler's setting says otherwise (runners.scan passes it).
+DEFAULT_FULL_SCAN_EVERY_SEC = FULL_SCAN_EVERY_MIN * 60
 # Files that failed to scan are tried again after this, doubling up to a day.
 RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0

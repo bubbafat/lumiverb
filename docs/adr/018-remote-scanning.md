@@ -167,7 +167,7 @@ Robert agreed all three (2026-10-12). Today's scan already works only through th
 | A video preview that never arrived is made again | the client | the server's list (decision 3) |
 | Previews, thumbnails, video previews, EXIF | the client | the client; the server re-encodes and checks (decision 10) |
 | Probing, capture, analysis proxies | the server's producers, reading the originals | the library's reader, from the list |
-| Changes a Mac reports, a full scan once a day, a file's retries backing off, a folder that can't be listed never taken for deleted | the server's scheduler | the reader (for this server's libraries, its scheduler) |
+| Changes a Mac reports, a full scan every 15 minutes (once a day until Oct 13), a file's retries backing off, a folder that can't be listed never taken for deleted | the server's scheduler | the reader (for this server's libraries, its scheduler) |
 | Whether the drive is there | the scheduler's own look (since #179) | the reader, in its check-in |
 
 **Phase 2 is the risk**, since it's where moves and missing files change sides. Its tests run the old and new comparisons over the same folders and server listings, and must agree.

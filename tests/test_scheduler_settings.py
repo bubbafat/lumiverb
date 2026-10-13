@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.processing.machine import Machine, default_render_concurrency
-from src.server.scheduler.settings import SchedulerSettings, api_url
+from src.server.scheduler.settings import SchedulerSettings, api_url, read_settings
 
 pytestmark = pytest.mark.fast
 
@@ -35,6 +35,53 @@ def test_the_schedulers_settings_come_from_its_environment(monkeypatch) -> None:
     assert (here.analysis_proxy_decoder, here.renders, here.face_batches_per_process) == ("cuda", 2, 8)
     assert here.gpu_decodes_here == 1
     assert Machine(analysis_proxy_decoder="cpu").gpu_decodes_here == 0
+
+
+def test_each_library_is_scanned_in_full_every_15_minutes_unless_set(monkeypatch, tmp_path) -> None:
+    # Robert, Oct 13: nothing reports changes on a Mac running the server, so
+    # its full scans are how new files are found; once a day was too seldom.
+    monkeypatch.chdir(tmp_path)  # no .env or .env.local of this checkout's
+    monkeypatch.delenv("LUMIVERB_FULL_SCAN_EVERY_MIN", raising=False)
+    assert read_settings().machine().full_scan_every_min == 15
+    assert Machine().full_scan_every_min == 15  # whatever runs processing without saying
+    monkeypatch.setenv("LUMIVERB_FULL_SCAN_EVERY_MIN", "120")  # a big library on a network share
+    assert read_settings().machine().full_scan_every_min == 120
+    monkeypatch.setenv("LUMIVERB_FULL_SCAN_EVERY_MIN", "0.5")
+    assert read_settings().machine().full_scan_every_min == 0.5
+
+
+@pytest.mark.parametrize("bad", ["0", "-15", "soon", "", "inf", "nan"])
+def test_a_full_scan_interval_that_isnt_a_positive_number_stops_the_scheduler_saying_why(
+        monkeypatch, tmp_path, caplog, bad) -> None:
+    # Before, any setting it couldn't read stopped it with nothing said:
+    # entry()'s exit came before the traceback.
+    from src.server import database
+    from src.server.scheduler import service
+
+    class GotPastTheSettings:
+        def __init__(self, *a, **kw) -> None:
+            raise AssertionError("the scheduler went on with a setting it can't use")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("LUMIVERB_FULL_SCAN_EVERY_MIN", bad)
+    monkeypatch.setattr(service, "configure_logging", lambda: None)  # the test run's logging stays as it is
+    monkeypatch.setattr(database, "APPLICATION_NAME", database.APPLICATION_NAME)  # put back after
+    monkeypatch.setattr("src.server.scheduler.scans.ServiceLock", GotPastTheSettings)
+    with caplog.at_level("ERROR", logger="src.server.scheduler.service"):
+        assert service.main() == 1
+    [said] = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert said.startswith("scheduler: not starting, a setting is wrong: LUMIVERB_FULL_SCAN_EVERY_MIN: ")
+    assert f"(it says {bad!r})" in said
+
+
+def test_a_setting_that_isnt_json_is_named(monkeypatch, tmp_path) -> None:
+    from src.server.scheduler.settings import SettingError
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", "{not json")
+    with pytest.raises(SettingError, match='"root_map".*isn\'t JSON'):
+        read_settings()
 
 
 @pytest.mark.parametrize("decoder,vulkan,videotoolbox,decodes", [
