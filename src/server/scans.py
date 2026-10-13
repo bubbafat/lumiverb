@@ -1,0 +1,490 @@
+"""What a scan found, compared with the library on the server (ADR-018 decision 12).
+
+The client says what it found; the server decides. A scan is a short-lived
+session (routers/scans.py): the client starts it, sends every media file its
+walk saw (path, size, modified time), says when the listing is complete, and
+gets the plan: what to upload now, what to hash first, what a person removed,
+how many are unchanged and how many clips are gone. It sends the hashes the
+plan asks for and gets a decision for each; then it finishes, and what's gone
+is archived as missing.
+
+The rules are today's scanner's (src/processing/scan.py), each moved here:
+- unchanged when size and modified time match the clip at the path; hashed
+  when they don't, or for --thorough; uploaded for --force, and when a
+  video's preview never arrived (_split_files, _preview_missing);
+- a file a person trashed, archived or deleted for good is skipped when its
+  size and time are the ones removed, or its content is (_skipped);
+- a move is a new path whose content is a clip gone from this scan, never a
+  copy (that clip's file still there); only files of a size a gone clip has
+  are hashed for it (_detect_moves);
+- gone is a clip of the scan's folder and media type the scan didn't find
+  (_detect_deletions), never under a folder it couldn't list, and never one
+  made or changed since the scan started: another scan may have just made it.
+
+Every comparison is one statement over the whole listing, the found files
+joined with the library's clips, so planning 100,000 files is one round
+trip, and a batch of hashes a fixed handful.
+"""
+
+from __future__ import annotations
+
+import posixpath
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
+from ulid import ULID
+
+from src.server.models.tenant import ScanSession
+from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from src.shared.utils import utcnow
+
+# An unfinished scan is deleted a day after its last call.
+TTL = timedelta(hours=24)
+# Files in one call (found, hashes); a plan's pages are MAX_PAGE (limits.py), as every page of clips.
+MAX_FILES = 1000
+
+ACTIONS = ("upload", "hash", "unchanged", "skipped")
+# What a plan's pages list unless asked: what the client acts on.
+TO_ACT_ON = ("upload", "hash", "skipped")
+
+
+class NotPlannedError(Exception):
+    """Hashes sent for files the plan doesn't list (not found, or present
+    only: settling, empty, another media type)."""
+
+    def __init__(self, rel_paths: list[str]) -> None:
+        super().__init__(f"{len(rel_paths)} file(s) the plan doesn't list")
+        self.rel_paths = rel_paths
+
+
+class PathTakenError(Exception):
+    """A move's new path was taken by another clip meanwhile (another scan's ingest)."""
+
+
+@dataclass
+class Found:
+    rel_path: str
+    file_size: int
+    file_mtime: datetime | None
+    media_type: str
+    settling: bool
+
+
+@dataclass
+class Decided:
+    rel_path: str
+    sha256: str
+    decision: str  # unchanged | upload | moved | move_candidate | move_skipped | skipped
+    asset_id: str | None = None
+    moved_from: str | None = None
+
+
+def media_type_of(rel_path: str) -> str | None:
+    """image or video, by the file's extension (src/shared/file_extensions.py); None for neither."""
+    ext = posixpath.splitext(rel_path)[1].lower()
+    return "video" if ext in VIDEO_EXTENSIONS else "image" if ext in IMAGE_EXTENSIONS else None
+
+
+def in_scope(rel_path: str, scope: str) -> bool:
+    """A file in the scan's folder ("" is the whole library)."""
+    return not scope or rel_path.startswith(scope + "/")
+
+
+# Clips of the scan's library, folder and media type that it didn't find: in
+# sight, at no path it found, under no folder it couldn't list, made and last
+# changed before it started, and not claimed by one of its moves.
+GONE = """
+    SELECT a.asset_id, a.rel_path, a.sha256, a.file_size
+    FROM assets a
+    WHERE a.library_id = :library_id AND a.deleted_at IS NULL
+      AND (CAST(:scope AS text) = '' OR starts_with(a.rel_path, CAST(:scope AS text) || '/'))
+      AND (CAST(:media_type AS text) = 'all' OR a.media_type = CAST(:media_type AS text))
+      AND a.created_at <= :started_at AND a.updated_at <= :started_at
+      AND NOT EXISTS (SELECT 1 FROM scan_found f WHERE f.scan_id = :scan_id AND f.rel_path = a.rel_path)
+      AND NOT EXISTS (SELECT 1 FROM unnest(CAST(:unlisted AS text[])) AS u(folder)
+                      WHERE u.folder = '' OR a.rel_path = u.folder OR starts_with(a.rel_path, u.folder || '/'))
+      AND NOT EXISTS (SELECT 1 FROM scan_found m WHERE m.scan_id = :scan_id AND m.asset_id = a.asset_id
+                      AND m.decision IN ('moved', 'move_candidate', 'move_skipped'))
+"""
+
+# Files a person removed from the library, with each one's content, size and
+# time: trashed or archived by a person (their clips), or deleted for good
+# (ignored_files). What GET /v1/libraries/{id}/ignored-paths lists.
+REMOVED = """
+    SELECT rel_path, sha256, file_size, file_mtime FROM assets
+    WHERE library_id = :library_id AND deleted_at IS NOT NULL AND deleted_reason IN ('user', 'archived')
+    UNION ALL
+    SELECT rel_path, sha256, file_size, file_mtime FROM ignored_files WHERE library_id = :library_id
+"""
+
+# Each found file's plan, as "action/reason". The clip in sight at the path
+# comes first (a removed file's path is never one a clip holds: that file is
+# the clip's). Settling and empty files, and those of another media type, are
+# present but get no plan.
+_PLAN = f"""
+    WITH gone AS ({GONE}),
+    removed AS (
+        SELECT f.rel_path,
+               bool_or(r.sha256 IS NULL) AS unknown,
+               COALESCE(bool_or(r.file_size = f.file_size AND r.file_mtime = f.file_mtime), false) AS as_removed
+        FROM scan_found f JOIN ({REMOVED}) r ON r.rel_path = f.rel_path
+        WHERE f.scan_id = :scan_id
+        GROUP BY f.rel_path
+    ),
+    planned AS (
+        SELECT f.rel_path, a.asset_id,
+               CASE
+                   WHEN f.settling OR f.file_size = 0
+                        OR (CAST(:media_type AS text) <> 'all' AND f.media_type <> CAST(:media_type AS text))
+                       THEN NULL
+                   WHEN a.asset_id IS NOT NULL THEN CASE
+                       WHEN a.media_type = 'video' AND a.video_preview_key IS NULL THEN 'upload/preview_missing'
+                       WHEN :force THEN 'upload/force'
+                       WHEN :thorough THEN 'hash/thorough'
+                       WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime THEN 'unchanged/'
+                       ELSE 'hash/changed' END
+                   WHEN r.unknown OR r.as_removed THEN 'skipped/removed'
+                   WHEN r.rel_path IS NOT NULL THEN 'hash/removed'
+                   WHEN :moves AND f.file_size IN (SELECT g.file_size FROM gone g WHERE g.sha256 IS NOT NULL)
+                       THEN 'hash/move'
+                   ELSE 'upload/new'
+               END AS kind
+        FROM scan_found f
+        LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = f.rel_path AND a.deleted_at IS NULL
+        LEFT JOIN removed r ON r.rel_path = f.rel_path
+        WHERE f.scan_id = :scan_id
+    )
+    UPDATE scan_found f
+    SET action = split_part(p.kind, '/', 1), reason = NULLIF(split_part(p.kind, '/', 2), ''),
+        asset_id = p.asset_id
+    FROM planned p
+    WHERE f.scan_id = :scan_id AND f.rel_path = p.rel_path AND p.kind IS NOT NULL
+"""
+
+# Hashes sent, in order, with what the scan and the library know of each path now.
+_POSTED = f"""
+    WITH posted AS (
+        SELECT * FROM unnest(CAST(:paths AS text[]), CAST(:shas AS text[])) WITH ORDINALITY AS p(rel_path, sha256, ord)
+    )
+    SELECT p.rel_path, p.sha256, f.action, f.decision, f.asset_id AS decided_id, f.moved_from,
+           f.file_size, f.file_mtime,
+           a.asset_id, a.sha256 AS asset_sha256,
+           COALESCE(a.file_size <> f.file_size OR a.file_mtime IS DISTINCT FROM f.file_mtime, false) AS stat_differs,
+           COALESCE(a.media_type = 'video' AND a.video_preview_key IS NULL, false) AS preview_missing,
+           p.rel_path IN (SELECT r.rel_path FROM ({REMOVED}) r
+                          JOIN posted q ON q.rel_path = r.rel_path AND q.sha256 = r.sha256) AS removed
+    FROM posted p
+    LEFT JOIN scan_found f ON f.scan_id = :scan_id AND f.rel_path = p.rel_path
+    LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = p.rel_path AND a.deleted_at IS NULL
+    ORDER BY p.ord
+"""
+
+
+def _params(scan: ScanSession) -> dict:
+    return {"scan_id": scan.scan_id, "library_id": scan.library_id, "scope": scan.scope,
+            "media_type": scan.media_type, "started_at": scan.started_at, "unlisted": list(scan.unlisted or [])}
+
+
+def start(session: Session, library_id: str, *, scope: str, media_type: str, thorough: bool, force: bool,
+          moves: str, dry_run: bool) -> ScanSession:
+    """A new scan, started now. Scans expired by now go first, with their listings."""
+    now = utcnow()
+    session.execute(text("DELETE FROM scan_sessions WHERE expires_at < :now"), {"now": now})
+    scan = ScanSession(scan_id="scan_" + str(ULID()), library_id=library_id, scope=scope, media_type=media_type,
+                       thorough=thorough, force=force, moves=moves, dry_run=dry_run, started_at=now,
+                       expires_at=now + TTL)
+    session.add(scan)
+    session.commit()
+    session.refresh(scan)
+    return scan
+
+
+def lock(session: Session, scan_id: str) -> ScanSession | None:
+    """The scan, locked until the transaction ends: its calls take turns."""
+    return session.exec(select(ScanSession).where(ScanSession.scan_id == scan_id).with_for_update()).first()
+
+
+def drop(session: Session, scan_id: str) -> bool:
+    """Delete a scan and its listing (no commit). False when there's none."""
+    return bool(session.execute(text("DELETE FROM scan_sessions WHERE scan_id = :s"), {"s": scan_id}).rowcount)
+
+
+def add_found(session: Session, scan_id: str, files: list[Found]) -> None:
+    """Append files to the scan's listing, one statement. A path sent again
+    takes its latest size and time."""
+    latest = {f.rel_path: f for f in files}
+    session.execute(text("""
+        INSERT INTO scan_found (scan_id, rel_path, file_size, file_mtime, media_type, settling)
+        SELECT :scan_id, f.rel_path, f.file_size, f.file_mtime, f.media_type, f.settling
+        FROM unnest(CAST(:paths AS text[]), CAST(:sizes AS bigint[]), CAST(:mtimes AS timestamptz[]),
+                    CAST(:types AS text[]), CAST(:settling AS boolean[]))
+             AS f(rel_path, file_size, file_mtime, media_type, settling)
+        ON CONFLICT (scan_id, rel_path) DO UPDATE
+        SET file_size = EXCLUDED.file_size, file_mtime = EXCLUDED.file_mtime,
+            media_type = EXCLUDED.media_type, settling = EXCLUDED.settling
+    """), {"scan_id": scan_id, "paths": list(latest), "sizes": [f.file_size for f in latest.values()],
+           "mtimes": [f.file_mtime for f in latest.values()], "types": [f.media_type for f in latest.values()],
+           "settling": [f.settling for f in latest.values()]})
+
+
+def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_moves: bool) -> None:
+    """The listing is complete: plan every found file, one statement. Moves
+    are looked for when the account follows them, unless the scan forces
+    every file or skips moves (as today's scanner: no move detection under
+    --force or --skip-moves)."""
+    scan.unlisted = unlisted
+    scan.planned_at = utcnow()
+    session.add(scan)
+    session.flush()
+    session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
+                                  "moves": moves_possible(scan, follow_moves)})
+
+
+def moves_possible(scan: ScanSession, follow_moves: bool) -> bool:
+    return follow_moves and not scan.force and scan.moves != "skip"
+
+
+def counts(session: Session, scan: ScanSession) -> dict[str, int]:
+    """The plan's counts: found, each action, settling, empty, and the clips gone."""
+    row = session.execute(text("""
+        SELECT count(*) AS found,
+               count(*) FILTER (WHERE action = 'upload') AS upload,
+               count(*) FILTER (WHERE action = 'hash') AS hash,
+               count(*) FILTER (WHERE action = 'unchanged') AS unchanged,
+               count(*) FILTER (WHERE action = 'skipped') AS skipped,
+               count(*) FILTER (WHERE settling) AS settling,
+               count(*) FILTER (WHERE file_size = 0) AS empty
+        FROM scan_found WHERE scan_id = :scan_id
+    """), {"scan_id": scan.scan_id}).mappings().one()
+    gone = session.execute(text(f"SELECT count(*) FROM ({GONE}) g"), _params(scan)).scalar_one()
+    return {**row, "gone": gone}
+
+
+def page(session: Session, scan_id: str, actions: tuple[str, ...], after: str | None, limit: int) -> list[dict]:
+    """A page of the plan, by rel_path: each file's action, reason and clip."""
+    return [dict(r) for r in session.execute(text("""
+        SELECT rel_path, action, reason, asset_id FROM scan_found
+        WHERE scan_id = :scan_id AND action = ANY(CAST(:actions AS text[]))
+          AND (CAST(:after AS text) IS NULL OR rel_path > :after)
+        ORDER BY rel_path LIMIT :limit
+    """), {"scan_id": scan_id, "actions": list(actions), "after": after, "limit": limit}).mappings()]
+
+
+def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *,
+           follow_moves: bool) -> list[Decided]:
+    """Decide each file from its content, in the order sent (no commit):
+
+    - at a path a clip holds: uploaded when its content differs (or the scan
+      forces, or the video's preview never arrived), else unchanged, and its
+      new size and time are recorded so the next scan's check matches;
+    - at a new path: skipped when a person removed this content here; moved
+      when it's the content of a clip gone from this scan, the first such
+      clip by id for the first such file sent, applied now when the scan
+      applies moves (as POST /v1/assets/batch-moves), a candidate when it
+      asks first; else uploaded.
+
+    A dry run decides and changes nothing. A file already moved or skipped
+    keeps its decision. Raises NotPlannedError, before anything changes, for files
+    the plan doesn't list; PathTakenError when another clip took a move's path
+    meanwhile (send the hashes again: the file is then that clip's)."""
+    rows = session.execute(text(_POSTED), {**_params(scan), "paths": [p for p, _ in posted],
+                                           "shas": [s for _, s in posted]}).mappings().all()
+    unknown = [r["rel_path"] for r in rows if r["action"] is None]
+    if unknown:
+        raise NotPlannedError(unknown)
+    decided: list[Decided] = []
+    stats: list[dict] = []
+    matching: list[Decided] = []
+    for r in rows:
+        if r["decision"] in ("moved", "move_candidate", "move_skipped") or r["action"] == "skipped":
+            decided.append(Decided(r["rel_path"], r["sha256"], r["decision"] or "skipped", r["decided_id"],
+                                   r["moved_from"]))
+            continue
+        d = Decided(r["rel_path"], r["sha256"], "upload")
+        if r["asset_id"] is not None:
+            d.asset_id = r["asset_id"]
+            if not (scan.force or r["preview_missing"] or r["asset_sha256"] != r["sha256"]):
+                d.decision = "unchanged"
+                if r["stat_differs"]:
+                    stats.append({"asset_id": r["asset_id"], "size": r["file_size"], "mtime": r["file_mtime"]})
+        elif r["removed"]:
+            d.decision = "skipped"
+        elif moves_possible(scan, follow_moves):
+            matching.append(d)
+        decided.append(d)
+    _match_moves(session, scan, matching)
+    if not scan.dry_run:
+        moving = [d for d in matching if d.decision == "moved"]
+        _not_moved(moving, apply_moves(session, scan.library_id,
+                                       [(d.asset_id, d.moved_from, d.rel_path) for d in moving]))
+        record_stats(session, stats)
+    _record(session, scan.scan_id, decided)
+    return decided
+
+
+def _match_moves(session: Session, scan: ScanSession, files: list[Decided]) -> None:
+    """Each file at a new path whose content is a gone clip's takes that clip:
+    moved (moves "apply"), or a candidate (moves "ask"). The first file sent
+    takes the first clip by id, as today's scanner took them in walk order
+    from the listing in id order. The rest stay uploads."""
+    if not files:
+        return
+    sources: dict[str, list[tuple[str, str]]] = {}
+    for r in session.execute(text(f"""
+        SELECT g.asset_id, g.rel_path, g.sha256 FROM ({GONE}) g
+        WHERE g.sha256 = ANY(CAST(:shas AS text[]))
+        ORDER BY g.sha256, g.asset_id COLLATE "C"
+    """), {**_params(scan), "shas": sorted({d.sha256 for d in files})}).mappings():
+        sources.setdefault(r["sha256"], []).append((r["asset_id"], r["rel_path"]))
+    for d in files:
+        if sources.get(d.sha256):
+            d.asset_id, d.moved_from = sources[d.sha256].pop(0)
+            d.decision = "moved" if scan.moves == "apply" else "move_candidate"
+
+
+def _not_moved(moving: list[Decided], applied: set[str]) -> None:
+    """A move that couldn't be made (the clip moved, changed or went
+    meanwhile) is an upload: ingest then does what's right for the file."""
+    for d in moving:
+        if d.asset_id not in applied:
+            d.decision, d.asset_id, d.moved_from = "upload", None, None
+
+
+def apply_moves(session: Session, library_id: str, moves: list[tuple[str, str, str]]) -> set[str]:
+    """Move clips to their new paths, one statement: (asset_id, from, to).
+    Only a clip still in sight at its old path, to a path no clip in sight
+    holds; each goes back in search, as with batch-moves. Returns the clips moved."""
+    if not moves:
+        return set()
+    try:
+        # The paths taken are looked up once, by the library's paths index.
+        return set(session.execute(text("""
+            UPDATE assets a SET rel_path = m.rel_path, search_synced_at = NULL, updated_at = :now
+            FROM unnest(CAST(:ids AS text[]), CAST(:froms AS text[]), CAST(:tos AS text[]))
+                 AS m(asset_id, moved_from, rel_path)
+            WHERE a.asset_id = m.asset_id AND a.library_id = :library_id AND a.deleted_at IS NULL
+              AND a.rel_path = m.moved_from
+              AND m.rel_path <> ALL (ARRAY(SELECT o.rel_path FROM assets o
+                                           WHERE o.library_id = :library_id AND o.deleted_at IS NULL
+                                             AND o.rel_path = ANY(CAST(:tos AS text[]))))
+            RETURNING a.asset_id
+        """), {"now": utcnow(), "library_id": library_id, "ids": [m[0] for m in moves],
+               "froms": [m[1] for m in moves], "tos": [m[2] for m in moves]}).scalars())
+    except IntegrityError as exc:  # another ingest put a clip at one of the paths just now
+        raise PathTakenError() from exc
+
+
+def record_stats(session: Session, stats: list[dict]) -> None:
+    """Unchanged files' new size and time (touched, copied back), one
+    statement, as POST /v1/assets/upsert records them: otherwise every later
+    scan reads the whole file again."""
+    if stats:
+        session.execute(text("""
+            UPDATE assets a SET file_size = s.size, file_mtime = s.mtime, availability = 'online'
+            FROM unnest(CAST(:ids AS text[]), CAST(:sizes AS bigint[]), CAST(:mtimes AS timestamptz[]))
+                 AS s(asset_id, size, mtime)
+            WHERE a.asset_id = s.asset_id AND a.deleted_at IS NULL
+        """), {"ids": [s["asset_id"] for s in stats], "sizes": [s["size"] for s in stats],
+               "mtimes": [s["mtime"] for s in stats]})
+
+
+def _record(session: Session, scan_id: str, decided: list[Decided]) -> None:
+    if decided:
+        session.execute(text("""
+            UPDATE scan_found f SET sha256 = d.sha256, decision = d.decision, asset_id = d.asset_id,
+                                    moved_from = d.moved_from
+            FROM unnest(CAST(:paths AS text[]), CAST(:shas AS text[]), CAST(:decisions AS text[]),
+                        CAST(:ids AS text[]), CAST(:froms AS text[])) AS d(rel_path, sha256, decision, asset_id, moved_from)
+            WHERE f.scan_id = :scan_id AND f.rel_path = d.rel_path
+        """), {"scan_id": scan_id, "paths": [d.rel_path for d in decided], "shas": [d.sha256 for d in decided],
+               "decisions": [d.decision for d in decided], "ids": [d.asset_id for d in decided],
+               "froms": [d.moved_from for d in decided]})
+
+
+def move_candidates(session: Session, scan_id: str, limit: int | None = None) -> list[dict]:
+    """Moves waiting for a person's say (moves "ask"), by new path."""
+    return [dict(r) for r in session.execute(text(
+        "SELECT rel_path, asset_id, moved_from FROM scan_found"
+        " WHERE scan_id = :scan_id AND decision = 'move_candidate' ORDER BY rel_path LIMIT :limit"
+    ), {"scan_id": scan_id, "limit": limit}).mappings()]
+
+
+def settle_moves(session: Session, scan: ScanSession, apply: bool) -> tuple[int, int, list[str]]:
+    """The person's say on the scan's move candidates (no commit): applied
+    (as batch-moves), or skipped, when the moved files take no part: not
+    uploaded, and their clips not archived (today's prompt, "Skip moves").
+    Returns (moved, skipped, the new paths to upload: moves that couldn't be
+    made). A dry run records the answer and moves nothing."""
+    waiting = move_candidates(session, scan.scan_id)
+    if not waiting:
+        return 0, 0, []
+    if not apply:
+        _settle(session, scan.scan_id, [w["rel_path"] for w in waiting], "move_skipped")
+        return 0, len(waiting), []
+    if scan.dry_run:
+        applied = waiting
+    else:
+        moved = apply_moves(session, scan.library_id,
+                            [(w["asset_id"], w["moved_from"], w["rel_path"]) for w in waiting])
+        applied = [w for w in waiting if w["asset_id"] in moved]
+    _settle(session, scan.scan_id, [w["rel_path"] for w in applied], "moved")
+    upload = [w["rel_path"] for w in waiting if w not in applied]
+    if upload:
+        session.execute(text(
+            "UPDATE scan_found SET decision = 'upload', asset_id = NULL, moved_from = NULL"
+            " WHERE scan_id = :scan_id AND rel_path = ANY(CAST(:paths AS text[]))"
+        ), {"scan_id": scan.scan_id, "paths": upload})
+    return len(applied), 0, upload
+
+
+def _settle(session: Session, scan_id: str, paths: list[str], decision: str) -> None:
+    session.execute(text(
+        "UPDATE scan_found SET decision = :decision WHERE scan_id = :scan_id AND rel_path = ANY(CAST(:paths AS text[]))"
+    ), {"scan_id": scan_id, "paths": paths, "decision": decision})
+
+
+def gone_ids(session: Session, scan: ScanSession) -> list[str]:
+    """The clips gone from this scan, by id: what its finish archives as missing."""
+    return list(session.execute(text(f"SELECT g.asset_id FROM ({GONE}) g ORDER BY g.asset_id COLLATE \"C\""),
+                                _params(scan)).scalars())
+
+
+def totals(session: Session, scan: ScanSession) -> dict[str, int]:
+    """What the scan decided, for its finish: files found of its media type,
+    moved (in a dry run, its candidates too), unchanged and skipped."""
+    return dict(session.execute(text("""
+        SELECT count(*) FILTER (WHERE CAST(:media_type AS text) = 'all' OR media_type = CAST(:media_type AS text))
+                   AS of_media_type,
+               count(*) FILTER (WHERE decision IN ('moved', 'move_candidate')) AS moved,
+               count(*) FILTER (WHERE COALESCE(decision, action) = 'unchanged') AS unchanged,
+               count(*) FILTER (WHERE COALESCE(decision, action) = 'skipped') AS skipped
+        FROM scan_found WHERE scan_id = :scan_id
+    """), {"scan_id": scan.scan_id, "media_type": scan.media_type}).mappings().one())
+
+
+def with_newer_copies(session: Session, asset_ids: list[str]) -> list[str]:
+    """Of these, in order, those with a newer clip in sight of the same
+    content in their library: the only ones a copy-then-delete handover can
+    move (AssetRepository.newer_copy_candidates), found in one statement."""
+    if not asset_ids:
+        return []
+    found = set(session.execute(text("""
+        SELECT o.asset_id FROM assets o
+        WHERE o.asset_id = ANY(CAST(:ids AS text[])) AND o.sha256 IS NOT NULL
+          AND EXISTS (SELECT 1 FROM assets c WHERE c.library_id = o.library_id AND c.sha256 = o.sha256
+                      AND c.deleted_at IS NULL AND c.asset_id <> o.asset_id AND c.created_at > o.created_at)
+    """), {"ids": asset_ids}).scalars())
+    return [a for a in asset_ids if a in found]
+
+
+def close(session: Session, scan: ScanSession) -> None:
+    """Finished: the listing goes; the scan stays until it expires, so a
+    finish sent again is told it's finished (no commit)."""
+    session.execute(text("DELETE FROM scan_found WHERE scan_id = :s"), {"s": scan.scan_id})
+    now = utcnow()
+    scan.finished_at = now
+    scan.expires_at = now + TTL
+    session.add(scan)

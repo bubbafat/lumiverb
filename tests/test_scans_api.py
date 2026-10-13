@@ -1,0 +1,1050 @@
+"""The server compares what a scan found (ADR-018 decision 12, phase 2).
+
+Each test drives the scan calls the way a client would, over real server
+state: start, send what's on disk, plan, hash what the plan asks for, answer
+moves, finish, then upload what was decided (POST /v1/ingest, after the
+finish, as today's scanner archives before it ingests). The outcomes are
+today's scanner's (src/processing/scan.py), rule by rule, except where the
+module's docstring says otherwise.
+
+Real Postgres (testcontainers), two accounts, a temp LocalStorage.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import os
+import uuid
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import make_url
+from sqlmodel import Session
+from testcontainers.postgres import PostgresContainer
+
+from src.server.api.main import app
+from src.server.config import get_settings
+from src.server.database import _engines, get_engine_for_url
+from src.server.models.tenant import Asset
+from src.server.storage.local import LocalStorage
+from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.machine_lineage import ingest_made, made_json
+
+_STORAGE_USERS = ("artifacts", "assets", "trash", "ingest", "video")
+T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+T1 = T0 + timedelta(hours=1)
+
+
+def _tenant(client: TestClient, name: str) -> tuple[str, str]:
+    r = client.post("/v1/admin/tenants", json={"name": name, "plan": "free"},
+                    headers={"Authorization": "Bearer test-admin-scans"})
+    assert r.status_code == 200, r.text
+    return r.json()["tenant_id"], r.json()["api_key"]
+
+
+def _route(tenant_id: str, url: str) -> None:
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    with get_control_session() as session:
+        row = TenantDbRoutingRepository(session).get_by_tenant_id(tenant_id)
+        row.connection_string = url
+        session.add(row)
+        session.commit()
+
+
+@pytest.fixture(scope="module")
+def env(tmp_path_factory):
+    """Two accounts, each with its own database: the first's admin, editor
+    and viewer keys, and the second's admin key."""
+    storage = LocalStorage(str(tmp_path_factory.mktemp("scans_storage")))
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    with PostgresContainer(PG_IMAGE) as control_pg:
+        control_url = _ensure_psycopg2(control_pg.get_connection_url())
+        engine = create_engine(control_url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            conn.commit()
+        engine.dispose()
+        _run_control_migrations(control_url)
+
+        os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
+        os.environ["TENANT_DATABASE_URL_TEMPLATE"] = str(make_url(control_url).set(database="{tenant_id}"))
+        os.environ["ADMIN_KEY"] = "test-admin-scans"
+        get_settings.cache_clear()
+        _engines.clear()
+
+        with patch("src.server.accounts.provision_tenant_database"), TestClient(app) as client:
+            tenant_id, api_key = _tenant(client, "ScansTenant")
+            other_id, other_key = _tenant(client, "OtherScansTenant")
+
+        with PostgresContainer(PG_IMAGE) as tenant_pg, PostgresContainer(PG_IMAGE) as other_pg:
+            tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
+            other_url = _ensure_psycopg2(other_pg.get_connection_url())
+            _provision_tenant_db(tenant_url, project_root)
+            _provision_tenant_db(other_url, project_root)
+            _route(tenant_id, tenant_url)
+            _route(other_id, other_url)
+
+            with ExitStack() as stack:
+                for mod in _STORAGE_USERS:
+                    stack.enter_context(patch(f"src.server.api.routers.{mod}.get_storage", return_value=storage))
+                with TestClient(app) as client:
+                    admin = {"Authorization": f"Bearer {api_key}"}
+
+                    def key(role: str) -> dict:
+                        r = client.post("/v1/keys", json={"label": role, "role": role}, headers=admin)
+                        assert r.status_code == 200, r.text
+                        return {"Authorization": f"Bearer {r.json()['plaintext']}"}
+
+                    db = create_engine(tenant_url)
+                    yield SimpleNamespace(client=client, admin=admin, editor=key("editor"), viewer=key("viewer"),
+                                          other={"Authorization": f"Bearer {other_key}"}, tenant_url=tenant_url,
+                                          db=db)
+                    db.dispose()
+        _engines.clear()
+
+
+@pytest.fixture(autouse=True)
+def _moves_followed(env):
+    yield
+    r = env.client.patch("/v1/tenant/settings", json={"follow_moves": True}, headers=env.admin)
+    assert r.status_code == 200, r.text
+
+
+# ---------------------------------------------------------------------------
+# A client: files on disk, ingest, and the scan's calls
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class File:
+    """A file on disk: its path, content (its hash and, unless given, its size) and modified time."""
+
+    rel_path: str
+    content: str
+    mtime: datetime = T0
+    size: int | None = None
+
+    @property
+    def sha(self) -> str:
+        return hashlib.sha256(self.content.encode()).hexdigest()
+
+    @property
+    def file_size(self) -> int:
+        return self.size if self.size is not None else 1000 + int(self.sha[:5], 16)
+
+    def at(self, rel_path: str) -> File:
+        return File(rel_path, self.content, self.mtime, self.size)
+
+    def touched(self) -> File:
+        return File(self.rel_path, self.content, T1, self.size)
+
+
+def _library(env) -> str:
+    name = f"scan-{uuid.uuid4().hex[:8]}"
+    r = env.client.post("/v1/libraries", json={"name": name, "root_path": f"/Volumes/{name}"}, headers=env.admin)
+    assert r.status_code == 200, r.text
+    return r.json()["library_id"]
+
+
+def _ingest(env, library_id: str, f: File, *, preview: bool = True) -> str:
+    """Upload a file as the scanner does (a video with its 10-second preview)."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
+    buf.seek(0)
+    video = f.rel_path.endswith(".mov")
+    r = env.client.post("/v1/ingest", headers=env.editor, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+        "library_id": library_id, "rel_path": f.rel_path, "file_size": str(f.file_size),
+        "file_mtime": f.mtime.isoformat(), "media_type": "video" if video else "image", "width": "64",
+        "height": "36", "exif": json.dumps({"sha256": f.sha}), "lineage": ingest_made(f.sha)})
+    assert r.status_code == 200, r.text
+    asset_id = r.json()["asset_id"]
+    if video and preview:
+        r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=env.editor,
+                            files={"file": ("p.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 preview"), "video/mp4")},
+                            data={"lineage": made_json("video_preview", f.sha)})
+        assert r.status_code == 200, r.text
+    return asset_id
+
+
+def _clips(env, library_id: str) -> dict[str, str]:
+    """The library's clips in sight: {rel_path: asset_id}."""
+    with env.db.connect() as conn:
+        return dict(conn.execute(text("SELECT rel_path, asset_id FROM assets"
+                                      " WHERE library_id = :l AND deleted_at IS NULL"), {"l": library_id}).all())
+
+
+def _clip(env, asset_id: str) -> dict:
+    with env.db.connect() as conn:
+        return dict(conn.execute(text("SELECT rel_path, deleted_reason, file_size, file_mtime FROM assets"
+                                      " WHERE asset_id = :a"), {"a": asset_id}).mappings().one())
+
+
+def _settings(env, **body) -> None:
+    r = env.client.patch("/v1/tenant/settings", json=body, headers=env.admin)
+    assert r.status_code == 200, r.text
+
+
+def _ok(r, status: int = 200) -> dict:
+    assert r.status_code == status, r.text
+    return r.json() if r.content else {}
+
+
+def _error(r, status: int, code: str) -> dict:
+    assert r.status_code == status, r.text
+    err = r.json()["error"]
+    assert err["code"] == code, err
+    return err
+
+
+def _start(env, library_id: str, headers: dict | None = None, **opts) -> str:
+    return _ok(env.client.post(f"/v1/libraries/{library_id}/scans", json=opts,
+                               headers=headers or env.editor))["scan_id"]
+
+
+def _listing(disk: list[File], settling=(), empty=()) -> list[dict]:
+    return [{"rel_path": f.rel_path, "file_size": 0 if f.rel_path in empty else f.file_size,
+             "file_mtime": f.mtime.isoformat(), "settling": f.rel_path in settling} for f in disk]
+
+
+@dataclass
+class Run:
+    scan_id: str
+    counts: dict = field(default_factory=dict)
+    plan: dict[str, dict] = field(default_factory=dict)  # rel_path -> planned file
+    decisions: dict[str, dict] = field(default_factory=dict)
+    moves: dict | None = None
+    finish: dict | None = None
+    finish_error: object = None  # the response to a finish the server refused
+    uploaded: dict[str, str] = field(default_factory=dict)  # rel_path -> asset_id
+
+
+def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unlisted=(), answer: bool | None = None,
+          allow_mass_missing: bool = False, page: int = 500, **opts) -> Run:
+    """A whole scan as a client makes it. Stops at a finish the server
+    refuses (run.finish is None), uploading nothing."""
+    c, h = env.client, env.editor
+    run = Run(_start(env, library_id, **opts))
+    listing = _listing(disk, settling, empty)
+    for i in range(0, len(listing), 1000):
+        _ok(c.post(f"/v1/scans/{run.scan_id}/found", json={"files": listing[i:i + 1000]}, headers=h))
+    first = _ok(c.post(f"/v1/scans/{run.scan_id}/plan", params={"limit": page},
+                       json={"unlisted": list(unlisted)}, headers=h))
+    run.counts = first["counts"]
+    files, cursor = first["files"], first["next_cursor"]
+    while cursor:
+        more = _ok(c.get(f"/v1/scans/{run.scan_id}/plan", params={"after": cursor, "limit": page}, headers=h))
+        files, cursor = files + more["files"], more["next_cursor"]
+    run.plan = {f["rel_path"]: f for f in files}
+    on_disk = {f.rel_path: f for f in disk}
+    to_hash = [p for p, f in run.plan.items() if f["action"] == "hash"]
+    for i in range(0, len(to_hash), 1000):
+        sent = [{"rel_path": p, "sha256": on_disk[p].sha} for p in to_hash[i:i + 1000]]
+        for d in _ok(c.post(f"/v1/scans/{run.scan_id}/hashes", json={"files": sent}, headers=h))["files"]:
+            run.decisions[d["rel_path"]] = d
+    if answer is not None and any(d["decision"] == "move_candidate" for d in run.decisions.values()):
+        run.moves = _ok(c.post(f"/v1/scans/{run.scan_id}/moves", json={"apply": answer}, headers=h))
+    r = c.post(f"/v1/scans/{run.scan_id}/finish", json={"allow_mass_missing": allow_mass_missing}, headers=h)
+    if r.status_code != 200:
+        run.finish_error = r
+        return run
+    run.finish = r.json()
+    if not opts.get("dry_run"):
+        uploads = [p for p, f in run.plan.items() if f["action"] == "upload"]
+        uploads += [p for p, d in run.decisions.items() if d["decision"] == "upload"]
+        uploads += (run.moves or {}).get("upload", [])
+        for p in uploads:
+            run.uploaded[p] = _ingest(env, library_id, on_disk[p])
+    return run
+
+
+def _planned(run: Run) -> dict[str, tuple[str, str | None]]:
+    return {p: (f["action"], f["reason"]) for p, f in run.plan.items()}
+
+
+def _decided(run: Run) -> dict[str, str]:
+    return {p: d["decision"] for p, d in run.decisions.items()}
+
+
+# ---------------------------------------------------------------------------
+# New, unchanged, touched, changed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_new_file_is_uploaded_without_hashing_first(env):
+    lib = _library(env)
+    run = _scan(env, lib, [File("a.jpg", "a")])
+    assert _planned(run) == {"a.jpg": ("upload", "new")}
+    assert run.counts == {"found": 1, "upload": 1, "hash": 0, "unchanged": 0, "skipped": 0, "settling": 0,
+                          "empty": 0, "gone": 0}
+    assert set(_clips(env, lib)) == {"a.jpg"}
+
+
+@pytest.mark.slow
+def test_a_file_whose_size_and_time_match_is_unchanged_without_hashing(env):
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a])
+    assert run.plan == {} and run.counts["unchanged"] == 1 and run.counts["hash"] == 0
+    assert run.finish["unchanged"] == 1 and run.finish["archived"] == 0
+    assert _clips(env, lib) == {"a.jpg": asset}
+
+
+@pytest.mark.slow
+def test_the_unchanged_files_are_listed_with_their_clips_on_request(env):
+    # A client keeping a cache of previews by clip (today's scanner fills its cache for unchanged files).
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    asset = _ingest(env, lib, a)
+    scan_id = _start(env, lib)
+    _ok(env.client.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([a])}, headers=env.editor))
+    first = _ok(env.client.post(f"/v1/scans/{scan_id}/plan", json={}, headers=env.editor))
+    assert first["files"] == []
+    page = _ok(env.client.get(f"/v1/scans/{scan_id}/plan", params={"action": "unchanged"}, headers=env.editor))
+    assert page["files"] == [{"rel_path": "a.jpg", "action": "unchanged", "reason": None, "asset_id": asset}]
+    _error(env.client.get(f"/v1/scans/{scan_id}/plan", params={"action": "gone"}, headers=env.editor),
+           422, "invalid_request")
+
+
+@pytest.mark.slow
+def test_a_touched_file_is_unchanged_and_its_new_time_is_recorded(env):
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.touched()])
+    assert _planned(run) == {"a.jpg": ("hash", "changed")}
+    assert run.decisions["a.jpg"] == {"rel_path": "a.jpg", "decision": "unchanged", "asset_id": asset,
+                                      "moved_from": None}
+    assert run.uploaded == {}
+    assert _clip(env, asset)["file_mtime"] == T1
+    # So the next scan doesn't read it again.
+    assert _scan(env, lib, [a.touched()]).counts["unchanged"] == 1
+
+
+@pytest.mark.slow
+def test_changed_content_is_uploaded_and_becomes_a_new_clip(env):
+    lib = _library(env)
+    old = _ingest(env, lib, File("a.jpg", "before"))
+    run = _scan(env, lib, [File("a.jpg", "after", mtime=T1)])
+    assert _planned(run) == {"a.jpg": ("hash", "changed")}
+    assert run.decisions["a.jpg"]["decision"] == "upload" and run.decisions["a.jpg"]["asset_id"] == old
+    new = _clips(env, lib)["a.jpg"]
+    assert new != old and _clip(env, old)["deleted_reason"] == "missing"  # ingest's rule: a new file is a new clip
+
+
+@pytest.mark.slow
+def test_a_video_whose_preview_never_arrived_is_uploaded_again(env):
+    lib = _library(env)
+    without, with_ = File("v1.mov", "v1"), File("v2.mov", "v2")
+    asset = _ingest(env, lib, without, preview=False)
+    _ingest(env, lib, with_)
+    run = _scan(env, lib, [without, with_])
+    assert run.plan == {"v1.mov": {"rel_path": "v1.mov", "action": "upload", "reason": "preview_missing",
+                                   "asset_id": asset}}
+    assert run.counts["unchanged"] == 1
+    assert run.uploaded == {"v1.mov": asset}
+
+
+@pytest.mark.slow
+def test_thorough_hashes_every_known_file(env):
+    lib = _library(env)
+    a, b = File("a.jpg", "a"), File("b.jpg", "b")
+    _ingest(env, lib, a)
+    _ingest(env, lib, b)
+    run = _scan(env, lib, [a, File("b.jpg", "b changed")], thorough=True)
+    assert _planned(run) == {"a.jpg": ("hash", "thorough"), "b.jpg": ("hash", "thorough")}
+    assert _decided(run) == {"a.jpg": "unchanged", "b.jpg": "upload"}
+
+
+@pytest.mark.slow
+def test_force_uploads_every_known_file_and_looks_for_no_moves(env):
+    lib = _library(env)
+    a, b = File("a.jpg", "a"), File("b.jpg", "b")
+    _ingest(env, lib, a)
+    b_asset = _ingest(env, lib, b)
+    run = _scan(env, lib, [a, b.at("moved/b.jpg")], force=True)
+    assert _planned(run) == {"a.jpg": ("upload", "force"), "moved/b.jpg": ("upload", "new")}
+    assert run.finish["archived"] == 1 and run.finish["moved"] == 0
+    # Archived first, then ingested: restored at its new path by content, as today under --force.
+    assert _clips(env, lib)["moved/b.jpg"] == b_asset
+
+
+# ---------------------------------------------------------------------------
+# Moves
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_moved_file_keeps_its_clip(env):
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="apply")
+    assert _planned(run) == {"b/1.jpg": ("hash", "move")} and run.counts["gone"] == 1
+    assert run.decisions["b/1.jpg"] == {"rel_path": "b/1.jpg", "decision": "moved", "asset_id": asset,
+                                        "moved_from": "a/1.jpg"}
+    assert run.finish["archived"] == 0 and run.finish["moved"] == 1
+    assert _clips(env, lib) == {"b/1.jpg": asset}
+    assert run.uploaded == {}
+
+
+@pytest.mark.slow
+def test_a_renamed_folder_moves_every_clip_in_it(env):
+    lib = _library(env)
+    trip = [File("Trip/1.jpg", "t1"), File("Trip/2.jpg", "t2"), File("Trip/3.mov", "t3")]
+    ids = {f.rel_path.split("/")[1]: _ingest(env, lib, f) for f in trip}
+    run = _scan(env, lib, [f.at(f.rel_path.replace("Trip/", "Trip 2024/")) for f in trip], moves="apply")
+    assert set(_decided(run).values()) == {"moved"}
+    assert _clips(env, lib) == {f"Trip 2024/{name}": asset for name, asset in ids.items()}
+    assert run.finish["archived"] == 0 and run.finish["moved"] == 3
+
+
+@pytest.mark.slow
+def test_a_copy_is_not_a_move(env):
+    # The original's file is still there: the copy is a new clip.
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a, a.at("b/1.jpg")], moves="apply")
+    assert _planned(run) == {"b/1.jpg": ("upload", "new")} and run.counts["gone"] == 0
+    clips = _clips(env, lib)
+    assert clips["a/1.jpg"] == asset and clips["b/1.jpg"] != asset
+
+
+@pytest.mark.slow
+def test_two_files_with_one_gone_clips_content_take_it_once(env):
+    lib = _library(env)
+    a = File("a.jpg", "same")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("x/a.jpg"), a.at("y/a.jpg")], moves="apply")
+    assert _decided(run) == {"x/a.jpg": "moved", "y/a.jpg": "upload"}  # the first sent takes it
+    clips = _clips(env, lib)
+    assert clips["x/a.jpg"] == asset and clips["y/a.jpg"] != asset
+
+
+@pytest.mark.slow
+def test_moves_off_a_moved_file_is_a_new_clip_and_the_old_one_is_archived(env):
+    _settings(env, follow_moves=False)
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="apply")
+    assert _planned(run) == {"b/1.jpg": ("upload", "new")}
+    assert run.finish["archived"] == 1
+    assert _clip(env, asset)["deleted_reason"] == "missing"
+    assert _clips(env, lib)["b/1.jpg"] != asset  # off: nothing is matched by content
+
+
+@pytest.mark.slow
+def test_moves_asked_about_wait_for_an_answer_then_apply(env):
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="ask")
+    assert _decided(run) == {"b/1.jpg": "move_candidate"}
+    assert _clip(env, asset)["rel_path"] == "a/1.jpg"  # not yet
+    err = _error(run.finish_error, 409, "moved_files")
+    assert err["details"] == {"count": 1, "moves": [{"from": "a/1.jpg", "to": "b/1.jpg"}]}
+    c, h = env.client, env.editor
+    assert _ok(c.post(f"/v1/scans/{run.scan_id}/moves", json={"apply": True}, headers=h)) == {
+        "moved": 1, "skipped": 0, "upload": []}
+    finish = _ok(c.post(f"/v1/scans/{run.scan_id}/finish", json={}, headers=h))
+    assert finish["archived"] == 0 and finish["moved"] == 1
+    assert _clips(env, lib) == {"b/1.jpg": asset}
+
+
+@pytest.mark.slow
+def test_moves_asked_about_and_skipped_take_no_part(env):
+    # Today's prompt, "Skip moves": the new path isn't uploaded, the old clip isn't archived.
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="ask", answer=False)
+    assert run.moves == {"moved": 0, "skipped": 1, "upload": []}
+    assert run.finish["archived"] == 0 and run.uploaded == {}
+    assert _clips(env, lib) == {"a/1.jpg": asset}
+
+
+@pytest.mark.slow
+def test_skipping_moves_looks_for_none_and_archives_nothing(env):
+    # --skip-moves as today (tests/test_scan_outcomes.py pins it as is): no
+    # moves are looked for, so the moved file is a new clip and the old one
+    # stays in sight; anything gone may be half a move, so nothing is archived.
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    gone = _ingest(env, lib, File("a/2.jpg", "two"))
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="skip")
+    assert _planned(run) == {"b/1.jpg": ("upload", "new")}
+    assert run.finish["archived"] == 0
+    assert (run.finish["held_back"], run.finish["held_back_reason"]) == (2, "skip_moves")
+    clips = _clips(env, lib)
+    assert set(clips) == {"a/1.jpg", "a/2.jpg", "b/1.jpg"} and clips["b/1.jpg"] != asset
+    assert clips["a/1.jpg"] == asset and clips["a/2.jpg"] == gone
+    # The next scan that looks for moves puts it right: the clip moves to its new copy.
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="apply")
+    assert run.finish["archived"] == 1 and run.finish["handed_over"] == 1
+    assert _clips(env, lib) == {"b/1.jpg": asset}
+
+
+@pytest.mark.slow
+def test_skipping_moves_where_moves_are_off_still_archives(env):
+    # Nothing gone can be half a move when a new path is always a new clip.
+    _settings(env, follow_moves=False)
+    lib = _library(env)
+    asset = _ingest(env, lib, File("a/1.jpg", "one"))
+    run = _scan(env, lib, [File("b/2.jpg", "two")], moves="skip")
+    assert run.finish["archived"] == 1 and run.finish["held_back_reason"] is None
+    assert _clip(env, asset)["deleted_reason"] == "missing"
+
+
+@pytest.mark.slow
+def test_hashes_sent_again_keep_their_decision(env):
+    lib = _library(env)
+    a = File("a.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b.jpg")], moves="ask")
+    again = _ok(env.client.post(f"/v1/scans/{run.scan_id}/hashes",
+                                json={"files": [{"rel_path": "b.jpg", "sha256": a.sha}]}, headers=env.editor))
+    assert again["files"] == [{"rel_path": "b.jpg", "decision": "move_candidate", "asset_id": asset,
+                               "moved_from": "a.jpg"}]
+
+
+# ---------------------------------------------------------------------------
+# Gone and back
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_file_gone_is_archived_as_missing(env):
+    lib = _library(env)
+    a, b = File("a.jpg", "a"), File("b.jpg", "b")
+    _ingest(env, lib, a)
+    b_asset = _ingest(env, lib, b)
+    run = _scan(env, lib, [a])
+    assert run.counts["gone"] == 1
+    assert run.finish == {"archived": 1, "moved": 0, "handed_over": 0, "unchanged": 1, "skipped": 0,
+                          "held_back": 0, "held_back_reason": None, "dry_run": False}
+    assert _clip(env, b_asset)["deleted_reason"] == "missing"
+
+
+@pytest.mark.slow
+def test_a_file_coming_back_restores_its_clip(env):
+    lib = _library(env)
+    a, b, c = File("a.jpg", "a"), File("b.jpg", "b"), File("c.jpg", "c")
+    _ingest(env, lib, a)
+    b_asset, c_asset = _ingest(env, lib, b), _ingest(env, lib, c)
+    assert _scan(env, lib, [a]).finish["archived"] == 2
+    # Back where it was, and back at a new path (restore by content).
+    run = _scan(env, lib, [a, b, c.at("elsewhere/c.jpg")])
+    assert _planned(run) == {"b.jpg": ("upload", "new"), "elsewhere/c.jpg": ("upload", "new")}
+    assert _clips(env, lib) == {"a.jpg": _clips(env, lib)["a.jpg"], "b.jpg": b_asset, "elsewhere/c.jpg": c_asset}
+
+
+@pytest.mark.slow
+def test_an_original_gone_moves_to_its_empty_newer_copy(env):
+    # Copy, then delete the original: the clip moves to its copy, as DELETE /v1/assets hands it over.
+    lib = _library(env)
+    a = File("Ingest/a.jpg", "a")
+    original = _ingest(env, lib, a)
+    copy = _ingest(env, lib, a.at("Projects/a.jpg"))
+    run = _scan(env, lib, [a.at("Projects/a.jpg")])
+    assert run.finish["archived"] == 0 and run.finish["handed_over"] == 1 and run.finish["moved"] == 1
+    assert _clips(env, lib) == {"Projects/a.jpg": original}
+    with env.db.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM assets WHERE asset_id = :a"), {"a": copy}).scalar() == 0
+
+
+@pytest.mark.slow
+def test_a_copy_someone_worked_on_keeps_its_clip_when_the_original_goes(env):
+    lib = _library(env)
+    a = File("Ingest/a.jpg", "a")
+    original = _ingest(env, lib, a)
+    copy = _ingest(env, lib, a.at("Projects/a.jpg"))
+    _ok(env.client.put(f"/v1/assets/{copy}/rating", json={"stars": 3}, headers=env.editor))
+    run = _scan(env, lib, [a.at("Projects/a.jpg")])
+    assert run.finish["archived"] == 1 and run.finish["handed_over"] == 0
+    assert _clips(env, lib) == {"Projects/a.jpg": copy}
+    assert _clip(env, original)["deleted_reason"] == "missing"
+
+
+@pytest.mark.slow
+def test_a_copy_made_then_the_original_overwritten_takes_the_clip_with_it(env):
+    lib = _library(env)
+    a = File("a.jpg", "original")
+    original = _ingest(env, lib, a)
+    run = _scan(env, lib, [File("a.jpg", "overwritten", mtime=T1), a.at("copies/a.jpg")])
+    assert _planned(run) == {"a.jpg": ("hash", "changed"), "copies/a.jpg": ("upload", "new")}
+    clips = _clips(env, lib)
+    assert set(clips) == {"a.jpg", "copies/a.jpg"}
+    assert clips["copies/a.jpg"] == original and clips["a.jpg"] != original
+
+
+@pytest.mark.slow
+def test_a_move_seen_first_by_a_scan_of_its_new_folder_is_a_move_by_the_next_full_scan(env):
+    # The folder's scan can't see the old path go: the file is a new clip
+    # there, and the next full scan hands the clip over to it.
+    lib = _library(env)
+    a = File("inbox/a.jpg", "a")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("sorted/a.jpg")], scope="sorted", moves="apply")
+    assert _planned(run) == {"sorted/a.jpg": ("upload", "new")} and run.finish["archived"] == 0
+    assert set(_clips(env, lib)) == {"inbox/a.jpg", "sorted/a.jpg"}
+    run = _scan(env, lib, [a.at("sorted/a.jpg")], moves="apply")
+    assert run.finish["handed_over"] == 1
+    assert _clips(env, lib) == {"sorted/a.jpg": asset}
+
+
+@pytest.mark.slow
+def test_a_file_moved_while_its_new_copy_settles_goes_missing_then_comes_back_there(env):
+    lib = _library(env)
+    a, b = File("a.jpg", "a"), File("b.jpg", "b")
+    asset = _ingest(env, lib, a)
+    _ingest(env, lib, b)
+    run = _scan(env, lib, [b, a.at("elsewhere/a.jpg")], settling={"elsewhere/a.jpg"}, moves="apply")
+    assert run.plan == {} and run.finish["archived"] == 1
+    assert _clip(env, asset)["deleted_reason"] == "missing"
+    run = _scan(env, lib, [b, a.at("elsewhere/a.jpg")], moves="apply")  # settled
+    assert _planned(run) == {"elsewhere/a.jpg": ("upload", "new")}
+    assert _clips(env, lib)["elsewhere/a.jpg"] == asset  # restored by content at ingest
+
+
+@pytest.mark.slow
+def test_unlisted_folders_protect_their_clips_and_hold_back_archiving(env):
+    lib = _library(env)
+    x, y1, y2, z = File("x/1.jpg", "x1"), File("y/1.jpg", "y1"), File("y/2.jpg", "y2"), File("z/1.jpg", "z1")
+    for f in (x, y1, y2, z):
+        _ingest(env, lib, f)
+    run = _scan(env, lib, [x, y2.at("w/2.jpg")], unlisted=["y"])
+    # y's clips are neither gone nor where a move comes from; z's is gone but not archived.
+    assert run.counts["gone"] == 1
+    assert _planned(run) == {"w/2.jpg": ("upload", "new")}
+    assert (run.finish["archived"], run.finish["held_back"], run.finish["held_back_reason"]) == (0, 1, "unlisted")
+    assert set(_clips(env, lib)) == {"x/1.jpg", "y/1.jpg", "y/2.jpg", "z/1.jpg", "w/2.jpg"}
+
+
+@pytest.mark.slow
+def test_unlisted_folders_still_let_moves_happen(env):
+    lib = _library(env)
+    x, z = File("x/1.jpg", "x1"), File("z/1.jpg", "z1")
+    _ingest(env, lib, x)
+    z_asset = _ingest(env, lib, z)
+    run = _scan(env, lib, [x, z.at("z2/1.jpg")], unlisted=["y"], moves="apply")
+    assert _decided(run) == {"z2/1.jpg": "moved"}
+    assert _clips(env, lib)["z2/1.jpg"] == z_asset
+
+
+@pytest.mark.slow
+def test_most_of_a_library_gone_asks_first_then_archives_when_allowed(env):
+    lib = _library(env)
+    files = [File(f"f{i:02}.jpg", f"f{i}") for i in range(60)]
+    for f in files:  # upserted: no content, as an older scan left them
+        _ok(env.client.post("/v1/assets/upsert", headers=env.editor, json={
+            "library_id": lib, "rel_path": f.rel_path, "file_size": f.file_size, "file_mtime": f.mtime.isoformat(),
+            "media_type": "image"}))
+    run = _scan(env, lib, files[:5])
+    err = _error(run.finish_error, 409, "mass_missing")
+    assert err["details"]["count"] == 55 and "allow_mass_missing: true" in err["message"]
+    assert len(_clips(env, lib)) == 60  # nothing taken
+    finish = _ok(env.client.post(f"/v1/scans/{run.scan_id}/finish", json={"allow_mass_missing": True},
+                                 headers=env.editor))
+    assert finish["archived"] == 55
+    assert len(_clips(env, lib)) == 5
+
+
+@pytest.mark.slow
+def test_a_whole_library_scan_that_finds_nothing_archives_nothing(env):
+    # An empty library is more likely an unmounted volume than a deleted one.
+    lib = _library(env)
+    asset = _ingest(env, lib, File("a.jpg", "a"))
+    run = _scan(env, lib, [])
+    assert (run.finish["archived"], run.finish["held_back"], run.finish["held_back_reason"]) == (0, 1, "nothing_found")
+    assert _clip(env, asset)["deleted_reason"] is None
+    # Unless forced, or a folder: an empty folder is just empty.
+    assert _scan(env, lib, [], force=True).finish["archived"] == 1
+
+
+@pytest.mark.slow
+def test_a_folder_scan_takes_only_that_folders_clips_for_gone(env):
+    lib = _library(env)
+    a = _ingest(env, lib, File("a/1.jpg", "a1"))
+    b = _ingest(env, lib, File("b/1.jpg", "b1"))
+    ab = _ingest(env, lib, File("ab/1.jpg", "ab1"))
+    run = _scan(env, lib, [], scope="a")
+    assert run.counts["gone"] == 1 and run.finish["archived"] == 1
+    assert _clip(env, a)["deleted_reason"] == "missing"
+    assert _clip(env, b)["deleted_reason"] is None and _clip(env, ab)["deleted_reason"] is None
+    scan_id = _start(env, lib, scope="a")
+    r = env.client.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([File("b/2.jpg", "b2")])},
+                        headers=env.editor)
+    _error(r, 400, "bad_request")
+
+
+@pytest.mark.slow
+def test_a_media_type_scan_takes_only_that_media_for_gone(env):
+    lib = _library(env)
+    photo = _ingest(env, lib, File("p.jpg", "p"))
+    video = _ingest(env, lib, File("v.mov", "v"))
+    run = _scan(env, lib, [File("q.jpg", "q"), File("w.mov", "w")], media_type="image")
+    assert _planned(run) == {"q.jpg": ("upload", "new")}  # the video on disk isn't this scan's
+    assert run.counts["gone"] == 1 and run.finish["archived"] == 1
+    assert _clip(env, photo)["deleted_reason"] == "missing" and _clip(env, video)["deleted_reason"] is None
+
+
+@pytest.mark.slow
+def test_settling_and_empty_files_are_present_but_not_planned(env):
+    lib = _library(env)
+    a, b = File("a.jpg", "a"), File("b.jpg", "b")
+    _ingest(env, lib, a)
+    _ingest(env, lib, b)
+    disk = [a.touched(), b, File("c.jpg", "c"), File("d.jpg", "d")]
+    run = _scan(env, lib, disk, settling={"a.jpg", "c.jpg"}, empty={"b.jpg", "d.jpg"})
+    assert run.plan == {}
+    assert run.counts == {"found": 4, "upload": 0, "hash": 0, "unchanged": 0, "skipped": 0, "settling": 2,
+                          "empty": 2, "gone": 0}
+    assert run.finish["archived"] == 0 and set(_clips(env, lib)) == {"a.jpg", "b.jpg"}
+
+
+@pytest.mark.slow
+def test_a_scan_doesnt_archive_what_another_scan_made_or_moved_meanwhile(env):
+    lib = _library(env)
+    a, m = File("a.jpg", "a"), File("m.jpg", "m")
+    _ingest(env, lib, a)
+    m_asset = _ingest(env, lib, m)
+    scan_id = _start(env, lib, moves="apply")
+    # While this scan walks, another one ingests a new file and moves m.
+    made = _ingest(env, lib, File("new.jpg", "new"))
+    _ok(env.client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": m_asset, "rel_path": "m2.jpg"}]},
+                        headers=env.editor))
+    c, h = env.client, env.editor
+    _ok(c.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([a, m])}, headers=h))  # walked before
+    plan = _ok(c.post(f"/v1/scans/{scan_id}/plan", json={}, headers=h))
+    assert plan["counts"]["gone"] == 0
+    assert _ok(c.post(f"/v1/scans/{scan_id}/finish", json={}, headers=h))["archived"] == 0
+    assert _clips(env, lib) == {"a.jpg": _clips(env, lib)["a.jpg"], "new.jpg": made, "m2.jpg": m_asset}
+
+
+# ---------------------------------------------------------------------------
+# Files a person removed
+# ---------------------------------------------------------------------------
+
+
+def _removed(env, lib: str) -> dict[str, File]:
+    """t.jpg trashed, r.jpg archived, e.jpg deleted for good; k.jpg kept."""
+    files = {n: File(f"{n}.jpg", n) for n in ("t", "r", "e", "k")}
+    ids = {n: _ingest(env, lib, f) for n, f in files.items()}
+    c = env.client
+    _ok(c.request("DELETE", "/v1/assets", json={"asset_ids": [ids["t"], ids["e"]], "reason": "user"},
+                  headers=env.editor))
+    _ok(c.post("/v1/assets/archive", json={"asset_ids": [ids["r"]]}, headers=env.editor))
+    assert _ok(c.request("DELETE", "/v1/trash/empty", json={"asset_ids": [ids["e"]]}, headers=env.admin))["deleted"] == 1
+    return files
+
+
+@pytest.mark.slow
+def test_files_a_person_removed_are_skipped_by_size_and_time(env):
+    lib = _library(env)
+    files = _removed(env, lib)
+    run = _scan(env, lib, list(files.values()))
+    assert _planned(run) == {"t.jpg": ("skipped", "removed"), "r.jpg": ("skipped", "removed"),
+                             "e.jpg": ("skipped", "removed")}
+    assert run.finish["skipped"] == 3 and run.finish["unchanged"] == 1 and run.finish["archived"] == 0
+    assert set(_clips(env, lib)) == {"k.jpg"}
+
+
+@pytest.mark.slow
+def test_a_removed_file_touched_is_hashed_and_skipped_for_its_content(env):
+    lib = _library(env)
+    files = _removed(env, lib)
+    run = _scan(env, lib, [f.touched() for f in files.values()])
+    assert {p: a for p, (a, _) in _planned(run).items()} == {"t.jpg": "hash", "r.jpg": "hash", "e.jpg": "hash",
+                                                             "k.jpg": "hash"}
+    assert _decided(run) == {"t.jpg": "skipped", "r.jpg": "skipped", "e.jpg": "skipped", "k.jpg": "unchanged"}
+    assert run.uploaded == {}
+
+
+@pytest.mark.slow
+def test_another_file_at_a_removed_path_is_a_new_clip(env):
+    lib = _library(env)
+    _removed(env, lib)
+    disk = [File(f"{n}.jpg", f"another {n}", mtime=T1) for n in ("t", "r", "e")]
+    run = _scan(env, lib, disk)
+    assert _decided(run) == {"t.jpg": "upload", "r.jpg": "upload", "e.jpg": "upload"}
+    assert set(_clips(env, lib)) == {"t.jpg", "r.jpg", "e.jpg"}  # k.jpg isn't on disk: gone
+
+
+# ---------------------------------------------------------------------------
+# Dry runs, expiry, the scan's own rules
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_a_dry_run_decides_everything_and_changes_nothing(env):
+    lib = _library(env)
+    a, b, c = File("a.jpg", "a"), File("b.jpg", "b"), File("c.jpg", "c")
+    a_asset, b_asset, c_asset = (_ingest(env, lib, f) for f in (a, b, c))
+    run = _scan(env, lib, [a.touched(), b.at("moved/b.jpg"), File("new.jpg", "new")], moves="apply", dry_run=True)
+    assert _planned(run) == {"a.jpg": ("hash", "changed"), "moved/b.jpg": ("hash", "move"),
+                             "new.jpg": ("upload", "new")}
+    assert _decided(run) == {"a.jpg": "unchanged", "moved/b.jpg": "moved"}
+    assert run.finish == {"archived": 1, "moved": 1, "handed_over": 0, "unchanged": 1, "skipped": 0,
+                          "held_back": 0, "held_back_reason": None, "dry_run": True}
+    assert _clips(env, lib) == {"a.jpg": a_asset, "b.jpg": b_asset, "c.jpg": c_asset}
+    assert _clip(env, a_asset)["file_mtime"] == T0
+
+
+@pytest.mark.slow
+def test_a_dry_run_asks_nothing_about_moves(env):
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b.jpg")], moves="ask", dry_run=True)
+    assert _decided(run) == {"b.jpg": "move_candidate"}
+    assert run.finish["moved"] == 1 and run.finish["archived"] == 0
+    assert _clips(env, lib) == {"a.jpg": asset}
+
+
+@pytest.mark.slow
+def test_a_finished_scan_cant_be_used_again(env):
+    lib = _library(env)
+    run = _scan(env, lib, [File("a.jpg", "a")])
+    c, h, s = env.client, env.editor, run.scan_id
+    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 409, "scan_finished")
+    _error(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=h), 409, "scan_finished")
+    _error(c.get(f"/v1/scans/{s}/plan", headers=h), 409, "scan_finished")
+    _ok(c.delete(f"/v1/scans/{s}", headers=h), 204)
+    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 404, "not_found")
+
+
+@pytest.mark.slow
+def test_each_step_comes_in_its_turn(env):
+    lib = _library(env)
+    c, h = env.client, env.editor
+    s = _start(env, lib)
+    _error(c.post(f"/v1/scans/{s}/hashes", json={"files": []}, headers=h), 409, "scan_not_planned")
+    _error(c.post(f"/v1/scans/{s}/moves", json={"apply": True}, headers=h), 409, "scan_not_planned")
+    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 409, "scan_not_planned")
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    _error(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=h), 409, "scan_planned")
+    _error(c.post(f"/v1/scans/{s}/plan", json={}, headers=h), 409, "scan_planned")
+
+
+@pytest.mark.slow
+def test_what_a_client_sends_is_checked(env):
+    lib = _library(env)
+    a = File("a.jpg", "a")
+    _ingest(env, lib, a)
+    c, h = env.client, env.editor
+    s = _start(env, lib)
+    found = f"/v1/scans/{s}/found"
+    for bad in ("../a.jpg", "/a.jpg", "a/./b.jpg", "a\nb.jpg"):
+        _error(c.post(found, json={"files": [{"rel_path": bad, "file_size": 1}]}, headers=h), 400, "bad_request")
+    _error(c.post(found, json={"files": [{"rel_path": "notes.txt", "file_size": 1}]}, headers=h), 400, "bad_request")
+    _error(c.post(found, json={"files": [{"rel_path": "a.jpg", "file_size": -1}]}, headers=h), 422, "invalid_request")
+    many = [{"rel_path": f"{i}.jpg", "file_size": 1} for i in range(1001)]
+    _error(c.post(found, json={"files": many}, headers=h), 422, "invalid_request")
+    _ok(c.post(found, json={"files": _listing([a.touched()])}, headers=h))
+    _error(c.post(f"/v1/scans/{s}/plan", json={"unlisted": ["../x"]}, headers=h), 400, "bad_request")
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    hashes = f"/v1/scans/{s}/hashes"
+    _error(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "sha256": "XYZ"}]}, headers=h), 422, "invalid_request")
+    err = _error(c.post(hashes, json={"files": [{"rel_path": "other.jpg", "sha256": a.sha}]}, headers=h),
+                 422, "not_planned")
+    assert err["details"] == {"rel_paths": ["other.jpg"], "count": 1}
+    assert _ok(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "sha256": a.sha}]}, headers=h))["files"][0][
+        "decision"] == "unchanged"
+    _error(c.post(f"/v1/libraries/{lib}/scans", json={"scope": "../x"}, headers=h), 400, "bad_request")
+    _error(c.post(f"/v1/libraries/{lib}/scans", json={"moves": "sometimes"}, headers=h), 422, "invalid_request")
+
+
+@pytest.mark.slow
+def test_names_are_compared_in_one_unicode_form(env):
+    # macOS hands out decomposed names; the clip's is stored composed (NFC).
+    import unicodedata
+
+    lib = _library(env)
+    cafe = File(unicodedata.normalize("NFC", "Café/a.jpg"), "a")
+    asset = _ingest(env, lib, cafe)
+    run = _scan(env, lib, [cafe.at(unicodedata.normalize("NFD", cafe.rel_path))])
+    assert run.counts["unchanged"] == 1 and run.counts["gone"] == 0
+    assert _clips(env, lib) == {cafe.rel_path: asset}
+
+
+@pytest.mark.slow
+def test_an_expired_scan_is_gone(env):
+    lib = _library(env)
+    c, h = env.client, env.editor
+    stale, waiting = _start(env, lib), _start(env, lib)
+    with env.db.begin() as conn:
+        conn.execute(text("UPDATE scan_sessions SET expires_at = now() - interval '1 minute'"
+                          " WHERE scan_id = ANY(:s)"), {"s": [stale, waiting]})
+    _error(c.post(f"/v1/scans/{stale}/found", json={"files": []}, headers=h), 410, "scan_expired")
+    _error(c.post(f"/v1/scans/{stale}/found", json={"files": []}, headers=h), 404, "not_found")
+    _start(env, lib)  # starting a scan clears the account's expired ones
+    with env.db.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM scan_sessions WHERE scan_id = :s"), {"s": waiting}).scalar() == 0
+
+
+@pytest.mark.slow
+def test_a_scan_is_pushed_back_a_day_by_each_call(env):
+    lib = _library(env)
+    s = _start(env, lib)
+    with env.db.begin() as conn:
+        conn.execute(text("UPDATE scan_sessions SET expires_at = now() + interval '1 minute' WHERE scan_id = :s"),
+                     {"s": s})
+    _ok(env.client.post(f"/v1/scans/{s}/found", json={"files": []}, headers=env.editor))
+    with env.db.connect() as conn:
+        left = conn.execute(text("SELECT expires_at - now() FROM scan_sessions WHERE scan_id = :s"), {"s": s}).scalar()
+    assert left > timedelta(hours=23)
+
+
+@pytest.mark.slow
+def test_abandoning_a_scan_changes_nothing(env):
+    lib = _library(env)
+    asset = _ingest(env, lib, File("a.jpg", "a"))
+    c, h = env.client, env.editor
+    s = _start(env, lib)
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=h))
+    assert _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))["counts"]["gone"] == 1
+    _ok(c.delete(f"/v1/scans/{s}", headers=h), 204)
+    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=h), 404, "not_found")
+    assert _clips(env, lib) == {"a.jpg": asset}
+
+
+# ---------------------------------------------------------------------------
+# Who may scan
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_another_accounts_scan_and_library_are_not_found(env):
+    lib = _library(env)
+    s = _start(env, lib)
+    c = env.client
+    _error(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=env.other), 404, "not_found")
+    _error(c.post(f"/v1/scans/{s}/finish", json={}, headers=env.other), 404, "not_found")
+    _error(c.delete(f"/v1/scans/{s}", headers=env.other), 404, "not_found")
+    _error(c.post(f"/v1/libraries/{lib}/scans", json={}, headers=env.other), 404, "not_found")
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": []}, headers=env.editor))  # still there for its own account
+
+
+@pytest.mark.slow
+def test_editors_scan_and_viewers_cant(env):
+    lib = _library(env)
+    c, v = env.client, env.viewer
+    _error(c.post(f"/v1/libraries/{lib}/scans", json={}, headers=v), 403, "forbidden")
+    s = _start(env, lib, headers=env.editor)
+    for method, path, body in (("POST", "found", {"files": []}), ("POST", "plan", {}), ("GET", "plan", None),
+                               ("POST", "hashes", {"files": []}), ("POST", "moves", {"apply": True}),
+                               ("POST", "finish", {})):
+        _error(c.request(method, f"/v1/scans/{s}/{path}", json=body, headers=v), 403, "forbidden")
+    _error(c.delete(f"/v1/scans/{s}", headers=v), 403, "forbidden")
+    assert _start(env, lib, headers=env.admin)
+
+
+@pytest.mark.slow
+def test_a_library_in_the_trash_isnt_scanned(env):
+    lib = _library(env)
+    _ok(env.client.delete(f"/v1/libraries/{lib}", headers=env.editor), 204)
+    _error(env.client.post(f"/v1/libraries/{lib}/scans", json={}, headers=env.editor), 409, "library_trashed")
+    _error(env.client.post("/v1/libraries/lib_nope/scans", json={}, headers=env.editor), 404, "not_found")
+
+
+# ---------------------------------------------------------------------------
+# Set-based: the round trips don't grow with the library
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _statements(env):
+    """Count the statements the API sends to the account's database."""
+    seen: list[str] = []
+
+    def count(conn, cursor, statement, *args):
+        seen.append(statement)
+
+    engine = get_engine_for_url(env.tenant_url)
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+
+
+def _library_of(env, n: int) -> tuple[str, list[File]]:
+    """A library of n photos, made directly (as many scans would have left it)."""
+    lib = _library(env)
+    files = [File(f"k/{i:05}.jpg", f"k{i}") for i in range(n)]
+    with Session(env.db) as session:
+        session.add_all([Asset(asset_id=f"ast_{lib}_{i:05}", library_id=lib, rel_path=f.rel_path, sha256=f.sha,
+                               file_size=f.file_size, file_mtime=f.mtime, media_type="image", status="proxy_ready",
+                               created_at=T0, updated_at=T0) for i, f in enumerate(files)])
+        session.commit()
+    return lib, files
+
+
+def _round_trips(env, n: int) -> dict[str, int]:
+    """Per call, the most statements any call of each kind sent, scanning a
+    library of n photos: 70% unchanged, 10% touched, 10% moved, 10% gone, and
+    5% new files."""
+    lib, files = _library_of(env, n)
+    tenth = n // 10
+    disk = files[:7 * tenth]
+    disk += [f.touched() for f in files[7 * tenth:8 * tenth]]
+    disk += [f.at(f.rel_path.replace("k/", "moved/")) for f in files[8 * tenth:9 * tenth]]
+    disk += [File(f"new/{i:05}.jpg", f"new {n} {i}") for i in range(n // 20)]
+    most: dict[str, int] = {}
+
+    def call(kind: str, method: str, path: str, **kwargs) -> dict:
+        with _statements(env) as seen:
+            r = env.client.request(method, path, headers=env.editor, **kwargs)
+        assert r.status_code == 200, r.text
+        most[kind] = max(most.get(kind, 0), len(seen))
+        return r.json()
+
+    s = call("start", "POST", f"/v1/libraries/{lib}/scans", json={"moves": "apply"})["scan_id"]
+    listing = _listing(disk)
+    for i in range(0, len(listing), 1000):
+        call("found", "POST", f"/v1/scans/{s}/found", json={"files": listing[i:i + 1000]})
+    plan = call("plan", "POST", f"/v1/scans/{s}/plan", params={"limit": 100}, json={})
+    assert plan["counts"]["gone"] == 2 * tenth and plan["counts"]["unchanged"] == 7 * tenth
+    files_, cursor = plan["files"], plan["next_cursor"]
+    while cursor:
+        more = call("page", "GET", f"/v1/scans/{s}/plan", params={"after": cursor, "limit": 100})
+        files_, cursor = files_ + more["files"], more["next_cursor"]
+    sha = {f.rel_path: f.sha for f in disk}
+    to_hash = [f["rel_path"] for f in files_ if f["action"] == "hash"]
+    assert len(to_hash) >= 2 * tenth
+    decided: list[dict] = []
+    for i in range(0, len(to_hash), 1000):
+        decided += call("hashes", "POST", f"/v1/scans/{s}/hashes",
+                        json={"files": [{"rel_path": p, "sha256": sha[p]} for p in to_hash[i:i + 1000]]})["files"]
+    assert sum(d["decision"] == "moved" for d in decided) == tenth
+    assert sum(d["decision"] == "unchanged" for d in decided) == tenth
+    finish = call("finish", "POST", f"/v1/scans/{s}/finish", json={})
+    assert finish["archived"] == tenth and finish["moved"] == tenth
+    return most
+
+
+@pytest.mark.slow
+def test_comparing_is_set_based_not_a_round_trip_per_file(env):
+    small, large = _round_trips(env, 300), _round_trips(env, 3000)
+    assert "page" in large  # the large plan took several pages
+    large.setdefault("page", 0)
+    small.setdefault("page", large["page"])
+    assert large == small, (small, large)
+    assert max(large.values()) <= 25, large
