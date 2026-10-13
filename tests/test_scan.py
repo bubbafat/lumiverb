@@ -1,312 +1,394 @@
-"""Tests for the scan phase (file discovery, SHA comparison, proxy upload).
+"""run_scan, the client's side of a scan (ADR-018 decision 12).
 
-These are unit tests that mock the API client. Integration tests that
-hit a real database are in test_scan_slow.py (requires Docker).
+The client says what it found and the server decides. These tests say what
+run_scan sends and what it does with each answer, over a scripted server
+(tests/scan_fakes.py). What the server decides is tested on the real one:
+tests/test_scans_api.py rule by rule, tests/test_scan_outcomes.py end to end.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import hashlib
+import os
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 from rich.console import Console
 
-from src.processing.scan import (
-    ScanStats,
-    _ServerAsset,
-    _detect_deletions,
-    _fetch_existing_assets_with_sha,
-    _populate_cache_for_unchanged,
-    _preview_missing,
-    _split_files,
-)
+from src.processing.scan import ScanStats, _hashed, _populate_cache_for_unchanged, run_scan
+from tests.scan_fakes import SCAN_ID, FakeScans, answer, finished, mass_missing
+
+pytestmark = pytest.mark.fast
+
+HOUR_AGO = time.time() - 3600
 
 
-def _make_file(tmp_path: Path, rel: str, content: bytes = b"test") -> dict:
-    """Create a real file and return a walk-style file descriptor."""
-    p = tmp_path / rel
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(content)
-    return {
-        "rel_path": rel,
-        "file_size": len(content),
-        "file_mtime": None,
-        "media_type": "image",
-        "ext": p.suffix.lower(),
+@pytest.fixture(autouse=True)
+def _cache_here(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scan's proxy cache in the test's own folder, never ~/.cache."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
+    path = tmp_path / "lib"
+    path.mkdir()
+    return path
+
+
+def _photo(root: Path, rel: str, *, mtime: float = HOUR_AGO, shade: int = 0) -> Path:
+    """A real JPEG (the scan makes its preview), settled unless said otherwise."""
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 48), (shade % 256, 80, 40)).save(path, format="JPEG")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _file(root: Path, rel: str, data: bytes = b"bytes", *, mtime: float = HOUR_AGO) -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _scan(server: FakeScans, root: Path, **kwargs) -> ScanStats:
+    kwargs = {"concurrency": 1, "console": Console(quiet=True), **kwargs}
+    with (
+        patch("src.processing.scan._load_tenant_filters", return_value=[]),
+        patch("src.processing.scan._load_library_filters", return_value=[]),
+    ):
+        return run_scan(server.client(), {"library_id": "lib_1", "root_path": str(root)}, **kwargs)
+
+
+def _sha(name: str) -> str:
+    return hashlib.sha256(name.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# What's sent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("options", "moves"), [
+    ({"allow_moves": True}, "apply"),  # the scheduler's
+    ({"skip_moves": True}, "skip"),
+    ({}, "ask"),  # the CLI's prompt
+])
+def test_a_scan_starts_before_the_walk_with_its_options(root: Path, options: dict, moves: str) -> None:
+    _photo(root, "a.jpg")
+    server = FakeScans()
+    started_before: list[bool] = []
+    from src.processing import ingest
+
+    def walk(*args, **kwargs):
+        started_before.append(any(r.path == "/v1/libraries/lib_1/scans" for r in server.requests))
+        return ingest._walk_library(*args, **kwargs)
+
+    with patch("src.processing.scan._walk_library", side_effect=walk):
+        _scan(server, root, thorough=True, **options)
+
+    assert started_before == [True]  # a clip made after the start is never taken for gone
+    assert server.started() == {"scope": "", "media_type": "all", "thorough": True, "force": False,
+                                "moves": moves, "dry_run": False}
+    assert server.calls() == ["POST /v1/libraries/lib_1/scans", f"POST /v1/scans/{SCAN_ID}/found",
+                              f"POST /v1/scans/{SCAN_ID}/plan", f"POST /v1/scans/{SCAN_ID}/finish", "POST /v1/ingest"]
+
+
+def test_every_media_file_is_listed_with_its_size_and_time(root: Path) -> None:
+    from datetime import UTC, datetime
+
+    a = _file(root, "Day 1/a.jpg", b"12345")
+    _file(root, "Day 1/clip.mov", b"123")
+    _file(root, "empty.jpg", b"")
+    _file(root, "notes.txt", b"not media")
+    server = FakeScans(default=("unchanged", None, "ast_x"))
+
+    stats = _scan(server, root, media_type_filter="image")
+
+    when = datetime.fromtimestamp(a.stat().st_mtime, tz=UTC).isoformat()
+    # Every media file in the scope, of every media type, the empty one too:
+    # none of them is gone. The server plans only the scan's media type.
+    assert server.found() == [
+        {"rel_path": "Day 1/a.jpg", "file_size": 5, "file_mtime": when, "settling": False},
+        {"rel_path": "Day 1/clip.mov", "file_size": 3, "file_mtime": when, "settling": False},
+        {"rel_path": "empty.jpg", "file_size": 0, "file_mtime": when, "settling": False},
+    ]
+    assert server.started()["media_type"] == "image"
+    assert stats.unchanged == 1
+
+
+def test_a_long_listing_goes_a_thousand_files_a_call_and_the_whole_plan_is_read(root: Path) -> None:
+    for n in range(2500):
+        _file(root, f"f{n:04}.jpg", b"x")
+    server = FakeScans(default=("unchanged", None, "ast_x"))
+
+    stats = _scan(server, root)
+
+    assert [len(r.body["files"]) for r in server.sent("POST", f"/v1/scans/{SCAN_ID}/found")] == [1000, 1000, 500]
+    pages = server.sent("GET", f"/v1/scans/{SCAN_ID}/plan")
+    assert len(pages) == 5  # 500 with the plan, 4 pages of 500, then an empty one: there's no more
+    assert all(p.params["action"] == "upload,hash,skipped,unchanged" for p in pages)
+    assert stats.unchanged == 2500
+
+
+def test_a_folder_scan_says_its_folder(root: Path) -> None:
+    _photo(root, "Shoots/Day 1/a.jpg")
+    server = FakeScans()
+    _scan(server, root, path_prefix="Shoots/Day 1/")
+    assert server.started()["scope"] == "Shoots/Day 1"
+    assert [f["rel_path"] for f in server.found()] == ["Shoots/Day 1/a.jpg"]
+
+
+def test_a_name_the_server_refuses_is_never_sent(root: Path, caplog: pytest.LogCaptureFixture) -> None:
+    # A backslash is a name on a Mac or Linux, never a library path: the
+    # whole listing would be refused. Skipped, never a failure to retry.
+    import logging
+
+    _photo(root, "keep.jpg")
+    _photo(root, "back\\slash.jpg")
+    server = FakeScans()
+    with caplog.at_level(logging.WARNING, logger="src.processing.scan"):
+        stats = _scan(server, root)
+    assert [f["rel_path"] for f in server.found()] == ["keep.jpg"]
+    assert (stats.new, stats.failed, stats.failed_paths) == (1, 0, [])
+    assert any("refuses its name" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Hashing what the plan asks about
+# ---------------------------------------------------------------------------
+
+
+def test_only_what_the_plan_asks_about_is_read_and_its_hashes_go_in_walk_order(root: Path) -> None:
+    rels = [f"d{n % 7}/f{n:04}.jpg" for n in range(2600)]
+    for rel in rels:
+        _file(root, rel, b"x")
+    walk_order = sorted(rels)
+    asked = [r for i, r in enumerate(walk_order) if i % 5 != 0]
+    clip = {r: f"ast_{n}" for n, r in enumerate(walk_order)}
+    plan = {r: ("hash", "changed", clip[r]) for r in asked}
+    plan |= {r: ("unchanged", None, clip[r]) for r in walk_order if r not in plan}
+    server = FakeScans(plan=plan, decide=lambda rel, sha: {"decision": "unchanged", "asset_id": clip[rel]})
+    read: list[str] = []
+    lock = threading.Lock()
+
+    def sha_of(path: Path) -> str:
+        with lock:
+            read.append(f"{path.parent.name}/{path.name}")
+        return _sha(path.name)
+
+    with patch("src.processing.scan.compute_sha256", side_effect=sha_of):
+        stats = _scan(server, root, concurrency=4)
+
+    assert sorted(read) == sorted(asked)  # the unchanged aren't read
+    batches = server.hashed()
+    assert [len(b) for b in batches] == [1000, 1000, len(asked) - 2000]
+    # In walk order: the first file sent with a gone clip's content takes it.
+    assert [f["rel_path"] for b in batches for f in b] == asked
+    assert stats.unchanged == 2600
+
+
+def test_hashing_keeps_at_most_twice_its_concurrency_waiting(tmp_path: Path) -> None:
+    started: list[str] = []
+    release = threading.Event()
+
+    def slow(path: Path) -> str:
+        started.append(path.name)
+        release.wait(5)
+        return _sha(path.name)
+
+    files = [{"rel_path": f"f{n:02}.jpg"} for n in range(20)]
+    for f in files:
+        (tmp_path / f["rel_path"]).write_bytes(b"x")
+    with patch("src.processing.scan.compute_sha256", side_effect=slow):
+        hashes = _hashed(tmp_path, files, 2)
+        threading.Timer(0.2, release.set).start()
+        first = next(hashes)
+        assert len(started) <= 4  # never every file submitted at once
+        rest = list(hashes)
+    assert [f["rel_path"] for f, _ in [first, *rest]] == [f["rel_path"] for f in files]
+    assert all(sha == _sha(f["rel_path"]) for f, sha in [first, *rest])
+
+
+def test_a_file_that_cant_be_read_is_left_as_it_is(root: Path) -> None:
+    # Found, so neither changed nor gone; no hash is sent. Counted as before
+    # the server compared: unchanged where a clip is, skipped where a person
+    # removed a file, else tried as new.
+    for rel in ("known.jpg", "removed.jpg", "moved.jpg"):
+        _photo(root, rel)
+    server = FakeScans(plan={"known.jpg": ("hash", "changed", "ast_k"), "removed.jpg": ("hash", "removed", None),
+                             "moved.jpg": ("hash", "move", None)}, gone=1)
+    with patch("src.processing.scan.compute_sha256", return_value=None):
+        stats = _scan(server, root, allow_moves=True)
+    assert server.hashed() == []
+    assert stats.unchanged == 1
+    assert server.ingested() == ["moved.jpg"]
+    assert stats.failed_paths == []
+
+
+# ---------------------------------------------------------------------------
+# What the server decides
+# ---------------------------------------------------------------------------
+
+
+def test_what_the_server_says_to_upload_is_uploaded_after_the_finish(root: Path) -> None:
+    for n, rel in enumerate(["changed.jpg", "force.jpg", "moved.jpg", "new.jpg", "new-path.jpg", "removed.jpg",
+                             "same.jpg", "touched.jpg"]):
+        _photo(root, rel, shade=n)
+    decided = {
+        "changed.jpg": {"decision": "upload", "asset_id": "ast_c"},  # other content: a new clip
+        "moved.jpg": {"decision": "moved", "asset_id": "ast_m", "moved_from": "was/moved.jpg"},
+        "new-path.jpg": {"decision": "upload"},
+        "touched.jpg": {"decision": "unchanged", "asset_id": "ast_t"},
     }
+    server = FakeScans(plan={
+        "changed.jpg": ("hash", "changed", "ast_c"),
+        "force.jpg": ("upload", "force", "ast_f"),
+        "moved.jpg": ("hash", "move", None),
+        "new.jpg": ("upload", "new", None),
+        "new-path.jpg": ("hash", "move", None),
+        "removed.jpg": ("skipped", "removed", None),
+        "same.jpg": ("unchanged", None, "ast_s"),
+        "touched.jpg": ("hash", "changed", "ast_t"),
+    }, decide=lambda rel, sha: decided[rel], gone=1)
+
+    with patch("src.processing.scan.compute_sha256", side_effect=lambda p: _sha(p.name)):
+        stats = _scan(server, root, allow_moves=True)
+
+    # New first, then changed, each in walk order; never before the finish
+    # (a file whose content was just archived comes back at its new path).
+    assert server.ingested() == ["new.jpg", "new-path.jpg", "force.jpg", "changed.jpg"]
+    calls = server.calls()
+    assert calls.index(f"POST /v1/scans/{SCAN_ID}/finish") < calls.index("POST /v1/ingest")
+    assert (stats.new, stats.changed, stats.unchanged, stats.moved, stats.deleted) == (2, 2, 2, 1, 1)
+    assert stats.failed_paths == []
+    # The hashes are the files' own.
+    assert {f["rel_path"]: f["sha256"] for b in server.hashed() for f in b} == {
+        rel: _sha(rel) for rel in ("changed.jpg", "moved.jpg", "new-path.jpg", "touched.jpg")}
 
 
-class TestSplitFiles:
-    """Test _split_files separates new from existing."""
-
-    def test_new_file(self):
-        """File not on server → new."""
-        f = {"rel_path": "a.jpg", "media_type": "image"}
-        existing: dict[str, _ServerAsset] = {}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(new) == 1
-        assert len(needs_hash) == 0
-        assert len(fast_unchanged) == 0
-
-    def test_existing_file_needs_hash_thorough(self):
-        """File on server with thorough=True → needs hash comparison."""
-        f = {"rel_path": "a.jpg", "media_type": "image"}
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing, thorough=True)
-        assert len(new) == 0
-        assert len(needs_hash) == 1
-        assert needs_hash[0]["_server"].asset_id == "id-1"
-        assert len(fast_unchanged) == 0
-
-    def test_existing_file_needs_hash_no_server_mtime(self):
-        """File on server without mtime → needs hash (can't fast-skip)."""
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 100,
-             "file_mtime": datetime(2024, 1, 1, tzinfo=timezone.utc)}
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc", file_size=100)}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(needs_hash) == 1
-        assert len(fast_unchanged) == 0
-
-    def test_fast_unchanged_mtime_size_match(self):
-        """File with matching mtime+size → fast unchanged (no hash needed)."""
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime=mtime.isoformat(),
-        )}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(new) == 0
-        assert len(needs_hash) == 0
-        assert len(fast_unchanged) == 1
-        assert fast_unchanged[0]["asset_id"] == "id-1"
-
-    def test_fast_unchanged_when_the_server_answers_in_its_own_timezone(self):
-        """A server whose Postgres runs in, say, America/New_York returns the
-        same instant as 08:00-04:00. It's still a match: compare instants,
-        not strings, or every scan re-hashes every file."""
-        from datetime import timedelta
-
-        mtime = datetime(2024, 6, 15, 12, 0, 0, 123456, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime}
-        new_york = timezone(timedelta(hours=-4))
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime=mtime.astimezone(new_york).isoformat(),
-        )}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(needs_hash) == 0
-        assert len(fast_unchanged) == 1
-
-    def test_fast_unchanged_reads_a_z_suffix(self):
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime="2024-06-15T12:00:00Z",
-        )}
-
-        _, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(fast_unchanged) == 1
-
-    def test_a_video_whose_preview_never_arrived_is_scanned_again(self):
-        # Its upload failed after the clip was made (a dropped connection):
-        # unchanged on disk, but only a scan makes a preview, so it goes
-        # through as a changed file does.
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.mov", "media_type": "video", "file_size": 5000, "file_mtime": mtime}
-
-        def split(has_preview, media_type="video"):
-            server = _ServerAsset(asset_id="id-1", sha256="abc", file_size=5000, file_mtime=mtime.isoformat(),
-                                  media_type=media_type, has_video_preview=has_preview)
-            _, needs_hash, fast = _split_files([dict(f, media_type=media_type)], {"a.mov": server})
-            return len(needs_hash), len(fast)
-
-        assert split(False) == (1, 0)
-        assert _preview_missing(_ServerAsset(asset_id="id-1", sha256="abc", media_type="video",
-                                             has_video_preview=False))
-        assert split(True) == (0, 1)
-        assert split(None) == (0, 1), "an older server doesn't say: as before"
-        assert split(None, "image") == (0, 1)
-
-    def test_the_server_says_whether_a_videos_preview_is_there(self):
-        client = MagicMock()
-        client.get.return_value.json.side_effect = [
-            {"items": [{"asset_id": "a", "rel_path": "a.mov", "media_type": "video", "has_video_preview": False},
-                       {"asset_id": "b", "rel_path": "b.jpg", "media_type": "image"}], "next_cursor": None},
-        ]
-        existing = _fetch_existing_assets_with_sha(client, "lib_1")
-        assert existing["a.mov"].has_video_preview is False
-        assert existing["b.jpg"].has_video_preview is None
-
-    def test_an_unreadable_server_mtime_needs_hash(self):
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000, file_mtime="yesterday",
-        )}
-
-        _, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(needs_hash) == 1
-        assert len(fast_unchanged) == 0
-
-    def test_a_microsecond_apart_needs_hash(self):
-        """Same instant only: a file touched since is checked."""
-        from datetime import timedelta
-
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime + timedelta(microseconds=1)}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000, file_mtime=mtime.isoformat(),
-        )}
-
-        _, needs_hash, _ = _split_files([f], existing)
-        assert len(needs_hash) == 1
-
-    def test_fast_skip_disabled_by_thorough(self):
-        """thorough=True forces hash even when mtime+size match."""
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": mtime}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime=mtime.isoformat(),
-        )}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing, thorough=True)
-        assert len(needs_hash) == 1
-        assert len(fast_unchanged) == 0
-
-    def test_size_mismatch_needs_hash(self):
-        """Different file size → needs hash (content may have changed)."""
-        mtime = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 6000,
-             "file_mtime": mtime}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime=mtime.isoformat(),
-        )}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(needs_hash) == 1
-        assert len(fast_unchanged) == 0
-
-    def test_mtime_mismatch_needs_hash(self):
-        """Different mtime → needs hash (file may have been modified)."""
-        f = {"rel_path": "a.jpg", "media_type": "image", "file_size": 5000,
-             "file_mtime": datetime(2024, 7, 1, tzinfo=timezone.utc)}
-        existing = {"a.jpg": _ServerAsset(
-            asset_id="id-1", sha256="abc", file_size=5000,
-            file_mtime=datetime(2024, 6, 15, tzinfo=timezone.utc).isoformat(),
-        )}
-
-        new, needs_hash, fast_unchanged = _split_files([f], existing)
-        assert len(needs_hash) == 1
-        assert len(fast_unchanged) == 0
-
-    def test_mixed(self):
-        """Mix of new and existing."""
-        files = [
-            {"rel_path": "new.jpg", "media_type": "image"},
-            {"rel_path": "old.jpg", "media_type": "image"},
-        ]
-        existing = {"old.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
-
-        new, needs_hash, fast_unchanged = _split_files(files, existing)
-        assert len(new) == 1
-        assert new[0]["rel_path"] == "new.jpg"
-        assert len(needs_hash) == 1
-        assert needs_hash[0]["rel_path"] == "old.jpg"
+def test_another_clip_just_put_at_a_moves_path_sends_the_hashes_again(root: Path) -> None:
+    _photo(root, "moved.jpg")
+    taken = answer(409, {"error": {"code": "path_taken", "message": "send them again", "details": {}}})
+    server = FakeScans(plan={"moved.jpg": ("hash", "move", None)}, hashes=[taken], gone=1,
+                       decide=lambda rel, sha: {"decision": "unchanged", "asset_id": "ast_1"})
+    stats = _scan(server, root, allow_moves=True)
+    assert len(server.hashed()) == 2 and server.hashed()[0] == server.hashed()[1]
+    assert stats.unchanged == 1
 
 
-class TestRunScanAcceptsThorough:
-    """Verify run_scan signature accepts thorough parameter."""
-
-    def test_thorough_param_exists(self):
-        import inspect
-        from src.processing.scan import run_scan
-        sig = inspect.signature(run_scan)
-        assert "thorough" in sig.parameters
-
-
-class TestDetectDeletions:
-    """Test _detect_deletions finds server assets missing from disk."""
-
-    def test_deleted_file(self, tmp_path):
-        existing = {"gone.jpg": _ServerAsset(asset_id="id-gone", sha256="abc")}
-        deleted = _detect_deletions([], existing, tmp_path, None)
-        assert deleted == ["id-gone"]
-
-    def test_no_deletions(self, tmp_path):
-        local = [{"rel_path": "a.jpg"}]
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="abc")}
-        deleted = _detect_deletions(local, existing, tmp_path, None)
-        assert deleted == []
-
-    def test_path_prefix_scopes_deletion(self, tmp_path):
-        """Only assets under the prefix are considered deleted."""
-        local = [{"rel_path": "sub/a.jpg"}]
-        existing = {
-            "sub/a.jpg": _ServerAsset(asset_id="id-1", sha256="x"),
-            "other/b.jpg": _ServerAsset(asset_id="id-2", sha256="y"),
-            "sub/gone.jpg": _ServerAsset(asset_id="id-3", sha256="z"),
-        }
-        deleted = _detect_deletions(local, existing, tmp_path, "sub")
-        assert set(deleted) == {"id-3"}
-
-    def test_unmounted_root_returns_empty(self):
-        """If root doesn't exist, no deletions (safety)."""
-        existing = {"a.jpg": _ServerAsset(asset_id="id-1", sha256="x")}
-        deleted = _detect_deletions([], existing, Path("/nonexistent"), None)
-        assert deleted == []
+def test_the_unchanged_files_fill_the_proxy_cache(root: Path) -> None:
+    _photo(root, "a.jpg")
+    _photo(root, "b.jpg")
+    server = FakeScans(default=("unchanged", None, None),
+                       plan={"a.jpg": ("unchanged", None, "ast_a"), "b.jpg": ("hash", "changed", "ast_b")},
+                       decide=lambda rel, sha: {"decision": "unchanged", "asset_id": "ast_b"})
+    _scan(server, root)
+    assert [r.path for r in server.requests if r.path.endswith("/artifacts/proxy")] == [
+        "/v1/assets/ast_a/artifacts/proxy", "/v1/assets/ast_b/artifacts/proxy"]
 
 
-class TestFetchExistingAssetsWithSha:
-    """Test server asset paging with SHA extraction."""
+# ---------------------------------------------------------------------------
+# The finish
+# ---------------------------------------------------------------------------
 
-    def test_single_page(self):
-        mock_client = MagicMock()
-        mock_client.get.return_value.json.return_value = {
-            "items": [
-                {"rel_path": "a.jpg", "asset_id": "id-a", "sha256": "sha-a"},
-                {"rel_path": "b.jpg", "asset_id": "id-b", "sha256": None},
-            ],
-            "next_cursor": None,
-        }
 
-        result = _fetch_existing_assets_with_sha(mock_client, "lib-1")
-        assert len(result) == 2
-        assert result["a.jpg"].asset_id == "id-a"
-        assert result["a.jpg"].sha256 == "sha-a"
-        assert result["b.jpg"].sha256 is None
+def test_clips_handed_to_an_empty_copy_of_their_file_count_as_moved(root: Path) -> None:
+    _photo(root, "f0.jpg")
+    server = FakeScans(default=("unchanged", None, "ast_0"), gone=2,
+                       finish=[answer(200, finished(archived=1, moved=1, handed_over=1))])
+    stats = _scan(server, root, allow_moves=True)
+    assert (stats.deleted, stats.moved) == (1, 1)
 
-    def test_multiple_pages(self):
-        mock_client = MagicMock()
-        mock_client.get.return_value.json.side_effect = [
-            {
-                "items": [{"rel_path": "a.jpg", "asset_id": "id-a", "sha256": "sha-a"}],
-                "next_cursor": "cursor-1",
-            },
-            {
-                "items": [{"rel_path": "b.jpg", "asset_id": "id-b", "sha256": "sha-b"}],
-                "next_cursor": None,
-            },
-        ]
 
-        result = _fetch_existing_assets_with_sha(mock_client, "lib-1")
-        assert len(result) == 2
+def test_the_server_asking_about_mass_missing_archives_nothing_but_uploads_the_rest(root: Path) -> None:
+    _photo(root, "new.jpg")
+    server = FakeScans(gone=90, finish=[mass_missing(90)])
+    stats = _scan(server, root, allow_moves=True)
+    assert server.finishes() == [{"allow_mass_missing": False}]
+    assert (stats.mass_missing, stats.deleted) == (90, 0)
+    assert server.abandoned()
+    assert server.ingested() == ["new.jpg"]  # as before: what's new is still new
+
+
+def test_allow_mass_delete_says_so_in_the_finish(root: Path) -> None:
+    _photo(root, "new.jpg")
+    server = FakeScans(gone=90)
+    stats = _scan(server, root, allow_moves=True, allow_mass_delete=True)
+    assert server.finishes() == [{"allow_mass_missing": True}]
+    assert stats.deleted == 90 and not server.abandoned()
+
+
+# ---------------------------------------------------------------------------
+# Moves the server asks about (the CLI), and dry runs
+# ---------------------------------------------------------------------------
+
+
+def _asked(root: Path, choice: str, **server_args) -> tuple[FakeScans, ScanStats]:
+    _photo(root, "keep.jpg")
+    _photo(root, "sorted/a.jpg")
+    server = FakeScans(plan={"sorted/a.jpg": ("hash", "move", None)}, gone=1, **server_args,
+                       decide=lambda rel, sha: {"decision": "move_candidate", "asset_id": "ast_a",
+                                                "moved_from": "inbox/a.jpg"})
+    with patch("builtins.input", side_effect=[choice] if choice != "eof" else EOFError):
+        stats = _scan(server, root)
+    return server, stats
+
+
+def test_moves_asked_about_and_applied(root: Path) -> None:
+    server, stats = _asked(root, "1", moves=[answer(200, {"moved": 1, "skipped": 0, "upload": []})])
+    assert server.started()["moves"] == "ask"
+    assert [r.body for r in server.sent("POST", f"/v1/scans/{SCAN_ID}/moves")] == [{"apply": True}]
+    calls = server.calls()
+    assert calls.index(f"POST /v1/scans/{SCAN_ID}/moves") < calls.index(f"POST /v1/scans/{SCAN_ID}/finish")
+    assert stats.moved == 1 and "sorted/a.jpg" not in server.ingested()
+
+
+def test_a_move_that_couldnt_be_made_is_uploaded(root: Path) -> None:
+    server, stats = _asked(root, "1", moves=[answer(200, {"moved": 0, "skipped": 0, "upload": ["sorted/a.jpg"]})])
+    assert "sorted/a.jpg" in server.ingested() and stats.moved == 0
+
+
+def test_moves_asked_about_and_skipped_take_no_part(root: Path) -> None:
+    server, stats = _asked(root, "2", moves=[answer(200, {"moved": 0, "skipped": 1, "upload": []})])
+    assert [r.body for r in server.sent("POST", f"/v1/scans/{SCAN_ID}/moves")] == [{"apply": False}]
+    assert "sorted/a.jpg" not in server.ingested()
+
+
+@pytest.mark.parametrize("choice", ["3", "eof"])
+def test_an_aborted_scan_changes_nothing(root: Path, choice: str) -> None:
+    server, stats = _asked(root, choice)
+    assert server.abandoned()
+    assert not server.sent("POST", f"/v1/scans/{SCAN_ID}/moves") and not server.finishes()
+    assert server.ingested() == []
+
+
+@pytest.mark.parametrize("allow_moves", [False, True])
+def test_a_dry_run_decides_everything_and_drops_the_scan(root: Path, allow_moves: bool) -> None:
+    _photo(root, "new.jpg")
+    _photo(root, "sorted/a.jpg")
+    server = FakeScans(plan={"sorted/a.jpg": ("hash", "move", None)}, gone=2,
+                       decide=lambda rel, sha: {"decision": "moved" if allow_moves else "move_candidate",
+                                                "asset_id": "ast_a", "moved_from": "inbox/a.jpg"},
+                       finish=[answer(200, finished(archived=1, moved=1, dry_run=True))])
+    with patch("builtins.input", side_effect=AssertionError("a dry run never asks")):
+        _scan(server, root, dry_run=True, allow_moves=allow_moves)
+    assert server.started()["dry_run"] is True
+    assert len(server.hashed()) == 1  # decided, to say what would happen
+    assert not server.sent("POST", f"/v1/scans/{SCAN_ID}/moves")
+    assert server.finishes() == [{"allow_mass_missing": False}] and server.abandoned()
+    assert server.ingested() == []
+
+
+# ---------------------------------------------------------------------------
+# The proxy cache
+# ---------------------------------------------------------------------------
 
 
 class TestPopulateCacheForUnchanged:
@@ -355,71 +437,3 @@ class TestPopulateCacheForUnchanged:
         assert stats.cache_populated == 1
         assert (tmp_path / "id-1").read_bytes() == b"server-proxy-bytes"
         assert (tmp_path / "id-1.sha").read_text() == "sha-1"
-
-
-class TestUnchangedFileStat:
-    """A file whose size or mtime changed but whose content didn't (touched,
-    copied back) is hashed and found unchanged. Its new stat goes to the
-    server, or every later scan hashes it again."""
-
-    OLD = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
-    NEW = datetime(2025, 1, 2, 3, 4, 5, 678901, tzinfo=timezone.utc)
-
-    def _scan(self, tmp_path: Path, *, local_mtime, local_sha="abc", thorough=False,
-              client: MagicMock | None = None) -> MagicMock:
-        from src.processing.scan import run_scan
-
-        root = tmp_path / "lib"
-        root.mkdir(exist_ok=True)
-        (root / "a.jpg").write_bytes(b"x")
-        local = [{"rel_path": "a.jpg", "file_size": 5000, "file_mtime": local_mtime, "media_type": "image",
-                  "ext": ".jpg"}]
-        existing = {"a.jpg": _ServerAsset(asset_id="ast_1", sha256="abc", file_size=5000,
-                                          file_mtime=self.OLD.isoformat(), media_type="image")}
-        client = client or MagicMock()
-        with (
-            patch("src.processing.scan._load_tenant_filters", return_value=[]),
-            patch("src.processing.scan._load_library_filters", return_value=[]),
-            patch("src.processing.scan._walk_library", return_value=local),
-            patch("src.processing.scan._fetch_existing_assets_with_sha", return_value=existing),
-            patch("src.processing.scan._fetch_ignored_paths", return_value={}),
-            patch("src.processing.scan.compute_sha256", return_value=local_sha),
-            patch("src.processing.scan._scan_one") as scan_one,
-            patch("src.processing.scan.ProxyCache"),
-            patch("src.processing.scan._populate_cache_for_unchanged"),
-        ):
-            scan_one.return_value = None
-            client.stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)},
-                                    console=Console(quiet=True), thorough=thorough)
-        client.scan_one = scan_one
-        return client
-
-    @staticmethod
-    def _stat_posts(client: MagicMock) -> list[dict]:
-        return [c.kwargs["json"] for c in client.post.call_args_list if c.args and c.args[0] == "/v1/assets/upsert"]
-
-    def test_a_touched_file_s_new_mtime_goes_to_the_server(self, tmp_path):
-        client = self._scan(tmp_path, local_mtime=self.NEW)
-        assert self._stat_posts(client) == [{
-            "library_id": "lib_1", "rel_path": "a.jpg", "file_size": 5000,
-            "file_mtime": self.NEW.isoformat(), "media_type": "image",
-        }]
-        client.scan_one.assert_not_called()  # unchanged: not re-ingested
-
-    def test_a_changed_file_is_scanned_not_just_restamped(self, tmp_path):
-        client = self._scan(tmp_path, local_mtime=self.NEW, local_sha="different")
-        assert self._stat_posts(client) == []
-        client.scan_one.assert_called_once()
-
-    def test_a_thorough_scan_of_a_matching_file_sends_nothing(self, tmp_path):
-        client = self._scan(tmp_path, local_mtime=self.OLD, thorough=True)
-        assert self._stat_posts(client) == []
-
-    def test_a_failed_restamp_doesn_t_stop_the_scan(self, tmp_path):
-        from src.client.cli.client import LumiverbAPIError
-
-        client = MagicMock()
-        client.post.side_effect = LumiverbAPIError("internal", "boom", 500)
-        client = self._scan(tmp_path, local_mtime=self.NEW, client=client)
-        assert self._stat_posts(client)  # tried; the next scan hashes it again
-        assert client.stats.unchanged == 1

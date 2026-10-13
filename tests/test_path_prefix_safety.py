@@ -38,7 +38,8 @@ def test_run_scan_with_an_unsafe_prefix_removes_nothing(tmp_path: Path) -> None:
         stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, path_prefix="../x",
                          console=Console(quiet=True), allow_moves=True)
     assert stats.unlisted == ["../x"]
-    assert not [c for c in client.raw.call_args_list if c.args[:2] == ("DELETE", "/v1/assets")]
+    client.post.assert_not_called()  # no scan started, so nothing can be taken for gone
+    client.raw.assert_not_called()
 
 
 def test_scheduler_is_dir_says_no_for_a_path_outside_the_root(tmp_path: Path) -> None:

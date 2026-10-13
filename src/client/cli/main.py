@@ -1037,7 +1037,7 @@ def scan(
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
     allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
-    skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Skip detected file moves (don't update paths, don't treat as new/deleted).")] = False,
+    skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Look for no moves: a file at a new path is a new clip, and nothing is archived (anything gone may be half a move), so a moved file's old clip stays until a scan without this.")] = False,
     allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and more than half of a library's clips are missing (the server asks first: normally skipped as a likely mount problem).")] = False,
     thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
 ) -> None:
@@ -1045,7 +1045,8 @@ def scan(
 
     Scan touches source files, generates 2048px proxies, and uploads them to
     the server. The rest (CLIP, vision, OCR, faces, ...) is the scheduler's;
-    `lumiverb enrich` asks it to do a producer's work now.
+    `lumiverb enrich` asks it to do a producer's work now. It says what it
+    found and the server decides what's new, changed, moved and missing.
 
     By default, files whose mtime and size match the server are skipped
     without hashing (fast mode). Use --thorough to SHA-verify all files.

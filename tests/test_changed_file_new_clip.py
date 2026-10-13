@@ -167,14 +167,18 @@ def test_trashing_the_old_version_leaves_the_clip_on_disk_alone(env, tmp_path):
 
 
 def test_a_file_on_disk_at_an_ignored_path_is_never_missing(env, tmp_path):
-    # Even if the ignore list names a path a clip in sight holds, the scan
-    # counts the file there as on disk.
-    from unittest.mock import patch
-
+    # Even when what a person removed names a path a clip in sight holds
+    # (the old version there, deleted for good), the file there is on disk.
+    client, headers, *_ = env
     path = "ncr-ignored/a.jpg"
+    old = _ingest(env, path, media_type="image", sha=_sha())
     clip = _ingest(env, path, media_type="image", sha=_sha())
-    with patch("src.processing.scan._fetch_ignored_paths", return_value={path: None}):
-        _scan(env, tmp_path, [path], "ncr-ignored")
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [old], "reason": "user"}, headers=headers)
+    assert r.status_code == 200, r.text
+    r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [old], "remove_from_projects": True},
+                       headers=headers)
+    assert r.status_code == 200 and r.json()["deleted"] == 1, r.text
+    _scan(env, tmp_path, [path], "ncr-ignored")
     assert _row(env, clip)[0] is None
 
 

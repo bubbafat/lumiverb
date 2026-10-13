@@ -315,11 +315,12 @@ def _mapped_library(home: Path, tmp_path: Path) -> tuple[dict, Path]:
 
 @pytest.mark.fast
 def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     from rich.console import Console
 
     from src.processing.scan import run_scan
+    from tests.scan_fakes import FakeScans
 
     library, here = _mapped_library(home, tmp_path)
     with (
@@ -327,7 +328,7 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
         patch("src.processing.scan._load_library_filters", return_value=[]),
         patch("src.processing.scan._walk_library", return_value=[]) as walk,
     ):
-        run_scan(MagicMock(), library, console=Console(quiet=True))
+        run_scan(FakeScans().client(), library, console=Console(quiet=True))
     assert walk.call_args.args[0] == here
 
 
