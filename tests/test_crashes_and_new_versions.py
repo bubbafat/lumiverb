@@ -111,6 +111,30 @@ def test_a_new_producer_version_waits_for_an_admin_to_resume_its_redo(env):
         client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
 
 
+def test_a_new_versions_hold_is_found_while_its_producer_is_paused(env):
+    """Oct 12: the hold was made only when its redo was listed, so not while
+    the producer was paused, and Processing couldn't show it. The scheduler's
+    refill looks for it, whatever is paused, before any redo is listed."""
+    from unittest.mock import MagicMock
+
+    from src.server.scheduler.service import Scheduler
+    from tests.test_scheduler_service import FakeAccount
+
+    lib = _library(env, "NewVersionPaused")
+    client, headers, library_id, *_ = lib
+    _made_by_an_older_version(lib, "a.jpg")
+    try:
+        assert client.post("/v1/producers/vision/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        # No AI machines and no slots: nothing runs, only what's due is listed.
+        acct = FakeAccount(env[4], vision=0, transcripts=0, libraries=(library_id,), reachable=(library_id,))
+        Scheduler(lambda: {env[4]: acct}, capacity={}, scan=MagicMock(), inline_refill=True).tick()
+        p = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}["vision"]
+        assert p["paused"] is True and p["redo_stopped"] is True and p["redo_stopped_by"] is None
+    finally:
+        client.post("/v1/producers/vision/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+
+
 def test_without_clips_an_older_version_made_nothing_is_stopped(env):
     lib = _library(env, "SameVersion")
     with _db(lib) as s:

@@ -320,10 +320,14 @@ SCOPES = (WORK, REDO)
 
 @dataclass(frozen=True)
 class Pauses:
-    """What's paused, by scope: {target: {paused_by, paused_at}} each."""
+    """What's paused, by scope: {target: {paused_by, paused_at}} each; and
+    whether Pause all is on (everything: the "all" row), when nothing, the
+    scheduler's own look at each library's storage included, touches the
+    library drives."""
 
     work: dict[str, dict[str, Any]] = field(default_factory=dict)
     redo: dict[str, dict[str, Any]] = field(default_factory=dict)
+    everything: bool = False
 
 
 # Pause all is a row of its own (target "all", scope work): every switch,
@@ -337,18 +341,20 @@ def pauses(session: Session) -> Pauses:
     """Every pause, in one read: the switches paused (WORK) and the producers
     whose redo is stopped (REDO). What's paused starts nothing more; what's
     running finishes. While Pause all is on, every switch there is now shows
-    as paused, by whoever paused all (unless it was paused alone before)."""
+    as paused, by whoever paused all (unless it was paused alone before),
+    and everything is True."""
     from src.shared.producers import pause_targets
 
-    out = Pauses()
+    work: dict[str, dict[str, Any]] = {}
+    redo: dict[str, dict[str, Any]] = {}
     for target, scope, by, at in session.execute(text(
             "SELECT target, scope, paused_by, paused_at FROM producer_pauses")):
-        (out.work if scope == WORK else out.redo)[target] = {"paused_by": by, "paused_at": at}
-    everything = out.work.pop(ALL, None)
+        (work if scope == WORK else redo)[target] = {"paused_by": by, "paused_at": at}
+    everything = work.pop(ALL, None)
     if everything is not None:
         for target in pause_targets():
-            out.work.setdefault(target, everything)
-    return out
+            work.setdefault(target, everything)
+    return Pauses(work=work, redo=redo, everything=everything is not None)
 
 
 def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:

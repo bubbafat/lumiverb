@@ -1,7 +1,8 @@
 """What one account's jobs run with (ADR-016 phase 4).
 
-Each library's storage is looked at by the scan pass only, and jobs go by
-that look; a job that finds the storage gone puts its storage work off
+Each library's storage is looked at by the scheduler itself every 30
+seconds (and by the scan pass before it walks one), and jobs go by the
+latest look; a job that finds the storage gone puts its storage work off
 until the next look. Models unused for a while are let go of, so the GPU
 is free for the rest.
 """
@@ -52,7 +53,7 @@ class Wall:
         return self.now
 
 
-def test_storage_work_goes_by_the_scan_passs_look(acct, tmp_path: Path) -> None:
+def test_storage_work_goes_by_the_latest_look(acct, tmp_path: Path) -> None:
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
     assert acct.library_ids(storage=True) == []  # not looked at yet
     acct.set_reachable({"lib_1": tmp_path, "lib_2": None})
@@ -61,6 +62,32 @@ def test_storage_work_goes_by_the_scan_passs_look(acct, tmp_path: Path) -> None:
     assert acct.root("lib_1") == tmp_path and acct.root("lib_2") is None
     acct.unreachable("lib_1")  # a job found it gone
     assert acct.library_ids(storage=True) == [] and acct.reachable == {"lib_1": False, "lib_2": False}
+    acct.set_reachable({"lib_2": tmp_path})  # a scan's look at one library leaves the other's
+    assert acct.library_ids(storage=True) == ["lib_2"] and acct.root("lib_1") is None
+
+
+def test_the_scheduler_looks_at_each_librarys_storage_every_30_seconds(acct, tmp_path: Path, monkeypatch) -> None:
+    looks: list = []
+    gone: set[str] = set()
+
+    def reachable_root(library, *, require_entries=False, **kw):
+        looks.append((library["library_id"], require_entries))
+        return None if library["library_id"] in gone else tmp_path
+
+    monkeypatch.setattr("src.processing.roots.reachable_root", reachable_root)
+    acct.set_libraries([{"library_id": "lib_1", "name": "A"}])
+    assert acct.look_at_storage() is True  # at once: not looked at since this start
+    assert looks == [("lib_1", True)] and acct.library_ids(storage=True) == ["lib_1"]
+    acct.unreachable("lib_1")  # a job found it gone
+    acct.clock.now += account_mod.LOOK_EVERY_SEC - 1
+    assert acct.look_at_storage() is False and acct.library_ids(storage=True) == []
+    acct.clock.now += 1
+    assert acct.look_at_storage() is True and acct.library_ids(storage=True) == ["lib_1"]  # back
+    acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
+    gone.add("lib_2")
+    assert acct.look_at_storage() is True  # a new library: at once
+    assert acct.library_ids(storage=True) == ["lib_1"]
+    assert acct.storage_seen()["lib_2"] == {"seen_at": None, "away_since": acct.wall.now.isoformat(), "checked": True}
 
 
 def test_each_look_is_kept_as_when_last_seen_and_since_when_unreachable(acct, tmp_path: Path) -> None:

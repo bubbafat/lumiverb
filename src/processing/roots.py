@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -23,9 +24,11 @@ logger = logging.getLogger(__name__)
 # A network mount whose server is asleep can block a stat for minutes.
 DEFAULT_TIMEOUT_SEC = 10.0
 
-# The latest probe thread per path, so a hung mount gets one stuck thread,
-# not one per check.
-_probes: dict[str, threading.Thread] = {}
+# The latest probe thread per path and when it started, so a hung mount
+# gets one stuck thread, not one per check; and a check while another is
+# under way (the scheduler's look and a scan's) waits for it rather than
+# taking it for a hung mount.
+_probes: dict[str, tuple[threading.Thread, float]] = {}
 _probes_lock = threading.Lock()
 
 
@@ -174,6 +177,18 @@ def _probe(path: Path, require_entries: bool) -> Path | None:
     return resolved
 
 
+def _start_probe(key: str, worker: threading.Thread) -> tuple[threading.Thread, float] | None:
+    """Start worker as the folder's probe, unless one is still running:
+    then that one and when it started."""
+    with _probes_lock:
+        earlier = _probes.get(key)
+        if earlier is not None and earlier[0].is_alive():
+            return earlier
+        _probes[key] = (worker, time.monotonic())
+        worker.start()
+        return None
+
+
 def reachable_root(
     library: dict,
     *,
@@ -191,7 +206,9 @@ def reachable_root(
     require_entries treats an empty folder as unreachable: an unmounted
     mount point is an empty folder, and scanning it would mark every file
     missing. The check gives up after `timeout` seconds, since a stat on a
-    network mount whose server sleeps can block far longer.
+    network mount whose server sleeps can block far longer. A check of the
+    same folder already under way is waited for (within the timeout); one
+    running longer than the timeout is a hung mount: unreachable at once.
     """
     mapping = _configured_map() if root_map is None else root_map
     path = local_library_root(library, mapping)
@@ -200,13 +217,6 @@ def reachable_root(
     if (reason := _refused(library, mapping)) is not None:
         _refuse(library, reason)
         return None
-
-    with _probes_lock:
-        stuck = _probes.get(str(path))
-        if stuck is not None and stuck.is_alive():
-            # Still waiting on an earlier probe: don't add another stuck thread.
-            logger.warning("Library root %s is still not answering; treating it as unreachable", path)
-            return None
 
     result: dict[str, Path | None | BaseException] = {}
 
@@ -220,11 +230,21 @@ def reachable_root(
         except BaseException as exc:  # noqa: BLE001 — reported below
             result["error"] = exc
 
+    deadline = time.monotonic() + timeout
     worker = threading.Thread(target=run, name=f"root-probe-{library.get('library_id', '')}", daemon=True)
-    with _probes_lock:
-        _probes[str(path)] = worker
-    worker.start()
-    worker.join(timeout)
+    while (earlier := _start_probe(str(path), worker)) is not None:
+        probe, started = earlier
+        if time.monotonic() - started >= timeout:
+            # Still waiting on an earlier probe: don't add another stuck thread.
+            logger.warning("Library root %s is still not answering; treating it as unreachable", path)
+            return None
+        # Another check of this folder is under way (the scheduler's look and
+        # a scan's, say): wait for it, rather than take it for a hung mount.
+        probe.join(max(0.0, min(started + timeout, deadline) - time.monotonic()))
+        if time.monotonic() >= deadline:
+            logger.warning("Library root %s didn't answer within %.0fs; treating it as unreachable", path, timeout)
+            return None
+    worker.join(max(0.0, deadline - time.monotonic()))
     if worker.is_alive():
         logger.warning("Library root %s didn't answer within %.0fs; treating it as unreachable", path, timeout)
         return None

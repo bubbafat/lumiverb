@@ -3,26 +3,37 @@
 Each tick tops up the queue from each account's database, starts the best
 job for every free slot of every pool, and collects what's done. A job
 whose AI machines can't be used isn't handed out; storage work only goes
-to libraries whose storage was reachable at the last look.
+to libraries whose storage was reachable at the latest look, which the
+scheduler makes itself, whatever is paused but Pause all.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
+from functools import partial
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from src.producers.runner import Work
+from src.producers.runner import run as run_work
 from src.server.repository.lineage import Pauses
+from src.server.scheduler.kinds import KINDS, QUEUED
 from src.server.scheduler.service import Scheduler, run
-from src.shared.producers import pause_targets
+from src.shared.producers import PAUSE_SCANS, pause_targets
 
 
-def _pauses(work=(), redo=()) -> Pauses:
-    """What an admin paused (lineage.pauses): switches' work, and producers' redo."""
+def _pauses(work=(), redo=(), everything: bool = False) -> Pauses:
+    """What an admin paused (lineage.pauses): switches' work, and producers'
+    redo; everything: Pause all (the "all" row: every switch shows paused)."""
     seen = {"paused_by": None, "paused_at": None}
-    return Pauses(work={t: seen for t in work}, redo={a: seen for a in redo})
+    paused = Pauses(work={t: seen for t in (pause_targets() if everything else work)},
+                    redo={a: seen for a in redo})
+    return dataclasses.replace(paused, everything=True) if everything else paused
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +45,8 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
                        ("_retry_requested_in_database", lambda tenant_id: None),
                        ("_status_to_database", lambda tenant_id, status: None),
                        ("_status_from_database", lambda tenant_id: None),
-                       ("_crashed_in_database", lambda tenant_id, artifact, asset_ids, error: [])):
+                       ("_crashed_in_database", lambda tenant_id, artifact, asset_ids, error: []),
+                       ("_hold_new_versions_in_database", lambda tenant_id: None)):
         monkeypatch.setattr(service, name, stub, raising=False)
 
 
@@ -53,6 +65,9 @@ class FakeAccount:
         self.followed: list[tuple[str, str | None]] = []
         self.seen: dict[str, dict] = {}
         self.seeded: list = []
+
+    def look_at_storage(self) -> bool:
+        return True  # reachable says what the looks found
 
     def storage_seen(self) -> dict[str, dict]:
         return dict(self.seen)
@@ -95,8 +110,8 @@ class Recorder:
         return run_
 
     def all(self) -> dict:
-        return {k: self.runner(k) for k in ("probe", "render", "clip", "vision", "ocr", "faces", "transcript",
-                                            "scenes", "scene_vision")}
+        """A runner for every kind the scheduler runs (a producer added later too)."""
+        return {k: self.runner(k) for k in dict.fromkeys(kind.base for kind in QUEUED)}
 
 
 def _item(asset_id: str, added: str = "2026-10-01") -> dict:
@@ -1320,3 +1335,288 @@ def test_the_scheduler_sends_no_nul_in_what_it_saves() -> None:
     client.patch("/y", json=["\x00"])
     assert sent == [("post", {"items": [{"description": "adog", "tags": ["beach"], "k": 1}], "n": 2}),
                     ("put", "a"), ("patch", [""])]
+
+
+# ---------------------------------------------------------------------------
+# A pause stops its own work only (Robert, Oct 12). Whether a library's
+# storage can be read, and a new version's hold, are the scheduler's to find
+# out, never a job's: pausing Scans stops only looking for new and changed
+# files. Pause all touches no library drive, the storage look included.
+# ---------------------------------------------------------------------------
+
+
+class Machines:
+    """An account's machines for one AI job (its guard): one online, a request at a time."""
+
+    model = "a-model"
+    down = False
+    error = None
+
+    def __init__(self) -> None:
+        self.pool = MagicMock()
+
+    def check(self) -> bool:
+        return True
+
+    def capacity(self) -> int:
+        return 1
+
+
+class Api:
+    """The API as an account reads it (the registry's settings, its
+    libraries) and its jobs save through it (each kind's, in events)."""
+
+    def __init__(self, libraries: list[dict], events: list) -> None:
+        self.libraries = libraries
+        self.events = events
+
+    def get(self, path: str, **kw):
+        body = self.libraries if path == "/v1/libraries" else {"producers": []}
+        return SimpleNamespace(json=lambda: body)
+
+    def post(self, path: str, **kw) -> None:
+        if path.startswith("/made/"):
+            self.events.append(("made", path.removeprefix("/made/")))
+
+    def close(self) -> None:
+        pass
+
+
+class Storage:
+    """Each library's storage as src.processing.roots.reachable_root finds it:
+    reachable at root unless gone. Every look is noted, in events too."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.gone: set[str] = set()
+        self.looks: list[tuple[str, bool]] = []
+        self.events: list[tuple[str, str]] = []
+
+    def __call__(self, library: dict, *, require_entries: bool = False, **kw) -> Path | None:
+        self.looks.append((library["library_id"], require_entries))
+        self.events.append(("look", library["library_id"]))
+        return None if library["library_id"] in self.gone else self.root
+
+    def originals(self, there: bool) -> None:
+        """Every due clip's original on the storage, or none (an unmounted share)."""
+        for kind in QUEUED:
+            path = self.root / f"{kind.name}-clip"
+            if there:
+                path.write_bytes(b"x")
+            else:
+                path.unlink(missing_ok=True)
+
+
+class ReadsOriginals(Work):
+    """A producer reading each clip's original, as probe, capture and render
+    do: through Work.original, which goes by the latest look and notes
+    storage found gone since."""
+
+    def make(self, clip: dict) -> str:
+        self.original(clip)
+        return clip["asset_id"]
+
+    def save(self, client, made) -> None:
+        client.post(f"/made/{self.job.kind}")
+
+
+LIBRARY = {"library_id": "lib_1", "name": "Footage", "root_path": "/Volumes/media-01/Footage"}
+STORAGE_KINDS = {k.name for k in QUEUED if k.storage}
+
+
+@pytest.fixture
+def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Storage:
+    """lib_1's storage, reachable, with every due clip's original on it."""
+    (tmp_path / "home").mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    (tmp_path / "Footage").mkdir()
+    s = Storage(tmp_path / "Footage")
+    s.originals(there=True)
+    monkeypatch.setattr("src.processing.roots.reachable_root", s)
+    return s
+
+
+class Fresh:
+    """A scheduler just started, with an account made as Accounts makes one
+    (nothing looked at yet), lib_1's storage reachable and a clip due for
+    every kind; a slot in every pool. What's offered is noted (offered),
+    and what each job made (made)."""
+
+    def __init__(self, storage: Storage, *, held=(), everything: bool = False) -> None:
+        from src.producers import pools
+        from src.server.scheduler.account import Account
+        from src.server.scheduler.scans import ScanState
+
+        self.storage = storage
+        self.clock = Clock()
+        self.acct = Account("t1", Api([LIBRARY], storage.events), ScanState(), clock=self.clock)
+        self.acct.guards = {job: Machines() for job in self.acct.guards}
+        self.paused = _pauses(held, everything=everything)
+        self.scan = MagicMock()
+        self.offered: list[str] = []
+        due = {k.name: [_item(f"{k.name}-clip")] for k in QUEUED}
+
+        def candidates(tenant_id, kind, libraries, skip=()):
+            return [i for i in due[kind.name] if i["library_id"] in libraries and i["asset_id"] not in skip]
+
+        def makes(acct, job) -> None:
+            acct.client.post(f"/made/{job.kind}")
+
+        self.s = Scheduler(lambda: {"t1": self.acct}, capacity={p.name: 1 for p in pools().values() if not p.per_account},
+                           candidates=candidates, scan=self.scan, inline_refill=True, clock=self.clock,
+                           runners={k.base: partial(run_work, ReadsOriginals) if k.storage else makes for k in QUEUED},
+                           on_hold=lambda tenant_id: self.paused, retry_requested=lambda tenant_id: None,
+                           write_status=lambda tenant_id, status: None)
+        offer = self.s.dispatcher.offer
+
+        def offered(tenant_id, kind, items, **kw) -> None:
+            if items:
+                self.offered.append(kind)
+            offer(tenant_id, kind, items, **kw)
+
+        self.s.dispatcher.offer = offered
+
+    def tick(self, seconds: float = 1.0) -> None:
+        """So many seconds later, a tick; its jobs finish."""
+        self.clock.now += seconds
+        self.s.tick()
+        _settle(self.s)
+
+    def made(self, since: int = 0) -> list[str]:
+        return [kind for what, kind in self.storage.events[since:] if what == "made"]
+
+
+def _own_kinds(switch: str) -> set[str]:
+    """The kinds a switch's pause stops: Scans' the scan; a producer's its
+    kind and its redo; Upkeep none of the scheduler's."""
+    if switch == PAUSE_SCANS:
+        return {"scan"}
+    return {k.name for k in KINDS.values() if k.flag and k.artifact == switch}
+
+
+@pytest.mark.fast
+def test_with_scans_paused_a_restarted_scheduler_still_reads_originals(storage: Storage) -> None:
+    # The live Mac, Oct 12: Scans paused, and after a restart no library was
+    # ever looked at, so analysis proxies (and all that's made from them)
+    # stopped for hours, and nothing on Processing said why.
+    f = Fresh(storage, held={PAUSE_SCANS})
+    f.tick()
+    assert storage.looks == [("lib_1", True)]  # one look, as the scan pass looks
+    assert {k.name for k in QUEUED if k.storage and not k.redo} <= set(f.made())
+    assert "scan" not in f.offered and not f.scan.called
+
+
+@pytest.mark.fast
+def test_the_first_look_after_a_restart_keeps_when_the_storage_was_last_seen(storage: Storage) -> None:
+    # The look comes after the record from before the restart is read: a
+    # library unreachable now still says when it was last seen.
+    f = Fresh(storage)
+    record = {"lib_1": {"seen_at": "2026-10-12T09:00:00+00:00", "away_since": None, "checked": True}}
+    f.s._last_status = lambda tenant_id: {"storage": record}
+    storage.gone.add("lib_1")
+    f.tick()
+    seen = f.acct.storage_seen()["lib_1"]
+    assert seen["seen_at"] == "2026-10-12T09:00:00+00:00" and seen["away_since"] and seen["checked"]
+    assert not STORAGE_KINDS & set(f.offered)
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("switch", pause_targets())
+def test_a_pause_stops_its_own_work_only(storage: Storage, switch: str) -> None:
+    # Every switch there is (one added later too): paused alone on a fresh
+    # start, every other kind still gets its due work offered, storage
+    # work included. The guard against the next hidden coupling.
+    f = Fresh(storage, held={switch})
+    f.tick()
+    assert set(f.offered) == set(KINDS) - _own_kinds(switch)
+
+
+@pytest.mark.fast
+def test_storage_a_job_found_gone_is_used_again_after_the_next_look_with_scans_paused(storage: Storage) -> None:
+    # One blip used to stop a library's storage work for good while Scans
+    # were paused: only the scan's look said it was back.
+    from src.server.scheduler.account import LOOK_EVERY_SEC
+
+    f = Fresh(storage, held={PAUSE_SCANS})
+    f.tick()  # looked at; the first of each storage kind made, their redos waiting
+    storage.gone.add("lib_1")
+    storage.originals(there=False)  # the share went away
+    f.tick()  # the redos find it gone
+    assert f.acct.library_ids(storage=True) == [] and f.acct.storage_seen()["lib_1"]["away_since"]
+    storage.gone.clear()
+    storage.originals(there=True)  # and came back
+    looks, mark = len(storage.looks), len(storage.events)
+    f.tick()
+    assert len(storage.looks) == looks and not STORAGE_KINDS & set(f.made(mark))  # until the next look
+    f.tick(LOOK_EVERY_SEC)
+    assert len(storage.looks) == looks + 1 and f.acct.library_ids(storage=True) == ["lib_1"]
+    assert {k.name for k in QUEUED if k.storage and k.redo} <= set(f.made(mark))
+
+
+@pytest.mark.fast
+def test_while_all_processing_is_paused_nothing_touches_the_drives_and_resuming_looks_first(
+        storage: Storage) -> None:
+    # Robert, Oct 12: Pause all is for working on the hardware. Nothing
+    # reads the library drives then, the scheduler's look included; on
+    # resuming, a look comes before any storage work.
+    from src.server.scheduler.account import LOOK_EVERY_SEC
+
+    f = Fresh(storage, everything=True)
+    for _ in range(3):
+        f.tick(LOOK_EVERY_SEC)
+    assert storage.looks == [] and f.made() == [] and not f.scan.called
+    for _ in range(2):  # resumed on a fresh start, and again after a long pause
+        f.paused = _pauses()
+        mark = len(storage.events)
+        f.tick()
+        after = storage.events[mark:]
+        assert after[0] == ("look", "lib_1") and STORAGE_KINDS & set(f.made(mark))
+        f.paused = _pauses(everything=True)
+        looks = len(storage.looks)
+        for _ in range(4):
+            f.tick(LOOK_EVERY_SEC)
+        assert len(storage.looks) == looks
+
+
+@pytest.mark.fast
+def test_a_new_versions_hold_is_looked_for_whatever_is_paused_before_any_redo_is_listed() -> None:
+    # Oct 12: the hold was made only when a redo was listed, so not while
+    # the producer (or the storage its redo reads) was held, and Processing
+    # couldn't show it.
+    from src.server.scheduler.service import NEW_VERSIONS_EVERY_SEC
+
+    clock = Clock()
+    asked: list[tuple[str, str]] = []
+    looked_for: list = [None]
+
+    def candidates(tenant_id, kind, libraries, skip=()):
+        asked.append(("listed", kind.name))
+        return []
+
+    def new_versions(tenant_id) -> None:
+        asked.append(("new versions", tenant_id))
+        if looked_for[0] is not None:
+            raise looked_for[0]
+
+    s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"scan": 0}, candidates=candidates, inline_refill=True,
+                  runners=Recorder().all(), scan=MagicMock(), clock=clock, new_versions=new_versions,
+                  on_hold=lambda tenant_id: _pauses({"vision"}),
+                  retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+    s.tick()
+    assert asked[0] == ("new versions", "t1")  # before anything is listed
+    assert ("listed", "redo_vision") not in asked  # vision is paused; its hold is still looked for
+    asked.clear()
+    clock.now += NEW_VERSIONS_EVERY_SEC / 2
+    s.tick()
+    assert ("new versions", "t1") not in asked  # once a minute
+    clock.now += NEW_VERSIONS_EVERY_SEC / 2
+    looked_for[0] = RuntimeError("database away")
+    s.tick()
+    s.tick()
+    assert asked.count(("new versions", "t1")) == 2  # tried again at the next refill
+    s._on_hold = lambda tenant_id: _pauses(everything=True)
+    looked_for[0] = None
+    asked.clear()
+    s.tick()
+    assert asked == [("new versions", "t1")]  # only the database is asked: Pause all doesn't stop it

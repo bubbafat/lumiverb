@@ -237,30 +237,30 @@ def _last_seen(libraries: Sequence[tuple[str, str]], storage: Mapping[str, Mappi
 
 
 def library_reachable(seen: Mapping[str, Any] | None, *, at: datetime | None, now: datetime,
-                      scans_paused: bool) -> bool | None:
+                      stopped: bool) -> bool | None:
     """A library's dot: True when the latest look since the scheduler started
     reached it, False when it found it unreachable, None when that isn't
-    known now (not looked at since a restart, Scans paused, or the scheduler
-    isn't running)."""
-    if at is None or now - at >= SCHEDULER_SILENT or not seen or not seen.get("checked"):
+    known now (not looked at since a restart, all processing paused, or the
+    scheduler isn't running)."""
+    if stopped or at is None or now - at >= SCHEDULER_SILENT or not seen or not seen.get("checked"):
         return None
-    if seen.get("away_since"):
-        return False
-    return None if scans_paused else True
+    return not seen.get("away_since")
 
 
 def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, Mapping[str, Any]],
-                scans_paused: bool, at: datetime | None, now: datetime) -> Row:
+                stopped: bool, at: datetime | None, now: datetime) -> Row:
     """libraries: (library_id, name) of those not trashed; storage: the
     scheduler's looks at each, {seen_at, away_since, checked} (checked:
     looked at since it started; otherwise a record from before), as of its
-    status at `at`.
+    status at `at`; stopped: Pause all is on (lineage.Pauses.everything).
 
-    Red when the latest look found one unreachable; yellow
-    while Scans are paused (nothing looks, so what's known is stale:
-    Proposed), when one hasn't been looked at since the scheduler started,
-    or the scheduler isn't running (each saying when it was last seen);
-    green when the latest look reached them all."""
+    The scheduler looks at each library's storage itself every 30 seconds,
+    whatever is paused (pausing Scans changes nothing here), except while
+    all processing is paused: nothing touches the drives then. Yellow
+    while the scheduler isn't running or all processing is paused (what's
+    known is stale, not broken), or when one hasn't been looked at since
+    the scheduler started, each saying when it was last seen; red when the
+    latest look found one unreachable; green when it reached them all."""
     row = Row("storage", "Storage", GREEN, "", link="/libraries", checked_at=at)
     if not libraries:
         row.reason = "No libraries."
@@ -277,6 +277,10 @@ def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, M
         if away:
             row.reason += f" Then {_names([n for _, n in away])} couldn't be reached."
         return row
+    if stopped:
+        row.state = YELLOW
+        row.reason = f"All processing paused, so storage isn't checked. {_last_seen(libraries, storage, now)}"
+        return row
     if away:
         row.state = RED
 
@@ -290,9 +294,6 @@ def storage_row(*, libraries: Sequence[tuple[str, str]], storage: Mapping[str, M
             row.reason = "Can't reach " + ", ".join(f"{n} ({last(i)})" for i, n in away) + "."
         if len(away) == 1:
             row.link = f"/libraries/{away[0][0]}/settings"
-        return row
-    if scans_paused:
-        row.state, row.reason = YELLOW, f"Scans paused. {_last_seen(libraries, storage, now)}"
         return row
     unchecked = [(i, n) for i, n in libraries if not rec(i).get("checked")]
     if unchecked:

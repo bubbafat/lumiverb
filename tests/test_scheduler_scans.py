@@ -207,6 +207,8 @@ def test_storage_that_goes_away_during_an_earlier_librarys_scan_isnt_scanned(das
     assert [c.args[1]["library_id"] for c in scan_mock.call_args_list] == ["lib_1"]
     assert reachable == {"lib_1": True, "lib_2": False}
     assert said[0]["lib_2"] is not None and said[-1]["lib_2"] is None  # jobs hear it went
+    # That one alone: the scheduler may have looked at the others since this pass did.
+    assert said[-1] == {"lib_2": None}
 
 
 @pytest.mark.fast

@@ -10,11 +10,15 @@ account shares.
 Settings and machines are read again every minute, off the scheduler's
 dispatching thread; machines that can't be used are looked at again as
 often. No job of the account's is handed out until its settings were read
-once. Each library's storage is looked at by the scan pass only, and jobs
-go by that look (several jobs probing one mount at once would see it as
-unreachable). What each look found is kept as when the library was last
-seen and since when it's been unreachable; the scheduler's status carries
-it over a restart, where it's a record, not a look (storage_seen).
+once. Each library's storage is looked at by the scheduler itself, every
+30 seconds and at once for a library not looked at since this start
+(look_at_storage, off the dispatching thread), whatever is paused but
+Pause all; the scan pass looks again right before it walks one. Jobs go
+by the latest look; one that finds the storage gone puts that library's
+storage work off until the next. What each look found is kept as when the
+library was last seen and since when it's been unreachable; the
+scheduler's status carries it over a restart, where it's a record, not a
+look (storage_seen).
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.server.scheduler.kinds import SCAN_EVERY_SEC
 from src.server.scheduler.scans import ScanState
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,9 @@ logger = logging.getLogger(__name__)
 REFRESH_SEC = 60.0
 # ...and sooner when the server didn't answer.
 RETRY_SEC = 15.0
+# Each library's storage is looked at this often (as often as the scan is
+# offered): storage a job found gone is back in use within it.
+LOOK_EVERY_SEC = SCAN_EVERY_SEC
 
 
 class Account:
@@ -71,9 +79,11 @@ class Account:
         # The server's settings were read at least once: its jobs can go.
         self.settings_ready = False
         # library_id -> the library; and its storage on this machine at the
-        # last scan pass's look (None: not reachable).
+        # latest look (None: not reachable).
         self.libraries: dict[str, dict] = {}
         self.roots: dict[str, Path | None] = {}
+        # When the scheduler last looked at every library's storage (look_at_storage).
+        self._looked_at: float | None = None
         # library_id -> {seen_at, away_since} (ISO times or None): when its
         # storage was last seen reachable, and since when it's been
         # unreachable (None: the latest look reached it); and the libraries
@@ -141,11 +151,35 @@ class Account:
         with self._lock:
             self.libraries = {lib["library_id"]: lib for lib in libraries}
 
+    def look_at_storage(self) -> bool:
+        """The scheduler's own look at each library's storage, when due:
+        every LOOK_EVERY_SEC, and at once when a library wasn't looked at
+        since this start (so before any of its storage work is handed out).
+        Looked at as the scan pass does (reachable_root: with a timeout; an
+        unmounted mount point is an empty folder), so the two never
+        disagree. Storage work goes by it whatever is paused; the scheduler
+        doesn't call it while Pause all is on (nothing touches the drives
+        then). Slow (a share that sleeps takes its timeout): called off the
+        dispatching thread. True when it looked."""
+        from src.processing.roots import reachable_root
+
+        now = self._clock()
+        with self._lock:
+            libraries = list(self.libraries.values())
+            new = any(i not in self._checked for i in self.libraries)
+        if not new and self._looked_at is not None and now - self._looked_at < LOOK_EVERY_SEC:
+            return False
+        self._looked_at = now
+        self.set_reachable({lib["library_id"]: reachable_root(lib, require_entries=True) for lib in libraries})
+        return True
+
     def set_reachable(self, roots: dict[str, Path | None]) -> None:
-        """The scan pass's look at each library's storage."""
+        """A look at libraries' storage (the scheduler's own, or the scan
+        pass's before it walks one): each one's root on this machine, None
+        where it can't be read. Libraries it leaves out keep their last look."""
         now = self._wall().isoformat()
         with self._lock:
-            self.roots = dict(roots)
+            self.roots.update(roots)
             for library_id, root in roots.items():
                 self._looked(library_id, root is not None, now)
 

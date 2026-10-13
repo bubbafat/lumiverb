@@ -182,13 +182,32 @@ def test_storage_after_a_restart_isnt_red_until_its_looked_at(env):
     assert row["state"] == "yellow" and row["reason"] == "Not checked yet. Footage never seen."
 
 
-def test_storage_while_scans_are_paused_says_when_each_was_last_seen(env):
+def test_storage_while_scans_are_paused_is_what_the_latest_look_found(env):
+    # Robert, Oct 12: pausing Scans stops only looking for new and changed
+    # files; the scheduler still looks at each library's storage itself.
     client, headers, library_id, *_ = env
     try:
         assert client.post("/v1/producers/scans/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        _status(env, storage={library_id: _seen(120, checked=False)})
+        _status(env, storage={library_id: _seen(120, away=1)})
         row, dots = _storage_and_dots(env)
-        assert row["state"] == "yellow" and row["reason"] == "Scans paused. Footage last seen 2 hours ago."
+        assert row["state"] == "red" and row["reason"] == "Can't reach Footage. Last seen 2 hours ago."
+        assert dots[library_id]["reachable"] is False
+        _status(env, storage={library_id: _seen()})
+        row, dots = _storage_and_dots(env)
+        assert row["state"] == "green" and dots[library_id]["reachable"] is True
+    finally:
+        client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
+
+
+def test_storage_while_all_processing_is_paused_says_when_each_was_last_seen(env):
+    # Pause all: nothing touches the drives, the scheduler's look included.
+    client, headers, library_id, *_ = env
+    try:
+        assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        _status(env, storage={library_id: _seen(120, away=1)})
+        row, dots = _storage_and_dots(env)
+        assert row["state"] == "yellow"
+        assert row["reason"] == "All processing paused, so storage isn't checked. Footage last seen 2 hours ago."
         assert dots[library_id]["reachable"] is None
     finally:
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)

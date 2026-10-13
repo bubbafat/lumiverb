@@ -10,8 +10,12 @@ The scheduler looks at each account's libraries every 30 seconds:
    can't be listed (no permission, or the CIFS mount timing out) keeps the
    changes, which wait for the same back-off, and nothing is taken for
    missing.
-2. Which libraries' storage is reachable is what probing and rendering
-   (which read the originals) go by until the next look.
+2. Each library's storage is looked at again right before its scan (an
+   unmounted mount point is an empty folder, and scanning it would mark
+   every file missing). What each look finds goes into the account's
+   record of its storage (on_roots), which the scheduler otherwise keeps
+   itself, every 30 seconds whatever is paused but Pause all
+   (account.py look_at_storage): pausing scans stops no other work.
 
 A library is skipped, never failed: the next look tries again.
 (Moved from the worker, src/client/cli/worker.py, which the scheduler replaces.)
@@ -293,10 +297,9 @@ def scan_pass(
 ) -> dict[str, Path | None]:
     """Scan what's due in each library whose storage is reachable; each
     library's storage on this machine (None: not reachable). on_roots hears
-    where each one's storage is before any scan, so work on the originals
-    needn't wait for a long one, and again whenever a library's changes.
-    Each library is looked at again right before its scan: a share can
-    sleep during another library's long scan."""
+    where every library's storage is before any scan, then a library's
+    alone whenever it changed. Each library is looked at again right before
+    its scan: a share can sleep during another library's long scan."""
     if scan_fn is None:
         from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
@@ -312,8 +315,8 @@ def scan_pass(
             root = reachable_root(library, require_entries=True)
             if root != roots[library["library_id"]]:
                 roots[library["library_id"]] = root
-                if on_roots is not None:
-                    on_roots(dict(roots))
+                if on_roots is not None:  # the others' looks may be older than the scheduler's since
+                    on_roots({library["library_id"]: root})
         if root is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             _warn_if_no_root_map()
