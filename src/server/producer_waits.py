@@ -1,0 +1,129 @@
+"""Why each producer's due work waits, as GET /v1/producers lists it on the
+producer's row (`waits`): one entry for each reason (src/shared/waits.py)
+holding some of it back now, with how many clips and what Settings →
+Processing needs to say it.
+
+Robert, Oct 12: work held back with no reason shown is a bug (analysis
+proxies stopped for hours and the page said nothing). Every gate the
+scheduler has is here, and tests/test_no_silent_waits.py holds each one to
+it: what's paused, what a clip is made from, its AI machines, its library's
+storage, a redo stopped by an admin or a new version, the clips the
+scheduler holds back after a try (a scan comes first, or the try couldn't
+finish), failures waiting their turn or given up, and the scheduler itself
+(not running, starting, or unable to list the work).
+
+Read from the account's database (pauses, lineage) and the scheduler's
+status (scheduler.status: whether it runs, each library's storage, the
+clips it holds back, its AI machines). What only the scheduler knows isn't
+said while it isn't running: that it isn't running is said instead.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import text
+from sqlmodel import Session
+
+from src.server.repository import lineage
+from src.shared.producers import PAUSE_SCANS, PRODUCERS
+from src.shared.waits import (
+    AI_MACHINES,
+    GIVEN_UP,
+    HELD,
+    NEEDS,
+    NEW_VERSION,
+    PAUSED,
+    REASONS,
+    REDO_STOPPED,
+    RETRY_LATER,
+    SCAN,
+    SCHEDULER,
+    STORAGE,
+)
+
+_ORDER = {reason: n for n, reason in enumerate(REASONS)}
+
+
+def is_paused(artifact: str, paused: lineage.Pauses) -> bool:
+    """Whether what makes an artifact is paused: its switch, or for what
+    scans make (proxies), Scans."""
+    return (artifact if PRODUCERS[artifact].scheduled else PAUSE_SCANS) in paused.work
+
+
+def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, counts: dict[str, dict[str, int]],
+                   paused: lineage.Pauses, status: Any, ai: Any = None, library_id: str | None = None,
+                   asset_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """Why the producer's due work waits: [{reason, clips, ...}] in the order
+    of src/shared/waits.py, each only when some clips wait for it (an AI
+    job's wait is said whatever: its work would). counts: every producer's
+    lineage.counts over the clips in sight; status: the scheduler's (with
+    live); ai: the control plane's word on its AI job (ai_machines.JobWait).
+    In one project (asset_ids), the clips the scheduler holds back aren't
+    counted: it doesn't say which clips they are. Scans make the producers
+    it doesn't run: pausing Scans says so on their rows, and they list none."""
+    p = PRODUCERS[artifact]
+    if not p.scheduled:
+        return []
+    c = counts[artifact]
+    redoable = lineage.redoable(artifact)
+    redo_runs = redoable and artifact not in paused.redo
+    due = c["due_new"] + (c["due_redo"] if redo_runs else 0)
+    live = bool(status.live)
+    out: list[dict[str, Any]] = []
+
+    def add(reason: str, clips: int, **details: Any) -> None:
+        if clips > 0:
+            out.append({"reason": reason, "clips": clips, **details})
+
+    if artifact in paused.work:
+        add(PAUSED, due)
+    # The scheduler hands nothing out: not running, or not yet sure of the settings.
+    unlisted = next((status.unlisted[k] for k in (p.kind, f"redo_{p.kind}") if k in status.unlisted), None)
+    if not live:
+        add(SCHEDULER, due, why="not_running")
+    elif not status.settings_ready:
+        add(SCHEDULER, due, why="starting")
+    elif unlisted is not None:
+        add(SCHEDULER, due, why="cant_list", message=unlisted)
+    if p.job:
+        # The control plane's word (machines and models as Settings → AI keeps
+        # them), else the scheduler's own: it found none it can use.
+        why, message = (ai.why, ai.message) if ai is not None else (
+            ("unusable", status.ai_waits[p.job]) if live and p.job in status.ai_waits else (None, None))
+        if why:
+            out.append({"reason": AI_MACHINES, "clips": due, "job": p.job, "why": why, "message": message})
+    for need in p.needs:
+        add(NEEDS, counts[need]["missing"] if need in counts else 0, artifact=need, paused=is_paused(need, paused))
+    # Pause all touches no drive, so nothing looks at them: paused says it.
+    if p.storage and live and not paused.everything:
+        away = [i for i in status.storage_waits if library_id is None or i == library_id]
+        due_in = lineage.due_by_library(session, artifact, want, away, redo=redo_runs, asset_ids=asset_ids)
+        names = _library_names(session, [i for i in away if due_in.get(i)])
+        for i in away:
+            seen = status.storage.get(i)
+            add(STORAGE, due_in.get(i, 0), library_id=i, library_name=names.get(i, ""),
+                seen_at=getattr(seen, "seen_at", None), away_since=getattr(seen, "away_since", None),
+                checked=bool(getattr(seen, "checked", False)))
+    if redoable and artifact in paused.redo:
+        # A new version stops its redo by no one (lineage.hold_new_version); an admin, by name.
+        add(NEW_VERSION if paused.redo[artifact]["paused_by"] is None else REDO_STOPPED, c["due_redo"])
+    if live and asset_ids is None:
+        held: dict[str, int] = {}
+        for row in status.held:
+            if row.kind == p.kind and (library_id is None or row.library_id == library_id):
+                why = row.why if row.why in (SCAN, HELD) else HELD  # a code it doesn't know: held
+                held[why] = held.get(why, 0) + row.clips
+        add(SCAN, held.get(SCAN, 0), paused=PAUSE_SCANS in paused.work)
+        add(HELD, held.get(HELD, 0))
+    add(RETRY_LATER, c["retrying"])
+    add(GIVEN_UP, c["given_up"])
+    return sorted(out, key=lambda w: _ORDER[w["reason"]])
+
+
+def _library_names(session: Session, library_ids: list[str]) -> dict[str, str]:
+    if not library_ids:
+        return {}
+    rows = session.execute(text("SELECT library_id, name FROM libraries WHERE library_id = ANY(:ids)"),
+                           {"ids": list(library_ids)}).all()
+    return {r[0]: r[1] for r in rows}

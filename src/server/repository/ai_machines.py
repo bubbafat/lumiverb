@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from sqlmodel import Session, select
 from ulid import ULID
 
@@ -49,7 +51,15 @@ def job_models(tenant: Tenant | None) -> dict[str, str]:
     return {job: job_model(tenant, job) for job in AI_JOBS}
 
 
-def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
+class JobWait(NamedTuple):
+    """Why an AI job's work waits: "off" (no model), "no_machine" (none does
+    it) or "offline" (none doing it is online), and that in a sentence."""
+
+    why: str
+    message: str
+
+
+def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, JobWait | None]:
     """Why each AI job's work waits now, for Settings → Processing (None:
     it doesn't). Leaving a job without a machine never asks (Robert, Oct 9):
     this is where it says so."""
@@ -57,16 +67,18 @@ def why_jobs_wait(ctrl: Session, tenant_id: str) -> dict[str, str | None]:
 
     tenant = ctrl.get(Tenant, tenant_id)
     every = machines(ctrl, tenant_id)
-    out: dict[str, str | None] = {}
+    out: dict[str, JobWait | None] = {}
     for job in JOBS:
         label = JOBS[job]
         doing = [m for m in every if m.enabled and job in m.jobs]
         if not job_model(tenant, job):
-            out[job] = f"{label} are off: no model is chosen in Settings → AI."
+            out[job] = JobWait("off", f"{label} are off: no model is chosen in Settings → AI.")
         elif not doing:
-            out[job] = f"No machine does {label.lower()}: its work waits until an admin adds one in Settings → AI."
+            out[job] = JobWait("no_machine", f"No machine does {label.lower()}: its work waits until an admin adds"
+                                             " one in Settings → AI.")
         elif all(m.online is False for m in doing):
-            out[job] = f"No machine doing {label.lower()} is online: its work waits. Settings → AI shows why."
+            out[job] = JobWait("offline", f"No machine doing {label.lower()} is online: its work waits."
+                                          " Settings → AI shows why.")
         else:
             out[job] = None
     return out

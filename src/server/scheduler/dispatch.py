@@ -13,9 +13,12 @@ reported as failing (the server then says when to try it again), only
 until the database has it (settle_after: a listing read before the save
 still names it). A clip that waits without saying why (the GPU ran out of
 memory, its file changed since it was hashed) would otherwise be first
-again at once: it's held for retake_after. The database is asked to leave
-held clips out (held()), so they can't fill its answer and keep the clips
-behind them waiting. A job that couldn't try at all (the storage went
+again at once: it's held for retake_after, and why is kept (a code from
+src/shared/waits.py, as the job said it: a scan comes first, or its try
+couldn't finish), so Settings → Processing says how many clips each
+producer has held back and why (status's held). The database is asked to
+leave held clips out (held()), so they can't fill its answer and keep the
+clips behind them waiting. A job that couldn't try at all (the storage went
 away) holds nothing back.
 """
 
@@ -26,6 +29,8 @@ import time
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
+
+from src.shared.waits import HELD, reasons_of
 
 # A kind's buffer is topped up once fewer than this are waiting.
 LOW = 10
@@ -70,7 +75,7 @@ def _same(kind: str, spec: KindSpec) -> str:
 
 # What a job says when it's done: "not_tried" (runners.NOT_TRIED: it couldn't
 # try at all), None (each clip saved or reported as failing), or the clips
-# that wait without either (held the long while).
+# that wait without either (held the long while; a Waiting says why each).
 Outcome = str | list[str] | None
 
 
@@ -111,6 +116,9 @@ class Dispatcher:
         self._empty_wait: dict[tuple[str, str], float] = {}
         self._in_hand: set[tuple[str, str, str]] = set()
         self._taken_until: dict[tuple[str, str, str], float] = {}
+        # Clips held back after a try that waited: why (a src/shared/waits.py
+        # code) and their library, while their hold lasts.
+        self._held_why: dict[tuple[str, str, str], tuple[str, str]] = {}
         self._busy: dict[str, int] = {}
         self._running_kinds: dict[tuple[str, str], int] = {}
         # Each account's kinds an admin paused: none handed out, no offer
@@ -175,6 +183,7 @@ class Dispatcher:
             if kind in self._paused_kinds.get(tenant_id, ()):
                 return  # paused since it was asked: its answer isn't kept
             self._taken_until = {k: t for k, t in self._taken_until.items() if t > now}
+            self._held_why = {k: w for k, w in self._held_why.items() if k in self._taken_until}
             same = _same(kind, self._kinds[kind])
             fresh = [i for i in items
                      if (tenant_id, same, i["asset_id"]) not in self._in_hand
@@ -268,7 +277,19 @@ class Dispatcher:
                     for job, at in self._started.values() if job.tenant_id == tenant_id]
             pace = {k: sum(e for e, _ in v) / sum(u for _, u in v)
                     for (t, k), v in self._paces.items() if t == tenant_id and v}
-            return {"running": running, "waiting": waiting, "pools": pools, "jobs": jobs, "pace": pace}
+            return {"running": running, "waiting": waiting, "pools": pools, "jobs": jobs, "pace": pace,
+                    "held": self._held(tenant_id, now)}
+
+    def _held(self, tenant_id: str, now: float) -> list[dict]:
+        """The account's clips held back after a try that waited, counted by
+        kind (a redo's under its kind), why and library."""
+        counted: dict[tuple[str, str, str], int] = {}
+        for key, (why, library_id) in self._held_why.items():
+            if key[0] == tenant_id and self._taken_until.get(key, 0.0) > now:
+                group = (key[1], why, library_id)
+                counted[group] = counted.get(group, 0) + 1
+        return [{"kind": kind, "why": why, "library_id": library_id, "clips": n}
+                for (kind, why, library_id), n in sorted(counted.items())]
 
     def seed_pace(self, tenant_id: str, pace: Mapping[str, object]) -> None:
         """Paces known before a restart (the last status): where each kind
@@ -294,6 +315,7 @@ class Dispatcher:
         account's clips waits out its hour any more."""
         with self._lock:
             self._taken_until = {k: t for k, t in self._taken_until.items() if k[0] != tenant_id}
+            self._held_why = {k: w for k, w in self._held_why.items() if k[0] != tenant_id}
             for key in [k for k in self._all_known_at if k[0] == tenant_id]:
                 del self._all_known_at[key]
 
@@ -302,11 +324,14 @@ class Dispatcher:
         """The job's slot is free; its clips aren't taken again for a while
         (unless it couldn't try at all). waiting: the clips neither saved nor
         reported (None: it can't say, so all of them); failed: those reported
-        as failing. Its kind learns its pace from the rest: the clips it made."""
+        as failing. Its kind learns its pace from the rest: the clips it made.
+        Why each waiting clip waits is kept while it's held (a Waiting says;
+        HELD otherwise)."""
         spec = self._kinds[job.kind]
         wait = self._retake_after if spec.retake_after is None else spec.retake_after
         pool = pool_key(spec, job.tenant_id)
         waits = set(job.asset_ids if waiting is None else waiting)
+        why = reasons_of(waiting)
         with self._lock:
             self._busy[pool] = max(0, self._busy.get(pool, 0) - 1)
             key = (job.tenant_id, job.kind)
@@ -322,8 +347,12 @@ class Dispatcher:
                 if made > 0 and now > started and not gone & set(job.asset_ids):
                     key = (job.tenant_id, _same(job.kind, spec))
                     self._paces.setdefault(key, deque(maxlen=PACE_JOBS)).append((now - started, made))
-            for asset_id in job.asset_ids:
+            for item in job.items:
+                asset_id = item["asset_id"]
                 key = (job.tenant_id, _same(job.kind, spec), asset_id)
                 self._in_hand.discard(key)
+                self._held_why.pop(key, None)
                 if tried:
                     self._taken_until[key] = now + (wait if asset_id in waits else min(wait, self.settle_after))
+                    if asset_id in waits:
+                        self._held_why[key] = (why.get(asset_id, HELD), str(item.get("library_id") or ""))

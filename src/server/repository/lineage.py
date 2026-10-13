@@ -215,6 +215,36 @@ def _below_sql(artifact: str) -> str:
             f" AND NOT ({RECHECK[artifact]}) AND (l.level IS NULL OR l.level < :level))")
 
 
+def _changed_sql(artifact: str) -> str:
+    """source_changed() on the producer's own lineage row (l): made by a
+    producer from a file whose content has since changed."""
+    if artifact in NOT_REDONE_ON_SOURCE_CHANGE:
+        return "false"
+    return ("(a.sha256 IS NOT NULL AND l.producer NOT IN ('', :person) AND l.source_sha256 IS NOT NULL"
+            " AND l.source_sha256 <> a.sha256)")
+
+
+# A failure isn't waiting its turn (nor given up): on the producer's own lineage row (l).
+_NOT_WAITING = "(l.retry_at IS NULL OR l.retry_at <= now())"
+
+
+def _due_new_sql(artifact: str) -> str:
+    """What the scheduler hands out as missing, on the producer's own lineage
+    row (l): not made, made from a file that's changed, or due to be checked
+    again; less failures waiting their turn."""
+    made = f"({MADE[artifact]})"
+    return (f"({_NOT_WAITING} AND (NOT {made} OR ({made} AND ({RECHECK[artifact]}))"
+            f" OR ({made} AND {_changed_sql(artifact)})))")
+
+
+def _due_redo_sql(artifact: str) -> str:
+    """What its redo hands out (stale, from the file as it is), on l: less
+    failures waiting their turn."""
+    made = f"({MADE[artifact]})"
+    return (f"({_NOT_WAITING} AND {made} AND (l.asset_id IS NULL OR {_stale_sql()})"
+            f" AND NOT ({RECHECK[artifact]}) AND NOT {_changed_sql(artifact)})")
+
+
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
            asset_ids: list[str] | None = None) -> dict[str, int]:
     """{applicable, current, stale, missing, rechecking, below, failing,
@@ -222,7 +252,11 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
     among asset_ids, when given). rechecking: made, and due to be checked
     again (not stale). below: made below the producer's level now (its level
     setting; not stale, and not current: made again only when asked,
-    redo_below). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries)."""
+    redo_below). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries).
+
+    And for why its work waits (src/server/producer_waits.py): due_new, what
+    the scheduler hands out as missing now; due_redo, what its redo hands out
+    while it runs; retrying, failing ones waiting their turn (not given up)."""
     if artifact not in MADE:
         raise KeyError(artifact)
     made = f"({MADE[artifact]})"
@@ -234,15 +268,36 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
         f" count(*) FILTER (WHERE {made} AND NOT {stale} AND ({RECHECK[artifact]})),"
         f" count(*) FILTER (WHERE {made} AND {_below_sql(artifact)}),"
         " count(*) FILTER (WHERE l.error IS NOT NULL),"
-        " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at = 'infinity')"
+        " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at = 'infinity'),"
+        f" count(*) FILTER (WHERE {_due_new_sql(artifact)}),"
+        f" count(*) FILTER (WHERE {_due_redo_sql(artifact)}),"
+        " count(*) FILTER (WHERE l.error IS NOT NULL AND l.retry_at > now() AND l.retry_at <> 'infinity')"
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
     ), _stale_params(artifact, want, library_id, asset_ids)).one()
-    applicable, n_missing, n_stale, n_rechecking, n_below, failing, given_up = (int(v) for v in row)
+    (applicable, n_missing, n_stale, n_rechecking, n_below, failing, given_up,
+     due_new, due_redo, retrying) = (int(v) for v in row)
     return {"applicable": applicable, "current": applicable - n_missing - n_stale - n_rechecking - n_below,
             "stale": n_stale, "missing": n_missing, "rechecking": n_rechecking, "below": n_below,
-            "failing": failing, "given_up": given_up}
+            "failing": failing, "given_up": given_up, "due_new": due_new, "due_redo": due_redo,
+            "retrying": retrying}
+
+
+def due_by_library(session: Session, artifact: str, want: dict[str, Any], library_ids: list[str], *,
+                   redo: bool, asset_ids: list[str] | None = None) -> dict[str, int]:
+    """Clips due in each of these libraries, as counts' due_new (and due_redo
+    when its redo runs): what waits while a library's storage can't be read."""
+    if not library_ids:
+        return {}
+    due = f"({_due_new_sql(artifact)} OR {_due_redo_sql(artifact)})" if redo else _due_new_sql(artifact)
+    rows = session.execute(text(
+        "SELECT a.library_id, count(*) FROM active_assets a"
+        " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
+        f" WHERE {APPLIES[artifact]} AND {_scope_sql()} AND a.library_id = ANY(:libs) AND {due}"
+        " GROUP BY a.library_id"
+    ), {**_stale_params(artifact, want, None, asset_ids), "libs": list(library_ids)}).all()
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bool,

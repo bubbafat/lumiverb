@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 from sqlalchemy import text
 from sqlmodel import Session
 
@@ -47,6 +47,7 @@ from src.shared.producers import (
     pause_state,
     pause_targets,
 )
+from src.shared.waits import HELD
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +190,9 @@ class ProducerItem(BaseModel):
     # and if they can't be yet, why.
     redoable: bool = True
     why_not: str | None = None
-    # An admin stopped its redo: stale clips wait until it's resumed (or its
-    # settings change). What's missing is still made.
+    # An admin stopped its redo, or a new version of it did (new_version):
+    # stale clips wait until it's resumed (or its settings change). What's
+    # missing is still made.
     redo_stopped: bool = False
     redo_stopped_by: str | None = None  # admins only
     redo_stopped_at: datetime | None = None
@@ -198,7 +200,8 @@ class ProducerItem(BaseModel):
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
-    # Why its work waits now (its AI job has no machine, none online, or is off).
+    # Why its work waits now (its AI job has no machine, none online, or is
+    # off), in a sentence: waits says it too (ai_machines), with every other reason.
     waiting: str | None = None
     # What its work grows with: "second" (of video) or "clip"; time left is reckoned in it.
     unit: str = "clip"
@@ -209,15 +212,53 @@ class ProducerItem(BaseModel):
     # The artifacts it's made from: a clip that lacks one waits for it (and
     # isn't counted here: scene descriptions apply to videos with scenes).
     needs: list[str] = []
+    # Its redo was stopped by a new version of it (not an admin): what an
+    # older version made is made again once an admin resumes it.
+    new_version: bool = False
+    # Why its due work waits now, each reason with how many clips
+    # (src/server/producer_waits.py); None without counts.
+    waits: list[Wait] | None = None
+
+
+class Wait(BaseModel):
+    """Why some of a producer's due work waits now: a reason from
+    src/shared/waits.py, how many clips, and what's needed to say it (only
+    the fields its reason has are sent)."""
+
+    reason: str
+    clips: int
+    # needs: the artifact it waits for.
+    artifact: str | None = None
+    # needs: what makes that is paused (Scans, for what scans make); scan: Scans is paused.
+    paused: bool | None = None
+    # storage: the library, and what the scheduler's looks at its drive found.
+    library_id: str | None = None
+    library_name: str | None = None
+    seen_at: datetime | None = None
+    away_since: datetime | None = None
+    checked: bool | None = None
+    # ai_machines: the job, and why: "off", "no_machine", "offline" or
+    # "unusable" (the scheduler can't use them: message says why).
+    job: str | None = None
+    # ai_machines (above); scheduler: "not_running", "starting" or "cant_list" (message: the error).
+    why: str | None = None
+    message: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _what_it_says(self, handler: Any) -> dict[str, Any]:
+        return {k: v for k, v in handler(self).items() if v is not None}
+
+
+ProducerItem.model_rebuild()
 
 
 class ProducerList(BaseModel):
     producers: list[ProducerItem]
 
 
-def tenant_ai(request: Request) -> tuple[dict[str, str], dict[str, str | None]]:
+def tenant_ai(request: Request) -> tuple[dict[str, str], dict[str, Any]]:
     """The tenant's model per AI job (Settings → AI), and why each job's
-    work waits now (None: it doesn't), from the control plane."""
+    work waits now (an ai_machines.JobWait; None: it doesn't), from the control plane."""
     from src.server.database import get_control_session
     from src.server.repository.ai_machines import job_models, why_jobs_wait
     from src.server.repository.control_plane import TenantRepository
@@ -240,8 +281,10 @@ def list_producers(
     counts: bool = True,
 ) -> ProducerList:
     """Every producer with its settings now, whether it's paused and whether
-    its redo is stopped; counts (in one library or project when given)
-    unless counts=false, as the scheduler asks."""
+    its redo is stopped; counts, and why its due work waits (in one library
+    or project when given), unless counts=false, as the scheduler asks."""
+    from src.server.producer_waits import producer_waits
+
     models, waits = tenant_ai(request)
     asset_ids = None
     if counts and project_id:
@@ -249,13 +292,22 @@ def list_producers(
         asset_ids = _project_clips(request, session, user_id, project_id)
     admin = _admin(request)
     paused = lineage.pauses(session)
-    items = []
+    items, wants, counted = [], {}, {}
     for artifact in PRODUCERS:
-        want = lineage.desired(session, artifact, models)
+        want = wants[artifact] = lineage.desired(session, artifact, models)
         item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), paused, admin)
         if counts:
-            item.counts = ProducerCounts(**lineage.counts(session, artifact, want, library_id, asset_ids))
+            counted[artifact] = lineage.counts(session, artifact, want, library_id, asset_ids)
+            item.counts = ProducerCounts(**counted[artifact])
         items.append(item)
+    if counts:
+        # What one producer waits for is another's count: every count first.
+        status = read_status(session)
+        for item in items:
+            p = PRODUCERS[item.artifact]
+            item.waits = [Wait(**w) for w in producer_waits(
+                session, item.artifact, wants[item.artifact], counts=counted, paused=paused, status=status,
+                ai=waits.get(p.job) if p.job else None, library_id=library_id, asset_ids=asset_ids)]
     return ProducerList(producers=items)
 
 
@@ -264,19 +316,22 @@ def _admin(request: Request) -> bool:
 
 
 def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> ProducerItem:
-    """Whether its redo is stopped and whether it's paused (who did it: admins only)."""
+    """Whether its redo is stopped (by an admin, or a new version of it) and
+    whether it's paused (who did it: admins only)."""
     if (redo := paused.redo.get(item.artifact)) is not None:
         item.redo_stopped, item.redo_stopped_at = True, redo["paused_at"]
         item.redo_stopped_by = redo["paused_by"] if admin else None
+        item.new_version = redo["paused_by"] is None  # lineage.hold_new_version
     if (pause := paused.work.get(item.artifact)) is not None:
         item.paused, item.paused_at = True, pause["paused_at"]
         item.paused_by = pause["paused_by"] if admin else None
     return item
 
 
-def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None], uses: dict[str, Any]) -> ProducerItem:
+def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict[str, Any]) -> ProducerItem:
     p = PRODUCERS[artifact]
     values = {**want["settings"], **uses}
+    job_wait = waits.get(p.job) if p.job else None
     return ProducerItem(
         artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
@@ -286,7 +341,7 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, str | None], use
                              choices=list(s.choices))
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
-        waiting=waits.get(p.job) if p.job else None, unit=p.unit, level=want.get("level"),
+        waiting=job_wait.message if job_wait else None, unit=p.unit, level=want.get("level"),
         part_of=p.part_of or None, needs=list(p.needs),
     )
 
@@ -510,6 +565,17 @@ class StorageSeen(BaseModel):
     checked: bool = False  # looked at since the scheduler started
 
 
+class HeldClips(BaseModel):
+    """Clips the scheduler holds back after a try that waited (for up to an
+    hour), of one kind (a redo's under its kind) and library, and why
+    (src/shared/waits.py: "scan" or "held"; one without a code is held)."""
+
+    kind: str
+    why: str = HELD
+    library_id: str = ""
+    clips: int = 0
+
+
 class SchedulerStatus(BaseModel):
     """What the scheduler is doing for the account (written every few seconds)."""
 
@@ -537,6 +603,14 @@ class SchedulerStatus(BaseModel):
     # Each library's storage looks: {seen_at, away_since, checked}. checked:
     # looked at since the scheduler started; otherwise a record from before.
     storage: dict[str, StorageSeen] = Field(default_factory=dict)
+    # Clips it holds back after a try that waited, by kind, why and library.
+    held: list[HeldClips] = Field(default_factory=list)
+    # AI jobs whose machines it can't use now, and why (their work isn't handed out).
+    ai_waits: dict[str, str] = Field(default_factory=dict)
+    # It has read the account's settings: until then it hands out nothing.
+    settings_ready: bool = True
+    # Kinds whose last listing failed, and the error (their work isn't handed out).
+    unlisted: dict[str, str] = Field(default_factory=dict)
     # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
     eta: Eta | None = None
 
@@ -577,21 +651,11 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     live is false when it hasn't said for 30 seconds. While it's live, eta says
     how long until each producer and everything is caught up, from each kind's
     pace and what's left; paused work gets no time."""
-    import json
-    from datetime import timedelta
-
     from src.server.scheduler.eta import eta
     from src.shared.utils import utcnow
 
-    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
-    status = SchedulerStatus()
-    if raw:
-        try:
-            status = SchedulerStatus(**json.loads(raw))
-        except (ValueError, TypeError):
-            pass
     now = utcnow()
-    status.live = status.at is not None and now - status.at < timedelta(seconds=30)
+    status = read_status(session, now)
     held, admin = lineage.pauses(session).work, _admin(request)
     status.state = pause_state(set(held))
     status.switches = [
@@ -607,6 +671,26 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
                                    paused=held_producers))
         except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
             logger.exception("producers: working out how long is left failed")
+    return status
+
+
+def read_status(session: Session, now: datetime | None = None) -> SchedulerStatus:
+    """The scheduler's status as it last wrote it (scheduler.status), live
+    when that was in the last 30 seconds; an empty one when there's none."""
+    import json
+    from datetime import timedelta
+
+    from src.shared.utils import utcnow
+
+    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
+    status = SchedulerStatus()
+    if raw:
+        try:
+            status = SchedulerStatus(**json.loads(raw))
+        except (ValueError, TypeError):
+            pass
+    now = now or utcnow()
+    status.live = status.at is not None and now - status.at < timedelta(seconds=30)
     return status
 
 

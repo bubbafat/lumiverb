@@ -18,9 +18,11 @@ import {
   stopRedo,
   type FailingClip,
   type Producer,
+  type ProducerWait,
   type SchedulerStatus,
   type SettingField,
 } from "../../api/client";
+import { WAIT_SENTENCES, waitIsLoud, waitSentence, type WaitContext } from "../../lib/waits";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const inputClass =
@@ -38,12 +40,6 @@ const clips = (value: number) => `${n(value)} clip${value === 1 ? "" : "s"}`;
 function mediaLabel(media: string[]): string {
   if (media.includes("image") && media.includes("video")) return "Images and videos";
   return media.includes("video") ? "Videos" : "Images";
-}
-
-/** "videos", "photos" or "clips", for a count of a producer's media. */
-function mediaNoun(media: string[], count: number): string {
-  const one = media.length === 1 && media[0] === "video" ? "video" : media.length === 1 ? "photo" : "clip";
-  return count === 1 ? one : `${one}s`;
 }
 
 const STATUS_QUERY_KEY = ["scheduler-status"];
@@ -150,13 +146,7 @@ export default function ProcessingSection() {
               admin,
               canRetry,
               paused: held.get(q.artifact) ?? q.paused,
-              // What it's made from that clips still lack: they wait, and aren't in its counts.
-              waitingFor: (q.needs ?? []).flatMap((need) => {
-                const p = producers.find((x) => x.artifact === need);
-                return p?.counts && p.counts.missing > 0
-                  ? [{ producer: p, clips: p.counts.missing, paused: held.get(p.artifact) ?? p.paused }]
-                  : [];
-              }),
+              titleOf: (artifact: string) => producers.find((x) => x.artifact === artifact)?.title ?? artifact,
               scansPaused: !!held.get("scans"),
               libraryId: kind === "library" ? id : undefined,
               timeLeft: kind === "all" && status?.live ? status.eta?.producers[q.artifact] : undefined,
@@ -210,14 +200,14 @@ function ProducerRow({
   canRedoBelow = true,
   levels,
   children,
-  waitingFor = [],
+  titleOf,
 }: {
   producer: Producer;
   admin: boolean;
   canRetry: boolean;
   paused: boolean;
-  // Clips waiting for what it's made from (scenes, for scene descriptions), each with whether that's paused.
-  waitingFor?: { producer: Producer; clips: number; paused: boolean }[];
+  // Another producer's title, by its artifact (what some of its clips wait for).
+  titleOf: (artifact: string) => string;
   scansPaused: boolean;
   libraryId?: string;
   // Seconds until it's caught up: the whole account's, so only with its counts.
@@ -242,6 +232,9 @@ function ProducerRow({
   const hasLevel = !!level;
   // Off (faces): it makes nothing new, so its counts say nothing; what it made stays.
   const off = level?.value === "off";
+  const say: WaitContext = { title: producer.title, media: producer.media, titleOf, when };
+  // Why its due work waits, each in a sentence (a stopped redo's in the redo's own box).
+  const waits = (producer.waits ?? []).filter((w) => w.reason !== "new_version" && w.reason !== "redo_stopped");
   return (
     <Item className={nested ? "space-y-2 border-t border-gray-800 pt-2"
                             : "rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-3 space-y-2"}
@@ -264,10 +257,9 @@ function ProducerRow({
       </div>
       <CountsBar producer={producer} />
       {!producer.scheduled && scansPaused && <p className="text-sm text-amber-300">Paused with scans</p>}
-      {producer.waiting && <WaitingLine why={producer.waiting} />}
       {off ? (
         <p className="text-sm text-gray-400">Off: nothing new is found. What's found stays.</p>
-      ) : c && !(c.applicable === 0 && waitingFor.length > 0) && (
+      ) : c && !(c.applicable === 0 && waits.length > 0) && (
         <p className="text-sm text-gray-400">
           {c.applicable === 0 ? (
             "Nothing to make yet."
@@ -290,12 +282,11 @@ function ProducerRow({
           )}
         </p>
       )}
-      {!off && waitingFor.map((w) => (
-        <p key={w.producer.artifact} className={`text-sm ${w.paused ? "text-amber-300" : "text-gray-400"}`}>
-          {n(w.clips)} {mediaNoun(w.producer.media, w.clips)} wait for {w.producer.title}
-          {w.paused ? ", which is paused." : " first."}
-        </p>
-      ))}
+      {!off && waits.length > 0 && (
+        <ul className="space-y-0.5" aria-label={`Why ${producer.title} waits`}>
+          {waits.map((w) => <WaitLine key={waitKey(w)} wait={w} say={say} />)}
+        </ul>
+      )}
       {c && c.failing > 0 && (
         <button
           type="button"
@@ -308,7 +299,7 @@ function ProducerRow({
         </button>
       )}
       {showFailures && <FailureList producer={producer} canRetry={canRetry} libraryId={libraryId} />}
-      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} paused={paused} />}
+      {c && c.stale > 0 && <RedoLine producer={producer} stale={c.stale} admin={admin} paused={paused} say={say} />}
       {!nested && hasLevel && <DetailControl producer={producer} admin={admin} libraryId={libraryId}
         canRedo={canRedoBelow} />}
       {levels}
@@ -378,12 +369,14 @@ function DetailControl({ producer, admin, libraryId, canRedo }: { producer: Prod
   );
 }
 
-/** Why a producer's work waits (its AI job is off or has no machine), with
- * Settings → AI as a link: leaving a job without a machine never asks. */
-function WaitingLine({ why }: { why: string }) {
-  const [before, ...rest] = why.split("Settings → AI");
+const waitKey = (w: ProducerWait) => [w.reason, w.artifact, w.library_id, w.job].filter(Boolean).join("|");
+
+/** Why some of a producer's work waits, in one sentence (lib/waits.ts): amber when it waits for someone to
+ * act. Settings → AI is a link: leaving a job without a machine never asks, so this is where it shows. */
+function WaitLine({ wait, say }: { wait: ProducerWait; say: WaitContext }) {
+  const [before, ...rest] = waitSentence(wait, say).split("Settings → AI");
   return (
-    <p role="status" className="text-sm text-amber-300">
+    <li data-wait={wait.reason} className={`text-sm ${waitIsLoud(wait) ? "text-amber-300" : "text-gray-400"}`}>
       {before}
       {rest.length > 0 && (
         <>
@@ -393,7 +386,7 @@ function WaitingLine({ why }: { why: string }) {
           {rest.join("Settings → AI")}
         </>
       )}
-    </p>
+    </li>
   );
 }
 
@@ -668,9 +661,11 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
   );
 }
 
-/** What happens to a producer's stale clips: redone after anything missing, stopped, or not yet possible. */
-function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stale: number; admin: boolean;
-                                                       paused: boolean }) {
+/** What happens to a producer's stale clips: redone after anything missing, stopped (by an admin, or by a new
+ * version of it waiting for an admin's OK), or not yet possible. */
+function RedoLine({ producer, stale, admin, paused, say }: { producer: Producer; stale: number; admin: boolean;
+                                                            paused: boolean; say: WaitContext }) {
+  const stopped = producer.new_version ? "new_version" : "redo_stopped";
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: () => (producer.redo_stopped ? resumeRedo(producer.artifact) : stopRedo(producer.artifact)),
@@ -679,15 +674,18 @@ function RedoLine({ producer, stale, admin, paused }: { producer: Producer; stal
   if (!producer.redoable) {
     return <p className="text-sm text-gray-500">Not made again yet. {producer.why_not}</p>;
   }
-  const box = producer.redo_stopped
-    ? "border-gray-600/60 bg-gray-800/40 text-gray-300"
-    : "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
+  // A new version waits for an admin's OK: amber, as everything someone must act on.
+  const box = producer.redo_stopped && producer.new_version
+    ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
+    : producer.redo_stopped
+      ? "border-gray-600/60 bg-gray-800/40 text-gray-300"
+      : "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
   return (
     <div className={`rounded-md border px-3 py-2 text-sm ${box}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span>
           {producer.redo_stopped
-            ? `Redo stopped: ${clips(stale)} stay as they are until it's resumed.`
+            ? WAIT_SENTENCES[stopped]({ reason: stopped, clips: stale }, say)
             : paused
               ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
               : `Redoing ${clips(stale)}, after anything missing.`}
