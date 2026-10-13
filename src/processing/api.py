@@ -120,3 +120,8 @@ class ApiClient:
     def raw(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         """The response whatever its status (the caller looks at it: a 204, a 409)."""
         return self._client.request(method, self._url(path), **kwargs)
+
+    def checked(self, response: httpx.Response) -> httpx.Response:
+        """A response from raw() whose status wasn't one the caller expected:
+        raised as any other call's error (said first, for a client that prints)."""
+        return self._handle_response(response)

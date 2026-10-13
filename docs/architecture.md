@@ -160,7 +160,7 @@ Responsibilities:
 
 ### 3.4 The CLI and the Mac app
 
-API clients. The CLI (`src/client/cli/`) scans libraries (`lumiverb scan`: proxies, thumbnails, EXIF, previews, uploaded through `POST /v1/ingest`), browses, searches and administers. It doesn't process: `lumiverb enrich` asks the scheduler to do a producer's work now (`POST /v1/producers/run`). The macOS app scans and reports file changes; its built-in AI retires (ADR-016 phase 2). Neither has direct Postgres, Quickwit or object storage access.
+API clients. The CLI (`src/client/cli/`) scans libraries (`lumiverb scan`: proxies, thumbnails, EXIF, previews, uploaded through `POST /v1/ingest`), browses, searches and administers. It doesn't process: `lumiverb enrich` asks the scheduler to do a producer's work now (`POST /v1/producers/run`). A scan (the CLI's or the scheduler's) says what it found and the server decides what's new, changed, moved, skipped and missing (ADR-018 decision 12): `src/processing/scan.py` walks, lists the files to a scan session on the server, hashes what the plan asks about and uploads what it's told to; `src/server/scans.py` compares, one statement over the whole listing. The macOS app scans and reports file changes; its built-in AI retires (ADR-016 phase 2). Neither has direct Postgres, Quickwit or object storage access.
 
 The processing both the scheduler and the CLI's scan use lives in `src/processing/`: the API client (`api.py`), this machine's settings (`machine.py`: library root map, caches, how video is rendered), scanning (`scan.py`, `ingest.py`), the account's AI machines (`ai_pool.py`, `job_guard.py` and its guards), failure reports, the producers' settings as the server says them, and the media tools (`video/`, `proxy/`, `workers/`). Nothing there imports the CLI or the server, and nothing in `src/server` imports `src/client`.
 
@@ -237,7 +237,11 @@ Key naming convention: `{tenant_id}/{asset_id}/proxy.jpg`, `{tenant_id}/{asset_i
 
 ```
 Local filesystem
-    → CLI scans directory, discovers media files
+    → CLI (or the scheduler) scans directory, discovers media files
+    → POST /v1/libraries/{id}/scans, then /found (every file: path, size, mtime) and /plan:
+      the server says what to upload, hash first, leave unchanged or skip
+    → Hashes what the plan asks about → /hashes: changed, unchanged, moved, skipped
+    → /finish: what wasn't found is archived as missing; then what's new or changed is uploaded
     → For each image:
         → Generate WebP proxy (2048px max) + thumbnail (512px) in memory
         → Extract EXIF metadata (camera, GPS, taken_at, duration)

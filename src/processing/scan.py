@@ -1,25 +1,38 @@
-"""Scan phase: discover files, hash, extract EXIF, generate proxies, upload.
+"""Scan phase: walk a library, say what's there, upload what the server asks for.
 
 Scan is the only operation that touches source files. It produces three
 outputs per file: a server-side asset record, a server-side 2048px proxy,
 and a local proxy cache entry with SHA sidecar.
 
-Change detection compares local SHA-256 against server-stored values to
-classify files as new, changed, unchanged, or deleted.
+The client says what it found; the server decides (ADR-018 decision 12,
+src/server/scans.py). A scan is a session on the server: started before the
+walk, it's sent every media file the walk saw (path, size, modified time),
+then plans each one: upload it, hash it first, unchanged, or skipped (a
+file a person removed). The client hashes what it's asked to, and the
+server decides from the content: changed, unchanged, moved (made now, or
+asked about first), skipped. The finish archives as missing the clips whose
+files weren't found, and the client then makes and uploads previews for
+what's new or changed (POST /v1/ingest, as before).
 
-See docs/archive/011-ingest-refactor-scan-and-enrich.md for full design.
+What stays here: the walk (filters, hidden files, no symlinks, control
+characters, refused folders, names in NFC, folders it couldn't list),
+files still being written, a scope folder that's gone, whether the storage
+is still there before anything is moved or archived, reading the files
+(hashes, previews, EXIF), the proxy cache, and the CLI's question about moves.
 """
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
-import contextlib
 import logging
 import threading
+from collections import deque
+from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from stat import S_ISDIR
 
@@ -33,12 +46,9 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.processing.api import ApiClient, LumiverbAPIError
-from src.processing.roots import local_library_root, reachable_root
+from src.processing.api import ApiClient
 from src.processing.ingest import (
-    SUPPORTED_EXTENSIONS,
     _build_exif_payload,
-    _detect_media_type,
     _extract_video_poster,
     _generate_proxy_bytes,
     _generate_video_preview,
@@ -48,13 +58,19 @@ from src.processing.ingest import (
     _walk_library,
 )
 from src.processing.proxy.proxy_cache import ProxyCache
-from src.processing.workers.exif_extract import compute_sha256
+from src.processing.roots import local_library_root, reachable_root
 from src.processing.video.probe import probe_video
-from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
-from src.shared.producers import effective_settings, lineage as producer_lineage
+from src.processing.workers.exif_extract import compute_sha256
+from src.shared.io_utils import (
+    UnsafeRelPathError,
+    check_rel_path,
+    resolve_source_path,
+    stat_if_present,
+)
+from src.shared.producers import effective_settings
+from src.shared.producers import lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
-
 
 # The macOS scanner's quarantine: a file modified this recently may still be
 # copying.
@@ -62,6 +78,18 @@ SETTLE_SEC = 30
 # A file stamped further ahead than this came from a camera whose clock runs
 # ahead, not from a copy in progress.
 FUTURE_MTIME_SEC = 300
+
+# Files in one call (found, hashes), and a page of the plan: the server's most.
+FILES_PER_CALL = 1000
+PLAN_PAGE = 500
+# Every planned file, the unchanged too: their clips fill the proxy cache.
+EVERY_ACTION = "upload,hash,skipped,unchanged"
+# A path the server's rule refuses is never sent (as long as Linux's PATH_MAX).
+MAX_PATH = 4096
+# How often hashes are sent again when another clip was just put at a move's path.
+PATH_TAKEN_TRIES = 3
+# The most folders a plan can name as unlisted: beyond, the library's root is named.
+MAX_UNLISTED = 10_000
 
 
 @dataclass
@@ -88,295 +116,19 @@ class ScanStats:
 
 
 @dataclass
-class _ServerAsset:
-    asset_id: str
-    sha256: str | None
-    file_size: int | None = None
-    file_mtime: str | None = None  # ISO8601 string from server
-    media_type: str | None = None
-    has_video_preview: bool | None = None  # None: the server didn't say (an older one)
+class _Work:
+    """What the plan and the server's decisions leave for the client, in walk order."""
 
-
-def _fetch_existing_assets_with_sha(
-    client: ApiClient, library_id: str,
-) -> dict[str, _ServerAsset]:
-    """Page through all assets on the server. Returns {rel_path: _ServerAsset}."""
-    existing: dict[str, _ServerAsset] = {}
-    cursor: str | None = None
-    while True:
-        params: dict[str, str] = {
-            "library_id": library_id, "limit": "500",
-            "sort": "asset_id", "dir": "asc",
-        }
-        if cursor:
-            params["after"] = cursor
-        resp = client.get("/v1/assets/page", params=params)
-        data = resp.json()
-        items = data.get("items", [])
-        if not items:
-            break
-        for a in items:
-            existing[a["rel_path"]] = _ServerAsset(
-                asset_id=a["asset_id"],
-                sha256=a.get("sha256"),
-                file_size=a.get("file_size"),
-                file_mtime=a.get("file_mtime"),
-                media_type=a.get("media_type"),
-                has_video_preview=a.get("has_video_preview"),
-            )
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
-    return existing
-
-
-def _fetch_ignored_paths(client: ApiClient, library_id: str) -> dict[str, list[_ServerAsset] | None]:
-    """Files a person trashed, archived or deleted for good, by rel_path: each
-    one's content, size and time, or None for whatever is at the path. Scans
-    skip them: Lumiverb never deletes originals, so they may still be on
-    disk. Another file at the path is a new clip."""
-    ignored: dict[str, list[_ServerAsset] | None] = {}
-    cursor: str | None = None
-    while True:
-        params: dict[str, str] = {"limit": "500"}
-        if cursor:
-            params["after"] = cursor
-        data = client.get(f"/v1/libraries/{library_id}/ignored-paths", params=params).json()
-        for item in data.get("items", []):
-            files = item.get("files")
-            ignored[item["rel_path"]] = None if files is None else [
-                _ServerAsset(asset_id="", sha256=f["sha256"], file_size=f.get("file_size"),
-                             file_mtime=f.get("file_mtime"))
-                for f in files
-            ]
-        cursor = data.get("next_cursor")
-        if not cursor:
-            return ignored
-
-
-def _skipped(f: dict, ignored: dict[str, list[_ServerAsset] | None], root_path: Path) -> bool:
-    """Whether this file is one a person removed. Hashed only when it isn't
-    one of them untouched (same size and time), so archives kept on disk
-    aren't read on every scan."""
-    if f["rel_path"] not in ignored:
-        return False
-    removed = ignored[f["rel_path"]]
-    if removed is None:
-        return True
-    if any(_mtime_size_match(f, r) for r in removed):
-        return True
-    sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
-    return sha is None or any(sha == r.sha256 for r in removed)
-
-
-def _split_files(
-    local_files: list[dict],
-    existing: dict[str, _ServerAsset],
-    *,
-    thorough: bool = False,
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Split files into new, needs-hash, and fast-unchanged.
-
-    New files can start scanning immediately. Needs-hash files require
-    SHA comparison before we know if they're changed or unchanged.
-
-    When thorough=False (default), files whose mtime and size match the
-    server are classified as fast-unchanged without hashing. When
-    thorough=True, all existing files go through SHA comparison.
-
-    Returns (new_files, needs_hash_files, fast_unchanged_files).
-    """
-    new_files: list[dict] = []
-    needs_hash: list[dict] = []
-    fast_unchanged: list[dict] = []
-    for f in local_files:
-        server = existing.get(f["rel_path"])
-        if server is None:
-            new_files.append(f)
-        elif not thorough and _mtime_size_match(f, server) and not _preview_missing(server):
-            f["asset_id"] = server.asset_id
-            fast_unchanged.append(f)
-        else:
-            f["_server"] = server
-            needs_hash.append(f)
-    return new_files, needs_hash, fast_unchanged
-
-
-def _preview_missing(server: _ServerAsset) -> bool:
-    """A video whose 10-second preview never reached the server (its upload
-    failed after the clip was made, a dropped connection, say): it's scanned
-    again, as a changed file is, so it gets one. Previews are made only by a
-    scan."""
-    return server.media_type == "video" and server.has_video_preview is False
-
-
-def _mtime_size_match(local_file: dict, server: _ServerAsset) -> bool:
-    """Check if local file's mtime and size match the server asset."""
-    if server.file_size is None or server.file_mtime is None:
-        return False
-    if local_file["file_size"] != server.file_size:
-        return False
-    # Compare instants, not strings: the server answers in its database's
-    # timezone (08:00-04:00 on a box set to New York), the scan in UTC.
-    local_mtime = local_file.get("file_mtime")
-    if local_mtime is None:
-        return False
-    try:
-        server_mtime = datetime.fromisoformat(server.file_mtime.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if server_mtime.tzinfo is None:
-        server_mtime = server_mtime.replace(tzinfo=timezone.utc)
-    return local_mtime == server_mtime
-
-
-def _record_file_stat(client: ApiClient, library_id: str, f: dict) -> None:
-    """Tell the server a file's current size and mtime, so the next scan's
-    fast check matches. A failure only costs a hash next time."""
-    data = {"library_id": library_id, "rel_path": f["rel_path"], "file_size": f["file_size"],
-            "file_mtime": f["file_mtime"].isoformat() if f.get("file_mtime") else None,
-            "media_type": f["media_type"]}
-    try:
-        client.post("/v1/assets/upsert", json=data)
-    except Exception as exc:  # noqa: BLE001 — never stops a scan
-        logger.warning("Couldn't record the new mtime of %s: %s", f["rel_path"], exc)
-
-
-def _fetch_follow_moves(client: ApiClient) -> bool | None:
-    """The account's "follow moves and renames" setting: on when the server is
-    too old to say, None when it can't be read."""
-    try:
-        settings = client.get("/v1/tenant/settings").json()
-        return settings.get("follow_moves", True) is not False
-    except Exception:  # noqa: BLE001 — unread: the caller looks for no moves
-        return None
-
-
-@dataclass
-class _MoveCandidate:
-    """A file that appears to have moved: same SHA, different path."""
-    asset_id: str
-    old_rel_path: str
-    new_rel_path: str
-    sha256: str
-
-
-def _detect_moves(
-    new_files: list[dict],
-    existing: dict[str, _ServerAsset],
-    root_path: Path,
-    local_rel_paths: set[str],
-    deleted_ids: list[str] | None = None,
-    console: Console | None = None,
-) -> tuple[list[_MoveCandidate], list[dict]]:
-    """Detect files that moved (same SHA, different path).
-
-    A move is: new local file whose SHA matches a server asset whose
-    old rel_path is no longer on the local filesystem.
-
-    Optimizations:
-    - Skip entirely if there are no deletions (no old path gone = no moves)
-    - Pre-filter by file_size before expensive SHA computation
-
-    Returns (moves, remaining_new_files). Moves are removed from new_files.
-    """
-    # No deletions = no moves possible (a move requires an old path to disappear)
-    if deleted_ids is not None and not deleted_ids:
-        return [], new_files
-
-    # Build set of deleted server assets for fast lookup
-    deleted_asset_id_set = set(deleted_ids) if deleted_ids else None
-
-    # Build reverse index from deleted server assets: SHA → list, file_size → set of SHAs
-    # Only index server assets whose paths are gone locally (deletion candidates)
-    sha_to_server: dict[str, list[tuple[str, _ServerAsset]]] = {}
-    deleted_file_sizes: set[int] = set()
-    for rel_path, sa in existing.items():
-        if rel_path in local_rel_paths:
-            continue  # still on disk — not a move source
-        if deleted_asset_id_set is not None and sa.asset_id not in deleted_asset_id_set:
-            continue  # not in deletion list
-        if sa.sha256:
-            sha_to_server.setdefault(sa.sha256, []).append((rel_path, sa))
-            if sa.file_size is not None:
-                deleted_file_sizes.add(sa.file_size)
-
-    if not sha_to_server:
-        return [], new_files
-
-    # Pre-filter new files by file_size match against deleted assets
-    candidates: list[dict] = []
-    no_match: list[dict] = []
-    for f in new_files:
-        if deleted_file_sizes and f.get("file_size") not in deleted_file_sizes:
-            no_match.append(f)
-        else:
-            candidates.append(f)
-
-    if not candidates:
-        return [], new_files
-
-    # Hash only the candidates (file_size matched a deleted asset)
-    moves: list[_MoveCandidate] = []
-    remaining: list[dict] = []
-    claimed_asset_ids: set[str] = set()
-
-    progress = None
-    tid = None
-    if console and len(candidates) > 1:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold]Checking moves"),
-            BarColumn(bar_width=30),
-            MofNCompleteColumn(),
-            console=console,
-            refresh_per_second=4,
-        )
-        progress.start()
-        tid = progress.add_task("Moves", total=len(candidates))
-
-    try:
-        for f in candidates:
-            source_path = resolve_source_path(root_path, f["rel_path"])
-            source_sha = compute_sha256(source_path)
-            f["source_sha256"] = source_sha
-
-            if progress and tid is not None:
-                progress.advance(tid)
-
-            if not source_sha or source_sha not in sha_to_server:
-                remaining.append(f)
-                continue
-
-            # Find a server asset with this SHA whose path is gone locally
-            server_candidates = sha_to_server[source_sha]
-            match = None
-            for old_path, sa in server_candidates:
-                if sa.asset_id in claimed_asset_ids:
-                    continue
-                if old_path not in local_rel_paths:
-                    match = (old_path, sa)
-                    break
-
-            if match is None:
-                remaining.append(f)
-                continue
-
-            old_path, sa = match
-            moves.append(_MoveCandidate(
-                asset_id=sa.asset_id,
-                old_rel_path=old_path,
-                new_rel_path=f["rel_path"],
-                sha256=source_sha,
-            ))
-            claimed_asset_ids.add(sa.asset_id)
-    finally:
-        if progress:
-            progress.stop()
-
-    # Combine: files that didn't match by size + files that matched size but not SHA
-    remaining = no_match + remaining
-    return moves, remaining
+    new: list[dict] = field(default_factory=list)
+    changed: list[dict] = field(default_factory=list)
+    # With their clips, for the proxy cache.
+    unchanged: list[dict] = field(default_factory=list)
+    # Moves the server asks about (moves "ask"): {rel_path, asset_id, moved_from}.
+    candidates: list[dict] = field(default_factory=list)
+    # Files a person removed.
+    skipped: int = 0
+    # Moves made (a dry run's: that would be).
+    moved: int = 0
 
 
 def _existing_folder(root: Path, rel: str) -> str | None:
@@ -390,23 +142,6 @@ def _existing_folder(root: Path, rel: str) -> str | None:
             return "/".join(parts)
         parts = parts[:-1]
     return None
-
-
-def _detect_deletions(
-    local_files: list[dict],
-    existing: dict[str, _ServerAsset],
-    root_path: Path,
-    path_prefix: str | None,
-) -> list[str]:
-    """Find server assets with no corresponding local file. Returns asset IDs."""
-    local_rel_paths = {f["rel_path"] for f in local_files}
-    scope = existing
-    if path_prefix:
-        prefix = path_prefix.rstrip("/") + "/"
-        scope = {rp: sa for rp, sa in existing.items() if rp.startswith(prefix)}
-    if not root_path.is_dir():
-        return []
-    return [sa.asset_id for rp, sa in scope.items() if rp not in local_rel_paths]
 
 
 def _made(artifact: str, source_sha256: str | None) -> dict:
@@ -495,7 +230,7 @@ def _scan_one(
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
+        progress.console.print(f"[red]scan ✗[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
 
@@ -592,7 +327,7 @@ def _scan_one_video(
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        progress.console.print(f"[red]scan \u2717[/red] {rel_path}: {e}")
+        progress.console.print(f"[red]scan ✗[/red] {rel_path}: {e}")
         progress.advance(task_id)
 
 
@@ -645,36 +380,10 @@ def _drain(inflight: set[Future]) -> tuple[set[Future], set[Future]]:
     return done, pending
 
 
-def _apply_moves(
-    client: ApiClient,
-    moves: list[_MoveCandidate],
-    stats: ScanStats,
-    console: Console,
-) -> None:
-    """Apply detected moves by updating rel_path on the server in batches."""
-    console.print(f"Applying {len(moves):,} moves...")
-    for batch_start in range(0, len(moves), 500):
-        batch = moves[batch_start : batch_start + 500]
-        items = [{"asset_id": m.asset_id, "rel_path": m.new_rel_path} for m in batch]
-        try:
-            client.post("/v1/assets/batch-moves", json={"items": items})
-        except Exception as e:
-            logger.warning("Batch move failed: %s", e)
-            # Fallback: skip these moves rather than crash
-            stats.failed += len(batch)
-            stats.failed_paths.extend(m.new_rel_path for m in batch)
-            continue
-        stats.moved += len(batch)
-
-
-def _prompt_move_decision(console: Console, moves: list[_MoveCandidate]) -> str:
+def _prompt_move_decision(console: Console, moves: list[dict]) -> str:
     """Show moved files and prompt user for action. Returns 'apply', 'skip', or 'abort'."""
     console.print(f"\n[yellow]Detected {len(moves):,} moved file(s):[/yellow]")
-    show = moves[:10]
-    for m in show:
-        console.print(f"  {m.old_rel_path} [dim]→[/dim] {m.new_rel_path}")
-    if len(moves) > 10:
-        console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
+    _show_moves(console, moves)
 
     console.print("\nOptions:")
     console.print("  [bold]1[/bold] Perform moves (update paths on server)")
@@ -695,37 +404,260 @@ def _prompt_move_decision(console: Console, moves: list[_MoveCandidate]) -> str:
         console.print("[red]Invalid choice. Enter 1, 2, or 3.[/red]")
 
 
-def _archive_missing(client, deleted_ids: list[str], stats, console, *, allow_mass_delete: bool) -> None:
-    """Archive clips whose files are gone ("missing", not the user's trash:
-    restored if the file reappears), all in one request so the server's
-    mass-missing rule sees the whole scan. When it would take most of a
-    library the server asks first (409 mass_missing, usually a volume not
-    fully mounted): skipped, unless --allow-mass-delete says yes with the count."""
-    console.print(f"Removing {len(deleted_ids):,} assets no longer on disk...")
-    body: dict = {"asset_ids": deleted_ids, "reason": "missing"}
-    resp = client.raw("DELETE", "/v1/assets", json=body)
-    if resp.status_code == 409:
-        err = {}
-        with contextlib.suppress(AttributeError, TypeError, ValueError):
-            err = (resp.json() or {}).get("error") or {}
-        if err.get("code") == "mass_missing":
-            count = (err.get("details") or {}).get("count")
-            if not allow_mass_delete:
-                stats.mass_missing = count or len(deleted_ids)
-                console.print(
-                    f"[yellow]Skipping {len(deleted_ids):,} deletions: {err.get('message', '')} "
-                    "If the files really are gone, re-run with --allow-mass-delete.[/yellow]"
-                )
-                return
-            resp = client.raw("DELETE", "/v1/assets", json={**body, "confirm_missing": count})
-    if resp.status_code >= 400:
-        raise LumiverbAPIError("archive_missing_failed", resp.text, resp.status_code)
-    # Some may have moved to an empty copy of their file instead (copy, then delete).
-    handed_over = 0
+def _show_moves(console: Console, moves: list[dict]) -> None:
+    for m in moves[:10]:
+        console.print(f"  {m['moved_from']} [dim]→[/dim] {m['rel_path']}")
+    if len(moves) > 10:
+        console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
+
+
+def _progress(console: Console, label: str, *, eta: bool = False) -> Progress:
+    columns = [SpinnerColumn(), TextColumn(f"[bold]{label}"), BarColumn(bar_width=30), MofNCompleteColumn()]
+    return Progress(*columns, *([TimeRemainingColumn()] if eta else []), console=console, refresh_per_second=4)
+
+
+def _batches(items: list, size: int) -> Iterator[list]:
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+# ---------------------------------------------------------------------------
+# The scan's conversation with the server (routers/scans.py)
+# ---------------------------------------------------------------------------
+
+
+def _error(resp) -> dict:
+    """The error envelope's error ({} when there's none)."""
     with contextlib.suppress(AttributeError, TypeError, ValueError):
-        handed_over = len(resp.json().get("handed_over") or [])
-    stats.deleted = len(deleted_ids) - handed_over
-    stats.moved += handed_over
+        return (resp.json() or {}).get("error") or {}
+    return {}
+
+
+def _answer(client: ApiClient, resp) -> dict:
+    """A raw response's JSON; any status but 2xx is raised as the client raises it."""
+    return client.checked(resp).json()
+
+
+def _post_again_if_taken(client: ApiClient, path: str, body: dict) -> dict:
+    """POST, sent again when another clip was just put at a move's path
+    (409 path_taken: the file is then that clip's)."""
+    for _ in range(PATH_TAKEN_TRIES):
+        resp = client.raw("POST", path, json=body)
+        if resp.status_code != 409 or _error(resp).get("code") != "path_taken":
+            break
+    return _answer(client, resp)
+
+
+def _abandon(client: ApiClient, scan_id: str) -> None:
+    """Drop the scan and its listing: nothing else changes. Never fails the
+    scan (an unfinished one expires in a day anyway)."""
+    try:
+        client.raw("DELETE", f"/v1/scans/{scan_id}")
+    except Exception as exc:  # noqa: BLE001 — the scan's outcome stands
+        logger.warning("Couldn't drop scan %s: %s", scan_id, exc)
+
+
+def _sendable(rel_path: str, *, allow_root: bool = False) -> bool:
+    """A path the server's rule takes (check_rel_path: no backslash, no
+    drive letter, ...; no longer than a path can be)."""
+    try:
+        check_rel_path(rel_path, allow_root=allow_root)
+    except UnsafeRelPathError:
+        return False
+    return len(rel_path) <= MAX_PATH
+
+
+def _refused_name(rel_path: str) -> bool:
+    """A file the server would refuse by its name: never sent, as the walk
+    never takes a name with a control character. Said once, as a warning,
+    never a failure to try again."""
+    if _sendable(rel_path):
+        return False
+    logger.warning("Not scanning %r: the server refuses its name", rel_path[:MAX_PATH])
+    return True
+
+
+def _settling(f: dict, now: datetime) -> bool:
+    """Written in the last SETTLE_SEC, so maybe still copying: it waits for a
+    later scan, as on the Mac. A camera clock far ahead isn't a copy."""
+    mtime = f.get("file_mtime")
+    return (bool(f["file_size"]) and mtime is not None
+            and now - timedelta(seconds=SETTLE_SEC) < mtime <= now + timedelta(seconds=FUTURE_MTIME_SEC))
+
+
+def _found(f: dict) -> dict:
+    return {"rel_path": f["rel_path"], "file_size": f["file_size"],
+            "file_mtime": f["file_mtime"].isoformat() if f.get("file_mtime") else None,
+            "settling": f["settling"]}
+
+
+def _send_found(client: ApiClient, scan_id: str, files: list[dict], console: Console) -> None:
+    """Every media file the walk saw, FILES_PER_CALL at a time."""
+    progress = _progress(console, "Listing")
+    with progress:
+        tid = progress.add_task("Listing", total=len(files))
+        for batch in _batches(files, FILES_PER_CALL):
+            client.post(f"/v1/scans/{scan_id}/found", json={"files": [_found(f) for f in batch]})
+            progress.advance(tid, len(batch))
+
+
+def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console) -> tuple[dict, dict[str, dict]]:
+    """The listing is complete: the plan's counts, and every planned file by rel_path."""
+    # A folder whose name the server refuses can't be named: then nothing in
+    # the library is taken for gone ("" is its root).
+    named = sorted({u if _sendable(u, allow_root=True) else "" for u in unlisted})
+    if len(named) > MAX_UNLISTED:
+        named = [""]
+    params = {"action": EVERY_ACTION, "limit": PLAN_PAGE}
+    first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json={"unlisted": named}).json()
+    counts = first["counts"]
+    plan = {p["rel_path"]: p for p in first["files"]}
+    cursor = first.get("next_cursor")
+    if cursor:
+        planned = counts["upload"] + counts["hash"] + counts["unchanged"] + counts["skipped"]
+        progress = _progress(console, "Plan")
+        with progress:
+            tid = progress.add_task("Plan", total=planned, completed=len(plan))
+            while cursor:
+                page = client.get(f"/v1/scans/{scan_id}/plan", params={**params, "after": cursor}).json()
+                plan.update((p["rel_path"], p) for p in page["files"])
+                progress.update(tid, completed=len(plan))
+                cursor = page.get("next_cursor")
+    return counts, plan
+
+
+def _sha_of(root_path: Path, rel_path: str) -> str | None:
+    """The file's SHA-256, or None when it can't be read."""
+    try:
+        return compute_sha256(resolve_source_path(root_path, rel_path))
+    except (OSError, UnsafeRelPathError) as exc:
+        logger.warning("Can't read %s: %s", rel_path, exc)
+        return None
+
+
+def _hashed(root_path: Path, files: list[dict], concurrency: int) -> Iterator[tuple[dict, str | None]]:
+    """Each file with its SHA-256 (None: it couldn't be read), in the order
+    given, read `concurrency` at a time and never more than concurrency * 2
+    waiting."""
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="hash") as pool:
+        waiting: deque[tuple[dict, Future]] = deque()
+        for f in files:
+            waiting.append((f, pool.submit(_sha_of, root_path, f["rel_path"])))
+            if len(waiting) >= concurrency * 2:
+                done, fut = waiting.popleft()
+                yield done, fut.result()
+        while waiting:
+            done, fut = waiting.popleft()
+            yield done, fut.result()
+
+
+def _unread(f: dict, work: _Work, stats: ScanStats) -> None:
+    """A file the plan asked about that couldn't be read: it was found, so
+    it's neither changed nor gone, and no hash is sent. Counted as before the
+    server compared: unchanged where a clip is, skipped where a person
+    removed a file, else tried as new (failing, it's tried again later)."""
+    planned = f["_plan"]
+    if planned["asset_id"]:
+        f["asset_id"] = planned["asset_id"]
+        work.unchanged.append(f)
+        stats.unchanged += 1
+    elif planned["reason"] == "removed":
+        work.skipped += 1
+    else:
+        work.new.append(f)
+
+
+def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
+    """The server's decision for a file it was sent the hash of."""
+    decision = d["decision"]
+    if decision == "unchanged":
+        f["asset_id"] = d["asset_id"]
+        work.unchanged.append(f)
+        stats.unchanged += 1
+    elif decision == "upload" and d.get("asset_id"):
+        f["asset_id"] = d["asset_id"]
+        work.changed.append(f)
+    elif decision == "upload":
+        work.new.append(f)
+    elif decision == "moved":
+        work.moved += 1
+    elif decision == "move_candidate":
+        work.candidates.append(d)
+    elif decision == "skipped":
+        work.skipped += 1
+    # move_skipped: a person said to skip it; it takes no part.
+
+
+def _storage_gone(library: dict) -> bool:
+    """Files that look missing or moved may only be the storage going away
+    mid-scan (a clean unmount leaves an empty folder): it's looked at again
+    before anything is moved or archived (Robert's call, Oct 8)."""
+    return reachable_root(library, require_entries=True) is None
+
+
+def _hash_and_decide(
+    client: ApiClient, scan_id: str, library: dict, root_path: Path, to_hash: list[dict], work: _Work,
+    stats: ScanStats, *, moves_now: bool, concurrency: int, console: Console,
+) -> bool:
+    """Read the files the plan asks about, in walk order, and send their
+    hashes FILES_PER_CALL at a time for the server's decisions: when the
+    scan applies moves they're made now, the first file sent taking the
+    first clip. False when the storage went away before a move could be
+    made: nothing more is sent."""
+    if not to_hash:
+        return True
+
+    def decide(batch: list[dict]) -> bool:
+        if moves_now and any(not f["_plan"]["asset_id"] for f in batch) and _storage_gone(library):
+            return False
+        sent = {f["rel_path"]: f for f in batch}
+        body = {"files": [{"rel_path": f["rel_path"], "sha256": f["source_sha256"]} for f in batch]}
+        for d in _post_again_if_taken(client, f"/v1/scans/{scan_id}/hashes", body)["files"]:
+            _take(sent[d["rel_path"]], d, work, stats)
+        return True
+
+    batch: list[dict] = []
+    progress = _progress(console, "Hashing")
+    with progress, contextlib.closing(_hashed(root_path, to_hash, concurrency)) as hashes:
+        tid = progress.add_task("Hashing", total=len(to_hash))
+        for f, sha in hashes:
+            progress.advance(tid)
+            if sha is None:
+                _unread(f, work, stats)
+                continue
+            f["source_sha256"] = sha
+            batch.append(f)
+            if len(batch) == FILES_PER_CALL:
+                if not decide(batch):
+                    return False
+                batch = []
+    return not batch or decide(batch)
+
+
+def _upload(
+    client: ApiClient, library_id: str, root_path: Path, work: _Work, proxy_cache: ProxyCache, stats: ScanStats,
+    *, concurrency: int, console: Console,
+) -> None:
+    """Make and upload the previews of what's new, then what changed,
+    `concurrency` at a time and never more than concurrency * 2 waiting."""
+    total = len(work.new) + len(work.changed)
+    if not total:
+        return
+    progress = _progress(console, "Scanning", eta=True)
+    with progress, ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan") as pool:
+        tid = progress.add_task("Scanning", total=total)
+        inflight: set[Future] = set()
+        for kind, files in (("new", work.new), ("changed", work.changed)):
+            for f in files:
+                handler = _scan_one_video if f["media_type"] == "video" else _scan_one
+                inflight.add(pool.submit(
+                    handler, client=client, library_id=library_id, root_path=root_path, f=f,
+                    proxy_cache=proxy_cache, stats=stats, progress=progress, task_id=tid, counter_field=kind,
+                ))
+                if len(inflight) >= concurrency * 2:
+                    _, inflight = _drain(inflight)
+        while inflight:
+            _, inflight = _drain(inflight)
 
 
 def run_scan(
@@ -743,10 +675,13 @@ def run_scan(
     allow_mass_delete: bool = False,
     console: Console,
 ) -> ScanStats:
-    """Discover files, compute SHA, extract EXIF, generate proxies, upload.
+    """Walk the library, tell the server what's there, read what it asks
+    about, and upload what it says is new or changed.
 
-    This is Phase 1 of the scan/enrich split. Scan touches source files;
-    enrich (Phase 2) operates on the proxy cache only.
+    moves: allow_moves applies them (the scheduler's), skip_moves looks for
+    none (and so archives nothing: anything gone may be half a move), else
+    the server asks and so does this (the CLI's prompt). allow_mass_delete
+    answers the server's question when most of a library looks gone.
     """
     library_id = library["library_id"]
     root_path = reachable_root(library)
@@ -763,16 +698,6 @@ def run_scan(
 
     stats = ScanStats()
 
-    # The account may not follow moves (the path is the identity): then a
-    # file at a new path is new, and its old path is simply gone.
-    # Unread, look for none: the old path is archived and the new one ingested,
-    # and a server that follows moves restores the asset there by content.
-    follow_moves = _fetch_follow_moves(client)
-    if follow_moves is None:
-        console.print("[dim]Couldn't read the account's settings: this scan looks for no moves.[/dim]")
-    elif not follow_moves:
-        console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
-
     # Load path filters
     tenant_filters = _load_tenant_filters(client)
     library_filters = _load_library_filters(client, library_id)
@@ -782,6 +707,7 @@ def run_scan(
 
     # A folder that's gone is scanned from the nearest folder still there,
     # which sees what was in it as deleted.
+    path_prefix = path_prefix.rstrip("/") if path_prefix else None
     if path_prefix:
         try:
             found = _existing_folder(root_path, path_prefix)
@@ -800,276 +726,189 @@ def run_scan(
         console.print(f"[red]Library root went away: {root_path}[/red]")
         return ScanStats(root_unreachable=True)
 
-    # Discover files
+    # Started before the walk: a clip made or changed after this is never
+    # taken for gone by it.
+    moves = "apply" if allow_moves else "skip" if skip_moves else "ask"
+    scan = client.post(f"/v1/libraries/{library_id}/scans", json={
+        "scope": path_prefix or "", "media_type": media_type_filter, "thorough": thorough, "force": force,
+        "moves": moves, "dry_run": dry_run,
+    }).json()
+    scan_id = scan["scan_id"]
+    try:
+        return _run(client, library, root_path, scan_id, stats, path_prefix=path_prefix,
+                    follow_moves=scan.get("follow_moves", True), moves=moves, force=force,
+                    media_type_filter=media_type_filter, dry_run=dry_run, allow_mass_delete=allow_mass_delete,
+                    tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
+                    console=console)
+    except BaseException:
+        _abandon(client, scan_id)
+        raise
+
+
+def _run(
+    client: ApiClient, library: dict, root_path: Path, scan_id: str, stats: ScanStats, *,
+    path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
+    allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int, console: Console,
+) -> ScanStats:
+    """run_scan once its scan is started: walk, list, plan, hash, finish, upload."""
+    library_id = library["library_id"]
+    if not follow_moves:
+        console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
+
     console.print("[bold]Discovering files...[/bold]")
-    local_files = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
-                                unlisted=stats.unlisted)
+    walked = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
+                           unlisted=stats.unlisted)
     if stats.unlisted:
         console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
                       "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
 
-    # Filter by media type
-    if media_type_filter != "all":
-        local_files = [f for f in local_files if f["media_type"] == media_type_filter]
+    # Every media file on disk is sent, of every media type, empty ones (on
+    # disk, never ingested) and ones still being written (a later scan takes
+    # them) too: none of them is gone.
+    on_disk: dict[str, dict] = {}
+    for f in walked:
+        if f["rel_path"] not in on_disk and not _refused_name(f["rel_path"]):
+            on_disk[f["rel_path"]] = f
+    of_type = [f for f in on_disk.values() if media_type_filter in ("all", f["media_type"])]
+    console.print(f"Found {len(of_type):,} media files")
 
-    console.print(f"Found {len(local_files):,} media files")
-
-    # An empty library is more likely an unmounted volume than a deleted
-    # one. An empty folder within it is just empty: its files are gone.
-    if not local_files and not force and not path_prefix:
-        # A share gone since the scan started looks just like this: say so,
-        # so the worker keeps the changes for when it's back.
-        if reachable_root(library, require_entries=True) is None:
-            console.print("[red]The library's storage went away during the scan; it's scanned again once it's back.[/red]")
-            stats.root_unreachable = True
-        return stats
-
-    # Fetch existing assets with SHA for change detection
-    console.print("Checking server for existing assets...")
-    existing = _fetch_existing_assets_with_sha(client, library_id)
-    console.print(f"Server has {len(existing):,} existing assets")
-
-    # Every file on disk, ingested or not: none of them is missing. An empty
-    # one (being rewritten, or truncated) is on disk but not ingested.
-    on_disk = local_files
-    local_files = [f for f in local_files if f["file_size"]]
-    ignored = _fetch_ignored_paths(client, library_id)
-    if ignored:
-        before = len(local_files)
-        local_files = [f for f in local_files if not _skipped(f, ignored, root_path)]
-        if before > len(local_files):
-            console.print(f"Skipping {before - len(local_files):,} file(s) you removed")
-
-    # Files written in the last SETTLE_SEC may still be copying, so they wait
-    # for a later scan, as on the Mac. They still count as on disk, so they
-    # are never taken for deleted.
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(seconds=SETTLE_SEC)
-    ahead = now + timedelta(seconds=FUTURE_MTIME_SEC)
-    settled: list[dict] = []
-    for f in local_files:
-        if f.get("file_mtime") and cutoff < f["file_mtime"] <= ahead:
-            stats.settling_paths.append(f["rel_path"])
-        else:
-            settled.append(f)
+    now = datetime.now(UTC)
+    for f in on_disk.values():
+        f["settling"] = _settling(f, now)
+    stats.settling_paths = [f["rel_path"] for f in of_type if f["settling"]]
     stats.settling = len(stats.settling_paths)
     if stats.settling:
         console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
 
-    # Split files: new (not on server by path) vs existing (need SHA check)
-    # Default (fast): mtime+size match skips hashing. --thorough forces SHA on all.
-    new_files, needs_hash, fast_unchanged = _split_files(
-        settled, existing, thorough=thorough or force,
-    )
-    local_rel_paths = {f["rel_path"] for f in on_disk}
+    _send_found(client, scan_id, list(on_disk.values()), console)
+    counts, plan = _plan(client, scan_id, stats.unlisted, console)
 
-    # Deletions only consider what this scan covers: a `--media-type image`
-    # scan doesn't see videos on disk, so it must not count them as gone.
-    # (The mass-missing rule is the server's: DELETE /v1/assets.)
-    scope = existing
-    if media_type_filter != "all":
-        scope = {rp: sa for rp, sa in existing.items() if sa.media_type == media_type_filter}
-
-    # Detect deletions first (needed to scope move detection)
-    deleted_ids = _detect_deletions(on_disk, scope, root_path, path_prefix)
-    if stats.unlisted:
-        # Files in a folder that couldn't be listed may well be there, so
-        # they're neither deleted nor the old half of a move.
-        unseen = {sa.asset_id for rp, sa in scope.items() if any(is_within(rp, u) for u in stats.unlisted)}
-        deleted_ids = [aid for aid in deleted_ids if aid not in unseen]
-
-    # --- Move detection ---
-    # Only check for moves when: there are new files, there are deletions
-    # (a move requires an old path to disappear), and --force is not set.
-    # Pre-filters by file_size before expensive SHA computation.
-    moves: list[_MoveCandidate] = []
-    if new_files and deleted_ids and not force and not skip_moves and follow_moves is True:
-        moves, new_files = _detect_moves(
-            new_files, existing, root_path, local_rel_paths,
-            deleted_ids=deleted_ids, console=console,
-        )
-
-    # Remove moved assets from deletion candidates (they're not deleted, just moved)
-    if moves:
-        moved_asset_ids = {m.asset_id for m in moves}
-        deleted_ids = [aid for aid in deleted_ids if aid not in moved_asset_ids]
-
-    fast_skip_msg = f", {len(fast_unchanged):,} unchanged (fast)" if fast_unchanged else ""
+    work = _Work()
+    to_hash: list[dict] = []
+    for f in of_type:
+        planned = plan.get(f["rel_path"])
+        if planned is None:  # still being written, or empty
+            continue
+        action = planned["action"]
+        if action == "upload" and planned["asset_id"]:  # a video's preview never arrived, or --force
+            f["asset_id"] = planned["asset_id"]
+            work.changed.append(f)
+        elif action == "upload":
+            work.new.append(f)
+        elif action == "hash":
+            f["_plan"] = planned
+            to_hash.append(f)
+        elif action == "unchanged":
+            f["asset_id"] = planned["asset_id"]
+            work.unchanged.append(f)
+        elif action == "skipped":
+            work.skipped += 1
+    stats.unchanged += len(work.unchanged)
     console.print(
-        f"{len(new_files):,} new, "
-        f"{len(needs_hash):,} to check, "
-        f"{len(deleted_ids):,} deleted, "
-        f"{len(moves):,} moved"
-        + fast_skip_msg
+        f"{len(work.new):,} new, "
+        f"{len(to_hash):,} to check, "
+        f"{len(work.unchanged):,} unchanged, "
+        f"{counts['gone']:,} not found"
+        + (f", {len(work.changed):,} to scan again" if work.changed else "")
     )
 
-    # --- Handle moves ---
-    move_decision = "skip"  # default: no moves or skip
-    if moves:
-        if allow_moves:
-            move_decision = "apply"
-        elif dry_run:
-            # dry-run: report and suggest flag
-            console.print(f"\n[yellow]{len(moves):,} moved file(s) detected.[/yellow]")
-            show = moves[:10]
-            for m in show:
-                console.print(f"  {m.old_rel_path} [dim]→[/dim] {m.new_rel_path}")
-            if len(moves) > 10:
-                console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
-            console.print("[dim]Use --allow-moves to apply, or --skip-moves to ignore.[/dim]")
-            move_decision = "skip"
-        else:
-            # Interactive prompt
-            move_decision = _prompt_move_decision(console, moves)
-            if move_decision == "abort":
-                console.print("[red]Scan aborted.[/red]")
-                return stats
-
-    # --skip-moves suppresses deletions too: without move detection we can't
-    # distinguish real deletes from the "old path" half of a move.
-    if stats.unlisted and deleted_ids:
-        console.print(f"[yellow]Skipping {len(deleted_ids):,} deletions: some folders couldn't be listed[/yellow]")
-        deleted_ids = []
-
-    if skip_moves and follow_moves is not False and deleted_ids:
-        console.print(f"[dim]Skipping {len(deleted_ids):,} deletions (--skip-moves)[/dim]")
-        deleted_ids = []
-
-    # For skipped moves (via prompt choice): moved files don't participate.
-    # New paths already removed from new_files by _detect_moves.
-    # Old paths already removed from deleted_ids above.
-    if move_decision == "skip" and moves:
-        console.print(f"[dim]Skipping {len(moves):,} moves[/dim]")
-
-    if dry_run:
-        # For dry-run, hash synchronously to show full breakdown
-        changed_files: list[dict] = []
-        unchanged_files: list[dict] = []
-        if needs_hash:
-            hash_progress = Progress(
-                SpinnerColumn(), TextColumn("[bold]Hashing"),
-                BarColumn(bar_width=30), MofNCompleteColumn(),
-                console=console, refresh_per_second=4,
-            )
-            with hash_progress:
-                tid = hash_progress.add_task("Hashing", total=len(needs_hash))
-                for f in needs_hash:
-                    server = f.pop("_server")
-                    source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
-                    if force or _preview_missing(server) or (source_sha and server.sha256 != source_sha):
-                        changed_files.append(f)
-                    else:
-                        unchanged_files.append(f)
-                    hash_progress.advance(tid)
-
-        total_unchanged = len(unchanged_files) + len(fast_unchanged)
-        console.print(
-            f"\n[bold]Scan summary:[/bold] "
-            f"{len(new_files):,} new, "
-            f"{len(changed_files):,} changed, "
-            f"{total_unchanged:,} unchanged, "
-            f"{len(deleted_ids):,} deleted, "
-            f"{len(moves):,} moved"
-        )
-        console.print(f"\n[bold]Root path:[/bold]  {root_path}")
-        return stats
-
-    # Files that look missing may only be the storage going away mid-scan (a
-    # clean unmount leaves an empty folder): check it again before changing
-    # anything, and stop if it's gone (Robert's call, Oct 8).
-    if (deleted_ids or (moves and move_decision == "apply")) and reachable_root(library, require_entries=True) is None:
+    # A move needs a clip gone from this scan; the server looks for them
+    # when the account follows moves, unless the scan forces or skips them,
+    # and makes them as the hashes arrive when the scan applies them.
+    moves_now = moves == "apply" and follow_moves and not force and not dry_run and counts["gone"] > 0
+    if not _hash_and_decide(client, scan_id, library, root_path, to_hash, work, stats, moves_now=moves_now,
+                            concurrency=concurrency, console=console):
         console.print("[red]The library's storage went away during the scan, so nothing was archived or moved. "
                       "It's scanned again once it's back.[/red]")
         stats.root_unreachable = True
+        _abandon(client, scan_id)
         return stats
+    if work.skipped:
+        console.print(f"Skipping {work.skipped:,} file(s) you removed")
 
-    # --- Apply moves FIRST (before any destructive actions) ---
-    if move_decision == "apply" and moves:
-        _apply_moves(client, moves, stats, console)
+    if work.candidates and dry_run:
+        console.print(f"\n[yellow]{len(work.candidates):,} moved file(s) detected.[/yellow]")
+        _show_moves(console, work.candidates)
+        console.print("[dim]Use --allow-moves to apply, or --skip-moves to ignore.[/dim]")
+    elif work.candidates:
+        choice = _prompt_move_decision(console, work.candidates)
+        if choice == "abort":
+            console.print("[red]Scan aborted.[/red]")
+            _abandon(client, scan_id)
+            return stats
+        if choice == "apply" and _storage_gone(library):
+            console.print("[red]The library's storage went away during the scan, so nothing was archived or "
+                          "moved. It's scanned again once it's back.[/red]")
+            stats.root_unreachable = True
+            _abandon(client, scan_id)
+            return stats
+        answer = _post_again_if_taken(client, f"/v1/scans/{scan_id}/moves", {"apply": choice == "apply"})
+        work.moved += answer["moved"]
+        work.new.extend(on_disk[rel] for rel in answer["upload"] if rel in on_disk)
+        if answer["skipped"]:
+            console.print(f"[dim]Skipping {answer['skipped']:,} moves[/dim]")
 
-    # Soft-delete missing assets (after moves, so moved assets are not deleted)
-    if deleted_ids:
-        _archive_missing(client, deleted_ids, stats, console, allow_mass_delete=allow_mass_delete)
-
-    # Pipeline: scan new files immediately while hashing existing files
-    # in the background. Changed files feed into the same scan pool as
-    # hashing completes.
-    # Count fast-unchanged toward stats
-    stats.unchanged += len(fast_unchanged)
-
-    total_to_scan = len(new_files) + len(needs_hash)  # upper bound (unchanged will be skipped)
-    if not total_to_scan:
-        proxy_cache = ProxyCache(root_path=root_path, client=client)
-        _populate_cache_for_unchanged(client, fast_unchanged, proxy_cache, stats, console)
-        return stats
-
-    proxy_cache = ProxyCache(root_path=root_path, client=client)
-    scan_progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold]Scanning"),
-        BarColumn(bar_width=30),
-        MofNCompleteColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        refresh_per_second=4,
-    )
-    unchanged_files = []
-
-    def _submit(f: dict, kind: str, pool: ThreadPoolExecutor, inflight: set, tid: object) -> set:
-        handler = _scan_one_video if f["media_type"] == "video" else _scan_one
-        fut = pool.submit(
-            handler,
-            client=client,
-            library_id=library_id,
-            root_path=root_path,
-            f=f,
-            proxy_cache=proxy_cache,
-            stats=stats,
-            progress=scan_progress,
-            task_id=tid,
-            counter_field=kind,
+    if dry_run:
+        finished = _answer(client, client.raw("POST", f"/v1/scans/{scan_id}/finish",
+                                               json={"allow_mass_missing": False}))
+        _abandon(client, scan_id)
+        console.print(
+            f"\n[bold]Scan summary:[/bold] "
+            f"{len(work.new):,} new, "
+            f"{len(work.changed):,} changed, "
+            f"{stats.unchanged:,} unchanged, "
+            f"{finished['archived']:,} deleted, "
+            f"{finished['moved']:,} moved"
         )
-        inflight.add(fut)
-        if len(inflight) >= concurrency * 2:
-            done, inflight = _drain(inflight)
-        return inflight
+        console.print(f"\n[bold]Root path:[/bold]  {root_path}")
+        return stats
+    stats.moved += work.moved
 
-    with scan_progress:
-        tid = scan_progress.add_task("Scanning", total=total_to_scan)
-        pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan")
-        inflight: set[Future] = set()
+    # A whole library's scan that found nothing is more likely an unmounted
+    # volume than an empty library: the server archives nothing, and the
+    # storage is looked at again so the scheduler keeps the changes.
+    nothing_found = not of_type and not force and not path_prefix
+    if (counts["gone"] or nothing_found) and _storage_gone(library):
+        if nothing_found:
+            console.print("[red]The library's storage went away during the scan; it's scanned again once it's back.[/red]")
+        else:
+            console.print("[red]The library's storage went away during the scan, so nothing was archived or "
+                          "moved. It's scanned again once it's back.[/red]")
+        stats.root_unreachable = True
+        _abandon(client, scan_id)
+        return stats
 
-        # Dispatch new files immediately — no hashing needed
-        for f in new_files:
-            inflight = _submit(f, "new", pool, inflight, tid)
+    # What's gone is archived as missing ("missing", not the user's trash:
+    # restored if the file reappears), all at once so the server's
+    # mass-missing rule sees the whole scan. When it would take most of a
+    # library the server asks first (409 mass_missing, usually a volume not
+    # fully mounted): skipped, unless --allow-mass-delete says yes.
+    resp = client.raw("POST", f"/v1/scans/{scan_id}/finish", json={"allow_mass_missing": allow_mass_delete})
+    err = _error(resp) if resp.status_code == 409 else {}
+    if err.get("code") == "mass_missing":
+        stats.mass_missing = (err.get("details") or {}).get("count") or counts["gone"]
+        console.print(f"[yellow]Skipping {stats.mass_missing:,} deletions: {err.get('message', '')} "
+                      "If the files really are gone, re-run with --allow-mass-delete.[/yellow]")
+        _abandon(client, scan_id)
+    else:
+        finished = _answer(client, resp)
+        # Some may have moved to an empty copy of their file instead (copy, then delete).
+        stats.deleted = finished["archived"]
+        stats.moved += finished["handed_over"]
+        held, why = finished["held_back"], finished.get("held_back_reason")
+        if why == "unlisted":
+            console.print(f"[yellow]Skipping {held:,} deletions: some folders couldn't be listed[/yellow]")
+        elif why == "skip_moves":
+            console.print(f"[dim]Skipping {held:,} deletions (--skip-moves)[/dim]")
+        elif why == "nothing_found":
+            console.print(f"[yellow]Found no media files, so {held:,} clip(s) aren't archived: "
+                          "is the volume fully mounted?[/yellow]")
+        if stats.deleted:
+            console.print(f"Archived {stats.deleted:,} clip(s) no longer on disk")
 
-        # Hash existing files and dispatch changed ones as they're identified.
-        # Unchanged files skip scanning (advance progress bar only).
-        for f in needs_hash:
-            server = f.pop("_server")
-            source_sha = compute_sha256(resolve_source_path(root_path, f["rel_path"]))
-            f["source_sha256"] = source_sha
-
-            if force or _preview_missing(server) or (source_sha and server.sha256 != source_sha):
-                f["asset_id"] = server.asset_id
-                inflight = _submit(f, "changed", pool, inflight, tid)
-            else:
-                f["asset_id"] = server.asset_id
-                unchanged_files.append(f)
-                stats.unchanged += 1
-                scan_progress.advance(tid)
-                # Same content, new size or mtime (touched, copied back): record
-                # it, or every later scan reads the whole file again.
-                if not _mtime_size_match(f, server):
-                    _record_file_stat(client, library_id, f)
-
-        while inflight:
-            done, inflight = _drain(inflight)
-        pool.shutdown(wait=True)
-
-    # Populate cache for unchanged files (both hash-verified and fast-skipped)
-    _populate_cache_for_unchanged(
-        client, unchanged_files + fast_unchanged, proxy_cache, stats, console,
-    )
-
+    # After the finish: a file whose content was just archived as missing
+    # comes back at its new path.
+    proxy_cache = ProxyCache(root_path=root_path, client=client)
+    _upload(client, library_id, root_path, work, proxy_cache, stats, concurrency=concurrency, console=console)
+    _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
     return stats
