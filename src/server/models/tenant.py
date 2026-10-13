@@ -68,8 +68,8 @@ class LibraryChange(SQLModel, table=True):
 class ScanSession(SQLModel, table=True):
     """A scan of a library, or a folder of it, while it runs (ADR-018 decision
     12): the client says what it found, the server decides (src/server/scans.py).
-    Deleted when it expires; a finished one is kept until then, so a retried
-    finish is told it's finished."""
+    Deleted when it expires; a finished one is kept until then, so a finish
+    sent again gets the answer the first one got."""
 
     __tablename__ = "scan_sessions"
     __table_args__ = (
@@ -92,6 +92,9 @@ class ScanSession(SQLModel, table=True):
     # Folders the walk couldn't list: nothing under them is gone.
     unlisted: list[str] | None = Field(default=None, sa_column=Column(ARRAY(Text()), nullable=True))
     finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # What it answered, by call ("plan": its counts; "moves", "finish"): a
+    # call sent again, its answer lost, gets the same answer.
+    answers: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
 
 
 class ScanFound(SQLModel, table=True):

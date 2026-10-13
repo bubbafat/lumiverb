@@ -369,12 +369,16 @@ class Scheduler:
         """What its status says of work it hands out none of, for Processing
         to say why (src/shared/waits.py): whether it has read the account's
         settings (no job goes until then), each AI job whose machines it can't
-        use and why (ai_waits), and each kind whose listing failed (unlisted)."""
+        use and why (ai_waits), each kind whose listing failed (unlisted), and
+        each library whose scans keep failing (scans_failing: tried again later)."""
+        from src.server.scheduler.scans import failing_now
+
         return {
             "settings_ready": bool(acct.settings_ready),
             "ai_waits": {pool.job.name: acct.job_error(pool.job.name)
                          for pool in account_pools() if not acct.capacity(pool.job.name)},
             "unlisted": dict(self._unlisted.get(tenant_id, {})),
+            "scans_failing": failing_now(getattr(acct, "scan_state", None), acct.library_ids(storage=False)),
         }
 
     def _find_new_versions(self, tenant_id: str) -> None:

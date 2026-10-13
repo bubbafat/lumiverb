@@ -938,8 +938,11 @@ def batch_trash_assets(
     archived clip moves it to the trash), and asks first about clips that
     projects use (409 in_projects). Marking files missing asks first when it
     would take most of a library (409 mass_missing), and hands each over to
-    an empty copy of its file when there is one (follow moves).
+    an empty copy of its file when there is one (follow moves): the archive
+    and the handovers commit together, or not at all.
     """
+    from src.server.after_commit import AfterCommit
+
     reason = body.reason
     asset_repo = AssetRepository(session)
     if reason == "user":
@@ -948,15 +951,20 @@ def batch_trash_assets(
             _ask_about_projects(session, request, asset_repo.trashable(body.asset_ids))
     else:
         _ask_about_mass_missing(session, body.asset_ids, body.confirm_missing)
-    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason)
+    trashed_ids, not_found_ids = asset_repo.trash_many(body.asset_ids, reason=reason, commit=False)
     handed_over: list[str] = []
+    after = AfterCommit()
     if trashed_ids and reason == "missing":
         # Copy, then delete the original: the asset moves to its empty copy.
         from src.server.api.routers.trash import hand_over_to_copies
         from src.server.tenant_settings import get_follow_moves
 
         if get_follow_moves(session):
-            handed_over = hand_over_to_copies(session, request, trashed_ids)
+            handed_over = hand_over_to_copies(session, request, trashed_ids, after=after)
+    # The archive and the handovers, together: an API that dies before this
+    # leaves both undone, never a clip archived whose copy it should have taken.
+    session.commit()
+    after.run()
     # Not those that moved: they're back in search, transcripts and all.
     _out_of_search(background, request, [a for a in trashed_ids if a not in handed_over])
     if trashed_ids and reason == "user":

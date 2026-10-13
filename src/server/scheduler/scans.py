@@ -17,7 +17,11 @@ The scheduler looks at each account's libraries every 30 seconds:
    itself, every 30 seconds whatever is paused but Pause all
    (account.py look_at_storage): pausing scans stops no other work.
 
-A library is skipped, never failed: the next look tries again.
+A library is skipped, never failed: the next look tries again. A library
+whose scan itself keeps failing (not one file: the scan raised) is tried
+again after a minute, then 2, 4 and so on up to half an hour, and from the
+first success as before; its reported changes wait meanwhile, and Settings
+→ Processing says so on the Scans row (src/shared/waits.py SCAN_FAILING).
 (Moved from the worker, src/client/cli/worker.py, which the scheduler replaces.)
 """
 
@@ -50,6 +54,9 @@ DEFAULT_FULL_SCAN_EVERY_SEC = 24 * 3600.0
 # Files that failed to scan are tried again after this, doubling up to a day.
 RETRY_FIRST_SEC = 300.0
 RETRY_MAX_SEC = 24 * 3600.0
+# A library whose scan failed is tried again after this, doubling up to half an hour.
+FAIL_FIRST_SEC = 60.0
+FAIL_MAX_SEC = 30 * 60.0
 # Where the full-scan times and retries are kept (the worker's file, so they
 # carry over from it).
 STATE_FILE = "worker-state.json"
@@ -92,13 +99,26 @@ class Retry:
 
 
 @dataclass
+class Failing:
+    """A library whose scans keep failing: the latest error, since when (wall
+    time, as now), and when it's tried again."""
+
+    error: str
+    since: float
+    delay: float
+    due: float
+
+
+@dataclass
 class ScanState:
     """What scanning remembers between passes. Full-scan times and retries
     outlive the process (save_state), so a restart doesn't rescan everything,
-    nor forget what's waiting to be tried again."""
+    nor forget what's waiting to be tried again. Libraries whose scans keep
+    failing don't: a new start (an upgrade with the fix, often) tries each at once."""
 
     last_full_scan: dict[str, float] = field(default_factory=dict)
     retries: dict[str, Retry] = field(default_factory=dict)
+    failing: dict[str, Failing] = field(default_factory=dict)
 
 
 def load_state(path: Path) -> ScanState:
@@ -235,9 +255,11 @@ def scan_library(
         logger.info("scheduler: in %s, %d file(s) still being written; %d change(s) wait for the next cycle",
                     library["name"], stats.settling, len(changes) - len(seen))
     if seen:
+        # Safe to send twice: a change acknowledged is gone, and one reported again since stays.
         client.post(
             f"/v1/libraries/{library_id}/changes/ack",
             json={"changes": [{"change_id": c["change_id"], "version": c["version"]} for c in seen]},
+            retry=True,
         )
 
 
@@ -321,9 +343,43 @@ def scan_pass(
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             _warn_if_no_root_map()
             continue
+        failing = state.failing.get(library["library_id"])
+        if failing is not None and now < failing.due:
+            continue  # its back-off: the scheduler's status says why
         try:
             scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
                          scan_fn=scan_fn, console=console)
-        except Exception:  # noqa: BLE001 — one library's trouble doesn't stop the rest
-            logger.exception("scheduler: scanning %s failed; trying again at the next look", library["name"])
+        except Exception as exc:  # noqa: BLE001 — one library's trouble doesn't stop the rest
+            _scan_failed(state, library, exc, now)
+        else:
+            if state.failing.pop(library["library_id"], None) is not None:
+                logger.info("scheduler: scanning %s works again", library["name"])
     return roots
+
+
+def _scan_failed(state: ScanState, library: dict, exc: Exception, now: float) -> None:
+    """A library's scan raised: it's tried again after FAIL_FIRST_SEC, twice
+    as long each time it fails again, up to FAIL_MAX_SEC."""
+    library_id = library["library_id"]
+    error = (str(exc).strip().splitlines() or [type(exc).__name__])[0][:300]
+    old = state.failing.get(library_id)
+    delay = min(old.delay * 2, FAIL_MAX_SEC) if old else FAIL_FIRST_SEC
+    state.failing[library_id] = Failing(error, old.since if old else now, delay, now + delay)
+    if old is None:
+        logger.exception("scheduler: scanning %s failed; trying again in %.0f min", library["name"], delay / 60)
+    else:
+        logger.warning("scheduler: scanning %s failed again (%s); trying again in %.0f min",
+                       library["name"], error, delay / 60)
+
+
+def failing_now(state: ScanState | None, library_ids: list[str]) -> list[dict]:
+    """Of these libraries, those whose scans keep failing: the error, since
+    when and the next try (ISO times), as the scheduler's status says them."""
+    from datetime import UTC, datetime
+
+    def iso(when: float) -> str:
+        return datetime.fromtimestamp(when, UTC).isoformat()
+
+    failing = dict(state.failing) if state is not None else {}  # a copy: a scan job changes it meanwhile
+    return [{"library_id": i, "error": f.error, "since": iso(f.since), "next_try": iso(f.due)}
+            for i in library_ids if (f := failing.get(i)) is not None]

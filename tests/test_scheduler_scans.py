@@ -331,6 +331,76 @@ def test_a_failed_scan_keeps_the_changes(das: Path) -> None:
     assert [lib for lib, _ in server.acks] == ["lib_2"]
 
 
+def _tried(server: FakeServer, state: ScanState, scan: MagicMock, *, start: float, seconds: int) -> list[int]:
+    """The scheduler's 30-second looks over `seconds`: when (seconds from start) each one scanned."""
+    tried = []
+    for second in range(0, seconds, 30):
+        before = scan.call_count
+        _pass(server, state, now=start + second, scan=scan)
+        if scan.call_count > before:
+            tried.append(second)
+    return tried
+
+
+@pytest.mark.fast
+def test_a_library_whose_scan_keeps_failing_waits_longer_each_time(das: Path) -> None:
+    """Review, Oct 13: a scan that raised was tried again at every 30-second
+    look, for as long as it failed. Now after a minute, then 2, 4 and so on
+    up to half an hour; the reported changes wait meanwhile."""
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    scan = MagicMock(side_effect=RuntimeError("[unknown]: the API said 500\nTraceback ..."))
+    state = ScanState(last_full_scan={"lib_1": 99 * HOUR})
+    tried = _tried(server, state, scan, start=100 * HOUR, seconds=2 * 3600)
+    assert [b - a for a, b in zip(tried, tried[1:], strict=False)] == [60, 120, 240, 480, 960, 1800, 1800]
+    assert server.acks == []
+    failing = state.failing["lib_1"]
+    assert (failing.error, failing.since) == ("[unknown]: the API said 500", 100 * HOUR)
+    assert failing.due == 100 * HOUR + tried[-1] + 1800
+
+
+@pytest.mark.fast
+def test_a_scan_that_works_again_clears_its_back_off(das: Path) -> None:
+    server = FakeServer([LIB], pending={"lib_1": [CHANGE]})
+    state = ScanState(last_full_scan={"lib_1": 99 * HOUR})
+    scan = MagicMock(side_effect=[RuntimeError("down"), RuntimeError("down"), ScanStats(), RuntimeError("down")])
+    tried = _tried(server, state, scan, start=100 * HOUR, seconds=240)
+    assert tried[:3] == [0, 60, 180]  # failed, failed, then scanned
+    assert server.acks == [("lib_1", [{"change_id": "chg_1", "version": 7}])]
+    # Failing again starts over at a minute, not where the last run of failures left off.
+    assert tried[3] == 210 and state.failing["lib_1"].delay == 60 and state.failing["lib_1"].since == 100 * HOUR + 210
+
+
+@pytest.mark.fast
+def test_one_librarys_back_off_doesnt_hold_up_another(das: Path) -> None:
+    (das / "Stills").mkdir()
+    (das / "Stills" / "B.jpg").write_bytes(b"x")
+    lib2 = {"library_id": "lib_2", "name": "Stills", "root_path": f"{MAC}/Stills"}
+    server = FakeServer([LIB, lib2], pending={"lib_1": [CHANGE], "lib_2": [{**CHANGE, "change_id": "chg_2"}]})
+
+    def scan(client, library, **kw):
+        if library["library_id"] == "lib_1":
+            raise RuntimeError("down")
+        return ScanStats()
+
+    state = ScanState(last_full_scan={"lib_1": 99 * HOUR, "lib_2": 99 * HOUR})
+    scan_mock = MagicMock(side_effect=scan)
+    _pass(server, state, now=100 * HOUR, scan=scan_mock)
+    _pass(server, state, now=100 * HOUR + 30, scan=scan_mock)
+    assert [c.args[1]["library_id"] for c in scan_mock.call_args_list] == ["lib_1", "lib_2", "lib_2"]
+
+
+@pytest.mark.fast
+def test_the_scheduler_says_which_libraries_scans_keep_failing() -> None:
+    from src.server.scheduler.scans import Failing, failing_now
+
+    state = ScanState(failing={"lib_1": Failing("the API said 500", 1_791_878_400.0, 120.0, 1_791_878_700.0),
+                               "lib_other": Failing("x", 0.0, 60.0, 60.0)})
+    assert failing_now(state, ["lib_1", "lib_2"]) == [{
+        "library_id": "lib_1", "error": "the API said 500", "since": "2026-10-13T08:00:00+00:00",
+        "next_try": "2026-10-13T08:05:00+00:00"}]
+    assert failing_now(None, ["lib_1"]) == []
+
+
 @pytest.mark.fast
 def test_a_scan_that_lost_its_root_keeps_the_changes(das: Path) -> None:
     server = FakeServer([LIB], pending={"lib_1": [CHANGE]})

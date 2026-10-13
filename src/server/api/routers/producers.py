@@ -555,6 +555,9 @@ class PauseSwitch(BaseModel):
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
+    # Why its work waits, as a producer's row says it (src/shared/waits.py):
+    # Scans' libraries whose scans keep failing (producer_waits.scan_waits).
+    waits: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StorageSeen(BaseModel):
@@ -574,6 +577,16 @@ class HeldClips(BaseModel):
     why: str = HELD
     library_id: str = ""
     clips: int = 0
+
+
+class ScanFailing(BaseModel):
+    """A library whose scans keep failing (the scan itself, not a file): the
+    latest error, since when, and when it's tried again."""
+
+    library_id: str
+    error: str = ""
+    since: datetime | None = None
+    next_try: datetime | None = None
 
 
 class SchedulerStatus(BaseModel):
@@ -611,6 +624,8 @@ class SchedulerStatus(BaseModel):
     settings_ready: bool = True
     # Kinds whose last listing failed, and the error (their work isn't handed out).
     unlisted: dict[str, str] = Field(default_factory=dict)
+    # Libraries whose scans keep failing: not scanned again until next_try.
+    scans_failing: list[ScanFailing] = Field(default_factory=list)
     # How long until things are made (src/server/scheduler/eta.py); None when it isn't running.
     eta: Eta | None = None
 
@@ -651,6 +666,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     live is false when it hasn't said for 30 seconds. While it's live, eta says
     how long until each producer and everything is caught up, from each kind's
     pace and what's left; paused work gets no time."""
+    from src.server.producer_waits import scan_waits
     from src.server.scheduler.eta import eta
     from src.shared.utils import utcnow
 
@@ -661,7 +677,8 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     status.switches = [
         PauseSwitch(target=t, title=SWITCH_TITLES.get(t) or PRODUCERS[t].title, paused=t in held,
                     paused_at=held[t]["paused_at"] if t in held else None,
-                    paused_by=held[t]["paused_by"] if t in held and admin else None)
+                    paused_by=held[t]["paused_by"] if t in held and admin else None,
+                    waits=scan_waits(session, status) if t == PAUSE_SCANS else [])
         for t in pause_targets()]
     # Paused work has no time left (Robert, Oct 9); what's running still says its time left, since it finishes.
     if status.live:

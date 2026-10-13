@@ -14,7 +14,14 @@ unmounted share is an empty folder): that stays the client's job.
 
 Every call needs an editor (403 for a viewer). The account is the token's:
 another account's scan is a 404. A scan expires a day after its last call
-(410 scan_expired once it has); a finished one can't be used again (409).
+(410 scan_expired once it has); a finished one can't be used again (409),
+but for its finish sent again.
+
+Every call but the start is safe to send twice (the client tries again
+when an answer was lost, src/processing/api.py): a repeat gets the answer
+the first got. The finish is one transaction: the clips archived, those
+handed over to their copies and the scan closed, all of it or none of it
+when the API dies halfway (its files and search documents go after).
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server import scans
+from src.server.after_commit import AfterCommit
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
@@ -175,9 +183,15 @@ class FinishResponse(BaseModel):
     dry_run: bool
 
 
-def _held(session: Session, scan_id: str, *, planned: bool | None) -> ScanSession:
+def _finished() -> ConflictError:
+    return ConflictError("scan_finished", "This scan is finished: start another.")
+
+
+def _held(session: Session, scan_id: str, *, planned: bool | None, finished: bool = False) -> ScanSession:
     """The scan, locked, its expiry pushed back a day; 404 unknown, 410
-    expired, 409 finished, or not at the step asked for."""
+    expired, 409 finished (unless finished: the finish's own, sent again),
+    or not at the step asked for (planned: True, after the plan; False,
+    before it; None, either)."""
     scan = scans.lock(session, scan_id)
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -186,8 +200,8 @@ def _held(session: Session, scan_id: str, *, planned: bool | None) -> ScanSessio
         scans.drop(session, scan_id)
         session.commit()
         raise ApiError(410, "scan_expired", "This scan expired: start another.")
-    if scan.finished_at is not None:
-        raise ConflictError("scan_finished", "This scan is finished: start another.")
+    if scan.finished_at is not None and not finished:
+        raise _finished()
     if planned and scan.planned_at is None:
         raise ConflictError("scan_not_planned", "Its listing isn't complete: send POST /v1/scans/{id}/plan first.")
     if planned is False and scan.planned_at is not None:
@@ -275,15 +289,22 @@ def plan_scan(
     action: str | None = None,
 ) -> PlanResponse:
     """The listing is complete: plan every file, and return the counts and
-    the plan's first page (GET for the rest)."""
+    the plan's first page (GET for the rest). Sent again for the same
+    unlisted folders (its answer lost), the same plan; for others, 409."""
     actions = _actions(action)
-    scan = _held(session, scan_id, planned=False)
+    scan = _held(session, scan_id, planned=None)
     try:
         unlisted = sorted({check_rel_path(u, allow_root=True) for u in body.unlisted})
     except UnsafeRelPathError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid unlisted folder: {exc}") from None
-    scans.plan(session, scan, unlisted, follow_moves=get_follow_moves(session))
-    counts = scans.counts(session, scan)
+    if scan.planned_at is not None:
+        counts = scans.answered(scan, "plan")
+        if counts is None or list(scan.unlisted or []) != unlisted:
+            raise ConflictError("scan_planned", "Its listing is complete: nothing more can be added.")
+    else:
+        scans.plan(session, scan, unlisted, follow_moves=get_follow_moves(session))
+        counts = scans.counts(session, scan)
+        scans.keep_answer(session, scan, "plan", counts)
     first = _page(session, scan.scan_id, actions, None, limit)
     session.commit()
     return PlanResponse(counts=PlanCounts(**counts), files=first.files, next_cursor=first.next_cursor)
@@ -344,8 +365,14 @@ def answer_moves(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> MovesResponse:
     """A person's say on the moves the scan asked about: apply them, or skip
-    them (the moved files take no part: not uploaded, their clips not archived)."""
+    them (the moved files take no part: not uploaded, their clips not archived).
+    The same say sent again with none waiting (its answer lost) gets the
+    answer the first got."""
     scan = _held(session, scan_id, planned=True)
+    earlier = scans.answered(scan, "moves")
+    if earlier is not None and earlier["apply"] == body.apply and not scans.move_candidates(session, scan.scan_id, 1):
+        session.commit()  # its expiry, pushed back
+        return MovesResponse(moved=earlier["moved"], skipped=earlier["skipped"], upload=earlier["upload"])
     if body.apply and not scan.dry_run and not get_follow_moves(session):
         raise DecisionRequiredError(
             "moves_off",
@@ -358,6 +385,8 @@ def answer_moves(
     except scans.PathTakenError:
         session.rollback()
         raise ConflictError("path_taken", "Another clip was just put at one of these paths: answer again.") from None
+    scans.keep_answer(session, scan, "moves", {"apply": body.apply, "moved": moved, "skipped": skipped,
+                                               "upload": upload})
     session.commit()
     _bump(session, scan.library_id, bool(moved) and not scan.dry_run)
     return MovesResponse(moved=moved, skipped=skipped, upload=upload)
@@ -373,8 +402,15 @@ def finish_scan(
 ) -> FinishResponse:
     """Archive what's gone as missing, as DELETE /v1/assets does (its guard
     against taking most of a library, and the handover to an empty newer copy
-    of a file), and close the scan. A dry run archives nothing."""
-    scan = _held(session, scan_id, planned=True)
+    of a file), and close the scan, in one transaction. A dry run archives
+    nothing. Sent again (its answer lost), the answer the first one got."""
+    scan = _held(session, scan_id, planned=True, finished=True)
+    if scan.finished_at is not None:
+        kept = scans.answered(scan, "finish")
+        if kept is None:  # finished before answers were kept
+            raise _finished()
+        session.commit()  # its expiry, pushed back
+        return FinishResponse(**kept)
     if not scan.dry_run and (waiting := scans.move_candidates(session, scan.scan_id)):
         shown = waiting[:MOVES_SHOWN]
         raise DecisionRequiredError(
@@ -396,19 +432,28 @@ def finish_scan(
     if archiving and not scan.dry_run and not body.allow_mass_missing:
         _ask_about_mass_missing(session, archiving, None, answer="allow_mass_missing: true")
     scans.close(session, scan)
-    archived, handed_over = len(archiving), []
+    archived, handed_over, out_of_sight = len(archiving), [], []
+    after = AfterCommit()
     if archiving and not scan.dry_run:
-        trashed, _ = AssetRepository(session).trash_many(archiving, reason="missing")  # commits the close too
+        trashed, _ = AssetRepository(session).trash_many(archiving, reason="missing", commit=False)
         if trashed and follow_moves:
-            handed_over = hand_over_to_copies(session, request, scans.with_newer_copies(session, trashed))
-        _out_of_search(background, request, [a for a in trashed if a not in handed_over])
+            handed_over = hand_over_to_copies(session, request, scans.with_newer_copies(session, trashed),
+                                              after=after)
+        out_of_sight = [a for a in trashed if a not in handed_over]
         archived = len(trashed) - len(handed_over)
-    session.commit()
-    return FinishResponse(
+    answer = FinishResponse(
         archived=archived, moved=totals["moved"] + len(handed_over), handed_over=len(handed_over),
         unchanged=totals["unchanged"], skipped=totals["skipped"],
         held_back=len(gone) if reason else 0, held_back_reason=reason, dry_run=scan.dry_run,
     )
+    scans.keep_answer(session, scan, "finish", answer.model_dump())
+    # The archive, the handovers, the scan's close and its answer, together:
+    # an API that dies before this leaves the scan to be finished again,
+    # never a clip archived whose copy it should have taken.
+    session.commit()
+    after.run()
+    _out_of_search(background, request, out_of_sight)
+    return answer
 
 
 @router.delete("/v1/scans/{scan_id}", status_code=204)

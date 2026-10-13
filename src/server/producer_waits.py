@@ -10,7 +10,8 @@ it: what's paused, what a clip is made from, its AI machines, its library's
 storage, a redo stopped by an admin or a new version, the clips the
 scheduler holds back after a try (a scan comes first, or the try couldn't
 finish), failures waiting their turn or given up, and the scheduler itself
-(not running, starting, or unable to list the work).
+(not running, starting, or unable to list the work). The Scans switch's
+row says its own (scan_waits): a library whose scans keep failing.
 
 Read from the account's database (pauses, lineage) and the scheduler's
 status (scheduler.status: whether it runs, each library's storage, the
@@ -38,6 +39,7 @@ from src.shared.waits import (
     REDO_STOPPED,
     RETRY_LATER,
     SCAN,
+    SCAN_FAILING,
     SCHEDULER,
     STORAGE,
 )
@@ -119,6 +121,19 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
     add(RETRY_LATER, c["retrying"])
     add(GIVEN_UP, c["given_up"])
     return sorted(out, key=lambda w: _ORDER[w["reason"]])
+
+
+def scan_waits(session: Session, status: Any) -> list[dict[str, Any]]:
+    """Why the Scans switch's work waits, as its row says it (GET
+    /v1/producers/queue): each library whose scans keep failing, with the
+    error, since when and the next try (SCAN_FAILING), while the scheduler
+    runs (only it knows; that it isn't running is said instead)."""
+    if not status.live or not status.scans_failing:
+        return []
+    names = _library_names(session, [f.library_id for f in status.scans_failing])
+    return [{"reason": SCAN_FAILING, "clips": 0, "library_id": f.library_id,
+             "library_name": names.get(f.library_id, ""), "message": f.error, "since": f.since,
+             "next_try": f.next_try} for f in status.scans_failing]
 
 
 def _library_names(session: Session, library_ids: list[str]) -> dict[str, str]:

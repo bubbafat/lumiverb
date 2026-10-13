@@ -82,10 +82,13 @@ class Account(FakeAccount):
     sets (what a restart's record would say is left alone)."""
 
     def __init__(self, tenant_id: str, root: Path, **kw: Any) -> None:
+        from src.server.scheduler.scans import ScanState
+
         super().__init__(tenant_id, **kw)
         self.client = MagicMock()
         self._root = root
         self.out_of_memory = False
+        self.scan_state = ScanState()
 
     def root(self, library_id: str) -> Path | None:
         return self._root if library_id in self.reachable else None
@@ -172,12 +175,17 @@ def test_a_crash_keeps_why_the_rest_of_its_job_waits():
 # ---------------------------------------------------------------------------
 
 SHARED_SLOTS = 4
+# The scheduler's wall clock (a scan's back-off goes by it) at the harness's start.
+WALL = 1_791_878_400.0  # 2026-10-13 08:00 UTC
 
 
 class Harness:
     """The real scheduler (inline refills, its real database reads, status
     written to the account's database) over one library, with runners that
-    record what's handed out. A runner made `real` runs the real runner."""
+    record what's handed out. A runner made `real` runs the real runner. Its
+    scan job scans nothing until a gate gives it a library (scan_library):
+    then the real scan pass, whose scan of that library records it (scanned)
+    or fails (scan_error)."""
 
     def __init__(self, tenant_id: str, library_id: str, root: Path) -> None:
         from src.producers import pools
@@ -190,6 +198,9 @@ class Harness:
         self.ran: list[tuple[str, tuple[str, ...]]] = []
         self.real: dict[str, type[Work]] = {}  # kind -> the Work its runner runs
         self.unlistable: set[str] = set()  # artifacts whose listing fails
+        self.scan_library: dict | None = None
+        self.scan_error: Exception | None = None
+        self.scanned: list[str] = []
         self._lock = threading.Lock()
 
         def candidates(tenant_id, kind, libraries, skip=None):
@@ -200,7 +211,23 @@ class Harness:
         self.scheduler = Scheduler(
             lambda: {tenant_id: self.acct}, capacity={p.name: SHARED_SLOTS for p in pools().values() if not p.per_account},
             candidates=candidates, runners={k: self._runner(k) for k in dict.fromkeys(q.base for q in QUEUED)},
-            scan=MagicMock(), inline_refill=True, clock=lambda: self.now)
+            scan=self._scan, inline_refill=True, clock=lambda: self.now, wall=lambda: WALL + self.now)
+
+    def _scan(self, acct, job, *, now: float) -> None:
+        """The scan job, as runners.scan runs it: the scan pass over the account's libraries."""
+        from src.server.scheduler.scans import scan_pass
+
+        if self.scan_library is not None:
+            scan_pass(acct.client, [self.scan_library], acct.scan_state, now=now, scan_fn=self._scan_one)
+
+    def _scan_one(self, client, library: dict, **kw: Any):
+        from src.processing.scan import ScanStats
+
+        with self._lock:
+            self.scanned.append(library["library_id"])
+        if self.scan_error is not None:
+            raise self.scan_error
+        return ScanStats()
 
     def _runner(self, base: str) -> Callable:
         def run_(acct, job):
@@ -358,6 +385,38 @@ def _retry(case: Case) -> None:
     case.post("/v1/producers/failures/retry", {"asset_ids": [case.clip]})
 
 
+def _hold_scan_failing(case: Case) -> None:
+    """The library's scan raises (the API answering 500, say): tried once,
+    then not again until its back-off is over, though the scan job is
+    handed out again (past its 30 seconds)."""
+    from src.server.scheduler.kinds import SCAN_EVERY_SEC
+
+    (case.root / "a.jpg").write_bytes(b"x")  # its drive has something on it: reachable
+    case.h.acct.client.get.return_value.json.return_value = {"changes": [], "truncated": False}
+    case.h.scan_library = {"library_id": case.h.library_id, "name": "Gate_scan_failing", "root_path": str(case.root)}
+    case.h.scan_error = RuntimeError("[unknown]: the API said 500")
+    case.h.run()
+    assert case.h.scanned == [case.h.library_id]  # tried once, and failed
+    case.h.now += SCAN_EVERY_SEC + 1
+
+
+def _lift_scan_failing(case: Case) -> None:
+    case.h.scan_error = None
+
+
+def _scanned(case: Case) -> bool:
+    return case.clip in case.h.scanned
+
+
+def _scans_row(case: Case) -> dict[str, dict]:
+    """The Scans switch's waits (GET /v1/producers/queue), by reason."""
+    client, headers, *_ = case.lib
+    r = client.get("/v1/producers/queue", headers=headers)
+    assert r.status_code == 200, r.text
+    [scans] = [s for s in r.json()["switches"] if s["target"] == "scans"]
+    return {w["reason"]: w for w in scans["waits"]}
+
+
 @dataclass(frozen=True)
 class Gate:
     artifact: str
@@ -365,6 +424,12 @@ class Gate:
     lift: Callable[[Case], None]
     clip: Callable[[tuple], str] = _image
     undo: Callable[[Case], None] = lambda case: None
+    # Whether its work was handed out (by default, the producer's clip), and
+    # the reasons said where its waits are (by default, the producer's row).
+    ran: Callable[[Case], bool] = lambda case: case.clip in case.h.handed_out(case.artifact)
+    said: Callable[[Case], dict[str, dict]] = lambda case: _reasons(case)
+    # The wait says how many clips (some say a machine or a library instead).
+    clips: bool = True
 
 
 def _post(path: str, body: dict) -> Callable[[Case], None]:
@@ -381,7 +446,7 @@ GATES: dict[str, Gate] = {
     "scheduler": Gate("capture", lambda case: setattr(case.h.acct, "settings_ready", False),
                       lambda case: setattr(case.h.acct, "settings_ready", True)),
     "ai_machines": Gate("vision", _hold_machines, _lift_machines,
-                        undo=lambda case: _set_vision(case.lib, "", machine=False)),
+                        undo=lambda case: _set_vision(case.lib, "", machine=False), clips=False),
     "needs": Gate("vision", lambda case: _set_proxy(case, None), lambda case: _set_proxy(case, case.saved["proxy_key"])),
     "storage": Gate("capture", _hold_storage, _lift_storage),
     "new_version": Gate("vision", lambda case: None, _post("/v1/producers/{artifact}/resume", REDO),
@@ -393,6 +458,9 @@ GATES: dict[str, Gate] = {
     "held": Gate("capture", _hold_held, _lift_held),
     "retry_later": Gate("capture", lambda case: _fail(case, 1), _retry),
     "given_up": Gate("capture", lambda case: _fail(case, 10), _retry),
+    # The Scans row's: a library's scan, through the real scan pass and its back-off.
+    "scan_failing": Gate("scans", _hold_scan_failing, _lift_scan_failing, clip=lambda lib: lib[2],
+                         ran=_scanned, said=_scans_row, clips=False),
 }
 
 
@@ -419,18 +487,19 @@ def test_due_work_held_back_always_says_why(env, reason, tmp_path):
     try:
         gate.hold(case)
         case.h.ran.clear()
+        case.h.scanned.clear()
         case.h.run()
-        assert case.clip not in case.h.handed_out(case.artifact), f"{reason}: the gate didn't hold the clip"
-        said = _reasons(case)
+        assert not gate.ran(case), f"{reason}: the gate didn't hold the clip"
+        said = gate.said(case)
         assert reason in said, f"{case.artifact}'s work waits for {reason}, and its row says {list(said)}"
-        assert said[reason]["clips"] >= 1 or reason == "ai_machines"
+        assert said[reason]["clips"] >= 1 or not gate.clips
 
         gate.lift(case)
         case.h.now += 600  # past every empty listing's wait
         case.h.ran.clear()
         case.h.run()
-        assert case.clip in case.h.handed_out(case.artifact), f"{reason}: lifted, the clip still wasn't handed out"
-        assert reason not in _reasons(case), f"{reason} is still said once it's lifted"
+        assert gate.ran(case), f"{reason}: lifted, the clip still wasn't handed out"
+        assert reason not in gate.said(case), f"{reason} is still said once it's lifted"
     finally:
         case.h.stop()
         gate.undo(case)

@@ -11,7 +11,7 @@ The order of the work (Progress) follows decision 12: today's scan moves onto th
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Each library names its reader (this server unless a device is chosen); the scan's pause becomes the library's | Not started |
-| 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | Done: the server compares (#183); the scanner asks it (#184) |
+| 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | Done: the server compares (#183); the scanner asks it (#184); a scan survives dropped connections, a lost answer and a crash mid-finish (decision 12, Interruptions) |
 | 3 | What's due for the originals is one computed list (decision 3): the scan's missing previews and the scheduler's probe, capture and analysis proxies come from it | Not started |
 | 4 | Sync by a high-water mark per library; the reader checks in (decision 4) | Not started |
 | 5 | Resumable uploads; videos from a client checked and rewritten; device keys limited to their libraries; the server admin as a person who signs in | Not started |
@@ -171,6 +171,8 @@ Robert agreed all three (2026-10-12). Today's scan already works only through th
 | Whether the drive is there | the scheduler's own look (since #179) | the reader, in its check-in |
 
 **Phase 2 is the risk**, since it's where moves and missing files change sides. Its tests run the old and new comparisons over the same folders and server listings, and must agree.
+
+**Interruptions** (2026-10-13, before a remote client depends on scanning). Every call but the start is safe to send twice, a repeat getting the answer the first got (the session keeps the plan's counts and the moves' and finish's answers), so the client tries each again through a dropped connection or the API restarting. The finish is one transaction: the archive, the handovers to copies and the scan's close, or none of them. Scans a killed client left are deleted by upkeep once expired. A library whose scan keeps failing waits a minute, then longer each time up to half an hour, and the Processing page's Scans row says so (`scan_failing`). A scan interrupted for longer still starts over at its next try (nothing lost, nothing wrongly archived): resuming one where it stopped waits for phase 4's record of what the client has sent.
 
 ## Alternatives considered
 

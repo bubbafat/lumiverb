@@ -4,7 +4,8 @@ Work is due when the scheduler would hand it out: what's missing, and
 what's stale while its redo runs. Each thing that can hold due work back
 has a code here, and every one is said: GET /v1/producers lists, on each
 producer's row, the codes holding some of its work now and how many clips
-(src/server/producer_waits.py), and Settings → Processing has a sentence for
+(src/server/producer_waits.py), GET /v1/producers/queue the Scans switch's
+on its row (scan_waits there), and Settings → Processing has a sentence for
 each (src/ui/web/src/lib/waits.ts). The scheduler names what it holds back
 itself (a job's clips that wait after a try: Waits' reason, Waiting) with
 these codes. Tests hold the scheduler, the API and the web to this list.
@@ -43,6 +44,9 @@ HELD = "held"
 RETRY_LATER = "retry_later"
 # It failed so many times it's no longer tried, until someone asks.
 GIVEN_UP = "given_up"
+# The Scans row's: a library's scans keep failing (the scan itself, not a
+# file): tried again after a minute, doubling up to half an hour.
+SCAN_FAILING = "scan_failing"
 
 # Every code, in the order a row shows them, with what it means.
 REASONS: dict[str, str] = {
@@ -57,6 +61,7 @@ REASONS: dict[str, str] = {
     HELD: "its last try couldn't finish through no fault of the clip's: tried again within the hour",
     RETRY_LATER: "its last try failed: tried again later",
     GIVEN_UP: "it failed too many times: tried again when someone asks",
+    SCAN_FAILING: "a library's scans keep failing: tried again later, a longer while each time",
 }
 
 

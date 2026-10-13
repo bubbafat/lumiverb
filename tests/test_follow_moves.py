@@ -376,6 +376,28 @@ def test_a_handover_that_fails_leaves_the_archive_done(env):
 
 
 @pytest.mark.slow
+def test_an_archive_that_dies_handing_over_leaves_nothing_archived(env):
+    """Review, Oct 13: the archive committed before the handover; an API
+    that died between them left the original archived, its people, notes
+    and projects with it, beside the empty copy, and nothing put it right.
+    The two commit together, or neither does."""
+    from unittest.mock import patch
+
+    client, headers, *_ = env
+    sha = _sha()
+    original = _ingest(env, "died/Q001.mov", sha=sha)
+    copy = _ingest(env, "died/copy/Q001.mov", sha=sha)
+    with (patch("src.server.api.routers.trash.hand_over_to_copies", side_effect=RuntimeError("the API died")),
+          pytest.raises(RuntimeError, match="the API died")):
+        client.request("DELETE", "/v1/assets", json={"asset_ids": [original], "reason": "missing"}, headers=headers)
+    assert _get(env, original)["rel_path"] == "died/Q001.mov"  # still in sight, not archived
+    assert _get(env, copy)["rel_path"] == "died/copy/Q001.mov"
+    _archive(env, original)  # sent again, it's all done
+    assert _get(env, original)["rel_path"] == "died/copy/Q001.mov"
+    assert _get(env, copy) == {"status_code": 404}
+
+
+@pytest.mark.slow
 def test_turning_moves_on_and_off_keeps_the_playback_cuts(env):
     from unittest.mock import patch
 

@@ -19,6 +19,13 @@ characters, refused folders, names in NFC, folders it couldn't list),
 files still being written, a scope folder that's gone, whether the storage
 is still there before anything is moved or archived, reading the files
 (hashes, previews, EXIF), the proxy cache, and the CLI's question about moves.
+
+A dropped connection, or the API restarting, doesn't end a scan: every call
+of the conversation but its start is safe to send twice (the server answers
+a repeat as it answered the first), so each is tried again
+(src/processing/api.py). Starting isn't (a repeat would leave a scan behind:
+this one fails before its walk), nor is an upload (a file that fails is
+tried again on its own by the scheduler's back-off).
 """
 
 from __future__ import annotations
@@ -440,9 +447,10 @@ def _answer(client: ApiClient, resp) -> dict:
 
 def _post_again_if_taken(client: ApiClient, path: str, body: dict) -> dict:
     """POST, sent again when another clip was just put at a move's path
-    (409 path_taken: the file is then that clip's)."""
+    (409 path_taken: the file is then that clip's). Hashes and moves are
+    safe to send twice: a repeat gets the answer the first got."""
     for _ in range(PATH_TAKEN_TRIES):
-        resp = client.raw("POST", path, json=body)
+        resp = client.raw("POST", path, json=body, retry=True)
         if resp.status_code != 409 or _error(resp).get("code") != "path_taken":
             break
     return _answer(client, resp)
@@ -452,7 +460,7 @@ def _abandon(client: ApiClient, scan_id: str) -> None:
     """Drop the scan and its listing: nothing else changes. Never fails the
     scan (an unfinished one expires in a day anyway)."""
     try:
-        client.raw("DELETE", f"/v1/scans/{scan_id}")
+        client.raw("DELETE", f"/v1/scans/{scan_id}", retry=True)  # sent again, a 404: it's gone
     except Exception as exc:  # noqa: BLE001 — the scan's outcome stands
         logger.warning("Couldn't drop scan %s: %s", scan_id, exc)
 
@@ -497,7 +505,7 @@ def _send_found(client: ApiClient, scan_id: str, files: list[dict], console: Con
     with progress:
         tid = progress.add_task("Listing", total=len(files))
         for batch in _batches(files, FILES_PER_CALL):
-            client.post(f"/v1/scans/{scan_id}/found", json={"files": [_found(f) for f in batch]})
+            client.post(f"/v1/scans/{scan_id}/found", json={"files": [_found(f) for f in batch]}, retry=True)
             progress.advance(tid, len(batch))
 
 
@@ -509,7 +517,8 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
     if len(named) > MAX_UNLISTED:
         named = [""]
     params = {"action": EVERY_ACTION, "limit": PLAN_PAGE}
-    first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json={"unlisted": named}).json()
+    # Sent again, the same listing's plan comes back.
+    first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json={"unlisted": named}, retry=True).json()
     counts = first["counts"]
     plan = {p["rel_path"]: p for p in first["files"]}
     cursor = first.get("next_cursor")
@@ -850,7 +859,7 @@ def _run(
 
     if dry_run:
         finished = _answer(client, client.raw("POST", f"/v1/scans/{scan_id}/finish",
-                                               json={"allow_mass_missing": False}))
+                                               json={"allow_mass_missing": False}, retry=True))
         _abandon(client, scan_id)
         console.print(
             f"\n[bold]Scan summary:[/bold] "
@@ -882,8 +891,10 @@ def _run(
     # restored if the file reappears), all at once so the server's
     # mass-missing rule sees the whole scan. When it would take most of a
     # library the server asks first (409 mass_missing, usually a volume not
-    # fully mounted): skipped, unless --allow-mass-delete says yes.
-    resp = client.raw("POST", f"/v1/scans/{scan_id}/finish", json={"allow_mass_missing": allow_mass_delete})
+    # fully mounted): skipped, unless --allow-mass-delete says yes. A finish
+    # sent again (its answer lost) gets the answer the first one got.
+    resp = client.raw("POST", f"/v1/scans/{scan_id}/finish", json={"allow_mass_missing": allow_mass_delete},
+                      retry=True)
     err = _error(resp) if resp.status_code == 409 else {}
     if err.get("code") == "mass_missing":
         stats.mass_missing = (err.get("details") or {}).get("count") or counts["gone"]

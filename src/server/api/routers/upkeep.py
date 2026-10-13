@@ -6,8 +6,9 @@ must say so with ?tenants=all; without it the call is a 400, never
 "everything". No key or a dead one is a 401; another role's key a 403.
 
 POST /v1/upkeep                    — search sync, face names, expired trash, missing artifact files,
-                                     empty dismissed people, face clusters when faces changed
-                                     (and, all accounts, old revoked tokens and the nightly backup)
+                                     empty dismissed people, face clusters when faces changed,
+                                     expired scans (and, all accounts, old revoked tokens and the
+                                     nightly backup)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true);
                                      folders the database doesn't list are only reported
@@ -129,6 +130,13 @@ class DismissedPeopleResult(BaseModel):
     paused_tenants: list[str] = Field(default_factory=list)
 
 
+class ExpiredScansResult(BaseModel):
+    """Scans expired a day after their last call (a client killed mid-scan),
+    deleted with what they found. Not paused with Upkeep: it's the scan
+    protocol's own housekeeping, as starting a scan deletes them too."""
+    deleted: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
@@ -136,6 +144,7 @@ class UpkeepResult(BaseModel):
     missing_files: MissingFilesResult = MissingFilesResult()
     dismissed_people: DismissedPeopleResult = DismissedPeopleResult()
     face_clusters: FaceClustersResult = FaceClustersResult()
+    expired_scans: ExpiredScansResult = ExpiredScansResult()
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
@@ -375,6 +384,14 @@ def _cleanup_dismissed(session) -> dict:
     return {"deleted": PersonRepository(session).cleanup_empty_dismissed()}
 
 
+def _delete_expired_scans(session) -> dict:
+    from src.server import scans
+
+    deleted = scans.delete_expired(session)
+    session.commit()
+    return {"deleted": deleted}
+
+
 def _recluster_if_changed(session) -> dict:
     """Compute the face clusters again when faces changed since they were."""
     from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
@@ -464,7 +481,9 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     """Run all periodic upkeep tasks: search sync, face propagation,
     deleting for good what has been in the trash past the trash days,
     repairing artifact files reported missing, deleting empty dismissed
-    people, and computing the face clusters again when faces changed since they were.
+    people, computing the face clusters again when faces changed since they
+    were, and deleting scans expired a day after their last call (a client
+    killed mid-scan).
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, old revoked tokens are dropped, and the nightly backup
@@ -485,6 +504,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     missing = _each_account(scope, "Missing files aren't repaired", _repair_missing_files, pausable=True)
     dismissed = _each_account(scope, "Empty dismissed people aren't deleted", _cleanup_dismissed, pausable=True)
     clusters = _each_account(scope, "Face clusters", _recluster_if_changed, pausable=False)
+    expired = _each_account(scope, "Expired scans aren't deleted", _delete_expired_scans, pausable=False)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -492,6 +512,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         missing_files=MissingFilesResult(**missing),
         dismissed_people=DismissedPeopleResult(**dismissed),
         face_clusters=FaceClustersResult(**clusters),
+        expired_scans=ExpiredScansResult(**expired),
         backup=backup,
         previews_move=previews_move,
     )

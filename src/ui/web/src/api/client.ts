@@ -989,8 +989,11 @@ export interface ProducerWait {
   job?: string;
   /** ai_machines: "off" | "no_machine" | "offline" | "unusable"; scheduler: "not_running" | "starting" | "cant_list". */
   why?: string;
-  /** ai_machines: why, in a sentence; scheduler (cant_list): the error. */
+  /** ai_machines: why, in a sentence; scheduler (cant_list), scan_failing: the error. */
   message?: string;
+  /** scan_failing: failing since, and when the library's scan is tried again. */
+  since?: string;
+  next_try?: string;
 }
 
 /** Make again what a producer made below its level now (admins): these clips (asset_ids) or every one
@@ -1050,6 +1053,8 @@ export interface PauseSwitch {
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
+  /** Why its work waits, as a producer's row says it (Scans: libraries whose scans keep failing). */
+  waits?: ProducerWait[];
 }
 
 /** Seconds until each producer, pool and everything is caught up. A producer
