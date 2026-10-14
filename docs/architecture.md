@@ -68,6 +68,8 @@ tenant_db_routing — tenant_id, connection_string, region
 
 The control plane handles: tenant provisioning, API key validation, JWT revocation tracking, and routing requests to the correct tenant database. It never stores media metadata.
 
+Where an account's database is, is its `tenant_db_routing` row, for every caller: a request (the middleware), and work outside one, such as a response's background task, upkeep for every account or the scheduler (`src/server/database.py` `tenant_database_url`, behind `get_tenant_session(tenant_id)`). A restore rewrites that row. The env file's `TENANT_DATABASE_URL_TEMPLATE` names only a new account's database (`src/server/accounts.py`), so nothing else reads it (`tests/test_account_database.py`).
+
 ### 3.2 Tenant Database (per tenant)
 
 Each tenant gets a dedicated Postgres database on the same Postgres instance (scales to hundreds of tenants before needing separate instances).

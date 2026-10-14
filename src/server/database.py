@@ -64,11 +64,22 @@ def get_control_engine() -> Engine:
     return _engines[url]
 
 
+def tenant_database_url(tenant_id: str) -> str:
+    """Where the account's database is: its routing row, as requests read it
+    (src/server/api/middleware.py) and a restore rewrites it. The template
+    names only a new account's database (src/server/accounts.py)."""
+    from src.server.repository.control_plane import TenantDbRoutingRepository
+
+    with get_control_session() as session:
+        routing = TenantDbRoutingRepository(session).get_by_tenant_id(tenant_id)
+    if routing is None:
+        raise LookupError(f"no database for {tenant_id}")
+    return routing.connection_string
+
+
 def get_tenant_engine(tenant_id: str) -> Engine:
-    """Return a cached engine for a specific tenant DB."""
-    settings = get_settings()
-    url = settings.tenant_database_url_template.format(tenant_id=tenant_id)
-    return get_engine_for_url(url)
+    """Return a cached engine for the account's database (tenant_database_url)."""
+    return get_engine_for_url(tenant_database_url(tenant_id))
 
 
 def get_engine_for_url(url: str) -> Engine:
@@ -88,7 +99,9 @@ def get_control_session() -> Generator[Session, None, None]:
 
 @contextmanager
 def get_tenant_session(tenant_id: str) -> Generator[Session, None, None]:
-    """Context manager yielding a SQLModel Session for a tenant DB."""
+    """Context manager yielding a SQLModel Session for the account's database
+    (tenant_database_url): for work outside a request, which has no
+    request.state.connection_string."""
     engine = get_tenant_engine(tenant_id)
     with Session(engine) as session:
         yield session
