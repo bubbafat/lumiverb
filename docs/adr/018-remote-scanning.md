@@ -18,7 +18,7 @@ The order of the work (Progress) follows decision 12: today's scan moves onto th
 | 6 | Libraries a device reads: the scheduler leaves their file work alone; the client (the scan plus analysis proxies) against a remote server; the processing page says who scans | Not started |
 | 7 | Quality as notches; the remake choice | Not started |
 | 8 | Library admins (roles per library) | Not started |
-| 9 | ~~A client that works offline (its own database, synced)~~ Dropped: a client keeps no truth of its own (decision 13). A cache for speed comes only once measurements show it's needed | Dropped |
+| 9 | ~~A client that works offline (its own database, synced)~~ Dropped: a client keeps no copy it decides from (decision 13). A cache for speed comes only once measurements show it's needed | Dropped |
 
 ## Overview
 
@@ -80,7 +80,7 @@ Information flows both ways; each field has one writer, so nothing is merged.
 - **The client respects** what people did on the server: the files to skip (trashed, archived, deleted for good, each with its hash: another file at the path is a new clip). It never writes them. The server refuses an upload for a clip that's gone, rather than trusting the client to skip it.
 - **People's edits are layers.** Corrected descriptions, OCR and tags, and a place a person set, are kept apart from what's derived, so nothing a client sends can undo them. A future correction (say, of when a clip was taken) is a layer too.
 - **The scanning client writes no human data** in this ADR. Editing offline would make human data two-writer, which needs merge rules of its own.
-- **Any implementation can be a client**, as long as it keeps no truth of its own (decision 13): whatever it keeps is a cache it can drop, and a fresh start loses nothing.
+- **Any implementation can be a client**, as long as it keeps no copy it decides from (decision 13): whatever it keeps is a cache it can drop, and a fresh start loses nothing.
 
 ### 6. Quality changes and remakes
 
@@ -174,11 +174,13 @@ Robert agreed all three (2026-10-12). Today's scan already works only through th
 
 **Interruptions** (2026-10-13, before a remote client depends on scanning). Every call but the start is safe to send twice, a repeat getting the answer the first got (the session keeps the plan's counts and the moves' and finish's answers), so the client tries each again through a dropped connection or the API restarting. The finish is one transaction: the archive, the handovers to copies and the scan's close, or none of them. Scans a killed client left are deleted by upkeep once expired. A library whose scan keeps failing waits a minute, then longer each time up to half an hour, and the Processing page's Scans row says so (`scan_failing`). A scan interrupted for longer still starts over at its next try (nothing lost, nothing wrongly archived): it costs a walk and a listing, so resuming one where it stopped waits until that's shown to matter (decision 13: the client keeps no record of what it sent).
 
-### 13. A client is never a source of truth
+### 13. One source of truth for each fact
 
-Robert, 2026-10-13, worried that remote scanning turns one source of truth into two: the server's, and a client's view of it. There are already two things no design removes: **the disk is the truth for files** (which exist, what's in them) and **the server is the truth for everything else** (clips, people's data, what AI made). A client is a reader of the disk, never a third.
+Robert, 2026-10-13, worried that remote scanning turns one source of truth into two: the server's, and a client's view of it. Then, on reflection: a client is a source of truth, since it speaks for its file system. So the rule is one source for each fact, and no copies:
 
-- **A client keeps nothing it decides from.** Each scan reads the disk and tells the server what's there; the server decides (decision 12). This is how phase 2 works: the client holds nothing between scans, and the scan session it fills is the server's, gone within a day.
+- **The file system is the truth for files:** which exist, and their content, size, time and EXIF. Its reader speaks for it (this server for its own disks, a client for a device's), as it reads it now. That's the client's side of decision 5's one writer per field.
+- **The server is the truth for everything else:** clips, people's data, what AI made.
+- **A client keeps no copy it decides from:** neither of the server's truth nor of its file system as it was. Each scan reads the disk and tells the server what's there; the server decides (decision 12). This is how phase 2 works: the client holds nothing between scans, and the scan session it fills is the server's, gone within a day.
 - **Anything a client keeps is a cache for speed:** dropping it loses nothing, since the next scan rebuilds it from the disk and the server. No decision that changes data is made from a cache.
 - **A full scan compares the disk with the server directly**, never with a cache, so drift is corrected.
 - **A high-water mark fetches the server's changes** (the files to skip, filters, settings, the list in decision 3); it never syncs a copy of the library (decision 4).
