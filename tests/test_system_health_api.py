@@ -357,8 +357,7 @@ def test_recreating_the_indexes_makes_them_again_beside_the_live_ones(env):
           patch("src.server.search.quickwit_client.QuickwitClient.make_index",
                 lambda self, index_id, kind: made.append(index_id) or True),
           patch("src.server.search.quickwit_client.QuickwitClient.drop_index",
-                lambda self, index_id: pytest.fail(f"{index_id} dropped")),
-          patch("src.server.database.get_tenant_session", lambda tenant_id: _db(env))):
+                lambda self, index_id: pytest.fail(f"{index_id} dropped"))):
         r = client.post("/v1/upkeep/recreate-search-indexes", headers=headers)
     assert r.status_code == 200 and r.json()["tenants_processed"] == 1, r.text
     tenant_id = env[4]

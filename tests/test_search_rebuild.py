@@ -93,8 +93,7 @@ def quickwit(env):
     with (patch.object(get_settings(), "quickwit_enabled", True),
           patch("src.server.search.quickwit_client.requests.get", fake.get),
           patch("src.server.search.quickwit_client.requests.post", fake.post),
-          patch("src.server.search.quickwit_client.requests.delete", fake.delete),
-          patch("src.server.database.get_tenant_session", lambda tenant_id: _db(env))):
+          patch("src.server.search.quickwit_client.requests.delete", fake.delete)):
         indexes._cache.clear()
         yield fake
     indexes._cache.clear()

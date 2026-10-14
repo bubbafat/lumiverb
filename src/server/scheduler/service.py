@@ -505,23 +505,6 @@ class Scheduler:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
-_tenant_urls: dict[str, str] = {}
-
-
-def tenant_url(tenant_id: str) -> str:
-    """The account's database, as its routing says (what requests use)."""
-    if tenant_id not in _tenant_urls:
-        from src.server.database import get_control_session
-        from src.server.repository.control_plane import TenantDbRoutingRepository
-
-        with get_control_session() as ctrl:
-            routing = TenantDbRoutingRepository(ctrl).get_by_tenant_id(tenant_id)
-            if routing is None:
-                raise LookupError(f"no database for {tenant_id}")
-            _tenant_urls[tenant_id] = routing.connection_string
-    return _tenant_urls[tenant_id]
-
-
 def stores_here() -> bool:
     """Whether the API keeps the previews on this machine's disk: the
     scheduler runs beside it, sharing its env (DATA_DIR, STORAGE_PROVIDER)."""
@@ -538,13 +521,12 @@ def stored_analysis_proxy(tenant_id: str, storage: Any = None) -> Callable[[str]
     clip has none, or its file isn't there (a drive unplugged): the cache
     downloads it then, as before."""
     from sqlalchemy import text
-    from sqlmodel import Session
 
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
 
     def find(asset_id: str):
         nonlocal storage
-        with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+        with get_tenant_session(tenant_id) as session:
             key = session.execute(text("SELECT analysis_proxy_key FROM assets WHERE asset_id = :a"),
                                   {"a": asset_id}).scalar()
         if not key:
@@ -562,13 +544,11 @@ def stored_analysis_proxy(tenant_id: str, storage: Any = None) -> Callable[[str]
 def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict] | None:
     """The kind's due clips, oldest first; None when it was paused (or its
     redo stopped) since the scheduler last looked."""
-    from sqlmodel import Session
-
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
     from src.server.repository import lineage
     from src.server.scheduler.queue import candidates
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         paused = lineage.pauses(session)
         if kind.artifact in paused.work:
             return None
@@ -589,12 +569,10 @@ REDONE = tuple(dict.fromkeys(k.artifact for k in KINDS.values() if k.redo))
 def _hold_new_versions_in_database(tenant_id: str) -> None:
     """lineage.hold_new_version for each producer made again, in the
     account's database (one read each once its version was seen)."""
-    from sqlmodel import Session
-
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
     from src.server.repository import lineage
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         for artifact in REDONE:
             lineage.hold_new_version(session, artifact)
 
@@ -609,22 +587,19 @@ def _job_models(tenant_id: str) -> dict[str, str]:
 def _retry_requested_in_database(tenant_id: str) -> str | None:
     """When someone last asked for failing clips to be tried again (lineage.retry)."""
     from sqlalchemy import text
-    from sqlmodel import Session
 
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         return session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.retry_at'")).scalar()
 
 
 def _crashed_in_database(tenant_id: str, artifact: str, asset_ids: list[str], error: str) -> list[str]:
     """lineage.note_crashes in the account's database."""
-    from sqlmodel import Session
-
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
     from src.server.repository import lineage
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         return lineage.note_crashes(session, artifact, asset_ids, error)
 
 
@@ -632,11 +607,10 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
     import json
 
     from sqlalchemy import text
-    from sqlmodel import Session
 
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         session.execute(text(
             "INSERT INTO system_metadata (key, value, updated_at) VALUES ('scheduler.status', :v, now())"
             " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"v": json.dumps(status)})
@@ -658,12 +632,10 @@ def held_kinds(paused: Any) -> set[str]:
 
 def _on_hold_in_database(tenant_id: str) -> Any:
     """What an admin paused, both scopes (lineage.pauses)."""
-    from sqlmodel import Session
-
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
     from src.server.repository import lineage
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         return lineage.pauses(session)
 
 
@@ -672,11 +644,10 @@ def _status_from_database(tenant_id: str) -> dict | None:
     import json
 
     from sqlalchemy import text
-    from sqlmodel import Session
 
-    from src.server.database import get_engine_for_url
+    from src.server.database import get_tenant_session
 
-    with Session(get_engine_for_url(tenant_url(tenant_id))) as session:
+    with get_tenant_session(tenant_id) as session:
         raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
     try:
         return json.loads(raw) if raw else None
