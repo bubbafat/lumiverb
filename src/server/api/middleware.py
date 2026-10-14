@@ -67,6 +67,16 @@ def _extract_library_from_f_params(query_params) -> str | None:
     return None
 
 
+def _routed(session, pub) -> str | None:
+    """A public link's account database: its routing row, as for every other
+    request (src/server/database.py tenant_database_url). None when there's
+    no such link, or its account is gone."""
+    if pub is None:
+        return None
+    routing = TenantDbRoutingRepository(session).get_by_tenant_id(pub.tenant_id)
+    return routing.connection_string if routing else None
+
+
 class TenantResolutionMiddleware(BaseHTTPMiddleware):
     """
     Run before every request except /health and /v1/admin/*.
@@ -76,7 +86,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
 
     Unauthenticated GET path: if the request URL or query params supply a library_id
     that exists in the public_libraries control plane table, resolves the tenant from
-    that table and sets request.state.is_public_request = True.  All other
+    that table (its database from the tenant's routing, as above) and sets
+    request.state.is_public_request = True.  All other
     unauthenticated requests return 401.
     """
 
@@ -161,9 +172,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             if library_id:
                 with get_control_session() as session:
                     pub = PublicLibraryRepository(session).get(library_id)
-                if pub is not None:
+                    connection_string = _routed(session, pub)
+                if connection_string is not None:
                     request.state.tenant_id = pub.tenant_id
-                    request.state.connection_string = pub.connection_string
+                    request.state.connection_string = connection_string
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True
@@ -174,9 +186,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             if project_id:
                 with get_control_session() as session:
                     pub = PublicProjectRepository(session).get(project_id)
-                if pub is not None:
+                    connection_string = _routed(session, pub)
+                if connection_string is not None:
                     request.state.tenant_id = pub.tenant_id
-                    request.state.connection_string = pub.connection_string
+                    request.state.connection_string = connection_string
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True
@@ -191,9 +204,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             if project_id:
                 with get_control_session() as session:
                     pub = PublicProjectRepository(session).get(project_id)
-                if pub is not None:
+                    connection_string = _routed(session, pub)
+                if connection_string is not None:
                     request.state.tenant_id = pub.tenant_id
-                    request.state.connection_string = pub.connection_string
+                    request.state.connection_string = connection_string
                     request.state.key_id = None
                     request.state.role = "public"
                     request.state.is_public_request = True

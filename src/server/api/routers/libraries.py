@@ -154,8 +154,7 @@ def create_library(
         session.commit()
         session.refresh(library)
         with get_control_session() as ctrl_session:
-            PublicLibraryRepository(ctrl_session).upsert(library.library_id, tenant_id,
-                                                         request.state.connection_string)
+            PublicLibraryRepository(ctrl_session).upsert(library.library_id, tenant_id)
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,
@@ -362,11 +361,10 @@ def update_library(
     # Maintain public_libraries control plane index
     if body.is_public is not None:
         tenant_id = request.state.tenant_id
-        connection_string = request.state.connection_string
         with get_control_session() as ctrl_session:
             pub_repo = PublicLibraryRepository(ctrl_session)
             if library.is_public:
-                pub_repo.upsert(library_id, tenant_id, connection_string)
+                pub_repo.upsert(library_id, tenant_id)
             else:
                 pub_repo.delete(library_id)
 

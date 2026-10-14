@@ -458,12 +458,8 @@ class PublicLibraryRepository:
     def get(self, library_id: str) -> PublicLibrary | None:
         return self._session.get(PublicLibrary, library_id)
 
-    def upsert(self, library_id: str, tenant_id: str, connection_string: str) -> None:
-        row = PublicLibrary(
-            library_id=library_id,
-            tenant_id=tenant_id,
-            connection_string=connection_string,
-        )
+    def upsert(self, library_id: str, tenant_id: str) -> None:
+        row = PublicLibrary(library_id=library_id, tenant_id=tenant_id)
         self._session.merge(row)
         self._session.commit()
 
@@ -484,13 +480,9 @@ class PublicProjectRepository:
         from src.server.models.control_plane import PublicProject
         return self._session.get(PublicProject, project_id)
 
-    def upsert(self, project_id: str, tenant_id: str, connection_string: str) -> None:
+    def upsert(self, project_id: str, tenant_id: str) -> None:
         from src.server.models.control_plane import PublicProject
-        row = PublicProject(
-            project_id=project_id,
-            tenant_id=tenant_id,
-            connection_string=connection_string,
-        )
+        row = PublicProject(project_id=project_id, tenant_id=tenant_id)
         self._session.merge(row)
         self._session.commit()
 

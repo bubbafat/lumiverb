@@ -35,8 +35,8 @@ Two-layer Postgres architecture:
 - `api_keys` — key_id, key_hash, tenant_id, name, label, scopes, role (`admin`|`editor`|`viewer`), created_by_user_id (the user who made it, signed in or with a key of theirs; null for the scheduler's and the operator's), created_at, last_used_at, revoked_at
 - `users` — user_id, tenant_id, email, password_hash, role (`admin`|`editor`|`viewer`), token_version (in every JWT as `tv`; bumped to revoke the user's tokens), created_at, last_login_at
 - `password_reset_tokens` — token_hash, user_id, expires_at, used_at
-- `public_libraries` — library_id, tenant_id, connection_string, created_at
-- `public_projects` — project_id, tenant_id, connection_string, created_at
+- `public_libraries` — library_id, tenant_id, created_at
+- `public_projects` — project_id, tenant_id, created_at (a public link names its account; its database is the account's `tenant_db_routing` row, as for every request)
 - `revoked_tokens` — jti (PK), revoked_at. Tracks revoked JWTs for server-side logout/refresh revocation. Cleaned up by upkeep sweep (entries older than 8 days).
 - `tenant_db_routing` — tenant_id, connection_string, region
 

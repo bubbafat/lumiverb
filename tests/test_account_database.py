@@ -1,8 +1,8 @@
 """Where an account's database is: its routing row, for every caller.
 
-Requests read it (src/server/api/middleware.py); work outside a request
-(a response's background task, upkeep for every account, the scheduler)
-reads it too (src/server/database.py tenant_database_url). The env file's
+Requests read it (src/server/api/middleware.py), public links' too; work
+outside a request (a response's background task, upkeep for every account,
+the scheduler) reads it as well (src/server/database.py tenant_database_url). The env file's
 template names only a new account's database: here it names somewhere the
 account isn't, as after a restore or with the tests' own databases."""
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,6 +135,70 @@ def test_upkeep_for_every_account_reaches_each_account(account):
     assert r.json()["deleted"] == 1
 
 
+@contextmanager
+def _moved(account):
+    """The account's database moved, as a restore onto another server does:
+    a copy elsewhere, and its routing row rewritten to it (backups.py restore).
+    Put back after."""
+    *_, tenant_id, tenant_url = account
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    control = create_engine(get_settings().control_plane_database_url)
+    with PostgresContainer(PG_IMAGE) as elsewhere:
+        moved_url = _ensure_psycopg2(elsewhere.get_connection_url())
+        _provision_tenant_db(moved_url, project_root)
+        with control.begin() as conn:
+            conn.execute(text("UPDATE tenant_db_routing SET connection_string = :u WHERE tenant_id = :t"),
+                         {"u": moved_url, "t": tenant_id})
+        try:
+            yield moved_url
+        finally:
+            with control.begin() as conn:
+                conn.execute(text("UPDATE tenant_db_routing SET connection_string = :u WHERE tenant_id = :t"),
+                             {"u": tenant_url, "t": tenant_id})
+            control.dispose()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("kind", ["library", "project"])
+def test_a_public_link_reaches_the_account_where_its_routing_says(account, kind):
+    """A link made public before the account's database moved opens the
+    database it moved to: the link keeps no address of its own."""
+    from sqlmodel import Session
+
+    from src.server.models.tenant import Project
+    from src.server.repository.tenant import LibraryRepository
+
+    client, headers, *_ = account
+    r = client.post("/v1/libraries", json={"name": f"Shared {kind}", "root_path": f"/shared-{kind}",
+                                           "is_public": kind == "library"}, headers=headers)
+    assert r.status_code == 200, r.text
+    library_id = r.json()["library_id"]
+    if kind == "project":
+        r = client.post("/v1/projects", json={"name": "Shared", "visibility": "public"}, headers=headers)
+        assert r.status_code in (200, 201), r.text
+        link_id = r.json()["project_id"]
+        url = f"/v1/public/projects/{link_id}"
+    else:
+        url = f"/v1/libraries/{library_id}"
+    assert client.get(url).status_code == 200
+
+    with _moved(account) as moved_url:
+        engine = create_engine(moved_url)
+        with Session(engine) as session:
+            moved = LibraryRepository(session).create(name="After the move", root_path=f"/shared-{kind}")
+            session.execute(text("UPDATE libraries SET library_id = :id, is_public = :p WHERE library_id = :old"),
+                            {"id": library_id, "p": kind == "library", "old": moved.library_id})
+            if kind == "project":
+                session.add(Project(project_id=link_id, name="After the move", visibility="public"))
+            session.commit()
+        engine.dispose()
+
+        r = client.get(url)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "After the move"
+
+
 @pytest.mark.fast
 def test_only_making_an_account_reads_the_template():
     """The template names a new account's database (accounts.py, and
@@ -148,3 +213,13 @@ def test_only_making_an_account_reads_the_template():
 
     assert "tenant_database_url_template" not in inspect.getsource(database.get_tenant_engine)
     assert "tenant_database_url_template" not in inspect.getsource(database.tenant_database_url)
+
+
+@pytest.mark.fast
+def test_public_links_keep_no_address_of_their_own():
+    """A public link names its account; the account's routing row says where
+    its database is (src/server/api/middleware.py _routed)."""
+    from src.server.models.control_plane import PublicLibrary, PublicProject
+
+    for model in (PublicLibrary, PublicProject):
+        assert "connection_string" not in model.model_fields, model.__name__
