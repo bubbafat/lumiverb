@@ -7,11 +7,13 @@ Redo on change (Robert, Oct 9): changing a setting is the approval, so a
 producer's stale clips are made again after anything missing, everywhere.
 An admin can stop that for a producer and resume it.
 
-Pausing (Robert, Oct 9): one switch per processing action (Scans, Upkeep,
-each producer the scheduler makes), or all of them, paused and resumed on
-its own (nothing else lifts a pause), with a scope: its work (nothing of it
-starts) or, for a producer, its redo alone (its stale clips wait). The
-scheduler starts nothing more of what's paused; what's running finishes.
+Pausing (Robert, Oct 9): one switch per processing action (Upkeep, each
+producer the scheduler makes), or all of them, paused and resumed on its
+own (nothing else lifts a pause), with a scope: its work (nothing of it
+starts) or, for a producer, its redo alone (its stale clips wait). Scans
+are paused per library (ADR-018 phase 1: POST /v1/libraries/scans/pause);
+Pause all pauses those too. The scheduler starts nothing more of what's
+paused; what's running finishes.
 
 Doing work now: POST /v1/producers/run asks the scheduler to make a
 producer's (or every producer's) work now, in one library or all of them,
@@ -229,7 +231,8 @@ class Wait(BaseModel):
     clips: int
     # needs: the artifact it waits for.
     artifact: str | None = None
-    # needs: what makes that is paused (Scans, for what scans make); scan: Scans is paused.
+    # needs: what makes that is paused (a library's scans, for what scans make);
+    # scan: a library it waits on a scan of has its scans paused.
     paused: bool | None = None
     # storage: the library, and what the scheduler's looks at its drive found.
     library_id: str | None = None
@@ -446,7 +449,7 @@ def _project_clips(request: Request, session: Session, user_id: str, project_id:
     return [a.asset_id for a in _all_project_assets(project, request, session, user_id)]
 
 
-SWITCH_TITLES = {PAUSE_SCANS: "Scans", PAUSE_UPKEEP: "Upkeep"}
+SWITCH_TITLES = {PAUSE_UPKEEP: "Upkeep"}
 
 
 class PauseIn(BaseModel):
@@ -457,14 +460,18 @@ class PauseIn(BaseModel):
 
 
 def _targets(target: str, scope: str) -> list[str]:
-    """What a pause names: one switch (Scans, Upkeep or a producer the
-    scheduler makes) or every one ("all", named, never a missing target).
-    404 for no such producer; 409 not_scheduled for what scans make (Scans
-    pauses it). A redo is a producer's: 422 bad_scope for Scans and Upkeep,
+    """What a pause names: one switch (Upkeep or a producer the scheduler
+    makes) or every one ("all", named, never a missing target). 404 for no
+    such producer; 409 per_library for "scans" (paused per library since
+    ADR-018 phase 1); 409 not_scheduled for what scans make (a library's
+    Scans pause stops it). A redo is a producer's: 422 bad_scope for Upkeep,
     409 cant_redo for a producer that isn't made again yet; "all" names
     every producer that is."""
     from src.server.api.errors import InvalidChoiceError
 
+    if target == PAUSE_SCANS:
+        raise ConflictError("per_library", "Scans are paused for each library: "
+                            "POST /v1/libraries/scans/pause with the libraries, or all.", {"target": target})
     if target == PAUSE_ALL:
         if scope == lineage.WORK:
             return list(pause_targets())
@@ -478,7 +485,7 @@ def _targets(target: str, scope: str) -> list[str]:
     if scope == lineage.REDO and not lineage.redoable(target):
         raise ConflictError("cant_redo", f"{p.title} isn't made again yet. {lineage.CANT_REDO.get(target, '')}".strip())
     if not p.scheduled:
-        raise ConflictError("not_scheduled", f"{p.title} are made by scans: pausing Scans stops them.",
+        raise ConflictError("not_scheduled", f"{p.title} are made by scans: pausing a library's scans stops them.",
                             {"artifact": target})
     return [target]
 
@@ -491,12 +498,12 @@ def pause_switch(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
     """Pause one switch (admins), or "all", whatever the others are. Scope
-    work: scans (no new or changed files found, no thumbnails or video
-    previews made), upkeep (no trash purge, file cleanup or face names
-    spread; search sync goes on) or a producer (nothing more of it starts,
-    missing or stale); all is every switch (state paused; each can be
-    resumed alone after; "all" is stored, so a producer a later version
-    adds is paused too). Scope redo: a producer's
+    work: upkeep (no trash purge, file cleanup or face names spread; search
+    sync goes on) or a producer (nothing more of it starts, missing or
+    stale); all is every switch and every library's scans (state paused;
+    each can be resumed alone after; "all" is stored, so a producer a later
+    version adds is paused too). A library's scans alone: POST
+    /v1/libraries/scans/pause. Scope redo: a producer's
     stale clips stay as they are until it's resumed, or its settings change
     (what's missing is still made). What's running finishes. Again is
     fine: who paused first stays."""
@@ -550,13 +557,27 @@ def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_te
 
 
 class PauseSwitch(BaseModel):
-    target: str  # "scans", "upkeep" or a producer's artifact
+    target: str  # "upkeep" or a producer's artifact
     title: str
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
-    # Why its work waits, as a producer's row says it (src/shared/waits.py):
-    # Scans' libraries whose scans keep failing (producer_waits.scan_waits).
+    # Why its work waits, as a producer's row says it (src/shared/waits.py).
+    waits: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LibraryScans(BaseModel):
+    """A library's scans (ADR-018 phase 1): who reads its files
+    (src/shared/readers.py), and its own Scans pause."""
+
+    library_id: str
+    name: str
+    reader: str
+    paused: bool = False
+    paused_by: str | None = None  # admins only
+    paused_at: datetime | None = None
+    # Why its scans wait (src/shared/waits.py): its scans keep failing
+    # (producer_waits.scan_waits).
     waits: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -600,11 +621,14 @@ class SchedulerStatus(BaseModel):
     pools: dict[str, list[int]] = Field(default_factory=dict)  # each pool's [busy, slots]
     # Requests the AI machines sharing its GPU give up while video is decoded there.
     gpu_hold: int = 0
-    # The account's pause state, derived from its switches (Robert, Oct 9):
-    # "running" (none paused: green), "partly" (some: yellow), "paused" (all: red).
+    # The account's pause state, derived from its switches and its libraries'
+    # scans (Robert, Oct 9): "running" (none paused: green), "partly" (some:
+    # yellow), "paused" (all: red).
     state: Literal["running", "partly", "paused"] = "running"
-    # Every pause switch: Scans, Upkeep, then each producer the scheduler makes.
+    # Every pause switch: Upkeep, then each producer the scheduler makes.
     switches: list[PauseSwitch] = Field(default_factory=list)
+    # Each library (not in the trash): who reads it, and its Scans pause.
+    libraries: list[LibraryScans] = Field(default_factory=list)
     # Seconds a slot spends per unit of work, by kind (learned from finished jobs).
     pace: dict[str, float] = Field(default_factory=dict)
     # Jobs running now: {kind, units, elapsed}.
@@ -672,14 +696,24 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
 
     now = utcnow()
     status = read_status(session, now)
-    held, admin = lineage.pauses(session).work, _admin(request)
-    status.state = pause_state(set(held))
+    paused, admin = lineage.pauses(session), _admin(request)
+    held = paused.work
+    libraries = session.execute(text(
+        "SELECT library_id, name, reader FROM libraries WHERE status = 'active' ORDER BY name")).all()
+    failing = scan_waits(session, status)
+    status.state = pause_state(set(held), libraries_paused=sum(1 for lib in libraries if paused.scans_paused(lib[0])),
+                               libraries=len(libraries))
     status.switches = [
         PauseSwitch(target=t, title=SWITCH_TITLES.get(t) or PRODUCERS[t].title, paused=t in held,
                     paused_at=held[t]["paused_at"] if t in held else None,
-                    paused_by=held[t]["paused_by"] if t in held and admin else None,
-                    waits=scan_waits(session, status) if t == PAUSE_SCANS else [])
+                    paused_by=held[t]["paused_by"] if t in held and admin else None)
         for t in pause_targets()]
+    status.libraries = [
+        LibraryScans(library_id=library_id, name=name, reader=reader, paused=paused.scans_paused(library_id),
+                     paused_at=paused.libraries.get(library_id, {}).get("paused_at"),
+                     paused_by=paused.libraries.get(library_id, {}).get("paused_by") if admin else None,
+                     waits=[w for w in failing if w["library_id"] == library_id])
+        for library_id, name, reader in libraries]
     # Paused work has no time left (Robert, Oct 9); what's running still says its time left, since it finishes.
     if status.live:
         held_producers = {t for t in held if t in PRODUCERS}

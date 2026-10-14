@@ -10,13 +10,16 @@ import {
   listLibraries,
   listProjects,
   pauseProcessing,
+  pauseScans,
   redoBelow,
   resumeProcessing,
   resumeRedo,
+  resumeScans,
   retryFailures,
   setProducerSettings,
   stopRedo,
   type FailingClip,
+  type LibraryScans,
   type Producer,
   type ProducerWait,
   type SchedulerStatus,
@@ -64,6 +67,12 @@ export default function ProcessingSection() {
   const admin = user?.role === "admin";
   // Each switch's state comes from the queue (polled every 5 s), not the scoped counts.
   const held = new Map((status?.switches ?? []).map((sw) => [sw.target, sw.paused]));
+  // Scans are each library's own (ADR-018 phase 1): what scans make is paused in one library when its scans are,
+  // and across every library when every one's are.
+  const libraryScans = status?.libraries ?? [];
+  const scansPaused = kind === "library"
+    ? !!libraryScans.find((l) => l.library_id === id)?.paused
+    : libraryScans.length > 0 && libraryScans.every((l) => l.paused);
   const canRetry = user?.role === "admin" || user?.role === "editor";
 
   return (
@@ -89,7 +98,8 @@ export default function ProcessingSection() {
 
       {status && (
         <ul className="space-y-2">
-          {status.switches.filter((sw) => sw.target === "scans" || sw.target === "upkeep").map((sw) => (
+          <ScansRow libraries={libraryScans} admin={admin} />
+          {status.switches.filter((sw) => sw.target === "upkeep").map((sw) => (
             <li key={sw.target} className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-2 space-y-1">
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                 <span className="text-sm text-gray-100">
@@ -98,7 +108,7 @@ export default function ProcessingSection() {
                 </span>
                 <Switch name={sw.title} target={sw.target} state={sw.paused ? "paused" : "running"} admin={admin} />
               </div>
-              {/* Why its work waits (Scans: a library whose scans keep failing), as a producer's row says its own. */}
+              {/* Why its work waits, as a producer's row says its own. */}
               {(sw.waits ?? []).length > 0 && (
                 <ul className="space-y-0.5" aria-label={`Why ${sw.title} waits`}>
                   {(sw.waits ?? []).map((w) => (
@@ -156,7 +166,7 @@ export default function ProcessingSection() {
               canRetry,
               paused: held.get(q.artifact) ?? q.paused,
               titleOf: (artifact: string) => producers.find((x) => x.artifact === artifact)?.title ?? artifact,
-              scansPaused: !!held.get("scans"),
+              scansPaused,
               libraryId: kind === "library" ? id : undefined,
               timeLeft: kind === "all" && status?.live ? status.eta?.producers[q.artifact] : undefined,
               timeNotKnown: kind === "all" && !!status?.live && !!status.eta?.not_counted?.some(
@@ -486,12 +496,16 @@ const STATE_WORDS = { running: "Running", partly: "Partly paused", paused: "Paus
 
 /** A pause switch (Robert, Oct 9): one row's (green running, yellow paused)
  * or "all" (green, yellow when some are paused, red when all are). The global one pauses every row from green or yellow and
- * resumes every row from red. Admins flip it; everyone sees it. */
-function Switch({ name, target, state, admin }: { name: string; target: string;
-                                                   state: "running" | "partly" | "paused"; admin: boolean }) {
+ * resumes every row from red. Admins flip it; everyone sees it. A library's scans say how they pause (pause, resume). */
+function Switch({ name, target, state, admin, pause, resume }: {
+  name: string; target: string; state: "running" | "partly" | "paused"; admin: boolean;
+  pause?: () => Promise<void>; resume?: () => Promise<void>;
+}) {
   const queryClient = useQueryClient();
   const toggle = useMutation({
-    mutationFn: () => (state === "paused" ? resumeProcessing(target) : pauseProcessing(target)),
+    mutationFn: () => (state === "paused"
+      ? (resume ?? (() => resumeProcessing(target)))()
+      : (pause ?? (() => pauseProcessing(target)))()),
     onSuccess: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY }),
@@ -529,6 +543,77 @@ function Switch({ name, target, state, admin }: { name: string; target: string;
         </span>
       )}
     </span>
+  );
+}
+
+const readerWords = (reader: string) => (reader === "server" ? "Read by this server" : `Read by ${reader}`);
+
+/** Scans (ADR-018 phase 1): each library's own pause, who reads its files, and why its scans wait. Admins pause or
+ * resume one library, or every library at once: that sets each library's own pause (there's no other). */
+function ScansRow({ libraries, admin }: { libraries: LibraryScans[]; admin: boolean }) {
+  const queryClient = useQueryClient();
+  const every = useMutation({
+    mutationFn: (pause: boolean) => (pause ? pauseScans("all") : resumeScans("all")),
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: STATUS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY }),
+      ]),
+  });
+  const paused = libraries.filter((l) => l.paused).length;
+  return (
+    <li className="rounded-md border border-gray-700/60 bg-gray-950/40 px-4 py-2 space-y-1">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="text-sm text-gray-100">
+          Scans
+          <span className="ml-2 text-xs text-gray-500">{SWITCH_ABOUT.scans}</span>
+        </span>
+        {admin && libraries.length > 1 && (
+          <span className="inline-flex flex-wrap gap-x-3">
+            <button type="button" className={linkClass} disabled={every.isPending || paused === libraries.length}
+              onClick={() => every.mutate(true)}>
+              Pause every library
+            </button>
+            <button type="button" className={linkClass} disabled={every.isPending || paused === 0}
+              onClick={() => every.mutate(false)}>
+              Resume every library
+            </button>
+          </span>
+        )}
+      </div>
+      {every.error && (
+        <p role="alert" className="text-sm text-red-300">
+          {message(every.error)}
+        </p>
+      )}
+      {libraries.length === 0 ? (
+        <p className="text-sm text-gray-500">No libraries yet.</p>
+      ) : (
+        <ul className="space-y-1" aria-label="Each library's scans">
+          {libraries.map((lib) => (
+            <li key={lib.library_id} className="space-y-0.5">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span className="text-sm text-gray-200">
+                  {lib.name}
+                  <span className="ml-2 text-xs text-gray-500">{readerWords(lib.reader)}</span>
+                </span>
+                <Switch name={`Scans of ${lib.name}`} target={lib.library_id} state={lib.paused ? "paused" : "running"}
+                  admin={admin} pause={() => pauseScans([lib.library_id])} resume={() => resumeScans([lib.library_id])} />
+              </div>
+              {/* Why its scans wait: they keep failing (lib/waits.ts scan_failing). */}
+              {(lib.waits ?? []).length > 0 && (
+                <ul className="space-y-0.5" aria-label={`Why scans of ${lib.name} wait`}>
+                  {(lib.waits ?? []).map((w) => (
+                    <WaitLine key={waitKey(w)} wait={w}
+                      say={{ title: `Scans of ${lib.name}`, media: [], titleOf: (a) => a, when }} />
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 

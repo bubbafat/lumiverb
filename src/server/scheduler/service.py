@@ -39,7 +39,6 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
-from src.shared.producers import PAUSE_SCANS
 
 logger = logging.getLogger(__name__)
 
@@ -618,12 +617,14 @@ def _status_to_database(tenant_id: str, status: dict) -> None:
 
 
 def held_kinds(paused: Any) -> set[str]:
-    """The kinds what's paused holds (lineage.Pauses): the scan for Scans; a
-    producer's kinds for its switch; its redo kind for its redo alone."""
+    """The kinds what's paused holds (lineage.Pauses): the scan when every
+    library's scans are (Pause all, or each its own; a library paused alone
+    is left out of the scan's pass, runners.scan); a producer's kinds for
+    its switch; its redo kind for its redo alone."""
     held = set()
     for kind in KINDS.values():
         if not kind.flag:
-            if kind.name == "scan" and PAUSE_SCANS in paused.work:
+            if kind.name == "scan" and paused.scans_paused():
                 held.add(kind.name)
         elif kind.artifact in paused.work or (kind.redo and kind.artifact in paused.redo):
             held.add(kind.name)

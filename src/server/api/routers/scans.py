@@ -41,6 +41,7 @@ from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.api.routers.assets import _ask_about_mass_missing, _out_of_search
 from src.server.api.routers.trash import hand_over_to_copies
 from src.server.models.tenant import ScanSession
+from src.server.repository import lineage
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.tenant_settings import get_follow_moves
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
@@ -227,12 +228,17 @@ def start_scan(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> StartScanResponse:
     """Start a scan of a library, or of a folder in it, before walking it:
-    a clip made or changed after this is never taken for gone by it."""
+    a clip made or changed after this is never taken for gone by it. 409
+    scans_paused while the library's scans are paused (its own pause, or
+    Pause all): whoever reads it, nothing new is found in it then."""
     library = LibraryRepository(session).get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
     if library.status == "trashed":
         raise ConflictError("library_trashed", "The library is in the trash.")
+    if lineage.pauses(session).scans_paused(library_id):
+        raise ConflictError("scans_paused", f"Scans of {library.name} are paused: resume them to scan it.",
+                            {"library_id": library_id})
     try:
         scope = check_rel_path(body.scope.strip("/"), allow_root=True)
     except UnsafeRelPathError as exc:

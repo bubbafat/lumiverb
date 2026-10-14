@@ -19,10 +19,12 @@ from src.server.api.dependencies import (
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.database import get_control_session
+from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
 from src.server.search.quickwit import purge_library_from_quickwit
 from src.shared.io_utils import normalize_path_prefix
+from src.shared.readers import SERVER, read_by_server
 from src.shared.utils import utcnow
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
@@ -54,6 +56,8 @@ class LibraryResponse(BaseModel):
     root_path: str
     is_public: bool = False
     cover_asset_id: str | None = None
+    # Who reads its files (src/shared/readers.py): "server", this server.
+    reader: str = SERVER
 
 
 class LibraryListItem(BaseModel):
@@ -69,6 +73,18 @@ class LibraryListItem(BaseModel):
     # The counter GET /{library_id}/revision reports: bumped whenever the
     # library's clips change, so a page across libraries can follow them all.
     revision: int = 0
+    # Who reads its files (src/shared/readers.py): "server", this server.
+    reader: str = SERVER
+    # Its own Scans pause (ADR-018 phase 1): no new or changed files are
+    # found in it. Pause all isn't said here (GET /v1/producers/queue says
+    # each library's with it, and who paused it).
+    scans_paused: bool = False
+
+
+class ScansPauseRequest(BaseModel):
+    # Which libraries, or all: true for every one. Neither or both is a 400.
+    library_ids: list[str] | None = Field(default=None, max_length=MAX_IDS)
+    all: bool = False
 
 
 class EmptyTrashResponse(BaseModel):
@@ -160,6 +176,7 @@ def create_library(
         name=library.name,
         root_path=library.root_path,
         is_public=library.is_public,
+        reader=library.reader,
     )
 
 
@@ -182,9 +199,47 @@ def list_libraries(
             cover_asset_id=repo.resolve_cover(lib),
             trashed_at=lib.trashed_at.isoformat() if lib.trashed_at else None,
             revision=lib.revision,
+            reader=lib.reader,
+            scans_paused=lib.scans_paused_at is not None,
         )
         for lib in libraries
     ]
+
+
+def _named_libraries(session: Session, body: ScansPauseRequest) -> list[str]:
+    """The libraries a request names (404 for one that doesn't exist), or
+    every one (all: true); neither or both is a 400 scope_required."""
+    require_scope(body.library_ids is not None, body.all, "library_ids")
+    known = [lib.library_id for lib in LibraryRepository(session).list_all(include_trashed=True)]
+    if body.all:
+        return known
+    missing = sorted(set(body.library_ids or []) - set(known))
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Library not found: {missing[0]}")
+    return list(dict.fromkeys(body.library_ids or []))
+
+
+@router.post("/scans/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def pause_scans(
+    body: ScansPauseRequest,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> None:
+    """Pause these libraries' scans, or every library's (admins; ADR-018
+    phase 1): no new or changed files are found in them, so neither their
+    thumbnails nor video previews are made; changes reported meanwhile
+    wait; every other kind of work goes on. A scan running finishes. Again
+    is fine: who paused first, and when, stays."""
+    lineage.pause_scans(session, _named_libraries(session, body), by=user_id)
+    session.commit()
+
+
+@router.post("/scans/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+def resume_scans(body: ScansPauseRequest, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
+    """Scan these libraries again, or every library (admins). While Pause
+    all is on, everything else stays paused, each on its own."""
+    lineage.resume_scans(session, _named_libraries(session, body))
+    session.commit()
 
 
 class LibraryHealthItem(BaseModel):
@@ -327,6 +382,7 @@ def get_library(
         root_path="" if is_public_request else library.root_path,
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
+        reader=library.reader,
     )
 
 
@@ -338,15 +394,18 @@ def update_library(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
-    """Update library name, root_path and/or is_public."""
+    """Update library name, root_path and/or is_public. A folder is chosen
+    on the library's reader: for this server's libraries, as on creating one
+    (require_folder_chosen_here)."""
     require_admin_for(request, body, {"is_public", "root_path"})
     if body.root_path is not None:
         checked_root_path(body.root_path)
-        require_folder_chosen_here(request)
     repo = LibraryRepository(session)
     library = repo.get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
+    if body.root_path is not None and read_by_server(library):
+        require_folder_chosen_here(request)
     if body.name is not None:
         library.name = body.name
     if body.root_path is not None:
@@ -374,6 +433,7 @@ def update_library(
         root_path=library.root_path,
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
+        reader=library.reader,
     )
 
 
@@ -453,7 +513,7 @@ def restore_library(
         raise ConflictError("not_trashed", "This library isn't in the trash.") from e
     repo.bump_revision(library_id)
     return LibraryResponse(library_id=library.library_id, name=library.name,
-                           root_path=library.root_path, is_public=library.is_public)
+                           root_path=library.root_path, is_public=library.is_public, reader=library.reader)
 
 
 @router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage, dependencies=[Depends(require_signed_in)])

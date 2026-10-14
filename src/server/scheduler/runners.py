@@ -23,11 +23,15 @@ def scan(acct: Account, job: Job, *, now: float) -> None:
     before its scan, and what that finds goes into the account's record as
     it's found (on_roots), beside the scheduler's own looks (Account.look_at_storage)."""
     from src.server.scheduler.scans import scan_pass
+    from src.shared.readers import read_by_server
 
     libraries = acct.client.get("/v1/libraries").json()
     acct.set_libraries(libraries)
+    # This server's libraries (src/shared/readers.py) whose scans aren't
+    # paused (ADR-018 phase 1): a paused one's reported changes wait.
+    scanned = [lib for lib in libraries if read_by_server(lib) and not lib.get("scans_paused")]
     # Saved like a producer's work: no NUL (a file's EXIF can have one).
-    scan_pass(Saving(acct.client), libraries, acct.scan_state, now=now,
+    scan_pass(Saving(acct.client), scanned, acct.scan_state, now=now,
               full_scan_every=acct.machine.full_scan_every_min * 60, on_roots=acct.set_reachable)
 
 

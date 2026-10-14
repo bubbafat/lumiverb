@@ -12,19 +12,27 @@ let producers: Producer[] = [];
 let answers: Response[] = [];
 let failures: unknown[] = [];
 let queue: Record<string, unknown> = { live: false, at: null, running: {}, waiting: {}, pools: {}, gpu_hold: 0 };
-// The pause switches paused, as the server keeps them (Scans, Upkeep, each producer the scheduler makes).
+// What's paused, as the server keeps it: the switches (Upkeep, each producer the scheduler makes), and each
+// library's scans as `scans:<library_id>` (ADR-018 phase 1).
 let paused = new Set<string>();
-// Why the Scans switch's work waits, as the queue says it on its row.
-let scanWaits: unknown[] = [];
+// Why a library's scans wait, as the queue says it on the library's row (each names its library_id).
+let scanWaits: { library_id: string }[] = [];
+const LIBS = [{ library_id: "lib_1", name: "Footage" }, { library_id: "lib_2", name: "Stills" }];
 
-/** As the server: each switch, and the state they make (running, partly, paused). */
+/** As the server: each switch, each library's scans, and the state they make (running, partly, paused). */
 function switches() {
-  const rows = [{ target: "scans", title: "Scans" }, { target: "upkeep", title: "Upkeep" },
+  const rows = [{ target: "upkeep", title: "Upkeep" },
                 ...producers.filter((p) => p.scheduled).map((p) => ({ target: p.artifact, title: p.title }))]
     .map((r) => ({ ...r, paused: paused.has(r.target), paused_at: paused.has(r.target) ? "2026-10-09T10:00:00Z" : null,
-                   paused_by: null, waits: r.target === "scans" ? scanWaits : [] }));
-  const n = rows.filter((r) => r.paused).length;
-  return { switches: rows, state: n === 0 ? "running" : n === rows.length ? "paused" : "partly" };
+                   paused_by: null, waits: [] }));
+  const libraries = LIBS.map((l) => {
+    const on = paused.has(`scans:${l.library_id}`);
+    return { ...l, reader: "server", paused: on, paused_at: on ? "2026-10-09T10:00:00Z" : null, paused_by: null,
+             waits: scanWaits.filter((w) => w.library_id === l.library_id) };
+  });
+  const n = rows.filter((r) => r.paused).length + libraries.filter((l) => l.paused).length;
+  const total = rows.length + libraries.length;
+  return { switches: rows, libraries, state: n === 0 ? "running" : n === total ? "paused" : "partly" };
 }
 const sent: { method: string; url: string; body: unknown }[] = [];
 
@@ -60,7 +68,17 @@ beforeEach(() => {
     sent.push({ method, url, body });
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
     if (path === "/me") return json({ email: "a@b.c", role });
-    if (path === "/libraries") return json([{ library_id: "lib_1", name: "Footage", root_path: "/f", status: "active" }]);
+    if (path === "/libraries") return json(LIBS.map((l) => ({ ...l, root_path: "/f", status: "active" })));
+    const scans = path.match(/^\/libraries\/scans\/(pause|resume)$/);
+    if (scans && method === "POST") {
+      const next = answers.shift();
+      if (next) return next;
+      for (const id of body.all ? LIBS.map((l) => l.library_id) : body.library_ids) {
+        if (scans[1] === "pause") paused.add(`scans:${id}`);
+        else paused.delete(`scans:${id}`);
+      }
+      return new Response(null, { status: 204 });
+    }
     if (path === "/projects") return json({ items: [{ project_id: "col_1", name: "Wedding" }] });
     if (path === "/producers") return json({ producers: producers.map((p) => ({ ...p, paused: paused.has(p.artifact) })) });
     if (path === "/producers/queue") return json({ ...switches(), ...queue });
@@ -89,7 +107,9 @@ beforeEach(() => {
     if (all && method === "POST") {
       const next = answers.shift();
       if (next) return next;
-      paused = all[1] === "pause" ? new Set(switches().switches.map((r) => r.target)) : new Set();
+      paused = all[1] === "pause"
+        ? new Set([...switches().switches.map((r) => r.target), ...LIBS.map((l) => `scans:${l.library_id}`)])
+        : new Set();
       return new Response(null, { status: 204 });
     }
     const one = path.match(/^\/producers\/([^/]+)\/(pause|resume)$/);
@@ -260,14 +280,36 @@ describe("ProcessingSection", () => {
   const state = (name: string) => screen.getByRole("switch", { name }).getAttribute("data-state");
   const flip = (name: string) => fireEvent.click(screen.getByRole("switch", { name }));
 
-  it("shows a green switch for all processing, and one each for scans, upkeep and each producer (admins)", async () => {
+  it("shows a green switch for all processing, one for each library's scans, upkeep and each producer (admins)", async () => {
     producers = [producer({}), producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     await screen.findByRole("switch", { name: "Descriptions and tags" });
     expect(state("All processing")).toBe("running");
-    for (const name of ["Scans", "Upkeep", "Descriptions and tags"]) expect(state(name)).toBe("running");
+    for (const name of ["Scans of Footage", "Scans of Stills", "Upkeep", "Descriptions and tags"]) {
+      expect(state(name)).toBe("running");
+    }
     expect(screen.getByRole("switch", { name: "All processing" }).textContent).toBe("Running");
-    expect(screen.queryByRole("switch", { name: "Proxies and thumbnails" })).toBeNull();  // Scans pauses it
+    expect(screen.queryByRole("switch", { name: "Proxies and thumbnails" })).toBeNull();  // a library's scans pause it
+    const scans = screen.getByRole("list", { name: "Each library's scans" });
+    expect(within(scans).getAllByText("Read by this server")).toHaveLength(2);
+  });
+
+  it("pauses or resumes every library's scans at once: each library's own (admins)", async () => {
+    producers = [producer({})];
+    renderSection();
+    const pauseEvery = await screen.findByRole("button", { name: "Pause every library" });
+    const resumeEvery = screen.getByRole("button", { name: "Resume every library" });
+    expect(resumeEvery).toHaveProperty("disabled", true);  // nothing to resume
+    fireEvent.click(pauseEvery);
+    await waitFor(() => expect(state("Scans of Stills")).toBe("paused"));
+    expect(state("Scans of Footage")).toBe("paused");
+    expect(state("Upkeep")).toBe("running");  // only scans
+    expect(state("All processing")).toBe("partly");
+    expect(screen.getByRole("button", { name: "Pause every library" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Resume every library" }));
+    await waitFor(() => expect(state("All processing")).toBe("running"));
+    expect(sent.filter((r) => r.method === "POST").map((r) => [new URL(r.url, "http://x").pathname, r.body])).toEqual([
+      ["/v1/libraries/scans/pause", { all: true }], ["/v1/libraries/scans/resume", { all: true }]]);
   });
 
   it("green → yellow → red → yellow → green → red → green, as the rows are flipped", async () => {
@@ -280,22 +322,24 @@ describe("ProcessingSection", () => {
     expect(screen.getByRole("switch", { name: "All processing" }).textContent).toBe("Partly paused");
     flip("All processing");  // from yellow: every row paused, red
     await waitFor(() => expect(state("All processing")).toBe("paused"));
-    for (const name of ["Scans", "Upkeep", "Descriptions and tags", "Text in images (OCR)"]) {
+    for (const name of ["Scans of Footage", "Scans of Stills", "Upkeep", "Descriptions and tags", "Text in images (OCR)"]) {
       expect(state(name)).toBe("paused");
     }
-    flip("Scans");  // the rows stay usable while all are paused: one on again, yellow
+    flip("Scans of Footage");  // the rows stay usable while all are paused: one on again, yellow
     await waitFor(() => expect(state("All processing")).toBe("partly"));
-    for (const name of ["Upkeep", "Descriptions and tags", "Text in images (OCR)"]) flip(name);
+    for (const name of ["Upkeep", "Descriptions and tags", "Text in images (OCR)", "Scans of Stills"]) flip(name);
     await waitFor(() => expect(state("All processing")).toBe("running"));  // the rest on, one by one: green
     flip("All processing");
     await waitFor(() => expect(state("All processing")).toBe("paused"));
     flip("All processing");  // from red: every row on, green
     await waitFor(() => expect(state("All processing")).toBe("running"));
-    expect(state("Scans")).toBe("running");
+    expect(state("Scans of Footage")).toBe("running");
     expect(sent.filter((r) => r.method === "POST").map((r) => new URL(r.url, "http://x").pathname)).toEqual([
-      "/v1/producers/vision/pause", "/v1/producers/all/pause", "/v1/producers/scans/resume",
+      "/v1/producers/vision/pause", "/v1/producers/all/pause", "/v1/libraries/scans/resume",
       "/v1/producers/upkeep/resume", "/v1/producers/vision/resume", "/v1/producers/ocr/resume",
-      "/v1/producers/all/pause", "/v1/producers/all/resume"]);
+      "/v1/libraries/scans/resume", "/v1/producers/all/pause", "/v1/producers/all/resume"]);
+    expect(sent.filter((r) => r.url.includes("/libraries/scans/")).map((r) => r.body)).toEqual([
+      { library_ids: ["lib_1"] }, { library_ids: ["lib_2"] }]);
   });
 
   it("a paused producer's row says Paused, and its redo waits", async () => {
@@ -308,23 +352,34 @@ describe("ProcessingSection", () => {
     expect(screen.getByRole("switch", { name: "Descriptions and tags" }).textContent).toBe("Paused");
   });
 
-  it("what scans make says Paused with scans", async () => {
-    paused = new Set(["scans"]);
+  it("what scans make says Paused with scans when every library's scans are, or the library shown's", async () => {
+    paused = new Set(["scans:lib_1", "scans:lib_2"]);
     producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans");
   });
 
-  it("the Scans row says a library whose scans keep failing, why, and when it's tried again", async () => {
-    scanWaits = [{ reason: "scan_failing", clips: 0, library_id: "lib_1", library_name: "Empty Besters",
+  it("one library's scans paused isn't every library's", async () => {
+    paused = new Set(["scans:lib_2"]);
+    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
+    renderSection();
+    await waitFor(() => expect(state("Scans of Stills")).toBe("paused"));
+    expect((await row("Proxies and thumbnails")).textContent).not.toContain("Paused with scans");
+    fireEvent.change(screen.getByLabelText("Counts for"), { target: { value: "library:lib_2" } });
+    await waitFor(async () => expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans"));
+  });
+
+  it("a library's scans say they keep failing, why, and when they're tried again", async () => {
+    scanWaits = [{ reason: "scan_failing", clips: 0, library_id: "lib_1", library_name: "Footage",
                    message: "[unknown]: the API said 500", since: "2026-10-13T13:50:00Z",
-                   next_try: "2026-10-13T14:20:00Z" }];
+                   next_try: "2026-10-13T14:20:00Z" } as { library_id: string }];
     producers = [producer({})];
     renderSection();
-    const why = await screen.findByRole("list", { name: "Why Scans waits" });
+    const why = await screen.findByRole("list", { name: "Why scans of Footage wait" });
     expect(why.textContent).toMatch(
-      /^Scans of Empty Besters keep failing \(\[unknown\]: the API said 500\); next try at .+\.$/);
+      /^Scans of Footage keep failing \(\[unknown\]: the API said 500\); next try at .+\.$/);
     expect(within(why).getByText(/keep failing/).getAttribute("data-wait")).toBe("scan_failing");
+    expect(screen.queryByRole("list", { name: "Why scans of Stills wait" })).toBeNull();
     expect(screen.queryByRole("list", { name: "Why Upkeep waits" })).toBeNull();
   });
 
@@ -342,7 +397,7 @@ describe("ProcessingSection", () => {
       producers = [producer({})];
       renderSection();
       await screen.findByRole("switch", { name: "Descriptions and tags" });
-      paused = new Set(["scans", "upkeep", "vision"]);  // lumiverb pause all, elsewhere
+      paused = new Set(["scans:lib_1", "scans:lib_2", "upkeep", "vision"]);  // lumiverb pause all, elsewhere
       await vi.advanceTimersByTimeAsync(5_500);
       await waitFor(() => expect(state("All processing")).toBe("paused"));
       paused = new Set();  // lumiverb resume all
@@ -365,12 +420,14 @@ describe("ProcessingSection", () => {
 
   it("shows everyone each switch's state; only admins flip them", async () => {
     role = "viewer";
-    paused = new Set(["scans"]);
+    paused = new Set(["scans:lib_1"]);
     producers = [producer({})];
     renderSection();
     expect((await screen.findByLabelText("All processing")).textContent).toBe("Partly paused");
-    expect(screen.getByLabelText("Scans").textContent).toBe("Paused");
+    expect(screen.getByLabelText("Scans of Footage").textContent).toBe("Paused");
+    expect(screen.getByLabelText("Scans of Stills").textContent).toBe("Running");
     expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause every library" })).toBeNull();
     expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
   });
 
@@ -895,7 +952,7 @@ describe("Why work waits (no silent waits)", () => {
     expect(await lines("Analysis proxies")).toEqual([
       "40 videos wait until it's resumed.",
       "40 videos wait for the scheduler, which isn't running.",
-      "2 videos wait for a scan to see their file again, and Scans is paused.",
+      "2 videos wait for a scan to see their file again, and its library's scans are paused.",
       "1 video is tried again within the hour: its last try couldn't finish.",
       "5 videos failed and wait to be tried again.",
       "1 video failed too many times and isn't tried again until someone asks.",

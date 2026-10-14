@@ -42,11 +42,13 @@ PRODUCERS: dict[str, Producer] = registry()
 ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
 
 # Pause switches (Robert, Oct 9): one per processing action, each paused
-# and resumed on its own: Scans (finding files, thumbnails, video previews),
-# Upkeep (the trash purge, file cleanup, spreading face names) and each
-# producer the scheduler makes. Pause all pauses every switch; nothing stores
-# it. The account's state is derived from the switches (pause_state). "all"
-# is named, never inferred from a missing target (Robert, Oct 9).
+# and resumed on its own: Upkeep (the trash purge, file cleanup, spreading
+# face names) and each producer the scheduler makes. Scans (finding files,
+# thumbnails, video previews) are paused per library (ADR-018 phase 1: the
+# library's own, lineage.pause_scans); "scans" is no switch since, and names
+# none. Pause all pauses every switch and every library's scans. The
+# account's state is derived from them (pause_state). "all" is named, never
+# inferred from a missing target (Robert, Oct 9).
 PAUSE_ALL = "all"
 PAUSE_SCANS = "scans"
 PAUSE_UPKEEP = "upkeep"
@@ -54,17 +56,21 @@ assert not {PAUSE_ALL, PAUSE_SCANS, PAUSE_UPKEEP} & set(PRODUCERS), "a producer 
 
 
 def pause_targets() -> tuple[str, ...]:
-    """Every pause switch: Scans, Upkeep, then each producer the scheduler makes."""
-    return (PAUSE_SCANS, PAUSE_UPKEEP, *(a for a, p in PRODUCERS.items() if p.scheduled))
+    """Every pause switch: Upkeep, then each producer the scheduler makes."""
+    return (PAUSE_UPKEEP, *(a for a, p in PRODUCERS.items() if p.scheduled))
 
 
-def pause_state(paused: set[str] | frozenset[str]) -> str:
-    """From the switches paused: "running" (none: green), "partly" (some:
-    yellow) or "paused" (all: red). A row for what's no longer a switch counts
-    for nothing, and a switch added since everything was paused runs."""
+def pause_state(paused: set[str] | frozenset[str], *, libraries_paused: int = 0, libraries: int = 0) -> str:
+    """From the switches paused and how many of the account's libraries
+    (of libraries) have their scans paused: "running" (nothing: green),
+    "partly" (some: yellow) or "paused" (every switch and every library:
+    red). A row for what's no longer a switch counts for nothing, and a
+    switch added since everything was paused runs."""
     targets = pause_targets()
     n = sum(1 for t in targets if t in paused)
-    return "running" if n == 0 else "paused" if n == len(targets) else "partly"
+    if n == 0 and libraries_paused == 0:
+        return "running"
+    return "paused" if n == len(targets) and libraries_paused >= libraries else "partly"
 
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.

@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
+from src.processing.api import LumiverbAPIError
 from src.processing.cache_dir import cache_dir
 from src.processing.machine import FULL_SCAN_EVERY_MIN
 from src.processing.roots import reachable_root
@@ -378,6 +379,11 @@ def scan_pass(
         try:
             scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
                          scan_fn=scan_fn, console=console)
+        except LumiverbAPIError as exc:
+            if exc.code != "scans_paused":
+                _scan_failed(state, library, exc, now)
+            else:  # paused since the libraries were listed: its changes wait, as a paused library's do
+                logger.info("scheduler: %s's scans were paused; not scanning it", library["name"])
         except Exception as exc:  # noqa: BLE001 — one library's trouble doesn't stop the rest
             _scan_failed(state, library, exc, now)
         else:

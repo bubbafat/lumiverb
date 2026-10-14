@@ -1,10 +1,12 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
 """Pause switches (Robert, Oct 9): one per processing action.
 
-Scans, Upkeep and each producer the scheduler makes each have a switch an
-admin pauses and resumes (POST /v1/producers/{target}/pause, /resume). Pause
-all (POST /v1/producers/all/pause) pauses every switch and Resume all resumes
-every one; "all" is stored, so a producer added later is paused too. GET /v1/producers/queue says each switch's
+Upkeep and each producer the scheduler makes each have a switch an admin
+pauses and resumes (POST /v1/producers/{target}/pause, /resume); scans are
+paused per library (tests/test_library_scans_pause.py). Pause all (POST
+/v1/producers/all/pause) pauses every switch and every library's scans, and
+Resume all resumes every one; "all" is stored, so a producer added later is
+paused too. GET /v1/producers/queue says each switch's
 state and the account's, derived: running (green), partly (yellow) or
 paused (red). Stopping a producer's redo is something else: what's missing
 is still made.
@@ -107,7 +109,7 @@ def test_one_switch_paused_is_partly_and_the_rest_go_on(env):
 
     client, headers, *_ = env
     try:
-        for target in ("vision", "scans", "upkeep"):
+        for target in ("vision", "upkeep"):
             assert client.post(f"/v1/producers/{target}/pause", json={"scope": "work"}, headers=headers).status_code == 204, target
             sw = _switches(env)
             assert sw[target]["paused"] is True and sw[target]["paused_at"] and sw[target]["paused_by"]
@@ -118,7 +120,7 @@ def test_one_switch_paused_is_partly_and_the_rest_go_on(env):
             assert _switches(env)[target]["paused_at"] == first  # who paused it first, and when, stay
             assert client.post(f"/v1/producers/{target}/resume", json={"scope": "work"}, headers=headers).status_code == 204
             assert _queue(env)["state"] == "running" and set(_on_hold_in_database(env[4]).work) == set()
-        assert _switches(env)["scans"]["title"] == "Scans" and _switches(env)["upkeep"]["title"] == "Upkeep"
+        assert "scans" not in _switches(env) and _switches(env)["upkeep"]["title"] == "Upkeep"
     finally:
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
 
@@ -130,12 +132,15 @@ def test_every_switch_works_while_all_are_paused_and_the_state_follows(env):
     client, headers, *_ = env
     try:
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        assert client.post("/v1/producers/scans/resume", json={"scope": "work"}, headers=headers).status_code == 204
-        assert _queue(env)["state"] == "partly" and _switches(env)["scans"]["paused"] is False
+        assert client.post("/v1/producers/upkeep/resume", json={"scope": "work"}, headers=headers).status_code == 204
+        assert _queue(env)["state"] == "partly" and _switches(env)["upkeep"]["paused"] is False
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
         assert _queue(env)["state"] == "paused"
         for target in pause_targets():
             assert client.post(f"/v1/producers/{target}/resume", json={"scope": "work"}, headers=headers).status_code == 204, target
+        assert _queue(env)["state"] == "partly"  # the libraries' scans are still paused, each its own
+        r = client.post("/v1/libraries/scans/resume", json={"all": True}, headers=headers)
+        assert r.status_code == 204, r.text
         assert _queue(env)["state"] == "running"
     finally:
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
@@ -160,7 +165,8 @@ def test_only_admins_pause_or_resume_and_only_they_see_who(env):
     editor = _key_with_role(env, "editor")
     viewer = _key_with_role(env, "viewer")
     for path in ("/v1/producers/all/pause", "/v1/producers/all/resume", "/v1/producers/ocr/pause",
-                 "/v1/producers/ocr/resume", "/v1/producers/scans/pause", "/v1/producers/upkeep/resume"):
+                 "/v1/producers/ocr/resume", "/v1/producers/scans/pause", "/v1/producers/upkeep/resume",
+                 "/v1/libraries/scans/pause", "/v1/libraries/scans/resume"):
         assert client.post(path, headers=editor).status_code == 403, path
         assert client.post(path, headers=viewer).status_code == 403, path
     try:
@@ -173,13 +179,13 @@ def test_only_admins_pause_or_resume_and_only_they_see_who(env):
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
 
 
-def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_scans(env):
+def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_a_librarys_scans(env):
     client, headers, *_ = env
     assert client.post("/v1/producers/nope/pause", json={"scope": "work"}, headers=headers).status_code == 404
     assert client.post("/v1/producers/nope/resume", json={"scope": "work"}, headers=headers).status_code == 404
     r = client.post("/v1/producers/proxy/pause", json={"scope": "work"}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_scheduled", r.text
-    assert "Scans" in r.json()["error"]["message"]
+    assert "a library's scans" in r.json()["error"]["message"]
     producers = _producers(env)
     assert producers["proxy"]["paused"] is False and producers["proxy"]["scheduled"] is False
     assert producers["vision"]["scheduled"] is True

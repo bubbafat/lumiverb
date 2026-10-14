@@ -89,7 +89,7 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
   },
   scan: (w, c) => {
     const s = some(w, c);
-    return `${s.count} ${s.wait} for a scan to see ${s.their} file again${w.paused ? ", and Scans is paused." : "."}`;
+    return `${s.count} ${s.wait} for a scan to see ${s.their} file again${w.paused ? ", and its library's scans are paused." : "."}`;
   },
   held: (w, c) => {
     const s = some(w, c);
@@ -103,7 +103,7 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const s = some(w, c);
     return `${s.count} failed too many times and ${s.are}n't tried again until someone asks.`;
   },
-  // The Scans row's: no clips, a library.
+  // A library's scans' (each library's row under Scans): no clips, a library.
   scan_failing: (w, c) => {
     const why = w.message ? ` (${w.message})` : "";
     const next = w.next_try ? `; next try at ${c.when(w.next_try)}` : "";

@@ -977,7 +977,7 @@ export interface ProducerWait {
   clips: number;
   /** needs: the artifact it waits for. */
   artifact?: string;
-  /** needs: what makes that is paused (Scans, for what scans make); scan: Scans is paused. */
+  /** needs: what makes that is paused (a library's scans, for what scans make); scan: its library's scans are paused. */
   paused?: boolean;
   /** storage: the library, and what the scheduler's looks at its drive found. */
   library_id?: string;
@@ -1037,15 +1037,17 @@ export interface SchedulerStatus {
   pools: Record<string, [number, number]>;
   /** Requests AI machines sharing its GPU give up while video is decoded there. */
   gpu_hold: number;
-  /** The account's pause state, derived from its switches: none paused, some, or all. */
+  /** The account's pause state, derived from its switches and its libraries' scans: none paused, some, or all. */
   state: "running" | "partly" | "paused";
-  /** Every pause switch: Scans, Upkeep, then each producer the scheduler makes. */
+  /** Every pause switch: Upkeep, then each producer the scheduler makes. */
   switches: PauseSwitch[];
+  /** Each library (not in the trash): who reads it and its own Scans pause. Older servers leave it out. */
+  libraries?: LibraryScans[];
   /** How long until things are made; null or absent when it isn't running. */
   eta?: Eta | null;
 }
 
-/** One pause switch (Robert, Oct 9): "scans", "upkeep" or a producer's artifact. */
+/** One pause switch (Robert, Oct 9): "upkeep" or a producer's artifact. */
 export interface PauseSwitch {
   target: string;
   title: string;
@@ -1053,7 +1055,21 @@ export interface PauseSwitch {
   /** Admins only. */
   paused_by: string | null;
   paused_at: string | null;
-  /** Why its work waits, as a producer's row says it (Scans: libraries whose scans keep failing). */
+  /** Why its work waits, as a producer's row says it. */
+  waits?: ProducerWait[];
+}
+
+/** A library's scans (ADR-018 phase 1): who reads its files, and its own Scans pause (or Pause all's). */
+export interface LibraryScans {
+  library_id: string;
+  name: string;
+  /** "server": this server reads its files. */
+  reader: string;
+  paused: boolean;
+  /** Admins only. */
+  paused_by: string | null;
+  paused_at: string | null;
+  /** Why its scans wait: they keep failing. */
   waits?: ProducerWait[];
 }
 
@@ -1373,8 +1389,8 @@ export async function resumeRedo(artifact: string): Promise<void> {
   await apiFetch<void>(`/producers/${artifact}/resume`, { method: "POST", body: { scope: "redo" } });
 }
 
-/** Pause one switch's work ("scans", "upkeep" or a producer's artifact), or "all" (admins). The target is
- * always named. What's running finishes. 409 not_scheduled for what scans make. */
+/** Pause one switch's work ("upkeep" or a producer's artifact), or "all" (admins). The target is
+ * always named. What's running finishes. 409 not_scheduled for what scans make (a library's scans pause it). */
 export async function pauseProcessing(target: string): Promise<void> {
   await apiFetch<void>(`/producers/${target}/pause`, { method: "POST", body: { scope: "work" } });
 }
@@ -1382,6 +1398,19 @@ export async function pauseProcessing(target: string): Promise<void> {
 /** Resume one switch's work, or "all" (admins). */
 export async function resumeProcessing(target: string): Promise<void> {
   await apiFetch<void>(`/producers/${target}/resume`, { method: "POST", body: { scope: "work" } });
+}
+
+/** Pause these libraries' scans, or every library's ("all", named, never inferred) (admins): no new or
+ * changed files are found in them; everything else goes on. */
+export async function pauseScans(libraries: string[] | "all"): Promise<void> {
+  await apiFetch<void>(`/libraries/scans/pause`, {
+    method: "POST", body: libraries === "all" ? { all: true } : { library_ids: libraries } });
+}
+
+/** Scan these libraries again, or every library (admins). */
+export async function resumeScans(libraries: string[] | "all"): Promise<void> {
+  await apiFetch<void>(`/libraries/scans/resume`, {
+    method: "POST", body: libraries === "all" ? { all: true } : { library_ids: libraries } });
 }
 
 export async function findSimilar(params: {

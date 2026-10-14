@@ -44,13 +44,19 @@ def test_an_account_paused_before_new_producers_stays_paused(paused, stays_pause
         with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         _alembic(url, "upgrade", BEFORE)
+        with engine.begin() as conn:  # a library: Scans' pause is its own since aec154348364, and comes back down
+            conn.execute(text("INSERT INTO libraries (library_id, name, root_path, status, created_at, updated_at)"
+                              " VALUES ('lib_1', 'One', '/x', 'active', now(), now())"))
         _pause(engine, paused)
         _alembic(url, "upgrade", AFTER)
         assert ("all" in _rows(engine)) is stays_paused
+        _alembic(url, "upgrade", "head")  # read as today's code reads it
         with Session(engine) as session:
-            held = lineage.pauses(session).work
+            pauses = lineage.pauses(session)
+            held = pauses.work
             assert ("capture" in held) is stays_paused
             assert ("all" in held) is False  # read as every switch, never as one called "all"
+            assert pauses.scans_paused("lib_1")  # Scans was paused either way
             if stays_paused:
                 assert set(pause_targets()) <= set(held) and held["capture"]["paused_by"] == "usr_1"
                 assert lineage.upkeep_paused(session)

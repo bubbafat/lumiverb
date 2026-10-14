@@ -10,7 +10,7 @@ The order of the work (Progress) follows decision 12: today's scan moves onto th
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Each library names its reader (this server unless a device is chosen); the scan's pause becomes the library's | Not started |
+| 1 | Each library names its reader (this server unless a device is chosen); the scan's pause becomes the library's | Done: `libraries.reader` ("server" until devices) and one check every caller asks (`src/shared/readers.py`: the scheduler's libraries, scans and storage looks, where a folder is chosen); each library's own Scans pause (`POST /v1/libraries/scans/pause`, the account's switch moved onto every library), honoured by the scan's start for whoever reads it |
 | 2 | The server compares: the scanner says what it found, the server decides what's new, changed, moved and missing (decision 12); today's scan switched to it | Done: the server compares (#183); the scanner asks it (#184); a scan survives dropped connections, a lost answer and a crash mid-finish (decision 12, Interruptions) |
 | 3 | What's due for the originals is one computed list (decision 3): the scan's missing previews and the scheduler's probe, capture and analysis proxies come from it | Not started |
 | 4 | The reader checks in; a high-water mark per library for fetching what changed on the server, never a copy of the library (decisions 4 and 13) | Not started |

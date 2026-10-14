@@ -187,7 +187,8 @@ def test_storage_while_scans_are_paused_is_what_the_latest_look_found(env):
     # files; the scheduler still looks at each library's storage itself.
     client, headers, library_id, *_ = env
     try:
-        assert client.post("/v1/producers/scans/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        r = client.post("/v1/libraries/scans/pause", json={"library_ids": [library_id]}, headers=headers)
+        assert r.status_code == 204, r.text
         _status(env, storage={library_id: _seen(120, away=1)})
         row, dots = _storage_and_dots(env)
         assert row["state"] == "red" and row["reason"] == "Can't reach Footage. Last seen 2 hours ago."
@@ -468,13 +469,16 @@ def test_a_scheduler_status_that_cant_be_read_isnt_called_never_run(env):
 
 def test_processing_follows_the_pause_switches(env):
     """GET /v1/producers/queue's state: running, partly (yellow), paused (red)."""
-    client, headers, *_ = env
+    client, headers, library_id, *_ = env
     _status(env)
     assert _rows(env)["processing"]["reason"] == "Running."
     try:
-        assert client.post("/v1/producers/scans/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        r = client.post("/v1/libraries/scans/pause", json={"library_ids": [library_id]}, headers=headers)
+        assert r.status_code == 204, r.text
         row = _rows(env)["processing"]
-        assert row["state"] == "yellow" and row["reason"].startswith("Partly paused: Scans")
+        assert row["state"] == "yellow" and row["reason"].startswith("Partly paused: Scans of Footage"), row
+        assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        assert _rows(env)["processing"]["reason"].startswith("Partly paused: Scans of Footage and Upkeep")
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
         row = _rows(env)["processing"]
         assert row["state"] == "red" and row["reason"].startswith("Paused")

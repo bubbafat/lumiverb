@@ -29,10 +29,14 @@ from src.shared.producers import PAUSE_SCANS, pause_targets
 
 def _pauses(work=(), redo=(), everything: bool = False) -> Pauses:
     """What an admin paused (lineage.pauses): switches' work, and producers'
-    redo; everything: Pause all (the "all" row: every switch shows paused)."""
+    redo; "scans" among the work: every library's scans (each its own,
+    ADR-018 phase 1); everything: Pause all (the "all" row: every switch and
+    every library shows paused)."""
     seen = {"paused_by": None, "paused_at": None}
-    paused = Pauses(work={t: seen for t in (pause_targets() if everything else work)},
-                    redo={a: seen for a in redo})
+    scans = everything or PAUSE_SCANS in work
+    paused = Pauses(work={t: seen for t in (pause_targets() if everything else work) if t != PAUSE_SCANS},
+                    redo={a: seen for a in redo}, library_ids=("lib_1",),
+                    libraries={"lib_1": seen} if scans else {})
     return dataclasses.replace(paused, everything=True) if everything else paused
 
 
@@ -614,7 +618,7 @@ def test_a_paused_account_starts_nothing_and_asks_for_nothing() -> None:
     asked: list = []
     scan = MagicMock()
     s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "vision": [_item("v")]}, rec,
-                   asked=asked, held=set(pause_targets()), scan=scan)
+                   asked=asked, held={*pause_targets(), PAUSE_SCANS}, scan=scan)
     s.tick()
     _settle(s)
     assert rec.ran == [] and asked == [] and not scan.called
@@ -1491,8 +1495,8 @@ class Fresh:
 
 
 def _own_kinds(switch: str) -> set[str]:
-    """The kinds a switch's pause stops: Scans' the scan; a producer's its
-    kind and its redo; Upkeep none of the scheduler's."""
+    """The kinds a switch's pause stops: every library's scans, the scan; a
+    producer's its kind and its redo; Upkeep none of the scheduler's."""
     if switch == PAUSE_SCANS:
         return {"scan"}
     return {k.name for k in KINDS.values() if k.flag and k.artifact == switch}
@@ -1525,11 +1529,12 @@ def test_the_first_look_after_a_restart_keeps_when_the_storage_was_last_seen(sto
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("switch", pause_targets())
+@pytest.mark.parametrize("switch", [*pause_targets(), PAUSE_SCANS])
 def test_a_pause_stops_its_own_work_only(storage: Storage, switch: str) -> None:
-    # Every switch there is (one added later too): paused alone on a fresh
-    # start, every other kind still gets its due work offered, storage
-    # work included. The guard against the next hidden coupling.
+    # Every switch there is (one added later too), and every library's scans:
+    # paused alone on a fresh start, every other kind still gets its due
+    # work offered, storage work included. The guard against the next
+    # hidden coupling.
     f = Fresh(storage, held={switch})
     f.tick()
     assert set(f.offered) == set(KINDS) - _own_kinds(switch)

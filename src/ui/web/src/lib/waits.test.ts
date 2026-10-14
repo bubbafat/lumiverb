@@ -50,7 +50,7 @@ describe("Why work waits", () => {
   it("agrees with the count", () => {
     expect(waitSentence({ reason: "scan", clips: 1 }, say)).toBe("1 video waits for a scan to see its file again.");
     expect(waitSentence({ reason: "scan", clips: 12, paused: true }, say)).toBe(
-      "12 videos wait for a scan to see their file again, and Scans is paused.");
+      "12 videos wait for a scan to see their file again, and its library's scans are paused.");
     expect(waitSentence({ reason: "held", clips: 1 }, say)).toBe(
       "1 video is tried again within the hour: its last try couldn't finish.");
     expect(waitSentence({ reason: "given_up", clips: 2 }, say)).toBe(
