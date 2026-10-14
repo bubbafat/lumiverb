@@ -235,12 +235,11 @@ def test_handler_rejects_stale_public_libraries_row(public_lib_client) -> None:
 
     # Re-insert a stale CP row manually (bypassing the route handler)
     from src.server.database import get_control_session
-    from src.server.repository.control_plane import ApiKeyRepository, PublicLibraryRepository, TenantDbRoutingRepository
+    from src.server.repository.control_plane import ApiKeyRepository, PublicLibraryRepository
     with get_control_session() as ctrl_session:
         actual_api_key_obj = ApiKeyRepository(ctrl_session).get_by_plaintext(api_key)
         tenant_id = actual_api_key_obj.tenant_id
-        routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(tenant_id)
-        PublicLibraryRepository(ctrl_session).upsert(library_id, tenant_id, routing.connection_string)
+        PublicLibraryRepository(ctrl_session).upsert(library_id, tenant_id)
 
     # Middleware now resolves tenant (CP row exists) but handler sees is_public=False → 404
     r = client.get(f"/v1/libraries/{library_id}")

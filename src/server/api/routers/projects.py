@@ -203,13 +203,12 @@ def _sync_public_index(request: Request, project_id: str, *, public: bool) -> No
     """Keep the control plane's public_projects index, which routes
     unauthenticated public links to this tenant, in step with visibility."""
     tenant_id = getattr(request.state, "tenant_id", None)
-    connection_string = getattr(request.state, "connection_string", None)
-    if not (tenant_id and connection_string):
+    if not tenant_id:
         return
     with get_control_session() as ctrl_session:
         pub_repo = PublicProjectRepository(ctrl_session)
         if public:
-            pub_repo.upsert(project_id, tenant_id, connection_string)
+            pub_repo.upsert(project_id, tenant_id)
         else:
             pub_repo.delete(project_id)
 
