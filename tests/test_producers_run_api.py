@@ -136,5 +136,5 @@ def test_retrying_failures_names_what_it_retries(env):
 def test_a_pause_names_its_scope(env):
     client, headers, *_ = env
     assert client.post("/v1/producers/vision/pause", headers=headers).status_code == 422
-    r = client.post("/v1/producers/scans/pause", json={"scope": "redo"}, headers=headers)
+    r = client.post("/v1/producers/upkeep/pause", json={"scope": "redo"}, headers=headers)
     assert r.status_code == 422 and _code(r) == "bad_scope"

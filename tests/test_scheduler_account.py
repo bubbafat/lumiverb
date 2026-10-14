@@ -66,6 +66,19 @@ def test_storage_work_goes_by_the_latest_look(acct, tmp_path: Path) -> None:
     assert acct.library_ids(storage=True) == ["lib_2"] and acct.root("lib_1") is None
 
 
+def test_only_libraries_this_server_reads_are_looked_at_or_worked_in(acct, tmp_path: Path, monkeypatch) -> None:
+    # ADR-018 phase 1: a library a device reads (from phase 6) is never this
+    # server's to look at, scan or read originals in (src/shared/readers.py).
+    looks: list = []
+    monkeypatch.setattr("src.processing.roots.reachable_root",
+                        lambda library, **kw: looks.append(library["library_id"]) or tmp_path)
+    acct.set_libraries([{"library_id": "lib_1", "name": "A", "reader": "server"},
+                        {"library_id": "lib_2", "name": "B", "reader": "device:dev_1"}])
+    acct.look_at_storage()
+    assert looks == ["lib_1"]
+    assert acct.library_ids(storage=False) == ["lib_1"] and acct.library_ids(storage=True) == ["lib_1"]
+
+
 def test_the_scheduler_looks_at_each_librarys_storage_every_30_seconds(acct, tmp_path: Path, monkeypatch) -> None:
     looks: list = []
     gone: set[str] = set()

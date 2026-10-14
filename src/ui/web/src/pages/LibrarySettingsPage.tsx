@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import type { PathFilterItem, ProjectUsage } from "../api/client";
 import LibraryPreviewsSection from "./LibraryPreviewsSection";
+import LibraryScansSection from "./LibraryScansSection";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 
 /* ---------- pattern warning helper ---------- */
@@ -462,6 +463,8 @@ export default function LibrarySettingsPage() {
             </div>
           )}
         </div>
+
+        {libraryId && <LibraryScansSection libraryId={libraryId} />}
 
         {libraryId && <LibraryPreviewsSection libraryId={libraryId} />}
       </div>

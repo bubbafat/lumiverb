@@ -182,7 +182,8 @@ def _processing(session: Session, tenant_id: str, status: Any, now: datetime, un
     return h.processing_row(
         at=status.at if status else None, now=now,
         pause_state=status.state if status else "running",
-        paused=[sw.title for sw in status.switches if sw.paused] if status else [],
+        paused=([f"Scans of {lib.name}" for lib in status.libraries if lib.paused]
+                + [sw.title for sw in status.switches if sw.paused]) if status else [],
         failing=_kept(tenant_id, "failing", COUNTS_EVERY_SEC, failing),
         unreadable=unreadable,
     )

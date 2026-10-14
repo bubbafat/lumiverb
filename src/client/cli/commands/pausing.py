@@ -1,9 +1,11 @@
 """`lumiverb pause|resume <name>`: the pause switches (Robert, Oct 9).
 
-One switch per processing action: each producer the scheduler makes,
-`scans` and `upkeep`; `all` is every one. Without a name nothing happens
-and the names are listed. After acting it says the account's state, derived
-from the switches: Running, Partly paused or Paused.
+One switch per processing action: each producer the scheduler makes and
+`upkeep`; `all` is every one, and every library's scans. `scans` is each
+library's own (ADR-018 phase 1): every library's, or one with --library.
+Without a name nothing happens and the names are listed. After acting it
+says the account's state, derived from the switches and the libraries'
+scans: Running, Partly paused or Paused.
 """
 
 from __future__ import annotations
@@ -36,23 +38,42 @@ def _switches(client: LumiverbClient) -> dict:
 
 def _usage(client: LumiverbClient, command: str) -> None:
     names = [sw["target"] for sw in _switches(client).get("switches") or []]
-    console.print(f"Usage: lumiverb {command} <name>")
-    console.print(f"Names: {', '.join(['all', *names]) if names else 'all, scans, upkeep or a producer'}")
+    console.print(f"Usage: lumiverb {command} <name> (scans: --library NAME for one library's)")
+    console.print(f"Names: {', '.join(['all', 'scans', *names]) if names else 'all, scans, upkeep or a producer'}")
     raise typer.Exit(2)
 
 
-def _act(command: str, name: str | None) -> None:
+def _library_id(client: LumiverbClient, name: str) -> str:
+    match = next((lib for lib in client.get("/v1/libraries").json() if name in (lib.get("name"), lib["library_id"])),
+                 None)
+    if match is None:
+        console.print(f"[red]Library not found: {escape(name)}[/red]")
+        raise typer.Exit(1)
+    return match["library_id"]
+
+
+def _act(command: str, name: str | None, library: str | None = None) -> None:
     client = LumiverbClient()
     if not name:
         _usage(client, command)
-    # "all" is a target like any other; a switch's work, never only its redo.
-    r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
+    if library and name != "scans":
+        console.print("[red]--library goes with scans: a library's own Scans pause.[/red]")
+        raise typer.Exit(2)
+    if name == "scans":
+        # Each library's own: the one named, or every one (named, never inferred).
+        body = {"library_ids": [_library_id(client, library)]} if library else {"all": True}
+        r = client.raw("POST", f"/v1/libraries/scans/{command}", json=body)
+    else:
+        # "all" is a target like any other; a switch's work, never only its redo.
+        r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
     if r.status_code >= 400:
-        console.print(f"[red]Couldn't {command} {escape(name or '')}: {escape(_error(r))}[/red]")
+        what = f"{name} of {library}" if library else name or ""
+        console.print(f"[red]Couldn't {command} {escape(what)}: {escape(_error(r))}[/red]")
         raise typer.Exit(1)
     queue = _switches(client)
     console.print(f"Processing: {STATE_WORDS.get(queue.get('state', ''), 'Running')}")
     paused = [sw["title"] for sw in queue.get("switches") or [] if sw.get("paused")]
+    paused += [f"Scans of {lib['name']}" for lib in queue.get("libraries") or [] if lib.get("paused")]
     if paused and queue.get("state") != "paused":
         console.print(f"Paused: {escape(', '.join(paused))}")
 
@@ -61,13 +82,15 @@ def register(app: typer.Typer) -> None:
     @app.command("pause")
     def pause(
         name: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), scans, upkeep, or all.")] = None,
+        library: Annotated[str | None, typer.Option(help="With scans: this library's only (its name or id).")] = None,
     ) -> None:
         """Pause one processing switch, or all (admins). What's running finishes."""
-        _act("pause", name)
+        _act("pause", name, library)
 
     @app.command("resume")
     def resume(
         name: Annotated[str | None, typer.Argument(help="A producer (e.g. vision), scans, upkeep, or all.")] = None,
+        library: Annotated[str | None, typer.Option(help="With scans: this library's only (its name or id).")] = None,
     ) -> None:
         """Resume one processing switch, or all (admins)."""
-        _act("resume", name)
+        _act("resume", name, library)

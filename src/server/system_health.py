@@ -99,7 +99,8 @@ def processing_row(*, at: datetime | None, now: datetime, pause_state: str = "ru
                    paused: Sequence[str] = (), failing: int = 0, unreadable: bool = False) -> Row:
     """Red when the scheduler is silent past 30 seconds, or every pause switch
     is on (pause_state "paused", GET /v1/producers/queue's state); yellow
-    when some are ("partly"; paused: their titles) or clips failed in the
+    when some are ("partly"; paused: their titles, a library's scans as
+    "Scans of <library>") or clips failed in the
     last day; green ("Running.") otherwise. The words are Settings →
     Processing's: Running, Partly paused, Paused."""
     row = Row("processing", "Processing", GREEN, "Running.", link="/settings/processing", checked_at=at)

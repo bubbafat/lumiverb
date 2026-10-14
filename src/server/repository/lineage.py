@@ -375,14 +375,27 @@ SCOPES = (WORK, REDO)
 
 @dataclass(frozen=True)
 class Pauses:
-    """What's paused, by scope: {target: {paused_by, paused_at}} each; and
-    whether Pause all is on (everything: the "all" row), when nothing, the
+    """What's paused, by scope: {target: {paused_by, paused_at}} each; the
+    libraries whose scans are paused, {library_id: {paused_by, paused_at}}
+    (ADR-018 phase 1: a library's own, the libraries' columns); and whether
+    Pause all is on (everything: the "all" row), when nothing, the
     scheduler's own look at each library's storage included, touches the
     library drives."""
 
     work: dict[str, dict[str, Any]] = field(default_factory=dict)
     redo: dict[str, dict[str, Any]] = field(default_factory=dict)
     everything: bool = False
+    libraries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Every library not in the trash, paused or not.
+    library_ids: tuple[str, ...] = ()
+
+    def scans_paused(self, library_id: str | None = None) -> bool:
+        """Whether the library's scans are paused (its own, or Pause all);
+        with no library, whether every library's are (none found anything
+        new then)."""
+        if library_id is not None:
+            return self.everything or library_id in self.libraries
+        return self.everything or (bool(self.library_ids) and all(i in self.libraries for i in self.library_ids))
 
 
 # Pause all is a row of its own (target "all", scope work): every switch,
@@ -393,11 +406,12 @@ ALL = "all"
 
 
 def pauses(session: Session) -> Pauses:
-    """Every pause, in one read: the switches paused (WORK) and the producers
-    whose redo is stopped (REDO). What's paused starts nothing more; what's
-    running finishes. While Pause all is on, every switch there is now shows
-    as paused, by whoever paused all (unless it was paused alone before),
-    and everything is True."""
+    """Every pause, in one read: the switches paused (WORK), the producers
+    whose redo is stopped (REDO) and the libraries whose scans are paused
+    (those in the trash aren't scanned anyway). What's paused starts nothing
+    more; what's running finishes. While Pause all is on, every switch there
+    is now and every library show as paused, by whoever paused all (unless
+    paused alone before), and everything is True."""
     from src.shared.producers import pause_targets
 
     work: dict[str, dict[str, Any]] = {}
@@ -406,10 +420,20 @@ def pauses(session: Session) -> Pauses:
             "SELECT target, scope, paused_by, paused_at FROM producer_pauses")):
         (work if scope == WORK else redo)[target] = {"paused_by": by, "paused_at": at}
     everything = work.pop(ALL, None)
+    libraries: dict[str, dict[str, Any]] = {}
+    library_ids = []
+    for library_id, by, at in session.execute(text(
+            "SELECT library_id, scans_paused_by, scans_paused_at FROM libraries WHERE status = 'active'")):
+        library_ids.append(library_id)
+        if at is not None:
+            libraries[library_id] = {"paused_by": by, "paused_at": at}
+        elif everything is not None:
+            libraries[library_id] = everything
     if everything is not None:
         for target in pause_targets():
             work.setdefault(target, everything)
-    return Pauses(work=work, redo=redo, everything=everything is not None)
+    return Pauses(work=work, redo=redo, everything=everything is not None, libraries=libraries,
+                  library_ids=tuple(library_ids))
 
 
 def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:
@@ -423,25 +447,58 @@ def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:
 
 def resume(session: Session, targets: list[str] | tuple[str, ...], scope: str) -> None:
     """Carry on with what was paused, in that scope. Resuming one switch while
-    Pause all is on leaves every other switch there is now paused, each by
-    a row of its own: the account is partly paused from then on. Doesn't commit."""
+    Pause all is on leaves every other switch there is now, and every
+    library's scans, paused, each on its own: the account is partly paused
+    from then on. Doesn't commit."""
     assert scope in SCOPES, scope
     if not targets:
         return
     if scope == WORK:
-        from src.shared.producers import pause_targets
-
-        everything = session.execute(text(
-            "DELETE FROM producer_pauses WHERE target = :all AND scope = :s RETURNING paused_by, paused_at"
-        ), {"all": ALL, "s": WORK}).first()
-        if everything is not None:
-            for target in pause_targets():
-                session.execute(text(
-                    "INSERT INTO producer_pauses (target, scope, paused_by, paused_at) VALUES (:t, :s, :by, :at)"
-                    " ON CONFLICT (target, scope) DO NOTHING"),
-                    {"t": target, "s": WORK, "by": everything[0], "at": everything[1]})
+        _end_pause_all(session)
     session.execute(text("DELETE FROM producer_pauses WHERE target = ANY(:t) AND scope = :s"),
                     {"t": list(targets), "s": scope})
+
+
+def _end_pause_all(session: Session) -> None:
+    """Pause all (the "all" row) becomes what it paused, each paused on its
+    own by whoever paused all: every switch there is now, and every library's
+    scans. Nothing when it isn't on. Doesn't commit."""
+    from src.shared.producers import pause_targets
+
+    everything = session.execute(text(
+        "DELETE FROM producer_pauses WHERE target = :all AND scope = :s RETURNING paused_by, paused_at"
+    ), {"all": ALL, "s": WORK}).first()
+    if everything is None:
+        return
+    for target in pause_targets():
+        session.execute(text(
+            "INSERT INTO producer_pauses (target, scope, paused_by, paused_at) VALUES (:t, :s, :by, :at)"
+            " ON CONFLICT (target, scope) DO NOTHING"),
+            {"t": target, "s": WORK, "by": everything[0], "at": everything[1]})
+    session.execute(text(
+        "UPDATE libraries SET scans_paused_at = :at, scans_paused_by = :by WHERE scans_paused_at IS NULL"),
+        {"by": everything[0], "at": everything[1]})
+
+
+def pause_scans(session: Session, library_ids: list[str], *, by: str | None) -> None:
+    """Pause these libraries' scans: no new or changed files are found in
+    them (ADR-018 phase 1). Again is fine: who paused first, and when, stays.
+    Doesn't commit."""
+    session.execute(text(
+        "UPDATE libraries SET scans_paused_at = :now, scans_paused_by = :by"
+        " WHERE library_id = ANY(:ids) AND scans_paused_at IS NULL"),
+        {"ids": list(library_ids), "by": by, "now": utcnow()})
+
+
+def resume_scans(session: Session, library_ids: list[str]) -> None:
+    """Carry on scanning these libraries. While Pause all is on, everything
+    else stays paused, each on its own (_end_pause_all). Doesn't commit."""
+    if not library_ids:
+        return
+    _end_pause_all(session)
+    session.execute(text(
+        "UPDATE libraries SET scans_paused_at = NULL, scans_paused_by = NULL WHERE library_id = ANY(:ids)"),
+        {"ids": list(library_ids)})
 
 
 def pause_everything(session: Session, *, by: str | None) -> None:
@@ -451,8 +508,11 @@ def pause_everything(session: Session, *, by: str | None) -> None:
 
 
 def resume_everything(session: Session) -> None:
-    """Resume all: every switch running again (a stopped redo stays stopped). Doesn't commit."""
+    """Resume all: every switch, and every library's scans, running again (a
+    stopped redo stays stopped). Doesn't commit."""
     session.execute(text("DELETE FROM producer_pauses WHERE scope = :s"), {"s": WORK})
+    session.execute(text(
+        "UPDATE libraries SET scans_paused_at = NULL, scans_paused_by = NULL WHERE scans_paused_at IS NOT NULL"))
 
 
 _VERSION_SEEN = "producer.{}.version_seen"

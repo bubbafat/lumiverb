@@ -409,11 +409,11 @@ def _scanned(case: Case) -> bool:
 
 
 def _scans_row(case: Case) -> dict[str, dict]:
-    """The Scans switch's waits (GET /v1/producers/queue), by reason."""
-    client, headers, *_ = case.lib
+    """The library's scans' waits (GET /v1/producers/queue's libraries), by reason."""
+    client, headers, library_id, *_ = case.lib
     r = client.get("/v1/producers/queue", headers=headers)
     assert r.status_code == 200, r.text
-    [scans] = [s for s in r.json()["switches"] if s["target"] == "scans"]
+    [scans] = [lib for lib in r.json()["libraries"] if lib["library_id"] == library_id]
     return {w["reason"]: w for w in scans["waits"]}
 
 
@@ -595,16 +595,21 @@ def test_scans_paused_is_said_with_what_waits_for_a_scan_or_for_proxies(env):
         s.execute(text("UPDATE assets SET proxy_key = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
     _status(env, held=[{"kind": "capture", "why": "scan", "library_id": library_id, "clips": 1}])
-    assert client.post("/v1/producers/scans/pause", json=WORK, headers=headers).status_code == 204
+    # The library's own Scans pause (ADR-018 phase 1).
+    r = client.post("/v1/libraries/scans/pause", json={"library_ids": [library_id]}, headers=headers)
+    assert r.status_code == 204, r.text
     try:
         rows = {p["artifact"]: p for p in client.get("/v1/producers", params={"library_id": library_id},
                                                      headers=headers).json()["producers"]}
         assert {"reason": "scan", "clips": 1, "paused": True} in rows["capture"]["waits"]
-        # Proxies are made by scans: what waits for one waits for Scans.
+        # Proxies are made by scans: what waits for one waits for the library's scans.
         assert {"reason": "needs", "clips": 1, "artifact": "proxy", "paused": True} in rows["vision"]["waits"]
         assert rows["proxy"]["waits"] == []  # scans make it: "Paused with scans" says so
+        # Across every library, another's scans still run: not said as paused.
+        everywhere = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}
+        assert all(not w.get("paused") for w in everywhere["vision"]["waits"] if w["reason"] == "needs")
     finally:
-        client.post("/v1/producers/scans/resume", json=WORK, headers=headers)
+        client.post("/v1/libraries/scans/resume", json={"library_ids": [library_id]}, headers=headers)
 
 
 @pytest.mark.slow

@@ -148,8 +148,13 @@ class Account:
                 self.ready[job] = False
 
     def set_libraries(self, libraries: list[dict]) -> None:
+        """The account's libraries this server reads (src/shared/readers.py):
+        the only ones whose storage it looks at and whose originals its
+        producers read."""
+        from src.shared.readers import read_by_server
+
         with self._lock:
-            self.libraries = {lib["library_id"]: lib for lib in libraries}
+            self.libraries = {lib["library_id"]: lib for lib in libraries if read_by_server(lib)}
 
     def look_at_storage(self) -> bool:
         """The scheduler's own look at each library's storage, when due:

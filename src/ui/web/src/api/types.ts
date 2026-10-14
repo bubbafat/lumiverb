@@ -9,6 +9,10 @@ export interface LibraryListItem {
   trashed_at?: string | null;
   /** Bumped whenever the library's clips change; older servers leave it out. */
   revision?: number;
+  /** Who reads its files: "server", this server (ADR-018). Older servers leave it out. */
+  reader?: string;
+  /** Its own Scans pause (Pause all isn't said here). Older servers leave it out. */
+  scans_paused?: boolean;
 }
 
 export interface DirectoryNode {
@@ -22,6 +26,8 @@ export interface LibraryResponse {
   name: string;
   root_path: string;
   is_public: boolean;
+  /** Who reads its files: "server", this server (ADR-018). Older servers leave it out. */
+  reader?: string;
 }
 
 export interface EmptyTrashResponse {
