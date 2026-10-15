@@ -383,11 +383,9 @@ def _run_quickwit_search(
                 logger.warning("Quickwit scene prefix search failed: %r", exc, exc_info=True)
 
         # Transcript index — uses transcript-restricted query (text only).
-        # The transcript index is created lazily on first transcript
-        # submission, so for libraries with no video transcripts the
-        # index doesn't exist and Quickwit returns 400. We swallow that
-        # specifically — no transcripts means no transcript hits, which
-        # is fine. Other transcript failures still get logged.
+        # It's made once the account has a transcript; until then the
+        # client finds nothing in it (quickwit_client._search_index), and
+        # other failures are logged.
         try:
             transcript_hits = qw.search_tenant_transcripts(
                 tenant_id=tenant_id,
