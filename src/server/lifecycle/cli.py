@@ -90,6 +90,7 @@ from src.server.lifecycle.postgres import (
     up_while,
 )
 from src.server.lifecycle.supervise import Child, Supervisor
+from src.shared.secrets_env import without_secrets
 from src.shared.stop_signals import set_on_signals
 
 logger = logging.getLogger("lumiverb-server")
@@ -137,6 +138,11 @@ def data_dir(env: dict[str, str]) -> Path:
     return path
 
 
+# The scheduler reads the database directly and makes its own API keys
+# (scheduler/service.py scheduler_key): no other secret.
+SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL",)
+
+
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
                     cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None,
                     log_file: Path | None = None) -> list[Child]:
@@ -147,8 +153,10 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
     the install's own settings (config_dir: the env file's folder, its secrets).
     The API is told which env file is the install's (env_file), to say how to
     restore a backup, and where the service's log is (log_file: launchd's, for
-    Admin › Logs)."""
+    Admin › Logs). Each gets only the secrets it needs (secrets_env): the API
+    all of them, the scheduler the control database's URL, the rest none."""
     base = {**env, "PYTHONUNBUFFERED": "1"}
+    no_secrets = without_secrets(base)
     data = data_dir(env)
     started_first: list[Child] = []
     if env.get("PG_BIN"):
@@ -156,18 +164,18 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         # a fast shutdown (SIGINT), the postmaster stopping its own backends.
         started_first.append(Child("postgres", postgres_argv(Path(env["PG_BIN"]), data,
                                                              env["CONTROL_PLANE_DATABASE_URL"]),
-                                   postgres_env(base), cwd, restart_after=5, stop_within=60, term_main_only=True,
+                                   postgres_env(no_secrets), cwd, restart_after=5, stop_within=60, term_main_only=True,
                                    stop_signal=signal.SIGINT))
     if env.get("QUICKWIT_BIN"):
         # Warnings and errors only, without colour codes: its info lines were
         # a sixth of the log (actors starting and stopping).
         started_first.append(Child("quickwit", [env["QUICKWIT_BIN"], "run", "--config", env["QUICKWIT_CONFIG"]],
-                                   {**base, "NO_COLOR": "1", "RUST_LOG": env.get("RUST_LOG") or "warn"},
+                                   {**no_secrets, "NO_COLOR": "1", "RUST_LOG": env.get("RUST_LOG") or "warn"},
                                    cwd, restart_after=5, stop_within=30))
     if env.get("NGINX_BIN"):
         started_first.append(Child("nginx", [env["NGINX_BIN"], "-p", f"{data / 'nginx'}/",
                                              "-c", env["NGINX_CONFIG"], "-e", "stderr"],
-                                   base, cwd, restart_after=5, stop_within=15, term_main_only=True))
+                                   no_secrets, cwd, restart_after=5, stop_within=15, term_main_only=True))
     api = Child(
         "api",
         # No line per request (over half the log, every thumbnail): nginx
@@ -193,7 +201,8 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
     scheduler = Child(
         "scheduler",
         [python, "-m", "src.server.scheduler"],
-        {**base, "LUMIVERB_REFUSED_ROOTS": json.dumps(refused), "XDG_CACHE_HOME": str(data / "cache"),
+        {**without_secrets(base, keep=SCHEDULER_SECRETS), "LUMIVERB_REFUSED_ROOTS": json.dumps(refused),
+         "XDG_CACHE_HOME": str(data / "cache"),
          "TMPDIR": str(data / "worker-tmp")}, cwd,
         # It lets jobs in hand finish for up to 25 s; only it hears the stop.
         restart_after=30, stop_within=40, term_main_only=True, empty_first=data / "worker-tmp",

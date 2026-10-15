@@ -41,7 +41,7 @@ def test_the_children_are_linux_s_units(tmp_path):
     assert scheduler.env["XDG_CACHE_HOME"] == str(tmp_path / "cache")
     assert (scheduler.restart_after, scheduler.stop_within, scheduler.term_main_only) == (30, 40, True)
     assert api.env["PYTHONUNBUFFERED"] == scheduler.env["PYTHONUNBUFFERED"] == "1"
-    assert scheduler.env["ADMIN_KEY"] == "k"  # the install's variables reach both
+    assert api.env["ADMIN_KEY"] == "k" and "ADMIN_KEY" not in scheduler.env  # each part only its secrets
     assert "LUMIVERB_LOG_FILE" not in api.env, "not launchd's: started from a terminal"
 
 
@@ -75,6 +75,22 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
     assert all(c.start_after is None for c in (postgres, quickwit, nginx))
     assert api.start_after is migrated and scheduler.start_after is migrated
+
+
+@pytest.mark.fast
+def test_each_part_gets_only_the_secrets_it_needs(tmp_path):
+    secrets = {"CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/cp",
+               "TENANT_DATABASE_URL_TEMPLATE": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/{tenant_id}",
+               "ADMIN_KEY": "a", "API_SECRET_KEY": "b", "JWT_SECRET": "c", "SMTP_PASSWORD": "d"}
+    env = {"DATA_DIR": str(tmp_path), "PG_BIN": "/pg/bin", "QUICKWIT_BIN": "/qw", "QUICKWIT_CONFIG": "/q",
+           "NGINX_BIN": "/n", "NGINX_CONFIG": "/c", "HOME": "/Users/x", "PATH": "/usr/bin", **secrets}
+    postgres, quickwit, nginx, api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
+    for child in (postgres, quickwit, nginx):
+        assert not set(secrets) & set(child.env), child.name
+        assert (child.env["HOME"], child.env["PATH"]) == ("/Users/x", "/usr/bin")
+    assert set(secrets) & set(scheduler.env) == {"CONTROL_PLANE_DATABASE_URL"}  # it reads the database, no more
+    assert set(secrets) <= set(api.env)  # it signs people in, checks keys, sends mail
+    assert postgres.argv[postgres.argv.index("-p") + 1] == "6468"  # its port, from the URL it isn't given
 
 
 # The formula's service `stop_timeout` (launchd's ExitTimeOut) in

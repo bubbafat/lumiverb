@@ -44,6 +44,7 @@ from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.storage.local import LocalStorage, get_storage
 from src.server.tenant_settings import playback_cap
+from src.shared.secrets_env import without_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,7 @@ def _duration(path: Path) -> float | None:
         out = subprocess.run(
             ["ffprobe", "-v", "error", *ffmpeg_run.input_args(), "-show_entries", "format=duration", "-of", "json",
              str(path)],
-            capture_output=True, text=True, timeout=30, check=True,
+            capture_output=True, text=True, timeout=30, check=True, env=without_secrets(os.environ),
         ).stdout
         return float(json.loads(out)["format"]["duration"])
     except (subprocess.SubprocessError, OSError, ValueError, KeyError):
@@ -340,7 +341,7 @@ def _make_cut(ask: _Ask) -> None:
                "-movflags", "+faststart", "-f", "mp4", str(tmp)]
         if _stopping.is_set():
             raise _CutFailed("the API is stopping")
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=without_secrets(os.environ))
         with _jobs_lock:
             _procs.add(proc)
             stopping = _stopping.is_set()  # stop_cuts came between: it didn't see this one
