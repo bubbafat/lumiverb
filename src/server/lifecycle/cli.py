@@ -139,8 +139,10 @@ def data_dir(env: dict[str, str]) -> Path:
 
 
 # The scheduler reads the database directly and makes its own API keys
-# (scheduler/service.py scheduler_key): no other secret.
-SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL",)
+# (scheduler/service.py scheduler_key): no other secret. The server's
+# settings require the template (config.py) though it reads each account's
+# database from its routing: the same credentials as the control URL's.
+SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE")
 
 
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
