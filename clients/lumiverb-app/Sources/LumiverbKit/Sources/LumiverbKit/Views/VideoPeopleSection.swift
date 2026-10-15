@@ -22,7 +22,7 @@ struct VideoPeopleSection: View {
                         .clipShape(Circle())
                     VStack(alignment: .leading, spacing: 4) {
                         Button(name(of: face)) { vm.selectFace(face.faceId) }
-                            .buttonStyle(.link)
+                            .nameAsLink()
                             .popover(isPresented: popoverBinding(for: face.faceId), arrowEdge: .leading) {
                                 FaceAssignmentPopover(vm: vm, face: face)
                             }
@@ -57,5 +57,17 @@ struct VideoPeopleSection: View {
                 if !isShown && vm.selectedFaceId == faceId { vm.deselectFace() }
             }
         )
+    }
+}
+
+private extension View {
+    /// A name that reads as a link: the link style on a Mac; iOS has none,
+    /// so a borderless button there, in the tint colour.
+    @ViewBuilder func nameAsLink() -> some View {
+        #if os(macOS)
+        buttonStyle(.link)
+        #else
+        buttonStyle(.borderless)
+        #endif
     }
 }
