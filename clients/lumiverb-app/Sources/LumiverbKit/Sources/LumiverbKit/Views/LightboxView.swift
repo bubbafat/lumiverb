@@ -114,9 +114,6 @@ public struct LightboxView: View {
                     onFindSimilar: {
                         Task { await browseState.findSimilar(assetId: detail.assetId) }
                     },
-                    onReEnrich: { ops in
-                        browseState.reEnrichAsset(assetId: detail.assetId, operations: ops)
-                    },
                     onRevealInFinder: {
                         #if os(macOS)
                         if let rootPath = browseState.selectedLibraryRootPath,
@@ -133,7 +130,6 @@ public struct LightboxView: View {
                         }
                         #endif
                     } : nil,
-                    whisperEnabled: browseState.whisperEnabled,
                     onMetadataFilter: { build in
                         browseState.applyMetadataFilter(build)
                     },
@@ -229,10 +225,8 @@ struct MetadataSidebar: View {
     @Binding var rating: Rating
     let onRatingChange: (RatingUpdateBody) -> Void
     let onFindSimilar: () -> Void
-    let onReEnrich: (Set<EnrichmentOperation>) -> Void
     let onRevealInFinder: () -> Void
     let onOpenInPlayer: (() -> Void)?
-    var whisperEnabled: Bool = false
     /// When set, metadata values become clickable filter links.
     var onMetadataFilter: (((inout BrowseFilter) -> Void) -> Void)?
     /// When set, tags become clickable search links.
@@ -292,9 +286,6 @@ struct MetadataSidebar: View {
                         .keyboardShortcut("d", modifiers: [])
                         .help("Show face bounding boxes (D)")
                     }
-
-                    ReEnrichMenu(onReEnrich: onReEnrich, whisperEnabled: whisperEnabled)
-                        .controlSize(.small)
 
                     if let onOpenInPlayer {
                         Button {

@@ -11,7 +11,7 @@ enum LibraryStatus: Equatable {
     /// Default healthy state — no pending work, root reachable.
     /// Rendered as green.
     case idle
-    /// Currently being scanned or enriched. Rendered as orange.
+    /// Currently being scanned. Rendered as orange.
     case busy
     /// Root path doesn't exist on disk (unmounted volume, moved
     /// folder, bad path). Rendered as red. Scan skips these until
@@ -42,7 +42,6 @@ class ScanState: ObservableObject {
     @Published var lastError = ""         // most recent error detail
     @Published var phase = ""            // current scan phase
     @Published var lastScanDate: Date?
-    @Published var scanError: String?
     @Published var isWatching = false
 
     /// Per-library scan results from the last run.
@@ -80,13 +79,6 @@ class ScanState: ObservableObject {
             }
             if phase.hasPrefix("error") {
                 return phase
-            }
-            if phase.hasPrefix("enriching") {
-                let step = phase.replacingOccurrences(of: "enriching: ", with: "")
-                if totalFiles == 0 {
-                    return "Enrichment: \(step) (nothing to do)"
-                }
-                return "Enrichment: \(step) \(processedFiles) of \(totalFiles)"
             }
             switch phase {
             case "discovering":
@@ -168,7 +160,6 @@ class ScanState: ObservableObject {
             isScanning = true
             processedFiles = 0
             totalFiles = 0
-            scanError = nil
             lastResults = [:]
 
             // Fetch tenant filters once (shared across all libraries)
@@ -179,14 +170,9 @@ class ScanState: ObservableObject {
                 tenantFilters = TenantFilterDefaultsResponse(includes: [], excludes: [])
             }
 
-            // Process each library fully (scan + enrich) before moving
-            // on to the next. This used to be two separate loops
-            // (scan all, then enrich all), but that made the per-
-            // library status indicator flap weirdly — a library would
-            // go .busy → .idle → .busy as it moved between phases. The
-            // new ordering keeps `.busy` contiguous per library, which
-            // is also closer to the natural "one library at a time"
-            // mental model.
+            // One library at a time. The app scans only: what's made
+            // from the files (previews, CLIP, faces, transcripts, …) is
+            // the server's scheduler's work.
             for library in appState.libraries {
                 guard isScanning else { break }
 
@@ -225,23 +211,6 @@ class ScanState: ObservableObject {
                 lastResults[library.libraryId] = result
                 stopProgressPolling()
                 pipelines.removeValue(forKey: library.libraryId)
-
-                // --- Enrich ---
-                phase = "enriching"
-                let enrichPipeline = EnrichmentPipeline(
-                    client: client,
-                    libraryId: library.libraryId,
-                    visionApiUrl: appState.resolvedVisionApiUrl,
-                    visionApiKey: appState.resolvedVisionApiKey,
-                    visionModelId: appState.resolvedVisionModelId
-                )
-                startEnrichProgressPolling(pipeline: enrichPipeline)
-                let enrichResult = await enrichPipeline.run()
-                stopProgressPolling()
-
-                if enrichResult.errors > 0 {
-                    scanError = "\(enrichResult.errors) enrichment errors"
-                }
 
                 libraryStatus[library.libraryId] = .idle
             }
@@ -325,25 +294,6 @@ class ScanState: ObservableObject {
                 self.errorCount = errors
                 self.lastError = error
                 self.phase = currentPhase
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        }
-    }
-
-    private func startEnrichProgressPolling(pipeline: EnrichmentPipeline) {
-        pollTask?.cancel()
-        pollTask = Task {
-            while !Task.isCancelled {
-                let total = await pipeline.totalItems
-                let processed = await pipeline.processedItems
-                let errors = await pipeline.errorCount
-                let error = await pipeline.lastError
-                let currentPhase = await pipeline.phase
-                self.totalFiles = total
-                self.processedFiles = processed
-                self.errorCount = errors
-                self.lastError = error
-                self.phase = "enriching: \(currentPhase)"
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }

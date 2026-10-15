@@ -56,13 +56,8 @@ struct BrowseWindow: View {
         self.appState = appState
         self.scanState = scanState
         // BrowseState consumes the cross-platform `BrowseAppContext`
-        // protocol that AppState now conforms to (see AppState.swift).
-        // The re-enrich invoker is installed after construction so the
-        // closure can hold the same AppState reference for vision /
-        // whisper config lookup at run time.
-        let browseState = BrowseState(appContext: appState)
-        browseState.reEnrichInvoker = MacReEnrichInvoker(appState: appState)
-        self._browseState = StateObject(wrappedValue: browseState)
+        // protocol that AppState conforms to (see AppState.swift).
+        self._browseState = StateObject(wrappedValue: BrowseState(appContext: appState))
         self._peopleState = StateObject(wrappedValue: PeopleState(client: appState.client))
         self._clusterReviewState = StateObject(
             wrappedValue: ClusterReviewState(client: appState.client)
@@ -300,17 +295,12 @@ struct BrowseWindow: View {
     @ViewBuilder
     private var libraryColumn: some View {
         VStack(spacing: 0) {
-            if browseState.isReEnriching || !browseState.reEnrichSkipped.isEmpty {
-                reEnrichBanner
-            } else if let libId = browseState.selectedLibraryId,
-                      scanState.libraryStatus[libId] == .busy {
-                // Background sync/enrich activity banner. Shows the same
+            if let libId = browseState.selectedLibraryId,
+               scanState.libraryStatus[libId] == .busy {
+                // Background sync activity banner. Shows the same
                 // status text as the menu bar so users in the browse
                 // window don't miss that work is in flight on the
-                // library they're looking at. The user-triggered
-                // re-enrich banner takes priority when both are active —
-                // they convey similar info and stacking both would be
-                // noisy.
+                // library they're looking at.
                 scanActivityBanner
             }
             FilterChicletBar(browseState: browseState) {
@@ -575,59 +565,10 @@ struct BrowseWindow: View {
         }
     }
 
-    // MARK: - Re-enrichment banner
-
-    private var reEnrichBanner: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if browseState.isReEnriching {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Re-enriching: \(browseState.reEnrichPhase)")
-                        .font(.caption)
-                    if browseState.reEnrichTotal > 0 {
-                        Text("\(browseState.reEnrichProcessed) of \(browseState.reEnrichTotal)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        browseState.cancelReEnrich()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            if !browseState.reEnrichSkipped.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                        .font(.caption)
-                    Text("Skipped: \(browseState.reEnrichSkipped.joined(separator: ", "))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Button {
-                        browseState.reEnrichSkipped = []
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
-    }
-
     // MARK: - Scan activity banner
 
     /// Thin progress banner shown when the currently-selected library
-    /// is being scanned or enriched by the background scan. Gives the
+    /// is being scanned by the background scan. Gives the
     /// browse-window user the same visibility into pipeline state
     /// that the menu bar dropdown already provides.
     private var scanActivityBanner: some View {

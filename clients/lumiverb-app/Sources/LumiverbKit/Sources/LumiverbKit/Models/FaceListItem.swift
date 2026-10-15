@@ -6,17 +6,17 @@ import Foundation
 ///
 /// **Two on-the-wire formats.** The server's `bounding_box_json` column is
 /// a free-form dict that's whatever the detection provider wrote at face
-/// submission time, and we have two providers in production:
+/// submission time:
 ///
-/// - The Python InsightFace path (`src/client/workers/faces/insightface_provider.py`)
+/// - The server's InsightFace path (`src/processing/workers/faces/insightface_provider.py`)
 ///   stores faces as `{"x": ..., "y": ..., "w": ..., "h": ...}` (top-left
 ///   origin + width/height).
-/// - The Swift Vision path (`Sources/macOS/Enrich/FaceDetectionProvider.swift`,
-///   via `FacesSubmitRequest.BoundingBox`) stores faces as
+/// - The macOS app's Apple Vision detection, before the server's scheduler
+///   did all the processing, stored faces as
 ///   `{"x1": ..., "y1": ..., "x2": ..., "y2": ...}` (top-left + bottom-right).
 ///
-/// The same library can contain faces from both providers depending on
-/// when each asset was last enriched, so the read path has to handle either.
+/// A library can still hold faces the macOS app found, so the read path
+/// has to handle either.
 /// This struct's custom `init(from:)` accepts both shapes and normalizes
 /// internally to `(x, y, width, height)`. The `x2` / `y2` accessors are
 /// computed for callers that want the bottom-right corner directly.

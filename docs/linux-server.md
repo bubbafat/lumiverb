@@ -121,7 +121,7 @@ A machine that doesn't answer, breaks off or can't load the model is skipped and
 
 ### 7. The Mac app
 
-Not pointed at prod yet (your call, Oct 8): its Swift changes wait. Until then it keeps scanning and enriching its own server. The changes it needs are under "Mac app changes" below.
+Not pointed at prod yet (your call, Oct 8): its Swift changes wait. It no longer enriches anything (its own AI is gone: the scheduler does it all); until the rest is done it keeps scanning for its own server. The changes it needs are under "Mac app changes" below.
 
 ### 8. The DAS mounts
 
@@ -227,10 +227,9 @@ Previews (every stored artifact) are in `DATA_DIR` (here `/mnt/ssd2/lumiverb`). 
    - Files or folders, up to 10,000 per request.
    - Retry on failure.
    - The response says how many matched a library (`accepted`) and how many didn't (`unmatched`).
-2. **Stop scanning and enriching.** The server does both now. Keep browsing.
-   - Retire Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint and whisper.cpp.
+2. **Stop scanning.** The server does it now. Keep browsing.
+   - Enriching is done: Apple Vision faces and OCR, CoreML ArcFace and CLIP, FeaturePrint and whisper.cpp are gone from the app.
    - A Mac can still serve a model as an ordinary endpoint, such as Ollama, as long as the model isn't Mac-specific.
-3. Until then, nothing breaks. If the Mac and the server both transcribe a clip, the last write wins; phase 3 makes each artifact have one producer.
 
 ## Moving the dev database to Postgres 18
 

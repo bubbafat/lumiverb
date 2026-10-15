@@ -12,7 +12,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 |-------|-------------|--------|
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
-| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: the macOS app's change reports and retiring its AI (Swift), finishing the fresh ingest |
+| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: the macOS app's change reports (Swift), finishing the fresh ingest. The macOS app's AI is retired (Oct 14) |
 | 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
 | 4 | Producers and endpoints | Producers in progress: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints not started |
 
@@ -67,7 +67,7 @@ Lumiverb has three roles. They can be separate machines or share one.
 | Server | Runs the catalog (API, Postgres, Quickwit), schedules all producers, holds derived media, serves the web UI. Reaches storage over the network, read-only. | A Linux box with an NVIDIA GPU |
 | Edit stations | Where cutting happens, and where the web UI is used to find and collect. | The Mac Studio (masters), a MacBook (proxies) |
 
-The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retires in phase 2. Because the server can't watch a network mount for changes, the macOS app reports the file changes it sees on storage.
+The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retired in phase 2 (Oct 14). Because the server can't watch a network mount for changes, the macOS app reports the file changes it sees on storage.
 
 ### AI inference runs at named endpoints
 
@@ -224,12 +224,12 @@ The server reads storage, schedules all rendering and enrichment, and is where L
 - Mount storage read-only; map each library's root to that mount in the server's own config, not the database
 - Render full-length analysis proxies at the Rendered milestone; transcription, scenes and vision read these instead of originals
 - Run scan and enrich as a service on the server (since phase 4, the scheduler); the storage machine reports file changes it sees
-- Retire the macOS app's built-in AI steps
+- Retire the macOS app's built-in AI steps (done Oct 14: the app scans and browses, and processes nothing)
 - Ingest the whole library fresh
 
 **Done when:** footage copied to storage becomes searchable and transcribed without starting anything on an edit station, and enrichment continues from proxies while storage sleeps.
 
-**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/linux-server.md` has the install, which needs sudo, and the Swift changes for the macOS app, which can't be built here. Prod is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
+**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/linux-server.md` has the install, which needs sudo, and the Swift changes for the macOS app. Its built-in AI is gone (Oct 14): enrichment, re-enrich and the vision and Whisper settings, with the CoreML conversion scripts; it still scans until its change reports are done. Prod is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
 
 ### Phase 3 — Lineage and reconciliation
 

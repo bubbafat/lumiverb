@@ -1,14 +1,15 @@
 import Foundation
 import Vision
 
-/// Apple Vision feature print embedder for iOS — mirror of the macOS
-/// `FeaturePrintProvider` so we can produce embeddings that match the
-/// vectors stored in the user's library.
+/// Apple Vision feature print embedder for iOS, producing embeddings that
+/// match the `apple_vision` vectors stored in the user's library.
 ///
-/// The macOS app indexes images using `VNGenerateImageFeaturePrintRequest`
-/// (model_id `apple_vision`, model_version `feature_print_v1`). For
-/// similar-by-image to work on iOS, the iOS-side embed has to land in
-/// the **same vector space** — that means the same Vision request.
+/// The macOS app, before the server's scheduler did all the processing
+/// (it embeds with CLIP), indexed images using
+/// `VNGenerateImageFeaturePrintRequest` (model_id `apple_vision`,
+/// model_version `feature_print_v1`). For similar-by-image to match
+/// those, the iOS-side embed has to land in the **same vector space** —
+/// that means the same Vision request.
 /// We pass raw image data to Vision and let it handle EXIF orientation
 /// internally; this also dodges a simulator-only "Failed to create
 /// espresso context" error that fires when CGImages are pre-loaded
@@ -21,7 +22,7 @@ enum iOSFeaturePrintEmbedder {
     /// Compute a feature print embedding from JPEG/PNG bytes. Returns
     /// an L2-normalized vector ready to send to `/v1/similar/search-by-vector`.
     ///
-    /// **Why we use the data init rather than loadOriented + cgImage**:
+    /// **Why we use the data init rather than a pre-loaded CGImage**:
     /// the iOS simulator's Vision implementation throws "Failed to
     /// create espresso context" intermittently when handed CGImages.
     /// Passing raw data via `VNImageRequestHandler(data:options:)`

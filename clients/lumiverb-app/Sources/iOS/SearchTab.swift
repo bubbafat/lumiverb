@@ -324,12 +324,13 @@ struct SearchTab: View {
     /// feature prints, and POSTs the vector to /v1/similar/search-by-vector.
     ///
     /// We embed client-side rather than relying on `search-by-image`'s
-    /// server CLIP because the macOS app indexes libraries with
+    /// server CLIP because the macOS app indexed libraries with
     /// `apple_vision` feature prints (model_id `apple_vision`, model
-    /// version `feature_print_v1`). The server's CLIP model lives in a
-    /// different vector space and would never match the indexed assets
-    /// — so the *scene* path has to embed here, in the same space the
-    /// library was indexed in.
+    /// version `feature_print_v1`) before the server's scheduler did all
+    /// the processing. The server's CLIP model lives in a different
+    /// vector space and would never match those vectors — so the *scene*
+    /// path has to embed here, in the same space. (Photos the scheduler
+    /// indexed have CLIP vectors only.)
     ///
     /// **Hybrid mode**: alongside the scene vector we ship a downscaled
     /// JPEG so the server can run face detection and ArcFace embedding,

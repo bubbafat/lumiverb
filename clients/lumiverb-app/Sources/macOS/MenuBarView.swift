@@ -177,12 +177,6 @@ struct MenuBarView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
-
-        if let error = scanState.scanError {
-            Text(error)
-                .font(.caption2)
-                .foregroundColor(.red)
-        }
     }
 
     // MARK: - Unauthenticated

@@ -52,11 +52,10 @@ public struct ImageSimilarityRequest: Encodable, Sendable {
 }
 
 /// Request body for `POST /v1/similar/search-by-vector`. For clients
-/// that embed locally — iOS uses Apple Vision feature prints, macOS
-/// uses CLIP via CoreML or Vision feature prints. The model_id /
-/// model_version must match how the library was indexed, otherwise
-/// the server's vector lookup returns no results (different vector
-/// spaces).
+/// that embed locally — iOS uses Apple Vision feature prints. The
+/// model_id / model_version must match how the library was indexed,
+/// otherwise the server's vector lookup returns no results (different
+/// vector spaces).
 ///
 /// **Hybrid mode**: when `imageB64` is also supplied, the server runs
 /// face detection on the image, embeds each face with ArcFace, and

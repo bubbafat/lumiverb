@@ -1,4 +1,3 @@
-import Combine
 import SwiftUI
 import LumiverbKit
 
@@ -24,31 +23,11 @@ class AppState: ObservableObject {
     /// and on `.onChange` and clears it. Nil = no pending request.
     @Published var pendingSelectedLibraryId: String?
 
-    // Vision API configuration (local overrides > tenant defaults)
-    @Published var visionApiUrl: String = ""
-    @Published var visionApiKey: String = ""
-    @Published var visionModelId: String = ""
-    // Tenant-provided defaults (read-only, shown in UI for reference)
-    @Published var tenantVisionApiUrl: String = ""
-    @Published var tenantVisionModelId: String = ""
-
-    // Whisper.cpp transcription config. Defaults match the Python production
-    // reference (`whisper_model="small"`). The `whisperEnabled` toggle is
-    // the primary opt-in: when off, the entire transcription pipeline is
-    // disabled — the menu item is shown but greyed out, the model directory
-    // can be cleaned up, and no model auto-downloads happen. Empty
-    // `whisperLanguage` means auto-detect; empty `whisperBinaryPath` means
-    // auto-discover from common Homebrew install locations.
-    @Published var whisperEnabled: Bool = false
-    @Published var whisperModelSize: String = "small"
-    @Published var whisperLanguage: String = ""
-    @Published var whisperBinaryPath: String = ""
-
     private(set) var client: APIClient?
     private(set) var authManager: AuthManager?
 
-    /// Where the access token and the vision API key are kept (owner-only
-    /// file, `FileTokenStore`), never UserDefaults.
+    /// Where the access token is kept (owner-only file, `FileTokenStore`),
+    /// never UserDefaults.
     private let tokenStore: any TokenStore = FileTokenStore()
 
     /// Pair of platform-specific caches handed to browse views via the
@@ -72,43 +51,24 @@ class AppState: ObservableObject {
     /// drives scroll commands.
     let scrollAccessor: MacScrollAccessor = MacScrollAccessor()
 
-    /// Resolved vision config: local override > tenant default.
-    var resolvedVisionApiUrl: String {
-        visionApiUrl.isEmpty ? tenantVisionApiUrl : visionApiUrl
-    }
-    var resolvedVisionApiKey: String { visionApiKey }
-    var resolvedVisionModelId: String {
-        visionModelId.isEmpty ? tenantVisionModelId : visionModelId
-    }
-    var isVisionConfigured: Bool {
-        !resolvedVisionApiUrl.isEmpty && !resolvedVisionModelId.isEmpty
-    }
-
-    var isWhisperConfigured: Bool {
-        WhisperProvider.isConfigured(modelSize: whisperModelSize, binaryPath: whisperBinaryPath)
-    }
-
-    /// True if whisper is enabled but the chosen model file is missing on
-    /// disk — used by Settings to surface a "Download now" banner without
-    /// auto-triggering a download as a side-effect of opening the page.
-    var isWhisperEnabledButModelMissing: Bool {
-        whisperEnabled && !isWhisperConfigured
-    }
+    /// The vision and whisper settings the app's own AI kept, before the
+    /// server's scheduler did all the processing.
+    private static let retiredSettingKeys = [
+        "visionApiUrl", "visionModelId",
+        "whisperEnabled", "whisperModelSize", "whisperLanguage", "whisperBinaryPath",
+    ]
 
     init() {
         // Try to restore saved server URL
         if let saved = UserDefaults.standard.string(forKey: "serverURL"), !saved.isEmpty {
             serverURL = saved
         }
-        // Restore saved vision config
-        visionApiUrl = UserDefaults.standard.string(forKey: "visionApiUrl") ?? ""
-        visionApiKey = (try? tokenStore.read(key: "visionApiKey")) ?? ""
-        visionModelId = UserDefaults.standard.string(forKey: "visionModelId") ?? ""
-        // Restore whisper config
-        whisperEnabled = UserDefaults.standard.bool(forKey: "whisperEnabled")
-        whisperModelSize = UserDefaults.standard.string(forKey: "whisperModelSize") ?? "small"
-        whisperLanguage = UserDefaults.standard.string(forKey: "whisperLanguage") ?? ""
-        whisperBinaryPath = UserDefaults.standard.string(forKey: "whisperBinaryPath") ?? ""
+        // Forget what the app's own AI kept: the vision service's key (a
+        // secret nothing reads any more) and its settings. A no-op once gone.
+        try? tokenStore.delete(key: "visionApiKey")
+        for key in Self.retiredSettingKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         // Restore favorites
         favoriteLibraryIds = Set(
             UserDefaults.standard.stringArray(forKey: "favoriteLibraryIds") ?? []
@@ -137,23 +97,6 @@ class AppState: ObservableObject {
     /// they appear in `libraries`. Used by the menu bar.
     var favoriteLibraries: [Library] {
         libraries.filter { favoriteLibraryIds.contains($0.libraryId) }
-    }
-
-    func saveVisionConfig() {
-        UserDefaults.standard.set(visionApiUrl, forKey: "visionApiUrl")
-        if visionApiKey.isEmpty {
-            try? tokenStore.delete(key: "visionApiKey")
-        } else {
-            try? tokenStore.save(key: "visionApiKey", value: visionApiKey)
-        }
-        UserDefaults.standard.set(visionModelId, forKey: "visionModelId")
-    }
-
-    func saveWhisperConfig() {
-        UserDefaults.standard.set(whisperEnabled, forKey: "whisperEnabled")
-        UserDefaults.standard.set(whisperModelSize, forKey: "whisperModelSize")
-        UserDefaults.standard.set(whisperLanguage, forKey: "whisperLanguage")
-        UserDefaults.standard.set(whisperBinaryPath, forKey: "whisperBinaryPath")
     }
 
     func configure(serverURL: String) {
@@ -320,20 +263,6 @@ class AppState: ObservableObject {
         try await client.delete("/v1/libraries/\(libraryId)/filters/\(filterId)")
     }
 
-    /// Fetch tenant context to get vision API defaults.
-    func fetchTenantContext() async {
-        guard let client else { return }
-        do {
-            let ctx: TenantContext = try await client.get("/v1/tenant/context")
-            tenantVisionApiUrl = ctx.visionApiUrl
-            tenantVisionModelId = ctx.visionModelId
-            // Don't overwrite local key with tenant key — tenant key
-            // is returned from context but users may want their own.
-        } catch {
-            // Non-fatal — local config still works
-        }
-    }
-
     private func fetchUserAndLibraries() async {
         guard let client else { return }
 
@@ -344,7 +273,6 @@ class AppState: ObservableObject {
             libraries = libs
             isAuthenticated = true
             connectionError = nil
-            await fetchTenantContext()
         } catch {
             let firstError = error
             // Token may be expired — try refresh
@@ -356,7 +284,6 @@ class AppState: ObservableObject {
                     libraries = libs
                     isAuthenticated = true
                     connectionError = nil
-                    await fetchTenantContext()
                 } catch {
                     connectionError = "After refresh: \(error)"
                 }
@@ -370,24 +297,11 @@ class AppState: ObservableObject {
 // MARK: - BrowseAppContext conformance
 
 /// macOS adapter for the cross-platform `BrowseAppContext` protocol that
-/// `BrowseState` consumes. All the requirements are already exposed as
-/// stored properties or computed accessors on `AppState`; this extension
-/// just declares conformance and erases `$whisperEnabled` to an
-/// `AnyPublisher` so the protocol can describe it without depending on
-/// `@Published`'s projected-value type.
+/// `BrowseState` consumes. `client` and `libraries` are already on
+/// `AppState`.
 extension AppState: BrowseAppContext {
-    var whisperEnabledPublisher: AnyPublisher<Bool, Never> {
-        $whisperEnabled.eraseToAnyPublisher()
-    }
-
-    /// Embedding model id for similarity search. Returns whichever local
-    /// provider is loaded — CLIP wins when its CoreML bundle is present,
-    /// FeaturePrint is the fallback (always available via Vision).
-    var embeddingModelId: String {
-        CLIPProvider.isAvailable ? CLIPProvider.modelId : FeaturePrintProvider.modelId
-    }
-
-    var embeddingModelVersion: String {
-        CLIPProvider.isAvailable ? CLIPProvider.modelVersion : FeaturePrintProvider.modelVersion
-    }
+    // The server's CLIP model (`src/producers/clip`), as iOS names it, so
+    // `/v1/similar` looks up the vectors the scheduler indexed.
+    var embeddingModelId: String { "clip" }
+    var embeddingModelVersion: String { "ViT-B-32-openai" }
 }

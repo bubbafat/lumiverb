@@ -1,5 +1,4 @@
 import XCTest
-import Combine
 @testable import LumiverbKit
 
 /// Tests for the search + filter stacking model:
@@ -17,16 +16,6 @@ final class SearchFilterStackingTests: XCTestCase {
     private class StubAppContext: BrowseAppContext {
         var client: APIClient? = nil
         var libraries: [Library] = []
-        var whisperEnabled: Bool = false
-        var whisperEnabledPublisher: AnyPublisher<Bool, Never> {
-            Just(false).eraseToAnyPublisher()
-        }
-        var resolvedVisionApiUrl: String = ""
-        var resolvedVisionApiKey: String = ""
-        var resolvedVisionModelId: String = ""
-        var whisperModelSize: String = ""
-        var whisperLanguage: String = ""
-        var whisperBinaryPath: String = ""
         var embeddingModelId: String = ""
         var embeddingModelVersion: String = ""
     }

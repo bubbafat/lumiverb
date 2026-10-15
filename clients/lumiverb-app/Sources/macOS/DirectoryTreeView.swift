@@ -120,14 +120,7 @@ struct DirectoryRowView: View {
                             let fullPath = (rootPath as NSString).appendingPathComponent(node.path)
                             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: fullPath)
                         }
-                        Divider()
                     }
-                    ReEnrichMenu(
-                        onReEnrich: { ops in
-                            browseState.reEnrich(operations: ops, pathPrefix: node.path)
-                        },
-                        whisperEnabled: browseState.whisperEnabled,
-                    )
                 }
             }
             .buttonStyle(.plain)
