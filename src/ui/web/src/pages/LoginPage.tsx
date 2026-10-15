@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { FormEvent } from "react";
 import { setApiKey } from "../api/client";
+import { signInNext } from "../lib/signInNext";
 import { fetchSetupStatus } from "./SetupPage";
 
 export default function LoginPage() {
@@ -41,14 +42,7 @@ export default function LoginPage() {
       if (res.ok) {
         const data = (await res.json()) as { access_token: string };
         setApiKey(data.access_token);
-        let safeDest = "/";
-        if (next) {
-          try {
-            const url = new URL(next, window.location.origin);
-            if (url.origin === window.location.origin) safeDest = next;
-          } catch { /* invalid URL — fall through to "/" */ }
-        }
-        navigate(safeDest);
+        navigate(signInNext(next));
       } else if (res.status === 401) {
         setError("Invalid email or password");
       } else {
