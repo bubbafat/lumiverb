@@ -6,7 +6,9 @@ walk saw (path, size, modified time), says when the listing is complete, and
 gets the plan: what to upload now, what to hash first, what a person removed,
 how many are unchanged and how many clips are gone. It sends the hashes the
 plan asks for and gets a decision for each; then it finishes, and what's gone
-is archived as missing.
+is archived as missing. Until then it can also list the files it skips
+because a person removed them (and how), and the clips gone (skipped_page,
+gone_page: what `lumiverb scan --explain` shows).
 
 The rules are today's scanner's (src/processing/scan.py), each moved here:
 - unchanged when size and modified time match the clip at the path; hashed
@@ -62,6 +64,9 @@ MAX_FILES = 1000
 ACTIONS = ("upload", "hash", "unchanged", "skipped")
 # What a plan's pages list unless asked: what the client acts on.
 TO_ACT_ON = ("upload", "hash", "skipped")
+# How a person removed a file (REMOVED), in the order one is named when
+# several removals at a path are the file's (skipped_page).
+REMOVED_AS = ("trash", "archived", "deleted")
 
 
 class NotPlannedError(Exception):
@@ -110,7 +115,7 @@ def in_scope(rel_path: str, scope: str) -> bool:
 # sight, at no path it found, under no folder it couldn't list, made and last
 # changed before it started, and not claimed by one of its moves.
 GONE = """
-    SELECT a.asset_id, a.rel_path, a.sha256, a.file_size
+    SELECT a.asset_id, a.rel_path, a.sha256, a.file_size, a.media_type
     FROM assets a
     WHERE a.library_id = :library_id AND a.deleted_at IS NULL
       AND (CAST(:scope AS text) = '' OR starts_with(a.rel_path, CAST(:scope AS text) || '/'))
@@ -124,13 +129,17 @@ GONE = """
 """
 
 # Files a person removed from the library, with each one's content, size and
-# time: trashed or archived by a person (their clips), or deleted for good
-# (ignored_files). A scan skips them; no client is told the list.
+# time, and how (REMOVED_AS): in the trash or archived by a person (their
+# clips), or deleted for good (ignored_files: no clip). A scan skips them; no
+# client is told the list, only which of the files it found are these
+# (skipped_page).
 REMOVED = """
-    SELECT rel_path, sha256, file_size, file_mtime FROM assets
+    SELECT rel_path, sha256, file_size, file_mtime, asset_id,
+           CASE deleted_reason WHEN 'user' THEN 'trash' ELSE 'archived' END AS removed_as
+    FROM assets
     WHERE library_id = :library_id AND deleted_at IS NOT NULL AND deleted_reason IN ('user', 'archived')
     UNION ALL
-    SELECT rel_path, sha256, file_size, file_mtime FROM ignored_files WHERE library_id = :library_id
+    SELECT rel_path, sha256, file_size, file_mtime, NULL, 'deleted' FROM ignored_files WHERE library_id = :library_id
 """
 
 # Each found file's plan, as "action/reason". The clip in sight at the path
@@ -526,6 +535,44 @@ def gone_ids(session: Session, scan: ScanSession) -> list[str]:
     """The clips gone from this scan, by id: what its finish archives as missing."""
     return list(session.execute(text(f"SELECT g.asset_id FROM ({GONE}) g ORDER BY g.asset_id COLLATE \"C\""),
                                 _params(scan)).scalars())
+
+
+def gone_page(session: Session, scan: ScanSession, after: str | None, limit: int) -> list[dict]:
+    """A page of the clips gone from this scan, by rel_path, with each one's
+    media type: what its finish archives as missing unless that's held back.
+    Moves decided by then (made, candidates, skipped) aren't gone."""
+    return [dict(r) for r in session.execute(text(f"""
+        SELECT g.asset_id, g.rel_path, g.media_type FROM ({GONE}) g
+        WHERE CAST(:after AS text) IS NULL OR g.rel_path > :after
+        ORDER BY g.rel_path LIMIT :limit
+    """), {**_params(scan), "after": after, "limit": limit}).mappings()]
+
+
+def skipped_page(session: Session, scan: ScanSession, after: str | None, limit: int) -> list[dict]:
+    """A page of the files the scan skips because a person removed them, by
+    rel_path: how each was removed (REMOVED_AS) and the clip removed (none
+    when deleted for good). The removal named is one at the file's path that
+    is this file, as the plan and the hashes decided: its content (once
+    hashed), its size and time, or one whose content isn't known; of several,
+    the first in REMOVED_AS, then one by content. A file whose removal was
+    undone since (its clip restored) isn't listed: it's no longer removed."""
+    return [dict(r) for r in session.execute(text(f"""
+        SELECT f.rel_path, m.removed_as, m.asset_id
+        FROM scan_found f
+        CROSS JOIN LATERAL (
+            SELECT r.removed_as, r.asset_id FROM ({REMOVED}) r
+            WHERE r.rel_path = f.rel_path
+              AND (r.sha256 IS NULL OR r.sha256 = f.sha256
+                   OR (r.file_size = f.file_size AND r.file_mtime = f.file_mtime))
+            ORDER BY array_position(CAST(:removed_as AS text[]), r.removed_as),
+                     COALESCE(r.sha256 = f.sha256, false) DESC, r.asset_id COLLATE "C"
+            LIMIT 1
+        ) m
+        WHERE f.scan_id = :scan_id AND COALESCE(f.decision, f.action) = 'skipped'
+          AND (CAST(:after AS text) IS NULL OR f.rel_path > :after)
+        ORDER BY f.rel_path LIMIT :limit
+    """), {"scan_id": scan.scan_id, "library_id": scan.library_id, "removed_as": list(REMOVED_AS),
+           "after": after, "limit": limit}).mappings()]
 
 
 def totals(session: Session, scan: ScanSession) -> dict[str, int]:

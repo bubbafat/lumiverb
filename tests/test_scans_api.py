@@ -233,9 +233,10 @@ class Run:
 
 
 def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unlisted=(), answer: bool | None = None,
-          allow_mass_missing: bool = False, page: int = 500, **opts) -> Run:
+          allow_mass_missing: bool = False, page: int = 500, finish: bool = True, **opts) -> Run:
     """A whole scan as a client makes it. Stops at a finish the server
-    refuses (run.finish is None), uploading nothing."""
+    refuses (run.finish is None), uploading nothing; before the finish when
+    finish is False (the scan's listing still there)."""
     c, h = env.client, env.editor
     run = Run(_start(env, library_id, **opts))
     listing = _listing(disk, settling, empty)
@@ -257,6 +258,8 @@ def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unli
             run.decisions[d["rel_path"]] = d
     if answer is not None and any(d["decision"] == "move_candidate" for d in run.decisions.values()):
         run.moves = _ok(c.post(f"/v1/scans/{run.scan_id}/moves", json={"apply": answer}, headers=h))
+    if not finish:
+        return run
     r = c.post(f"/v1/scans/{run.scan_id}/finish", json={"allow_mass_missing": allow_mass_missing}, headers=h)
     if r.status_code != 200:
         run.finish_error = r
@@ -928,6 +931,192 @@ def test_force_add_hashes_sent_again_keep_their_decision(env):
 
 
 # ---------------------------------------------------------------------------
+# Listed before the finish (lumiverb scan --explain): the files a scan skips
+# because a person removed them, and the clips it didn't find
+# ---------------------------------------------------------------------------
+
+
+def _all(env, scan_id: str, what: str, key: str, limit: int = 500) -> list[dict]:
+    """Every item of GET /v1/scans/{id}/{what} (skipped, gone), a page at a time."""
+    items: list[dict] = []
+    params: dict = {"limit": limit}
+    while True:
+        page = _ok(env.client.get(f"/v1/scans/{scan_id}/{what}", params=params, headers=env.editor))
+        items += page[key]
+        if page["next_cursor"] is None:
+            return items
+        params["after"] = page["next_cursor"]
+
+
+def _removed_ids(env, lib: str) -> dict[str, str]:
+    """The library's clips a person trashed or archived: {rel_path: asset_id}."""
+    with env.db.connect() as conn:
+        return dict(conn.execute(text("SELECT rel_path, asset_id FROM assets WHERE library_id = :l"
+                                      " AND deleted_reason IN ('user', 'archived')"), {"l": lib}).all())
+
+
+def _trash(env, asset_ids: list[str]) -> None:
+    _ok(env.client.request("DELETE", "/v1/assets", json={"asset_ids": asset_ids, "reason": "user"},
+                           headers=env.editor))
+
+
+def _empty_trash(env, asset_ids: list[str]) -> None:
+    assert _ok(env.client.request("DELETE", "/v1/trash/empty", json={"asset_ids": asset_ids},
+                                  headers=env.admin))["deleted"] == len(asset_ids)
+
+
+def _archive(env, asset_ids: list[str]) -> None:
+    _ok(env.client.post("/v1/assets/archive", json={"asset_ids": asset_ids}, headers=env.editor))
+
+
+def _drop(env, scan_id: str) -> None:
+    _ok(env.client.delete(f"/v1/scans/{scan_id}", headers=env.editor), 204)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("touched", [False, True], ids=["by size and time", "by content"])
+def test_the_files_a_scan_skips_say_how_a_person_removed_them(env, touched):
+    lib = _library(env)
+    files = _removed(env, lib)  # t.jpg trashed, r.jpg archived, e.jpg deleted for good; k.jpg kept
+    ids = _removed_ids(env, lib)
+    run = _scan(env, lib, [f.touched() if touched else f for f in files.values()], finish=False)
+    if touched:  # read, and skipped for their content
+        assert _decided(run) == {"t.jpg": "skipped", "r.jpg": "skipped", "e.jpg": "skipped", "k.jpg": "unchanged"}
+    else:  # skipped for their size and time, unread
+        assert {p: a for p, (a, _) in _planned(run).items()} == {"t.jpg": "skipped", "r.jpg": "skipped",
+                                                                 "e.jpg": "skipped"}
+    assert _all(env, run.scan_id, "skipped", "files") == [
+        {"rel_path": "e.jpg", "removed_as": "deleted", "asset_id": None},
+        {"rel_path": "r.jpg", "removed_as": "archived", "asset_id": ids["r.jpg"]},
+        {"rel_path": "t.jpg", "removed_as": "trash", "asset_id": ids["t.jpg"]},
+    ]
+    assert _all(env, run.scan_id, "gone", "clips") == []
+    _drop(env, run.scan_id)
+
+
+@pytest.mark.slow
+def test_of_several_removals_that_are_the_file_the_trash_is_named_then_the_archive(env):
+    # One path removed three times over, by clips whose content was never
+    # known (an older scan's): each of them is whatever file is there now.
+    lib = _library(env)
+    deleted = make_clip(env.tenant_url, lib, "p.jpg")
+    _trash(env, [deleted])
+    _empty_trash(env, [deleted])
+    archived = make_clip(env.tenant_url, lib, "p.jpg")
+    _archive(env, [archived])
+    trashed = make_clip(env.tenant_url, lib, "p.jpg")
+    _trash(env, [trashed])
+
+    def named() -> list[dict]:
+        run = _scan(env, lib, [File("p.jpg", "whatever is there", mtime=T1)], dry_run=True, finish=False)
+        assert _planned(run) == {"p.jpg": ("skipped", "removed")}
+        try:
+            return _all(env, run.scan_id, "skipped", "files")
+        finally:
+            _drop(env, run.scan_id)
+
+    assert named() == [{"rel_path": "p.jpg", "removed_as": "trash", "asset_id": trashed}]
+    _empty_trash(env, [trashed])  # the path's deleted for good twice now, one record
+    assert named() == [{"rel_path": "p.jpg", "removed_as": "archived", "asset_id": archived}]
+
+
+@pytest.mark.slow
+def test_the_removal_named_is_the_one_that_is_the_file(env):
+    # By its content, its size and time, or a content never known; another
+    # removal at the same path that isn't this file is never named, trash or not.
+    lib = _library(env)
+    # c.jpg: trashed with other content, then archived with this one: read, the archive's by content.
+    old_c = _ingest(env, lib, File("c.jpg", "old c"))
+    _trash(env, [old_c])
+    new_c = _ingest(env, lib, File("c.jpg", "new c", mtime=T1))
+    _archive(env, [new_c])
+    # s.jpg: archived with this size and time, then trashed with others: unread, the archive's by size and time.
+    s = File("s.jpg", "s")
+    s_archived = _ingest(env, lib, s)
+    _archive(env, [s_archived])
+    _trash(env, [_ingest(env, lib, File("s.jpg", "other s", mtime=T1))])
+    # u.jpg: trashed before its content was known: whatever is there now.
+    unknown = make_clip(env.tenant_url, lib, "u.jpg")
+    _trash(env, [unknown])
+
+    disk = [File("c.jpg", "new c", mtime=T1 + timedelta(hours=1)), s, File("u.jpg", "u", mtime=T1)]
+    run = _scan(env, lib, disk, finish=False)
+    assert _planned(run) == {"c.jpg": ("hash", "removed"), "s.jpg": ("skipped", "removed"),
+                             "u.jpg": ("skipped", "removed")}
+    assert _decided(run) == {"c.jpg": "skipped"}
+    assert _all(env, run.scan_id, "skipped", "files") == [
+        {"rel_path": "c.jpg", "removed_as": "archived", "asset_id": new_c},
+        {"rel_path": "s.jpg", "removed_as": "archived", "asset_id": s_archived},
+        {"rel_path": "u.jpg", "removed_as": "trash", "asset_id": unknown},
+    ]
+    _drop(env, run.scan_id)
+
+
+@pytest.mark.slow
+def test_a_dry_run_lists_what_it_skips_and_whats_gone_less_its_moves(env):
+    lib = _library(env)
+    files = _removed(env, lib)
+    ids = _removed_ids(env, lib)
+    photo = _ingest(env, lib, File("gone/p.jpg", "p"))
+    video = _ingest(env, lib, File("gone/v.mov", "v"))
+    moving = File("m.jpg", "m")
+    _ingest(env, lib, moving)
+    before = _clips(env, lib)
+    run = _scan(env, lib, [*files.values(), moving.at("moved/m.jpg")], dry_run=True, finish=False)
+    assert _decided(run) == {"moved/m.jpg": "move_candidate"}
+    # m.jpg would move, so it isn't gone; k.jpg was found.
+    assert _all(env, run.scan_id, "gone", "clips") == [
+        {"asset_id": photo, "rel_path": "gone/p.jpg", "media_type": "image"},
+        {"asset_id": video, "rel_path": "gone/v.mov", "media_type": "video"},
+    ]
+    assert _all(env, run.scan_id, "skipped", "files") == [
+        {"rel_path": "e.jpg", "removed_as": "deleted", "asset_id": None},
+        {"rel_path": "r.jpg", "removed_as": "archived", "asset_id": ids["r.jpg"]},
+        {"rel_path": "t.jpg", "removed_as": "trash", "asset_id": ids["t.jpg"]},
+    ]
+    finish = _ok(env.client.post(f"/v1/scans/{run.scan_id}/finish", json={}, headers=env.editor))
+    assert (finish["archived"], finish["moved"], finish["skipped"], finish["dry_run"]) == (2, 1, 3, True)
+    assert _clips(env, lib) == before and _removed_ids(env, lib) == ids  # nothing changed
+
+
+@pytest.mark.slow
+def test_what_a_scan_skips_and_whats_gone_come_a_page_at_a_time_by_path(env):
+    lib = _library(env)
+    on_disk = [File(f"t{i}.jpg", f"t{i}") for i in range(5)]
+    trashed = [_ingest(env, lib, f) for f in on_disk]
+    _trash(env, trashed)
+    gone = [_ingest(env, lib, File(f"g{i}.jpg", f"g{i}")) for i in range(5)]
+    run = _scan(env, lib, on_disk, finish=False)
+    for what, key, ids in (("skipped", "files", trashed), ("gone", "clips", gone)):
+        first = _ok(env.client.get(f"/v1/scans/{run.scan_id}/{what}", params={"limit": 2}, headers=env.editor))
+        assert len(first[key]) == 2 and first["next_cursor"] == first[key][-1]["rel_path"]
+        every = _all(env, run.scan_id, what, key, limit=2)
+        assert [i["asset_id"] for i in every] == ids  # by path, each once
+        assert _all(env, run.scan_id, what, key) == every
+        _error(env.client.get(f"/v1/scans/{run.scan_id}/{what}", params={"limit": 501}, headers=env.editor),
+               422, "invalid_request")
+    _drop(env, run.scan_id)
+
+
+@pytest.mark.slow
+def test_what_a_scan_skips_and_whats_gone_are_listed_after_the_plan_until_the_finish(env):
+    lib = _library(env)
+    _ingest(env, lib, File("gone.jpg", "gone"))
+    c, h = env.client, env.editor
+    s = _start(env, lib, dry_run=True)
+    for what in ("skipped", "gone"):
+        _error(c.get(f"/v1/scans/{s}/{what}", headers=h), 409, "scan_not_planned")
+    _ok(c.post(f"/v1/scans/{s}/found", json={"files": _listing([File("new.jpg", "new")])}, headers=h))
+    _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
+    assert _ok(c.get(f"/v1/scans/{s}/skipped", headers=h)) == {"files": [], "next_cursor": None}
+    assert [g["rel_path"] for g in _ok(c.get(f"/v1/scans/{s}/gone", headers=h))["clips"]] == ["gone.jpg"]
+    _error(c.get(f"/v1/scans/{s}/gone", headers=env.other), 404, "not_found")
+    _ok(c.post(f"/v1/scans/{s}/finish", json={}, headers=h))
+    for what in ("skipped", "gone"):  # the finish dropped its listing
+        _error(c.get(f"/v1/scans/{s}/{what}", headers=h), 409, "scan_finished")
+
+
+# ---------------------------------------------------------------------------
 # Dry runs, expiry, the scan's own rules
 # ---------------------------------------------------------------------------
 
@@ -1334,6 +1523,7 @@ def test_editors_scan_and_viewers_cant(env):
     _error(c.post(f"/v1/libraries/{lib}/scans", json={}, headers=v), 403, "forbidden")
     s = _start(env, lib, headers=env.editor)
     for method, path, body in (("POST", "found", {"files": []}), ("POST", "plan", {}), ("GET", "plan", None),
+                               ("GET", "skipped", None), ("GET", "gone", None),
                                ("POST", "hashes", {"files": []}), ("POST", "moves", {"apply": True}),
                                ("POST", "finish", {})):
         _error(c.request(method, f"/v1/scans/{s}/{path}", json=body, headers=v), 403, "forbidden")
@@ -1420,6 +1610,15 @@ def _round_trips(env, n: int) -> dict[str, int]:
                         json={"files": [{"rel_path": p, "sha256": sha[p]} for p in to_hash[i:i + 1000]]})["files"]
     assert sum(d["decision"] == "moved" for d in decided) == tenth
     assert sum(d["decision"] == "unchanged" for d in decided) == tenth
+    # What --explain lists: a page of what's gone, or skipped, is one statement whatever the library's size.
+    assert call("skipped", "GET", f"/v1/scans/{s}/skipped", params={"limit": 100})["files"] == []
+    gone, cursor = [], None
+    while True:
+        page = call("gone", "GET", f"/v1/scans/{s}/gone", params={"limit": 100, **({"after": cursor} if cursor else {})})
+        gone, cursor = gone + page["clips"], page["next_cursor"]
+        if cursor is None:
+            break
+    assert len(gone) == tenth  # the moved ones aren't gone
     finish = call("finish", "POST", f"/v1/scans/{s}/finish", json={})
     assert finish["archived"] == tenth and finish["moved"] == tenth
     return most

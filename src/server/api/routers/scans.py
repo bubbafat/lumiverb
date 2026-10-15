@@ -4,7 +4,9 @@ A scan is a short-lived session. The client starts it before it walks, sends
 every media file the walk saw, says the listing is complete and gets the plan,
 sends the hashes the plan asks for and gets a decision for each, answers any
 moves it was asked about, and finishes: what's gone is archived as missing,
-with the same guard as DELETE /v1/assets. The rules are in src/server/scans.py.
+with the same guard as DELETE /v1/assets. Before it finishes it can list
+what it skips because a person removed it, and what's gone (GET /skipped,
+/gone: `lumiverb scan --explain`). The rules are in src/server/scans.py.
 
 The client still reads and uploads (POST /v1/ingest, as today), after the
 finish: today's scanner archives before it ingests, so a file whose content
@@ -134,6 +136,30 @@ class PlanPage(BaseModel):
 
 class PlanResponse(PlanPage):
     counts: PlanCounts
+
+
+class SkippedFile(BaseModel):
+    rel_path: str
+    # How a person removed it: in the trash, archived, or deleted for good.
+    removed_as: Literal["trash", "archived", "deleted"]
+    # The clip removed (trash, archived); none for a file deleted for good.
+    asset_id: str | None = None
+
+
+class SkippedPage(BaseModel):
+    files: list[SkippedFile]
+    next_cursor: str | None = None
+
+
+class GoneClip(BaseModel):
+    asset_id: str
+    rel_path: str
+    media_type: str
+
+
+class GonePage(BaseModel):
+    clips: list[GoneClip]
+    next_cursor: str | None = None
 
 
 class HashedFile(BaseModel):
@@ -338,6 +364,42 @@ def plan_page(
     result = _page(session, scan.scan_id, actions, after, limit)
     session.commit()
     return result
+
+
+@router.get("/v1/scans/{scan_id}/skipped", response_model=SkippedPage)
+def skipped_page(
+    scan_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = Query(default=MAX_PAGE, ge=1, le=MAX_PAGE),
+) -> SkippedPage:
+    """A page of the files the scan skips because a person removed them, by
+    rel_path, each with how and the clip removed: what `lumiverb scan
+    --explain` lists. After the plan (its hashes' decisions too, once sent)
+    and before the finish, which drops the scan's listing; a dry run's too.
+    Changes nothing."""
+    scan = _held(session, scan_id, planned=True)
+    rows = scans.skipped_page(session, scan, after, limit)
+    session.commit()  # its expiry, pushed back
+    return SkippedPage(files=[SkippedFile(**r) for r in rows],
+                       next_cursor=rows[-1]["rel_path"] if len(rows) == limit else None)
+
+
+@router.get("/v1/scans/{scan_id}/gone", response_model=GonePage)
+def gone_page(
+    scan_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = None,
+    limit: int = Query(default=MAX_PAGE, ge=1, le=MAX_PAGE),
+) -> GonePage:
+    """A page of the clips the scan didn't find, by rel_path: what its finish
+    archives as missing unless that's held back. Moves decided by then aren't
+    gone. As GET /skipped: after the plan, before the finish; changes nothing."""
+    scan = _held(session, scan_id, planned=True)
+    rows = scans.gone_page(session, scan, after, limit)
+    session.commit()  # its expiry, pushed back
+    return GonePage(clips=[GoneClip(**r) for r in rows],
+                    next_cursor=rows[-1]["rel_path"] if len(rows) == limit else None)
 
 
 def _bump(session: Session, library_id: str, changed: bool) -> None:
