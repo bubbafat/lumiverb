@@ -7,12 +7,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -82,37 +84,17 @@ def media_type_client():
 @pytest.mark.slow
 def test_image_media_type_accepted(media_type_client):
     """media_type='image' is accepted."""
-    client, auth, library_id, _ = media_type_client
-    r = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "photo.jpg",
-            "file_size": 1000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-        },
-        headers=auth,
-    )
-    assert r.status_code == 200
+    _, _, library_id, tenant_engine = media_type_client
+    with Session(tenant_engine) as session:
+        make_clip(session, library_id, "photo.jpg", media_type="image", file_size=1000)
 
 
 @pytest.mark.slow
 def test_video_media_type_accepted(media_type_client):
     """media_type='video' is accepted."""
-    client, auth, library_id, _ = media_type_client
-    r = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "clip.mp4",
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-        headers=auth,
-    )
-    assert r.status_code == 200
+    _, _, library_id, tenant_engine = media_type_client
+    with Session(tenant_engine) as session:
+        make_clip(session, library_id, "clip.mp4", media_type="video", file_size=5000)
 
 
 @pytest.mark.slow

@@ -73,6 +73,17 @@ class UpstreamError(ConflictError):
     status_code = 502
 
 
+class GoneError(ApiError):
+    """410 gone: a retired route. It stays defined, behind the role it always
+    needed, so a caller still using it is told what replaced it (the message,
+    and details.replaced_by) instead of a bare 404."""
+
+    status_code = 410
+
+    def __init__(self, message: str, replaced_by: list[str]) -> None:
+        super().__init__(None, "gone", message, {"replaced_by": replaced_by})
+
+
 def envelope(status_code: int, code: str, message: str, details: dict[str, Any] | None = None,
              headers: dict[str, str] | None = None) -> JSONResponse:
     return JSONResponse(
@@ -95,6 +106,7 @@ STATUS_CODES: dict[int, str] = {
     404: "not_found",
     405: "method_not_allowed",
     409: "conflict",
+    410: "gone",
     413: "too_large",
     416: "range_not_satisfiable",
     422: "invalid_request",

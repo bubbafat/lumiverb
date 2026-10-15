@@ -1,4 +1,4 @@
-"""Assets API: upsert for scanner, trash and restore. All routes require tenant auth (middleware)."""
+"""Assets API: clips, what's made for them, trash and restore. All routes require tenant auth (middleware)."""
 
 import base64
 import inspect
@@ -14,9 +14,9 @@ from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
-from src.server.api.dependencies import checked_rel_path, get_current_user_id, get_tenant_session, require_editor, require_signed_in
+from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.dependencies import require_tenant_admin
-from src.server.api.errors import ConflictError, DecisionRequiredError
+from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.shared import asset_status
 from src.shared.io_utils import normalize_path_prefix
@@ -40,19 +40,6 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/v1/assets", tags=["assets"])
-
-
-class UpsertAssetRequest(BaseModel):
-    library_id: str
-    rel_path: str
-    file_size: int
-    file_mtime: str | None  # ISO8601
-    media_type: str
-    force: bool = False
-
-
-class UpsertAssetResponse(BaseModel):
-    action: str  # added | updated | skipped
 
 
 class VideoFacetModel(BaseModel):
@@ -1789,102 +1776,31 @@ def submit_batch_embeddings(
     return {"updated": updated, "skipped": skipped}
 
 
-class BatchMoveItem(BaseModel):
-    asset_id: str
-    rel_path: str
+# The old scan protocol's writes (a client comparing and saying what changed)
+# answer 410: scans compare on the server now, in a scan session (ADR-018
+# decision 12, routers/scans.py), and a file becomes a clip when it's
+# ingested. Each keeps its role, so a viewer is still refused first.
+SCAN_SESSIONS = "POST /v1/libraries/{library_id}/scans"
 
 
-class BatchMoveRequest(BaseModel):
-    items: list[BatchMoveItem]
+@router.post("/batch-moves", dependencies=[Depends(require_editor)])
+def submit_batch_moves() -> None:
+    """Retired (410 gone): a scan session moves clips (routers/scans.py)."""
+    raise GoneError(
+        "POST /v1/assets/batch-moves is retired: a scan session finds the files that moved and moves their "
+        "clips on the server (ADR-018).",
+        [SCAN_SESSIONS],
+    )
 
 
-@router.post("/batch-moves", status_code=200, dependencies=[Depends(require_editor)])
-def submit_batch_moves(
-    body: BatchMoveRequest,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Update rel_path for multiple assets (file moves detected by scan).
-    409 moves_off when the account doesn't follow moves."""
-    from src.server.tenant_settings import get_follow_moves
-
-    # Every path checked before any move is made.
-    moved_to = {item.asset_id: checked_rel_path(item.rel_path) for item in body.items}
-    if not get_follow_moves(session):
-        raise DecisionRequiredError(
-            "moves_off",
-            "This account doesn't follow moves and renames: a file at a new path is a new asset. "
-            "Turn follow_moves on (PATCH /v1/tenant/settings) to move assets.",
-            {"follow_moves": False},
-        )
-    asset_repo = AssetRepository(session)
-    updated = 0
-    skipped = 0
-
-    for item in body.items:
-        asset = asset_repo.get_by_id(item.asset_id)
-        if asset is None or asset.deleted_at is not None:
-            skipped += 1
-            continue
-        asset.rel_path = moved_to[item.asset_id]
-        asset.search_synced_at = None
-        asset.updated_at = utcnow()
-        session.add(asset)
-        updated += 1
-
-    if updated > 0:
-        session.commit()
-        lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
-        lib_repo = LibraryRepository(session)
-        for lid in lib_ids:
-            lib_repo.bump_revision(lid)
-
-    return {"updated": updated, "skipped": skipped}
-
-
-@router.post("/upsert", response_model=UpsertAssetResponse, dependencies=[Depends(require_editor)])
-def upsert_asset(
-    body: UpsertAssetRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> UpsertAssetResponse:
-    """
-    Upsert by (library_id, rel_path): creates if not found; otherwise updates or skips.
-    """
-    lib_repo = LibraryRepository(session)
-    library = lib_repo.get_by_id(body.library_id)
-    if library is None:
-        raise HTTPException(status_code=404, detail="Library not found")
-
-    file_mtime_dt: datetime | None = None
-    if body.file_mtime:
-        try:
-            file_mtime_dt = datetime.fromisoformat(body.file_mtime.replace("Z", "+00:00"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid file_mtime format")
-
-    asset_repo = AssetRepository(session)
-    rel_path = checked_rel_path(body.rel_path)
-    existing = asset_repo.get_by_library_and_rel_path(body.library_id, rel_path)
-
-    if existing is None:
-        asset_repo.create_asset(
-            library_id=body.library_id,
-            rel_path=rel_path,
-            file_size=body.file_size,
-            file_mtime=file_mtime_dt,
-            media_type=body.media_type,
-        )
-        return UpsertAssetResponse(action="added")
-
-    if body.force or existing.file_size != body.file_size or existing.file_mtime != file_mtime_dt:
-        existing.file_size = body.file_size
-        existing.file_mtime = file_mtime_dt
-        existing.availability = "online"
-        session.add(existing)
-        session.commit()
-        return UpsertAssetResponse(action="updated")
-
-    return UpsertAssetResponse(action="skipped")
+@router.post("/upsert", dependencies=[Depends(require_editor)])
+def upsert_asset() -> None:
+    """Retired (410 gone): a scan session decides, and ingest makes the clip."""
+    raise GoneError(
+        "POST /v1/assets/upsert is retired: a scan session decides what's new or changed on the server "
+        "(ADR-018), and a file becomes a clip when it's ingested (POST /v1/ingest).",
+        [SCAN_SESSIONS, "POST /v1/ingest"],
+    )
 
 
 # ---------------------------------------------------------------------------

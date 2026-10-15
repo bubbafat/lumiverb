@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
+from tests.clips import make_clip
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_by_hand import _sha
 from tests.test_archive_trash_safety import _key_with_role
@@ -282,11 +283,8 @@ def test_videos_off_finds_no_face_in_any_video(env):
 
     lib = _library(env, "VideoFacesOff")
     client, headers, library_id, *_ = lib
-    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": "v.mov", "file_size": 1,
-                                               "file_mtime": "2025-01-01T00:00:00Z", "media_type": "video"},
-                    headers=headers)
-    assert r.status_code == 200, r.text
     with _db(lib) as s:
+        make_clip(s, library_id, "v.mov", media_type="video", file_size=1)
         s.execute(text("UPDATE assets SET video_indexed = true, analysis_proxy_key = 'a.mp4' WHERE library_id = :l"),
                   {"l": library_id})
         s.commit()

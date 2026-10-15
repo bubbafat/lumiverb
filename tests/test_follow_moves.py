@@ -115,18 +115,6 @@ def test_off_a_file_back_at_its_own_path_still_comes_back(env):
     assert _ingest(env, "off/B001.mov", sha=sha) == asset
 
 
-@pytest.mark.slow
-def test_off_moves_are_refused(env):
-    client, headers, *_ = env
-    asset = _ingest(env, "off/C001.mov", sha=_sha())
-    _settings(env, follow_moves=False)
-    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": asset, "rel_path": "off/moved/C001.mov"}]},
-                    headers=headers)
-    assert r.status_code == 409
-    assert r.json()["error"]["code"] == "moves_off"
-    assert _get(env, asset)["rel_path"] == "off/C001.mov"
-
-
 # ---------------------------------------------------------------------------
 # On: copy, then delete the original
 # ---------------------------------------------------------------------------

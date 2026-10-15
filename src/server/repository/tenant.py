@@ -1328,50 +1328,6 @@ class AssetRepository:
 
         locations.fixes_back(self._session, [asset.asset_id])
 
-    def page_ignored_paths(
-        self, library_id: str, *, after: str | None = None, limit: int = 500
-    ) -> list[tuple[str, str, list[dict] | None]]:
-        """Files scanners must skip, by rel_path: (rel_path, reason, files).
-
-        reason: "trashed" = in the trash by a person's choice; "archived" = a
-        person archived it; "emptied" = a person deleted it for good
-        (ignored_files); the first of these when a path has several.
-        files: each one skipped there, {sha256, file_size, file_mtime}, or
-        None when one's content isn't known (then whatever is at the path).
-        Another file at the path is a new clip. Not a path a clip in sight
-        holds now: that file is the clip's (a changed file is a new clip, and
-        the old one may be trashed).
-        """
-        rows = self._session.execute(
-            text(
-                """
-                SELECT rel_path,
-                       (array_agg(kind ORDER BY CASE kind WHEN 'trashed' THEN 0 WHEN 'archived' THEN 1 ELSE 2 END))[1],
-                       CASE WHEN bool_or(sha256 IS NULL) THEN NULL
-                            ELSE jsonb_agg(DISTINCT jsonb_build_object('sha256', sha256, 'file_size', file_size,
-                                                                       'file_mtime', file_mtime)) END
-                FROM (
-                    SELECT rel_path, CASE deleted_reason WHEN 'user' THEN 'trashed' ELSE 'archived' END AS kind,
-                           sha256, file_size, file_mtime
-                    FROM assets
-                    WHERE library_id = :lib AND deleted_at IS NOT NULL
-                      AND deleted_reason IN ('user', 'archived')
-                    UNION ALL
-                    SELECT rel_path, 'emptied' AS kind, sha256, file_size, file_mtime FROM ignored_files
-                    WHERE library_id = :lib
-                ) p
-                WHERE (CAST(:after AS text) IS NULL OR rel_path > :after)
-                  AND NOT EXISTS (SELECT 1 FROM assets o WHERE o.library_id = :lib AND o.rel_path = p.rel_path
-                                  AND o.deleted_at IS NULL)
-                GROUP BY rel_path
-                ORDER BY rel_path
-                LIMIT :limit
-                """
-            ),
-            {"lib": library_id, "after": after, "limit": limit},
-        ).all()
-        return [(r[0], r[1], sorted(r[2], key=lambda f: f["sha256"]) if r[2] is not None else None) for r in rows]
-
     VIDEO_FACET_FIELDS = (
         "duration_sec", "container", "video_codec", "width", "height", "rotation",
         "frame_rate_num", "frame_rate_den", "start_timecode", "drop_frame",

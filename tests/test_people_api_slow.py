@@ -17,6 +17,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
 
@@ -78,7 +79,8 @@ def people_client() -> Tuple[_AuthClient, str, str]:
         _engines.clear()
 
 
-def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: str, n_faces: int = 1) -> tuple[str, list[str]]:
+def _create_asset_with_faces(auth_client: _AuthClient, tenant_url: str, library_id: str, name: str,
+                             n_faces: int = 1) -> tuple[str, list[str]]:
     """Create a test asset, submit faces, return (asset_id, face_ids).
 
     Each face's embedding is derived from `name` so different helper calls
@@ -89,20 +91,7 @@ def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: st
     import hashlib
     import random as _random
 
-    rel_path = f"photos/{name}.jpg"
-    r = auth_client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 1000,
-            "file_mtime": "2024-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    assert r.status_code == 200
-    r2 = auth_client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    asset_id = r2.json()["asset_id"]
+    asset_id = make_clip(tenant_url, library_id, f"photos/{name}.jpg")
 
     seed = int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)
     rng = _random.Random(seed)
@@ -123,7 +112,7 @@ def _create_asset_with_faces(auth_client: _AuthClient, library_id: str, name: st
 @pytest.mark.slow
 def test_create_person(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/people creates a person."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
     r = auth_client.post("/v1/people", json={"display_name": "Alice"})
     assert r.status_code == 201, (r.status_code, r.text)
@@ -136,9 +125,9 @@ def test_create_person(people_client: Tuple[_AuthClient, str, str]) -> None:
 @pytest.mark.slow
 def test_create_person_with_faces(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/people with face_ids assigns faces."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "alice_photo", 2)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "alice_photo", 2)
 
     r = auth_client.post("/v1/people", json={"display_name": "Bob", "face_ids": face_ids})
     assert r.status_code == 201
@@ -172,7 +161,7 @@ def test_clusters_cache_marked_dirty_on_face_assign(people_client: Tuple[_AuthCl
     auth_client, library_id, tenant_url = people_client
 
     # Create at least one unassigned face with an embedding so upkeep can compute/cache.
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "cluster_dirty", 2)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "cluster_dirty", 2)
 
     r = auth_client.post("/v1/upkeep/recluster")
     assert r.status_code == 200, r.text
@@ -330,10 +319,10 @@ def test_create_person_conflict_already_assigned(people_client: Tuple[_AuthClien
 @pytest.mark.slow
 def test_assign_face_to_existing_person(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/faces/{face_id}/assign assigns face to an existing person."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
     # Create an unassigned face
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_test", 1)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "assign_test", 1)
     face_id = face_ids[0]
 
     # Create a person
@@ -355,9 +344,9 @@ def test_assign_face_to_existing_person(people_client: Tuple[_AuthClient, str, s
 @pytest.mark.slow
 def test_assign_face_new_person(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/faces/{face_id}/assign with new_person_name creates person and assigns."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_new_test", 1)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "assign_new_test", 1)
     face_id = face_ids[0]
 
     r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "NewPerson"})
@@ -370,9 +359,9 @@ def test_assign_face_new_person(people_client: Tuple[_AuthClient, str, str]) -> 
 @pytest.mark.slow
 def test_assign_face_conflict(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/faces/{face_id}/assign returns 409 if face already assigned."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "assign_conflict", 1)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "assign_conflict", 1)
     face_id = face_ids[0]
 
     # Create person and assign
@@ -387,9 +376,9 @@ def test_assign_face_conflict(people_client: Tuple[_AuthClient, str, str]) -> No
 @pytest.mark.slow
 def test_unassign_face(people_client: Tuple[_AuthClient, str, str]) -> None:
     """DELETE /v1/faces/{face_id}/assign removes face from person."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "unassign_test", 1)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "unassign_test", 1)
     face_id = face_ids[0]
 
     r = auth_client.post(f"/v1/faces/{face_id}/assign", json={"new_person_name": "UnassignTarget"})
@@ -412,9 +401,9 @@ def test_unassign_face(people_client: Tuple[_AuthClient, str, str]) -> None:
 @pytest.mark.slow
 def test_unassign_face_not_found(people_client: Tuple[_AuthClient, str, str]) -> None:
     """DELETE /v1/faces/{face_id}/assign returns 404 if not assigned."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "unassign_404", 1)
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "unassign_404", 1)
     face_id = face_ids[0]
 
     r = auth_client._client.delete(
@@ -427,11 +416,11 @@ def test_unassign_face_not_found(people_client: Tuple[_AuthClient, str, str]) ->
 @pytest.mark.slow
 def test_merge_person(people_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/people/{id}/merge merges source into target, deletes source."""
-    auth_client, library_id, _ = people_client
+    auth_client, library_id, tenant_url = people_client
 
     # Create two people with faces
-    _, face_ids_a = _create_asset_with_faces(auth_client, library_id, "merge_a", 1)
-    _, face_ids_b = _create_asset_with_faces(auth_client, library_id, "merge_b", 1)
+    _, face_ids_a = _create_asset_with_faces(auth_client, tenant_url, library_id, "merge_a", 1)
+    _, face_ids_b = _create_asset_with_faces(auth_client, tenant_url, library_id, "merge_b", 1)
 
     r = auth_client.post("/v1/people", json={"display_name": "MergeTarget", "face_ids": face_ids_a})
     assert r.status_code == 201

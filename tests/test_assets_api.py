@@ -16,13 +16,14 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
 def assets_api_client() -> tuple[TestClient, str, str, list[str]]:
     """
-    Two testcontainers Postgres; provision tenant DB; create library + 2-3 assets via upsert.
+    Two testcontainers Postgres; provision tenant DB; create library + 3 clips.
     Yields (client, api_key, library_id, asset_ids).
     """
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,18 +82,7 @@ def assets_api_client() -> tuple[TestClient, str, str, list[str]]:
 
                 asset_ids: list[str] = []
                 for i, rel_path in enumerate(["a.jpg", "b.jpg", "c.png"]):
-                    r_up = client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": rel_path,
-                            "file_size": 1000 + i,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
-                    assert r_up.status_code == 200
+                    make_clip(tenant_url, library_id, rel_path, file_size=1000 + i)
                     r_by_path = client.get(
                         "/v1/assets/by-path",
                         params={"library_id": library_id, "rel_path": rel_path},

@@ -28,6 +28,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
+from tests.clips import make_clip
 from tests.conftest import (
     PG_IMAGE,
     _AuthClient,
@@ -50,6 +51,7 @@ def _seeded_embedding(label: str, dim: int = 512) -> list[float]:
 
 def _create_asset_with_faces(
     auth_client: _AuthClient,
+    tenant_url: str,
     library_id: str,
     name: str,
     embedding_label: str,
@@ -58,22 +60,7 @@ def _create_asset_with_faces(
     """Create an asset and submit n faces with embeddings derived from
     embedding_label so groups of related faces actually cluster together.
     """
-    rel_path = f"clusters/{name}.jpg"
-    r = auth_client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 1000,
-            "file_mtime": "2024-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    assert r.status_code == 200
-    asset_id = auth_client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-    ).json()["asset_id"]
+    asset_id = make_clip(tenant_url, library_id, f"clusters/{name}.jpg")
 
     base = _seeded_embedding(embedding_label)
     faces = []
@@ -94,7 +81,7 @@ def _create_asset_with_faces(
 
 
 @pytest.fixture(scope="module")
-def clusters_client() -> Iterator[tuple[_AuthClient, str]]:
+def clusters_client() -> Iterator[tuple[_AuthClient, str, str]]:
     """Provision a fresh tenant + library and seed three groups of faces
     that should naturally form three clusters."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -149,12 +136,13 @@ def clusters_client() -> Iterator[tuple[_AuthClient, str]]:
                     for i in range(3):
                         _create_asset_with_faces(
                             auth_client,
+                            tenant_url,
                             library_id,
                             name=f"{group}_{i}",
                             embedding_label=group,
                         )
 
-                yield auth_client, library_id
+                yield auth_client, library_id, tenant_url
 
         _engines.clear()
 
@@ -174,7 +162,7 @@ def _clusters(auth_client: _AuthClient, **params) -> list[dict]:
 
 @pytest.mark.slow
 def test_list_people_q_filter_returns_match(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     # Create two named people so we can search by name
     auth_client.post("/v1/people", json={"display_name": "QueryAlice"})
@@ -189,7 +177,7 @@ def test_list_people_q_filter_returns_match(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_list_people_pagination_limit_out_of_range(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
     # Out of range is a 422, not a silent clamp (it clamped to 1..100).
     for limit in (0, 101):
         r = auth_client.get("/v1/people", params={"limit": limit})
@@ -204,7 +192,7 @@ def test_list_people_pagination_limit_out_of_range(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_get_clusters_returns_seeded_groups(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     clusters = _clusters(auth_client)
     # Three identity groups → at least three clusters of size >= 2
@@ -214,7 +202,7 @@ def test_get_clusters_returns_seeded_groups(clusters_client) -> None:
 @pytest.mark.slow
 def test_get_clusters_sorts(clusters_client) -> None:
     """Largest first unless asked otherwise; every order is total (ties by first face)."""
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     default = _clusters(auth_client)
     sizes = [c["size"] for c in default]
@@ -232,14 +220,14 @@ def test_get_clusters_sorts(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_get_clusters_unknown_sort_is_refused(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
     r = auth_client.get("/v1/faces/clusters", params={"sort": "random"})
     assert r.status_code == 422
 
 
 @pytest.mark.slow
 def test_list_cluster_faces_paginates(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     clusters = _clusters(auth_client)
     assert clusters, "expected seeded clusters"
@@ -262,7 +250,7 @@ def test_list_cluster_faces_paginates(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_nearest_people_for_cluster(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     # Need at least one named person with a centroid for ranking to return rows
     clusters = _clusters(auth_client)
@@ -295,7 +283,7 @@ def test_nearest_people_for_cluster(clusters_client) -> None:
 @pytest.mark.slow
 def test_name_cluster_assigns_to_existing_person(clusters_client) -> None:
     """name_cluster with person_id assigns all cluster faces to that person."""
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     # Create a person to receive the cluster
     r = auth_client.post("/v1/people", json={"display_name": "ExistingTarget"})
@@ -330,7 +318,7 @@ def test_name_cluster_merge_without_display_name(clusters_client) -> None:
     Regression test for the 422 "field required" error users hit when
     confirming a face match in the macOS app.
     """
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     r = auth_client.post("/v1/people", json={"display_name": "MergeTarget"})
     assert r.status_code == 201
@@ -350,7 +338,7 @@ def test_name_cluster_merge_without_display_name(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_name_cluster_validation_errors(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
 
     # Empty display_name + no person_id → 400
     r = auth_client.post(
@@ -373,12 +361,12 @@ def test_name_cluster_validation_errors(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_dismiss_then_list_then_undismiss_cluster(clusters_client) -> None:
-    auth_client, library_id = clusters_client
+    auth_client, library_id, tenant_url = clusters_client
 
     # Seed a cluster of our own: earlier tests may have named or dismissed
     # every cluster the fixture created.
     _, face_ids = _create_asset_with_faces(
-        auth_client, library_id, "dismiss_flow", "dismiss_flow", n_faces=3
+        auth_client, tenant_url, library_id, "dismiss_flow", "dismiss_flow", n_faces=3
     )
     clusters = _clusters(auth_client, limit=50, faces_per_cluster=20)
     mine = [c for c in clusters if {f["face_id"] for f in c["faces"]} & set(face_ids)]
@@ -411,7 +399,7 @@ def test_dismiss_then_list_then_undismiss_cluster(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_dismiss_cluster_409_for_an_unknown_id(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
     r = auth_client.post("/v1/faces/clusters/fc_gone/dismiss", json={})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "cluster_changed"
@@ -422,8 +410,8 @@ def test_a_cluster_keeps_its_id_and_a_changed_one_is_a_409(clusters_client) -> N
     """The id names the faces, not a position: computed again, the same faces
     have the same id. Once its faces are named, the id answers 409, and the
     next load doesn't show it even before upkeep computes them again."""
-    auth_client, library_id = clusters_client
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "stable_id", "stable_id", n_faces=3)
+    auth_client, library_id, tenant_url = clusters_client
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "stable_id", "stable_id", n_faces=3)
 
     def mine(clusters):
         return [c["cluster_id"] for c in clusters if {f["face_id"] for f in c["faces"]} & set(face_ids)]
@@ -444,7 +432,7 @@ def test_a_cluster_keeps_its_id_and_a_changed_one_is_a_409(clusters_client) -> N
 
 @pytest.mark.slow
 def test_undismiss_404_for_active_person(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
     # Create a non-dismissed person — undismiss should 404
     r = auth_client.post("/v1/people", json={"display_name": "NotDismissed"})
     assert r.status_code == 201
@@ -458,14 +446,14 @@ def test_undismiss_404_for_active_person(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_nearest_people_for_person_ranks(clusters_client) -> None:
-    auth_client, library_id = clusters_client
+    auth_client, library_id, tenant_url = clusters_client
 
     # Build two named people with distinct centroids by creating fresh faces
     _, alpha_face_ids = _create_asset_with_faces(
-        auth_client, library_id, "ranknn_alpha", "rank_alpha", n_faces=2
+        auth_client, tenant_url, library_id, "ranknn_alpha", "rank_alpha", n_faces=2
     )
     _, beta_face_ids = _create_asset_with_faces(
-        auth_client, library_id, "ranknn_beta", "rank_beta", n_faces=2
+        auth_client, tenant_url, library_id, "ranknn_beta", "rank_beta", n_faces=2
     )
 
     r1 = auth_client.post("/v1/people", json={"display_name": "RankAlpha", "face_ids": alpha_face_ids})
@@ -494,14 +482,14 @@ def test_nearest_people_for_person_ranks(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_nearest_people_for_face(clusters_client) -> None:
-    auth_client, library_id = clusters_client
+    auth_client, library_id, tenant_url = clusters_client
 
     # Create a face and a separate named person to rank against
     _, query_face_ids = _create_asset_with_faces(
-        auth_client, library_id, "facequery_a", "facequery_a", n_faces=1
+        auth_client, tenant_url, library_id, "facequery_a", "facequery_a", n_faces=1
     )
     _, target_face_ids = _create_asset_with_faces(
-        auth_client, library_id, "facequery_b", "facequery_b", n_faces=2
+        auth_client, tenant_url, library_id, "facequery_b", "facequery_b", n_faces=2
     )
     auth_client.post(
         "/v1/people",
@@ -527,7 +515,7 @@ def test_nearest_people_for_face(clusters_client) -> None:
 
 @pytest.mark.slow
 def test_get_face_crop_404_for_unknown_face(clusters_client) -> None:
-    auth_client, _ = clusters_client
+    auth_client, *_ = clusters_client
     r = auth_client.get("/v1/faces/face_nonexistent000000000000/crop")
     assert r.status_code == 404
 
@@ -536,10 +524,10 @@ def test_get_face_crop_404_for_unknown_face(clusters_client) -> None:
 def test_get_face_crop_404_when_no_proxy_for_generation(clusters_client) -> None:
     """Faces submitted without a proxy on the asset have no crop_key and
     no proxy to generate from, so the endpoint must return 404."""
-    auth_client, library_id = clusters_client
+    auth_client, library_id, tenant_url = clusters_client
 
     _, face_ids = _create_asset_with_faces(
-        auth_client, library_id, "no_proxy_face", "noproxy", n_faces=1
+        auth_client, tenant_url, library_id, "no_proxy_face", "noproxy", n_faces=1
     )
     r = auth_client.get(f"/v1/faces/{face_ids[0]}/crop")
     assert r.status_code == 404
@@ -549,8 +537,8 @@ def test_get_face_crop_404_when_no_proxy_for_generation(clusters_client) -> None
 def test_an_undone_dismissal_brings_the_cluster_back_usable(clusters_client) -> None:
     """Undo (deleting the dismissed person) shows the cluster again under its
     id, and it can be named, without waiting for upkeep."""
-    auth_client, library_id = clusters_client
-    _, face_ids = _create_asset_with_faces(auth_client, library_id, "undo_dismiss", "undo_dismiss", n_faces=3)
+    auth_client, library_id, tenant_url = clusters_client
+    _, face_ids = _create_asset_with_faces(auth_client, tenant_url, library_id, "undo_dismiss", "undo_dismiss", n_faces=3)
     params = {"limit": 50, "faces_per_cluster": 20}
     mine = [c["cluster_id"] for c in _clusters(auth_client, **params)
             if {f["face_id"] for f in c["faces"]} & set(face_ids)]

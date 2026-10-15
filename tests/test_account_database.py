@@ -24,6 +24,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 ADMIN_KEY = "test-admin-secret"
@@ -92,16 +93,11 @@ def test_clips_put_in_the_trash_leave_search_after_the_response(account, caplog)
     """DELETE /v1/assets drops the trashed clips' search documents once it has
     answered (assets.py _drop_from_search), reading which are still out of
     sight from the account's own database."""
-    client, headers, tenant_id, _ = account
+    client, headers, tenant_id, tenant_url = account
     r = client.post("/v1/libraries", json={"name": "Trash", "root_path": "/trash"}, headers=headers)
     assert r.status_code == 200, r.text
     library_id = r.json()["library_id"]
-    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": "a.jpg", "file_size": 1,
-                                               "file_mtime": "2025-01-01T12:00:00Z", "media_type": "image"},
-                    headers=headers)
-    assert r.status_code == 200, r.text
-    clip = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": "a.jpg"},
-                      headers=headers).json()["asset_id"]
+    clip = make_clip(tenant_url, library_id, "a.jpg", file_size=1)
 
     dropped: list[tuple[str, list[str]]] = []
     with (patch("src.server.search.quickwit_client.QuickwitClient.delete_tenant_documents_by_asset_ids",

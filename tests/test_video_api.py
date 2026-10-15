@@ -14,6 +14,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
 
@@ -21,7 +22,7 @@ from tests.machine_lineage import made
 @pytest.fixture(scope="module")
 def video_api_client() -> tuple[TestClient, str, str, str, str]:
     """
-    Two testcontainers Postgres; provision tenant DB; create library, upsert video asset,
+    Two testcontainers Postgres; provision tenant DB; create library and a video clip,
     init chunks via POST /v1/video/{asset_id}/chunks.
     Yields (client, api_key, library_id, asset_id, tenant_url).
     """
@@ -79,24 +80,7 @@ def video_api_client() -> tuple[TestClient, str, str, str, str]:
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                client.post(
-                    "/v1/assets/upsert",
-                    json={
-                        "library_id": library_id,
-                        "rel_path": "clip.mp4",
-                        "file_size": 5000000,
-                        "file_mtime": "2025-01-01T12:00:00Z",
-                        "media_type": "video",
-                    },
-                    headers=auth,
-                )
-                r_asset = client.get(
-                    "/v1/assets/by-path",
-                    params={"library_id": library_id, "rel_path": "clip.mp4"},
-                    headers=auth,
-                )
-                assert r_asset.status_code == 200
-                asset_id = r_asset.json()["asset_id"]
+                asset_id = make_clip(tenant_url, library_id, "clip.mp4", media_type="video", file_size=5000000)
 
                 r_init = client.post(
                     f"/v1/video/{asset_id}/chunks",
@@ -114,7 +98,7 @@ def video_api_client() -> tuple[TestClient, str, str, str, str]:
 @pytest.mark.slow
 def test_init_chunks(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """POST /v1/video/{asset_id}/chunks with {duration_sec} returns {chunk_count, already_initialized} with 200."""
-    client, api_key, library_id, asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Init again is idempotent - already_initialized will be True
@@ -135,9 +119,9 @@ def test_claim_next_chunk(video_api_client: tuple[TestClient, str, str, str, str
     """POST /v1/video/{asset_id}/chunks/next hands out a clip's chunks one at a time (its own
     video: no other test claims them): 409 chunk_under_way while one is, the next once it's
     done, then 204 when none is left."""
-    client, api_key, library_id, _, _tenant_url = video_api_client
+    client, api_key, library_id, _, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _video(client, auth, library_id, "claim.mp4", 90.0)
+    asset_id = _video(client, auth, tenant_url, library_id, "claim.mp4", 90.0)
 
     claimed = []
     while (r := client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)).status_code == 200:
@@ -156,7 +140,7 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
     """Claim chunk, POST /v1/video/chunks/{chunk_id}/complete with scene data; assert 200."""
     client, api_key, library_id, _, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _video(client, auth, library_id, "complete.mp4", 60.0)
+    asset_id = _video(client, auth, tenant_url, library_id, "complete.mp4", 60.0)
 
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
     assert r_claim.status_code == 200, r_claim.text  # its own video: never claimed by another test
@@ -211,9 +195,9 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
 @pytest.mark.slow
 def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Claim chunk, POST /v1/video/chunks/{chunk_id}/fail with error; assert 200."""
-    client, api_key, library_id, _, _tenant_url = video_api_client
+    client, api_key, library_id, _, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _video(client, auth, library_id, "fail.mp4", 60.0)
+    asset_id = _video(client, auth, tenant_url, library_id, "fail.mp4", 60.0)
 
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
     assert r_claim.status_code == 200, r_claim.text  # its own video: never claimed by another test
@@ -235,28 +219,11 @@ def test_fail_chunk(video_api_client: tuple[TestClient, str, str, str, str]) -> 
 @pytest.mark.slow
 def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """GET /v1/video/{asset_id}/scenes on asset with no completed scenes returns empty list."""
-    client, api_key, library_id, asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Create a second video asset with no chunks completed
-    client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "empty.mp4",
-            "file_size": 1000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-        headers=auth,
-    )
-    r_asset = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": "empty.mp4"},
-        headers=auth,
-    )
-    assert r_asset.status_code == 200
-    empty_asset_id = r_asset.json()["asset_id"]
+    empty_asset_id = make_clip(tenant_url, library_id, "empty.mp4", media_type="video", file_size=1000)
 
     r = client.get(f"/v1/video/{empty_asset_id}/scenes", headers=auth)
     assert r.status_code == 200
@@ -267,28 +234,11 @@ def test_get_scenes_empty(video_api_client: tuple[TestClient, str, str, str, str
 @pytest.mark.slow
 def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Complete a chunk with scene payloads, then GET /v1/video/{asset_id}/scenes returns those scenes."""
-    client, api_key, library_id, asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Use a fresh asset to avoid interference
-    client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "scenes.mp4",
-            "file_size": 2000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-        headers=auth,
-    )
-    r_asset = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": "scenes.mp4"},
-        headers=auth,
-    )
-    assert r_asset.status_code == 200
-    aid = r_asset.json()["asset_id"]
+    aid = make_clip(tenant_url, library_id, "scenes.mp4", media_type="video", file_size=2000)
 
     client.post(
         f"/v1/video/{aid}/chunks",
@@ -329,9 +279,9 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
 @pytest.mark.slow
 def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """PATCH /v1/video/scenes/{scene_id} with {model_id, model_version, description, tags} returns updated scene."""
-    client, api_key, library_id, _, _tenant_url = video_api_client
+    client, api_key, library_id, _, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    asset_id = _video(client, auth, library_id, "vision.mp4", 60.0)  # its own: what other tests did doesn't matter
+    asset_id = _video(client, auth, tenant_url, library_id, "vision.mp4", 60.0)  # its own: what other tests did doesn't matter
 
     r_claim = client.post(f"/v1/video/{asset_id}/chunks/next", headers=auth)
     assert r_claim.status_code == 200, r_claim.text
@@ -374,18 +324,15 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
 @pytest.mark.slow
 def test_video_api_requires_auth(video_api_client: tuple[TestClient, str, str, str, str]) -> None:
     """Missing Authorization header on video endpoint returns 401."""
-    client, _, _, asset_id, _tenant_url = video_api_client
+    client, _, _, asset_id, tenant_url = video_api_client
 
     r = client.get(f"/v1/video/{asset_id}/scenes")
     assert r.status_code == 401
 
 
-def _video(client: TestClient, auth: dict, library_id: str, rel_path: str, duration_sec: float) -> str:
-    client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 3000,
-                                          "file_mtime": "2025-01-01T12:00:00Z", "media_type": "video"},
-                headers=auth)
-    aid = client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path},
-                     headers=auth).json()["asset_id"]
+def _video(client: TestClient, auth: dict, tenant_url: str, library_id: str, rel_path: str,
+           duration_sec: float) -> str:
+    aid = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=3000)
     assert client.post(f"/v1/video/{aid}/chunks", json={"duration_sec": duration_sec, "scene_sec": 30.0}, headers=auth).status_code == 200
     return aid
 
@@ -403,9 +350,9 @@ def _complete(client: TestClient, auth: dict, work: dict, starts: list[int]) -> 
 def test_a_failed_chunk_stays_failed_until_the_next_run(video_api_client) -> None:
     """Review (Oct 9): every claim put failed chunks back and handed out the
     lowest, the one that just failed, so one bad chunk looped forever."""
-    client, api_key, library_id, _asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, _asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _video(client, auth, library_id, "loops.mp4", 60.0)  # two chunks
+    aid = _video(client, auth, tenant_url, library_id, "loops.mp4", 60.0)  # two chunks
 
     first = client.post(f"/v1/video/{aid}/chunks/next", headers=auth).json()
     assert first["chunk_index"] == 0
@@ -426,9 +373,9 @@ def test_a_failed_chunk_stays_failed_until_the_next_run(video_api_client) -> Non
 def test_a_chunk_under_way_holds_back_the_next(video_api_client) -> None:
     """Scenes are found, and numbered, in order: while one chunk is claimed
     (its lease not run out) the next isn't handed out."""
-    client, api_key, library_id, _asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, _asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _video(client, auth, library_id, "inorder.mp4", 60.0)
+    aid = _video(client, auth, tenant_url, library_id, "inorder.mp4", 60.0)
     first = client.post(f"/v1/video/{aid}/chunks/next", headers=auth).json()
     assert client.post(f"/v1/video/{aid}/chunks/next", headers=auth).status_code == 409
     _complete(client, auth, first, [0])
@@ -439,9 +386,9 @@ def test_a_chunk_under_way_holds_back_the_next(video_api_client) -> None:
 def test_a_completed_chunk_cant_be_failed(video_api_client) -> None:
     """A /complete whose answer was lost, then /fail: the chunk stays
     completed (its scenes aren't found and saved twice)."""
-    client, api_key, library_id, _asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, _asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _video(client, auth, library_id, "lostanswer.mp4", 30.0)
+    aid = _video(client, auth, tenant_url, library_id, "lostanswer.mp4", 30.0)
     work = client.post(f"/v1/video/{aid}/chunks/next", headers=auth).json()
     _complete(client, auth, work, [0])
     r = client.post(f"/v1/video/chunks/{work['chunk_id']}/fail", headers=auth,
@@ -453,7 +400,7 @@ def test_a_completed_chunk_cant_be_failed(video_api_client) -> None:
 
 @pytest.mark.slow
 def test_claiming_a_chunk_is_a_post(video_api_client) -> None:
-    client, api_key, _library_id, asset_id, _tenant_url = video_api_client
+    client, api_key, _library_id, asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     assert client.get(f"/v1/video/{asset_id}/chunks/next", headers=auth).status_code == 405
 
@@ -464,7 +411,7 @@ def test_a_resumed_clip_goes_on_numbering_its_scenes(video_api_client) -> None:
     clip resumed after a failure had two scene 0s."""
     client, api_key, library_id, _asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _video(client, auth, library_id, "resumed.mp4", 60.0)
+    aid = _video(client, auth, tenant_url, library_id, "resumed.mp4", 60.0)
 
     _complete(client, auth, client.post(f"/v1/video/{aid}/chunks/next", headers=auth).json(), [0, 10000])
     # The run stops here; the next one claims the rest.
@@ -485,9 +432,9 @@ def test_a_resumed_clip_goes_on_numbering_its_scenes(video_api_client) -> None:
 def test_a_claimed_chunk_is_under_way_not_failed(video_api_client) -> None:
     """A chunk another process holds (one stopped mid-chunk, until its lease
     runs out) says so, apart from a failed one: the scheduler waits on it."""
-    client, api_key, library_id, _asset_id, _tenant_url = video_api_client
+    client, api_key, library_id, _asset_id, tenant_url = video_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _video(client, auth, library_id, "held.mp4", 60.0)  # two chunks
+    aid = _video(client, auth, tenant_url, library_id, "held.mp4", 60.0)  # two chunks
 
     first = client.post(f"/v1/video/{aid}/chunks/next", headers=auth)
     assert first.status_code == 200 and first.json()["chunk_index"] == 0

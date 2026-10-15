@@ -16,8 +16,8 @@ from src.server.api.dependencies import (
     require_signed_in,
     require_tenant_admin,
 )
-from src.server.api.errors import ConflictError, DecisionRequiredError
-from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
+from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
+from src.server.api.limits import MAX_IDS, require_scope
 from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
@@ -99,30 +99,6 @@ class EmptyLibraryTrashRequest(BaseModel):
     # Required when clips in those libraries are in projects: deleting them
     # for good takes them out of those projects.
     remove_from_projects: bool = False
-
-
-class IgnoredFileItem(BaseModel):
-    sha256: str
-    # Its size and time when a person removed it: a scanner hashes the file
-    # at the path only when they differ.
-    file_size: int | None = None
-    file_mtime: datetime | None = None
-
-
-class IgnoredPathItem(BaseModel):
-    rel_path: str
-    # "trashed": in the trash by the user's choice. "archived": a person
-    # archived it. "emptied": the user emptied its trash; the file may still
-    # be on disk.
-    reason: str
-    # The files skipped at this path; None when one's content isn't known
-    # (then whatever is there). Another file at the path is a new clip.
-    files: list[IgnoredFileItem] | None = None
-
-
-class IgnoredPathPage(BaseModel):
-    items: list[IgnoredPathItem]
-    next_cursor: str | None
 
 
 class UnignoreRequest(BaseModel):
@@ -516,25 +492,14 @@ def restore_library(
                            root_path=library.root_path, is_public=library.is_public, reader=library.reader)
 
 
-@router.get("/{library_id}/ignored-paths", response_model=IgnoredPathPage, dependencies=[Depends(require_signed_in)])
-def page_ignored_paths(
-    library_id: str,
-    session: Annotated[Session, Depends(get_tenant_session)],
-    after: str | None = None,
-    limit: int = Query(default=500, ge=1, le=MAX_PAGE),
-) -> IgnoredPathPage:
-    """Files a scan must skip because a person trashed, archived or deleted
-    them, by rel_path, with their contents.
-
-    Lumiverb never deletes originals, so these files may still be on disk.
-    Ingest refuses them with 409; another file at the path is a new clip.
-    """
-    if LibraryRepository(session).get_by_id(library_id) is None:
-        raise HTTPException(status_code=404, detail="Library not found")
-    rows = AssetRepository(session).page_ignored_paths(library_id, after=after, limit=limit)
-    return IgnoredPathPage(
-        items=[IgnoredPathItem(rel_path=p, reason=k, files=f) for p, k, f in rows],
-        next_cursor=rows[-1][0] if len(rows) == limit else None,
+@router.get("/{library_id}/ignored-paths", dependencies=[Depends(require_signed_in)])
+def page_ignored_paths(library_id: str) -> None:
+    """Retired (410 gone): a scan session skips these files on the server
+    (src/server/scans.py REMOVED). Signed in only, as it always was."""
+    raise GoneError(
+        "GET /v1/libraries/{library_id}/ignored-paths is retired: a scan session skips the files a person "
+        "trashed, archived or deleted for good on the server (ADR-018), so no client needs the list.",
+        ["POST /v1/libraries/{library_id}/scans"],
     )
 
 

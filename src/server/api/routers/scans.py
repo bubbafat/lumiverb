@@ -335,7 +335,7 @@ def plan_page(
 
 
 def _bump(session: Session, library_id: str, changed: bool) -> None:
-    """Open grids and folder trees reload, as after batch-moves."""
+    """Open grids and folder trees reload when clips moved."""
     if changed:
         LibraryRepository(session).bump_revision(library_id)
 

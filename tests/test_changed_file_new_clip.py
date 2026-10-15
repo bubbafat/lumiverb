@@ -11,9 +11,11 @@ whose content isn't known (no hash) stays the clip it was.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 
+from tests.scan_plan import scan_would
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
-from tests.test_archive_by_hand import _archive, _row, _sha, _unarchive
+from tests.test_archive_by_hand import _archive, _db, _row, _sha, _unarchive
 
 pytestmark = pytest.mark.slow
 
@@ -156,12 +158,14 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
 def test_trashing_the_old_version_leaves_the_clip_on_disk_alone(env, tmp_path):
     client, headers, library_id, *_ = env
     path = "ncr-trash/a.jpg"
+    new_sha = _sha()
     old = _ingest(env, path, media_type="image", sha=_sha())
-    new = _ingest(env, path, media_type="image", sha=_sha())
+    new = _ingest(env, path, media_type="image", sha=new_sha)
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [old], "reason": "user"}, headers=headers)
     assert r.status_code == 200, r.text
-    items = client.get(f"/v1/libraries/{library_id}/ignored-paths", headers=headers).json()["items"]
-    assert path not in {i["rel_path"] for i in items}  # the file there is the new clip's
+    # The file there is the new clip's: a scan finds it unchanged, never skips it.
+    assert scan_would(client, headers, library_id, [{"rel_path": path, "file_size": 1000}],
+                      hashes={path: new_sha}) == {path: "unchanged"}
     _scan(env, tmp_path, [path], "ncr-trash")
     assert _row(env, new)[0] is None  # on disk, so not missing
 
@@ -289,11 +293,14 @@ def test_a_path_remembers_each_file_deleted_there_for_good(env):
         client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "user"}, headers=headers)
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [first, second]}, headers=headers)
     assert r.status_code == 200 and r.json()["deleted"] == 2, r.text
-    items = client.get(f"/v1/libraries/{library_id}/ignored-paths", headers=headers).json()["items"]
-    item = next(i for i in items if i["rel_path"] == path)
-    assert item["reason"] == "emptied"
-    assert sorted(f["sha256"] for f in item["files"]) == sorted([first_sha, second_sha])
-    assert all(f["file_size"] == 1000 for f in item["files"])
+    with _db(env) as s:  # each file remembered with its content and size
+        remembered = s.execute(text("SELECT sha256, file_size FROM ignored_files"
+                                    " WHERE library_id = :l AND rel_path = :p"), {"l": library_id, "p": path}).all()
+    assert sorted(remembered) == sorted([(first_sha, 1000), (second_sha, 1000)])
+    found = [{"rel_path": path, "file_size": 1000}]
+    for sha in (first_sha, second_sha):  # a scan skips each of them there
+        assert scan_would(client, headers, library_id, found, hashes={path: sha}) == {path: "skipped"}
+    assert scan_would(client, headers, library_id, found, hashes={path: _sha()}) == {path: "upload"}
     for sha in (first_sha, second_sha):
         with pytest.raises(AssertionError, match="409"):
             _ingest(env, path, media_type="image", sha=sha)

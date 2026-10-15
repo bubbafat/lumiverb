@@ -465,8 +465,8 @@ async def create_and_ingest(
             archived.rel_path = rel_path
             existing = archived
     # A person's trash or archive is human data: a rescan of a file still
-    # on disk never undoes it. Scanners skip these via
-    # GET /v1/libraries/{id}/ignored-paths.
+    # on disk never undoes it. A scan's plan skips these (src/server/scans.py
+    # REMOVED); this refuses one sent anyway.
     if existing is not None and existing.deleted_at is not None and existing.deleted_reason in ("user", "archived"):
         where = "in the trash" if existing.deleted_reason == "user" else "archived"
         raise HTTPException(status_code=409, detail=f"Asset is {where}: {rel_path}")

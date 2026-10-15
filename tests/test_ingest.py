@@ -22,6 +22,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made
 
@@ -108,24 +109,7 @@ def ingest_env(tmp_path_factory):
 
                     # Helper to create assets
                     def create_asset(rel_path: str) -> str:
-                        raw_client.post(
-                            "/v1/assets/upsert",
-                            json={
-                                "library_id": library_id,
-                                "rel_path": rel_path,
-                                "file_size": 1000,
-                                "file_mtime": "2025-01-01T12:00:00Z",
-                                "media_type": "image",
-                            },
-                            headers=auth_headers,
-                        )
-                        r = raw_client.get(
-                            "/v1/assets/by-path",
-                            params={"library_id": library_id, "rel_path": rel_path},
-                            headers=auth_headers,
-                        )
-                        assert r.status_code == 200
-                        return r.json()["asset_id"]
+                        return make_clip(tenant_url, library_id, rel_path)
 
                     asset_id = create_asset("photo.jpg")
                     yield raw_client, auth_headers, library_id, asset_id, storage, create_asset

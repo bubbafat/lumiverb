@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 
+from tests.clips import make_clip
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 
 
@@ -21,10 +22,7 @@ def _library_of(env, n: int) -> list[str]:
     assert r.status_code == 200, r.text
     library_id = r.json()["library_id"]
     for i in range(n):
-        r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": f"f{i}.jpg",
-                                                   "file_size": 1, "file_mtime": None, "media_type": "image"},
-                        headers=headers)
-        assert r.status_code == 200, r.text
+        make_clip(env[-1], library_id, f"f{i}.jpg", file_size=1, file_mtime=None)
     r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=headers)
     return sorted(a["asset_id"] for a in r.json()["items"])
 
