@@ -31,7 +31,9 @@ public struct SimilarityResponse: Decodable, Sendable {
 }
 
 /// Request body for `POST /v1/similar/search-by-image`. The client
-/// pre-resizes the image and sends it as base64-encoded JPEG bytes.
+/// pre-resizes the image and sends it as base64-encoded JPEG bytes; the
+/// server embeds it with CLIP and looks for the faces in it too, so the
+/// clips found look like it or have the same people in them.
 public struct ImageSimilarityRequest: Encodable, Sendable {
     public let libraryId: String
     public let imageB64: String
@@ -51,49 +53,7 @@ public struct ImageSimilarityRequest: Encodable, Sendable {
     }
 }
 
-/// Request body for `POST /v1/similar/search-by-vector`. For clients
-/// that embed locally — iOS uses Apple Vision feature prints. The
-/// model_id / model_version must match how the library was indexed,
-/// otherwise the server's vector lookup returns no results (different
-/// vector spaces).
-///
-/// **Hybrid mode**: when `imageB64` is also supplied, the server runs
-/// face detection on the image, embeds each face with ArcFace, and
-/// fuses the per-face identity matches with the scene-vector cosine
-/// results via Reciprocal Rank Fusion. The bytes are additive — the
-/// scene `vector` is still the primary signal — so legacy callers
-/// that only set `vector` keep working unchanged. Pass the same image
-/// you embedded, downscaled to a face-detection-friendly size (~768px
-/// max edge) to keep upload bandwidth bounded.
-public struct VectorSimilarityRequest: Encodable, Sendable {
-    public let libraryId: String
-    public let vector: [Float]
-    public let modelId: String
-    public let modelVersion: String
-    public let limit: Int
-    public let offset: Int
-    public let imageB64: String?
-
-    public init(
-        libraryId: String,
-        vector: [Float],
-        modelId: String,
-        modelVersion: String,
-        limit: Int = 20,
-        offset: Int = 0,
-        imageB64: String? = nil
-    ) {
-        self.libraryId = libraryId
-        self.vector = vector
-        self.modelId = modelId
-        self.modelVersion = modelVersion
-        self.limit = limit
-        self.offset = offset
-        self.imageB64 = imageB64
-    }
-}
-
-/// Response from `POST /v1/similar/search-by-image` (and search-by-vector).
+/// Response from `POST /v1/similar/search-by-image`.
 /// Has `hits` + `total` but no `source_asset_id` (the source is the
 /// uploaded image, not a stored asset).
 public struct ImageSimilarityResponse: Decodable, Sendable {
