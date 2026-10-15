@@ -252,6 +252,33 @@ def test_emptying_asks_first_and_names_what_goes():
     assert "Deleted 2 clips for good." in result.output
 
 
+# Robert's words: deleting for good never touches the files on disk, and
+# Lumiverb remembers them so scans don't add them back.
+FILES_STAY = "Your files stay where they are. Lumiverb won't show these again unless a file changes, moves or is renamed."
+BRING_BACK = "To bring a file back: lumiverb scan --library NAME --force-add --path-prefix FOLDER"
+
+
+@pytest.mark.parametrize("args", [("a1", "a2"), ("--all",)])
+def test_emptying_says_the_files_stay_and_how_to_bring_one_back(args):
+    client = _client()
+    client.raw.return_value = _answer(200, {"deleted": 2})
+    result = _run(client, "trash", "empty", *args, "--yes")
+    assert result.exit_code == 0, result.output
+    lines = [" ".join(line.split()) for line in result.output.splitlines()]
+    said = " ".join(result.output.split())
+    assert said.index("Deleted 2 clips for good.") < said.index(FILES_STAY) < said.index(BRING_BACK)
+    assert BRING_BACK in lines  # on its own line, whole, so it can be copied
+
+
+def test_emptying_nothing_says_nothing_about_files():
+    client = _client()
+    client.raw.return_value = _answer(200, {"deleted": 0})
+    result = _run(client, "trash", "empty", "a1", "--yes")
+    assert result.exit_code == 0, result.output
+    assert "Deleted 0 clips for good." in result.output
+    assert "Your files stay" not in result.output and "--force-add" not in result.output
+
+
 def test_emptying_one_librarys_trash():
     client = _client()
     client.raw.return_value = _answer(200, {"deleted": 3})

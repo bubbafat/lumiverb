@@ -79,6 +79,7 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 - `lumiverb trash restore <clip ids>...` — Take clips out of the trash, back to where they were: in sight, or the archive for clips archived before (it says which). A library's clips come back with the library.
 - `lumiverb trash list [--library <name|id>] [--folder <path>] [--limit N]` — Clips in the trash, most recent first, with the day each is deleted for good.
 - `lumiverb trash empty (<clip ids>... | --all [--library <name|id>] [--folder <path>]) [--remove-from-projects] [--yes]` — Delete clips in the trash for good now, to free space (admins only), after a confirmation: chosen clips, or everything in the trash (of a library, under a folder). Never archived clips (trash them first), nor a trashed library's (they go with it).
+- Deleting clips for good never touches their files on disk: Lumiverb remembers each file, and scans skip it unless it changes, moves or is renamed. `trash empty` says so after deleting, and how to bring one back: `lumiverb scan --library <name> --force-add --path-prefix <folder>`.
 
 #### Project
 - `lumiverb project list [--json] [--archived | --all | --trashed]` — List projects (active unless `--archived`, `--all` or `--trashed`).

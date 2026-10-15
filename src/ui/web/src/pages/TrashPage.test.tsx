@@ -18,6 +18,10 @@ vi.mock("../api/client", async (importOriginal) => ({
 }));
 vi.mock("../api/useAuthenticatedImage", () => ({ useAuthenticatedImage: () => ({ url: null }) }));
 
+// Robert's words, wherever clips are deleted for good: the files on disk are
+// never touched, and Lumiverb remembers them so scans don't add them back.
+const FILES_STAY = "Your files stay where they are. Lumiverb won't show these again unless a file changes, moves or is renamed.";
+
 const clip = (id: string, path: string) => ({
   asset_id: id, library_id: "lib_1", library_name: "Media", rel_path: path, media_type: "video",
   trashed_at: "2026-10-01T12:00:00Z", expires_at: "2026-10-31T12:00:00Z",
@@ -75,7 +79,7 @@ describe("TrashPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete for good" }));
     const dialog = await screen.findByRole("dialog", { name: "Delete for good?" });
     expect(dialog.textContent).toMatch(/1 clip will be deleted for good/);
-    expect(dialog.textContent).toMatch(/original files on your drives aren't touched/);
+    expect(dialog.textContent).toContain(FILES_STAY);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 1 clip for good" }));
     expect(await within(dialog).findByText(/Reel: 1 clip/)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete and remove from projects" }));
@@ -88,6 +92,7 @@ describe("TrashPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Empty trash (2)" }));
     const dialog = await screen.findByRole("dialog", { name: "Empty the trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash \(2 clips\)/);
+    expect(dialog.textContent).toContain(FILES_STAY);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
     // Only what was listed: nothing trashed since it loaded.
     await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith("all", false,
@@ -106,6 +111,7 @@ describe("TrashPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Empty Media's trash (2)" }));
     const dialog = await screen.findByRole("dialog", { name: "Empty Media's trash?" });
     expect(dialog.textContent).toMatch(/Every clip in the trash of Media \(2 clips\)/);
+    expect(dialog.textContent).toContain(FILES_STAY);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 clips for good" }));
     await waitFor(() => expect(api.emptyClipTrash).toHaveBeenCalledWith("all", false,
       { libraryId: "lib_1", trashedBefore: "2026-10-08T12:00:00+00:00" }));
