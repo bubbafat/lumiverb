@@ -25,6 +25,8 @@ from src.server.lifecycle.init import nginx_conf, nginx_site
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 from tests.test_server_postgres import NO_POSTGRES, free_port, postgres_bin
 
+REPO = Path(__file__).resolve().parent.parent
+
 
 @pytest.mark.fast
 def test_the_children_are_linux_s_units(tmp_path):
@@ -88,9 +90,26 @@ def test_each_part_gets_only_the_secrets_it_needs(tmp_path):
     for child in (postgres, quickwit, nginx):
         assert not set(secrets) & set(child.env), child.name
         assert (child.env["HOME"], child.env["PATH"]) == ("/Users/x", "/usr/bin")
-    assert set(secrets) & set(scheduler.env) == {"CONTROL_PLANE_DATABASE_URL"}  # it reads the database, no more
+    # It reads the database, no more (the template: the server's settings require it, the same credentials).
+    assert set(secrets) & set(scheduler.env) == {"CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE"}
     assert set(secrets) <= set(api.env)  # it signs people in, checks keys, sends mail
     assert postgres.argv[postgres.argv.index("-p") + 1] == "6468"  # its port, from the URL it isn't given
+
+
+@pytest.mark.fast
+def test_the_api_and_the_scheduler_can_read_their_settings_from_what_they_are_given(tmp_path):
+    # In a folder with no .env (an install's), each child's environment alone
+    # must make the server's settings: the scheduler stopped at start when a
+    # required one was held back, and a checkout's .env hid it.
+    env = {"DATA_DIR": str(tmp_path), "HOME": str(tmp_path), "PATH": os.environ["PATH"],
+           "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/control_plane",
+           "TENANT_DATABASE_URL_TEMPLATE": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/{tenant_id}",
+           "ADMIN_KEY": "a", "API_SECRET_KEY": "b", "JWT_SECRET": "c"}
+    code = "from src.server.config import Settings; Settings(); print('read')"
+    for child in cli.server_children(env, python=sys.executable, cwd=tmp_path):
+        done = subprocess.run([sys.executable, "-c", code], env={**child.env, "PYTHONPATH": str(REPO)}, cwd=tmp_path,
+                              capture_output=True, text=True)
+        assert done.stdout.strip() == "read", f"{child.name}: {done.stderr[-400:]}"
 
 
 # The formula's service `stop_timeout` (launchd's ExitTimeOut) in
