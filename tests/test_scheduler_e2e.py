@@ -142,3 +142,14 @@ def test_the_scheduler_reads_the_stored_analysis_proxy_where_the_api_keeps_it(en
     find = stored_analysis_proxy(env[4], storage=env[3])
     assert find(with_proxy).read_bytes() == body
     assert find(without) is None
+
+
+def test_the_scheduler_reads_the_stored_preview_where_the_api_keeps_it(env) -> None:
+    # What CLIP, faces, OCR and descriptions see: the API's own file, no copy.
+    from src.server.scheduler.service import stored_preview
+    from tests.test_analysis_proxy_api import _ingest
+
+    clip = _ingest(env, "stored/c.jpg", media_type="image")
+    found = stored_preview(env[4], storage=env[3])(clip)
+    assert found is not None and found.read_bytes()[8:12] == b"WEBP"
+    assert stored_preview(env[4], storage=env[3])("ast_nothing_here") is None

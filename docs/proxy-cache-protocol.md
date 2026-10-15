@@ -2,6 +2,8 @@
 
 Shared disk cache protocol for proxy images. Lumiverb's Python side (the CLI's scan and the scheduler) and the macOS app use the same format and location so proxies are reusable across them. Only the Python side writes proxies during a scan: the macOS app scans nothing (the server's scheduler scans every library), and only reads the cache and keeps the proxies it downloads for browsing.
 
+**The scheduler beside the API keeps no copies.** Where the API stores the previews on the same machine (`STORAGE_PROVIDER=local`, as on a Mac's install), the scheduler reads each clip's stored preview where it is (`ProxyCache(stored=…)`, `src/server/scheduler/service.py` `stored_preview`), sized to the cache's edge for CLIP, faces, OCR and descriptions. Its scans write nothing here and don't list unchanged files (`run_scan(cache_previews=False)`), and at its start it removes the copies an earlier scheduler kept, when its cache is inside the server's data folder (`forget_preview_copies`). The cache is still used for a clip whose stored preview isn't on this machine (none yet, a drive unplugged), and by the CLI's scan for the Mac app's browsing.
+
 ## Location
 
 ```

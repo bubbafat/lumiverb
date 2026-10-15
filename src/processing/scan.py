@@ -93,6 +93,8 @@ FILES_PER_CALL = 1000
 PLAN_PAGE = 500
 # Every planned file, the unchanged too: their clips fill the proxy cache.
 EVERY_ACTION = "upload,hash,skipped,unchanged"
+# What a scan needs when it fills no cache: the unchanged are only counted.
+WORK_ACTIONS = "upload,hash,skipped"
 # A path the server's rule refuses is never sent (as long as Linux's PATH_MAX).
 MAX_PATH = 4096
 # How often hashes are sent again when another clip was just put at a move's path.
@@ -170,13 +172,13 @@ def _scan_one(
     library_id: str,
     root_path: Path,
     f: dict,
-    proxy_cache: ProxyCache,
+    proxy_cache: ProxyCache | None,
     stats: ScanStats,
     progress: Progress,
     task_id: object,
     counter_field: str,
 ) -> None:
-    """Scan a single file: proxy gen → EXIF → upload → cache.
+    """Scan a single file: proxy gen → EXIF → upload → cache (when there's one).
 
     Works for both new and changed files.
     """
@@ -226,10 +228,8 @@ def _scan_one(
         asset_id = result.get("asset_id")
 
         # 5. Cache the 2048px proxy + SHA sidecar
-        if asset_id and f.get("source_sha256"):
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f["source_sha256"])
-        elif asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, "")
+        if proxy_cache is not None and asset_id:
+            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("source_sha256") or "")
         del jpeg_bytes
 
         with stats.lock:
@@ -323,10 +323,8 @@ def _scan_one_video(
         del preview_bytes
 
         # 7. Cache the poster proxy + SHA sidecar
-        if asset_id and f.get("source_sha256"):
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f["source_sha256"])
-        elif asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, "")
+        if proxy_cache is not None and asset_id:
+            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("source_sha256") or "")
         del jpeg_bytes
 
         with stats.lock:
@@ -521,21 +519,23 @@ def _send_found(client: ApiClient, scan_id: str, files: list[dict], console: Con
             progress.advance(tid, len(batch))
 
 
-def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console) -> tuple[dict, dict[str, dict]]:
-    """The listing is complete: the plan's counts, and every planned file by rel_path."""
+def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console,
+          actions: str = EVERY_ACTION) -> tuple[dict, dict[str, dict]]:
+    """The listing is complete: the plan's counts, and each planned file of
+    `actions` by rel_path."""
     # A folder whose name the server refuses can't be named: then nothing in
     # the library is taken for gone ("" is its root).
     named = sorted({u if _sendable(u, allow_root=True) else "" for u in unlisted})
     if len(named) > MAX_UNLISTED:
         named = [""]
-    params = {"action": EVERY_ACTION, "limit": PLAN_PAGE}
+    params = {"action": actions, "limit": PLAN_PAGE}
     # Sent again, the same listing's plan comes back.
     first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json={"unlisted": named}, retry=True).json()
     counts = first["counts"]
     plan = {p["rel_path"]: p for p in first["files"]}
     cursor = first.get("next_cursor")
     if cursor:
-        planned = counts["upload"] + counts["hash"] + counts["unchanged"] + counts["skipped"]
+        planned = sum(counts[action] for action in actions.split(","))
         progress = _progress(console, "Plan")
         with progress:
             tid = progress.add_task("Plan", total=planned, completed=len(plan))
@@ -656,7 +656,7 @@ def _hash_and_decide(
 
 
 def _upload(
-    client: ApiClient, library_id: str, root_path: Path, work: _Work, proxy_cache: ProxyCache, stats: ScanStats,
+    client: ApiClient, library_id: str, root_path: Path, work: _Work, proxy_cache: ProxyCache | None, stats: ScanStats,
     *, concurrency: int, console: Console,
 ) -> None:
     """Make and upload the previews of what's new, then what changed,
@@ -695,6 +695,7 @@ def run_scan(
     thorough: bool = False,
     allow_mass_delete: bool = False,
     waiting: Mapping[str, tuple[int, str | None]] | None = None,
+    cache_previews: bool = True,
     console: Console,
 ) -> ScanStats:
     """Walk the library, tell the server what's there, read what it asks
@@ -709,6 +710,10 @@ def run_scan(
     ScanStats.failed_seen). One still so is found, so it's never gone, but
     it's neither read nor uploaded (ScanStats.waiting_paths); one that
     changed (replaced, say) is tried now.
+    cache_previews: keep each preview made, and every unchanged clip's, in
+    this machine's proxy cache (the CLI's: the Mac app browses it). The
+    scheduler beside the API keeps none: it reads the stored previews where
+    they are (proxy_cache.py `stored`), and unchanged files are only counted.
     """
     library_id = library["library_id"]
     root_path = reachable_root(library)
@@ -766,7 +771,7 @@ def run_scan(
                     follow_moves=scan.get("follow_moves", True), moves=moves, force=force,
                     media_type_filter=media_type_filter, dry_run=dry_run, allow_mass_delete=allow_mass_delete,
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
-                    waiting=waiting or {}, console=console)
+                    waiting=waiting or {}, cache_previews=cache_previews, console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -776,7 +781,7 @@ def _run(
     client: ApiClient, library: dict, root_path: Path, scan_id: str, stats: ScanStats, *,
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
-    waiting: Mapping[str, tuple[int, str | None]], console: Console,
+    waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, console: Console,
 ) -> ScanStats:
     """run_scan once its scan is started: walk, list, plan, hash, finish, upload."""
     library_id = library["library_id"]
@@ -809,7 +814,8 @@ def _run(
         console.print(f"{stats.settling:,} file(s) still being written; a later scan picks them up")
 
     _send_found(client, scan_id, list(on_disk.values()), console)
-    counts, plan = _plan(client, scan_id, stats.unlisted, console)
+    counts, plan = _plan(client, scan_id, stats.unlisted, console,
+                         actions=EVERY_ACTION if cache_previews else WORK_ACTIONS)
 
     work = _Work()
     to_hash: list[dict] = []
@@ -834,13 +840,15 @@ def _run(
             work.unchanged.append(f)
         elif action == "skipped":
             work.skipped += 1
-    stats.unchanged += len(work.unchanged)
+    # Not listed when nothing is cached: the plan's count says how many.
+    unchanged = len(work.unchanged) if cache_previews else counts["unchanged"]
+    stats.unchanged += unchanged
     if stats.waiting_paths:
         console.print(f"{len(stats.waiting_paths):,} file(s) that failed wait for their retry")
     console.print(
         f"{len(work.new):,} new, "
         f"{len(to_hash):,} to check, "
-        f"{len(work.unchanged):,} unchanged, "
+        f"{unchanged:,} unchanged, "
         f"{counts['gone']:,} not found"
         + (f", {len(work.changed):,} to scan again" if work.changed else "")
     )
@@ -943,8 +951,9 @@ def _run(
 
     # After the finish: a file whose content was just archived as missing
     # comes back at its new path.
-    proxy_cache = ProxyCache(root_path=root_path, client=client)
+    proxy_cache = ProxyCache(root_path=root_path, client=client) if cache_previews else None
     _upload(client, library_id, root_path, work, proxy_cache, stats, concurrency=concurrency, console=console)
     stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
-    _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
+    if proxy_cache is not None:
+        _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
     return stats

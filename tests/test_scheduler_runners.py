@@ -873,6 +873,7 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     cache.path.mkdir()
     cache.sha_path.side_effect = lambda asset_id: cache.path / f"{asset_id}.sha"
     cache.has.return_value = False
+    cache.stored_path.return_value = None  # no preview the API keeps on this machine
     (tmp_path / "a.jpg").write_bytes(b"photo")
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: b"proxy")
     monkeypatch.setattr("src.processing.workers.exif_extract.compute_sha256", lambda source: "sha-now")
@@ -880,6 +881,22 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     cache.put.assert_called_once_with("ast_1", b"proxy")
     assert (cache.path / "ast_1.sha").read_text() == "sha-now"
     assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "sha256": "sha-then"}, tmp_path, cache)
+
+
+def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_path, monkeypatch) -> None:
+    # Where the API keeps the previews on this machine the faces step reads
+    # the clip's there: nothing is made from the original or kept in the
+    # cache, even when the original changed since (changed content is a new clip).
+    from src.producers.faces.work import face_proxy
+
+    cache = MagicMock()
+    cache.stored_path.return_value = tmp_path / "stored.webp"
+    (tmp_path / "a.jpg").write_bytes(b"photo, changed since")
+    made = []
+    monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: made.append(source))
+    monkeypatch.setattr("src.processing.workers.exif_extract.compute_sha256", lambda source: "sha-now")
+    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": "sha-then"}, tmp_path, cache)
+    assert made == [] and not cache.put.called
 
 
 # ---------------------------------------------------------------------------

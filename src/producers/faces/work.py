@@ -17,12 +17,16 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
     """Make sure the proxy cache has the photo as its file is now: kept when its
     hash matches, made again from the original when it's reachable here (a
     photo whose file no longer matches its hash: False, it waits for its
-    scan). The server's proxy is downloaded later when there's none."""
+    scan). The server's proxy is downloaded later when there's none. A
+    preview the API stores on this machine is the clip as it was hashed
+    (changed content is a new clip): read there, nothing is made or kept."""
     from src.processing.proxy.proxy_gen import generate_face_proxy
     from src.processing.workers.exif_extract import compute_sha256
     from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
 
     asset_id, expected = item["asset_id"], item.get("sha256")
+    if proxy_cache.stored_path(asset_id) is not None:
+        return True
     if proxy_cache.has(asset_id):
         sha_file = proxy_cache.sha_path(asset_id)
         if not expected:
