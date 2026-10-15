@@ -29,7 +29,6 @@ from __future__ import annotations
 import itertools
 import logging
 import os
-import signal
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -39,6 +38,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
+from src.shared.stop_signals import set_on_signals
 
 logger = logging.getLogger(__name__)
 
@@ -890,8 +890,7 @@ def main() -> int:
         logger.error("scheduler: another scheduler holds the lock in the control-plane database")
         return 1
     stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    set_on_signals(stop)  # SIGTERM, SIGINT
     try:
         if removed := clear_leftovers():
             logger.info("scheduler: removed %d half-made analysis proxies left by an earlier run", removed)
