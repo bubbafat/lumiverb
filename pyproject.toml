@@ -23,7 +23,7 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "pgvector>=0.3.0",
     # Auth
-    "pyjwt>=2.8",
+    "pyjwt>=2.15",
     "bcrypt>=4.0",
     # Search
     "PyYAML>=6.0",
