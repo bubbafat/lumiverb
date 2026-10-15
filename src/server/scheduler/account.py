@@ -49,9 +49,11 @@ LOOK_EVERY_SEC = SCAN_EVERY_SEC
 class Account:
     def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *, models: Any = None,
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None,
-                 stored: Callable[[str], Path | None] | None = None) -> None:
+                 stored: Callable[[str], Path | None] | None = None,
+                 stored_preview: Callable[[str], Path | None] | None = None) -> None:
         """`stored`: the analysis proxy the API keeps for a clip, read on this
-        machine's disk (stored_analysis_proxy), so the cache holds no copy."""
+        machine's disk (stored_analysis_proxy), so the cache holds no copy;
+        `stored_preview` its preview, the same way (stored_preview)."""
         from src.processing.failure_report import FailureReport
         from src.processing.machine import current
         from src.processing.producer_settings import ProducerSettings
@@ -74,6 +76,7 @@ class Account:
         # Each AI job's machines (Settings → AI), checked and called by its guard.
         self.guards: dict[str, Any] = {name: load(job.guard)(client) for name, job in AI_JOBS.items()}
         self.analysis_cache = AnalysisProxyCache(client, stored=stored)
+        self._stored_preview = stored_preview
         # Set when the scheduler stops: jobs in hand save nothing more.
         self.stopping = threading.Event()
         # The server's settings were read at least once: its jobs can go.
@@ -262,8 +265,9 @@ class Account:
     # -- caches and models --------------------------------------------------
 
     def proxy_cache(self, library_id: str) -> Any:
-        """The images CLIP, faces and vision see, for clips of one library
-        (made from the original while its storage is reachable)."""
+        """The images CLIP, faces and vision see, for clips of one library:
+        the preview the API keeps on this machine, else made from the
+        original while its storage is reachable."""
         from src.processing.proxy.proxy_cache import ProxyCache
         from src.producers.clip import PROXY_CACHE_EDGE
 
@@ -271,7 +275,8 @@ class Account:
         with self._lock:
             cache = self._proxy_caches.get(library_id)
             if cache is None or cache._root_path != root:
-                cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root, client=self.client)
+                cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root, client=self.client,
+                                   stored=self._stored_preview)
                 self._proxy_caches[library_id] = cache
             return cache
 

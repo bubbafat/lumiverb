@@ -12,6 +12,10 @@ JPEG proxies without thinking about resolution. The cache handles:
 
 Scan writes 2048px proxies + SHA sidecars. Enrich reads and resizes
 as needed. The cache is the handoff point between the two phases.
+
+Where the API keeps the previews on this machine (the scheduler beside it:
+`stored`, src/server/scheduler/service.py stored_preview), a clip's stored
+preview is read where it is, first, and the cache holds no second copy.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from src.processing.cache_dir import cache_dir, cache_entry
@@ -46,18 +51,22 @@ class ProxyCache:
         max_edge: int = _DEFAULT_MAX_EDGE,
         root_path: Path | None = None,
         client: object | None = None,
+        stored: Callable[[str], Path | None] | None = None,
     ) -> None:
         """
         Args:
             max_edge: Maximum long edge for cached proxies (for put/get).
             root_path: Library root for local source file generation.
             client: ApiClient for server download fallback.
+            stored: A clip's preview as the API stored it on this machine's
+                disk (None: not here), read before anything else.
         """
         self._dir = cache_dir("proxies")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_edge = max_edge
         self._root_path = root_path
         self._client = client
+        self._stored = stored
 
     @property
     def path(self) -> Path:
@@ -103,16 +112,41 @@ class ProxyCache:
         """Check if a proxy exists in the cache without reading it."""
         return self._entry(asset_id).exists()
 
+    def stored_path(self, asset_id: str) -> Path | None:
+        """The clip's preview where the API stored it on this machine, or
+        None (not here: none yet, a drive unplugged, another machine's
+        server). A lookup that fails is None too: the other ways, as before."""
+        if self._stored is None:
+            return None
+        try:
+            return self._stored(asset_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("Couldn't look up %s's stored preview; the cache is used", asset_id, exc_info=True)
+            return None
+
     def get(self, asset_id: str, rel_path: str | None = None) -> bytes | None:
         """Get proxy bytes for an asset.
 
         Resolution order:
+        0. The preview the API stored on this machine (if `stored`), sized;
+           a copy cached before goes
         1. Disk cache (already at correct size)
         2. Generate from local source file (if root_path set and file exists)
         3. Download from server (if client set), downscale, cache
 
         Returns None only if all sources fail.
         """
+        # 0. Where the API keeps it
+        stored = self.stored_path(asset_id)
+        if stored is not None:
+            try:
+                image_bytes = stored.read_bytes()
+            except OSError:
+                image_bytes = None
+            if image_bytes:
+                self.remove(asset_id)
+                return self._ensure_size(image_bytes)
+
         # 1. Check cache
         p = self._entry(asset_id)
         if p.exists():

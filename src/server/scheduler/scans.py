@@ -254,8 +254,10 @@ def scan_library(
     waiting = {} if retry is None or retry_due else {p: s for p, s in retry.seen.items() if p in retry.paths}
     # When most of a library looks gone the server asks first (409
     # mass_missing, ADR-016): a person answers, never the scheduler.
+    from src.server.scheduler.service import stores_here
+
     stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False,
-                    waiting=waiting, console=console)
+                    waiting=waiting, cache_previews=not stores_here(), console=console)
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return

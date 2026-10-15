@@ -775,3 +775,11 @@ def test_report_changes_makes_relative_paths_absolute(home: Path, tmp_path: Path
     monkeypatch.chdir(tmp_path)
     CliRunner().invoke(main.app, ["library", "report-changes", "clip.mov"])
     assert client.post.call_args.kwargs["json"]["paths"] == [str(tmp_path / "clip.mov")]
+
+
+@pytest.mark.parametrize("here", [True, False])
+def test_a_scan_keeps_preview_copies_only_where_the_api_keeps_none(das, monkeypatch, here) -> None:
+    # Beside the API the scheduler reads stored previews in place (proxy_cache.py `stored`).
+    monkeypatch.setattr("src.server.scheduler.service.stores_here", lambda: here)
+    scan, _, _ = _pass(FakeServer([LIB]), ScanState(last_full_scan={}))
+    assert scan.call_args.kwargs["cache_previews"] is (not here)

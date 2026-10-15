@@ -29,10 +29,12 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from pathlib import Path
 from typing import Any
 
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
@@ -513,20 +515,66 @@ def stores_here() -> bool:
     return settings.storage_provider == "local" and bool(settings.data_dir)
 
 
+def forget_preview_copies() -> tuple[int, int] | None:
+    """Where the API keeps the previews on this machine, the copies an
+    earlier scheduler kept in its proxy cache (scans' and the faces step's)
+    go: each clip's stored preview is read where it is (stored_preview).
+    Only a cache inside the server's data folder (lumiverb-server run puts
+    the scheduler's there): never a folder a CLI or the Mac app shares.
+    Returns (files, bytes) removed, or None when there was nothing to do."""
+    from src.processing.cache_dir import cache_dir
+    from src.server.config import get_settings
+
+    if not stores_here():
+        return None
+    folder = cache_dir("proxies").absolute()
+    data = Path(get_settings().data_dir).absolute()
+    if data not in folder.parents or not folder.is_dir():
+        return None
+    files = sizes = 0
+    for entry in folder.rglob("*"):
+        try:
+            if entry.is_file():
+                files, sizes = files + 1, sizes + entry.stat().st_size
+        except OSError:
+            continue
+    shutil.rmtree(folder, ignore_errors=True)
+    return files, sizes
+
+
 def stored_analysis_proxy(tenant_id: str, storage: Any = None) -> Callable[[str], Any]:
     """The account's clip's analysis proxy as the API stored it, read where
     it is on this disk (src/server/storage/local.py: during a move, either
     folder): the scheduler's cache then holds no second copy. None when the
     clip has none, or its file isn't there (a drive unplugged): the cache
     downloads it then, as before."""
+    return _stored_file(tenant_id, "analysis_proxy_key", storage)
+
+
+def stored_preview(tenant_id: str, storage: Any = None) -> Callable[[str], Any]:
+    """The account's clip's preview (its proxy) as the API stored it, read
+    where it is on this disk, as stored_analysis_proxy: what CLIP, faces,
+    OCR and descriptions see (src/processing/proxy/proxy_cache.py), with no
+    copy in the scheduler's cache."""
+    return _stored_file(tenant_id, "proxy_key", storage)
+
+
+# The assets columns a stored file's key is read from.
+_STORED_KEYS = {"analysis_proxy_key", "proxy_key"}
+
+
+def _stored_file(tenant_id: str, column: str, storage: Any) -> Callable[[str], Any]:
     from sqlalchemy import text
 
     from src.server.database import get_tenant_session
 
+    if column not in _STORED_KEYS:
+        raise ValueError(column)
+
     def find(asset_id: str):
         nonlocal storage
         with get_tenant_session(tenant_id) as session:
-            key = session.execute(text("SELECT analysis_proxy_key FROM assets WHERE asset_id = :a"),
+            key = session.execute(text(f"SELECT {column} FROM assets WHERE asset_id = :a"),  # noqa: S608 — a known column
                                   {"a": asset_id}).scalar()
         if not key:
             return None
@@ -746,8 +794,10 @@ class Accounts:
                 continue
             try:
                 client = scheduler_client(self._url, scheduler_key(tenant_id))
+                here = stores_here()
                 self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state, models=self._models,
-                                                    stored=stored_analysis_proxy(tenant_id) if stores_here() else None)
+                                                    stored=stored_analysis_proxy(tenant_id) if here else None,
+                                                    stored_preview=stored_preview(tenant_id) if here else None)
                 logger.info("scheduler: working for %s", tenant_id)
             except Exception:  # noqa: BLE001 — tried again at the next listing
                 logger.exception("scheduler: couldn't start work for %s", tenant_id)
@@ -887,6 +937,9 @@ def main() -> int:
     # transcript processes) has none.
     get_settings()
     secrets_env.forget()
+    if removed := forget_preview_copies():
+        logger.info("scheduler: removed %d files (%.1f GB) of preview copies from its cache: previews are read "
+                    "where the API keeps them", removed[0], removed[1] / 1e9)
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")
