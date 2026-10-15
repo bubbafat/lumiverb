@@ -90,6 +90,7 @@ from src.server.lifecycle.postgres import (
     up_while,
 )
 from src.server.lifecycle.supervise import Child, Supervisor
+from src.shared.stop_signals import set_on_signals
 
 logger = logging.getLogger("lumiverb-server")
 
@@ -372,8 +373,7 @@ def _run(args: argparse.Namespace) -> int:
     log.configure()  # launchd's file, rotated, each child's lines named (log.py)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     stop = threading.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, lambda *_: stop.set())
+    set_on_signals(stop, (signal.SIGTERM, signal.SIGINT, signal.SIGHUP))
 
     if env.get("PG_BIN"):
         try:
