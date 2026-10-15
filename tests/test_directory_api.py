@@ -1,4 +1,4 @@
-"""API tests for library directory tree endpoint and assets page path_prefix filter."""
+"""API tests for library directory tree endpoint and the query's folder filter (path:)."""
 
 import os
 from datetime import UTC, datetime
@@ -236,16 +236,16 @@ def test_directories_parent_traversal_400(
 
 
 @pytest.mark.slow
-def test_assets_page_path_prefix_2024(
+def test_query_path_prefix_2024(
     directory_api_client: tuple[TestClient, str, str, str]
 ) -> None:
-    """GET /v1/assets/page?path_prefix=2024 returns only assets under 2024/."""
+    """GET /v1/query?f=path:2024 returns only assets under 2024/."""
     client, api_key, nested_library_id, _ = directory_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.get(
-        "/v1/assets/page",
-        params={"library_id": nested_library_id, "path_prefix": "2024"},
+        "/v1/query",
+        params=[("f", f"library:{nested_library_id}"), ("f", "path:2024")],
         headers=auth,
     )
     assert r.status_code == 200
@@ -258,16 +258,16 @@ def test_assets_page_path_prefix_2024(
 
 
 @pytest.mark.slow
-def test_assets_page_path_prefix_2024_europe(
+def test_query_path_prefix_2024_europe(
     directory_api_client: tuple[TestClient, str, str, str]
 ) -> None:
-    """GET /v1/assets/page?path_prefix=2024/Europe returns only assets under 2024/Europe/."""
+    """GET /v1/query?f=path:2024/Europe returns only assets under 2024/Europe/."""
     client, api_key, nested_library_id, _ = directory_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.get(
-        "/v1/assets/page",
-        params={"library_id": nested_library_id, "path_prefix": "2024/Europe"},
+        "/v1/query",
+        params=[("f", f"library:{nested_library_id}"), ("f", "path:2024/Europe")],
         headers=auth,
     )
     assert r.status_code == 200
@@ -279,16 +279,16 @@ def test_assets_page_path_prefix_2024_europe(
 
 
 @pytest.mark.slow
-def test_assets_page_path_prefix_nonexistent_empty(
+def test_query_path_prefix_nonexistent_empty(
     directory_api_client: tuple[TestClient, str, str, str]
 ) -> None:
-    """GET /v1/assets/page?path_prefix=nonexistent returns empty items."""
+    """GET /v1/query?f=path:nonexistent returns empty items."""
     client, api_key, nested_library_id, _ = directory_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.get(
-        "/v1/assets/page",
-        params={"library_id": nested_library_id, "path_prefix": "nonexistent"},
+        "/v1/query",
+        params=[("f", f"library:{nested_library_id}"), ("f", "path:nonexistent")],
         headers=auth,
     )
     assert r.status_code == 200

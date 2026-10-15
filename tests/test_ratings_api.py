@@ -506,7 +506,7 @@ def test_user_deletion_cleans_ratings(ratings_env):
 
 @pytest.mark.slow
 def test_browse_filter_favorite(ratings_env):
-    """Browse with favorite=true only returns favorited assets."""
+    """Browse with favorite:yes only returns favorited assets."""
     client, api_key, library_id, _ = ratings_env
     a1 = _ingest_asset(client, api_key, library_id, "filt_fav1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "filt_fav2.jpg")
@@ -515,7 +515,7 @@ def test_browse_filter_favorite(ratings_env):
     client.put(f"/v1/assets/{a1}/rating", json={"favorite": True}, headers=_headers(api_key))
 
     r = client.get(
-        f"/v1/assets/page?library_id={library_id}&favorite=true",
+        "/v1/query", params={"f": [f"library:{library_id}", "favorite:yes"], "limit": 500},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -526,7 +526,7 @@ def test_browse_filter_favorite(ratings_env):
 
 @pytest.mark.slow
 def test_browse_filter_star_min(ratings_env):
-    """Browse with star_min filters to assets with at least N stars."""
+    """Browse with stars:N+ filters to assets with at least N stars."""
     client, api_key, library_id, _ = ratings_env
     a1 = _ingest_asset(client, api_key, library_id, "filt_star1.jpg")
     a2 = _ingest_asset(client, api_key, library_id, "filt_star2.jpg")
@@ -535,7 +535,7 @@ def test_browse_filter_star_min(ratings_env):
     client.put(f"/v1/assets/{a2}/rating", json={"stars": 2}, headers=_headers(api_key))
 
     r = client.get(
-        f"/v1/assets/page?library_id={library_id}&star_min=4",
+        "/v1/query", params={"f": [f"library:{library_id}", "stars:4+"], "limit": 500},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -555,7 +555,7 @@ def test_browse_filter_color(ratings_env):
     client.put(f"/v1/assets/{a2}/rating", json={"color": "blue"}, headers=_headers(api_key))
 
     r = client.get(
-        f"/v1/assets/page?library_id={library_id}&color=red",
+        "/v1/query", params={"f": [f"library:{library_id}", "color:red"], "limit": 500},
         headers=_headers(api_key),
     )
     assert r.status_code == 200
@@ -607,7 +607,7 @@ def test_browse_filter_no_rating_filters_returns_all(ratings_env):
     # a2 has no rating
 
     r = client.get(
-        f"/v1/assets/page?library_id={library_id}",
+        "/v1/query", params={"f": f"library:{library_id}", "limit": 500},
         headers=_headers(api_key),
     )
     assert r.status_code == 200

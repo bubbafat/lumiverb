@@ -36,7 +36,7 @@ from tests.conftest import (
     _provision_tenant_db,
     _run_control_migrations,
 )
-from tests.machine_lineage import made
+from tests.faces import plant_faces
 
 
 def _seeded_embedding(label: str, dim: int = 512) -> list[float]:
@@ -75,9 +75,7 @@ def _create_asset_with_faces(
                 "embedding": perturbed,
             }
         )
-    r3 = auth_client.post(f"/v1/assets/{asset_id}/faces", json={"faces": faces, "lineage": made("faces")})
-    assert r3.status_code == 201, r3.text
-    return asset_id, r3.json()["face_ids"]
+    return asset_id, plant_faces(auth_client, asset_id, faces)
 
 
 @pytest.fixture(scope="module")

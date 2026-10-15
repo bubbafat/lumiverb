@@ -117,8 +117,9 @@ def _param_sets(s: dict, asset_id: str) -> list[list[tuple[str, str]]]:
 def test_no_public_response_holds_an_email(seeded):
     client = seeded["client"]
     routes = public_get_routes()
-    # The allow-list as it stands: if these go, the enumeration broke.
-    for must in ("/v1/query", "/v1/assets/page", "/v1/assets/{asset_id}", "/v1/assets/by-path", "/v1/similar",
+    # The allow-list as it stands: if these go, the enumeration broke. (/v1/assets/page is still
+    # walked, but it's retired: a visitor gets 410 gone, no data; tests/test_retired_endpoints.py.)
+    for must in ("/v1/query", "/v1/assets/{asset_id}", "/v1/assets/by-path", "/v1/similar",
                  "/v1/libraries/{library_id}/directories", "/v1/public/projects/{project_id}",
                  "/v1/public/projects/{project_id}/assets", "/v1/assets/{asset_id}/playback",
                  "/v1/stream/{token}", "/v1/assets/facets"):
@@ -147,7 +148,7 @@ def test_no_public_response_holds_an_email(seeded):
                             leaks.append(f"{url} {params} -> {r.status_code}: {EMAIL.search(text)}")
     assert not leaks, "Emails on public responses:\n" + "\n".join(leaks)
     # The routes that matter answered the visitor (a test of 401s would prove nothing).
-    for must in ("/v1/query", "/v1/assets/page", "/v1/assets/{asset_id}",  # by-path refuses visitors (403)
+    for must in ("/v1/query", "/v1/assets/{asset_id}",  # by-path refuses visitors (403)
                  "/v1/public/projects/{project_id}", "/v1/public/projects/{project_id}/assets", "/v1/assets/facets",
                  "/v1/libraries/{library_id}/directories", "/v1/libraries/{library_id}"):
         assert must in answered, (must, sorted(answered))

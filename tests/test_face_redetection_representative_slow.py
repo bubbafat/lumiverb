@@ -1,6 +1,7 @@
 """Slow tests for the redetection → representative_face_id healing path.
 
-When the macOS / CLI face provider re-runs detection on an asset,
+When detection re-runs on an asset (its faces saved with POST
+/v1/assets/batch-faces, which reads Apple Vision's two-corner boxes too),
 ``FaceRepository.submit_faces`` updates the faces it re-finds in place
 (same face_id) and deletes unconfirmed faces it doesn't re-find. A
 person whose representative face was deleted would be left orphaned.
@@ -44,7 +45,7 @@ from tests.conftest import (
     _provision_tenant_db,
     _run_control_migrations,
 )
-from tests.machine_lineage import made
+from tests.faces import plant_faces
 
 
 @pytest.fixture(scope="module")
@@ -213,23 +214,18 @@ def test_redetection_keeps_refound_representative_face(people_client) -> None:
         tenant_url, library_id, idx=11, name="RepKeep"
     )
 
-    r = auth_client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={
-            "detection_model": "apple_vision",
-            "detection_model_version": "1",
-            "lineage": made("faces"),
-            "faces": [
-                {
-                    "bounding_box": {"x1": 0.1, "y1": 0.1, "x2": 0.4, "y2": 0.4},
-                    "detection_confidence": 0.92,
-                    "embedding": _orthogonal_512(11),
-                }
-            ],
-        },
+    face_ids = plant_faces(
+        auth_client, asset_id,
+        [
+            {
+                "bounding_box": {"x1": 0.1, "y1": 0.1, "x2": 0.4, "y2": 0.4},
+                "detection_confidence": 0.92,
+                "embedding": _orthogonal_512(11),
+            }
+        ],
+        detection_model="apple_vision", detection_model_version="1",
     )
-    assert r.status_code == 201, (r.status_code, r.text)
-    assert r.json()["face_ids"] == [old_face_id]
+    assert face_ids == [old_face_id]
     assert _read_representative(tenant_url, person_id) == old_face_id
 
 
@@ -291,22 +287,17 @@ def test_redetection_repicks_representative_face(people_client) -> None:
         engine.dispose()
 
     # Re-detection finds a different face elsewhere in the frame.
-    r = auth_client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={
-            "detection_model": "apple_vision",
-            "detection_model_version": "1",
-            "lineage": made("faces"),
-            "faces": [
-                {
-                    "bounding_box": {"x1": 0.6, "y1": 0.6, "x2": 0.8, "y2": 0.8},
-                    "detection_confidence": 0.92,
-                    "embedding": _orthogonal_512(14),
-                }
-            ],
-        },
+    plant_faces(
+        auth_client, asset_id,
+        [
+            {
+                "bounding_box": {"x1": 0.6, "y1": 0.6, "x2": 0.8, "y2": 0.8},
+                "detection_confidence": 0.92,
+                "embedding": _orthogonal_512(14),
+            }
+        ],
+        detection_model="apple_vision", detection_model_version="1",
     )
-    assert r.status_code == 201, (r.status_code, r.text)
 
     new_rep = _read_representative(tenant_url, person_id)
     assert new_rep is not None, "redetection left representative_face_id NULL"

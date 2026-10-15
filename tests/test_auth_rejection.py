@@ -47,8 +47,8 @@ def auth_rejection_client() -> TestClient:
 
 @pytest.mark.slow
 def test_assets_list_no_auth(auth_rejection_client: TestClient) -> None:
-    """GET /v1/assets/page without auth returns 401."""
-    r = auth_rejection_client.get("/v1/assets/page", params={"library_id": "lib_foo"})
+    """Listing a library's clips (GET /v1/query?f=library:...) without auth returns 401."""
+    r = auth_rejection_client.get("/v1/query", params={"f": "library:lib_foo"})
     assert r.status_code == 401
 
 

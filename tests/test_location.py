@@ -170,8 +170,6 @@ def test_a_persons_location_counts_and_is_recorded_as_theirs(env):
     assert bare not in _query(env, "has_gps:no")
     assert bare in _query(env, "near:51.5,-0.12,1")
     assert bare not in _query(env, "near:40,-74,1")
-    page = env[0].get("/v1/assets/page", params={"library_id": env[2], "has_gps": "true"}, headers=env[1]).json()
-    assert bare in {i["asset_id"] for i in page["items"]}
 
     d = _detail(env, bare)
     assert d["gps_lat"] is None  # the file says nothing; it stays so

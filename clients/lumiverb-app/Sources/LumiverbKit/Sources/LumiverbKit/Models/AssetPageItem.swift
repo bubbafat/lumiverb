@@ -1,6 +1,8 @@
 import Foundation
 
-/// A single asset in a paginated listing from `GET /v1/assets/page`.
+/// A single asset as the browse grids show it: a `GET /v1/query` item
+/// (`QueryItem.toPageItem()`). Named for `GET /v1/assets/page`, which
+/// listed them once and is retired (410).
 public struct AssetPageItem: Decodable, Identifiable, Sendable, Equatable {
     public let assetId: String
     public let relPath: String

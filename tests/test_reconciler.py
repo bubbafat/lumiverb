@@ -5,11 +5,12 @@ was made (ADR-016 phase 3, piece 2).
 An artifact is missing when it doesn't exist, whatever lineage says. One
 that exists is current or stale by its lineage; with none it's an unknown
 producer's, so stale (a write can't leave one now: it must say how it was
-made, so only a lineage row lost since does). The worker is handed what's missing, and what was
-made from a file whose content has since changed; stale from a settings or
-producer change waits for approval (piece 5). A failure waits its turn
-(5 minutes, doubling to a day) and is reported by the worker. The repair
-summary, the page filters and the library health dot all say the same.
+made, so only a lineage row lost since does). The scheduler is handed what's missing, and what was
+made from a file whose content has since changed (its queue, once what a
+step is made from exists); stale from a settings or producer change is a
+redo's (test_redo_on_change.py). A failure waits its turn (5 minutes,
+doubling to a day) and is reported by the scheduler. The repair summary,
+the scheduler's queue and the library health dot all say the same.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import pytest
 from sqlalchemy import text
 
 from src.shared import producers as P
+from tests.producer_fakes import due
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 
@@ -38,12 +40,21 @@ def _summary(env) -> dict:
     return r.json()
 
 
-def _due(env, flag: str) -> list[str]:
-    """What the worker is handed for one step: the page filter it uses."""
-    client, headers, library_id, *_ = env
-    r = client.get("/v1/assets/page", params={"library_id": library_id, flag: "true"}, headers=headers)
-    assert r.status_code == 200, r.text
-    return [i["asset_id"] for i in r.json()["items"]]
+def _due(env, kind: str) -> list[str]:
+    """What the scheduler is handed for one kind (a producer's) in this
+    test's library: its queue (scheduler/queue.py), which lists what the
+    reconciler says is missing once what the kind is made from exists."""
+    _, _, library_id, *_ = env
+    return [c["asset_id"] for c in due(env[-1], kind, [library_id])]
+
+
+def _analysis_proxy_made(env, asset_id: str) -> None:
+    """A video's analysis proxy, made: what its scenes and transcript are
+    made from, so the scheduler hands them out (the file isn't read here)."""
+    with _db(env) as s:
+        s.execute(text("UPDATE assets SET analysis_proxy_key = :k WHERE asset_id = :a"),
+                  {"k": f"analysis/{asset_id}.mp4", "a": asset_id})
+        s.commit()
 
 
 def _counts(env, artifact: str) -> dict:
@@ -82,13 +93,13 @@ def test_missing_until_made_then_current(env):
     lib = _library(env, "RecMade")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, {"proxy": _want(env, "proxy", sha)})
-    assert _due(lib, "missing_vision") == [clip]
+    assert _due(lib, "vision") == [clip]
     assert _summary(lib)["missing_vision"] == 1
     assert _counts(lib, "vision") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "rechecking": 0, "below": 0, "failing": 0,
                                       "given_up": 0}
 
     _describe(lib, clip, sha)
-    assert _due(lib, "missing_vision") == []
+    assert _due(lib, "vision") == []
     assert _summary(lib)["missing_vision"] == 0
     assert _counts(lib, "vision")["current"] == 1
 
@@ -102,7 +113,7 @@ def test_lineage_without_the_artifact_is_missing(env):
     with _db(env) as s:  # the description went, its lineage stayed
         s.execute(text("DELETE FROM asset_metadata WHERE asset_id = :a"), {"a": clip})
         s.commit()
-    assert _due(lib, "missing_vision") == [clip]
+    assert _due(lib, "vision") == [clip]
     assert _counts(lib, "vision")["missing"] == 1
 
 
@@ -118,7 +129,7 @@ def test_an_artifact_nobody_said_how_was_made_is_stale_not_missing(env):
     c = _counts(lib, "vision")
     assert (c["stale"], c["missing"], c["current"]) == (1, 0, 0)
     # Stale from how it was made waits for approval: not handed out.
-    assert _due(lib, "missing_vision") == []
+    assert _due(lib, "vision") == []
 
 
 @pytest.mark.slow
@@ -134,7 +145,7 @@ def test_a_settings_change_makes_it_stale_and_it_waits_for_approval(env):
         s.commit()
     try:
         assert _counts(lib, "vision")["stale"] == 1
-        assert _due(lib, "missing_vision") == []
+        assert _due(lib, "vision") == []
         assert _summary(lib)["missing_vision"] == 0
     finally:
         with _db(env) as s:
@@ -160,11 +171,11 @@ def test_a_changed_file_is_a_new_clip_made_from_scratch(env):
         "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
         "lineage": _want(env, "clip", old)}, headers=headers)
     assert r.status_code == 201, r.text
-    assert _due(lib, "missing_vision") == [] and _due(lib, "missing_embeddings") == []
+    assert _due(lib, "vision") == [] and _due(lib, "clip") == []
 
     replaced = _ingest_with(lib, "a.jpg", new, None)
     assert replaced != clip
-    assert _due(lib, "missing_vision") == [replaced] and _due(lib, "missing_embeddings") == [replaced]
+    assert _due(lib, "vision") == [replaced] and _due(lib, "clip") == [replaced]
     assert _summary(lib)["missing_vision"] == 1
     with _db(env) as s:  # the old clip, archived as missing, keeps its description
         assert s.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"), {"a": clip}).scalar() == "missing"
@@ -183,7 +194,8 @@ def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
                        " description, created_at) VALUES (:i, :a, 0, 0, 999, 0, 'a beach', now())"),
                   {"i": f"scn_{vid}_0", "a": vid})
         s.commit()
-    assert _due(lib, "missing_video_scenes") == [] and _due(lib, "missing_scene_vision") == []
+    _analysis_proxy_made(env, vid)
+    assert _due(lib, "scenes") == [] and _due(lib, "scene_vision") == []
 
     new = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
     assert new != vid
@@ -192,7 +204,8 @@ def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
         s.commit()
         # The old clip keeps its scenes, archived with it.
         assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 1
-    assert _due(lib, "missing_video_scenes") == [new]
+    _analysis_proxy_made(env, new)
+    assert _due(lib, "scenes") == [new]
 
 
 @pytest.mark.slow
@@ -207,7 +220,7 @@ def test_a_persons_transcript_stays_when_the_file_changes(env):
                     headers=headers)
     assert r.status_code == 200, r.text
     _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    assert _due(lib, "missing_transcription") == []
+    assert _due(lib, "transcript") == []
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +237,7 @@ def test_a_failure_waits_then_is_handed_out_again(env):
     assert r.status_code == 200, r.text
     assert r.json() == {"recorded": 1}
 
-    assert _due(lib, "missing_vision") == []
+    assert _due(lib, "vision") == []
     assert _summary(lib)["missing_vision"] == 0
     assert _summary(lib)["waiting_failures"] == 1
     assert _counts(lib, "vision")["failing"] == 1
@@ -234,7 +247,7 @@ def test_a_failure_waits_then_is_handed_out_again(env):
         s.execute(text("UPDATE artifact_lineage SET retry_at = now() - interval '1 second'"
                        " WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
         s.commit()
-    assert _due(lib, "missing_vision") == [clip]
+    assert _due(lib, "vision") == [clip]
 
     _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "again"}])
     with _db(env) as s:
@@ -275,20 +288,23 @@ def test_a_failure_for_no_such_artifact_or_clip(env):
 
 @pytest.mark.slow
 def test_every_producer_sorts_a_new_clip_the_same_everywhere(env):
-    """The summary, page filters and producer counts agree for each step the worker runs."""
+    """The summary, the scheduler's queue and producer counts agree for each
+    step it runs, for clips that have what each step is made from (the
+    queue waits for that: a photo's proxy, a video's analysis proxy)."""
     lib = _library(env, "RecAgree")
     img = _ingest_with(lib, "a.jpg", _sha(), None)
     vid = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
         s.commit()
+    _analysis_proxy_made(env, vid)
     summary = _summary(lib)
     for flag, artifact in P.MISSING_FLAGS.items():
-        due = _due(lib, flag)
-        assert len(due) == summary[flag], flag
-        assert _counts(lib, artifact)["missing"] == len(due), flag
-    assert set(_due(lib, "missing_vision")) == {img}
-    assert set(_due(lib, "missing_transcription")) == {vid}
+        handed = _due(lib, P.PRODUCERS[artifact].kind)
+        assert len(handed) == summary[flag], flag
+        assert _counts(lib, artifact)["missing"] == len(handed), flag
+    assert set(_due(lib, "vision")) == {img}
+    assert set(_due(lib, "transcript")) == {vid}
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +326,7 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
         s.execute(text("UPDATE artifact_lineage SET source_sha256 = NULL WHERE asset_id = :a"), {"a": clip})
         s.execute(text("UPDATE assets SET sha256 = :s WHERE asset_id = :a"), {"s": _sha(), "a": clip})
         s.commit()
-    assert _due(lib, "missing_vision") == []
+    assert _due(lib, "vision") == []
     assert _counts(lib, "vision")["stale"] == 1
 
 
@@ -326,7 +342,8 @@ def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
                        " source_sha256, produced_at, outcome, attempts) VALUES (:a, 'scenes', 'scene-detect', '1',"
                        " 'h', 'old', now(), 'ok', 0)"), {"a": vid})
         s.commit()
-    assert _due(lib, "missing_video_scenes") == []
+    _analysis_proxy_made(env, vid)  # what its scenes are found in: only the stale hash can hold it back
+    assert _due(lib, "scenes") == []
     assert _counts(lib, "scenes")["stale"] == 1
 
 

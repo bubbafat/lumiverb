@@ -309,8 +309,6 @@ def test_the_upgrade_step_is_gone(env):
     assert client.post("/v1/producers/vision/upgrade", json={}, headers=headers).status_code in (404, 405)
     p = _producer(lib)
     assert "upgrades" not in p and "edited" not in p and "upgradable" not in p
-    r = client.get("/v1/assets/page", params={"library_id": lib[2], "missing_vision": "true"}, headers=headers)
-    assert r.status_code == 200 and all("upgrade" not in i for i in r.json()["items"])
     with _db(env) as s:
         tables = {r[0] for r in s.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))}
     assert "producer_pauses" in tables

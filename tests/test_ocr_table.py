@@ -40,10 +40,10 @@ def test_ocr_doesnt_wait_for_a_description(env):
     lib = _library(env, "OcrFirst")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    assert _due(lib, "missing_ocr") == [clip]  # handed out right away
+    assert _due(lib, "ocr") == [clip]  # handed out right away
     _ocr(lib, clip, "EXIT", sha)
     assert _detail(env, clip)["ocr_text"] == "EXIT"
-    assert _due(lib, "missing_ocr") == []
+    assert _due(lib, "ocr") == []
     assert _counts(lib, "ocr")["current"] == 1
 
 
@@ -59,7 +59,7 @@ def test_describing_again_leaves_ocr_alone(env):
     client.post(f"/v1/assets/{clip}/vision", json={"model_id": "other", "description": "a sign"}, headers=headers)
     _describe(lib, clip, sha)
     assert _detail(env, clip)["ocr_text"] == "NO PARKING"
-    assert _due(lib, "missing_ocr") == []
+    assert _due(lib, "ocr") == []
 
 
 @pytest.mark.slow
@@ -69,7 +69,7 @@ def test_no_text_is_an_answer_too(env):
     clip = _ingest_with(lib, "a.jpg", sha, None)
     _ocr(lib, clip, "", sha)
     assert _detail(env, clip).get("ocr_text") in ("", None)
-    assert _due(lib, "missing_ocr") == []
+    assert _due(lib, "ocr") == []
 
 
 @pytest.mark.slow

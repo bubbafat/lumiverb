@@ -124,11 +124,22 @@ def _summary(env) -> dict:
     return r.json()
 
 
-def _page(env, **params) -> list[dict]:
-    client, headers, library_id, *_ = env
-    r = client.get("/v1/assets/page", params={"library_id": library_id, **params}, headers=headers)
-    assert r.status_code == 200, r.text
-    return r.json()["items"]
+def _renders_due(env) -> list[dict]:
+    """The videos the scheduler hands out for an analysis proxy (its queue)."""
+    from tests.producer_fakes import due
+
+    _, _, library_id, *_ = env
+    return due(env[-1], "render", [library_id])
+
+
+def _analysis_proxy_key(env, asset_id: str) -> str | None:
+    engine = create_engine(env[-1])
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text("SELECT analysis_proxy_key FROM assets WHERE asset_id = :a"),
+                                {"a": asset_id}).scalar()
+    finally:
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +158,7 @@ def test_upload_stores_the_proxy_and_marks_the_asset(env) -> None:
 
     storage = env[3]
     assert storage.abs_path(r.json()["key"]).read_bytes() == body
-    [item] = [i for i in _page(env) if i["asset_id"] == asset_id]
-    assert item["has_analysis_proxy"] is True
+    assert _analysis_proxy_key(env, asset_id) == r.json()["key"]
 
 
 @pytest.mark.slow
@@ -225,18 +235,18 @@ def test_unknown_asset_is_404(env) -> None:
 
 
 @pytest.mark.slow
-def test_summary_and_page_count_videos_without_a_proxy(env) -> None:
+def test_summary_and_the_scheduler_count_videos_without_a_proxy(env) -> None:
     before = _summary(env)["missing_analysis_proxy"]
     video = _ingest(env, "missing/a.mov")
     _ingest(env, "missing/b.jpg", media_type="image")
     assert _summary(env)["missing_analysis_proxy"] == before + 1
-    missing = {i["asset_id"] for i in _page(env, missing_analysis_proxy=True)}
-    assert video in missing
-    assert all(i["media_type"] == "video" for i in _page(env, missing_analysis_proxy=True))
+    due = _renders_due(env)
+    assert video in {c["asset_id"] for c in due}
+    assert len(due) == before + 1 and all(c["media_type"] == "video" for c in due)
 
     _upload(env, video)
     assert _summary(env)["missing_analysis_proxy"] == before
-    assert video not in {i["asset_id"] for i in _page(env, missing_analysis_proxy=True)}
+    assert video not in {c["asset_id"] for c in _renders_due(env)}
 
 
 @pytest.mark.slow
@@ -259,11 +269,15 @@ def test_changed_file_needs_a_new_proxy(env) -> None:
     video = _ingest(env, "changed/a.mov", sha="a" * 64)
     _upload(env, video)
     _ingest(env, "changed/a.mov", sha="a" * 64)  # rescan, same content
-    assert next(i for i in _page(env) if i["asset_id"] == video)["has_analysis_proxy"] is True
+    client, headers, *_ = env
+    assert client.get(f"/v1/assets/{video}", headers=headers).status_code == 200  # still in sight
+    assert _analysis_proxy_key(env, video) is not None
 
     replaced = _ingest(env, "changed/a.mov", sha="b" * 64)  # another file there: a new clip (Robert, Oct 9)
     assert replaced != video
-    assert next(i for i in _page(env) if i["asset_id"] == replaced)["has_analysis_proxy"] is False
+    assert client.get(f"/v1/assets/{replaced}", headers=headers).status_code == 200
+    assert _analysis_proxy_key(env, replaced) is None
+    assert replaced in {c["asset_id"] for c in _renders_due(env)}
 
 
 @pytest.mark.slow

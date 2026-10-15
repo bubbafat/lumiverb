@@ -616,13 +616,9 @@ def test_delete_project_preserves_assets(projects_env):
     # Delete project
     client.request("DELETE", f"/v1/projects/{col_id}", headers=_headers(api_key))
 
-    # Asset should still exist
-    r2 = client.get(
-        f"/v1/assets/page?library_id={library_id}",
-        headers=_headers(api_key),
-    )
-    asset_ids = [item["asset_id"] for item in r2.json()["items"]]
-    assert a1 in asset_ids
+    # Asset should still exist, in sight
+    r2 = client.get(f"/v1/assets/{a1}", headers=_headers(api_key))
+    assert r2.status_code == 200, r2.text
 
 
 # ---------------------------------------------------------------------------
@@ -846,11 +842,9 @@ def test_paging_with_undated_clips_returns_each_clip_once(projects_env, directio
     ).json()["project_id"]
     saved = _all_pages(client, api_key, project_id, limit=2)
     assert sorted(saved) == expected
-    # Unified query and the asset page endpoint share the cursor logic
+    # The unified query pages through them too
     query = pages("/v1/query", {"f": f"library:{lib}", "sort": "taken_at", "dir": direction})
     assert sorted(query) == expected
-    page = pages("/v1/assets/page", {"library_id": lib, "sort": "taken_at", "dir": direction})
-    assert sorted(page) == expected
     # Every advertised sort column pages too (exposure: all NULL here)
     exposure = pages("/v1/query", {"f": f"library:{lib}", "sort": "exposure_time_us", "dir": direction})
     assert sorted(exposure) == expected
@@ -992,9 +986,8 @@ def test_empty_trash_deletes_only_the_chosen_projects_forever(projects_env):
     assert client.post(f"/v1/projects/{doomed}/restore", headers=_headers(api_key)).status_code == 404
     # Gone from the public index too, so the link can't reach the tenant.
     assert client.get(f"/v1/public/projects/{doomed}").status_code in (401, 404)
-    # The clips themselves stay in the library.
-    page = client.get(f"/v1/assets/page?library_id={library_id}", headers=_headers(api_key)).json()
-    assert asset_id in [a["asset_id"] for a in page["items"]]
+    # The clips themselves stay in the library, in sight.
+    assert client.get(f"/v1/assets/{asset_id}", headers=_headers(api_key)).status_code == 200
 
 
 @pytest.mark.slow

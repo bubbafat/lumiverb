@@ -1,8 +1,5 @@
 """Assets API: clips, what's made for them, trash and restore. All routes require tenant auth (middleware)."""
 
-import base64
-import inspect
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +14,8 @@ from src.shared.io_utils import normalize_rel_path
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.dependencies import require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
-from src.server.api.limits import MAX_IDS, MAX_PAGE
+from src.server.api.limits import MAX_IDS
 from src.shared import asset_status
-from src.shared.io_utils import normalize_path_prefix
 from src.server.repository.tenant import (
     MISSING_CONDITIONS,
     AssetMetadataRepository,
@@ -75,12 +71,11 @@ class AssetResponse(BaseModel):
     thumbnail_key: str | None
     width: int | None
     height: int | None
-    # Source-file size in bytes. Included on the detail response (in
-    # addition to the page response) so the lightbox can render it
-    # regardless of how the user got there — e.g. opening from the
-    # cluster review face drill-down, which only has a face_id +
-    # asset_id and synthesizes a placeholder list-item with file_size=0
-    # to satisfy the AssetPageItem shape.
+    # Source-file size in bytes. Included on the detail response (as well
+    # as in a query's items) so the lightbox can render it regardless of
+    # how the user got there — e.g. opening from the cluster review face
+    # drill-down, which only has a face_id + asset_id and synthesizes a
+    # placeholder list-item with file_size=0 (the web's AssetPageItem).
     file_size: int | None = None
     sha256: str | None = None
     exif_extracted_at: str | None = None  # ISO8601
@@ -121,55 +116,6 @@ class AssetResponse(BaseModel):
     gps_accuracy_m: float | None = None
     # Faces found in it (null: not looked for yet); a video's, the people seen.
     face_count: int | None = None
-
-
-class AssetPageItem(BaseModel):
-    """Asset fields returned by GET /v1/assets/page."""
-
-    asset_id: str
-    rel_path: str
-    file_size: int
-    file_mtime: str | None  # ISO8601
-    sha256: str | None
-    media_type: str
-    width: int | None = None
-    height: int | None = None
-    taken_at: str | None = None  # ISO8601
-    status: str = "pending"
-    duration_sec: float | None = None
-    camera_make: str | None = None
-    camera_model: str | None = None
-    iso: int | None = None
-    aperture: float | None = None
-    focal_length: float | None = None
-    focal_length_35mm: float | None = None
-    lens_model: str | None = None
-    flash_fired: bool | None = None
-    gps_lat: float | None = None
-    gps_lon: float | None = None
-    face_count: int | None = None
-    created_at: str | None = None  # ISO8601
-    has_analysis_proxy: bool = False
-    # A video's 10-second preview is on the server (None: not said here). The
-    # scan makes it again when it isn't: its upload failed after the clip was made.
-    has_video_preview: bool | None = None
-
-
-class AssetPageResponse(BaseModel):
-    """Response envelope for paginated assets."""
-
-    items: list[AssetPageItem]
-    next_cursor: str | None = None
-
-
-# Valid sort columns for the page endpoint.
-SORT_COLUMNS = {"taken_at", "created_at", "file_size", "iso", "exposure_time_us", "aperture", "focal_length", "rel_path", "asset_id"}
-
-
-def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
-    """Encode a composite cursor as base64 JSON."""
-    payload = json.dumps({"v": sort_value, "id": asset_id}, default=str)
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
 class BatchTrashRequest(BaseModel):
@@ -298,194 +244,23 @@ class VisionSubmitResponse(BaseModel):
     status: str
 
 
-def missing_filters(**flags: bool) -> frozenset[str]:
-    """The missing_* filters asked for: one per producer the scheduler runs
-    (its flag, src/producers/<artifact>/), and missing_face_embeddings."""
-    return frozenset(flag for flag, on in flags.items() if on)
-
-
-missing_filters.__signature__ = inspect.Signature([  # type: ignore[attr-defined]
-    inspect.Parameter(flag, inspect.Parameter.KEYWORD_ONLY, default=False, annotation=bool)
-    for flag in MISSING_CONDITIONS])
-
-
-@router.get("/page", response_model=AssetPageResponse)
-def page_assets(
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-    library_id: str,
-    after: str | None = None,
-    limit: int = Query(default=500, ge=1, le=MAX_PAGE),
-    path_prefix: str | None = None,
-    tag: str | None = None,
-    missing: Annotated[frozenset[str], Depends(missing_filters)] = frozenset(),
-    has_faces: bool | None = None,
-    person_id: str | None = None,
-    sort: str = "taken_at",
-    dir: str = "desc",
-    media_type: str | None = None,
-    camera_make: str | None = None,
-    camera_model: str | None = None,
-    lens_model: str | None = None,
-    iso_min: int | None = None,
-    iso_max: int | None = None,
-    exposure_min_us: int | None = None,
-    exposure_max_us: int | None = None,
-    aperture_min: float | None = None,
-    aperture_max: float | None = None,
-    focal_length_min: float | None = None,
-    focal_length_max: float | None = None,
-    has_exposure: bool | None = None,
-    has_gps: bool = False,
-    near_lat: float | None = None,
-    near_lon: float | None = None,
-    near_radius_km: float = 1.0,
-    favorite: bool | None = None,
-    star_min: int | None = None,
-    star_max: int | None = None,
-    color: str | None = None,
-    has_rating: bool | None = None,
-) -> AssetPageResponse:
-    """
-    Keyset-paginated assets with sorting and filtering.
-    Returns a response envelope with items and next_cursor.
-    """
-    if getattr(request.state, "is_public_request", False):
-        lib_repo = LibraryRepository(session)
-        library = lib_repo.get_by_id(library_id)
-        if library is None or not library.is_public:
-            raise HTTPException(status_code=404, detail="Not found")
-        # Ratings are a signed-in person's; who's in a photo isn't for visitors to probe,
-        # nor where it was shot (repeated near searches would find it).
-        if person_id or any(v is not None for v in (favorite, star_min, star_max, color, has_rating)):
-            raise HTTPException(status_code=403, detail="That filter isn't available on public pages")
-        if has_gps or near_lat is not None or near_lon is not None:
-            raise HTTPException(status_code=403, detail="Location filters aren't available on public pages")
-        camera = (camera_make, camera_model, lens_model, iso_min, iso_max, exposure_min_us, exposure_max_us,
-                  aperture_min, aperture_max, focal_length_min, focal_length_max, has_exposure)
-        if any(v is not None for v in camera):
-            raise HTTPException(status_code=403, detail="Camera filters aren't available on public pages")
-        from src.server.api.routers.query import PUBLIC_SORTS, require_public_folder
-
-        if sort not in PUBLIC_SORTS:
-            raise HTTPException(status_code=403, detail="That sort isn't available on public pages")
-        if public_folder := normalize_path_prefix(path_prefix):
-            require_public_folder(session, [library_id], public_folder)
-
-    sort_col = sort if sort in SORT_COLUMNS else "taken_at"
-    direction = dir if dir in ("asc", "desc") else "desc"
-
-    asset_repo = AssetRepository(session)
-    normalized_prefix: str | None = None
-    if path_prefix is not None:
-        normalized_prefix = normalize_path_prefix(path_prefix)
-        if normalized_prefix and ".." in normalized_prefix.split("/"):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid path_prefix; path traversal not allowed",
-            )
-
-    media_types: list[str] | None = None
-    if media_type:
-        media_types = [m.strip() for m in media_type.split(",") if m.strip()]
-
-    # Rating filters require user identity
-    rating_user_id: str | None = None
-    color_list: list[str] | None = None
-    needs_rating_filter = favorite is not None or star_min is not None or star_max is not None or color is not None or has_rating is not None
-    if needs_rating_filter:
-        uid = getattr(request.state, "user_id", None)
-        if not uid:
-            key_id = getattr(request.state, "key_id", None)
-            rating_user_id = f"key:{key_id}" if key_id else None
-        else:
-            rating_user_id = uid
-        if color is not None:
-            color_list = [c.strip() for c in color.split(",") if c.strip()]
-
-    assets = asset_repo.page_by_library(
-        library_id=library_id,
-        after=after,
-        limit=limit,
-        path_prefix=normalized_prefix,
-        tag=tag,
-        missing=missing,
-        has_faces=has_faces,
-        person_id=person_id,
-        sort=sort_col,
-        direction=direction,
-        media_types=media_types,
-        camera_make=camera_make,
-        camera_model=camera_model,
-        lens_model=lens_model,
-        iso_min=iso_min,
-        iso_max=iso_max,
-        exposure_min_us=exposure_min_us,
-        exposure_max_us=exposure_max_us,
-        aperture_min=aperture_min,
-        aperture_max=aperture_max,
-        focal_length_min=focal_length_min,
-        focal_length_max=focal_length_max,
-        has_exposure=has_exposure,
-        has_gps=has_gps,
-        near_lat=near_lat,
-        near_lon=near_lon,
-        near_radius_km=near_radius_km,
-        rating_user_id=rating_user_id,
-        favorite=favorite,
-        star_min=star_min,
-        star_max=star_max,
-        color=color_list,
-        has_rating=has_rating,
+@router.get("/page")
+def page_assets() -> None:
+    """Retired (410 gone): GET /v1/query lists a library's clips, and the
+    scheduler finds what each producer still needs (scheduler/queue.py).
+    Signed in or a public library's visitor, as it was."""
+    raise GoneError(
+        "GET /v1/assets/page is retired: list a library's clips with GET /v1/query (f=library:<id>). What each "
+        "producer still needs (the missing_* filters) is the server's scheduler's to find, from the database.",
+        ["GET /v1/query"],
     )
 
-    items = [
-        AssetPageItem(
-            asset_id=a.asset_id,
-            rel_path=a.rel_path,
-            file_size=a.file_size,
-            file_mtime=a.file_mtime.isoformat() if a.file_mtime else None,
-            sha256=a.sha256,
-            media_type=a.media_type,
-            width=a.width,
-            height=a.height,
-            taken_at=a.taken_at.isoformat() if a.taken_at else None,
-            status=a.status,
-            duration_sec=a.duration_sec,
-            camera_make=a.camera_make,
-            camera_model=a.camera_model,
-            iso=a.iso,
-            aperture=a.aperture,
-            focal_length=a.focal_length,
-            focal_length_35mm=a.focal_length_35mm,
-            lens_model=a.lens_model,
-            flash_fired=a.flash_fired,
-            gps_lat=a.gps_lat,
-            gps_lon=a.gps_lon,
-            face_count=a.face_count,
-            created_at=a.created_at.isoformat() if a.created_at else None,
-            has_analysis_proxy=a.analysis_proxy_key is not None,
-            has_video_preview=a.video_preview_key is not None if a.media_type == "video" else None,
-        )
-        for a in assets
-    ]
-    if getattr(request.state, "is_public_request", False):
-        items = [_page_item_visitor_view(i) for i in items]
-    next_cursor: str | None = None
-    if items and len(items) == limit:
-        last = assets[-1]
-        sort_value = getattr(last, sort_col, None)
-        if hasattr(sort_value, "isoformat"):
-            sort_value = sort_value.isoformat()
-        next_cursor = _encode_cursor(sort_col, sort_value, last.asset_id)
 
-    return AssetPageResponse(items=items, next_cursor=next_cursor)
-
-
-# Counts for a library: its clips, what scans left out (proxies, EXIF), each
-# missing_* filter (one per producer the scheduler runs, and face
-# embeddings), stale search entries, and failures waiting their turn (not in
-# the counts above).
+# Counts for a library: its clips, what scans left out (proxies, EXIF), what
+# each producer the scheduler runs still needs, by its missing_* flag
+# (MISSING_CONDITIONS, the rule its queue lists from), and face embeddings,
+# stale search entries, and failures waiting their turn (not in the counts
+# above).
 RepairSummary = create_model("RepairSummary", total_assets=(int, 0), missing_proxy=(int, 0), missing_exif=(int, 0),
                              **{flag: (int, 0) for flag in MISSING_CONDITIONS}, stale_search_sync=(int, 0),
                              waiting_failures=(int, 0))
@@ -674,26 +449,6 @@ def _project_visitor_view(response: AssetResponse) -> AssetResponse:
         transcript_srt=response.transcript_srt,
         transcript_language=response.transcript_language,
         video_facet=response.video_facet,
-    )
-
-
-def _page_item_visitor_view(item: AssetPageItem) -> AssetPageItem:
-    """A page item as a visitor to a public library sees it: what
-    _project_visitor_view keeps (shape, time, length), not where it lives,
-    where it was shot or what shot it."""
-    return AssetPageItem(
-        asset_id=item.asset_id,
-        rel_path="",
-        file_size=0,
-        file_mtime=None,
-        sha256=None,
-        media_type=item.media_type,
-        width=item.width,
-        height=item.height,
-        taken_at=item.taken_at,
-        status=item.status,
-        duration_sec=item.duration_sec,
-        has_analysis_proxy=item.has_analysis_proxy,
     )
 
 
@@ -1828,8 +1583,8 @@ def _normalize_bounding_box(bb: dict[str, float]) -> dict[str, float]:
     with top-left origin. The server stores and returns {x, y, w, h}.
 
     Accepted input formats:
-      - {x, y, w, h}: position + size — used by Python CLI (InsightFace)
-      - {x1, y1, x2, y2}: two corners — used by Swift client (Apple Vision)
+      - {x, y, w, h}: position + size — what the faces producer sends (InsightFace)
+      - {x1, y1, x2, y2}: two corners — what the macOS app sent (Apple Vision)
 
     Output format (stored in DB, returned by API, used by web UI):
       - {x, y, w, h}: top-left corner + width/height, all 0.0–1.0
@@ -1843,20 +1598,6 @@ def _normalize_bounding_box(bb: dict[str, float]) -> dict[str, float]:
         "w": bb["x2"] - bb["x1"],
         "h": bb["y2"] - bb["y1"],
     }
-
-
-class FaceSubmitRequest(BaseModel):
-    detection_model: str = "insightface"
-    detection_model_version: str = "buffalo_l"
-    # The model that embedded the faces (the faces producer's `model`).
-    embedding_model: str = Field(default="buffalo_l", max_length=100)
-    faces: list[FaceDetectionItem]
-    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
-
-
-class FaceSubmitResponse(BaseModel):
-    face_count: int
-    face_ids: list[str]
 
 
 class FaceListItem(BaseModel):
@@ -1998,53 +1739,15 @@ def submit_batch_faces(
     return {"processed": processed, "skipped": skipped}
 
 
-@router.post("/{asset_id}/faces", response_model=FaceSubmitResponse, status_code=201, dependencies=[Depends(require_editor)])
-def submit_faces(
-    asset_id: str,
-    body: FaceSubmitRequest,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> FaceSubmitResponse:
-    """Submit face detections for an asset.
-
-    Faces the new detections re-find keep their ids and confirmed assignments;
-    confirmed faces that aren't re-found are kept. See FaceRepository.submit_faces.
-    """
-    made = require_lineage(body.lineage, "faces")  # before anything is saved
-    from src.server.repository.tenant import FaceRepository
-
-    asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-
-    face_repo = FaceRepository(session)
-    faces_data = [
-        {
-            "bounding_box": _normalize_bounding_box(f.bounding_box),
-            "detection_confidence": f.detection_confidence,
-            "embedding": [float(x) for x in f.embedding] if f.embedding else None,
-        }
-        for f in body.faces
-    ]
-    face_ids = face_repo.submit_faces(
-        asset_id=asset_id,
-        detection_model=body.detection_model,
-        detection_model_version=body.detection_model_version,
-        faces=faces_data,
-        embedding_model=body.embedding_model,
+@router.post("/{asset_id}/faces", dependencies=[Depends(require_editor)])
+def submit_faces(asset_id: str) -> None:
+    """Retired (410 gone): the scheduler's faces producers save faces
+    (batch-faces for photos, routers/video.py for videos). An editor's, as it was."""
+    raise GoneError(
+        "POST /v1/assets/{asset_id}/faces is retired: the server's scheduler finds faces. Its faces producer saves "
+        "a photo's with POST /v1/assets/batch-faces, and a video's with POST /v1/video/{asset_id}/faces.",
+        ["POST /v1/assets/batch-faces", "POST /v1/video/{asset_id}/faces"],
     )
-    lineage.record(session, asset_id, "faces", made, outcome="ok" if faces_data else "empty")
-
-    # Generate face crop thumbnails
-    tenant_id = getattr(request.state, "tenant_id", None)
-    if tenant_id and asset.proxy_key:
-        _generate_face_crops(tenant_id, asset, face_ids, faces_data, session)
-
-    # Bump library revision so UI reflects face_count changes
-    LibraryRepository(session).bump_revision(asset.library_id)
-
-    session.refresh(asset)
-    return FaceSubmitResponse(face_count=asset.face_count or 0, face_ids=face_ids)
 
 
 @router.get("/{asset_id}/faces", response_model=FaceListResponse, dependencies=[Depends(require_signed_in)])
