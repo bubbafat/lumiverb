@@ -411,6 +411,12 @@ class QuickwitClient:
             json={"query": query, "max_hits": max_hits, "start_offset": start_offset, "sort_by": "_score"},
             timeout=10,
         )
+        if resp.status_code == 404:
+            # Not made yet: an account's indexes are made by the search sweep,
+            # its scenes' and transcripts' only once it has some (a library
+            # of photos never does). Nothing in it to find.
+            logger.debug("Quickwit index %s isn't there yet: no hits", index_id)
+            return []
         resp.raise_for_status()
         return resp.json().get("hits", [])
 

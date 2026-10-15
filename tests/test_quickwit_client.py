@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.server.search.quickwit_client import QuickwitClient
 
@@ -387,3 +388,32 @@ def test_new_index_wait_survives_connection_errors(tmp_path):
         qw.ensure_tenant_index("tnt_1")
 
     assert len([c for c in calls if "/ingest" in c]) == 2
+
+
+def _answer(status: int, body: bytes) -> requests.Response:
+    resp = requests.Response()
+    resp.status_code = status
+    resp._content = body
+    resp.url = "http://localhost:7280/api/v1/x/search"
+    return resp
+
+
+@pytest.mark.fast
+def test_an_index_not_made_yet_has_no_hits():
+    """An account's scene and transcript indexes are made only once it has
+    scenes or transcripts (a library of photos never does): a search there
+    finds nothing, rather than failing (a logged traceback every search)."""
+    qw = _make_client()
+    missing = _answer(404, b'{"message": "could not find indexes matching the IDs"}')
+    with patch("src.server.search.quickwit_client.requests.post", return_value=missing):
+        assert qw.search_tenant_transcripts("tnt_1", "text:hello") == []
+        assert qw.search_tenant("tnt_1", "hello") == []
+
+
+@pytest.mark.fast
+def test_any_other_quickwit_failure_still_raises():
+    qw = _make_client()
+    for status in (400, 500):
+        with patch("src.server.search.quickwit_client.requests.post", return_value=_answer(status, b"{}")), \
+                pytest.raises(requests.HTTPError):
+            qw.search_tenant_transcripts("tnt_1", "text:hello")
