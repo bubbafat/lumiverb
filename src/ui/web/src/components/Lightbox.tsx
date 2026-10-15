@@ -1703,7 +1703,7 @@ export function Lightbox({
                     ) : null}
                     {(detail?.sha256 || asset.sha256) && (
                       <div className="flex">
-                        <dt className="w-2/5 text-xs text-gray-500">SHA256</dt>
+                        <dt className="w-2/5 text-xs text-gray-500">Content hash</dt>
                         <dd
                           className="w-3/5 font-mono text-xs text-gray-400"
                           title={

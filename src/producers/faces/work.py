@@ -21,7 +21,7 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
     preview the API stores on this machine is the clip as it was hashed
     (changed content is a new clip): read there, nothing is made or kept."""
     from src.processing.proxy.proxy_gen import generate_face_proxy
-    from src.processing.workers.exif_extract import compute_sha256
+    from src.shared.content_hash import matches
     from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
 
     asset_id, expected = item["asset_id"], item.get("sha256")
@@ -41,8 +41,11 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
         return True  # never read outside the library: the server's proxy instead
     if not source.is_file():
         return True
-    if expected and compute_sha256(source) != expected:
-        return False
+    try:
+        if expected and not matches(source, expected):
+            return False
+    except OSError:
+        return False  # couldn't be read: as a changed file, it waits for its scan
     try:
         proxy_cache.put(asset_id, generate_face_proxy(source))
         if expected:

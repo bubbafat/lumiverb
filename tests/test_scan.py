@@ -183,7 +183,7 @@ def test_only_what_the_plan_asks_about_is_read_and_its_hashes_go_in_walk_order(r
             read.append(f"{path.parent.name}/{path.name}")
         return _sha(path.name)
 
-    with patch("src.processing.scan.compute_sha256", side_effect=sha_of):
+    with patch("src.processing.scan.content_hash", side_effect=sha_of):
         stats = _scan(server, root, concurrency=4)
 
     assert sorted(read) == sorted(asked)  # the unchanged aren't read
@@ -206,14 +206,14 @@ def test_hashing_keeps_at_most_twice_its_concurrency_waiting(tmp_path: Path) -> 
     files = [{"rel_path": f"f{n:02}.jpg"} for n in range(20)]
     for f in files:
         (tmp_path / f["rel_path"]).write_bytes(b"x")
-    with patch("src.processing.scan.compute_sha256", side_effect=slow):
+    with patch("src.processing.scan.content_hash", side_effect=slow):
         hashes = _hashed(tmp_path, files, 2)
         threading.Timer(0.2, release.set).start()
         first = next(hashes)
         assert len(started) <= 4  # never every file submitted at once
         rest = list(hashes)
     assert [f["rel_path"] for f, _ in [first, *rest]] == [f["rel_path"] for f in files]
-    assert all(sha == _sha(f["rel_path"]) for f, sha in [first, *rest])
+    assert all(hashed == (_sha(f["rel_path"]), None) for f, hashed in [first, *rest])
 
 
 def test_a_file_that_cant_be_read_is_left_as_it_is(root: Path) -> None:
@@ -224,7 +224,7 @@ def test_a_file_that_cant_be_read_is_left_as_it_is(root: Path) -> None:
         _photo(root, rel)
     server = FakeScans(plan={"known.jpg": ("hash", "changed", "ast_k"), "removed.jpg": ("hash", "removed", None),
                              "moved.jpg": ("hash", "move", None)}, gone=1)
-    with patch("src.processing.scan.compute_sha256", return_value=None):
+    with patch("src.processing.scan.content_hash", side_effect=OSError("unreadable")):
         stats = _scan(server, root, allow_moves=True)
     assert server.hashed() == []
     assert stats.unchanged == 1
@@ -258,7 +258,7 @@ def test_what_the_server_says_to_upload_is_uploaded_after_the_finish(root: Path)
         "touched.jpg": ("hash", "changed", "ast_t"),
     }, decide=lambda rel, sha: decided[rel], gone=1)
 
-    with patch("src.processing.scan.compute_sha256", side_effect=lambda p: _sha(p.name)):
+    with patch("src.processing.scan.content_hash", side_effect=lambda p: _sha(p.name)):
         stats = _scan(server, root, allow_moves=True)
 
     # New first, then changed, each in walk order; never before the finish

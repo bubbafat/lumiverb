@@ -17,14 +17,14 @@ For each asset:
 | File | Contents | Purpose |
 |------|----------|---------|
 | `{asset_id}` | JPEG image bytes (no extension) | 2048px max long edge proxy image |
-| `{asset_id}.sha` | 64-char hex SHA-256 string (UTF-8, no newline) | SHA-256 of the source file at time of proxy generation |
+| `{asset_id}.sha` | The source file's content hash (UTF-8, no newline): 64 hex, or `fp1:` and 64 for a file over 64 MiB | The source's content hash at time of proxy generation (`src/shared/content_hash.py`) |
 
 ## Operations
 
 ### Write (during scan)
 
 1. Generate 2048px JPEG proxy from source file
-2. Compute SHA-256 of source file
+2. Compute the source file's content hash (`src/shared/content_hash.py`)
 3. Atomic write proxy: write to temp file in same directory, then `rename()` to `{asset_id}`
 4. Atomic write sidecar: write to temp file, then `rename()` to `{asset_id}.sha`
 5. Sidecar written **after** proxy — a reader that sees a `.sha` file can trust the proxy is complete

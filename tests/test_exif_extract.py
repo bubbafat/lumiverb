@@ -1,6 +1,5 @@
 """Fast tests for EXIF extraction utilities."""
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -11,22 +10,6 @@ def test_extract_exif_missing_file() -> None:
     from src.processing.workers.exif_extract import extract_exif
 
     assert extract_exif(Path("/nonexistent/file.jpg")) == {}
-
-
-@pytest.mark.fast
-def test_compute_sha256(tmp_path: Path) -> None:
-    from src.processing.workers.exif_extract import compute_sha256
-
-    f = tmp_path / "test.bin"
-    f.write_bytes(b"hello world")
-    assert compute_sha256(f) == hashlib.sha256(b"hello world").hexdigest()
-
-
-@pytest.mark.fast
-def test_compute_sha256_missing_file() -> None:
-    from src.processing.workers.exif_extract import compute_sha256
-
-    assert compute_sha256(Path("/nonexistent")) is None
 
 
 @pytest.mark.fast

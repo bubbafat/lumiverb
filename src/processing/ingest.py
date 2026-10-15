@@ -17,8 +17,8 @@ from src.processing.api import ApiClient
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, has_control_character, is_path_included_merged
 from src.shared.io_utils import UnsafeRelPathError, resolve_source_path, stat_if_present
+from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.processing.workers.exif_extract import (
-    compute_sha256,
     extract_exif,
     parse_aperture,
     parse_flash_fired,
@@ -53,17 +53,32 @@ def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
     return generate_proxy_bytes(source_path)
 
 
-def _build_exif_payload(source_path: Path, media_type: str) -> dict:
-    """Extract EXIF and build the JSON payload for the ingest endpoint."""
+def _content_hash(source_path: Path) -> str | None:
+    try:
+        return content_hash(source_path)
+    except OSError as exc:
+        logger.warning("Couldn't hash %s: %s", source_path, exc)
+        return None
+
+
+def _build_exif_payload(source_path: Path, media_type: str, *, sha256: str | None = None,
+                        legacy_sha256: str | None = None, whole_too: bool = False) -> dict:
+    """Extract EXIF and build the JSON payload for the ingest endpoint, with
+    the file's content hash (sha256: already known, else read now). The
+    whole file's SHA-256 goes beside an fp1 when it's known or whole_too asks
+    for it (its scan's plan: legacy, src/shared/content_hash.py)."""
     from src.processing.workers.exif_extract import capture_facts, parse_duration
 
     exif_data = extract_exif(source_path)
-    sha256 = compute_sha256(source_path)
+    sha256 = sha256 or _content_hash(source_path)
+    if sampled(sha256) and whole_too and legacy_sha256 is None:
+        legacy_sha256 = whole_file_sha256(source_path)
     gps_lat, gps_lon = parse_gps(exif_data)
     duration_sec = parse_duration(exif_data, media_type == "video")
 
     return {
         "sha256": sha256,
+        **({"legacy_sha256": legacy_sha256} if sampled(sha256) and legacy_sha256 else {}),
         "exif": exif_data,
         "camera_make": exif_data.get("Make"),
         "camera_model": exif_data.get("Model"),

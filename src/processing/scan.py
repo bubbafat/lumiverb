@@ -72,7 +72,7 @@ from src.processing.ingest import (
 from src.processing.proxy.proxy_cache import ProxyCache
 from src.processing.roots import local_library_root, reachable_root
 from src.processing.video.probe import probe_video
-from src.processing.workers.exif_extract import compute_sha256
+from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.io_utils import (
     UnsafeRelPathError,
     check_rel_path,
@@ -199,6 +199,13 @@ def _made(artifact: str, source_sha256: str | None) -> dict:
     return producer_lineage(artifact, effective_settings(artifact), source_sha256)
 
 
+def _hashes(f: dict) -> dict:
+    """What an upload's EXIF payload takes of the file's hashes: those its
+    hashing found, and whether its plan asks for the whole file's too."""
+    return {"sha256": f.get("source_sha256"), "legacy_sha256": f.get("legacy_sha256"),
+            "whole_too": bool(f.get("_plan", {}).get("legacy"))}
+
+
 def _scan_one(
     *,
     client: ApiClient,
@@ -229,11 +236,8 @@ def _scan_one(
         # 1. Generate 2048px JPEG proxy
         jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
 
-        # 2. Extract EXIF (includes SHA computation, but we already have it)
-        exif_payload = _build_exif_payload(source_path, f["media_type"])
-        # Use the SHA we already computed during classification
-        if f.get("source_sha256"):
-            exif_payload["sha256"] = f["source_sha256"]
+        # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
+        exif_payload = _build_exif_payload(source_path, f["media_type"], **_hashes(f))
 
         # 3. Convert to WebP for server upload
         webp_bytes = _jpeg_to_webp(jpeg_bytes)
@@ -307,10 +311,8 @@ def _scan_one_video(
         # 1. Extract poster frame as JPEG proxy
         jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
 
-        # 2. Extract EXIF
-        exif_payload = _build_exif_payload(source_path, "video")
-        if f.get("source_sha256"):
-            exif_payload["sha256"] = f["source_sha256"]
+        # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
+        exif_payload = _build_exif_payload(source_path, "video", **_hashes(f))
 
         # 3. Generate 10-second preview
         preview_bytes = _generate_video_preview(source_path)
@@ -587,23 +589,28 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
     return counts, plan
 
 
-def _sha_of(root_path: Path, rel_path: str) -> str | None:
-    """The file's SHA-256, or None when it can't be read."""
+def _sha_of(root_path: Path, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
+    """The file's content hash, and the whole file's SHA-256 when asked for
+    and that isn't it (a file over 64 MiB, its plan's legacy), or None when
+    it can't be read."""
     try:
-        return compute_sha256(resolve_source_path(root_path, rel_path))
+        path = resolve_source_path(root_path, rel_path)
+        sha = content_hash(path)
+        return sha, whole_file_sha256(path) if whole_too and sampled(sha) else None
     except (OSError, UnsafeRelPathError) as exc:
         logger.warning("Can't read %s: %s", rel_path, exc)
         return None
 
 
-def _hashed(root_path: Path, files: list[dict], concurrency: int) -> Iterator[tuple[dict, str | None]]:
-    """Each file with its SHA-256 (None: it couldn't be read), in the order
-    given, read `concurrency` at a time and never more than concurrency * 2
-    waiting."""
+def _hashed(root_path: Path, files: list[dict], concurrency: int
+            ) -> Iterator[tuple[dict, tuple[str, str | None] | None]]:
+    """Each file with its hashes (_sha_of; None: it couldn't be read), in the
+    order given, read `concurrency` at a time and never more than
+    concurrency * 2 waiting."""
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="hash") as pool:
         waiting: deque[tuple[dict, Future]] = deque()
         for f in files:
-            waiting.append((f, pool.submit(_sha_of, root_path, f["rel_path"])))
+            waiting.append((f, pool.submit(_sha_of, root_path, f["rel_path"], bool(f.get("_plan", {}).get("legacy")))))
             if len(waiting) >= concurrency * 2:
                 done, fut = waiting.popleft()
                 yield done, fut.result()
@@ -679,7 +686,9 @@ def _hash_and_decide(
         if moves_now and any(not f["_plan"]["asset_id"] for f in batch) and _storage_gone(library):
             return False
         sent = {f["rel_path"]: f for f in batch}
-        body = {"files": [{"rel_path": f["rel_path"], "sha256": f["source_sha256"]} for f in batch]}
+        body = {"files": [{"rel_path": f["rel_path"], "sha256": f["source_sha256"],
+                           **({"legacy_sha256": f["legacy_sha256"]} if f.get("legacy_sha256") else {})}
+                          for f in batch]}
         for d in _post_again_if_taken(client, f"/v1/scans/{scan_id}/hashes", body)["files"]:
             _take(sent[d["rel_path"]], d, work, stats)
         return True
@@ -688,12 +697,12 @@ def _hash_and_decide(
     progress = _progress(console, "Hashing")
     with progress, contextlib.closing(_hashed(root_path, to_hash, concurrency)) as hashes:
         tid = progress.add_task("Hashing", total=len(to_hash))
-        for f, sha in hashes:
+        for f, hashed in hashes:
             progress.advance(tid)
-            if sha is None:
+            if hashed is None:
                 _unread(f, work, stats)
                 continue
-            f["source_sha256"] = sha
+            f["source_sha256"], f["legacy_sha256"] = hashed
             batch.append(f)
             if len(batch) == FILES_PER_CALL:
                 if not decide(batch):
@@ -1021,13 +1030,13 @@ def _run(
         if action in ("upload", "hash") and waiting.get(f["rel_path"]) == _as_seen(f):
             stats.waiting_paths.append(f["rel_path"])  # unchanged since it failed: its retry tries it
             continue
+        f["_plan"] = planned
         if action == "upload" and planned["asset_id"]:  # a video's preview never arrived, or --force
             f["asset_id"] = planned["asset_id"]
             work.changed.append(f)
         elif action == "upload":
             work.new.append(f)
         elif action == "hash":
-            f["_plan"] = planned
             to_hash.append(f)
         elif action == "unchanged":
             f["asset_id"] = planned["asset_id"]

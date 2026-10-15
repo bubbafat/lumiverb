@@ -14,6 +14,11 @@ The rules are today's scanner's (src/processing/scan.py), each moved here:
 - unchanged when size and modified time match the clip at the path; hashed
   when they don't, or for --thorough; uploaded for --force, and when a
   video's preview never arrived (_split_files, _preview_missing);
+- content is known by its content hash (src/shared/content_hash.py): a file
+  over 64 MiB by an fp1 of 3 MiB of it. A clip whose hash was made before
+  fp1 (the whole file's) is hashed again when it's unchanged, and its hash
+  swapped (rekey); until then a file its size is hashed whole too, so it's
+  compared with what was (legacy);
 - a file a person trashed, archived or deleted for good is skipped when its
   size and time are the ones removed, or its content is (_skipped); unless
   the scan adds them anyway (force_add, `lumiverb scan --force-add`, a
@@ -53,6 +58,7 @@ from ulid import ULID
 
 from src.server.models.tenant import ScanSession
 from src.server.repository.tenant import AssetRepository
+from src.shared.content_hash import FULL_UP_TO, PREFIX, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.utils import utcnow
 
@@ -98,6 +104,17 @@ class Decided:
     decision: str  # unchanged | upload | moved | move_candidate | move_skipped | skipped | restored
     asset_id: str | None = None
     moved_from: str | None = None
+    legacy_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class Hashed:
+    """A file's content hash as a scan sent it, with the whole file's
+    SHA-256 when the plan asked for that too (legacy)."""
+
+    rel_path: str
+    sha256: str
+    legacy_sha256: str | None = None
 
 
 def media_type_of(rel_path: str) -> str | None:
@@ -109,6 +126,13 @@ def media_type_of(rel_path: str) -> str | None:
 def in_scope(rel_path: str, scope: str) -> bool:
     """A file in the scan's folder ("" is the whole library)."""
     return not scope or rel_path.startswith(scope + "/")
+
+
+def _whole_file(alias: str) -> str:
+    """SQL: the row's content hash was made before fp1, of a file fp1 hashes
+    now (content_hash.whole_file)."""
+    return (f"({alias}.file_size > {FULL_UP_TO} AND {alias}.sha256 IS NOT NULL"
+            f" AND {alias}.sha256 NOT LIKE '{PREFIX}%')")
 
 
 # Clips of the scan's library, folder and media type that it didn't find: in
@@ -145,9 +169,18 @@ REMOVED = """
 # Each found file's plan, as "action/reason". The clip in sight at the path
 # comes first (a removed file's path is never one a clip holds: that file is
 # the clip's). Settling and empty files, and those of another media type, are
-# present but get no plan.
+# present but get no plan. An unchanged clip whose hash was made before fp1
+# is hashed again (rekey: its fp1 takes the place of its whole file's hash).
+# A file to hash or upload whose size a clip or file deleted for good of the
+# library has, its hash made before fp1, is hashed whole too (legacy): it's
+# compared with what was.
 _PLAN = f"""
     WITH gone AS ({GONE}),
+    whole_sizes AS (
+        SELECT a.file_size FROM assets a WHERE a.library_id = :library_id AND {_whole_file('a')}
+        UNION
+        SELECT i.file_size FROM ignored_files i WHERE i.library_id = :library_id AND {_whole_file('i')}
+    ),
     removed AS (
         SELECT f.rel_path,
                bool_or(r.sha256 IS NULL) AS unknown,
@@ -166,7 +199,8 @@ _PLAN = f"""
                        WHEN a.media_type = 'video' AND a.video_preview_key IS NULL THEN 'upload/preview_missing'
                        WHEN :force THEN 'upload/force'
                        WHEN :thorough THEN 'hash/thorough'
-                       WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime THEN 'unchanged/'
+                       WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime
+                           THEN CASE WHEN {_whole_file('a')} THEN 'hash/rekey' ELSE 'unchanged/' END
                        ELSE 'hash/changed' END
                    WHEN (r.unknown OR r.as_removed) AND NOT :force_add THEN 'skipped/removed'
                    WHEN r.rel_path IS NOT NULL THEN 'hash/removed'
@@ -181,7 +215,9 @@ _PLAN = f"""
     )
     UPDATE scan_found f
     SET action = split_part(p.kind, '/', 1), reason = NULLIF(split_part(p.kind, '/', 2), ''),
-        asset_id = p.asset_id
+        asset_id = p.asset_id,
+        legacy = split_part(p.kind, '/', 1) IN ('upload', 'hash') AND p.kind <> 'hash/rekey'
+                 AND f.file_size IN (SELECT w.file_size FROM whole_sizes w)
     FROM planned p
     WHERE f.scan_id = :scan_id AND f.rel_path = p.rel_path AND p.kind IS NOT NULL
 """
@@ -191,7 +227,7 @@ _POSTED = f"""
     WITH posted AS (
         SELECT * FROM unnest(CAST(:paths AS text[]), CAST(:shas AS text[])) WITH ORDINALITY AS p(rel_path, sha256, ord)
     )
-    SELECT p.rel_path, p.sha256, f.action, f.decision, f.asset_id AS decided_id, f.moved_from,
+    SELECT p.rel_path, p.sha256, f.action, f.reason, f.decision, f.asset_id AS decided_id, f.moved_from,
            f.file_size, f.file_mtime,
            a.asset_id, a.sha256 AS asset_sha256,
            COALESCE(a.file_size <> f.file_size OR a.file_mtime IS DISTINCT FROM f.file_mtime, false) AS stat_differs,
@@ -311,16 +347,17 @@ def counts(session: Session, scan: ScanSession) -> dict[str, int]:
 
 
 def page(session: Session, scan_id: str, actions: tuple[str, ...], after: str | None, limit: int) -> list[dict]:
-    """A page of the plan, by rel_path: each file's action, reason and clip."""
+    """A page of the plan, by rel_path: each file's action, reason and clip,
+    and whether to send the whole file's SHA-256 too (legacy)."""
     return [dict(r) for r in session.execute(text("""
-        SELECT rel_path, action, reason, asset_id FROM scan_found
+        SELECT rel_path, action, reason, asset_id, legacy FROM scan_found
         WHERE scan_id = :scan_id AND action = ANY(CAST(:actions AS text[]))
           AND (CAST(:after AS text) IS NULL OR rel_path > :after)
         ORDER BY rel_path LIMIT :limit
     """), {"scan_id": scan_id, "actions": list(actions), "after": after, "limit": limit}).mappings()]
 
 
-def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *,
+def decide(session: Session, scan: ScanSession, posted: list[Hashed], *,
            follow_moves: bool) -> list[Decided]:
     """Decide each file from its content, in the order sent (no commit):
 
@@ -335,16 +372,26 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
       sent, applied now when the scan applies moves (apply_moves), a
       candidate when it asks first; else uploaded.
 
+    Hashes made before fp1 are swapped for the fp1s sent first (rekey), so
+    each comparison is of two fp1s.
+
     A dry run decides and changes nothing. A file already moved, skipped or
     restored keeps its decision. Raises NotPlannedError, before anything
     changes, for files the plan doesn't list; PathTakenError when another
     clip took a move's path meanwhile (send the hashes again: the file is
     then that clip's)."""
-    rows = session.execute(text(_POSTED), {**_params(scan), "paths": [p for p, _ in posted],
-                                           "shas": [s for _, s in posted]}).mappings().all()
+    params = {**_params(scan), "paths": [h.rel_path for h in posted], "shas": [h.sha256 for h in posted]}
+    rows = session.execute(text(_POSTED), params).mappings().all()
     unknown = [r["rel_path"] for r in rows if r["action"] is None]
     if unknown:
         raise NotPlannedError(unknown)
+    swaps = _swaps(rows, {h.rel_path: h.legacy_sha256 for h in posted if h.legacy_sha256})
+    # A dry run's swaps last only while it decides.
+    swapping = session.begin_nested() if swaps and scan.dry_run else None
+    if swaps:
+        rekey(session, scan.library_id, swaps)
+        rows = session.execute(text(_POSTED), params).mappings().all()
+    legacy = {h.rel_path: h.legacy_sha256 for h in posted}
     decided: list[Decided] = []
     stats: list[dict] = []
     matching: list[Decided] = []
@@ -372,6 +419,10 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
             matching.append(d)
         decided.append(d)
     _match_moves(session, scan, matching)
+    if swapping is not None:
+        swapping.rollback()
+    for d in decided:
+        d.legacy_sha256 = legacy.get(d.rel_path)
     if not scan.dry_run:
         _add_anyway(session, scan.library_id, adding)
         moving = [d for d in matching if d.decision == "moved"]
@@ -380,6 +431,57 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
         record_stats(session, stats)
     _record(session, scan.scan_id, decided)
     return decided
+
+
+def _swaps(rows, legacy: dict[str, str]) -> list[tuple[str, str, int]]:
+    """The hashes made before fp1 that the fp1s sent take the place of, as
+    (whole file's SHA-256, fp1, size): the whole file's hash sent beside its
+    fp1 (the plan asked, legacy), and an unchanged clip's own hash (the plan
+    asked for its fp1, rekey: as a scan takes a clip whose size and modified
+    time are as they were to be unchanged, it takes its content to be)."""
+    swaps: list[tuple[str, str, int]] = []
+    for r in rows:
+        if not sampled(r["sha256"]):
+            continue
+        if r["rel_path"] in legacy:
+            swaps.append((legacy[r["rel_path"]], r["sha256"], r["file_size"]))
+        elif (r["reason"] == "rekey" and r["asset_id"] is not None and not r["stat_differs"]
+              and whole_file(r["asset_sha256"], r["file_size"])):
+            swaps.append((r["asset_sha256"], r["sha256"], r["file_size"]))
+    return swaps
+
+
+def rekey(session: Session, library_id: str, swaps: list[tuple[str, str, int]]) -> None:
+    """Hashes made before fp1 swapped for the fp1s of the same content (no
+    commit): each (whole file's SHA-256, fp1, file size) in the library's
+    clips of that size, in any state, with their lineage's sources, and its
+    files deleted for good. The fp1 is of the content the whole file's hash
+    names, so every comparison comes out as it did; nothing is stale, and no
+    clip's updated_at moves (a scan under way still takes it as it was)."""
+    swaps = [s for s in swaps if whole_file(s[0], s[2]) and sampled(s[1])]
+    if not swaps:
+        return
+    params = {"library_id": library_id, "olds": [s[0] for s in swaps], "news": [s[1] for s in swaps],
+              "sizes": [s[2] for s in swaps]}
+    session.execute(text("""
+        WITH k AS (SELECT * FROM unnest(CAST(:olds AS text[]), CAST(:news AS text[]), CAST(:sizes AS bigint[]))
+                   AS k(old, new, size)),
+        swapped AS (
+            UPDATE assets a SET sha256 = k.new FROM k
+            WHERE a.library_id = :library_id AND a.sha256 = k.old AND a.file_size = k.size
+            RETURNING a.asset_id, k.old, k.new
+        )
+        UPDATE artifact_lineage l SET source_sha256 = s.new FROM swapped s
+        WHERE l.asset_id = s.asset_id AND l.source_sha256 = s.old
+    """), params)
+    # A path's file deleted for good is remembered once by its content.
+    session.execute(text("""
+        UPDATE ignored_files i SET sha256 = k.new
+        FROM unnest(CAST(:olds AS text[]), CAST(:news AS text[]), CAST(:sizes AS bigint[])) AS k(old, new, size)
+        WHERE i.library_id = :library_id AND i.sha256 = k.old AND i.file_size = k.size
+          AND NOT EXISTS (SELECT 1 FROM ignored_files j
+                          WHERE j.library_id = i.library_id AND j.rel_path = i.rel_path AND j.sha256 = k.new)
+    """), params)
 
 
 def _add_anyway(session: Session, library_id: str, files: list[Decided]) -> None:
@@ -476,13 +578,14 @@ def _record(session: Session, scan_id: str, decided: list[Decided]) -> None:
     if decided:
         session.execute(text("""
             UPDATE scan_found f SET sha256 = d.sha256, decision = d.decision, asset_id = d.asset_id,
-                                    moved_from = d.moved_from
+                                    moved_from = d.moved_from, legacy_sha256 = d.legacy_sha256
             FROM unnest(CAST(:paths AS text[]), CAST(:shas AS text[]), CAST(:decisions AS text[]),
-                        CAST(:ids AS text[]), CAST(:froms AS text[])) AS d(rel_path, sha256, decision, asset_id, moved_from)
+                        CAST(:ids AS text[]), CAST(:froms AS text[]), CAST(:legacy AS text[]))
+                 AS d(rel_path, sha256, decision, asset_id, moved_from, legacy_sha256)
             WHERE f.scan_id = :scan_id AND f.rel_path = d.rel_path
         """), {"scan_id": scan_id, "paths": [d.rel_path for d in decided], "shas": [d.sha256 for d in decided],
                "decisions": [d.decision for d in decided], "ids": [d.asset_id for d in decided],
-               "froms": [d.moved_from for d in decided]})
+               "froms": [d.moved_from for d in decided], "legacy": [d.legacy_sha256 for d in decided]})
 
 
 def move_candidates(session: Session, scan_id: str, limit: int | None = None) -> list[dict]:
@@ -551,17 +654,18 @@ def skipped_page(session: Session, scan: ScanSession, after: str | None, limit: 
     is this file, as the plan and the hashes decided: its content (once
     hashed), its size and time, or one whose content isn't known; of several,
     the first in REMOVED_AS, then one by content. A file whose removal was
-    undone since (its clip restored) isn't listed: it's no longer removed."""
+    undone since (its clip restored) isn't listed: it's no longer removed.
+    Its content is either hash sent (a dry run swaps no hash made before fp1)."""
     return [dict(r) for r in session.execute(text(f"""
         SELECT f.rel_path, m.removed_as, m.asset_id
         FROM scan_found f
         CROSS JOIN LATERAL (
             SELECT r.removed_as, r.asset_id FROM ({REMOVED}) r
             WHERE r.rel_path = f.rel_path
-              AND (r.sha256 IS NULL OR r.sha256 = f.sha256
+              AND (r.sha256 IS NULL OR r.sha256 = f.sha256 OR r.sha256 = f.legacy_sha256
                    OR (r.file_size = f.file_size AND r.file_mtime = f.file_mtime))
             ORDER BY array_position(CAST(:removed_as AS text[]), r.removed_as),
-                     COALESCE(r.sha256 = f.sha256, false) DESC, r.asset_id COLLATE "C"
+                     COALESCE(r.sha256 IN (f.sha256, f.legacy_sha256), false) DESC, r.asset_id COLLATE "C"
             LIMIT 1
         ) m
         WHERE f.scan_id = :scan_id AND COALESCE(f.decision, f.action) = 'skipped'
