@@ -190,3 +190,17 @@ def test_enrich_asks_the_scheduler_and_says_what_it_has_to_do(monkeypatch) -> No
     assert "Faces: 3 to make, 120 to make again, 1 tried again (redo stopped)" in result.output
     result, client = _enrich(monkeypatch, "all", "--all")
     assert client.raw.call_args.kwargs["json"] == {"producer": "all", "scope": "new", "all": True}
+
+
+def test_an_error_that_stops_the_scheduler_is_said_before_it_goes(tmp_path) -> None:
+    # entry() ends the process at once (os._exit), before Python would print
+    # the traceback: a scheduler stopping at start said nothing, every time.
+    code = ("from src.server.scheduler import service\n"
+            "def main():\n"
+            "    raise RuntimeError('a required setting is missing')\n"
+            "service.main = main\n"
+            "service.entry()\n")
+    done = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1
+    assert "scheduler: stopped by an error" in done.stderr
+    assert "RuntimeError: a required setting is missing" in done.stderr
