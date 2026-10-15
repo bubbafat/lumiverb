@@ -7,7 +7,7 @@ alwaysApply: false
 # Lumiverb — CLI Rules
 
 ## The CLI is an API Client Only
-- The CLI never touches the tenant DB, Quickwit, or object storage directly.
+- The CLI never touches the tenant DB or object storage directly.
 - Every operation goes through the API (`/v1/`).
 - The only local state the CLI maintains is a SQLite asset-map cache (SHA256 dedup) —
   this is the one permitted SQLite use in the entire codebase.

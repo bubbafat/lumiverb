@@ -73,12 +73,12 @@ describe("AdminLogsPage", () => {
   it("offers the parts a Mac's log has; Linux's journal has its own", async () => {
     renderPage();
     const parts = await screen.findByRole("group", { name: "Part" });
-    await waitFor(() => expect(parts.textContent).toBe("AllAPIProcessingDatabaseSearchWeb serverService"));
+    await waitFor(() => expect(parts.textContent).toBe("AllAPIProcessingDatabaseWeb serverService"));
     cleanup();
     answer = () => json({ ...FIRST, source: "journal", where: "the journal (lumiverb-api.service)" });
     renderPage();
     const journal = await screen.findByRole("group", { name: "Part" });
-    await waitFor(() => expect(journal.textContent).toBe("AllAPIProcessingSearchUpkeep"));
+    await waitFor(() => expect(journal.textContent).toBe("AllAPIProcessingUpkeep"));
   });
 
   it("asks for one part, problems only, and the text searched", async () => {

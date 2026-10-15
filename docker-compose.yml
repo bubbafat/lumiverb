@@ -1,5 +1,5 @@
 # Local development stack.
-# Starts PostgreSQL (control plane + tenant DB host) and Quickwit.
+# Starts PostgreSQL (control plane + tenant DB host). Search is in it too (ADR-019).
 # The API server and workers run outside Docker during development (uv run).
 #
 # Usage:
@@ -31,23 +31,5 @@ services:
       retries: 10
     restart: unless-stopped
 
-  quickwit:
-    image: quickwit/quickwit:0.8.1
-    container_name: lumiverb-quickwit
-    ports:
-      - "7280:7280"   # production / main
-    volumes:
-      - quickwit_data:/quickwit/qwdata
-    environment:
-      QW_ENABLE_OTLP_ENDPOINT: "false"
-    command: run
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:7280/health/livez || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
 volumes:
   postgres18_data:
-  quickwit_data:

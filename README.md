@@ -41,7 +41,7 @@ them to another drive, Lumiverb working meanwhile, and a library can have a
 folder of its own (its settings).
 
 It's one service that starts again at login: Lumiverb runs its own
-PostgreSQL 18 (with pgvector), Quickwit and nginx, so nothing is shared with
+PostgreSQL 18 (with pgvector, and its full-text search) and nginx, so nothing is shared with
 another PostgreSQL you run. It also brings ffmpeg, exiftool, libvips and
 Python 3.12. Its log is `$(brew --prefix)/var/log/lumiverb.log`, each line
 saying which part wrote it (`api | …`, `scheduler | …`), kept to 50 MB; Admin › Logs shows it. The web app is for that Mac only to begin with; to use it from
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/bubbafat/lumiverb/main/scripts/depl
 ```
 
 It installs everything (PostgreSQL 18 with pgvector, nginx with a
-certificate, Quickwit, Python, Node.js), builds the web app and starts the
+certificate, Python, Node.js), builds the web app and starts the
 services. `--worker` adds the scheduler, which does all the processing. Then
 create your account:
 
@@ -203,11 +203,11 @@ them faster with another GPU, see [AI machines](docs/linux-server.md#6-ai-machin
 │  - Uploads via /v1/ingest   - Web UI (React/TS)         │
 └───────────────┬─────────────────────┬───────────────────┘
                 │                     │
-         ┌──────▼──────┐    ┌─────────▼────────┐
-         │  Tenant DB  │    │  Quickwit Search  │
-         │  (Postgres) │    │  (BM25 index)     │
-         │  per tenant │    │  per model ver    │
-         └─────────────┘    └──────────────────┘
+         ┌──────▼──────────────────────────────▼──────┐
+         │  Tenant DB (Postgres) per account          │
+         │  clips, people, projects, and text search  │
+         │  (full-text, ADR-019) and pgvector         │
+         └────────────────────────────────────────────┘
 ```
 
 Two databases per deployment:
@@ -247,7 +247,7 @@ cp .env.example .env
 
 ```bash
 docker compose up -d
-# Postgres on :5432, Quickwit on :7280
+# Postgres on :5432
 # Wait for healthchecks to pass (~15s)
 docker compose ps
 ```
@@ -329,7 +329,7 @@ curl -G http://localhost:8000/v1/query \
 │   ├── video/                 # FFmpeg pipeline, scene segmentation
 │   ├── metadata/              # EXIF, sharpness, face detection
 │   ├── ai/                    # Vision analysis (Moondream Station)
-│   ├── search/                # Quickwit integration
+│   ├── search/                # Text search in PostgreSQL (ADR-019)
 │   └── core/                  # Config, storage, utilities
 │
 ├── migrations/
@@ -344,13 +344,9 @@ curl -G http://localhost:8000/v1/query \
 │   └── docker/
 │       └── postgres-init.sql  # pgvector setup on first container start
 │
-├── quickwit/
-│   └── media_scenes_schema.json  # Quickwit index schema
-│
 ├── .cursorrules               # Cursor AI rules — read before coding
 ├── .env.example               # Environment template
 ├── docker-compose.yml         # Local dev infrastructure
-├── docker-compose.dev.yml     # Test Quickwit on port 7281
 └── pyproject.toml
 ```
 
@@ -369,9 +365,6 @@ uv run pytest -m "fast or slow"
 
 # Migration tests
 uv run pytest -m migration
-
-# Search documents against a real Quickwit (starts a throwaway one in Docker)
-uv run pytest -m quickwit
 
 # Everything
 uv run pytest --all-extras

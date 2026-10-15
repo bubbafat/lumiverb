@@ -41,7 +41,7 @@ UNITS = {
     "lumiverb-api.service": "api",
     "lumiverb-scheduler.service": "scheduler",
     "lumiverb-worker.service": "scheduler",  # what the scheduler replaced
-    "lumiverb-quickwit.service": "quickwit",
+    "lumiverb-quickwit.service": "quickwit",  # gone (ADR-019): its old lines
     "lumiverb-upkeep.service": "upkeep",
     "lumiverb-upkeep-daily.service": "upkeep",
 }

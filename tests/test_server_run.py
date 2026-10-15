@@ -6,6 +6,7 @@ runs the scheduler, and stops both cleanly on SIGTERM."""
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import socket
@@ -60,22 +61,20 @@ def test_the_api_is_told_where_launchds_log_is(tmp_path):
 def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp_path):
     migrated = threading.Event()
     env = {"DATA_DIR": str(tmp_path), "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/cp",
-           "PG_BIN": "/pg/bin", "QUICKWIT_BIN": "/qw/quickwit", "QUICKWIT_CONFIG": "/etc/quickwit.yaml",
-           "NGINX_BIN": "/nginx/nginx", "NGINX_CONFIG": "/etc/nginx.conf"}
+           "PG_BIN": "/pg/bin", "NGINX_BIN": "/nginx/nginx", "NGINX_CONFIG": "/etc/nginx.conf",
+           # An older install's env file names Quickwit: never started (ADR-019: search is in PostgreSQL).
+           "QUICKWIT_BIN": "/qw/quickwit", "QUICKWIT_CONFIG": "/etc/quickwit.yaml"}
     children = cli.server_children(env, migrated=migrated, python="/py", cwd=tmp_path)
     # Stopped in reverse: the scheduler first, PostgreSQL (its clients gone) last.
-    assert [c.name for c in children] == ["postgres", "quickwit", "nginx", "api", "scheduler"]
-    postgres, quickwit, nginx, api, scheduler = children
+    assert [c.name for c in children] == ["postgres", "nginx", "api", "scheduler"]
+    postgres, nginx, api, scheduler = children
     assert postgres.argv == ["/pg/bin/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468",
                              "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]
     assert postgres.term_main_only, "the postmaster stops its own backends"
     assert postgres.stop_signal == signal.SIGINT, "a fast shutdown: its clients have gone"
     assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
-    assert quickwit.argv == ["/qw/quickwit", "run", "--config", "/etc/quickwit.yaml"]
-    # Its warnings and errors only, without colour codes (a sixth of the log was its info lines).
-    assert (quickwit.env["NO_COLOR"], quickwit.env["RUST_LOG"]) == ("1", "warn")
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
-    assert all(c.start_after is None for c in (postgres, quickwit, nginx))
+    assert all(c.start_after is None for c in (postgres, nginx))
     assert api.start_after is migrated and scheduler.start_after is migrated
 
 
@@ -84,10 +83,10 @@ def test_each_part_gets_only_the_secrets_it_needs(tmp_path):
     secrets = {"CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/cp",
                "TENANT_DATABASE_URL_TEMPLATE": "postgresql+psycopg2://lumiverb:pw@127.0.0.1:6468/{tenant_id}",
                "ADMIN_KEY": "a", "API_SECRET_KEY": "b", "JWT_SECRET": "c", "SMTP_PASSWORD": "d"}
-    env = {"DATA_DIR": str(tmp_path), "PG_BIN": "/pg/bin", "QUICKWIT_BIN": "/qw", "QUICKWIT_CONFIG": "/q",
-           "NGINX_BIN": "/n", "NGINX_CONFIG": "/c", "HOME": "/Users/x", "PATH": "/usr/bin", **secrets}
-    postgres, quickwit, nginx, api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
-    for child in (postgres, quickwit, nginx):
+    env = {"DATA_DIR": str(tmp_path), "PG_BIN": "/pg/bin", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c",
+           "HOME": "/Users/x", "PATH": "/usr/bin", **secrets}
+    postgres, nginx, api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
+    for child in (postgres, nginx):
         assert not set(secrets) & set(child.env), child.name
         assert (child.env["HOME"], child.env["PATH"]) == ("/Users/x", "/usr/bin")
     # It reads the database, no more (the template: the server's settings require it, the same credentials).
@@ -112,6 +111,37 @@ def test_the_api_and_the_scheduler_can_read_their_settings_from_what_they_are_gi
         assert done.stdout.strip() == "read", f"{child.name}: {done.stderr[-400:]}"
 
 
+@pytest.mark.fast
+def test_what_quickwit_left_goes_at_start_and_only_that(tmp_path, caplog):
+    """An install from before search moved into PostgreSQL (ADR-019): its
+    index and the config init wrote for it go; the env file's lines stay
+    (the admin's), and a second start finds nothing to do."""
+    data, etc = tmp_path / "var", tmp_path / "etc"
+    (data / "quickwit" / "indexes").mkdir(parents=True)
+    (data / "quickwit" / "indexes" / "split").write_bytes(b"x" * 10)
+    (data / "previews").mkdir()
+    etc.mkdir()
+    config = etc / "quickwit.yaml"
+    config.write_text("version: 0.8\nnode_id: lumiverb\nlisten_address: 127.0.0.1\n")
+    env = {"DATA_DIR": str(data), "QUICKWIT_BIN": "/opt/homebrew/opt/quickwit/bin/quickwit",
+           "QUICKWIT_CONFIG": str(config), "QUICKWIT_URL": "http://127.0.0.1:6466"}
+
+    with caplog.at_level(logging.INFO, logger=cli.logger.name):
+        assert cli.forget_quickwit(env, data) == [data / "quickwit", config]
+    assert not (data / "quickwit").exists() and not config.exists()
+    assert (data / "previews").is_dir(), "nothing else in DATA_DIR"
+    assert "Quickwit isn't used any more" in caplog.text and "QUICKWIT_* lines" in caplog.text
+    assert cli.forget_quickwit(env, data) == []  # the next start: nothing to do
+
+
+@pytest.mark.fast
+def test_a_quickwit_config_init_didnt_write_is_left_alone(tmp_path):
+    theirs = tmp_path / "my-quickwit.yaml"
+    theirs.write_text("version: 0.8\nnode_id: someone-elses\n")
+    assert cli.forget_quickwit({"QUICKWIT_CONFIG": str(theirs)}, tmp_path / "var") == []
+    assert theirs.exists()
+
+
 # The formula's service `stop_timeout` (launchd's ExitTimeOut) in
 # bubbafat/homebrew-lumiverb: past it launchd kills the whole service.
 HOMEBREW_STOP_TIMEOUT_SEC = 240
@@ -120,7 +150,7 @@ HOMEBREW_STOP_TIMEOUT_SEC = 240
 @pytest.mark.fast
 def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
     env = {"DATA_DIR": str(tmp_path), "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://l:p@127.0.0.1:6468/c",
-           "PG_BIN": "/pg", "QUICKWIT_BIN": "/qw", "QUICKWIT_CONFIG": "/q", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c"}
+           "PG_BIN": "/pg", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c"}
     # One after another, each at its longest.
     assert sum(c.stop_within for c in cli.server_children(env, python="/py", cwd=tmp_path)) <= HOMEBREW_STOP_TIMEOUT_SEC
 
@@ -227,7 +257,6 @@ def test_run_migrates_serves_and_stops_cleanly(tmp_path):
             "LUMIVERB_API_WORKERS=1",
             "ADMIN_KEY=test-admin-run",
             "JWT_SECRET=test-jwt-run",
-            "QUICKWIT_ENABLED=false",  # whatever a developer's .env.local says
         ]))
         out = tmp_path / "service.log"
         clean_env = {k: v for k, v in os.environ.items() if not k.startswith(("CONTROL_PLANE", "TENANT_DATABASE", "LUMIVERB_", "API_", "DATA_DIR"))}
@@ -305,7 +334,7 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
     lines = [f"CONTROL_PLANE_DATABASE_URL={url}/control_plane", f"TENANT_DATABASE_URL_TEMPLATE={url}/{{tenant_id}}",
              f"DATA_DIR={tmp_path / 'data'}", f"API_PORT={api_port}", "API_LISTEN_HOST=127.0.0.1",
              "LUMIVERB_API_WORKERS=1", "ADMIN_KEY=test-admin-run", "JWT_SECRET=test-jwt-secret-of-at-least-32-bytes",
-             "QUICKWIT_ENABLED=false", f"PG_BIN={postgres_bin()}"]
+             f"PG_BIN={postgres_bin()}"]
     nginx = _nginx_bin()
     if nginx:
         conf = tmp_path / "nginx.conf"

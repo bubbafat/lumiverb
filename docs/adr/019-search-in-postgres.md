@@ -8,8 +8,8 @@ Accepted (Robert, 2026-10-15). Replaces Quickwit as Lumiverb's text search.
 
 | Step | What | Status |
 |------|------|--------|
-| 1 | Search reads and writes the account's database; Quickwit is no longer used (its service still runs) | This change |
-| 2 | Quickwit leaves the install: `lumiverb-server` no longer starts it, `init` no longer configures it, Homebrew no longer installs it, Linux's scripts no longer deploy it; its data folder goes | Next |
+| 1 | Search reads and writes the account's database; Quickwit is no longer used (its service still runs) | Done: #220, v0.1.27 |
+| 2 | Quickwit leaves the install: `lumiverb-server` no longer starts it (an older env file's `QUICKWIT_*` lines are ignored), and its index and the config `init` wrote go at start (`forget_quickwit`); `init` no longer configures it; Homebrew no longer installs it; a Linux update stops and removes its service, binary, config and index, and a new install has none | This change |
 
 ## Context
 

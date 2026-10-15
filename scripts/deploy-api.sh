@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bootstrap the Lumiverb API server on a fresh Ubuntu 22.04+ machine.
 #
-# Installs PostgreSQL, Quickwit, Python/uv, runs migrations, creates systemd
-# units. Does NOT install nginx, Node.js, or build the web UI — use
-# deploy-web.sh for that (same or different machine).
+# Installs PostgreSQL, Python/uv, runs migrations, creates systemd units.
+# Search is PostgreSQL's own (ADR-019): there's no search service. Does NOT
+# install nginx, Node.js, or build the web UI — use deploy-web.sh for that
+# (same or different machine).
 #
 # Usage:
 #   bash scripts/deploy-api.sh --domain api.example.com
@@ -11,7 +12,7 @@
 # Prod (ADR-016 phase 2), a LAN/Tailscale box that shares its ports
 # with other services and runs the scheduler (all processing):
 #   sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 \
-#     --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall \
+#     --pg-port 5434 --api-port 8100 --no-firewall \
 #     --data-dir /mnt/ssd2/lumiverb --worker \
 #     --root-map /Volumes/media-01=/mnt/media-01
 #
@@ -55,7 +56,6 @@ APP_HOST=""
 PG_PORT=""
 PG_VERSION=""
 API_PORT=""
-QW_PORT=""
 NO_FIREWALL=""
 WITH_WORKER=false
 DRY_RUN=false
@@ -77,7 +77,6 @@ while [[ $# -gt 0 ]]; do
     --pg-port)          PG_PORT="${2:?Missing value for --pg-port}"; shift 2 ;;
     --pg-version)       PG_VERSION="${2:?Missing value for --pg-version}"; shift 2 ;;
     --api-port)         API_PORT="${2:?Missing value for --api-port}"; shift 2 ;;
-    --quickwit-port)    QW_PORT="${2:?Missing value for --quickwit-port}"; shift 2 ;;
     --no-firewall)      NO_FIREWALL=true; shift ;;
     --firewall)         NO_FIREWALL=false; shift ;;
     --worker)           WITH_WORKER=true; shift ;;
@@ -86,7 +85,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       echo "Usage: $0 (--domain <FQDN> | --app-host <URL>) [--email <email>] [--tenant <name>] [--data-dir <path>]"
       echo "          [--api-listen-host <ip>] [--api-allow-from <cidr>] [--vision-api-url <url>] [--vision-api-key <key>]"
-      echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>] [--quickwit-port <port>]"
+      echo "          [--pg-port <port>] [--pg-version <major>] [--api-port <port>]"
       echo "          [--no-firewall | --firewall] [--worker] [--root-map <server-prefix>=<local-prefix>]... [--repo <url>] [--branch <ref>] [--dry-run]"
       echo ""
       echo "  --app-host       Base URL people reach Lumiverb at, instead of https://<domain> (e.g. http://192.168.86.166)"
@@ -124,7 +123,6 @@ PG_USER="app"
 PG_DB="control_plane"
 UV_VERSION="0.7.12"
 UV_BIN="/usr/local/bin/uv"
-QUICKWIT_VERSION="0.8.2"
 
 # The env file is root's (600, in a 750 folder): read as anyone else it
 # looks absent, and the defaults would stand in for what's remembered.
@@ -139,13 +137,11 @@ _existing_val() {
 PG_PORT="${PG_PORT:-$(_existing_val PG_PORT)}";        PG_PORT="${PG_PORT:-5432}"
 API_PORT="${API_PORT:-$(_existing_val API_PORT)}";     API_PORT="${API_PORT:-8000}"
 API_LISTEN_HOST="${API_LISTEN_HOST:-$(_existing_val API_LISTEN_HOST)}"; API_LISTEN_HOST="${API_LISTEN_HOST:-127.0.0.1}"
-QW_PORT="${QW_PORT:-$(_existing_val QUICKWIT_PORT)}";  QW_PORT="${QW_PORT:-7280}"
 APP_HOST="${APP_HOST:-$(_existing_val APP_HOST)}"
 [[ -n "$DOMAIN" || -n "$APP_HOST" ]] || fail "Required: --domain <FQDN> (e.g. --domain api.example.com) or --app-host <URL>"
 APP_HOST="${APP_HOST:-https://${DOMAIN}}"
-QW_GRPC_PORT=$((QW_PORT + 1))
 # A rerun without --data-dir must not move storage back to the default:
-# search would come up empty and every artifact would 404.
+# every preview and artifact would 404.
 DATA_DIR="${DATA_DIR_OVERRIDE:-$(_existing_val DATA_DIR)}"; DATA_DIR="${DATA_DIR:-/var/lib/lumiverb}"
 BRANCH="${BRANCH:-$(_existing_val BRANCH)}";             BRANCH="${BRANCH:-main}"
 NO_FIREWALL="${NO_FIREWALL:-$(_existing_val NO_FIREWALL)}"
@@ -174,7 +170,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "PG_PORT=${PG_PORT}"
   echo "API_PORT=${API_PORT}"
   echo "API_LISTEN_HOST=${API_LISTEN_HOST}"
-  echo "QUICKWIT_PORT=${QW_PORT}"
   echo "WORKER=${WITH_WORKER}"
   echo "ROOT_MAPS=${ROOT_MAPS[*]-}"
   exit 0
@@ -258,7 +253,7 @@ step "Creating service user and directories"
 SVC_HOME="/var/lib/lumiverb"
 id -u "$SVC_USER" >/dev/null 2>&1 || useradd --system --shell /usr/sbin/nologin --home "$SVC_HOME" "$SVC_USER"
 
-mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp "$BACKUP_DIR"
+mkdir -p "$SVC_HOME" "$CONF_DIR" "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp "$BACKUP_DIR"
 chown "$SVC_USER":"$SVC_USER" "$SVC_HOME"
 chown root:"$SVC_USER" "$CONF_DIR"
 chmod 750 "$CONF_DIR"
@@ -364,10 +359,6 @@ STORAGE_PROVIDER=local
 DATA_DIR=${DATA_DIR}
 XDG_CACHE_HOME=${DATA_DIR}/cache
 
-# Search
-QUICKWIT_URL=http://127.0.0.1:${QW_PORT}
-QUICKWIT_ENABLED=true
-
 # API
 API_LISTEN_HOST=${API_LISTEN_HOST}
 API_PORT=${API_PORT}
@@ -375,7 +366,6 @@ API_PORT=${API_PORT}
 # What this install uses (remembered for reruns)
 PG_PORT=${PG_PORT}
 PG_VERSION=${PG_VERSION}
-QUICKWIT_PORT=${QW_PORT}
 BRANCH=${BRANCH}
 NO_FIREWALL=${NO_FIREWALL}
 
@@ -391,62 +381,17 @@ LOG_LEVEL=INFO
 # SMTP_PASSWORD=
 # SMTP_FROM=noreply@${DOMAIN:-lumiverb.local}
 ENVEOF
-KEPT="$(awk -F= 'NR == FNR { if (/^[A-Za-z_][A-Za-z0-9_]*=/) ours[$1] = 1; next } !($1 in ours)' \
-  "$ENV_FILE" - <<< "$EARLIER")"
+# What earlier versions wrote for Quickwit, which nothing reads now (ADR-019),
+# isn't kept as if it had been added by hand.
+KEPT="$(awk -F= 'NR == FNR { if (/^[A-Za-z_][A-Za-z0-9_]*=/) ours[$1] = 1; next }
+  !($1 in ours) && $1 !~ /^QUICKWIT_(URL|ENABLED|PORT)$/' "$ENV_FILE" - <<< "$EARLIER")"
 [[ -z "$KEPT" ]] || printf '\n# Added by hand, kept by deploy-api.sh\n%s\n' "$KEPT" >> "$ENV_FILE"
 
 chmod 600 "$ENV_FILE"
-ok "Secrets generated, env written (API on ${API_LISTEN_HOST}:${API_PORT}, Postgres on ${PG_PORT}, Quickwit on ${QW_PORT})"
+ok "Secrets generated, env written (API on ${API_LISTEN_HOST}:${API_PORT}, Postgres on ${PG_PORT})"
 
 # ---------------------------------------------------------------------------
-# 6. Quickwit
-# ---------------------------------------------------------------------------
-step "Installing Quickwit"
-
-if ! command -v quickwit >/dev/null 2>&1; then
-  QW_ARCHIVE="quickwit-v${QUICKWIT_VERSION}-${RUST_TARGET}.tar.gz"
-  QW_TMP="$(mktemp -d)"
-  curl -LsSf "https://github.com/quickwit-oss/quickwit/releases/download/v${QUICKWIT_VERSION}/${QW_ARCHIVE}" \
-    -o "${QW_TMP}/quickwit.tar.gz"
-  tar -xzf "${QW_TMP}/quickwit.tar.gz" -C "$QW_TMP"
-  QW_BIN="$(find "$QW_TMP" -name quickwit -type f -executable | head -1)"
-  [[ -n "$QW_BIN" ]] || fail "Could not find quickwit binary in downloaded archive"
-  install -m 0755 "$QW_BIN" /usr/local/bin/quickwit
-  rm -rf "$QW_TMP"
-fi
-ok "quickwit $(quickwit --version 2>&1 | head -1)"
-
-cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF
-version: 0.8
-node_id: lumiverb
-listen_address: 127.0.0.1
-rest:
-  listen_port: ${QW_PORT}
-grpc_listen_port: ${QW_GRPC_PORT}
-data_dir: ${DATA_DIR}/quickwit
-QWCONF
-chmod 644 "${CONF_DIR}/quickwit.yaml"
-
-cat > /etc/systemd/system/lumiverb-quickwit.service <<UNIT
-[Unit]
-Description=Lumiverb Quickwit
-After=network.target
-
-[Service]
-Type=simple
-User=${SVC_USER}
-Group=${SVC_USER}
-ExecStart=/usr/local/bin/quickwit run --config ${CONF_DIR}/quickwit.yaml
-Restart=on-failure
-RestartSec=5s
-NoNewPrivileges=true
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# ---------------------------------------------------------------------------
-# 7. Clone / update application
+# 6. Clone / update application
 # ---------------------------------------------------------------------------
 step "Deploying application to ${APP_DIR}"
 
@@ -468,7 +413,7 @@ cd "$APP_DIR"
 chown -R "$SVC_USER":"$SVC_USER" "$APP_DIR"
 
 # ---------------------------------------------------------------------------
-# 8. Python dependencies
+# 7. Python dependencies
 # ---------------------------------------------------------------------------
 step "Installing Python dependencies"
 
@@ -478,7 +423,7 @@ sudo -u "$SVC_USER" "$UV_BIN" sync "${EXTRAS[@]}"
 ok "Python venv ready (${EXTRAS[*]})"
 
 # ---------------------------------------------------------------------------
-# 9. Run migrations
+# 8. Run migrations
 # ---------------------------------------------------------------------------
 step "Running database migrations"
 
@@ -495,15 +440,14 @@ sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
 ok "Control plane migrations applied"
 
 # ---------------------------------------------------------------------------
-# 10. systemd units
+# 9. systemd units
 # ---------------------------------------------------------------------------
 step "Installing systemd units"
 
 cat > /etc/systemd/system/lumiverb-api.service <<UNIT
 [Unit]
 Description=Lumiverb API Server
-After=network.target postgresql.service lumiverb-quickwit.service
-Wants=lumiverb-quickwit.service
+After=network.target postgresql.service
 
 [Service]
 Type=simple
@@ -625,9 +569,14 @@ UNIT
 
 systemctl daemon-reload
 ok "systemd units installed"
+# Search is PostgreSQL's own (ADR-019): an earlier install's Quickwit is
+# unused, and the update takes it away.
+if [[ -f /etc/systemd/system/lumiverb-quickwit.service ]]; then
+  warn "Quickwit from an earlier install is still here, unused: sudo bash ${APP_DIR}/scripts/update.sh removes it"
+fi
 
 # ---------------------------------------------------------------------------
-# 11. Firewall
+# 10. Firewall
 # ---------------------------------------------------------------------------
 if [[ "$NO_FIREWALL" == "true" ]]; then
   step "Firewall"
@@ -653,11 +602,11 @@ ok "Firewall active"
 fi
 
 # ---------------------------------------------------------------------------
-# 12. Start services
+# 11. Start services
 # ---------------------------------------------------------------------------
 step "Starting services"
 
-systemctl enable --now lumiverb-quickwit lumiverb-api lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
+systemctl enable --now lumiverb-api lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
 
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then
@@ -672,10 +621,10 @@ else
   warn "API server not responding yet — check: journalctl -u lumiverb-api -n 50"
 fi
 
-systemctl status --no-pager lumiverb-quickwit lumiverb-api || true
+systemctl status --no-pager lumiverb-api || true
 
 # ---------------------------------------------------------------------------
-# 13. Provision default tenant (first run only)
+# 12. Provision default tenant (first run only)
 # ---------------------------------------------------------------------------
 CLI_CONFIG="${SVC_HOME}/.lumiverb/config.json"
 if [[ -f "$CLI_CONFIG" ]] && grep -q '"api_key": *"[^"]' "$CLI_CONFIG"; then
@@ -720,7 +669,7 @@ ok "CLI configured for tenant"
 fi
 
 # ---------------------------------------------------------------------------
-# 14. Scheduler: where library roots are on this machine, then start it
+# 13. Scheduler: where library roots are on this machine, then start it
 # ---------------------------------------------------------------------------
 # The scheduler's own settings (LUMIVERB_* in the env file; never the CLI's
 # config): what an earlier install put in the service user's CLI config is

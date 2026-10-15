@@ -8,6 +8,7 @@ anything, so these run as an ordinary user. LUMIVERB_CONF_DIR stands in for
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -89,8 +90,9 @@ def test_rerun_without_flags_keeps_everything(tmp_path):
     assert s["PG_VERSION"] == "18"
     assert s["PG_PORT"] == "5434"
     assert s["API_PORT"] == "8100"
-    assert s["QUICKWIT_PORT"] == "7290"
     assert s["APP_HOST"] == "http://192.168.86.166"
+    # An earlier install's Quickwit port is nothing to remember: search is PostgreSQL's (ADR-019).
+    assert not [key for key in s if "QUICKWIT" in key]
 
 
 def test_flags_beat_remembered_values(tmp_path):
@@ -127,7 +129,7 @@ def test_earlier_install_without_pg_version_keeps_the_cluster_on_its_port(tmp_pa
 def test_env_file_remembers_the_rerun_settings():
     text = DEPLOY_API.read_text()
     env_block = text.split('cat > "$ENV_FILE" <<ENVEOF', 1)[1].split("ENVEOF", 1)[0]
-    for key in ("DATA_DIR", "PG_PORT", "PG_VERSION", "API_PORT", "QUICKWIT_PORT", "APP_HOST", "BRANCH", "NO_FIREWALL"):
+    for key in ("DATA_DIR", "PG_PORT", "PG_VERSION", "API_PORT", "APP_HOST", "BRANCH", "NO_FIREWALL"):
         assert f"\n{key}=${{" in env_block, f"{key} isn't written to /etc/lumiverb/env"
 
 
@@ -138,7 +140,7 @@ def _write_env(env: Path) -> None:
     block = text[start:text.index('chmod 600 "$ENV_FILE"', start)]
     script = (
         f'ENV_FILE="{env}"; DB_URL=postgresql://app:pw@127.0.0.1:5434; PG_DB=control_plane\n'
-        "ADMIN_KEY=a; API_SECRET_KEY=b; JWT_SECRET=c; DATA_DIR=/mnt/ssd2/lumiverb; QW_PORT=7290\n"
+        "ADMIN_KEY=a; API_SECRET_KEY=b; JWT_SECRET=c; DATA_DIR=/mnt/ssd2/lumiverb\n"
         "API_LISTEN_HOST=127.0.0.1; API_PORT=8100; PG_PORT=5434; PG_VERSION=18; BRANCH=feat/other\n"
         "NO_FIREWALL=true; APP_HOST=http://192.168.86.166; DOMAIN=\n"
         + block
@@ -162,6 +164,18 @@ def test_a_rerun_keeps_settings_added_to_the_env_file_by_hand(tmp_path):
     fresh = tmp_path / "fresh"
     _write_env(fresh)
     assert "kept" not in fresh.read_text()
+
+
+def test_a_rerun_drops_what_earlier_versions_wrote_for_quickwit(tmp_path):
+    # Its own lines from before ADR-019, which nothing reads now: not kept as
+    # if added by hand. What was added by hand still is.
+    env = tmp_path / "env"
+    env.write_text("ADMIN_KEY=a\nQUICKWIT_URL=http://127.0.0.1:7290\nQUICKWIT_ENABLED=true\n"
+                   "QUICKWIT_PORT=7290\nSMTP_HOST=smtp.fastmail.com\n")
+    _write_env(env)
+    text = env.read_text()
+    assert "QUICKWIT" not in text
+    assert text.splitlines().count("SMTP_HOST=smtp.fastmail.com") == 1
 
 
 def test_scheduler_caches_live_in_the_data_dir():
@@ -327,7 +341,7 @@ def test_scheduler_temp_files_go_on_the_data_disk():
 
 def test_a_fresh_install_starts_the_scheduler_not_the_worker():
     text = DEPLOY_API.read_text()
-    start = text.split("# 14. Scheduler", 1)[1]
+    start = text.split("# 13. Scheduler", 1)[1]
     assert "systemctl enable lumiverb-scheduler" in start
     assert "systemctl disable --now lumiverb-worker" in start
     assert "systemctl enable lumiverb-worker" not in text
@@ -1106,3 +1120,254 @@ def test_neither_an_install_nor_an_update_lets_lumiverb_read_the_whole_journal()
     # Logs (src/server/service_log.py), never these scripts (Robert, Oct 11).
     for script in (DEPLOY_API, UPDATE_API, REPO / "scripts" / "update.sh", DEPLOY_VPS):
         assert "systemd-journal" not in script.read_text(), script.name
+
+
+# --- Quickwit leaves the install (ADR-019) -----------------------------------
+# Search is PostgreSQL's own, in each account's database: a new install gets
+# no Quickwit, and an update takes an earlier install's away, nothing else.
+
+
+def test_a_new_install_has_no_quickwit(tmp_path):
+    text = DEPLOY_API.read_text()
+    # Nothing downloaded, configured, made, remembered or started for it.
+    for gone in ("QUICKWIT_VERSION", "quickwit-oss", "quickwit.yaml", "lumiverb-quickwit.service <<",
+                 '"$DATA_DIR"/quickwit', "QW_PORT", "QW_GRPC_PORT", "_existing_val QUICKWIT", "--quickwit-port"):
+        assert gone not in text, gone
+    env_block = text.split('cat > "$ENV_FILE" <<ENVEOF', 1)[1].split("ENVEOF", 1)[0]
+    assert "QUICKWIT" not in env_block
+    api_unit = text.split("Description=Lumiverb API Server", 1)[1].split("UNIT", 1)[0]
+    assert "quickwit" not in api_unit
+    assert [line for line in text.splitlines()
+            if line.startswith(("systemctl enable", "systemctl status")) and "quickwit" in line] == []
+    assert "QUICKWIT_PORT" not in _settings(tmp_path, "--app-host", "http://x")
+    # An old command line's --quickwit-port stops the run before it does anything.
+    out = subprocess.run(["bash", str(DEPLOY_API), "--app-host", "http://x", "--quickwit-port", "7290", "--dry-run"],
+                         capture_output=True, text=True, timeout=30, check=False,
+                         env={**os.environ, "LUMIVERB_CONF_DIR": str(tmp_path / "conf")})
+    assert out.returncode != 0 and "Unknown option: --quickwit-port" in out.stderr
+
+
+@pytest.mark.parametrize("had_it", [True, False], ids=["had-quickwit", "never-had-it"])
+def test_a_rerun_over_an_earlier_quickwit_says_the_update_removes_it(tmp_path, had_it):
+    text = DEPLOY_API.read_text()
+    start = text.index("if [[ -f /etc/systemd/system/lumiverb-quickwit.service ]]")
+    block = text[start:text.index("\nfi\n", start) + 4]
+    units = tmp_path / "units"
+    units.mkdir()
+    if had_it:
+        (units / "lumiverb-quickwit.service").write_text("[Service]\n")
+    script = 'warn() { echo "warn: $1"; }\nAPP_DIR=/opt/lumiverb\n' + block.replace("/etc/systemd/system/", f"{units}/")
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    said = ("warn: Quickwit from an earlier install is still here, unused: "
+            "sudo bash /opt/lumiverb/scripts/update.sh removes it\n")
+    assert out.stdout == (said if had_it else "")
+
+
+# The API's unit as deploy-api.sh wrote it while it installed Quickwit.
+OLD_API_UNIT = """\
+[Unit]
+Description=Lumiverb API Server
+After=network.target postgresql.service lumiverb-quickwit.service
+Wants=lumiverb-quickwit.service
+
+[Service]
+Type=simple
+User=lumiverb
+Group=lumiverb
+WorkingDirectory=/opt/lumiverb
+EnvironmentFile=/etc/lumiverb/env
+Environment=PYTHONUNBUFFERED=1
+Environment=TMPDIR={data}/tmp
+ExecStartPre=-/usr/bin/find {data}/tmp -mindepth 1 -delete
+ExecStart=/opt/lumiverb/.venv/bin/uvicorn src.server.api.main:app --host ${{API_LISTEN_HOST}} --port ${{API_PORT}} --workers 2
+ReadWritePaths={data}
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# Its env file then: Quickwit's settings among the rest.
+OLD_ENV = ("API_PORT=8100\nQUICKWIT_URL=http://127.0.0.1:7290\nQUICKWIT_ENABLED=true\nQUICKWIT_PORT=7290\n"
+           "SMTP_HOST=smtp.fastmail.com\n")
+
+
+def _install_with_quickwit(tmp_path: Path) -> dict[str, Path]:
+    """What deploy-api.sh left while it installed Quickwit, under tmp_path, with
+    things beside each of Quickwit's that must stay."""
+    root = tmp_path / "root"
+    p = {name: root / name for name in ("units", "conf", "data", "bin")}
+    files = {
+        "units/lumiverb-quickwit.service": "[Service]\nExecStart=/usr/local/bin/quickwit run --config "
+                                           "/etc/lumiverb/quickwit.yaml\n",
+        "units/lumiverb-quickwit.service.d/override.conf": "[Service]\nRestartSec=10s\n",
+        "units/lumiverb-scheduler.service": "[Service]\n",
+        "conf/quickwit.yaml": "version: 0.8\nnode_id: lumiverb\n",
+        "conf/env": OLD_ENV,
+        "conf/.pg_password": "pw",
+        "data/quickwit/indexes/lumiverb_assets/01H.split": "index",
+        "data/quickwit-before-0.8/keep": "someone's",
+        "data/previews/a/b.jpg": "jpeg",
+        "data/backups/20261015/control.dump": "dump",
+        "bin/quickwit": "#!/bin/sh\n",
+        "bin/uv": "#!/bin/sh\n",
+        # Another Quickwit, on the PATH but not where deploy-api.sh put its own.
+        "opt/quickwit/bin/quickwit": "#!/bin/sh\n",
+    }
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    (p["units"] / "lumiverb-api.service").write_text(OLD_API_UNIT.format(data=p["data"]))
+    return p
+
+
+def _update_quickwit(tmp_path: Path, p: dict[str, Path], *, data_dir: str | None = None) -> tuple[str, list[str]]:
+    """Run update-api.sh's Quickwit step, then its API-unit step, on `p`;
+    returns what they said and the systemctl calls."""
+    calls = tmp_path / "systemctl-calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    start = text.index('QW_UNIT="')
+    quickwit = text[start:text.index("# ----", start)]
+    api_unit = text.split('step "Updating the API unit"', 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { echo "step: $1"; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }\n'
+        f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
+        f'CONF_DIR="{p["conf"]}"; ENV_FILE="{p["conf"]}/env"\n'
+        f'DATA_DIR="{p["data"] if data_dir is None else data_dir}"\n'
+        + (quickwit + api_unit).replace("/etc/systemd/system/", f"{p['units']}/")
+                               .replace("/usr/local/bin/quickwit", f"{p['bin']}/quickwit")
+    )
+    path = f"{p['units'].parent / 'opt' / 'quickwit' / 'bin'}:{os.environ['PATH']}"
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30,
+                         env={**os.environ, "PATH": path})
+    assert out.returncode == 0, out.stdout + out.stderr
+    return out.stdout + out.stderr, calls.read_text().splitlines()
+
+
+def _tree(root: Path) -> list[str]:
+    return sorted(str(path.relative_to(root)) for path in root.rglob("*"))
+
+
+def _quickwit_s(name: str) -> bool:
+    return (name in ("units/lumiverb-quickwit.service", "conf/quickwit.yaml", "data/quickwit", "bin/quickwit")
+            or name.startswith(("units/lumiverb-quickwit.service.d", "data/quickwit/")))
+
+
+def _deploy_api_unit_section() -> str:
+    """The [Unit] section deploy-api.sh writes for the API now."""
+    text = DEPLOY_API.read_text()
+    return text.split("cat > /etc/systemd/system/lumiverb-api.service <<UNIT\n", 1)[1].split("\n\n", 1)[0]
+
+
+def test_an_update_takes_quickwit_away_and_nothing_else(tmp_path):
+    p = _install_with_quickwit(tmp_path)
+    root = p["units"].parent
+    before = _tree(root)
+    out, calls = _update_quickwit(tmp_path, p)
+    # Its unit, drop-ins, config, index and binary go; nothing beside them does,
+    # in the data dir (a folder named like it included), the config folder or
+    # /usr/local/bin, and no other Quickwit on the PATH.
+    assert _tree(root) == [name for name in before if not _quickwit_s(name)]
+    # Stopped and disabled before its unit goes, then systemd told.
+    assert calls[:2] == ["disable --now lumiverb-quickwit", "daemon-reload"]
+    # The env file is the admin's: its Quickwit settings stay, and the update says once that nothing reads them.
+    assert (p["conf"] / "env").read_text() == OLD_ENV
+    assert [line for line in out.splitlines() if "QUICKWIT_" in line] == [
+        f"ok: QUICKWIT_URL, QUICKWIT_ENABLED, QUICKWIT_PORT in {p['conf']}/env: no longer used, they may be removed"]
+    assert "step: Removing Quickwit (search is in PostgreSQL now)" in out
+    assert "warn" not in out
+    # The API's unit neither waits for Quickwit nor wants it: its [Unit] is a
+    # new install's, the rest as it was.
+    unit, rest = (p["units"] / "lumiverb-api.service").read_text().split("\n\n", 1)
+    assert unit == _deploy_api_unit_section()
+    assert rest == OLD_API_UNIT.format(data=p["data"]).split("\n\n", 1)[1]
+    assert "ok: The API no longer waits for Quickwit" in out
+
+
+def test_a_second_update_has_nothing_to_do_and_says_nothing(tmp_path):
+    p = _install_with_quickwit(tmp_path)
+    _update_quickwit(tmp_path, p)
+    root = p["units"].parent
+    before, unit = _tree(root), (p["units"] / "lumiverb-api.service").read_text()
+    out, calls = _update_quickwit(tmp_path, p)
+    assert out == ""
+    assert not [call for call in calls if "quickwit" in call]
+    assert _tree(root) == before
+    assert (p["units"] / "lumiverb-api.service").read_text() == unit
+
+
+def test_an_install_that_never_had_quickwit_is_left_alone(tmp_path):
+    # A new install's: no Quickwit, an env file that never named it, the API unit deploy-api.sh writes now.
+    p = _install_with_quickwit(tmp_path)
+    root = p["units"].parent
+    for name in ("units/lumiverb-quickwit.service", "conf/quickwit.yaml", "bin/quickwit"):
+        (root / name).unlink()
+    for name in ("units/lumiverb-quickwit.service.d", "data/quickwit"):
+        shutil.rmtree(root / name)
+    (p["conf"] / "env").write_text("API_PORT=8100\n")
+    api_unit = p["units"] / "lumiverb-api.service"
+    old = OLD_API_UNIT.format(data=p["data"])
+    api_unit.write_text(_deploy_api_unit_section() + "\n\n" + old.split("\n\n", 1)[1])
+    before, unit = _tree(root), api_unit.read_text()
+    out, calls = _update_quickwit(tmp_path, p)
+    assert out == ""
+    assert not [call for call in calls if "quickwit" in call]
+    assert _tree(root) == before
+    assert api_unit.read_text() == unit
+
+
+def test_quickwit_s_folder_as_a_link_goes_but_never_what_it_points_to(tmp_path):
+    # Moved to another disk by hand: the link in the data dir goes, nothing on that disk.
+    p = _install_with_quickwit(tmp_path)
+    shutil.rmtree(p["data"] / "quickwit")
+    elsewhere = tmp_path / "other-disk" / "quickwit"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "01H.split").write_text("index")
+    (p["data"] / "quickwit").symlink_to(elsewhere)
+    out, _ = _update_quickwit(tmp_path, p)
+    assert not (p["data"] / "quickwit").is_symlink() and not (p["data"] / "quickwit").exists()
+    assert (elsewhere / "01H.split").read_text() == "index"
+    assert f"ok: Removed {p['data']}/quickwit (its index)" in out
+
+
+def test_without_a_data_dir_no_folder_is_taken(tmp_path):
+    # "${DATA_DIR}/quickwit" with no DATA_DIR would be /quickwit.
+    p = _install_with_quickwit(tmp_path)
+    out, _ = _update_quickwit(tmp_path, p, data_dir="")
+    assert "(its index)" not in out
+    assert (p["data"] / "quickwit" / "indexes" / "lumiverb_assets" / "01H.split").exists()
+    assert not (p["units"] / "lumiverb-quickwit.service").exists()  # the rest still goes
+
+
+@pytest.mark.parametrize(("before", "after"), [
+    (["After=network.target postgresql.service lumiverb-quickwit.service", "Wants=lumiverb-quickwit.service"],
+     ["After=network.target postgresql.service"]),
+    (["After=lumiverb-quickwit.service network.target", "Wants=lumiverb-quickwit.service  postgresql.service"],
+     ["After=network.target", "Wants=postgresql.service"]),
+    # Required, a unit that's gone would keep the API from starting.
+    (["After=network.target lumiverb-quickwit.service postgresql.service", "Requires=lumiverb-quickwit.service"],
+     ["After=network.target postgresql.service"]),
+    (["After=network.target postgresql.service"], ["After=network.target postgresql.service"]),
+], ids=["as-deployed", "edited-by-hand", "required", "already-without"])
+def test_the_api_unit_stops_waiting_for_quickwit(tmp_path, before, after):
+    unit = tmp_path / "lumiverb-api.service"
+    unit.write_text("\n".join(["[Unit]", "Description=Lumiverb API Server", *before]) + "\n\n" + API_UNIT)
+    _update_api_unit(tmp_path, unit)
+    _update_api_unit(tmp_path, unit)  # reruns change nothing
+    head, rest = unit.read_text().split("\n\n", 1)
+    assert head.splitlines() == ["[Unit]", "Description=Lumiverb API Server", *after]
+    assert rest.startswith("[Service]\n")
+
+
+def test_an_update_no_longer_makes_restarts_or_shows_quickwit(tmp_path):
+    text = UPDATE_API.read_text()
+    assert "Fixing Quickwit sandbox" not in text
+    assert "quickwit" not in text.split('step "Restarting services"', 1)[1]
+    # Taken away before the API's unit stops naming it, and before anything restarts.
+    assert text.index('QW_UNIT="') < text.index('step "Updating the API unit"') < text.index(
+        'step "Restarting services"')
+    # The data-dir step no longer makes its folder.
+    data = tmp_path / "data"
+    _update_data_dir(tmp_path, f"DATA_DIR={data}\n")
+    assert sorted(path.name for path in data.iterdir()) == ["tmp", "worker-tmp"]

@@ -8,7 +8,7 @@ Mac Studio ── DAS (media-01, media-02)
     ▼
 media: /mnt/media-01, /mnt/media-02  ──►  lumiverb-scheduler ──►  API :8100  ◄── nginx :80 ◄── web, Mac, iOS
                                            (every job, ranked;   Postgres 18 :5434
-                                            AI on Settings → AI) Quickwit :7290
+                                            AI on Settings → AI) (data and search)
 ```
 
 ## Ports on this box
@@ -18,7 +18,6 @@ Settled so prod and dev run side by side. Don't use other ports without updating
 | What | Dev (unchanged) | Prod |
 |---|---|---|
 | Postgres | 5433 (Docker, pgvector:pg18) | **5434** (Ubuntu postgresql-18 + pgvector) |
-| Quickwit | 7280 (Docker) | **7290** REST, 7291 gRPC |
 | API | 8000 (uvicorn --reload) | **8100**, 127.0.0.1 only |
 | Web | 5173 (Vite, 127.0.0.1 only) | **80** (nginx, any address, HTTP) |
 
@@ -41,15 +40,15 @@ The first library is `/Volumes/media-01/Media`: about 14,400 photos and videos, 
 From this checkout (`~/src/lumiverb`):
 
 ```bash
-sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --quickwit-port 7290 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01
+sudo bash scripts/deploy-api.sh --app-host http://192.168.86.166 --pg-port 5434 --api-port 8100 --no-firewall --data-dir /mnt/ssd2/lumiverb --worker --root-map /Volumes/media-01=/mnt/media-01
 ```
 
 Add `--dry-run` to see the settings it will use without changing anything. Once installed, it needs sudo too: the remembered settings are in `/etc/lumiverb/env`, which only root can read.
 
 - **Data dir** `/mnt/ssd2/lumiverb` (proposed): 3.4 TB free. Previews, stills and analysis proxies live there. Analysis proxies take about 0.4 GB per hour of footage, plus about 20 MB per hour for each extra stereo audio track. The scheduler's caches go there too (`cache/`), not on the root disk, and its temp files, such as the audio Whisper reads (`worker-tmp/`), not in RAM.
-- **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched.
+- **Postgres 18** comes from Ubuntu's own packages, and the cluster is created on 5434. Resolve's database on 5432 is never touched. Search is PostgreSQL's own, in each account's database (ADR-019): there's no search service to install.
 - **The scheduler** (`--worker` installs it) runs as the `lumiverb` user. Everything outside the data dir and its home is read-only to it, the DAS mounts included, whatever the mount options say.
-- **Reruns are safe.** They keep the ports, the data dir, the branch, the Postgres version, `--no-firewall` (until a run with `--firewall`), the tenant, the keys and any settings added to `/etc/lumiverb/env` by hand, so `sudo bash scripts/deploy-api.sh` alone is enough. `deploy-web.sh` follows the same branch and firewall setting.
+- **Reruns are safe.** They keep the ports, the data dir, the branch, the Postgres version, `--no-firewall` (until a run with `--firewall`), the tenant, the keys and any settings added to `/etc/lumiverb/env` by hand, so `sudo bash scripts/deploy-api.sh` alone is enough. `deploy-web.sh` follows the same branch and firewall setting. A rerun on an install that still has Quickwit leaves it, and says the update removes it (Updating, below).
 
 ### 3. Install the web UI
 
@@ -182,6 +181,7 @@ It pulls the install's branch, then runs `update-api.sh` (packages, migrations, 
 - **A failure** stops the update where it happened and says where; so does Ctrl-C or a dropped SSH session. Fix that and run it again.
 - **One at a time:** a second update while one runs stops at once.
 - **Never merges on the server:** a checkout with commits of its own stops at the pull. A `--branch` older than `update.sh` is refused before anything changes.
+- **Quickwit goes:** search is in PostgreSQL (ADR-019), so an update on an install that still has Quickwit stops and removes `lumiverb-quickwit`, its config (`/etc/lumiverb/quickwit.yaml`), its index (`quickwit` in the data dir: search was already rebuilt in each account's database) and `/usr/local/bin/quickwit`, and the API's unit stops waiting for it. Nothing else in the data dir is touched. The `QUICKWIT_*` lines in `/etc/lumiverb/env` stay (the file is yours): nothing reads them, and the update says once that they may be removed. Later updates, and installs that never had Quickwit, have nothing to do.
 
 An install on a branch that has no `update.sh` gets the script from `main` itself, which moves the install there:
 
@@ -215,7 +215,7 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BAC
 sudo systemctl start lumiverb-api lumiverb-scheduler
 ```
 
-`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while a client is connected to the databases (the API and the scheduler name themselves: lumiverb-api, lumiverb-scheduler; PostgreSQL's own workers, such as autovacuum, don't count, and one closing gets 3 seconds to go), backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, migrates to this version, and marks each account's search index to be remade.
+`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while a client is connected to the databases (the API and the scheduler name themselves: lumiverb-api, lumiverb-scheduler; PostgreSQL's own workers, such as autovacuum, don't count, and one closing gets 3 seconds to go), backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, and migrates to this version. Search is in the restored databases: there's nothing to remake.
 
 ## Where previews live
 

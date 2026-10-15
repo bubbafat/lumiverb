@@ -641,7 +641,7 @@ def go_on_moving(request: Request, session: Annotated[Session, Depends(get_tenan
 
 class LogEntry(BaseModel):
     id: str
-    part: str | None  # api, scheduler, postgres, quickwit, nginx, upkeep, lumiverb-server (a Mac's run)
+    part: str | None  # api, scheduler, postgres, nginx, upkeep, lumiverb-server (a Mac's run)
     level: str  # error | warning | info
     text: str  # a record and the lines continuing it (a traceback)
     at: str | None = None  # the journal's time; a file's lines carry their own

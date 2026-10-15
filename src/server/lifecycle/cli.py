@@ -1,7 +1,7 @@
 """lumiverb-server: look after this machine's Lumiverb server.
 
-    lumiverb-server init --env FILE --data-dir DIR [--pg-bin DIR] [--quickwit-bin FILE --quickwit-config FILE]
-                         [--nginx-bin FILE --nginx-config FILE] [--local-roots] [--reset-on-this-machine]
+    lumiverb-server init --env FILE --data-dir DIR [--pg-bin DIR] [--nginx-bin FILE --nginx-config FILE]
+                         [--local-roots] [--reset-on-this-machine]
     lumiverb-server migrate --env FILE
     lumiverb-server run --env FILE
     lumiverb-server setup --env FILE [--email EMAIL] [--account-name NAME]
@@ -9,21 +9,24 @@
     lumiverb-server backup --env FILE [--before-upgrade]
     lumiverb-server restore --env FILE BACKUP [--yes]
 
-init: the install's env file, Quickwit's config and nginx's, each written
-only if it isn't there (init.py), for Homebrew's post_install.
+init: the install's env file and nginx's config, each written only if it
+isn't there (init.py), for Homebrew's post_install.
 
 migrate: the control plane's and every account's database migrations, as
 scripts/migrate.sh does on Linux.
 
 run: the whole server as one long-running service, for a Mac (Homebrew's
 one service; launchd keeps it up). It starts what the env file names
-(PG_BIN: Lumiverb's own PostgreSQL, made on first start; QUICKWIT_BIN;
-NGINX_BIN), makes the control database if it's missing and migrates,
+(PG_BIN: Lumiverb's own PostgreSQL, made on first start; NGINX_BIN), makes
+the control database if it's missing and migrates,
 waiting for PostgreSQL, then runs the API and the scheduler as a Linux
 install's systemd units do (supervise.py) and posts upkeep as its timers do
 (upkeep.py), until SIGTERM. When `brew upgrade` replaces its install, it
 stops everything and starts the new one, so an upgrade needs no restart.
-A Linux install keeps its systemd units: it doesn't use this.
+A Linux install keeps its systemd units: it doesn't use this. Quickwit is
+never started (ADR-019: search is in PostgreSQL), though an older env file
+names it; what it left (its index, the config init wrote) goes at start
+(forget_quickwit).
 
 setup: the install's first admin, asking for their email and password; the
 same as the web app's setup page (src/server/setup.py), while nobody can
@@ -44,8 +47,8 @@ of those are kept however old).
 
 restore: every database put back from a backup (its folder, or its name in
 the backups folder), with Lumiverb stopped: after backing up what's there
-first, so it can be undone. Then migrated to this version; the search index
-is remade from it once Lumiverb runs. A Mac's own PostgreSQL is started for
+first, so it can be undone. Then migrated to this version; search is in the
+databases put back. A Mac's own PostgreSQL is started for
 the while if the service is stopped.
 
 Which install is always said, never assumed: --env FILE, or
@@ -145,10 +148,39 @@ def data_dir(env: dict[str, str]) -> Path:
 SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE")
 
 
+def forget_quickwit(env: dict[str, str], data: Path) -> list[Path]:
+    """What Quickwit left on an install made before search moved into
+    PostgreSQL (ADR-019): its index (DATA_DIR/quickwit) and the config init
+    wrote for it (the env file's QUICKWIT_CONFIG, only if it's that one).
+    Nothing reads either now. Removed, each said in the log; returns what was."""
+    gone: list[Path] = []
+    index = data / "quickwit"
+    if index.is_dir() and not index.is_symlink():
+        shutil.rmtree(index, ignore_errors=True)
+        if index.exists():
+            logger.warning("Couldn't remove all of %s (Quickwit's index, not used any more)", index)
+        else:
+            gone.append(index)
+    config = Path(env["QUICKWIT_CONFIG"]) if env.get("QUICKWIT_CONFIG") else None
+    if config is not None and config.is_file() and not config.is_symlink():
+        try:
+            written_by_init = "node_id: lumiverb" in config.read_text(errors="replace")
+        except OSError:
+            written_by_init = False
+        if written_by_init:
+            config.unlink(missing_ok=True)
+            gone.append(config)
+    for path in gone:
+        logger.info("Removed %s: Quickwit isn't used any more (search is in PostgreSQL)", path)
+    if gone and any(key.startswith("QUICKWIT_") for key in env):
+        logger.info("The env file's QUICKWIT_* lines aren't read any more: they may be removed")
+    return gone
+
+
 def server_children(env: dict[str, str], *, migrated: threading.Event | None = None, python: str = sys.executable,
                     cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None,
                     log_file: Path | None = None) -> list[Child]:
-    """What the env file names to run (PostgreSQL, Quickwit, nginx), then the
+    """What the env file names to run (PostgreSQL, nginx), then the
     API and the scheduler (once `migrated`), with a Linux install's units'
     environment, restart delays and stop times (deploy-api.sh). They stop in
     reverse: the scheduler first, PostgreSQL last. The scheduler never reads
@@ -168,12 +200,6 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
                                                              env["CONTROL_PLANE_DATABASE_URL"]),
                                    postgres_env(no_secrets), cwd, restart_after=5, stop_within=60, term_main_only=True,
                                    stop_signal=signal.SIGINT))
-    if env.get("QUICKWIT_BIN"):
-        # Warnings and errors only, without colour codes: its info lines were
-        # a sixth of the log (actors starting and stopping).
-        started_first.append(Child("quickwit", [env["QUICKWIT_BIN"], "run", "--config", env["QUICKWIT_CONFIG"]],
-                                   {**no_secrets, "NO_COLOR": "1", "RUST_LOG": env.get("RUST_LOG") or "warn"},
-                                   cwd, restart_after=5, stop_within=30))
     if env.get("NGINX_BIN"):
         started_first.append(Child("nginx", [env["NGINX_BIN"], "-p", f"{data / 'nginx'}/",
                                              "-c", env["NGINX_CONFIG"], "-e", "stderr"],
@@ -260,15 +286,11 @@ def _init(args: argparse.Namespace) -> int:
         return path.absolute() if path else None
 
     choices = Choices(data_dir=full(args.data_dir), pg_port=args.pg_port, api_port=args.api_port,
-                      quickwit_port=args.quickwit_port, web_port=args.web_port, app_host=args.app_host,
-                      pg_bin=full(args.pg_bin), quickwit_bin=full(args.quickwit_bin),
-                      quickwit_config=full(args.quickwit_config), nginx_bin=full(args.nginx_bin),
-                      nginx_config=full(args.nginx_config), local_roots=args.local_roots,
-                      reset_on_this_machine=args.reset_on_this_machine)
-    if (choices.quickwit_bin is None) != (choices.quickwit_config is None) or (
-            (choices.nginx_bin is None) != (choices.nginx_config is None)):
-        raise InstallError("Name each program with its config: --quickwit-bin with --quickwit-config, "
-                           "--nginx-bin with --nginx-config")
+                      web_port=args.web_port, app_host=args.app_host, pg_bin=full(args.pg_bin),
+                      nginx_bin=full(args.nginx_bin), nginx_config=full(args.nginx_config),
+                      local_roots=args.local_roots, reset_on_this_machine=args.reset_on_this_machine)
+    if (choices.nginx_bin is None) != (choices.nginx_config is None):
+        raise InstallError("Name nginx with its config: --nginx-bin with --nginx-config")
     try:
         init(env_file, choices, web_root=args.web_root)
     except InitError as exc:
@@ -383,6 +405,7 @@ def _run(args: argparse.Namespace) -> int:
                                env_file=named.absolute() if named else None, log_file=log_file)
     log.configure()  # launchd's file, rotated, each child's lines named (log.py)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
+    forget_quickwit(env, data)
     stop = threading.Event()
     set_on_signals(stop, (signal.SIGTERM, signal.SIGINT, signal.SIGHUP))
 
@@ -584,7 +607,7 @@ def _restore(args: argparse.Namespace) -> int:
         return 1
     for name in left:
         print(f"  ! {name} isn't in the backup: left as it was, no account lists it now")
-    print(f"✓ Restored the backup from {made}. Start Lumiverb again; search is remade from it in a few minutes.")
+    print(f"✓ Restored the backup from {made}. Start Lumiverb again.")
     return 0
 
 
@@ -610,12 +633,10 @@ def main(argv: list[str] | None = None) -> int:
     # --env before or after the command. A subcommand's default would overwrite
     # one given before it, so it sets --env only when given there.
     init_command = commands.add_parser(
-        "init", help="write the install's env file, Quickwit's config and the nginx site, each only if it isn't there")
+        "init", help="write the install's env file and the nginx site, each only if it isn't there")
     _env_option(init_command, argparse.SUPPRESS)
     init_command.add_argument("--data-dir", type=Path, help="where its data goes (a new env file needs it)")
     init_command.add_argument("--pg-bin", type=Path, help="PostgreSQL's bin folder: run starts Lumiverb's own")
-    init_command.add_argument("--quickwit-bin", type=Path, help="Quickwit: run starts it")
-    init_command.add_argument("--quickwit-config", type=Path, help="Quickwit's config, written here")
     init_command.add_argument("--nginx-bin", type=Path, help="nginx: run starts it")
     init_command.add_argument("--nginx-config", type=Path, help="nginx's config, written here")
     init_command.add_argument("--local-roots", action="store_true",
@@ -624,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
                               help="Forgot password on this machine gives the reset link at once: whoever is at it "
                                    "owns the install (a Mac's, never a server's)")
     init_command.add_argument("--web-root", type=Path, default=WEB_ROOT, help="the web build nginx serves")
-    for port in ("pg", "api", "quickwit", "web"):
+    for port in ("pg", "api", "web"):
         init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")
     init_command.add_argument("--app-host", help="the URL people reach it at, for a new env file")
     _env_option(commands.add_parser("migrate", help="migrate the control plane and every account's database"),

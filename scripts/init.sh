@@ -53,26 +53,13 @@ for line in sys.stdin:
     except Exception:
         pass
 ")
-qw_status=$(docker compose ps --format json 2>/dev/null | python3 -c "
-import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        s = json.loads(line)
-        if s.get('Name') == 'lumiverb-quickwit':
-            print(s.get('State', ''))
-    except Exception:
-        pass
-")
 
-if [[ "$pg_status" != "running" ]] || [[ "$qw_status" != "running" ]]; then
-  echo -e "${RED}✗ lumiverb-postgres and/or lumiverb-quickwit not running.${NC}" >&2
-  echo "Run 'docker compose up -d' first." >&2
+if [[ "$pg_status" != "running" ]]; then
+  echo -e "${RED}✗ lumiverb-postgres not running.${NC}" >&2
+  echo "Run 'docker compose up -d postgres' first." >&2
   exit 1
 fi
-echo -e "${GREEN}✓${NC} lumiverb-postgres and lumiverb-quickwit running"
+echo -e "${GREEN}✓${NC} lumiverb-postgres running"
 
 echo "Waiting for Postgres to be ready (up to 30s)..."
 for i in {1..30}; do

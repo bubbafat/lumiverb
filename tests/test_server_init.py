@@ -1,10 +1,10 @@
-"""lumiverb-server init (src/server/lifecycle/init.py): an install's env file,
-Quickwit's config and nginx's, each written once. Homebrew runs it on every
-upgrade, so what's there is kept, and what it makes agrees with the env
-file. The env file points at Lumiverb's own PostgreSQL and names what
-`lumiverb-server run` starts. Quickwit's config and nginx's server block are
-Linux's scripts' own, to the byte, and the env file names every setting
-Linux's does."""
+"""lumiverb-server init (src/server/lifecycle/init.py): an install's env file
+and nginx's config, each written once. Homebrew runs it on every upgrade, so
+what's there is kept, and what it makes agrees with the env file. The env
+file points at Lumiverb's own PostgreSQL and names what `lumiverb-server run`
+starts. nginx's server block is Linux's script's own, to the byte, and the
+env file names every setting Linux's does. Nothing of Quickwit's (ADR-019:
+search is in PostgreSQL), even for an older env file that names it."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from src.server.lifecycle.init import (
     init,
     nginx_conf,
     nginx_site,
-    quickwit_yaml,
 )
 from src.server.lifecycle.migrate import APP_DIR
 
@@ -47,16 +46,13 @@ def _counter():
 
 
 def _paths(tmp_path: Path) -> dict[str, Path]:
-    return {"env": tmp_path / "etc" / "env", "quickwit": tmp_path / "etc" / "quickwit.yaml",
-            "nginx": tmp_path / "etc" / "nginx.conf"}
+    return {"env": tmp_path / "etc" / "env", "nginx": tmp_path / "etc" / "nginx.conf"}
 
 
 def _homebrews(tmp_path: Path) -> Choices:
     """What the formula's post_install says."""
     paths = _paths(tmp_path)
-    return Choices(data_dir=tmp_path / "var", pg_bin=OPT / "postgresql@18/bin",
-                   quickwit_bin=OPT / "quickwit/bin/quickwit", quickwit_config=paths["quickwit"],
-                   nginx_bin=OPT / "nginx/bin/nginx", nginx_config=paths["nginx"], local_roots=True,
+    return Choices(data_dir=tmp_path / "var", pg_bin=OPT / "postgresql@18/bin", nginx_bin=OPT / "nginx/bin/nginx", nginx_config=paths["nginx"], local_roots=True,
                    reset_on_this_machine=True)
 
 
@@ -74,7 +70,7 @@ def _hand_made(tmp_path: Path, text: str) -> Path:
     return env_file
 
 
-def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
+def test_a_new_install_gets_both_and_they_agree(tmp_path):
     said: list[str] = []
     paths = _install(tmp_path, said=said)
     env = read_env_file(paths["env"])
@@ -85,14 +81,13 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     assert env["TENANT_DATABASE_URL_TEMPLATE"] == "postgresql+psycopg2://lumiverb:secret-4@127.0.0.1:6468/{tenant_id}"
     assert [env["ADMIN_KEY"], env["API_SECRET_KEY"], env["JWT_SECRET"]] == ["secret-1", "secret-2", "secret-3"]
     assert env["DATA_DIR"] == str(tmp_path / "var")
-    assert (env["WEB_PORT"], env["API_PORT"], env["QUICKWIT_PORT"]) == ("6464", "6465", "6466")
-    assert env["QUICKWIT_URL"] == "http://127.0.0.1:6466"
+    assert (env["WEB_PORT"], env["API_PORT"]) == ("6464", "6465")
     assert env["APP_HOST"] == "http://localhost:6464"
-    # What run starts besides the API and the scheduler.
-    assert {key: env[key] for key in ("PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG")} == {
-        "PG_BIN": str(OPT / "postgresql@18/bin"), "QUICKWIT_BIN": str(OPT / "quickwit/bin/quickwit"),
-        "QUICKWIT_CONFIG": str(paths["quickwit"]), "NGINX_BIN": str(OPT / "nginx/bin/nginx"),
+    # What run starts besides the API and the scheduler: no search service (ADR-019).
+    assert {key: env[key] for key in ("PG_BIN", "NGINX_BIN", "NGINX_CONFIG")} == {
+        "PG_BIN": str(OPT / "postgresql@18/bin"), "NGINX_BIN": str(OPT / "nginx/bin/nginx"),
         "NGINX_CONFIG": str(paths["nginx"])}
+    assert not [key for key in env if key.startswith("QUICKWIT")]
 
     # The Mac has the files: the scheduler reads each library folder where it is, said here.
     assert env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}'
@@ -101,8 +96,6 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     assert env["LUMIVERB_RESET_ON_THIS_MACHINE"] == "true"
     assert "# Forgot password, on this machine itself: the reset link at once" in paths["env"].read_text()
 
-    assert "listen_port: 6466\ngrpc_listen_port: 6467\n" in paths["quickwit"].read_text()
-    assert f"data_dir: {tmp_path / 'var' / 'quickwit'}\n" in paths["quickwit"].read_text()
     conf = paths["nginx"].read_text()
     # A whole config of its own: in the foreground, errors to the service's log.
     assert conf.startswith("# Lumiverb's own nginx") and "\ndaemon off;\nerror_log stderr;\n" in conf
@@ -117,9 +110,10 @@ def test_a_new_install_gets_all_three_and_they_agree(tmp_path):
     assert "proxy_pass http://127.0.0.1:6465;" in conf
     assert f"root {tmp_path / 'web'};" in conf
 
-    for folder in ("quickwit", "cache", "tmp", "worker-tmp", "nginx"):
+    for folder in ("cache", "tmp", "worker-tmp", "nginx"):
         assert (tmp_path / "var" / folder).is_dir()
-    assert said == [f"✓ {paths['env']}", f"✓ {paths['quickwit']}", f"✓ {paths['nginx']}"]
+    assert not (tmp_path / "var" / "quickwit").exists()
+    assert said == [f"✓ {paths['env']}", f"✓ {paths['nginx']}"]
 
 
 def test_nginx_s_config_is_linux_s_server_block_inside_it():
@@ -136,18 +130,20 @@ def test_every_upgrade_keeps_what_is_there(tmp_path):
     said: list[str] = []
     _install(tmp_path, said=said)  # Homebrew's post_install, again
     assert {name: path.read_bytes() for name, path in paths.items()} == before, "the secrets above all"
-    assert said == [f"· {paths['env']} kept", f"· {paths['quickwit']} kept", f"· {paths['nginx']} kept"]
+    assert said == [f"· {paths['env']} kept", f"· {paths['nginx']} kept"]
 
 
 def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
     paths = _paths(tmp_path)
+    # An older install's: it still names Quickwit, which nothing writes for now.
+    quickwit = tmp_path / "etc" / "quickwit.yaml"
     env_file = _hand_made(tmp_path, f"DATA_DIR={tmp_path / 'elsewhere'}\nAPI_PORT=9100\nQUICKWIT_PORT=9200\n"
-                                    f"WEB_PORT=9300\nQUICKWIT_CONFIG={paths['quickwit']}\n"
+                                    f"WEB_PORT=9300\nQUICKWIT_CONFIG={quickwit}\n"
                                     f"NGINX_CONFIG={paths['nginx']}\n")
     _install(tmp_path, Choices())
 
     assert env_file.read_text().startswith("DATA_DIR="), "kept as it was"
-    assert "listen_port: 9200\ngrpc_listen_port: 9201\n" in paths["quickwit"].read_text()
+    assert not quickwit.exists() and not (tmp_path / "elsewhere" / "quickwit").exists()
     conf = paths["nginx"].read_text()
     assert f"include {tmp_path / 'elsewhere' / 'nginx' / 'listen.conf'};" in conf
     assert "proxy_pass http://127.0.0.1:9100;" in conf
@@ -158,19 +154,19 @@ def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
 def test_what_it_doesnt_name_isnt_written(tmp_path):
     paths = _install(tmp_path, Choices(data_dir=tmp_path / "var"))
     env = read_env_file(paths["env"])
-    assert not {"PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG", "LUMIVERB_ROOT_MAP",
+    assert not {"PG_BIN", "NGINX_BIN", "NGINX_CONFIG", "LUMIVERB_ROOT_MAP",
                 "LUMIVERB_RESET_ON_THIS_MACHINE"} & env.keys()
-    assert not paths["quickwit"].exists() and not paths["nginx"].exists()
+    assert not paths["nginx"].exists()
 
 
 def test_a_choice_the_env_file_disagrees_with_is_refused_and_nothing_written(tmp_path):
     paths = _install(tmp_path)
-    paths["quickwit"].unlink()
+    paths["nginx"].unlink()
     with pytest.raises(InitError, match=r"says API_PORT='6465' \(you said '7000'\).*edit it, or move it away"):
         _install(tmp_path, Choices(data_dir=tmp_path / "var", api_port=7000))
     with pytest.raises(InitError, match=r"says NGINX_BIN="):
         _install(tmp_path, Choices(nginx_bin=Path("/elsewhere/nginx")))
-    assert not paths["quickwit"].exists()
+    assert not paths["nginx"].exists()
 
 
 def test_a_new_env_file_needs_its_data_dir(tmp_path):
@@ -180,17 +176,17 @@ def test_a_new_env_file_needs_its_data_dir(tmp_path):
 
 
 def test_an_env_file_with_a_data_dir_that_isnt_a_full_path_is_refused(tmp_path, monkeypatch):
-    _hand_made(tmp_path, "DATA_DIR=var\nAPI_PORT=6465\nQUICKWIT_PORT=6466\nWEB_PORT=6464\n")
+    _hand_made(tmp_path, f"DATA_DIR=var\nAPI_PORT=6465\nWEB_PORT=6464\nNGINX_CONFIG={_paths(tmp_path)['nginx']}\n")
     monkeypatch.chdir(tmp_path)
     with pytest.raises(InitError, match=r"^DATA_DIR must be a full path, not var$"):
         _install(tmp_path, Choices())
-    assert not (tmp_path / "var").exists() and not (tmp_path / "etc" / "quickwit.yaml").exists()
+    assert not (tmp_path / "var").exists() and not _paths(tmp_path)["nginx"].exists()
 
 
 def test_an_env_file_without_a_port_it_needs_says_which(tmp_path):
     env_file = _hand_made(tmp_path, f"DATA_DIR={tmp_path / 'var'}\nAPI_PORT=8100\n"
-                                    f"QUICKWIT_CONFIG={_paths(tmp_path)['quickwit']}\n")
-    with pytest.raises(InitError, match=rf"^{re.escape(str(env_file))} has no QUICKWIT_PORT$"):
+                                    f"NGINX_CONFIG={_paths(tmp_path)['nginx']}\n")
+    with pytest.raises(InitError, match=rf"^{re.escape(str(env_file))} has no WEB_PORT$"):
         _install(tmp_path, Choices())
 
 
@@ -215,45 +211,40 @@ def test_the_nginx_site_is_deploy_web_s_to_the_byte():
                       root=Path("/opt/lumiverb/src/ui/web/dist"), upstream="http://127.0.0.1:6465") == linux
 
 
-def test_quickwit_s_config_is_deploy_api_s_to_the_byte():
-    linux = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "${CONF_DIR}/quickwit.yaml" <<QWCONF',
-                     {"QW_PORT": "6466", "QW_GRPC_PORT": "6467", "DATA_DIR": "/srv/lumiverb"})
-    assert quickwit_yaml(Path("/srv/lumiverb"), 6466) == linux
-
-
 def test_the_env_file_names_every_setting_linux_s_does(tmp_path):
     linux = _heredoc(SCRIPTS / "deploy-api.sh", 'cat > "$ENV_FILE" <<ENVEOF', {})
     keys = lambda text: {m.group(1) for m in re.finditer(r"^#? ?([A-Z_]+)=", text, re.MULTILINE)}  # noqa: E731
     # Its Postgres cluster (a Mac's port is in the database URL), checkout and ufw.
     linux_only = {"PG_PORT", "PG_VERSION", "BRANCH", "NO_FIREWALL"}
     # What run starts: a Linux install's systemd units name theirs.
-    mac_only = {"WEB_PORT", "PG_BIN", "QUICKWIT_BIN", "QUICKWIT_CONFIG", "NGINX_BIN", "NGINX_CONFIG",
+    mac_only = {"WEB_PORT", "PG_BIN", "NGINX_BIN", "NGINX_CONFIG",
                 "LUMIVERB_ROOT_MAP",  # a Linux install's map is scheduler-env.py's, after this file
                 "LUMIVERB_RESET_ON_THIS_MACHINE"}  # never a server's: anything on it could reset any account
     ours = keys(_install(tmp_path)["env"].read_text())
     assert ours - mac_only == keys(linux) - linux_only
+    assert not [key for key in keys(linux) if key.startswith("QUICKWIT")], "neither names Quickwit (ADR-019)"
 
 
 def test_the_command_writes_them_with_env_before_or_after(tmp_path, capsys):
     env_file = tmp_path / "env"
     assert cli.main(["init", "--env", str(env_file), "--data-dir", str(tmp_path / "var"),
                      "--pg-bin", str(OPT / "postgresql@18/bin"),
-                     "--quickwit-bin", str(OPT / "quickwit/bin/quickwit"),
-                     "--quickwit-config", str(tmp_path / "quickwit.yaml"), "--local-roots",
+                     "--nginx-bin", str(OPT / "nginx/bin/nginx"),
+                     "--nginx-config", str(tmp_path / "nginx.conf"), "--local-roots",
                      "--reset-on-this-machine"]) == 0
     env = read_env_file(env_file)
-    assert env["DATA_DIR"] == str(tmp_path / "var") and env["QUICKWIT_CONFIG"] == str(tmp_path / "quickwit.yaml")
+    assert env["DATA_DIR"] == str(tmp_path / "var") and env["NGINX_CONFIG"] == str(tmp_path / "nginx.conf")
     assert env["LUMIVERB_ROOT_MAP"] == '{"/": "/"}' and env["LUMIVERB_RESET_ON_THIS_MACHINE"] == "true"
-    assert (tmp_path / "quickwit.yaml").exists()
+    assert (tmp_path / "nginx.conf").exists()
     capsys.readouterr()
     assert cli.main(["--env", str(env_file), "init"]) == 0
-    assert capsys.readouterr().out.splitlines() == [f"· {env_file} kept", f"· {tmp_path / 'quickwit.yaml'} kept"]
+    assert capsys.readouterr().out.splitlines() == [f"· {env_file} kept", f"· {tmp_path / 'nginx.conf'} kept"]
 
 
 def test_the_command_wants_a_program_and_its_config_together(tmp_path, capsys):
     assert cli.main(["init", "--env", str(tmp_path / "env"), "--data-dir", str(tmp_path / "var"),
                      "--nginx-bin", str(OPT / "nginx/bin/nginx")]) == 1
-    assert capsys.readouterr().err.strip().startswith("✗ Name each program with its config")
+    assert capsys.readouterr().err.strip().startswith("✗ Name nginx with its config")
     assert not (tmp_path / "env").exists()
 
 
