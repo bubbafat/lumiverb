@@ -111,20 +111,26 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
                     headers=getattr(exc, "headers", None))
 
 
-def _finite(value: Any) -> Any:
-    """The rejected input may hold inf or NaN, which isn't valid JSON."""
+def _answerable(value: Any) -> Any:
+    """The rejected input as JSON can carry it: inf or NaN as text, and a body
+    that isn't text (a file sent where JSON was asked for) as its size."""
     if isinstance(value, float) and not math.isfinite(value):
         return str(value)
+    if isinstance(value, bytes):
+        try:
+            return value.decode()
+        except UnicodeDecodeError:
+            return f"{len(value)} bytes that aren't text"
     if isinstance(value, dict):
-        return {k: _finite(v) for k, v in value.items()}
+        return {k: _answerable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_finite(v) for v in value]
+        return [_answerable(v) for v in value]
     return value
 
 
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
-    errors = _finite(jsonable_encoder(exc.errors()))
+    errors = jsonable_encoder(_answerable(exc.errors()))
     first = errors[0] if errors else {}
     where = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
     msg = str(first.get("msg", "Invalid request"))
