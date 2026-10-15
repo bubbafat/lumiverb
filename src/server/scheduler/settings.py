@@ -9,7 +9,8 @@
                                    files: '{"/": "/"}' (init --local-roots writes it)
     LUMIVERB_REFUSED_ROOTS         folders never read besides DATA_DIR, JSON: '["/opt/homebrew/etc/lumiverb"]'
                                    (lumiverb-server run sets the install's settings folder)
-    LUMIVERB_ANALYSIS_PROXY_ENCODER  libx264
+    LUMIVERB_ANALYSIS_PROXY_ENCODER  libx264 | h264_nvenc: H.264 only, which every browser plays
+                                   (ADR-018 decision 11; the web player streams the proxy)
     LUMIVERB_ANALYSIS_PROXY_DECODER  auto (Vulkan, else a Mac's VideoToolbox) | cpu | an ffmpeg hwaccel (cuda)
     LUMIVERB_GPU_DECODES           renders decoding on the GPU at once (1; a Mac's VideoToolbox takes every render; 0: none);
                                    AI machines sharing the GPU give up requests only for those (Machine.gpu_decodes_here)
@@ -29,6 +30,8 @@ setting the scheduler can't run with stops it at its start, saying which
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings import SettingsError as UnparsedSetting
@@ -39,7 +42,7 @@ from src.processing.machine import FULL_SCAN_EVERY_MIN, Machine
 class SchedulerSettings(BaseSettings):
     root_map: dict[str, str] = Field(default_factory=dict)
     refused_roots: list[str] = Field(default_factory=list)
-    analysis_proxy_encoder: str = "libx264"
+    analysis_proxy_encoder: Literal["libx264", "h264_nvenc"] = "libx264"
     analysis_proxy_decoder: str = "auto"
     gpu_decodes: int = Field(default=1, ge=0)
     render_concurrency: int = Field(default=0, ge=0)
