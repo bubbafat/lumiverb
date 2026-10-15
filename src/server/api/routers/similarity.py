@@ -301,6 +301,10 @@ def search_by_image(
     body: ImageSimilarityRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ImageSimilarityResponse:
+    """Clips like a picture: the server embeds it with CLIP, and looks for
+    faces in it too, fusing the clips with those people in (as by vector
+    with the picture). A picture with no faces, or a face path that fails,
+    is searched by its look alone."""
     from src.server.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
 
     resolved_model_id = body.model_id or "clip"
@@ -317,8 +321,9 @@ def search_by_image(
             detail=f"Server can only embed with model 'clip'. Use /search-by-vector for '{resolved_model_id}'.",
         )
 
+    image_bytes = _decode_image(body.image_b64)
     try:
-        pil_image = images.rgb(_decode_image(body.image_b64))
+        pil_image = images.rgb(image_bytes)
     except images.NotAnImageError as exc:
         raise _invalid_image(exc) from None
     try:
@@ -330,6 +335,7 @@ def search_by_image(
     return _search_by_vector(
         session, body.library_id, vector, resolved_model_id, resolved_model_version,
         body.limit, body.offset, body.from_ts, body.to_ts, body.asset_types, body.cameras,
+        image_bytes=image_bytes,
     )
 
 

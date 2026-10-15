@@ -320,27 +320,12 @@ struct SearchTab: View {
         imageSimilarLoading = false
     }
 
-    /// Loads the picked photo, embeds it locally with Apple Vision
-    /// feature prints, and POSTs the vector to /v1/similar/search-by-vector.
-    ///
-    /// We embed client-side rather than relying on `search-by-image`'s
-    /// server CLIP because the macOS app indexed libraries with
-    /// `apple_vision` feature prints (model_id `apple_vision`, model
-    /// version `feature_print_v1`) before the server's scheduler did all
-    /// the processing. The server's CLIP model lives in a different
-    /// vector space and would never match those vectors — so the *scene*
-    /// path has to embed here, in the same space. (Photos the scheduler
-    /// indexed have CLIP vectors only.)
-    ///
-    /// **Hybrid mode**: alongside the scene vector we ship a downscaled
-    /// JPEG so the server can run face detection and ArcFace embedding,
-    /// then RRF-fuse the identity hits with the scene cosine results.
-    /// This is the fix for "the photo of my daughter doesn't find other
-    /// photos of my daughter" — Apple Vision feature prints encode
-    /// scene-level signal, not identity, and ArcFace is purpose-built
-    /// for the identity case. The downscale to ~768px keeps upload
-    /// bandwidth bounded while staying well above the face-detection
-    /// minimum face size.
+    /// Loads the picked photo and asks the server for clips like it
+    /// (POST /v1/similar/search-by-image): the server embeds it with CLIP,
+    /// the model the scheduler indexes every photo with, and looks for the
+    /// faces in it too, so clips with the same people come up as well as
+    /// clips that look like it. The photo goes downscaled to 768px on its
+    /// long edge as JPEG: enough for both, and a bounded upload.
     private func runImageSimilarSearch(item: PhotosPickerItem) async {
         guard let client = appState.client else { return }
         // Pick a library: prefer the currently selected one, fall back
@@ -367,34 +352,17 @@ struct SearchTab: View {
                 return
             }
             // Show a downscaled preview at the top of the results.
-            // The full-resolution data is what we feed to Vision —
-            // VNGenerateImageFeaturePrintRequest does its own
-            // resampling internally.
             imageSimilarSource = downscaleImage(uiImage, maxDimension: 512)
 
-            // Embed on the iOS device — must use Apple Vision feature
-            // prints to match what the macOS app indexed with.
-            let vector = try iOSFeaturePrintEmbedder.embed(imageData: data)
-
-            // Build the hybrid upload bytes: downscale to 768px max
-            // edge and re-encode at 0.85 JPEG quality. The server only
-            // needs enough resolution for InsightFace (which itself
-            // resizes to 640x640 internally), so anything larger is
-            // pure bandwidth waste.
-            let uploadImage = downscaleImage(uiImage, maxDimension: 768)
-            let imageB64 = uploadImage.jpegData(compressionQuality: 0.85)?
-                .base64EncodedString()
-
-            let request = VectorSimilarityRequest(
-                libraryId: libraryId,
-                vector: vector,
-                modelId: iOSFeaturePrintEmbedder.modelId,
-                modelVersion: iOSFeaturePrintEmbedder.modelVersion,
-                limit: 30,
-                imageB64: imageB64
-            )
+            guard let imageB64 = downscaleImage(uiImage, maxDimension: 768)
+                .jpegData(compressionQuality: 0.85)?
+                .base64EncodedString() else {
+                imageSimilarError = "Couldn't read image"
+                return
+            }
+            let request = ImageSimilarityRequest(libraryId: libraryId, imageB64: imageB64, limit: 30)
             let response: ImageSimilarityResponse = try await client.post(
-                "/v1/similar/search-by-vector",
+                "/v1/similar/search-by-image",
                 body: request
             )
             imageSimilarHits = response.hits

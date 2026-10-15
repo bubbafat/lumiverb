@@ -872,6 +872,42 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+@pytest.mark.slow
+def test_search_by_image_also_finds_the_people_in_it(
+    similarity_client: Tuple[_AuthClient, str, str], clip_sees, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clip with the face in the picture is found by image too, as by
+    vector with the picture: the server embeds the picture with CLIP and
+    looks for faces in it, then fuses the two (iOS's photo search, the
+    CLI's `similar image`)."""
+    from src.processing.workers.faces.insightface_provider import FaceDetection
+    from src.server.repository.tenant import FaceRepository
+
+    auth_client, library_id, tenant_url = similarity_client
+    face_vec = [0.0] * 512
+    face_vec[1] = 1.0
+    with Session(create_engine(tenant_url)) as session:
+        # A clip with only a face: no CLIP vector, so its look can't find it.
+        face_only = AssetRepository(session).create_asset(
+            library_id=library_id, rel_path="image_faces/face_only.jpg", file_size=100, file_mtime=None,
+            media_type="image")
+        FaceRepository(session).submit_faces(
+            asset_id=face_only.asset_id, detection_model="insightface", detection_model_version="buffalo_l",
+            faces=[{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.95,
+                    "embedding": face_vec}])
+        session.commit()
+        face_only_id = face_only.asset_id
+    monkeypatch.setattr("src.server.faces.server_face_provider.detect_faces_in_image",
+                        lambda _bytes: [FaceDetection(bounding_box={"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
+                                                      detection_confidence=0.99, embedding=face_vec,
+                                                      sharpness=100.0)])
+    r = auth_client.post("/v1/similar/search-by-image",
+                         json={"library_id": library_id, "image_b64": _b64(sample("JPEG")), "limit": 10})
+    assert r.status_code == 200, r.text
+    assert face_only_id in [h["asset_id"] for h in r.json()["hits"]]
+    assert clip_sees == [("RGB", (64, 48))]
+
+
 @pytest.fixture
 def clip_sees(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, tuple[int, int]]]:
     """What search by image embeds, (mode, size) a picture: CLIP's stand-in."""
@@ -903,17 +939,19 @@ def _by_vector(auth_client: _AuthClient, library_id: str, picture: bytes):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("fmt", READ)
-def test_image_search_reads_jpeg_png_and_webp(similarity_client: Tuple[_AuthClient, str, str], clip_sees, fmt) -> None:
+def test_image_search_reads_jpeg_png_and_webp(similarity_client: Tuple[_AuthClient, str, str], clip_sees,
+                                             faces_looked_for, fmt) -> None:
     auth_client, library_id, _ = similarity_client
     r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": _b64(sample(fmt))})
     assert r.status_code == 200, r.text
     assert clip_sees == [("RGB", (64, 48))]
+    assert faces_looked_for == [sample(fmt)]  # the same picture, for the people in it
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize("fmt", NOT_READ)
 def test_image_search_reads_only_jpeg_png_and_webp(
-    similarity_client: Tuple[_AuthClient, str, str], clip_sees, other_readers, fmt,
+    similarity_client: Tuple[_AuthClient, str, str], clip_sees, faces_looked_for, other_readers, fmt,
 ) -> None:
     auth_client, library_id, _ = similarity_client
     r = auth_client.post("/v1/similar/search-by-image", json={"library_id": library_id, "image_b64": _b64(sample(fmt))})
@@ -922,6 +960,7 @@ def test_image_search_reads_only_jpeg_png_and_webp(
     assert error["code"] == "invalid_image" and error["message"] == "image_b64 isn't a JPEG, PNG or WebP image."
     assert error["details"] == REFUSED_DETAILS
     assert clip_sees == [] and other_readers == [], "no other format's reader looks at it"
+    assert faces_looked_for == []
 
 
 @pytest.mark.slow
