@@ -218,15 +218,14 @@ def test_sets_asset_status_described(vision_env) -> None:
 
 @pytest.mark.slow
 def test_vision_submit_triggers_search_sync(vision_env) -> None:
-    """After submission, inline search sync is attempted (best-effort without Quickwit)."""
+    """After submission, the clip's search row is written at once (ADR-019) and marked synced."""
     auth, _, _, active_id, _, _, tenant_url = vision_env
 
     _post(auth, active_id)
 
-    # Vision submit now calls try_sync_asset inline. Without Quickwit in
-    # test it fails silently. Verify the metadata was persisted (the trigger).
-    from src.server.database import get_engine_for_url
     from sqlalchemy import text
+
+    from src.server.database import get_engine_for_url
 
     tenant_engine = get_engine_for_url(tenant_url)
     with tenant_engine.connect() as conn:
@@ -234,7 +233,12 @@ def test_vision_submit_triggers_search_sync(vision_env) -> None:
             text("SELECT COUNT(*) FROM asset_metadata WHERE asset_id = :asset_id"),
             {"asset_id": active_id},
         ).scalar_one()
+        row = conn.execute(text("SELECT described FROM asset_search WHERE asset_id = :a"), {"a": active_id}).first()
+        synced = conn.execute(text("SELECT search_synced_at FROM assets WHERE asset_id = :a"),
+                              {"a": active_id}).scalar_one()
     assert count >= 1
+    assert row is not None and row.described, "its words are searchable at once"
+    assert synced is not None
 
 
 @pytest.mark.slow

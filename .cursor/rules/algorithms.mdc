@@ -32,8 +32,7 @@ Key constants — do not change:
 - `similarity_step = 0.10`
 - `similarity_min_results = 3`
 - Tags appear **twice** in query tokens (BM25 weight boost — do not remove)
-- Score filtering is client-side after HTTP response (Quickwit query-level score syntax not stable)
-- Multi-index routing: one index per AI model version, fetched per request (no cache)
+- Score filtering is client-side after HTTP response
 
 ## AI Vision & Metadata → @docs/reference/ai_vision_metadata.md
 Key constants — do not change:

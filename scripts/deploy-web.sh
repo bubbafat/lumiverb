@@ -3,7 +3,7 @@
 #
 # Installs nginx + Node.js, clones the repo, builds the SPA, configures
 # nginx to proxy /v1/* to the API server. Does NOT install Python,
-# PostgreSQL, Quickwit, or any API server components.
+# PostgreSQL, or any API server components.
 #
 # Usage:
 #   bash scripts/deploy-web.sh --domain app.example.com --api-upstream http://10.0.0.5:8000

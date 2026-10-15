@@ -1,7 +1,7 @@
 """What a Mac install keeps is its user's alone (lumiverb-server run).
 
 run makes everything with umask 077, so what it and its children write
-(PostgreSQL's, Quickwit's index, previews, caches, the log once it's
+(PostgreSQL's, previews, caches, the log once it's
 rotated) is readable by this user only, and the same after an upgrade's
 re-exec. At each start it also makes private what an earlier install left
 open: DATA_DIR, each account's folder in a previews folder chosen elsewhere

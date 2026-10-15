@@ -1136,7 +1136,7 @@ export async function getNetworkAccess(): Promise<NetworkAccess> {
 /** One record of the service's log (Admin › Logs) and the lines continuing it (a traceback). */
 export interface LogEntry {
   id: string;
-  /** api, scheduler, postgres, quickwit, nginx, upkeep, lumiverb-server (a Mac's service itself). */
+  /** api, scheduler, postgres, nginx, upkeep, lumiverb-server (a Mac's service itself). */
   part: string | null;
   level: "error" | "warning" | "info";
   text: string;

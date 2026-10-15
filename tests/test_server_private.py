@@ -28,7 +28,7 @@ def _mode(path: Path) -> int:
 def install(tmp_path: Path) -> dict[str, Path]:
     """An install as an earlier version left it: everything 0755/0644."""
     data = tmp_path / "data"
-    (data / "quickwit").mkdir(parents=True)
+    (data / "cache").mkdir(parents=True)
     chosen = tmp_path / "drive"  # a previews folder chosen elsewhere, its accounts' folders in it
     (chosen / "ten_one" / "lib_1" / "proxies").mkdir(parents=True)
     (chosen / "other-things").mkdir()
@@ -40,7 +40,7 @@ def install(tmp_path: Path) -> dict[str, Path]:
     logs.mkdir()
     for name in ("lumiverb.log", "lumiverb.log.1", "lumiverb.log.4", "other.log"):
         (logs / name).write_text("x")
-    for path in [data, data / "quickwit", chosen, chosen / "ten_one", chosen / "other-things", library_own,
+    for path in [data, data / "cache", chosen, chosen / "ten_one", chosen / "other-things", library_own,
                  library_own / "ten_one", logs]:
         path.chmod(0o755)
     for path in logs.iterdir():
@@ -70,7 +70,7 @@ def test_a_chosen_folder_itself_and_what_isnt_lumiverbs_are_left_alone(install):
     assert _mode(install["chosen"] / "other-things") == 0o755
     assert _mode(install["library_own"]) == 0o755
     assert _mode(install["log"].parent / "other.log") == 0o644
-    assert _mode(install["data"] / "quickwit") == 0o755  # inside DATA_DIR, which is private now
+    assert _mode(install["data"] / "cache") == 0o755  # inside DATA_DIR, which is private now
 
 
 def test_only_what_this_user_owns_is_changed(install, monkeypatch):

@@ -1,8 +1,8 @@
 """Backups of what only Lumiverb holds: every database, the control plane's
 (people who log in, accounts, keys) and each account's (libraries, clips,
-names, faces, ratings, notes, projects, settings), as pg_dump makes them.
-Previews, the search index and models aren't in them: they're made again
-from the databases and the originals.
+names, faces, ratings, notes, projects, settings, and its search: ADR-019),
+as pg_dump makes them. Previews and models aren't in them: they're made
+again from the databases and the originals.
 
 A backup is a folder, `lumiverb-<local time>-<kind>`, in the install's
 backups folder (DATA_DIR/backups, or the one an admin chose on the machine
@@ -25,8 +25,8 @@ manifest); anything else in the folder is left alone.
 
 Restore (`lumiverb-server restore`, with Lumiverb stopped) puts each
 database back beside the live one and swaps it in only once whole, so a
-failed restore changes nothing; then migrates to this version and remakes
-the search index from what was restored.
+failed restore changes nothing; then migrates to this version (search is in
+the databases restored).
 """
 
 from __future__ import annotations
@@ -640,8 +640,8 @@ def _restore_one(url: str, archive: Path, pg_restore: str, say: Callable[[str], 
 def restore(backup: Backup, control_url: str, *, tenant_url_template: str | None, pg_bin: str | None = None,
             say: Callable[[str], None] = print) -> list[str]:
     """Puts every database in the backup back, Lumiverb stopped. The accounts
-    are this install's again (their routing: tenant_url_template), and each
-    one's search index is remade from what was restored. Returns the
+    are this install's again (their routing: tenant_url_template), their search
+    with them. Returns the
     databases that aren't in the backup, left as they were. Raises
     BackupError, before changing anything when it can."""
     verify(backup)

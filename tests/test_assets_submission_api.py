@@ -426,8 +426,7 @@ def test_submit_empty_transcript_marks_no_speech(submission_client) -> None:
 def test_submit_then_delete_transcript(submission_client) -> None:
     client, auth, _, _, video_asset_id = submission_client
 
-    # Best-effort Quickwit indexing should swallow connection errors so the
-    # endpoint still returns 200 even without a quickwit sidecar running.
+    # The transcript's segments are written with it (ADR-019); the endpoint answers 200.
     r = client.post(
         f"/v1/assets/{video_asset_id}/transcript",
         json={"source": "manual", "srt": _VALID_SRT, "language": "en"},

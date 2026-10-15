@@ -190,6 +190,17 @@ def test_a_service_not_running_afterwards_fails_the_update(install):
     assert "Result: FAILED" in log
 
 
+def test_the_summary_checks_what_runs_and_no_quickwit(install):
+    """Search is PostgreSQL's (ADR-019): update-api.sh takes Quickwit away, so
+    the summary never asks about it, even where systemd says it's enabled."""
+    out = _run(install)
+    assert out.returncode == 0, out.stdout + out.stderr
+    lines = _lines(install)
+    assert {"  lumiverb-api: active", "  lumiverb-scheduler: active", "  nginx: active"} <= set(lines)
+    assert "quickwit" not in _log(install).lower()
+    assert "quickwit" not in install["calls"].read_text()
+
+
 def test_an_api_that_doesn_t_answer_fails_the_update(install):
     out = _run(install, API_DOWN="1")
     assert out.returncode != 0

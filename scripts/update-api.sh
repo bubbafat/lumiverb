@@ -12,9 +12,9 @@
 #   2. uv sync (if Python changes: built beside the running one, then a short stop to swap)
 #   3. Run migrations (control plane + tenants)
 #   4. Sync data directory
-#   5. Fix Quickwit sandbox
+#   5. Remove Quickwit, if the install has it (search is in PostgreSQL: ADR-019)
 #   6. Install upkeep timers
-#   7. Restart API + Quickwit + scheduler
+#   7. Restart API + scheduler
 #   8. Health check
 #
 # Does NOT: rebuild web UI, touch nginx, install Node.js.
@@ -35,7 +35,8 @@ fail()  { echo -e "${RED}  ✗ $1${NC}" >&2; exit 1; }
 trap 'echo -e "${RED}  ✗ Stopped at line ${LINENO}: ${BASH_COMMAND}${NC}" >&2' ERR
 
 APP_DIR="/opt/lumiverb"
-ENV_FILE="/etc/lumiverb/env"
+CONF_DIR="/etc/lumiverb"
+ENV_FILE="${CONF_DIR}/env"
 SVC_USER="lumiverb"
 UV_BIN="/usr/local/bin/uv"
 
@@ -183,7 +184,7 @@ fi
 step "Ensuring data directory"
 DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
-  mkdir -p "$DATA_DIR"/quickwit "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
+  mkdir -p "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
   # Caches, and the scheduler's lock and state, on the data disk for manual
   # runs as the service user too, so one never runs beside the service.
@@ -193,12 +194,41 @@ if [[ -n "$DATA_DIR" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-step "Fixing Quickwit sandbox (namespace-dependent directives)"
+# Search is PostgreSQL's own (ADR-019): an install that had Quickwit loses it,
+# its index too (derived data, already rebuilt in each account's database).
+# Only what deploy-api.sh made for it: its unit, its config, its folder in
+# DATA_DIR (nothing else there) and the binary it put in /usr/local/bin.
+# Nothing to do, nothing said: an install without it, or the next update.
 QW_UNIT="/etc/systemd/system/lumiverb-quickwit.service"
-if [[ -f "$QW_UNIT" ]] && grep -qE '^(PrivateTmp|ProtectSystem|ReadWritePaths|ReadOnlyPaths)=' "$QW_UNIT"; then
-  sed -i '/^PrivateTmp=/d; /^ProtectSystem=/d; /^ReadWritePaths=/d; /^ReadOnlyPaths=/d' "$QW_UNIT"
-  systemctl daemon-reload
-  ok "Removed namespace-dependent directives from Quickwit unit"
+QW_CONF="${CONF_DIR}/quickwit.yaml"
+QW_DATA="${DATA_DIR:+${DATA_DIR}/quickwit}"
+QW_BIN="/usr/local/bin/quickwit"
+if [[ -e "$QW_UNIT" || -e "$QW_CONF" || ( -n "$QW_DATA" && ( -e "$QW_DATA" || -L "$QW_DATA" ) ) \
+      || -e "$QW_BIN" || -L "$QW_BIN" ]]; then
+  step "Removing Quickwit (search is in PostgreSQL now)"
+  if [[ -e "$QW_UNIT" ]]; then
+    systemctl disable --now lumiverb-quickwit 2>/dev/null || true
+    rm -rf "$QW_UNIT" "${QW_UNIT}.d"
+    systemctl daemon-reload
+    ok "lumiverb-quickwit stopped and removed"
+  fi
+  if [[ -e "$QW_CONF" ]]; then
+    rm -f "$QW_CONF"
+    ok "Removed ${QW_CONF}"
+  fi
+  if [[ -n "$QW_DATA" && ( -e "$QW_DATA" || -L "$QW_DATA" ) ]]; then
+    rm -rf -- "$QW_DATA"
+    ok "Removed ${QW_DATA} (its index)"
+  fi
+  if [[ -e "$QW_BIN" || -L "$QW_BIN" ]]; then
+    rm -f "$QW_BIN"
+    ok "Removed ${QW_BIN}"
+  fi
+  # The env file is the admin's: its Quickwit settings stay, said once.
+  QW_KEYS="$(grep -oE '^QUICKWIT_[A-Za-z0-9_]*' "$ENV_FILE" 2>/dev/null | paste -sd ' ' - || true)"
+  if [[ -n "$QW_KEYS" ]]; then
+    ok "${QW_KEYS// /, } in ${ENV_FILE}: no longer used, they may be removed"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -212,6 +242,16 @@ ok "API on port ${API_PORT}"
 step "Updating the API unit"
 API_UNIT="/etc/systemd/system/lumiverb-api.service"
 if [[ -f "$API_UNIT" ]]; then
+  # Quickwit's unit is gone (above): the API no longer waits for it or wants it.
+  if grep -qE '^(After|Wants|Requires)=.*lumiverb-quickwit\.service' "$API_UNIT"; then
+    sed -i -E '/^(After|Wants|Requires)=/ {
+        s/(=|[[:space:]])lumiverb-quickwit\.service([[:space:]]|$)/\1\2/g
+        s/=[[:space:]]+/=/; s/[[:space:]]+$//; s/[[:space:]]{2,}/ /g
+      }
+      /^(After|Wants|Requires)=$/d' "$API_UNIT"
+    systemctl daemon-reload
+    ok "The API no longer waits for Quickwit"
+  fi
   # Large uploads (analysis proxies) are spooled to TMPDIR; PrivateTmp's /tmp
   # can be RAM (tmpfs), so they go on the data disk (inside ReadWritePaths).
   if [[ -z "$DATA_DIR" ]]; then
@@ -378,7 +418,6 @@ step "Restarting services"
 # The scheduler stops first: while the API restarts, its jobs couldn't save,
 # and each would count against its clip as a failure.
 systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl stop lumiverb-scheduler
-systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl restart lumiverb-quickwit
 systemctl restart lumiverb-api
 # uv's cache: an old Python's packages stay in it for good (prune keeps
 # them), and the venv doesn't need it. Every update, so a rerun gets there.
@@ -397,7 +436,6 @@ done
 systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl start lumiverb-scheduler
 
 systemctl status --no-pager lumiverb-api || true
-systemctl is-enabled lumiverb-quickwit >/dev/null 2>&1 && systemctl status --no-pager lumiverb-quickwit || true
 systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl status --no-pager lumiverb-scheduler || true
 
 if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then

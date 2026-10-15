@@ -3,8 +3,8 @@
 launchd writes the service's stdout and stderr to one file (brew services'
 log_path, /opt/homebrew/var/log/lumiverb.log), appended to forever: on a
 busy evening 10 MB in two and a half hours, most of it a line per web
-request and Quickwit's coloured chatter. Here each child's output comes
-through run (relay): each line said by whom ("api | ...", "quickwit | ..."),
+request and Quickwit's coloured chatter (Quickwit is gone: ADR-019). Here
+each child's output comes through run (relay): each line said by whom ("api | ...", "nginx | ..."),
 its colour codes out, into that same file, which is rotated at LOG_BYTES,
 LOG_KEPT kept beside it. The process's own stdout and stderr follow the
 current file (a stray print, a crash's traceback). Not launched by launchd

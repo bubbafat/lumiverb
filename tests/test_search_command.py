@@ -30,7 +30,7 @@ def _libraries() -> MagicMock:
     return MagicMock(json=lambda: [{"library_id": "lib_abc", "name": "MyLib", "root_path": "/x"}])
 
 
-def _page(items: list[dict], next_cursor: str | None = None, source: str = "quickwit") -> MagicMock:
+def _page(items: list[dict], next_cursor: str | None = None, source: str = "postgres") -> MagicMock:
     return MagicMock(
         status_code=200,
         json=lambda: {"items": items, "next_cursor": next_cursor, "search_source": source},
@@ -68,7 +68,7 @@ def test_search_calls_query_with_library_and_text_filters() -> None:
     assert call[1]["params"] == {"f": ["library:lib_abc", "query:sunset"], "limit": 10}
     assert "photos/sunset.jpg" in result.output
     assert "A sunset over water" in result.output
-    assert "quickwit" in result.output
+    assert "postgres" in result.output
 
 
 @pytest.mark.fast

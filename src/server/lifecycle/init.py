@@ -1,14 +1,14 @@
-"""The files an install needs, each written once: its env file, Quickwit's
-config and nginx's. Homebrew's post_install runs it on every install and
-upgrade, so a file already there is kept as it is: init never rewrites one
-(move it away and run init again to start over).
+"""The files an install needs, each written once: its env file and nginx's
+config. Homebrew's post_install runs it on every install and upgrade, so a
+file already there is kept as it is: init never rewrites one (move it away
+and run init again to start over).
 
 The env file is deploy-api.sh's, for a Mac, where `lumiverb-server run` is
 the one service: it names what run starts besides the API and the scheduler
-(Lumiverb's own PostgreSQL, Quickwit and nginx: each one named), with
-secrets generated here. Quickwit's config and nginx's are made from the env
-file, whichever wrote it, so they agree with it. nginx's server block is
-deploy-web.sh's (a test holds them to the same bytes).
+(Lumiverb's own PostgreSQL and nginx: each one named), with secrets
+generated here. nginx's config is made from the env file, whichever wrote
+it, so they agree. nginx's server block is deploy-web.sh's (a test holds
+them to the same bytes).
 """
 
 from __future__ import annotations
@@ -24,11 +24,10 @@ from src.server.lifecycle import network
 from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
 
-# A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000,
-# docker-compose's Quickwit on 7280 and 7281).
+# A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000).
+# 6466 and 6467 were Quickwit's (ADR-019: search is in PostgreSQL).
 WEB_PORT = 6464
 API_PORT = 6465
-QUICKWIT_PORT = 6466  # gRPC on the next one, as deploy-api.sh does
 PG_PORT = 6468  # Lumiverb's own PostgreSQL (not Homebrew's, on 5432)
 PG_ROLE = "lumiverb"
 # The scheduler reads every library folder where it is: this machine has the files.
@@ -54,13 +53,10 @@ class Choices:
     data_dir: Path | None = None
     pg_port: int | None = None
     api_port: int | None = None
-    quickwit_port: int | None = None
     web_port: int | None = None
     app_host: str | None = None
     # What run starts besides the API and the scheduler, each only if named.
     pg_bin: Path | None = None  # PostgreSQL's bin folder (initdb, postgres)
-    quickwit_bin: Path | None = None
-    quickwit_config: Path | None = None
     nginx_bin: Path | None = None
     nginx_config: Path | None = None
     local_roots: bool = False  # LUMIVERB_ROOT_MAP: library folders read where they are
@@ -68,13 +64,12 @@ class Choices:
     reset_on_this_machine: bool = False
 
     def runs(self) -> dict[str, str]:
-        named = {"PG_BIN": self.pg_bin, "QUICKWIT_BIN": self.quickwit_bin, "QUICKWIT_CONFIG": self.quickwit_config,
-                 "NGINX_BIN": self.nginx_bin, "NGINX_CONFIG": self.nginx_config}
+        named = {"PG_BIN": self.pg_bin, "NGINX_BIN": self.nginx_bin, "NGINX_CONFIG": self.nginx_config}
         return {key: str(value) for key, value in named.items() if value is not None}
 
     def given(self) -> dict[str, str]:
-        named = {"DATA_DIR": self.data_dir, "API_PORT": self.api_port, "QUICKWIT_PORT": self.quickwit_port,
-                 "WEB_PORT": self.web_port, "APP_HOST": self.app_host}
+        named = {"DATA_DIR": self.data_dir, "API_PORT": self.api_port, "WEB_PORT": self.web_port,
+                 "APP_HOST": self.app_host}
         roots = {"LUMIVERB_ROOT_MAP": LOCAL_ROOT_MAP} if self.local_roots else {}
         reset = {"LUMIVERB_RESET_ON_THIS_MACHINE": "true"} if self.reset_on_this_machine else {}
         return {key: str(value) for key, value in named.items() if value is not None} | self.runs() | roots | reset
@@ -85,7 +80,6 @@ def env_text(choices: Choices, *, now: datetime, secret: Callable[[], str]) -> s
         raise InitError("Say where its data goes: --data-dir DIR")
     data = choices.data_dir
     api_port = choices.api_port or API_PORT
-    qw_port = choices.quickwit_port or QUICKWIT_PORT
     web_port = choices.web_port or WEB_PORT
     admin_key, api_secret_key, jwt_secret, pg_password = secret(), secret(), secret(), secret()
     db = f"postgresql+psycopg2://{PG_ROLE}:{pg_password}@127.0.0.1:{choices.pg_port or PG_PORT}"
@@ -120,16 +114,11 @@ STORAGE_PROVIDER=local
 DATA_DIR={data}
 XDG_CACHE_HOME={data / 'cache'}
 
-# Search
-QUICKWIT_URL=http://127.0.0.1:{qw_port}
-QUICKWIT_ENABLED=true
-
 # API (the web reaches it through nginx on WEB_PORT)
 API_LISTEN_HOST=127.0.0.1
 API_PORT={api_port}
 
 # What this install uses
-QUICKWIT_PORT={qw_port}
 WEB_PORT={web_port}
 
 # What lumiverb-server run starts besides the API and the scheduler
@@ -145,19 +134,6 @@ LOG_LEVEL=INFO
 # SMTP_USER=apikey
 # SMTP_PASSWORD=
 # SMTP_FROM=noreply@lumiverb.local
-"""
-
-
-def quickwit_yaml(data_dir: Path, port: int) -> str:
-    """deploy-api.sh's quickwit.yaml."""
-    return f"""\
-version: 0.8
-node_id: lumiverb
-listen_address: 127.0.0.1
-rest:
-  listen_port: {port}
-grpc_listen_port: {port + 1}
-data_dir: {data_dir / 'quickwit'}
 """
 
 
@@ -297,9 +273,8 @@ def _port(env: dict[str, str], key: str, env_file: Path) -> int:
 
 def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Callable[[str], None] = print,
          secret: Callable[[], str] = lambda: secrets.token_hex(32)) -> None:
-    """Writes the env file if there's none, then Quickwit's config and
-    nginx's (each where the env file names it, if it isn't there) from it,
-    and makes its data folders. Raises InitError when a given choice
+    """Writes the env file if there's none, then nginx's config (where the
+    env file names it, if it isn't there) from it, and makes its data folders. Raises InitError when a given choice
     disagrees with the env file already there."""
     if env_file.exists():
         env = read_env_file(env_file)
@@ -318,13 +293,9 @@ def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Ca
     data = Path(env.get("DATA_DIR") or APP_DIR / "data")
     if not data.is_absolute():
         raise InitError(f"DATA_DIR must be a full path, not {data}")
-    for folder in (data, data / "quickwit", data / "cache", data / "tmp", data / "worker-tmp", data / "nginx"):
+    for folder in (data, data / "cache", data / "tmp", data / "worker-tmp", data / "nginx"):
         folder.mkdir(parents=True, exist_ok=True)
 
-    if env.get("QUICKWIT_CONFIG"):
-        path = Path(env["QUICKWIT_CONFIG"])
-        text = quickwit_yaml(data, _port(env, "QUICKWIT_PORT", env_file))
-        say(f"✓ {path}" if write_new(path, text, 0o644) else f"· {path} kept")
     if env.get("NGINX_CONFIG"):
         # Where it listens is Settings › Network's (network.py): this machine
         # only, as a new install is set up there (routers/setup.py), until an

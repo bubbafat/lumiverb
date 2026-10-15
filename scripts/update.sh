@@ -190,7 +190,7 @@ if [[ "$SETTLE" != 0 ]]; then
   sleep "$SETTLE"
 fi
 DOWN=()
-for unit in lumiverb-api lumiverb-scheduler lumiverb-quickwit nginx; do
+for unit in lumiverb-api lumiverb-scheduler nginx; do
   systemctl is-enabled --quiet "$unit" 2>/dev/null || continue
   state="$(systemctl is-active "$unit" 2>/dev/null || true)"
   echo "  ${unit}: ${state}"

@@ -17,9 +17,8 @@ alwaysApply: true
 - `@pytest.mark.fast` — no DB, no AI, pure unit tests, mocks, `tmp_path` only
 - `@pytest.mark.slow` — requires DB via testcontainers Postgres
 - `@pytest.mark.ai` — requires Moondream Station running locally
-- `@pytest.mark.quickwit` — requires dev Quickwit at port 7281
 
-Never leave a test without a mark. Tests must never touch port 7280 (production Quickwit).
+Never leave a test without a mark. Search is PostgreSQL's (ADR-019): test it against the real database.
 
 ## Test Data
 - Tests that write to a shared database must use unique identifiers (ULIDs, UUIDs,
@@ -34,7 +33,7 @@ Never leave a test without a mark. Tests must never touch port 7280 (production 
 ## Environment
 - Package manager is `uv`. Always show full `uv` commands — never bare `python` or `pip`.
 - Always use `uv sync --all-extras` — never plain `uv sync` (it drops the dev environment).
-- Docker Compose manages infrastructure (Postgres + Quickwit).
+- Docker Compose manages infrastructure (Postgres).
 - The API server and workers run outside Docker in development.
 
 ## Timestamps

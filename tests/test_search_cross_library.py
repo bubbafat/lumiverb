@@ -1,8 +1,7 @@
-"""Integration tests for cross-library search (per-tenant Quickwit indexes).
+"""Integration tests for cross-library search (the account's database, ADR-019).
 
 Tests the search API with optional library_id, cross-library results,
-and library_id/library_name in SearchHit responses. Uses Postgres
-fallback (Quickwit not running in test).
+and library_id/library_name in SearchHit responses.
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def _ingest_asset_with_vision(client, api_key, library_id, rel_path, description
 
 @pytest.fixture(scope="module")
 def search_env():
-    """Two libraries with searchable assets. Quickwit disabled, Postgres fallback enabled."""
+    """Two libraries with searchable assets."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     with PostgresContainer(PG_IMAGE) as control_postgres:
@@ -85,8 +84,6 @@ def search_env():
         os.environ["CONTROL_PLANE_DATABASE_URL"] = control_url
         os.environ["TENANT_DATABASE_URL_TEMPLATE"] = tenant_tpl
         os.environ["ADMIN_KEY"] = "test-admin-xsearch"
-        os.environ["QUICKWIT_ENABLED"] = "false"
-        os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
         get_settings.cache_clear()
         _engines.clear()
 
