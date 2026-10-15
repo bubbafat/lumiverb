@@ -101,14 +101,6 @@ class EmptyLibraryTrashRequest(BaseModel):
     remove_from_projects: bool = False
 
 
-class UnignoreRequest(BaseModel):
-    rel_paths: list[str]
-
-
-class UnignoreResponse(BaseModel):
-    removed: int
-
-
 class DirectoryItem(BaseModel):
     name: str
     path: str
@@ -503,19 +495,15 @@ def page_ignored_paths(library_id: str) -> None:
     )
 
 
-@router.delete("/{library_id}/ignored-paths", response_model=UnignoreResponse)
-def unignore_paths(
-    library_id: str,
-    body: UnignoreRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-    _: Annotated[None, Depends(require_editor)],
-) -> UnignoreResponse:
-    """Forget emptied-trash records so the next scan ingests those files again.
-
-    Assets still in the trash are restored with POST /v1/assets/{id}/restore instead.
-    """
-    removed = AssetRepository(session).unignore(library_id, body.rel_paths)
-    return UnignoreResponse(removed=removed)
+@router.delete("/{library_id}/ignored-paths", dependencies=[Depends(require_editor)])
+def unignore_paths(library_id: str) -> None:
+    """Retired (410 gone): a scan brings back the files a person removed when
+    asked (force_add: `lumiverb scan --force-add`). An editor's, as it was."""
+    raise GoneError(
+        "DELETE /v1/libraries/{library_id}/ignored-paths is retired: a scan started with force_add "
+        "(`lumiverb scan --force-add`) adds the files a person removed, and forgets those deleted for good.",
+        ["POST /v1/libraries/{library_id}/scans"],
+    )
 
 
 @router.get("/{library_id}/directories", response_model=list[DirectoryItem])

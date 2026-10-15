@@ -94,6 +94,8 @@ class ScanSession(SQLModel, table=True):
     force: bool = Field(default=False, nullable=False)
     moves: str = Field(default="ask", nullable=False)
     dry_run: bool = Field(default=False, nullable=False)
+    # Add the files a person removed as if they never had (lumiverb scan --force-add).
+    force_add: bool = Field(default=False, nullable=False)
     # A clip made or changed since then is never taken for gone by this scan.
     started_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, index=True))

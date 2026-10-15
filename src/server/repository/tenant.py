@@ -781,7 +781,14 @@ class AssetRepository:
         ).scalars().all())
         return self._bring_back(ids, "a.deleted_reason = 'archived'")[0]
 
-    def _bring_back(self, asset_ids: list[str], condition: str) -> tuple[list[str], list[str]]:
+    def bring_back_removed(self, asset_ids: list[str]) -> list[str]:
+        """Clips a person trashed or archived, straight back into sight, the
+        archive skipped too (a scan's --force-add: their files are on disk and
+        a person asked for them). No commit: the caller's. Returns those back."""
+        return self._bring_back(asset_ids, "a.deleted_reason IN ('user', 'archived')" + self._IN_A_LIVE_LIBRARY,
+                                commit=False)[0]
+
+    def _bring_back(self, asset_ids: list[str], condition: str, *, commit: bool = True) -> tuple[list[str], list[str]]:
         """Clips matching condition (SQL on alias a) back in sight and queued
         for search, with their scenes. Returns (back, skipped), in the order given."""
         if not asset_ids:
@@ -817,7 +824,8 @@ class AssetRepository:
             from src.server.repository import locations
 
             locations.fixes_back(self._session, back)
-        self._session.commit()
+        if commit:
+            self._session.commit()
         return _split(asset_ids, set(back))
 
     def page_hidden(
@@ -1075,20 +1083,6 @@ class AssetRepository:
                  "   AND (sha256 IS NULL OR CAST(:sha AS text) IS NULL OR sha256 = :sha) LIMIT 1"),
             {"lib": library_id, "path": normalize_rel_path(rel_path), "sha": sha256},
         ).first() is not None
-
-    def unignore(self, library_id: str, rel_paths: list[str]) -> int:
-        """Forget emptied-trash records so the next scan picks the files up again."""
-        if not rel_paths:
-            return 0
-        result = self._session.execute(
-            text(
-                "DELETE FROM ignored_files"
-                " WHERE library_id = :lib AND rel_path = ANY(:paths)"
-            ),
-            {"lib": library_id, "paths": [normalize_rel_path(p) for p in rel_paths]},
-        )
-        self._session.commit()
-        return result.rowcount  # type: ignore[union-attr]
 
     def list_trashed(
         self,

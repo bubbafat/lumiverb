@@ -95,7 +95,7 @@ def test_a_scan_starts_before_the_walk_with_its_options(root: Path, options: dic
 
     assert started_before == [True]  # a clip made after the start is never taken for gone
     assert server.started() == {"scope": "", "media_type": "all", "thorough": True, "force": False,
-                                "moves": moves, "dry_run": False}
+                                "moves": moves, "dry_run": False, "force_add": False}
     assert server.calls() == ["POST /v1/libraries/lib_1/scans", f"POST /v1/scans/{SCAN_ID}/found",
                               f"POST /v1/scans/{SCAN_ID}/plan", f"POST /v1/scans/{SCAN_ID}/finish", "POST /v1/ingest"]
 

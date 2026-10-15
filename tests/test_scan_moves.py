@@ -51,6 +51,27 @@ class TestCliFlags:
 
 
 @pytest.mark.fast
+@pytest.mark.parametrize(("args", "force_add"), [([], False), (["--force-add"], True)])
+def test_force_add_reaches_the_scan(args: list[str], force_add: bool) -> None:
+    """--force-add, a person's last resort, is what the scan asks the server
+    for (what it does: tests/test_scans_api.py, tests/test_scan_outcomes.py)."""
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from src.client.cli.main import app
+
+    with (
+        patch("src.client.cli.main.LumiverbClient") as client,
+        patch("src.processing.scan.run_scan", return_value=ScanStats()) as run_scan,
+    ):
+        client.return_value.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "L"}]
+        result = CliRunner().invoke(app, ["scan", "--library", "L", *args])
+    assert result.exit_code == 0, result.output
+    assert run_scan.call_args.kwargs["force_add"] is force_add
+
+
+@pytest.mark.fast
 class TestScanStatsIncludesMoved:
     """Verify ScanStats has the moved field."""
 

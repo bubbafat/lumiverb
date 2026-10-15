@@ -801,6 +801,132 @@ def test_another_file_at_a_removed_path_is_a_new_clip(env):
     assert set(_clips(env, lib)) == {"t.jpg", "r.jpg", "e.jpg"}  # k.jpg isn't on disk: gone
 
 
+def _every_clip(env, library_id: str) -> dict[str, tuple[str, str | None]]:
+    """Every clip of the library, in sight or not: {rel_path: (asset_id, deleted_reason)}, the latest per path."""
+    with env.db.connect() as conn:
+        rows = conn.execute(text("SELECT rel_path, asset_id, deleted_reason FROM assets WHERE library_id = :l"
+                                 " ORDER BY created_at"), {"l": library_id}).all()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def _forgotten(env, library_id: str, rel_path: str) -> bool:
+    with env.db.connect() as conn:
+        return conn.execute(text("SELECT 1 FROM ignored_files WHERE library_id = :l AND rel_path = :p"),
+                            {"l": library_id, "p": rel_path}).first() is None
+
+
+@pytest.mark.slow
+def test_force_add_brings_back_what_a_person_removed(env):
+    """A last resort (lumiverb scan --force-add): a clip trashed or archived
+    comes back into sight with everything it had; a file deleted for good
+    comes back as a new clip and is forgotten as deleted, so later scans take
+    it as any other file."""
+    lib = _library(env)
+    files = _removed(env, lib)
+    before = _every_clip(env, lib)
+    run = _scan(env, lib, list(files.values()), force_add=True)
+    assert _planned(run) == {"t.jpg": ("hash", "removed"), "r.jpg": ("hash", "removed"),
+                             "e.jpg": ("hash", "removed")}
+    assert _decided(run) == {"t.jpg": "restored", "r.jpg": "restored", "e.jpg": "upload"}
+    assert run.decisions["t.jpg"]["asset_id"] == before["t.jpg"][0]
+    assert run.decisions["r.jpg"]["asset_id"] == before["r.jpg"][0]
+    assert run.finish["archived"] == 0 and run.finish["skipped"] == 0
+    clips = _clips(env, lib)
+    assert set(clips) == {"t.jpg", "r.jpg", "e.jpg", "k.jpg"}
+    assert clips["t.jpg"] == before["t.jpg"][0] and clips["r.jpg"] == before["r.jpg"][0]
+    assert clips["e.jpg"] == run.uploaded["e.jpg"]
+    assert _forgotten(env, lib, "e.jpg")
+    again = _scan(env, lib, list(files.values()))
+    assert _planned(again) == {} and again.finish["unchanged"] == 4
+
+
+@pytest.mark.slow
+def test_force_add_brings_a_clip_archived_then_trashed_into_sight(env):
+    lib = _library(env)
+    f = File("a.jpg", "a")
+    asset_id = _ingest(env, lib, f)
+    _ok(env.client.post("/v1/assets/archive", json={"asset_ids": [asset_id]}, headers=env.editor))
+    _ok(env.client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user"},
+                           headers=env.editor))
+    run = _scan(env, lib, [f.touched()], force_add=True)
+    assert _decided(run) == {"a.jpg": "restored"}
+    clip = _clip(env, asset_id)
+    assert clip["deleted_reason"] is None and clip["file_mtime"] == T1  # in sight, the file as found
+
+
+@pytest.mark.slow
+def test_force_add_brings_back_a_clip_whose_content_was_never_known(env):
+    """Removed before its content was known: a scan skips the file by its
+    path alone, and force_add brings the clip back by its path alone."""
+    lib = _library(env)
+    f = File("old.jpg", "old")
+    asset_id = _ingest(env, lib, f)
+    _ok(env.client.delete(f"/v1/assets/{asset_id}", headers=env.editor), 204)
+    with env.db.begin() as conn:
+        conn.execute(text("UPDATE assets SET sha256 = NULL WHERE asset_id = :a"), {"a": asset_id})
+    assert _planned(_scan(env, lib, [f], dry_run=True)) == {"old.jpg": ("skipped", "removed")}
+    run = _scan(env, lib, [f], force_add=True)
+    assert _decided(run) == {"old.jpg": "restored"}
+    assert _clips(env, lib) == {"old.jpg": asset_id}
+
+
+@pytest.mark.slow
+def test_force_add_another_file_at_a_removed_path_is_a_new_clip_and_the_old_stays_removed(env):
+    lib = _library(env)
+    _removed(env, lib)
+    before = _every_clip(env, lib)
+    disk = [File(f"{n}.jpg", f"another {n}", mtime=T1) for n in ("t", "r")]
+    run = _scan(env, lib, disk, force_add=True)
+    assert _decided(run) == {"t.jpg": "upload", "r.jpg": "upload"}
+    assert set(_clips(env, lib)) == {"t.jpg", "r.jpg"}
+    assert _clip(env, before["t.jpg"][0])["deleted_reason"] == "user"
+    assert _clip(env, before["r.jpg"][0])["deleted_reason"] == "archived"
+
+
+@pytest.mark.slow
+def test_force_add_takes_only_the_scans_folder(env):
+    lib = _library(env)
+    here, there = File("here/a.jpg", "here"), File("there/a.jpg", "there")
+    ids = {f.rel_path: _ingest(env, lib, f) for f in (here, there)}
+    _ok(env.client.request("DELETE", "/v1/assets", json={"asset_ids": list(ids.values()), "reason": "user"},
+                           headers=env.editor))
+    run = _scan(env, lib, [here], scope="here", force_add=True)
+    assert _decided(run) == {"here/a.jpg": "restored"}
+    assert _clips(env, lib) == {"here/a.jpg": ids["here/a.jpg"]}
+    assert _clip(env, ids["there/a.jpg"])["deleted_reason"] == "user"
+
+
+@pytest.mark.slow
+def test_force_add_in_a_dry_run_decides_and_changes_nothing(env):
+    lib = _library(env)
+    files = _removed(env, lib)
+    before = _every_clip(env, lib)
+    run = _scan(env, lib, list(files.values()), force_add=True, dry_run=True)
+    assert _decided(run) == {"t.jpg": "restored", "r.jpg": "restored", "e.jpg": "upload"}
+    assert _every_clip(env, lib) == before
+    assert not _forgotten(env, lib, "e.jpg")
+    assert _planned(_scan(env, lib, list(files.values()), dry_run=True)) == {
+        "t.jpg": ("skipped", "removed"), "r.jpg": ("skipped", "removed"), "e.jpg": ("skipped", "removed")}
+
+
+@pytest.mark.slow
+def test_force_add_hashes_sent_again_keep_their_decision(env):
+    lib = _library(env)
+    f = File("a.jpg", "a")
+    asset_id = _ingest(env, lib, f)
+    _ok(env.client.delete(f"/v1/assets/{asset_id}", headers=env.editor), 204)
+    c, h = env.client, env.editor
+    scan_id = _start(env, lib, force_add=True)
+    _ok(c.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([f])}, headers=h))
+    _ok(c.post(f"/v1/scans/{scan_id}/plan", json={}, headers=h))
+    sent = {"files": [{"rel_path": f.rel_path, "sha256": f.sha}]}
+    first = _ok(c.post(f"/v1/scans/{scan_id}/hashes", json=sent, headers=h))
+    second = _ok(c.post(f"/v1/scans/{scan_id}/hashes", json=sent, headers=h))
+    assert first == second == {"files": [{"rel_path": "a.jpg", "decision": "restored", "asset_id": asset_id,
+                                          "moved_from": None}]}
+    assert _clips(env, lib) == {"a.jpg": asset_id}
+
+
 # ---------------------------------------------------------------------------
 # Dry runs, expiry, the scan's own rules
 # ---------------------------------------------------------------------------
