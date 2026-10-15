@@ -93,7 +93,11 @@ async def lifespan(app: FastAPI):
 
 
 set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them
-app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan)
+# FastAPI's own OpenTelemetry, off whatever the environment says
+# (FASTAPI_OTEL_AUTO_CONFIGURE, OTEL_*): Lumiverb records and sends nothing.
+NO_TELEMETRY = {"tracing": False, "metrics": False, "logs": False, "operation_spans": False,
+                "auto_configure": False}
+app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY)
 
 
 # Every error in one envelope: {"error": {"code", "message", "details"}} (errors.py).
