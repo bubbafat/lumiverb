@@ -4,10 +4,8 @@ import Foundation
 ///
 /// **Per-platform behavior:**
 /// - macOS uses `MacProxyDiskCache` — unbounded disk cache at
-///   `~/.cache/lumiverb/proxies/`, shared with the Python CLI via SHA
-///   sidecars. The scan-specific methods (`putScan`, `getSHA`, `isValid`)
-///   are NOT part of this protocol; enrichment code uses the concrete
-///   `MacProxyDiskCache` type directly.
+///   `~/.cache/lumiverb/proxies/`, shared with the Python CLI (whose scan
+///   writes proxies there with SHA sidecars).
 /// - iOS uses `MemoryImageCache` (proxy slot) — in-memory NSCache only,
 ///   ~150 MB budget, no disk fallback.
 public protocol ProxyCache: Sendable {

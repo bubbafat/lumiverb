@@ -3,7 +3,6 @@ import LumiverbKit
 
 struct MenuBarView: View {
     @ObservedObject var appState: AppState
-    @ObservedObject var scanState: ScanState
     var openBrowseWindow: (() -> Void)?
 
     var body: some View {
@@ -16,17 +15,12 @@ struct MenuBarView: View {
         }
         .padding()
         .frame(width: 300)
+        // The app's one session restore: the browse window opens from
+        // here, and uses the session this makes.
         .task {
             if !appState.serverURL.isEmpty && !appState.isAuthenticated {
                 appState.configure(serverURL: appState.serverURL)
                 await appState.tryRestoreSession()
-            }
-        }
-        .onChange(of: appState.isAuthenticated) { _, isAuth in
-            if isAuth {
-                scanState.startWatching()
-            } else {
-                scanState.stopWatching()
             }
         }
     }
@@ -47,11 +41,6 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-
-        Divider()
-
-        // Scan status
-        scanStatusSection
 
         // Favorites: only render the section if the user has actually
         // favorited something. The previous design always listed every
@@ -84,7 +73,6 @@ struct MenuBarView: View {
         Divider()
 
         Button("Log Out") {
-            scanState.stopWatching()
             Task { await appState.logout() }
         }
 
@@ -98,85 +86,6 @@ struct MenuBarView: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
-    }
-
-    // MARK: - Scan status
-
-    @ViewBuilder
-    private var scanStatusSection: some View {
-        HStack {
-            if scanState.isPaused {
-                Image(systemName: "pause.circle.fill")
-                    .foregroundColor(.secondary)
-            } else if scanState.isScanning {
-                ProgressView()
-                    .controlSize(.small)
-            } else if scanState.isWatching {
-                Image(systemName: "eye")
-                    .foregroundColor(.blue)
-            }
-            Text(scanState.statusText)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-
-        if scanState.isScanning {
-            // Only show progress bar during actual processing
-            if scanState.totalFiles > 0 && scanState.phase == "processing" {
-                ProgressView(
-                    value: Double(scanState.processedFiles),
-                    total: Double(scanState.totalFiles)
-                )
-                .progressViewStyle(.linear)
-            }
-        }
-
-        // Pause / Resume / Scan / Cancel — pause is a persistent toggle so
-        // the controls are visible regardless of `isScanning`. Cancel only
-        // makes sense mid-scan.
-        HStack(spacing: 8) {
-            if scanState.isPaused {
-                Button("Resume Sync") { scanState.resumeSync() }
-                    .controlSize(.small)
-                    .keyboardShortcut("p")
-            } else {
-                Button("Pause Sync") { scanState.pauseSync() }
-                    .controlSize(.small)
-                    .keyboardShortcut("p")
-            }
-
-            if scanState.isScanning {
-                Button("Cancel") { scanState.cancelScanning() }
-                    .controlSize(.small)
-            } else {
-                Button("Sync Now") { scanState.scanAllLibraries() }
-                    .controlSize(.small)
-                    .keyboardShortcut("s")
-                    .disabled(appState.libraries.isEmpty || scanState.isPaused)
-            }
-        }
-
-        if scanState.errorCount > 0 {
-            Text("\(scanState.errorCount) errors")
-                .font(.caption2)
-                .foregroundColor(.red)
-            Text(scanState.lastError)
-                .font(.caption2)
-                .foregroundColor(.red)
-                .lineLimit(3)
-                .textSelection(.enabled)
-            Button("Copy Error") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(scanState.lastError, forType: .string)
-            }
-            .controlSize(.small)
-        }
-
-        if let lastScan = scanState.lastScanDate {
-            Text("Last sync: \(lastScan, style: .relative) ago")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
     }
 
     // MARK: - Unauthenticated

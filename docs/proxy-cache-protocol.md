@@ -1,6 +1,6 @@
 # Proxy Cache Protocol
 
-Shared disk cache protocol for proxy images. All Lumiverb clients (Python CLI, macOS app, future clients) use the same format and location so proxies are reusable across clients.
+Shared disk cache protocol for proxy images. Lumiverb's Python side (the CLI's scan and the scheduler) and the macOS app use the same format and location so proxies are reusable across them. Only the Python side writes proxies during a scan: the macOS app scans nothing (the server's scheduler scans every library), and only reads the cache and keeps the proxies it downloads for browsing.
 
 ## Location
 
@@ -55,4 +55,4 @@ Remove both `{asset_id}` and `{asset_id}.sha`.
 
 ## Compatibility
 
-Both the Python CLI (`src/processing/proxy/proxy_cache.py`) and the Swift macOS app (`ProxyCacheOnDisk`) implement this protocol. Files written by either client are readable by the other.
+The Python side (`src/processing/proxy/proxy_cache.py`) implements the whole protocol. The Swift macOS app (`MacProxyDiskCache`) implements the browse read, its own atomic write of a downloaded proxy (no sidecar), and the delete. Files written by either are readable by the other.

@@ -37,9 +37,3 @@ public struct AssetPageItem: Decodable, Identifiable, Sendable, Equatable {
         return Double(w) / Double(h)
     }
 }
-
-/// Response from `GET /v1/assets/page`.
-public struct AssetPageResponse: Decodable, Sendable {
-    public let items: [AssetPageItem]
-    public let nextCursor: String?
-}

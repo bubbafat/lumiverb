@@ -8,7 +8,6 @@ struct LibrarySidebar: View {
     let libraries: [Library]
     @ObservedObject var browseState: BrowseState
     @ObservedObject var appState: AppState
-    @ObservedObject var scanState: ScanState
     @Binding var section: SidebarSection
 
     /// Presents the `NewLibrarySheet`. Scoped here because the sheet needs
@@ -89,7 +88,6 @@ struct LibrarySidebar: View {
                                 .frame(width: 16)
                             Text(lib.name)
                             Spacer(minLength: 4)
-                            libraryStatusDot(for: lib.libraryId)
                             if appState.isFavoriteLibrary(lib.libraryId) {
                                 Image(systemName: "star.fill")
                                     .font(.caption)
@@ -137,34 +135,19 @@ struct LibrarySidebar: View {
             .frame(maxHeight: libraries.count <= 3 ? 120 : 200)
             .sheet(isPresented: $showNewLibrarySheet) {
                 NewLibrarySheet(appState: appState) { newLibraryId in
-                    // Select the new library immediately and restart the
-                    // scanner so the LibraryWatcher picks up the new root
-                    // path (it captures paths at watch time; stopping and
-                    // starting rebinds it). Then kick a manual scan so the
-                    // user sees immediate progress instead of waiting for
-                    // a filesystem event.
+                    // Select the new library at once. The server's
+                    // scheduler scans it; this app scans nothing.
                     browseState.selectedLibraryId = newLibraryId
                     section = .library
-                    if scanState.isWatching {
-                        scanState.stopWatching()
-                        scanState.startWatching()
-                    }
-                    scanState.scanAllLibraries()
                 }
             }
             .sheet(item: $settingsLibrary) { lib in
                 LibrarySettingsSheet(appState: appState, library: lib) { changed in
                     // Renaming or re-rooting a library invalidates any cached
-                    // directory tree for the currently selected library, and
-                    // changes the LibraryWatcher's set of root paths. Restart
-                    // the watcher (captured at watch time — see startWatching)
-                    // and ask BrowseState to re-load directories if this is
-                    // the selected one.
+                    // directory tree for the currently selected library: ask
+                    // BrowseState to re-load directories if this is the
+                    // selected one.
                     guard changed else { return }
-                    if scanState.isWatching {
-                        scanState.stopWatching()
-                        scanState.startWatching()
-                    }
                     if browseState.selectedLibraryId == lib.libraryId {
                         Task { await browseState.loadRootDirectories() }
                     }
@@ -203,37 +186,6 @@ struct LibrarySidebar: View {
     /// like "École" sort sensibly). Recomputed on every render — driven
     /// by `appState.favoriteLibraryIds` (`@Published`) so toggling a
     /// favorite via the context menu reorders the sidebar live.
-    /// Small colored dot reflecting the library's health:
-    /// - green: idle / up-to-date
-    /// - orange: currently scanning
-    /// - red: root path is offline (unmounted volume or bad path)
-    ///
-    /// Defaults to green when the library has no recorded status yet
-    /// (e.g., before the first scan has run on this launch). The
-    /// status gets populated as soon as `ScanState.scanAllLibraries`
-    /// begins touching each library.
-    @ViewBuilder
-    private func libraryStatusDot(for libraryId: String) -> some View {
-        let status = scanState.libraryStatus[libraryId] ?? .idle
-        let color: Color = {
-            switch status {
-            case .idle: return .green
-            case .busy: return .orange
-            case .offline: return .red
-            }
-        }()
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .help({
-                switch status {
-                case .idle: return "Up to date"
-                case .busy: return "Syncing…"
-                case .offline: return "Root path is offline"
-                }
-            }())
-    }
-
     private var sortedLibraries: [Library] {
         let favoriteIds = appState.favoriteLibraryIds
         let alphaCmp: (Library, Library) -> Bool = {

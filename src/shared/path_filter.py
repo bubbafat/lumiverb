@@ -14,8 +14,7 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 def has_control_character(name: str) -> bool:
     """name (a file or folder name, or a path) has a control character: C0
     (U+0000-U+001F: a newline, a tab, NUL) or DEL (U+007F). No library takes
-    such a name: scans skip it and the server refuses it (check_rel_path).
-    Twin: PathFilter.hasControlCharacter in LumiverbKit."""
+    such a name: scans skip it and the server refuses it (check_rel_path)."""
     return _CONTROL.search(name) is not None
 
 

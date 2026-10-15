@@ -11,7 +11,6 @@ that same real clip beside it."""
 from __future__ import annotations
 
 import asyncio
-import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -26,9 +25,6 @@ from src.processing.video.video_scanner import VideoScanner
 from src.shared.file_extensions import VIDEO_EXTENSIONS, VIDEO_EXTENSIONS_LIST
 
 pytestmark = pytest.mark.fast
-
-SWIFT_TWIN = (Path(__file__).parent.parent / "clients/lumiverb-app/Sources/LumiverbKit/Sources/LumiverbKit"
-              / "Models/FFmpegInput.swift")
 
 
 def _clip(path: Path, seconds: float = 2.0) -> Path:
@@ -174,11 +170,6 @@ def test_each_format_names_one_of_this_ffmpegs_demuxers():
              for name in (row[2] if row[1] == "d" else row[1]).split(",")}
     for demuxer in ffmpeg_run.INPUT_FORMATS.split(","):
         assert demuxer in names
-
-
-def test_the_mac_apps_twin_has_the_same_demuxers():
-    pairs = dict(re.findall(r'"(\.\w+)":\s*"(\w+)"', SWIFT_TWIN.read_text()))
-    assert pairs == ffmpeg_run.DEMUXERS
 
 
 @pytest.mark.parametrize("ext", VIDEO_EXTENSIONS_LIST)

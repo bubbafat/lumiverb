@@ -40,7 +40,6 @@ enum SortOption: String, CaseIterable, Identifiable {
 /// Main browse window with library sidebar, media grid, and lightbox.
 struct BrowseWindow: View {
     @ObservedObject var appState: AppState
-    @ObservedObject var scanState: ScanState
     @StateObject private var browseState: BrowseState
     @StateObject private var peopleState: PeopleState
     @StateObject private var clusterReviewState: ClusterReviewState
@@ -52,9 +51,8 @@ struct BrowseWindow: View {
     @State private var section: SidebarSection = .library
     @State private var showSmartCollectionSheet = false
 
-    init(appState: AppState, scanState: ScanState) {
+    init(appState: AppState) {
         self.appState = appState
-        self.scanState = scanState
         // BrowseState consumes the cross-platform `BrowseAppContext`
         // protocol that AppState conforms to (see AppState.swift).
         self._browseState = StateObject(wrappedValue: BrowseState(appContext: appState))
@@ -73,7 +71,6 @@ struct BrowseWindow: View {
                 libraries: appState.libraries,
                 browseState: browseState,
                 appState: appState,
-                scanState: scanState,
                 section: $section
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
@@ -295,14 +292,6 @@ struct BrowseWindow: View {
     @ViewBuilder
     private var libraryColumn: some View {
         VStack(spacing: 0) {
-            if let libId = browseState.selectedLibraryId,
-               scanState.libraryStatus[libId] == .busy {
-                // Background sync activity banner. Shows the same
-                // status text as the menu bar so users in the browse
-                // window don't miss that work is in flight on the
-                // library they're looking at.
-                scanActivityBanner
-            }
             FilterChicletBar(browseState: browseState) {
                 showSmartCollectionSheet = true
             }
@@ -563,25 +552,6 @@ struct BrowseWindow: View {
                 .buttonStyle(.plain)
             }
         }
-    }
-
-    // MARK: - Scan activity banner
-
-    /// Thin progress banner shown when the currently-selected library
-    /// is being scanned by the background scan. Gives the
-    /// browse-window user the same visibility into pipeline state
-    /// that the menu bar dropdown already provides.
-    private var scanActivityBanner: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text(scanState.statusText)
-                .font(.caption)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
     }
 
     // MARK: - Sort menu

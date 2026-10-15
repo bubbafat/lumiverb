@@ -35,7 +35,7 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 ## 2. Architectural Principles
 
 1. **API-first.** Every capability is exposed via the REST API. The CLI, web UI, and Mac agent are all API clients. Nothing bypasses the API.
-2. **Originals are read-only.** Anything that reads source files (scanning, probing, proxy generation) runs on a machine that can read them: today the CLI or macOS app on the machine that holds them, and under ADR-016 the server through a read-only mount. Originals are never written, moved, renamed or uploaded; the API never receives source files.
+2. **Originals are read-only.** Anything that reads source files (scanning, probing, proxy generation) runs on a machine that can read them: the server's scheduler through a read-only mount (ADR-016), or the CLI's scan on the machine that holds them. The macOS app reads none. Originals are never written, moved, renamed or uploaded; the API never receives source files.
 3. **Stateless API server.** The API server holds no local state. It can be replaced, scaled, or moved without data loss.
 4. **Per-tenant isolation.** Each tenant has a dedicated database. Cross-tenant data leakage is architecturally impossible.
 5. **Regenerable caches.** Proxies, thumbnails, search indexes and AI outputs are all regenerable from source. Human data in Postgres (person names, corrections, trash, projects, filters, settings) is irreplaceable and is never overwritten automatically by derived data (ADR-016).
@@ -162,7 +162,7 @@ Responsibilities:
 
 ### 3.4 The CLI and the Mac app
 
-API clients. The CLI (`src/client/cli/`) scans libraries (`lumiverb scan`: proxies, thumbnails, EXIF, previews, uploaded through `POST /v1/ingest`), browses, searches and administers. It doesn't process: `lumiverb enrich` asks the scheduler to do a producer's work now (`POST /v1/producers/run`). A scan (the CLI's or the scheduler's) says what it found and the server decides what's new, changed, moved, skipped and missing (ADR-018 decision 12): `src/processing/scan.py` walks, lists the files to a scan session on the server, hashes what the plan asks about and uploads what it's told to; `src/server/scans.py` compares, one statement over the whole listing. The macOS app scans and browses; it processes nothing (its built-in AI retired in ADR-016 phase 2: the scheduler makes every artifact). Neither has direct Postgres, Quickwit or object storage access.
+API clients. The CLI (`src/client/cli/`) scans libraries (`lumiverb scan`: proxies, thumbnails, EXIF, previews, uploaded through `POST /v1/ingest`), browses, searches and administers. It doesn't process: `lumiverb enrich` asks the scheduler to do a producer's work now (`POST /v1/producers/run`). A scan (the CLI's or the scheduler's) says what it found and the server decides what's new, changed, moved, skipped and missing (ADR-018 decision 12): `src/processing/scan.py` walks, lists the files to a scan session on the server, hashes what the plan asks about and uploads what it's told to; `src/server/scans.py` compares, one statement over the whole listing. The macOS app browses: it scans nothing and processes nothing (its built-in AI retired in ADR-016 phase 2, its own scan after it: the scheduler scans every library and makes every artifact). Neither has direct Postgres, Quickwit or object storage access.
 
 The processing both the scheduler and the CLI's scan use lives in `src/processing/`: the API client (`api.py`), this machine's settings (`machine.py`: library root map, caches, how video is rendered), scanning (`scan.py`, `ingest.py`), the account's AI machines (`ai_pool.py`, `job_guard.py` and its guards), failure reports, the producers' settings as the server says them, and the media tools (`video/`, `proxy/`, `workers/`). Nothing there imports the CLI or the server, and nothing in `src/server` imports `src/client`.
 
@@ -312,7 +312,7 @@ Client calls GET /v1/similar?asset_id=...&library_id=...
 | CLIP embeddings | open-clip-torch (ViT-B/32) | 512-dim vectors for similarity search |
 | CLI | Python, Typer | Shares models with API server |
 | Web UI | React, TypeScript, Tailwind | Required for media grid, virtualized scroll |
-| Mac agent | Swift / Electron TBD | Filesystem access, background service |
+| Mac app | Swift / SwiftUI | A browse client in the menu bar (the server's scheduler scans) |
 | Cloud platform | GCP | Employee discounts, known infrastructure |
 | Container | Docker Compose (self-hosted), Cloud Run (cloud) | Same image, different orchestration |
 | Auth | Hybrid: email/password + JWT (web), API keys (CLI/automation). 1h access tokens, 7d refresh window, server-side revocation. Rate-limited auth endpoints. | Self-hosted, no external auth service dependency |
@@ -454,6 +454,9 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - Library management
 
 ### Phase 4: Mac Agent
+
+Superseded: the native macOS app is a browse client. The server's scheduler scans every library and makes every artifact (ADR-016, ADR-018); the app watches, scans and ingests nothing. The plan as it was:
+
 - Native Mac app or Electron
 - Background filesystem watching
 - Menu bar status

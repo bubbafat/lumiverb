@@ -5,31 +5,25 @@ import LumiverbKit
 struct LumiverbApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appState = AppState()
-    @StateObject private var scanState: ScanState
     @Environment(\.openWindow) private var openWindow
 
-    init() {
-        let state = AppState()
-        _appState = StateObject(wrappedValue: state)
-        _scanState = StateObject(wrappedValue: ScanState(appState: state))
-    }
-
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarView(appState: appState, scanState: scanState, openBrowseWindow: {
+        // The menu bar's icon is fixed: this app scans nothing (the
+        // server's scheduler scans every library), so there's no sync
+        // state to show there.
+        MenuBarExtra("Lumiverb", systemImage: "photo.stack") {
+            MenuBarView(appState: appState, openBrowseWindow: {
                 // Show dock icon when browse window opens
                 NSApp.setActivationPolicy(.regular)
                 openWindow(id: "browse")
                 NSApp.activate(ignoringOtherApps: true)
             })
-        } label: {
-            MenuBarLabel(scanState: scanState)
         }
         .menuBarExtraStyle(.window)
 
         // Browse window
         Window("Lumiverb", id: "browse") {
-            BrowseWindow(appState: appState, scanState: scanState)
+            BrowseWindow(appState: appState)
                 .frame(minWidth: 800, minHeight: 500)
                 // ADR-015 M1: install the macOS cache bundle and scroll
                 // accessor as environment values so views moved into
@@ -58,32 +52,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon — menu bar only (until browse window opens)
         NSApp.setActivationPolicy(.accessory)
-    }
-}
-
-/// Three-state menu bar icon: paused / idle / active. macOS menu bar items
-/// are template-rendered (monochrome) by default — `symbolRenderingMode`
-/// and color modifiers don't survive into the menu bar appearance — so we
-/// use three visually distinct SF symbols instead of relying on color:
-///
-/// - **paused**: `pause.rectangle.fill`
-/// - **active** (currently scanning): `arrow.triangle.2.circlepath` with the
-///   built-in symbol effect rotation
-/// - **idle** (watching, healthy): `photo.stack`
-///
-/// The label is reactive — `@ObservedObject` on `ScanState` ensures the
-/// icon updates whenever `isPaused` / `isScanning` change.
-private struct MenuBarLabel: View {
-    @ObservedObject var scanState: ScanState
-
-    var body: some View {
-        Image(systemName: iconName)
-            .help(scanState.statusText)
-    }
-
-    private var iconName: String {
-        if scanState.isPaused { return "pause.rectangle.fill" }
-        if scanState.isScanning { return "arrow.triangle.2.circlepath" }
-        return "photo.stack"
     }
 }

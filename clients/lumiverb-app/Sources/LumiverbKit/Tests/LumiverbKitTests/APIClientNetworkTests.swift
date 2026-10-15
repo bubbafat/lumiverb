@@ -468,57 +468,6 @@ final class APIClientNetworkTests: XCTestCase {
         XCTAssertEqual(callCount, 2)
     }
 
-    // MARK: - Multipart upload
-
-    func testPostMultipartSendsCorrectBoundary() async throws {
-        MockURLProtocol.requestHandler = { request in
-            let contentType = request.value(forHTTPHeaderField: "Content-Type")!
-            XCTAssert(contentType.starts(with: "multipart/form-data; boundary="))
-
-            if let bodyData = request.httpBody {
-                let body = String(data: bodyData, encoding: .utf8)!
-                XCTAssert(body.contains("name=\"library_id\""), "Missing library_id field")
-                XCTAssert(body.contains("name=\"rel_path\""), "Missing rel_path field")
-                XCTAssert(body.contains("filename=\"proxy.jpg\""), "Missing file")
-            }
-
-            return jsonResponse(200, json: """
-            {"asset_id": "ast_new", "status": "created", "created": true, "proxy_key": null, "proxy_sha256": null, "thumbnail_key": null, "thumbnail_sha256": null, "width": null, "height": null}
-            """, for: request)
-        }
-
-        let client = makeClient()
-        let response: IngestResponse = try await client.postMultipart(
-            "/v1/ingest",
-            fields: ["library_id": "lib_1", "rel_path": "photo.jpg"],
-            fileField: "proxy",
-            fileData: Data([0xFF, 0xD8]),
-            fileName: "proxy.jpg",
-            mimeType: "image/jpeg"
-        )
-        XCTAssertEqual(response.assetId, "ast_new")
-        XCTAssertTrue(response.created)
-    }
-
-    func testPostMultipartThrowsNoToken() async {
-        let client = makeClient(token: nil)
-        do {
-            let _: IngestResponse = try await client.postMultipart(
-                "/v1/ingest",
-                fields: [:],
-                fileField: "proxy",
-                fileData: Data(),
-                fileName: "f.jpg",
-                mimeType: "image/jpeg"
-            )
-            XCTFail("Expected noToken")
-        } catch let error as APIError {
-            XCTAssertEqual(error, .noToken)
-        } catch {
-            XCTFail("Unexpected error: \(error)")
-        }
-    }
-
     // MARK: - Library creation
 
     func testCreateLibraryPostsSnakeCaseBody() async throws {
@@ -774,16 +723,16 @@ final class APIClientNetworkTests: XCTestCase {
                 XCTAssertNotNil(body["asset_ids"])
             }
             return jsonResponse(200, json: """
-            {"trashed": ["a1", "a2"], "not_found": []}
+            {"removed": 2}
             """, for: request)
         }
 
         let client = makeClient()
-        let result: BatchDeleteResponse = try await client.deleteWithBody(
-            "/v1/assets/batch-delete",
-            body: BatchDeleteRequest(assetIds: ["a1", "a2"], reason: .missing)
+        let result: BatchRemoveResponse = try await client.deleteWithBody(
+            "/v1/projects/prj_1/assets",
+            body: AssetIdsRequest(assetIds: ["a1", "a2"])
         )
-        XCTAssertEqual(result.trashed.count, 2)
+        XCTAssertEqual(result.removed, 2)
     }
 
     // MARK: - Ratings

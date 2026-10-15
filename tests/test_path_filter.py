@@ -13,7 +13,6 @@ from src.shared.path_filter import (
     validate_pattern,
 )
 
-# The same cases as ControlCharacterNameTests.swift: the twins agree.
 CONTROL_CHARACTERS = [chr(c) for c in range(0x20)] + ["\x7f"]
 ORDINARY_NAMES = [
     "photo.jpg", "Shoots/Day 1/A001.mov", "café/résumé.jpg",

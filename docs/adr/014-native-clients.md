@@ -4,7 +4,7 @@
 
 Accepted — in progress (Phases 0–4 complete; 6 partial; 5 not started)
 
-> **Partly superseded by [ADR-016](016-operating-model.md) (2026-10-07).** The server schedules all processing and reads storage read-only. The macOS app's built-in AI from Phase 4 (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retired in ADR-016 phase 2 (removed from the app 2026-10-14), and scanning moves to the server, with the macOS app reporting the file changes it sees. Browsing (Phases 2, 5 and 6) stands.
+> **Partly superseded by [ADR-016](016-operating-model.md) (2026-10-07).** The server schedules all processing and reads storage read-only. The macOS app's built-in AI from Phase 4 (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retired in ADR-016 phase 2 (removed from the app 2026-10-14), and so did its scan (Phase 3: the FSEvents watcher, proxy generation and ingest; removed 2026-10-14): the server's scheduler scans every library, and the app reports no changes. Browsing (Phases 2, 5 and 6) stands.
 
 ## Progress
 
@@ -13,7 +13,7 @@ Accepted — in progress (Phases 0–4 complete; 6 partial; 5 not started)
 | 0 | Python restructure: clean client/server separation, test boundary audit | Complete |
 | 1 | Swift project scaffold: Xcode project, shared package, API client, auth | Complete |
 | 2 | macOS browse shell: library list, media grid, lightbox, search | Complete |
-| 3 | macOS background scan: file watching, hashing, proxy generation, upload | Complete |
+| 3 | macOS background scan: file watching, hashing, proxy generation, upload | Complete; removed 2026-10-14 (ADR-016, ADR-018: the server's scheduler scans every library) |
 | 4 | macOS enrichment: CoreML CLIP, CoreML ArcFace, Apple Vision OCR, whisper.cpp | Complete — CLIP / ArcFace / face detection / OCR / vision-AI / video preview / whisper.cpp transcription all shipped; removed 2026-10-14 (ADR-016: the server's scheduler does it all) |
 | 5 | iOS browse app: shared UI from Phase 2 adapted for iOS | Not started — only Phase 1 deliverables (login, connected screen) exist under `Sources/iOS/` |
 | 6 | Face tagging UI (both platforms) | Partial — macOS face overlay, cluster review, people page, person detail, dismiss, name flows all built; iOS blocked on Phase 5 |
