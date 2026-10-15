@@ -121,6 +121,47 @@ def test_search_sync_has_no_library(monkeypatch):
     c.post.assert_not_called()
 
 
+# What POST /v1/upkeep/search-sync answers (routers/upkeep.py SearchSyncResult).
+SYNCED = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0}
+
+
+def _syncs(monkeypatch, *answers: dict, force: bool = False):
+    """`search-sync --all` against a server answering each call in turn: (its output, the client)."""
+    from src.client.cli.main import app
+
+    mod = importlib.import_module("src.client.cli.commands.maintenance")
+    c = MagicMock()
+    c.post.return_value.json.side_effect = list(answers)
+    monkeypatch.setattr(mod, "LumiverbClient", lambda: c)
+    r = CliRunner().invoke(app, ["maintenance", "search-sync", "--all", *(["--force"] if force else [])])
+    assert r.exit_code == 0, r.output
+    return " ".join(r.output.split()), c
+
+
+def test_search_sync_goes_on_until_a_call_writes_nothing(monkeypatch):
+    out, c = _syncs(monkeypatch, {**SYNCED, "synced": 1000, "transcripts_synced": 3}, {**SYNCED, "synced": 200},
+                    SYNCED, force=True)
+    # Everything again once (force clears the sync times), then what's left.
+    assert [call.args[0] for call in c.post.call_args_list] == [
+        "/v1/upkeep/search-sync?force=true", "/v1/upkeep/search-sync", "/v1/upkeep/search-sync"]
+    assert "Batch 1: 1000 clips, 3 transcripts synced" in out and "Batch 2: 200 clips, 0 transcripts synced" in out
+    assert "Clips synced 1200 Transcripts synced 3 Failed 0" in out
+
+
+def test_search_sync_of_transcripts_alone_goes_on(monkeypatch):
+    out, c = _syncs(monkeypatch, {**SYNCED, "transcripts_synced": 40}, SYNCED)
+    assert c.post.call_count == 2
+    assert "Clips synced 0 Transcripts synced 40 Failed 0" in out
+
+
+@pytest.mark.parametrize("failed", ["failed", "transcripts_failed"])
+def test_search_sync_stops_when_something_failed(monkeypatch, failed):
+    """Asked again at once it would fail the same way: the next upkeep tries again."""
+    out, c = _syncs(monkeypatch, {**SYNCED, "synced": 10, failed: 1}, {**SYNCED, "synced": 10})
+    assert c.post.call_count == 1
+    assert "Clips synced 10 Transcripts synced 0 Failed 1" in out
+
+
 def test_cleanup_dismissed_all(monkeypatch):
     r, c = _invoke(monkeypatch, "cleanup-dismissed", "--all")
     assert r.exit_code == 0, r.output

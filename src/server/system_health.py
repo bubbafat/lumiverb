@@ -27,9 +27,7 @@ FAILING_WINDOW = timedelta(hours=24)
 # The scheduler checks each machine of a job that's on every minute; not
 # checked for this long, nothing is checking it. Proposed.
 MACHINE_STALE = timedelta(minutes=10)
-# A search that fell back to Postgres, or failed, this recently colours Search. Proposed.
-SEARCH_RECENT = timedelta(minutes=10)
-# This many clips not in the search index yet: search can miss them. Proposed.
+# This many clips not searchable yet (their search rows not written): search can miss them. Proposed.
 UNSYNCED_YELLOW = 100
 # Free space on the data disk, as a share of it. Proposed.
 DISK_YELLOW = 0.15
@@ -178,40 +176,16 @@ def ai_row(*, machines: Sequence[Mapping[str, Any]], job_models: Mapping[str, st
 # -- Search ---------------------------------------------------------------------
 
 
-def search_row(*, enabled: bool, fallback_on: bool, quickwit: str | None, quickwit_error: str,
-               last_fallback: tuple[datetime, str] | None, last_failure: tuple[datetime, str] | None,
-               unsynced: int, now: datetime) -> Row:
-    """quickwit: "ok", "missing" (the account's index isn't there), "down"
-    (not answering), None (off). Red when searches failed lately, or
-    Quickwit can't answer and the Postgres fallback is off (searches find
-    nothing). Yellow while Postgres stands in (Quickwit off, down or the
-    index missing; or a search fell back lately) or many clips wait to be
-    indexed. Green when Quickwit answers."""
-    row = Row("search", "Search", GREEN, "Quickwit is answering.", checked_at=now)
-    if last_failure and now - last_failure[0] < SEARCH_RECENT:
-        row.state, row.reason = RED, f"A search failed {ago(now - last_failure[0])} ago: {last_failure[1]}"
-        return row
-    if not enabled or quickwit in ("down", "missing"):
-        why = ("Quickwit is off" if not enabled else
-               "Quickwit isn't answering" if quickwit == "down" else "The search index is missing")
-        if not fallback_on:
-            row.state, row.reason = RED, f"{why} and the Postgres fallback is off: searches find nothing."
-            return row
-        row.state = YELLOW
-        if quickwit == "missing" and enabled:
-            row.reason = (f"{why}: search uses Postgres (simpler matching) until upkeep remakes it, "
-                          "within 5 minutes, and indexes clips, scenes and transcripts again.")
-        else:
-            detail = f" ({quickwit_error})" if quickwit_error and enabled and quickwit == "down" else ""
-            row.reason = f"{why}{detail}: search uses Postgres (simpler matching)."
-        return row
-    notes = []
-    if last_fallback and now - last_fallback[0] < SEARCH_RECENT:
-        notes.append(f"A search fell back to Postgres {ago(now - last_fallback[0])} ago: {last_fallback[1]}")
+def search_row(*, unsynced: int, now: datetime) -> Row:
+    """Search is in the account's database (ADR-019): there's nothing to be
+    down. Yellow while many clips wait for the search sync to write their
+    words (upkeep does, within minutes); a few waiting is said, and green."""
+    row = Row("search", "Search", GREEN, "Every clip is searchable.", checked_at=now)
+    if unsynced:
+        row.reason = (f"{_clips(unsynced)} {'isn' if unsynced == 1 else 'aren'}'t searchable yet: "
+                      f"upkeep adds {'it' if unsynced == 1 else 'them'} within minutes.")
     if unsynced >= UNSYNCED_YELLOW:
-        notes.append(f"{_clips(unsynced)} aren't in the search index yet: search can miss them.")
-    if notes:
-        row.state, row.reason = YELLOW, " ".join(notes)
+        row.state = YELLOW
     return row
 
 

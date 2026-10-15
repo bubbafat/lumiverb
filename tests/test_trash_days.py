@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -75,8 +74,7 @@ def _exists(env, table: str, key: str, value: str) -> bool:
 
 def _upkeep(env) -> dict:
     client, headers, *_ = env
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()):
-        r = client.post("/v1/upkeep", headers=headers)
+    r = client.post("/v1/upkeep", headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["trash_purge"]
 

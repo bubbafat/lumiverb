@@ -4,15 +4,20 @@
 Review of PR 10: a text search was cut to its first 1,000 matches without a
 word, and a filter the server couldn't read was dropped, widening the
 project to the whole library.
+
+Text searches here are the real one (src/server/search/text_search.py) over
+real clips: each test's own word, in its clips' paths (written by the
+search sync) or their scenes' descriptions.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, text
 
+from tests.scenes import Scene, described_scenes
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 
 pytestmark = pytest.mark.slow
@@ -52,13 +57,22 @@ def _project_ids(client, headers, project_id) -> list[str]:
             return ids
 
 
-def _quickwit(ids: list[str]) -> MagicMock:
-    qw = MagicMock()
-    qw.enabled = True
-    qw.search_tenant.return_value = [{"asset_id": a, "score": 1.0 - i / 10_000} for i, a in enumerate(ids)]
-    qw.search_tenant_scenes.return_value = []
-    qw.search_tenant_transcripts.return_value = []
-    return qw
+def _synced(env) -> None:
+    """The upkeep's search sync, until it has written every stale clip
+    (one sweep goes on for so long: a sweep that writes nothing is the last)."""
+    client, headers, *_ = env
+    for _ in range(10):
+        r = client.post("/v1/upkeep/search-sync", headers=headers)
+        assert r.status_code == 200 and r.json()["failed"] == 0, r.text
+        if r.json()["synced"] == 0:
+            return
+    raise AssertionError("the search sync never caught up")
+
+
+def _save(env, name: str, word: str):
+    client, headers, library_id, *_ = env
+    return client.post("/v1/projects", json={"name": name, "from_search": {"filters": [
+        {"type": "query", "value": word}, {"type": "library", "value": library_id}]}}, headers=headers)
 
 
 def _projects_named(client, headers, name: str) -> int:
@@ -66,63 +80,62 @@ def _projects_named(client, headers, name: str) -> int:
 
 
 def test_a_text_search_is_saved_whole(env) -> None:
-    client, headers, library_id, _storage, _tid, tenant_url = env
-    base = _ingest(env, "txt/base.jpg", media_type="image")
-    ids = [base] + _clone(tenant_url, base, 1499, "txt")
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=_quickwit(ids)):
-        r = client.post("/v1/projects", json={"name": "Beach", "from_search": {"filters": [
-            {"type": "query", "value": "beach"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    _client, _headers, _library_id, _storage, _tid, tenant_url = env
+    base = _ingest(env, "seashore/base.jpg", media_type="image")
+    _clone(tenant_url, base, 1499, "seashore")  # 1,500 with the base: past one page of 1,000
+    _synced(env)
+    r = _save(env, "Seashore", "seashore")
     assert r.status_code == 201, r.text
     assert r.json()["asset_count"] == 1500
 
 
 def test_a_text_search_whose_matches_were_capped_is_refused(env) -> None:
     # The candidate set stops at its cap: past it, some matches would be left out unseen.
-    client, headers, library_id, _storage, _tid, tenant_url = env
-    base = _ingest(env, "cap/base.jpg", media_type="image")
-    ids = [base] + _clone(tenant_url, base, 49, "cap")
-    with (patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50),
-          patch("src.server.search.quickwit_client.QuickwitClient", return_value=_quickwit(ids))):
-        r = client.post("/v1/projects", json={"name": "Capped", "from_search": {"filters": [
-            {"type": "query", "value": "beach"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    client, headers, _library_id, _storage, _tid, tenant_url = env
+    base = _ingest(env, "lagoon/base.jpg", media_type="image")
+    _clone(tenant_url, base, 49, "lagoon")
+    _synced(env)
+    with patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50):
+        r = _save(env, "Capped", "lagoon")
     assert r.status_code == 422 and r.json()["error"]["code"] == "search_too_big", r.text
     assert r.json()["error"]["details"] == {"max": 50}
     assert _projects_named(client, headers, "Capped") == 0
+    with patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 51):  # one more: it came back short
+        r = _save(env, "Under the cap", "lagoon")
+    assert r.status_code == 201 and r.json()["asset_count"] == 50, r.text
 
 
 def test_a_full_scene_search_is_refused_though_few_clips_match(env) -> None:
-    # Review round 2: each index's search is capped on its own and counts
-    # scenes, not clips. 50 scenes over 10 videos filled the scene search:
-    # more scenes (other videos) were left out, so it's refused.
-    client, headers, library_id, _storage, _tid, tenant_url = env
-    base = _ingest(env, "scn/base.mp4", media_type="video")
-    ids = [base] + _clone(tenant_url, base, 9, "scn")
-    qw = _quickwit([])
-    qw.search_tenant_scenes.side_effect = lambda **kw: [
-        {"asset_id": ids[i // 5], "score": 1.0 - i / 1000, "start_ms": i * 1000, "end_ms": i * 1000 + 500}
-        for i in range(min(kw["max_hits"], 50))
-    ]
-    with (patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50),
-          patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw)):
-        r = client.post("/v1/projects", json={"name": "Scenes", "from_search": {"filters": [
-            {"type": "query", "value": "dog"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    # Review round 2: each search is capped on its own and counts scenes,
+    # not clips. 50 scenes over 10 videos filled the scene search: more
+    # scenes (other videos) could have been left out, so it's refused.
+    client, headers, *_ = env
+    for v in range(10):
+        video = _ingest(env, f"scn/{v}.mp4", media_type="video")
+        described_scenes(client, headers, video, [
+            Scene(s * 5000, s * 5000 + 4000, f"A dog playing, take {s}") for s in range(5)])
+    with patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50):
+        r = _save(env, "Scenes", "dog")
     assert r.status_code == 422 and r.json()["error"]["code"] == "search_too_big", r.text
+    assert _projects_named(client, headers, "Scenes") == 0
+    with patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 51):  # one more: the 10 videos, whole
+        r = _save(env, "Scenes under the cap", "dog")
+    assert r.status_code == 201 and r.json()["asset_count"] == 10, r.text
 
 
 def test_searches_that_came_back_short_are_saved_whole_however_many_together(env) -> None:
-    # 30 exact and 25 other prefix matches: 55 clips past a cap of 50, but
-    # neither search was cut, so nothing was left out.
-    client, headers, library_id, _storage, _tid, tenant_url = env
-    base = _ingest(env, "both/base.jpg", media_type="image")
-    ids = [base] + _clone(tenant_url, base, 54, "both")
-    qw = _quickwit([])
-    qw.search_tenant.side_effect = lambda **kw: (
-        [{"asset_id": a, "score": 1.0} for a in ids[:30]] if "*" not in kw["query"]
-        else [{"asset_id": a, "score": 0.9} for a in ids[30:]])
-    with (patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50),
-          patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw)):
-        r = client.post("/v1/projects", json={"name": "Both", "from_search": {"filters": [
-            {"type": "query", "value": "beach"}, {"type": "library", "value": library_id}]}}, headers=headers)
+    # 30 clips found by their own words and 25 other videos by a scene: 55
+    # clips past a cap of 50, but neither search was cut, so nothing was
+    # left out.
+    client, headers, _library_id, _storage, _tid, tenant_url = env
+    base = _ingest(env, "reef/base.jpg", media_type="image")
+    _clone(tenant_url, base, 29, "reef")
+    _synced(env)
+    for v in range(25):
+        video = _ingest(env, f"corals/{v}.mp4", media_type="video")
+        described_scenes(client, headers, video, [Scene(0, 4000, "Fish over a reef at low tide")])
+    with patch("src.server.api.routers.query.MAX_CANDIDATE_IDS", 50):
+        r = _save(env, "Both", "reef")
     assert r.status_code == 201, r.text
     assert r.json()["asset_count"] == 55
 

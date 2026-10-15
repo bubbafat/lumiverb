@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
@@ -607,59 +607,6 @@ def _ask_about_projects(session: Session, request: Request, asset_ids: list[str]
         )
 
 
-def _out_of_search(background: BackgroundTasks, request: Request, asset_ids: list[str]) -> None:
-    """Drop these clips' search documents after the response (best effort):
-    search already leaves out clips out of sight; this keeps pages full.
-    Only those still out of sight then: one back meanwhile (handed over to
-    its copy by another request, say) keeps its documents, transcript
-    segments too, which no sweep puts back."""
-    tenant_id = getattr(request.state, "tenant_id", None)
-    if tenant_id and asset_ids:
-        background.add_task(_drop_from_search, tenant_id, list(asset_ids))
-
-
-def _drop_from_search(tenant_id: str, asset_ids: list[str]) -> None:
-    from sqlalchemy import text as sa_text
-
-    from src.server.database import get_tenant_session
-    from src.server.search.quickwit_client import QuickwitClient
-
-    try:
-        with get_tenant_session(tenant_id) as session:
-            in_sight = set(session.execute(
-                sa_text("SELECT asset_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL"),
-                {"ids": asset_ids},
-            ).scalars())
-    except Exception as exc:  # noqa: BLE001 — best effort, as the delete itself
-        logger.warning("Couldn't check which clips came back before dropping them from search: %s", exc)
-        return
-    gone = [a for a in asset_ids if a not in in_sight]
-    if gone:
-        QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, gone)
-
-
-def _back_in_search(background: BackgroundTasks, request: Request, session: Session, asset_ids: list[str]) -> None:
-    """Clips back in sight: the sync sweep re-indexes them and their scenes
-    (bringing them back queued them); transcript segments are put back here,
-    after the response."""
-    tenant_id = getattr(request.state, "tenant_id", None)
-    if not tenant_id or not asset_ids:
-        return
-    from sqlmodel import select
-
-    with_transcripts = list(session.exec(
-        select(Asset).where(Asset.asset_id.in_(asset_ids), Asset.transcript_srt.is_not(None))  # type: ignore[attr-defined,union-attr]
-    ).all())
-    if with_transcripts:
-        from src.server.search.sync import index_transcript_segments
-
-        def run() -> None:
-            for asset in with_transcripts:
-                index_transcript_segments(session, tenant_id, asset)
-
-        background.add_task(run)
-
-
 def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
     """Bump the revision of every library these clips are in, so open grids and folder trees reload."""
     asset_repo, library_repo = AssetRepository(session), LibraryRepository(session)
@@ -671,7 +618,6 @@ def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> BatchTrashResponse:
     """Take clips out of sight: a person's trash ("user"), or files a scan no longer finds ("missing").
@@ -707,8 +653,6 @@ def batch_trash_assets(
     # leaves both undone, never a clip archived whose copy it should have taken.
     session.commit()
     after.run()
-    # Not those that moved: they're back in search, transcripts and all.
-    _out_of_search(background, request, [a for a in trashed_ids if a not in handed_over])
     if trashed_ids and reason == "user":
         _refresh_grids(session, trashed_ids)
     return BatchTrashResponse(trashed=trashed_ids, not_found=not_found_ids, handed_over=handed_over)
@@ -806,7 +750,6 @@ def put_capture(
 def trash_asset(
     asset_id: str,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     remove_from_projects: bool = False,
@@ -823,18 +766,7 @@ def trash_asset(
         _ask_about_projects(session, request, [asset_id])
     if not asset_repo.trash(asset_id, reason="user"):
         raise HTTPException(status_code=404, detail="Asset not found or already trashed")
-    _out_of_search(background, request, [asset_id])
     _refresh_grids(session, [asset_id])
-
-
-def reindex_restored_asset(request: Request, session: Session, asset: Asset) -> None:
-    """Put a restored asset's transcript segments back in search; the sync
-    sweep re-indexes the asset and its scenes (restore queued them)."""
-    tenant_id = getattr(request.state, "tenant_id", None)
-    if tenant_id and asset.transcript_srt:
-        from src.server.search.sync import index_transcript_segments
-
-        index_transcript_segments(session, tenant_id, asset)
 
 
 _NOT_THE_TRASH = {
@@ -850,7 +782,6 @@ _NOT_THE_TRASH = {
 def restore_asset(
     asset_id: str,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> None:
@@ -864,9 +795,6 @@ def restore_asset(
         raise ConflictError(*_NOT_THE_TRASH[outcome])
     if outcome != "restored":
         raise HTTPException(status_code=404, detail="Asset not found or not trashed")
-    back = session.get(Asset, asset_id)
-    if back is not None and back.deleted_at is None:  # else it went back to the archive
-        _back_in_search(background, request, session, [asset_id])
     _refresh_grids(session, [asset_id])
 
 
@@ -874,7 +802,6 @@ def restore_asset(
 def restore_assets(
     body: RestoreRequest,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> RestoreResponse:
@@ -883,7 +810,6 @@ def restore_assets(
     Anything else asked for is skipped: archived or missing clips, clips in
     sight, and clips whose library is in the trash."""
     restored, skipped, to_archive = AssetRepository(session).restore_many(body.asset_ids)
-    _back_in_search(background, request, session, [a for a in restored if a not in set(to_archive)])
     _refresh_grids(session, restored)
     return RestoreResponse(restored=restored, skipped=skipped, to_archive=to_archive)
 
@@ -898,7 +824,6 @@ def _folder_library(session: Session, library_id: str) -> None:
 def archive_assets(
     body: PickClipsRequest,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> ArchiveResponse:
@@ -912,7 +837,6 @@ def archive_assets(
     else:
         _folder_library(session, body.library_id)  # type: ignore[arg-type]
         archived, skipped = repo.archive_folder(body.library_id, body.path), []  # type: ignore[arg-type]
-    _out_of_search(background, request, archived)
     _refresh_grids(session, archived)
     return ArchiveResponse(archived=archived, skipped=skipped)
 
@@ -921,7 +845,6 @@ def archive_assets(
 def unarchive_assets(
     body: PickClipsRequest,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> UnarchiveResponse:
@@ -933,7 +856,6 @@ def unarchive_assets(
     else:
         _folder_library(session, body.library_id)  # type: ignore[arg-type]
         back, skipped = repo.unarchive_folder(body.library_id, body.path), []  # type: ignore[arg-type]
-    _back_in_search(background, request, session, back)
     _refresh_grids(session, back)
     return UnarchiveResponse(unarchived=back, skipped=skipped)
 
@@ -976,7 +898,7 @@ def submit_vision(
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     if meta:
         from src.server.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+        try_sync_asset(session, asset, meta)
 
     # Bump library revision for UI polling
     LibraryRepository(session).bump_revision(asset.library_id)
@@ -1014,7 +936,7 @@ def submit_ocr(
     # Re-sync search
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
     from src.server.search.sync import try_sync_asset
-    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -1059,16 +981,10 @@ def submit_batch_ocr(
         updated += 1
     session.commit()
 
-    # Clear search_synced_at so the sweep picks these up for re-indexing.
-    # Avoids 25 individual Quickwit calls inside the request.
     if updated > 0:
-        from sqlalchemy import text
-        asset_ids = [item.asset_id for item in body.items]
-        session.execute(
-            text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"),
-            {"ids": asset_ids},
-        )
-        session.commit()
+        from src.server.search.sync import sync_clips
+
+        sync_clips(session, [item.asset_id for item in body.items])  # searchable now (else the sweep's)
 
         # Bump revision once per library
         lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
@@ -1122,13 +1038,10 @@ def submit_batch_vision(
         updated += 1
 
     if updated > 0:
-        from sqlalchemy import text
-        asset_ids = [item.asset_id for item in body.items]
-        session.execute(
-            text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"),
-            {"ids": asset_ids},
-        )
+        from src.server.search.sync import sync_clips
+
         session.commit()
+        sync_clips(session, [item.asset_id for item in body.items])  # searchable now (else the sweep's)
 
         lib_ids = {a.library_id for item in body.items if (a := asset_repo.get_by_id(item.asset_id))}
         lib_repo = LibraryRepository(session)
@@ -1175,7 +1088,7 @@ def correct_asset(
     asset.search_synced_at = None
     session.add(asset)
     session.commit()
-    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta)
     LibraryRepository(session).bump_revision(asset.library_id)
 
     return _asset_detail(session, request, asset)
@@ -1304,11 +1217,11 @@ def _transcript_searched(session: Session, request: Request, asset: Asset) -> No
     session.add(asset)
     session.commit()
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset.asset_id)
-    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta)
     tid = getattr(request.state, "tenant_id", None)
     if tid:
         try:
-            index_transcript_segments(session, tid, asset)  # the transcript as committed, or none
+            index_transcript_segments(session, asset)  # the transcript as committed, or none
         except Exception as exc:  # noqa: BLE001 — search catches up on its own
             logger.warning("Transcript segment re-index failed for %s: %s", asset.asset_id, exc)
     LibraryRepository(session).bump_revision(asset.library_id)
@@ -1407,7 +1320,7 @@ def update_note(
     # Sync to search (works with or without vision metadata)
     from src.server.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 
@@ -1440,7 +1353,7 @@ def delete_note(
 
     from src.server.search.sync import try_sync_asset
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    try_sync_asset(session, asset, meta, tenant_id=getattr(request.state, "tenant_id", None))
+    try_sync_asset(session, asset, meta)
 
     LibraryRepository(session).bump_revision(asset.library_id)
 

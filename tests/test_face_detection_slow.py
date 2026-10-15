@@ -343,10 +343,14 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
             "data": _json.dumps({"description": "sunset at the beach", "tags": ["sunset"]})})
     engine.dispose()
 
-    # Search with has_faces=true (Postgres fallback)
-    os.environ["QUICKWIT_ENABLED"] = "false"
-    os.environ["QUICKWIT_FALLBACK_TO_POSTGRES"] = "true"
-    get_settings.cache_clear()
+    # Search has their descriptions once the sweep writes them.
+    r = auth_client.post("/v1/upkeep/search-sync")
+    assert r.status_code == 200, r.text
+
+    r = auth_client.get("/v1/query", params={"f": ["query:sunset"]})
+    assert r.status_code == 200
+    hit_ids = [h["asset_id"] for h in r.json()["items"]]
+    assert asset_with in hit_ids and asset_no in hit_ids  # both match the words
 
     r = auth_client.get("/v1/query", params={"f": ["query:sunset", "has_faces:yes"]})
     assert r.status_code == 200

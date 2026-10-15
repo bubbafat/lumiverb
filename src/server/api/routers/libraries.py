@@ -22,7 +22,6 @@ from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
-from src.server.search.quickwit import purge_library_from_quickwit
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.readers import SERVER, read_by_server
 from src.shared.utils import utcnow
@@ -322,7 +321,6 @@ def delete_libraries_for_good(
             continue
         repo.hard_delete(library_id)  # commits, releasing the lock
         deleted += 1
-        purge_library_from_quickwit(library_id, tenant_id=tenant_id)
         # Trash cleared is_public, so any public row left behind goes regardless.
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).delete(library_id)

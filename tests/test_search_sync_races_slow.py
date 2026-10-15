@@ -1,16 +1,17 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
-"""What the search sync sweep marks synced: never a write it didn't index.
+"""What the search sync sweep marks synced: never a write it didn't write to search.
 
-A description, OCR or correction saved while the sweep runs is newer than the
-sweep's start; a write that cleared the clip's sync time (a note, a move)
-stays cleared. And a scene described again is stale until search has it.
+A description, OCR or note saved while the sweep runs (after it read the
+clip, before it marked it) isn't in the row the sweep wrote, so the clip
+stays stale and the next sweep writes it: the sweep marks a clip only if its
+row is as it read it (src/server/search/sync.py, xmin). A scene described
+again is found by its new words at once: its words are computed with its row.
 """
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
@@ -19,27 +20,35 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 from tests.test_lineage_api import _db, _ingest_with, _sha
 from tests.test_reconciler import _library
 
+WORD = "quillfeather"  # what the write meanwhile says, and nothing else does
 
-def _sweep_while(env, session, write_meanwhile) -> MagicMock:
-    """Run the sweep; a write commits in its own transaction just as the
-    sweep deletes the old asset documents (its rows were read, its documents
-    built). Returns the Quickwit mock."""
+
+def _sweep(session) -> dict:
     from src.server.search.sync import run_search_sync_sweep
 
-    def write(*_a, **_k):
-        with _db(env) as other:
-            write_meanwhile(other)
-            other.commit()
+    return run_search_sync_sweep(session)
 
-    qw = MagicMock()
-    qw.ensure_tenant_index.return_value = False
-    qw.ensure_tenant_scene_index.return_value = False
-    qw.ensure_tenant_transcript_index.return_value = False
-    qw.outdated.return_value = False
-    qw.delete_asset_index_documents_by_asset_ids.side_effect = write
-    with patch("src.server.search.sync._get_quickwit", return_value=qw):
-        run_search_sync_sweep(session, tenant_id=env[4])
-    return qw
+
+def _sweep_while(env, session, write_meanwhile) -> list[dict]:
+    """Run the sweep; a write commits in its own transaction just as the
+    sweep writes the clips' search rows (they were read and built, not yet
+    written or marked). Returns the rows the sweep wrote."""
+    from src.server.search import sync
+
+    real = sync.put_search_rows
+    written: list[dict] = []
+
+    def put(session, rows):
+        if rows and not written:
+            with _db(env) as other:
+                write_meanwhile(other)
+                other.commit()
+        written.extend(rows)
+        real(session, rows)
+
+    with patch.object(sync, "put_search_rows", put):
+        _sweep(session)
+    return written
 
 
 def _stale(session, asset_id: str) -> bool:
@@ -50,6 +59,22 @@ def _stale(session, asset_id: str) -> bool:
         {"a": asset_id}).scalar())
 
 
+def _row(session, asset_id: str) -> str | None:
+    """The clip's search row, its text columns together (None: it has none)."""
+    return session.execute(
+        text("SELECT concat_ws(' | ', described, note, ocr_text, transcript_text, path_words)"
+             " FROM asset_search WHERE asset_id = :a"), {"a": asset_id}).scalar()
+
+
+def _found(lib, words: str) -> dict[str, dict]:
+    """What a search of the library finds: {asset_id: its search context}."""
+    client, headers, library_id, *_ = lib
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", f"query:{words}")], headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["search_source"] == "postgres"
+    return {i["asset_id"]: i["search_context"] for i in r.json()["items"]}
+
+
 def _save(other, write: str, clip: str) -> None:
     """A write as the API saves it: a vision or OCR save whose inline sync
     failed (the real repositories, so their own clock and locking), or a
@@ -57,12 +82,27 @@ def _save(other, write: str, clip: str) -> None:
     from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository
 
     if write == "description":
-        AssetMetadataRepository(other).upsert(clip, "m", "1", {"description": "new words", "tags": []})
+        AssetMetadataRepository(other).upsert(clip, "m", "1", {"description": f"a {WORD}", "tags": []})
     elif write == "ocr":
-        AssetOcrRepository(other).upsert(clip, "new words", "m")
+        AssetOcrRepository(other).upsert(clip, WORD.upper(), "m")
     else:
-        other.execute(text("UPDATE assets SET note = 'new words', search_synced_at = NULL WHERE asset_id = :a"),
-                      {"a": clip})
+        other.execute(text("UPDATE assets SET note = :n, search_synced_at = NULL WHERE asset_id = :a"),
+                      {"n": f"ask about the {WORD}", "a": clip})
+
+
+def _only_this_clip_stale(session, clip: str) -> None:
+    session.execute(text("UPDATE assets SET search_synced_at = now()"))
+    session.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
+    session.commit()
+
+
+def _next_sweep_writes_it(lib, session, clip: str) -> None:
+    """What the sweep left stale, the next one writes, and search finds."""
+    session.rollback()  # a new snapshot: what's committed now
+    _sweep(session)
+    assert not _stale(session, clip)
+    assert WORD in _row(session, clip).lower()
+    assert clip in _found(lib, WORD)
 
 
 @pytest.mark.slow
@@ -71,14 +111,15 @@ def test_a_write_during_the_sweep_stays_stale(env, write):
     lib = _library(env, f"SweepRace-{write}")
     clip = _ingest_with(lib, f"{write}.jpg", _sha(), None)
     with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))
-        s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
-        s.commit()
+        _only_this_clip_stale(s, clip)
 
-        qw = _sweep_while(env, s, lambda other: _save(other, write, clip))
-        sent = [d for d in qw.ingest_tenant_documents.call_args.args[1] if d["asset_id"] == clip]
-        assert len(sent) == 1 and "new words" not in json.dumps(sent[0])
-        assert _stale(s, clip), "the sweep marked synced a write it never indexed"
+        written = _sweep_while(env, s, lambda other: _save(other, write, clip))
+        assert [r["asset_id"] for r in written if r["asset_id"] == clip] == [clip], "the sweep wrote the clip once"
+        assert WORD not in _row(s, clip).lower(), "the sweep read the clip before the write"
+        assert clip not in _found(lib, WORD)
+        assert _stale(s, clip), "the sweep marked synced a write it never wrote to search"
+
+        _next_sweep_writes_it(lib, s, clip)
 
 
 @pytest.mark.slow
@@ -95,22 +136,23 @@ def test_a_save_timed_before_the_sweep_began_and_committed_after_it_read_stays_s
     clip = _ingest_with(lib, f"gap-{write}.jpg", _sha(), None)
     real_utcnow = tenant.utcnow
     with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))
-        s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
-        s.commit()
+        _only_this_clip_stale(s, clip)
 
         def save_timed_earlier(other):
             with patch.object(tenant, "utcnow", lambda: real_utcnow() - timedelta(minutes=1)):
                 _save(other, write, clip)
 
-        qw = _sweep_while(env, s, save_timed_earlier)
-        sent = [d for d in qw.ingest_tenant_documents.call_args.args[1] if d["asset_id"] == clip]
-        assert len(sent) == 1 and "new words" not in json.dumps(sent[0]), "the sweep read before the save"
-        assert _stale(s, clip), "the sweep marked synced a save it never indexed"
+        written = _sweep_while(env, s, save_timed_earlier)
+        assert [r["asset_id"] for r in written if r["asset_id"] == clip] == [clip]
+        assert WORD not in _row(s, clip).lower(), "the sweep read before the save"
+        assert _stale(s, clip), "the sweep marked synced a save it never wrote to search"
+
+        _next_sweep_writes_it(lib, s, clip)
 
 
 @pytest.mark.slow
-def test_a_scene_described_again_is_stale_until_search_has_it(env):
+def test_a_scene_described_again_is_found_by_its_new_words_at_once(env):
+    """No sync to wait for, and none to miss: a scene's words are its row's."""
     from src.server.repository.tenant import VideoSceneRepository
 
     lib = _library(env, "SceneRedo")
@@ -118,67 +160,58 @@ def test_a_scene_described_again_is_stale_until_search_has_it(env):
     scene_id = f"scn_{vid}_0"
     with _db(env) as s:
         s.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
-                       " description, tags, created_at, search_synced_at)"
-                       " VALUES (:id, :a, 0, 0, 999, 0, 'old words', '[]', now() - interval '1 hour', now())"),
+                       " description, tags, created_at)"
+                       " VALUES (:id, :a, 0, 4000, 9000, 6000, 'a marmot by the river', '[]',"
+                       " now() - interval '1 hour')"),
                   {"id": scene_id, "a": vid})
         s.commit()
-        VideoSceneRepository(s).update_vision(scene_id, "m2", "1", "a brand new description", [])
-        assert s.execute(text("SELECT search_synced_at IS NULL FROM video_scenes WHERE scene_id = :s"),
-                         {"s": scene_id}).scalar()
+        assert _found(lib, "marmot")[vid]["hit_type"] == "scene"
+
+        VideoSceneRepository(s).update_vision(scene_id, "m2", "1", "a pelican on a piling", ["bird"])
+    hit = _found(lib, "pelican")[vid]
+    assert (hit["hit_type"], hit["start_ms"], hit["end_ms"], hit["snippet"]) == ("scene", 4000, 9000,
+                                                                                 "a pelican on a piling")
+    assert vid in _found(lib, "bird"), "its tags are found too"
+    assert vid not in _found(lib, "marmot"), "the old description is still found"
 
 
 @pytest.mark.slow
-def test_after_a_restore_the_sweep_makes_the_indexes_again_beside_the_live_ones(env):
-    """A restored database (src/server/backups.py) is marked: the next sweep
-    makes the account's indexes again beside the live ones, which search
-    keeps answering from, and fills them from the database, every clip,
-    synced or not before (tests/test_search_rebuild.py, the whole way)."""
-    from src.server.search import indexes
-    from src.server.search.sync import mark_recreate, run_search_sync_sweep
-
-    lib = _library(env, "Restored")
-    clip = _ingest_with(lib, "restored.jpg", _sha(), None)
-    tenant_id = env[4]
+def test_everything_again_writes_every_clips_row_synced_or_not(env):
+    """POST /v1/upkeep/search-sync?force=true: every clip's row is written
+    again, whatever its sync time says (a row lost, say, while marked synced)."""
+    client, headers, *_ = env
+    lib = _library(env, "EverythingAgain")
+    clip = _ingest_with(lib, "zanzibar.jpg", _sha(), None)
     with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))
-        mark_recreate(s)
+        _sweep(s)
+        assert clip in _found(lib, "zanzibar")
+        s.execute(text("DELETE FROM asset_search WHERE asset_id = :a"), {"a": clip})
         s.commit()
-        qw = MagicMock()
-        qw.ensure_tenant_index.return_value = False
-        qw.ensure_tenant_scene_index.return_value = False
-        qw.ensure_tenant_transcript_index.return_value = False
-        qw.outdated.return_value = False
-        qw.make_index.return_value = False
-        try:
-            for _ in range(2):  # begun, then filling (every process writes to it by then)
-                with patch("src.server.search.sync._get_quickwit", return_value=qw):
-                    run_search_sync_sweep(s, tenant_id=tenant_id)
-            assert not s.execute(text("SELECT 1 FROM system_metadata WHERE key = 'search.recreate'")).scalar()
-            qw.drop_index.assert_not_called()
-            new = f"{indexes.base_id(tenant_id, 'assets')}_g1"
-            filled = {d["asset_id"] for call in qw.ingest_into.call_args_list if call.args[0] == new
-                      for d in call.args[1]}
-            assert clip in filled, "every clip goes in, synced or not before"
-            assert indexes.read(s, tenant_id)["assets"].live == new  # full: live now
-        finally:
-            s.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": indexes.KEY})
-            s.commit()
+        assert not _stale(s, clip) and clip not in _found(lib, "zanzibar")
+
+    r = client.post("/v1/upkeep/search-sync", params={"force": "true"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["synced"] >= 1 and r.json()["failed"] == 0
+    assert clip in _found(lib, "zanzibar")
 
 
 @pytest.mark.slow
-def test_a_restore_mark_waits_while_quickwit_is_down(env):
-    from src.server.search import indexes
-    from src.server.search.sync import mark_recreate, run_search_sync_sweep
+def test_a_batch_that_fails_leaves_its_clips_for_the_next_sweep(env):
+    from src.server.search import sync
 
+    lib = _library(env, "SweepFails")
+    clip = _ingest_with(lib, "kestrel.jpg", _sha(), None)
     with _db(env) as s:
-        mark_recreate(s)
-        s.commit()
-        qw = MagicMock()
-        qw.outdated.return_value = False
-        qw.make_index.side_effect = ConnectionError("Quickwit isn't answering")
-        with patch("src.server.search.sync._get_quickwit", return_value=qw):
-            run_search_sync_sweep(s, tenant_id=env[4])
-        assert s.execute(text("SELECT 1 FROM system_metadata WHERE key = 'search.recreate'")).scalar()
-        assert not s.execute(text("SELECT 1 FROM system_metadata WHERE key = :k"), {"k": indexes.KEY}).scalar()
-        s.execute(text("DELETE FROM system_metadata WHERE key = 'search.recreate'"))
-        s.commit()
+        _only_this_clip_stale(s, clip)
+
+        def broken(session, rows):
+            raise RuntimeError("the write failed")
+
+        with patch.object(sync, "put_search_rows", broken):
+            result = _sweep(s)
+        assert result["failed"] == 1 and result["synced"] == 0
+        assert _stale(s, clip) and _row(s, clip) is None, "nothing marked that wasn't written"
+
+        assert _sweep(s)["synced"] >= 1
+        assert not _stale(s, clip) and "kestrel" in _row(s, clip)
+    assert clip in _found(lib, "kestrel")

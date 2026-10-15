@@ -41,16 +41,15 @@ def env(tmp_path_factory):
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.accounts.provision_tenant_database"):
-            with TestClient(app) as bootstrap:
-                r = bootstrap.post(
-                    "/v1/admin/tenants",
-                    json={"name": "UpkeepTenant", "plan": "free"},
-                    headers={"Authorization": "Bearer test-admin-secret"},
-                )
-                assert r.status_code == 200, r.text
-                tenant_id = r.json()["tenant_id"]
-                api_key = r.json()["api_key"]
+        with patch("src.server.accounts.provision_tenant_database"), TestClient(app) as bootstrap:
+            r = bootstrap.post(
+                "/v1/admin/tenants",
+                json={"name": "UpkeepTenant", "plan": "free"},
+                headers={"Authorization": "Bearer test-admin-secret"},
+            )
+            assert r.status_code == 200, r.text
+            tenant_id = r.json()["tenant_id"]
+            api_key = r.json()["api_key"]
 
         with PostgresContainer(PG_IMAGE) as tenant_pg:
             tenant_url = _ensure_psycopg2(tenant_pg.get_connection_url())
@@ -132,8 +131,12 @@ def test_cleanup_with_revoked_key_is_401(env) -> None:
 
 
 ADMIN = {"Authorization": "Bearer test-admin-secret"}
+# Retired (ADR-019: search is in the account's database, with no index to
+# make again): it still takes only the keys it took, and answers them 410.
+RECREATE = "/v1/upkeep/recreate-search-indexes"
 ENDPOINTS = ["/v1/upkeep", "/v1/upkeep/search-sync", "/v1/upkeep/cleanup", "/v1/upkeep/recluster",
-             "/v1/upkeep/recreate-search-indexes", "/v1/upkeep/cleanup-dismissed"]
+             RECREATE, "/v1/upkeep/cleanup-dismissed"]
+LIVE = [path for path in ENDPOINTS if path != RECREATE]
 
 
 @pytest.mark.slow
@@ -151,7 +154,7 @@ def test_every_upkeep_call_without_a_live_key_is_401(env, path, headers) -> None
 @pytest.mark.parametrize("path", ENDPOINTS)
 @pytest.mark.parametrize("role", ["viewer", "editor"])
 def test_every_upkeep_call_needs_an_account_admin(env, path, role) -> None:
-    """A viewer's key can't wipe the search indexes or force a reindex (nor anything else here)."""
+    """A viewer's key can't force every search row written again (nor anything else here)."""
     client, api_key, *_ = env
     _, key = _new_key(client, api_key, role)
 
@@ -161,7 +164,7 @@ def test_every_upkeep_call_needs_an_account_admin(env, path, role) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize("path", LIVE)
 def test_an_account_admin_acts_on_the_account(env, path) -> None:
     client, api_key, *_ = env
     params = {"all": "true"} if path == "/v1/upkeep/cleanup" else {}
@@ -206,13 +209,30 @@ def test_the_admin_key_must_name_every_account(env, path) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize("path", LIVE)
 def test_the_admin_key_with_tenants_all_acts_on_every_account(env, path) -> None:
     client, *_ = env
 
     r = client.post(path, params={"tenants": "all"}, headers=ADMIN)
 
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("who", ["account admin", "admin key, tenants=all"])
+def test_recreating_the_search_indexes_is_gone_and_names_search_sync(env, who) -> None:
+    """Whoever could ask is told what does it now: a search sync (force=true writes every row again)."""
+    client, api_key, *_ = env
+    if who == "account admin":
+        r = client.post(RECREATE, headers={"Authorization": f"Bearer {api_key}"})
+    else:
+        r = client.post(RECREATE, params={"tenants": "all"}, headers=ADMIN)
+
+    assert r.status_code == 410, r.text
+    err = r.json()["error"]
+    assert err["code"] == "gone"
+    assert err["details"] == {"replaced_by": ["POST /v1/upkeep/search-sync"]}
+    assert "retired" in err["message"] and "search-sync?force=true" in err["message"], err["message"]
 
 
 @pytest.mark.slow

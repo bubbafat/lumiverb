@@ -316,10 +316,6 @@ class VideoScene(SQLModel, table=True):
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
-    search_synced_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
 
 
 class VideoIndexChunk(SQLModel, table=True):

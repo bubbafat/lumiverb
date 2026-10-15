@@ -94,7 +94,11 @@ video_scenes      — scene_id, asset_id, scene_index, start_ms, end_ms,
                     rep_frame_ms, proxy_key, thumbnail_key,
                     rep_frame_sha256, description, tags (JSONB),
                     sharpness_score, keep_reason, phash, created_at,
-                    search_synced_at
+                    words (tsvector, computed: description and tags)
+asset_search      — asset_id, described, note, ocr_text, transcript_text,
+                    path_words, snippet; everything / shown / shown_capped
+                    (tsvectors, computed; ADR-019)
+transcript_segments — asset_id, seq, start_ms, end_ms, text, words (tsvector, computed)
 video_index_chunks — chunk_id, asset_id, chunk_index, start_ms, end_ms,
                     status, worker_id, claimed_at, lease_expires_at,
                     completed_at, error_message, created_at
@@ -153,11 +157,11 @@ Responsibilities:
 - User management (email/password auth, JWT sessions)
 - Atomic ingest (proxy + metadata in one request)
 - File serving (thumbnails, proxies, video previews — never source files)
-- Search endpoint (BM25 via Quickwit)
+- Search (PostgreSQL full-text search in the account's database, ADR-019)
 - Similarity search endpoint (pgvector nearest-neighbor on CLIP embeddings, person-aware reranking)
 - People and face management (clustering, assignment, merge)
 - Video chunk coordination (scene segmentation metadata)
-- Search sync (timestamp-based sweep to keep Quickwit in sync)
+- Search sync (each clip's search row and each transcript's segments, written on a save and by a timestamp-based sweep)
 - Upkeep (search sync, face propagation, orphaned file cleanup, revoked token cleanup)
 
 ### 3.4 The CLI and the Mac app
@@ -211,13 +215,11 @@ Whose an error is, as the runner judges it:
 Nothing else is edited: the kinds and their redo kind, the queue, the pool (declare a new `Pool` in the folder, or name a shared one), an AI job (declare an `AiJob` with its guard in the folder), the account's model storage, the page filter and summary count, Settings → Processing, pauses and failures all follow. A producer that reads the originals (EXIF, say) sets `storage=True` and calls `self.original(clip)`: jobs then go only to libraries whose storage was reachable at the scheduler's latest look, and the file missing or the storage gone is handled for it.
 
 **Search sync:**
-Search sync is timestamp-based: assets and video scenes have a `search_synced_at` column. The `POST /v1/upkeep/search-sync` endpoint sweeps records where `search_synced_at` is stale, builds Quickwit documents, and ingests them. The CLI `lumiverb maintenance search-sync --all` command triggers this for the account. Inline sync also runs on each ingest. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
+Search sync is timestamp-based: a clip's `search_synced_at` and `transcript_synced_at` say when its search row and transcript segments were last written. A save writes them (`try_sync_asset`, `sync_clips` after a batch, `index_transcript_segments`); the `POST /v1/upkeep/search-sync` sweep writes any still stale. The CLI `lumiverb maintenance search-sync --all` runs it for the account (`--force`: everything again). Scenes need none: their words are computed with their rows.
 
-### 3.6 Search Engine (Quickwit)
+### 3.6 Search (PostgreSQL)
 
-Quickwit provides BM25 full-text search over AI descriptions and metadata. Runs in Docker.
-
-Sync is timestamp-based: assets and video scenes track `search_synced_at`. The upkeep endpoint sweeps stale records and ingests them into Quickwit. Quickwit is a regenerable cache — if lost, run search-sync to rebuild.
+Text search is PostgreSQL's full-text search in each account's database (ADR-019): a clip's own words (`asset_search`), its scenes' (`video_scenes.words`) and its transcript's segments (`transcript_segments`), each searched among the clips in sight, so trash, archive and restore need nothing from search. `src/server/search/text_search.py` is the only code that knows the engine (English stemming, prefixes, phrases, field weights); swapping in another (ParadeDB's BM25, say) would be a migration and that file. It's in the database it searches: a backup and restore covers it, and there's no service to run.
 
 ### 3.7 Object Storage
 
@@ -250,7 +252,7 @@ Local filesystem
         → Run vision AI (OpenAI-compatible) → description + tags
         → POST /v1/ingest (multipart: proxy + all metadata, atomic)
         → API normalizes proxy, generates thumbnail, stores everything
-        → API attempts inline search sync to Quickwit
+        → API writes the clip's search row (try_sync_asset)
         → Asset appears fully populated on first creation
     → For each video (stage 1):
         → Extract poster frame, generate proxy/thumbnail
@@ -266,24 +268,23 @@ Local filesystem
 ### 4.2 Search Sync Flow
 
 ```
-Inline (on each ingest):
-    → API calls try_sync_asset() after storing metadata
-    → Builds Quickwit document, ingests, sets search_synced_at
+On a save (a description, OCR, a correction, a note, a move, a transcript):
+    → API writes the clip's asset_search row (try_sync_asset; sync_clips after a batch)
+      and marks search_synced_at in the same transaction
+    → A transcript's segments are rewritten with it (index_transcript_segments)
 
 Periodic sweep (CLI or upkeep endpoint):
     → POST /v1/upkeep/search-sync
-    → Server finds assets/scenes where search_synced_at is stale
-    → Builds Quickwit documents from Postgres metadata
-    → Ingests to Quickwit in batches
-    → Updates search_synced_at on each record
+    → Server finds clips whose search_synced_at is stale, and transcripts whose transcript_synced_at is
+    → Writes their rows a batch at a time by id, each marked synced only if nothing wrote the clip meanwhile
 ```
 
 ### 4.3 Search Flow
 
 ```
 Client calls GET /search?q=...&library_id=...
-    → API queries Quickwit BM25
-    → API enriches results with asset metadata from Postgres
+    → API runs the text search in the account's database (text_search.py)
+    → API applies the other filters to its candidates, ordered by relevance
     → Returns paginated asset list with thumbnails
 ```
 
@@ -306,7 +307,7 @@ Client calls GET /v1/similar?asset_id=...&library_id=...
 | API server | Python 3.12, FastAPI, SQLModel | Familiar, Cursor-optimised, proven in PoC |
 | Database | PostgreSQL 18 + pgvector | Per-tenant isolation, JSONB for metadata, vector similarity (phase 2) |
 | Migrations | Alembic | Standard, works with SQLModel |
-| Search | Quickwit | Columnar BM25, Docker-friendly, proven in PoC |
+| Search | PostgreSQL full-text search | In the database it searches: one source of truth, no service to run (ADR-019) |
 | Object storage | Abstracted (GCS / S3 / B2 / MinIO) | Deployment-mode flexibility |
 | AI inference | OpenAI-compatible (configurable) | Supports any vision model (e.g. qwen3-visioncaption-2b via LM Studio) |
 | CLIP embeddings | open-clip-torch (ViT-B/32) | 512-dim vectors for similarity search |
@@ -364,7 +365,7 @@ Staged rollout:
 | Thumbnail (JPEG 400px) | ~20 KB | Served in grid views |
 | Proxy (JPEG 2048px) | ~200 KB | Served for AI inference and detail views |
 | Postgres metadata | ~8 KB | Per asset including AI description |
-| Quickwit index | ~1.5 KB | Per asset |
+| Search rows | ~1.5 KB | Per asset, in Postgres |
 | **Total** | **~230 KB** | Proxies dominate at 87% |
 
 ### 7.2 At Scale
@@ -382,7 +383,6 @@ Staged rollout:
 | Object storage (4.8 TB) | ~$110 |
 | Cloud SQL (Postgres) | ~$100 |
 | Cloud Run (API server) | ~$50 |
-| Quickwit VM | ~$50 |
 | Vision AI API (tenant-paid) | ~$100–200 |
 | **Total** | **~$500–600** |
 | **Net revenue** | **~$9,400–9,500** |
@@ -395,7 +395,7 @@ Staged rollout:
 
 Only Postgres is irreplaceable. Everything else is regenerable:
 - Proxies / thumbnails → regenerable from source files via `lumiverb ingest`
-- Quickwit index → regenerable via search-sync
+- Search rows → regenerable via search-sync (`--force`)
 - AI descriptions → regenerable by re-running ingest
 
 ### 8.2 Postgres Backup Strategy
@@ -477,7 +477,6 @@ Superseded: the native macOS app is a browse client. The server's scheduler scan
 `docker-compose.yml` includes:
 - `api` — FastAPI server
 - `postgres` — PostgreSQL 18
-- `quickwit` — Search engine
 - `minio` — Object storage (optional, can point at S3/B2)
 
 Configuration via environment variables. No cloud dependencies required. A NAS or $5/month VPS is sufficient for personal use.

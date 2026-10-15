@@ -1,20 +1,21 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
 """GET /v1/system/health: the Admin page's seven rows, gathered from the
-scheduler's status, the AI machines, Quickwit, the libraries, the data
-disk and the backups (the rules alone: tests/test_system_health.py)."""
+scheduler's status, the AI machines, the clips not searchable yet, the
+libraries, the data disk and the backups (the rules alone:
+tests/test_system_health.py)."""
 
 from __future__ import annotations
 
 import json
 from collections import namedtuple
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
 
-from src.server.config import get_settings
 from src.shared.utils import utcnow
+from tests.clips import make_clip
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha
 
@@ -25,15 +26,12 @@ KEYS = ["website", "processing", "ai", "search", "storage", "disk", "backups"]
 
 @pytest.fixture(autouse=True)
 def _fresh():
-    """Nothing kept from the last test: the cached checks, notes' throttle, the status."""
+    """Nothing kept from the last test: the cached checks."""
     from src.server.api.routers import system
-    from src.server.search import health as search_health
 
     system._cache.clear()
-    search_health._noted.clear()
     yield
     system._cache.clear()
-    search_health._noted.clear()
 
 
 def _health(env) -> dict:
@@ -59,21 +57,6 @@ def _forget(env, *keys: str) -> None:
     with _db(env) as s:
         s.execute(text("DELETE FROM system_metadata WHERE key = ANY(:k)"), {"k": list(keys)})
         s.commit()
-
-
-def _settings(monkeypatch, **env_vars) -> None:
-    for k, v in env_vars.items():
-        monkeypatch.setenv(k, v)
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def quickwit_on(monkeypatch):
-    """Quickwit turned on at a closed port: it isn't answering."""
-    _settings(monkeypatch, QUICKWIT_ENABLED="true", QUICKWIT_URL="http://127.0.0.1:9")
-    yield
-    monkeypatch.undo()
-    get_settings.cache_clear()
 
 
 def test_seven_rows_in_order_with_the_worst_overall(env):
@@ -228,49 +211,39 @@ def test_ai_machines_are_yellow_when_one_doing_a_job_is_offline(env):
     assert _rows(env)["ai"]["state"] == "green"
 
 
-def test_search_is_yellow_with_quickwit_off(env):
-    row = _rows(env)["search"]  # the suite runs with Quickwit off
-    assert row["state"] == "yellow" and "Quickwit is off" in row["reason"]
+def _all_searchable(env) -> None:
+    """Every clip's search row written: the search sync's sweep, as upkeep runs it."""
+    from src.server.search.sync import run_search_sync_sweep
 
-
-def test_a_search_quickwit_failed_is_noted_and_postgres_answers(env, quickwit_on):
-    client, headers, library_id, *_ = env
-    _forget(env, "search.fallback", "search.failure")
-    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", "query:zebra")], headers=headers)
-    assert r.status_code == 200 and r.json()["search_source"] == "postgres_fallback"
     with _db(env) as s:
-        noted = json.loads(s.execute(text("SELECT value FROM system_metadata WHERE key = 'search.fallback'")).scalar())
-    assert "Quickwit" in noted["reason"]
+        assert run_search_sync_sweep(s)["failed"] == 0
+        assert s.execute(text("SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar() == 0
+
+
+def test_search_is_green_when_every_clip_is_searchable(env):
+    _all_searchable(env)
     row = _rows(env)["search"]
-    assert row["state"] == "yellow" and "isn't answering" in row["reason"]
+    assert row["state"] == "green" and row["reason"] == "Every clip is searchable."
 
 
-def test_search_is_red_when_quickwit_fails_and_the_fallback_is_off(env, quickwit_on, monkeypatch):
+def test_search_is_yellow_from_the_threshold_of_clips_in_sight_not_searchable_yet(env):
+    from src.server import system_health as h
+    from src.server.api.routers import system
+
     client, headers, library_id, *_ = env
-    _forget(env, "search.fallback", "search.failure")
-    _settings(monkeypatch, QUICKWIT_FALLBACK_TO_POSTGRES="false")
-    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", "query:zebra")], headers=headers)
-    assert r.status_code == 200 and r.json()["items"] == []
-    row = _rows(env)["search"]
-    assert row["state"] == "red"
-    with _db(env) as s:
-        assert s.execute(text("SELECT 1 FROM system_metadata WHERE key = 'search.failure'")).scalar() == 1
-    _forget(env, "search.failure")
-
-
-def test_search_is_yellow_when_the_accounts_index_is_missing(env, quickwit_on):
-    with patch("src.server.search.quickwit_client.requests.get", return_value=MagicMock(status_code=404)):
+    _all_searchable(env)
+    clips = [make_clip(env[-1], library_id, f"unsearched/{i:03}.jpg") for i in range(h.UNSYNCED_YELLOW)]
+    try:
+        r = client.request("DELETE", "/v1/assets", json={"asset_ids": clips[:1], "reason": "user"}, headers=headers)
+        assert r.status_code == 200 and r.json()["trashed"] == clips[:1], r.text
+        assert _rows(env)["search"]["state"] == "green"  # the one in the trash isn't counted
+        make_clip(env[-1], library_id, "unsearched/one-more.jpg")
+        system._cache.clear()
         row = _rows(env)["search"]
-    assert row["state"] == "yellow" and "index is missing" in row["reason"]
-
-
-def test_search_is_green_when_quickwit_answers_and_counts_whats_not_indexed(env, quickwit_on):
-    _forget(env, "search.fallback", "search.failure")
-    with patch("src.server.search.quickwit_client.requests.get", return_value=MagicMock(status_code=200)):
-        row = _rows(env)["search"]
-    with _db(env) as s:
-        unsynced = s.execute(text("SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar()
-    assert row["state"] == ("green" if unsynced < 100 else "yellow")
+        assert row["state"] == "yellow"
+        assert row["reason"] == f"{h.UNSYNCED_YELLOW} clips aren't searchable yet: upkeep adds them within minutes."
+    finally:
+        _all_searchable(env)
 
 
 def test_disk_follows_free_space_on_the_data_disk(env):
@@ -290,161 +263,31 @@ def test_a_row_that_cant_be_checked_says_so_without_taking_the_page_down(env):
     assert row["state"] == "yellow" and "boom" in row["reason"]
 
 
-def _quickwit_that(*remade: str) -> MagicMock:
-    """A Quickwit whose indexes are there, but those named (assets, scenes, transcripts) made just now."""
-    qw = MagicMock()
-    qw.ensure_tenant_index.return_value = "assets" in remade
-    qw.ensure_tenant_scene_index.return_value = "scenes" in remade
-    qw.ensure_tenant_transcript_index.return_value = "transcripts" in remade
-    qw.outdated.return_value = False  # their schemas are as now: nothing rebuilt
-    qw.make_index.return_value = False
-    return qw
-
-
-def _sweep(env, qw: MagicMock) -> dict:
-    from src.server.search.sync import run_search_sync_sweep
-
-    with _db(env) as s, patch("src.server.search.sync._get_quickwit", return_value=qw):
-        return run_search_sync_sweep(s, tenant_id=env[4])
-
-
-def _synced(env, column: str, ids: list[str]) -> dict:
-    with _db(env) as s:
-        return dict(s.execute(text(f"SELECT asset_id, {column} IS NOT NULL FROM assets WHERE asset_id = ANY(:ids)"),
-                              {"ids": ids}).all())
-
-
-def _marks(env) -> set[str]:
-    with _db(env) as s:
-        return set(s.execute(text("SELECT key FROM system_metadata WHERE key LIKE 'search.reindex.%'")).scalars())
-
-
-def test_a_missing_index_made_by_an_inline_sync_is_refilled_by_the_sweep(env):
-    """The request that made the missing index only marks it; the sweep
-    clears the sync times and indexes every clip again. Before, the request
-    ran the reset itself."""
-    from src.server.models.tenant import Asset
-    from src.server.search.sync import try_sync_asset
-
-    tenant_id = env[4]
-    a = _ingest_with(env, "kept.jpg", _sha())
-    b = _ingest_with(env, "edited.jpg", _sha())
-    _forget(env, "search.reindex.assets")
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))
-        s.commit()
-        assert try_sync_asset(s, s.get(Asset, b), None, tenant_id=tenant_id, quickwit=_quickwit_that("assets"))
-    assert _synced(env, "search_synced_at", [a, b]) == {a: True, b: True}  # the request reset nothing
-    assert "search.reindex.assets" in _marks(env)
-    qw = _quickwit_that()
-    _sweep(env, qw)
-    docs = {d["asset_id"] for c in qw.ingest_tenant_documents.call_args_list for d in c.args[1]}
-    assert {a, b} <= docs  # the sweep put a back in
-    assert "search.reindex.assets" not in _marks(env)
-
-
-def test_recreating_the_indexes_makes_them_again_beside_the_live_ones(env):
-    """Nothing is wiped: search answers from the live indexes while new ones fill (tests/test_search_rebuild.py)."""
-    from src.server.config import get_settings as settings
-    from src.server.search import indexes
-
-    client, headers, *_ = env
-    a = _ingest_with(env, "recreated.jpg", _sha())
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))
-        s.commit()
-    made: list[str] = []
-    with (patch.object(settings(), "quickwit_enabled", True),
-          patch("src.server.search.quickwit_client.QuickwitClient.make_index",
-                lambda self, index_id, kind: made.append(index_id) or True),
-          patch("src.server.search.quickwit_client.QuickwitClient.drop_index",
-                lambda self, index_id: pytest.fail(f"{index_id} dropped"))):
-        r = client.post("/v1/upkeep/recreate-search-indexes", headers=headers)
-    assert r.status_code == 200 and r.json()["tenants_processed"] == 1, r.text
-    tenant_id = env[4]
-    try:
-        with _db(env) as s:
-            where = indexes.read(s, tenant_id)
-        assert made == [f"{indexes.base_id(tenant_id, k)}_g1" for k in indexes.KINDS]
-        assert {k: (w.live, w.building) for k, w in where.items()} == {
-            k: (indexes.base_id(tenant_id, k), f"{indexes.base_id(tenant_id, k)}_g1") for k in indexes.KINDS}
-        assert _synced(env, "search_synced_at", [a]) == {a: True} and not _marks(env)
-    finally:
-        with _db(env) as s:
-            s.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": indexes.KEY})
-            s.commit()
-
-
 SRT = "1\n00:00:00,000 --> 00:00:01,500\nthe ferry leaves at noon\n"
 
 
-def test_a_lost_transcript_index_is_refilled_by_the_sweep(env):
-    """Before, the sweep never indexed transcripts: one went back in only when submitted again."""
-    from src.server.models.tenant import Asset
-    from src.server.search.sync import index_transcript_segments
+def test_the_sweep_writes_the_transcripts_search_doesnt_have(env):
+    """Before, the sweep never indexed transcripts: one went back in only when
+    submitted again. Now a transcript whose segments were never written, or
+    were written before it was transcribed again, is written by the sweep."""
+    from src.server.search.sync import run_search_sync_sweep
 
-    tenant_id = env[4]
-    kept = _ingest_with(env, "ferry.mov", _sha(), media_type="video")
-    resent = _ingest_with(env, "dock.mov", _sha(), media_type="video")
-    _forget(env, "search.reindex.transcripts")
+    never = _ingest_with(env, "ferry.mov", _sha(), media_type="video")
+    again = _ingest_with(env, "dock.mov", _sha(), media_type="video")
     with _db(env) as s:
         s.execute(text("UPDATE assets SET transcript_srt = :t, transcribed_at = now() - interval '1 hour',"
-                       " transcript_synced_at = now() WHERE asset_id = ANY(:ids)"),
-                  {"t": SRT, "ids": [kept, resent]})
+                       " transcript_synced_at = CASE WHEN asset_id = :again THEN now() - interval '2 hours' END"
+                       " WHERE asset_id = ANY(:ids)"), {"t": SRT, "again": again, "ids": [never, again]})
         s.commit()
-        qw = _quickwit_that("transcripts")
-        qw.enabled = True
-        with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
-            index_transcript_segments(s, tenant_id, s.get(Asset, resent))  # finds the index gone and makes it
-    assert _synced(env, "transcript_synced_at", [kept, resent]) == {kept: True, resent: True}
-    assert "search.reindex.transcripts" in _marks(env)
-    qw = _quickwit_that()
-    result = _sweep(env, qw)
-    docs = [d for c in qw.ingest_tenant_transcript_documents.call_args_list for d in c.args[1]]
-    assert {kept, resent} <= {d["asset_id"] for d in docs} and result["transcripts_synced"] >= 2
-    assert any(d["asset_id"] == kept and d["text"] == "the ferry leaves at noon" for d in docs)
-    with _db(env) as s:  # synced again, so the next sweep leaves them
+        result = run_search_sync_sweep(s)
+        assert result["transcripts_synced"] >= 2 and result["transcripts_failed"] == 0
+        segments = s.execute(text("SELECT asset_id, text FROM transcript_segments WHERE asset_id = ANY(:ids)"),
+                             {"ids": [never, again]}).all()
+        assert sorted(tuple(r) for r in segments) == sorted([(never, "the ferry leaves at noon"),
+                                                             (again, "the ferry leaves at noon")])
+        # Synced since it was transcribed: the next sweep leaves them.
         assert s.execute(text("SELECT count(*) FROM assets WHERE asset_id = ANY(:ids)"
-                              " AND transcript_synced_at > transcribed_at"), {"ids": [kept, resent]}).scalar() == 2
-    qw = _quickwit_that("transcripts")  # the sweep finds it gone itself
-    _sweep(env, qw)
-    docs = {d["asset_id"] for c in qw.ingest_tenant_transcript_documents.call_args_list for d in c.args[1]}
-    assert {kept, resent} <= docs
-
-
-def test_a_search_with_the_clip_search_failing_is_noted_and_keeps_its_hits(env, quickwit_on):
-    """Before, a search whose clip search failed but whose scenes answered noted nothing."""
-    from src.server.search.quickwit_client import QuickwitClient
-
-    client, headers, library_id, *_ = env
-    clip = _ingest_with(env, "harbour.mov", _sha(), media_type="video")
-    _forget(env, "search.fallback", "search.failure")
-    scene = {"asset_id": clip, "score": 1.0, "description": "a harbour", "start_ms": 0, "end_ms": 1000}
-    with (patch.object(QuickwitClient, "search_tenant", side_effect=RuntimeError("index gone")),
-          patch.object(QuickwitClient, "search_tenant_scenes", return_value=[scene]),
-          patch.object(QuickwitClient, "search_tenant_transcripts", return_value=[])):
-        r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", "query:harbour")],
-                       headers=headers)
-    assert r.status_code == 200 and r.json()["search_source"] == "quickwit", r.text
-    assert clip in [item["asset_id"] for item in r.json()["items"]]
-    with _db(env) as s:
-        noted = json.loads(s.execute(text("SELECT value FROM system_metadata WHERE key = 'search.failure'")).scalar())
-    assert "only scenes and transcripts" in noted["reason"]
-    assert _rows(env)["search"]["state"] == "red"
-    _forget(env, "search.failure")
-
-
-def test_noting_is_throttled_per_kind(env):
-    from src.server.search import health as search_health
-
-    _forget(env, "search.fallback")
-    with _db(env) as s:
-        search_health.note(s, search_health.FALLBACK, "first")
-        search_health.note(s, search_health.FALLBACK, "second")  # within the minute: not written
-        when, why = search_health.last(s, search_health.FALLBACK)
-    assert why == "first" and utcnow() - when < timedelta(minutes=1)
-    _forget(env, "search.fallback")
-
+                              " AND transcript_synced_at > transcribed_at"), {"ids": [never, again]}).scalar() == 2
 
 
 def test_a_failed_query_in_one_row_doesnt_spoil_the_next(env):

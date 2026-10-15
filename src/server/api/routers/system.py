@@ -7,7 +7,7 @@ Seven rows (website, processing, AI machines, search, storage, disk, backups), e
 green, yellow or red with a one-line reason and where to fix it; the rules
 are src/server/system_health.py. Admins see it (the Admin page, and its
 link's dot); nobody else, a public page's visitor least of all. The web page asks every 10 seconds, so what costs more
-than a query (asking Quickwit, counting clips) is kept for a little while
+than a query (counting clips) is kept for a little while
 per worker.
 """
 
@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/system", tags=["system"])
 
 # How long each worker keeps what's slow to find out, per account.
-QUICKWIT_EVERY_SEC = 30.0
 COUNTS_EVERY_SEC = 60.0
 
 _cache: dict[tuple[str, str], tuple[float, Any]] = {}
@@ -210,24 +209,9 @@ def _ai(tenant_id: str, status: Any, now: datetime) -> h.Row:
 
 
 def _search(session: Session, tenant_id: str, now: datetime) -> h.Row:
-    from src.server.config import get_settings
-    from src.server.search import health as search_health
-    from src.server.search.quickwit_client import QuickwitClient
-
-    settings = get_settings()
-    enabled = settings.quickwit_enabled
-    quickwit, error, unsynced = None, "", 0
-    if enabled:
-        quickwit, error = _kept(tenant_id, "quickwit", QUICKWIT_EVERY_SEC,
-                                lambda: QuickwitClient().tenant_index_state(tenant_id))
-        if quickwit == "ok":
-            unsynced = _kept(tenant_id, "unsynced", COUNTS_EVERY_SEC, lambda: session.execute(text(
-                "SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar() or 0)
-    return h.search_row(
-        enabled=enabled, fallback_on=settings.quickwit_fallback_to_postgres, quickwit=quickwit,
-        quickwit_error=error, last_fallback=search_health.last(session, search_health.FALLBACK),
-        last_failure=search_health.last(session, search_health.FAILURE), unsynced=unsynced, now=now,
-    )
+    unsynced = _kept(tenant_id, "unsynced", COUNTS_EVERY_SEC, lambda: session.execute(text(
+        "SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar() or 0)
+    return h.search_row(unsynced=unsynced, now=now)
 
 
 def _disk(now: datetime) -> h.Row:

@@ -2,13 +2,14 @@
 
 Accepts the same ``?f=prefix:value`` params as ``/v1/query`` so that facet
 counts reflect the currently active filter set.  When a text search filter
-is present, Quickwit candidate IDs scope the aggregation.
+is present, the clips it finds (src/server/search/text_search.py) scope the
+aggregation.
 """
 
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import Session
@@ -17,7 +18,6 @@ from src.server.api.dependencies import get_tenant_session
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
     LOCATION_JOIN,
-    LeafFilter,
     LibraryScope,
     SearchTerm,
     has_location_sql,
@@ -68,34 +68,20 @@ def get_facets(
     # --- Candidate set from text search ---
     candidate_ids: list[str] | None = None
     if spec.search_terms:
-        tenant_id = getattr(request.state, "tenant_id", None)
+        from src.server.api.routers.query import MAX_CANDIDATE_IDS, _run_text_search
+
         library_ids: list[str] | None = None
         for leaf in spec.leaves:
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
-        if tenant_id:
-            from src.server.api.routers.query import (
-                MAX_CANDIDATE_IDS,
-                _run_postgres_fallback,
-                _run_quickwit_search,
-            )
-
-            scores, contexts, source = _run_quickwit_search(
-                tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
-                public=getattr(request.state, "is_public_request", False),
-            )
-            if source == "postgres_fallback":
-                pg_query = " ".join(st.q for st in spec.search_terms if st.q)
-                scores, contexts = _run_postgres_fallback(
-                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                    include_transcripts=public_cap_ms is None,
-                    include_notes=not getattr(request.state, "is_public_request", False),
-                    include_file_details=not getattr(request.state, "is_public_request", False),
-                )
-            if not scores:
-                return _empty_facets()
-            candidate_ids = list(scores.keys())
+        scores, _contexts, _source = _run_text_search(
+            session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
+            public=getattr(request.state, "is_public_request", False),
+        )
+        if not scores:
+            return _empty_facets()
+        candidate_ids = list(scores.keys())
 
     if candidate_ids is not None:
         conditions.append("a.asset_id = ANY(:candidate_ids)")

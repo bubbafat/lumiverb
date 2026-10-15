@@ -507,17 +507,10 @@ def _restore_trashed_clips(
     request: Request, session: Session, repo: ProjectRepository, project_id: str,
 ) -> tuple[int, int]:
     """Restore the project's clips that a person trashed, everywhere, back to
-    where they were. Returns (back in sight, back in the archive)."""
-    from src.server.api.routers.assets import reindex_restored_asset
-
+    where they were (search finds each again: its words were kept). Returns
+    (back in sight, back in the archive)."""
     asset_repo = AssetRepository(session)
     restored, _, to_archive = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
-    for asset_id in restored:
-        if asset_id in to_archive:
-            continue  # back in the archive: not in search
-        asset = asset_repo.get_by_id(asset_id)
-        if asset is not None:
-            reindex_restored_asset(request, session, asset)
     for library_id in asset_repo.library_ids_of(restored):
         LibraryRepository(session).bump_revision(library_id)
     return len(restored) - len(to_archive), len(to_archive)
@@ -599,8 +592,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         MAX_CANDIDATE_IDS,
         SORT_COLUMNS,
         _encode_cursor,
-        _run_postgres_fallback,
-        _run_quickwit_search,
+        _run_text_search,
     )
     from src.server.models.filter_registry import from_json
     from src.server.models.query_filter import LibraryScope
@@ -632,14 +624,10 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
-        capped: set[str] = set()  # each index's search is capped on its own
-        scores, _contexts, source = _run_quickwit_search(
-            request.state.tenant_id, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,
+        capped: set[str] = set()  # each search (clips, scenes, transcripts) is capped on its own
+        scores, _contexts, _source = _run_text_search(
+            session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,
         )
-        if source == "postgres_fallback":
-            pg_query = " ".join(st.q for st in spec.search_terms if st.q)
-            scores, _contexts = _run_postgres_fallback(session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS)
-            capped = {"postgres"} if len(scores) >= MAX_CANDIDATE_IDS else set()
         if capped:  # some matches were left out: refused, never cut
             raise too_big(MAX_CANDIDATE_IDS, text_search=True)
         if not scores:

@@ -257,39 +257,29 @@ def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str,
 
 @pytest.mark.slow
 def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
-    """Trashed asset does not appear in search results (postgres fallback uses active_assets)."""
+    """Trashed asset does not appear in search results (search reads only active_assets)."""
     client, api_key, library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _create_asset_for_test(tenant_url, library_id, f"search_{os.urandom(4).hex()}.jpg")
+    aid = _create_asset_for_test(tenant_url, library_id, f"search/ptarmigan_{os.urandom(4).hex()}.jpg")
+    # Its words (its path's) go in search with the sweep.
+    assert client.post("/v1/upkeep/search-sync", headers=auth).status_code == 200
+    search = {"f": [f"library:{library_id}", "query:ptarmigan"]}
 
-    # Use postgres fallback by disabling Quickwit
-    orig = os.environ.get("QUICKWIT_ENABLED")
+    r_before = client.get("/v1/query", params=search, headers=auth)
+    assert r_before.status_code == 200
+    hits_before = {h["asset_id"] for h in r_before.json()["items"]}
+
+    client.delete(f"/v1/assets/{aid}", headers=auth)
+
+    r_after = client.get("/v1/query", params=search, headers=auth)
+    assert r_after.status_code == 200
+    hits_after = {h["asset_id"] for h in r_after.json()["items"]}
+    assert aid in hits_before
+    assert aid not in hits_after
+    engine = create_engine(tenant_url)
     try:
-        os.environ["QUICKWIT_ENABLED"] = "false"
-        get_settings.cache_clear()
- 
-        r_before = client.get(
-            "/v1/query",
-            params={"f": [f"library:{library_id}", "query:jpg"]},
-            headers=auth,
-        )
-        assert r_before.status_code == 200
-        hits_before = {h["asset_id"] for h in r_before.json()["items"]}
-
-        client.delete(f"/v1/assets/{aid}", headers=auth)
-
-        r_after = client.get(
-            "/v1/query",
-            params={"f": [f"library:{library_id}", "query:jpg"]},
-            headers=auth,
-        )
-        assert r_after.status_code == 200
-        hits_after = {h["asset_id"] for h in r_after.json()["items"]}
-        assert aid not in hits_after
-        assert aid in hits_before
+        with engine.connect() as conn:  # nothing was taken out of search: it's out of sight
+            kept = conn.execute(text("SELECT count(*) FROM asset_search WHERE asset_id = :a"), {"a": aid}).scalar()
     finally:
-        if orig is not None:
-            os.environ["QUICKWIT_ENABLED"] = orig
-        else:
-            os.environ.pop("QUICKWIT_ENABLED", None)
-        get_settings.cache_clear()
+        engine.dispose()
+    assert kept == 1

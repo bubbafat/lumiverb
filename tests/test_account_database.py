@@ -9,7 +9,6 @@ account isn't, as after a restore or with the tests' own databases."""
 from __future__ import annotations
 
 import inspect
-import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -89,24 +88,28 @@ def test_an_account_with_no_routing_has_no_database(account):
 
 
 @pytest.mark.slow
-def test_clips_put_in_the_trash_leave_search_after_the_response(account, caplog):
-    """DELETE /v1/assets drops the trashed clips' search documents once it has
-    answered (assets.py _drop_from_search), reading which are still out of
-    sight from the account's own database."""
-    client, headers, tenant_id, tenant_url = account
+def test_clips_put_in_the_trash_leave_search_at_once(account):
+    """Search is in the account's own database, the one its routing names
+    (ADR-019): a clip put in the trash is out of what a search finds as the
+    trash commits, with nothing left to drop after the response."""
+    client, headers, _, tenant_url = account
     r = client.post("/v1/libraries", json={"name": "Trash", "root_path": "/trash"}, headers=headers)
     assert r.status_code == 200, r.text
     library_id = r.json()["library_id"]
     clip = make_clip(tenant_url, library_id, "a.jpg", file_size=1)
-
-    dropped: list[tuple[str, list[str]]] = []
-    with (patch("src.server.search.quickwit_client.QuickwitClient.delete_tenant_documents_by_asset_ids",
-                lambda self, t, ids: dropped.append((t, list(ids)))),
-          caplog.at_level(logging.WARNING, logger="src.server.api.routers.assets")):
-        r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "user"}, headers=headers)
-
+    r = client.put(f"/v1/assets/{clip}/note", json={"text": "the lighthouse keeper"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert dropped == [(tenant_id, [clip])], caplog.text
+
+    def found() -> list[str]:
+        r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", "query:lighthouse")],
+                       headers=headers)
+        assert r.status_code == 200, r.text
+        return [item["asset_id"] for item in r.json()["items"]]
+
+    assert found() == [clip]
+    r = client.request("DELETE", "/v1/assets", json={"asset_ids": [clip], "reason": "user"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert found() == []
 
 
 @pytest.mark.slow

@@ -314,7 +314,7 @@ def test_undoing_every_edit_while_search_is_down_still_reaches_search(env, monke
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": clip})
         s.commit()
-    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # Quickwit down
+    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # its search row not written
     assert _correct(env, clip, description=None).status_code == 200
     with _db(env) as s:
         stale = s.execute(text(f"SELECT {sync.STALE_SEARCH} FROM active_assets a WHERE a.asset_id = :a"),
@@ -344,22 +344,23 @@ def test_a_persons_ocr_is_the_one_copy(env):
 
 @pytest.mark.slow
 def test_filters_and_search_see_what_the_person_sees(env):
-    from src.server.search.postgres_search import search_assets
-
     client, headers, *_ = env
     lib, clip, sha = _image(env, "CorrFilters")
     _describe_as(env, clip, "a cat on a sofa", ["cat", "sofa"])
     _correct(env, clip, description="Mittens asleep", tags=["cat", "Mittens"])
 
-    def tagged(tag: str) -> list[str]:
-        r = client.get("/v1/query", params=[("f", f"library:{lib[2]}"), ("f", f"tag:{tag}")], headers=headers)
+    def found(*f: str) -> list[str]:
+        r = client.get("/v1/query", params=[("f", f"library:{lib[2]}"), *(("f", x) for x in f)], headers=headers)
         assert r.status_code == 200, r.text
         return [i["asset_id"] for i in r.json()["items"]]
 
-    assert tagged("Mittens") == [clip] and tagged("sofa") == []
-    with _db(env) as s:
-        assert [h["asset_id"] for h in search_assets(s, lib[2], "mittens asleep")] == [clip]
-        assert search_assets(s, lib[2], "sofa") == []
+    assert found("tag:Mittens") == [clip] and found("tag:sofa") == []
+    assert found("query:mittens asleep") == [clip]
+    assert found("query:sofa") == []
+    with _db(env) as s:  # what search holds is what the person sees, the machine's words nowhere
+        described, snippet = s.execute(text("SELECT described, snippet FROM asset_search WHERE asset_id = :a"),
+                                       {"a": clip}).one()
+    assert "sofa" not in described.lower() and snippet == "Mittens asleep"
 
 
 @pytest.mark.slow
@@ -494,7 +495,7 @@ def test_removing_a_transcript_while_search_is_down_still_reaches_search(env, mo
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": vid})
         s.commit()
-    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # Quickwit down
+    monkeypatch.setattr(sync, "try_sync_asset", lambda *a, **k: None)  # its search row not written
     _remove(env, vid, "machine")
     with _db(env) as s:
         assert s.execute(text(f"SELECT {sync.STALE_SEARCH} FROM active_assets a WHERE a.asset_id = :a"),

@@ -628,7 +628,8 @@ def test_each_scene_is_saved_as_its_described(acct, monkeypatch, tmp_path) -> No
     assert patched == ["/v1/video/scenes/s1", "/v1/video/scenes/s2"]
     body = acct.client.patch.call_args.kwargs["json"]
     assert body["description"] == "a beach" and body["lineage"]["producer"] == "scene-vision"
-    assert "/v1/video/scenes/s2/sync" in _posted(acct)
+    # Searchable once saved (ADR-019): no sync to ask for (its route is retired, 410).
+    assert not [p for p in _posted(acct) if p.endswith("/sync")]
 
 
 def test_a_transient_api_error_saving_a_scene_charges_nothing(acct, monkeypatch, tmp_path) -> None:

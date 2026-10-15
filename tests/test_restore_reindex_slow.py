@@ -1,14 +1,14 @@
-"""Restoring a trashed asset puts it back in search.
+"""A clip back in sight is found again at once.
 
-Trashing deletes an asset's documents from all three Quickwit indexes
-(assets, scenes, transcript segments). Restore has to queue the asset and
-its scenes for the next search sync and re-index its transcript segments,
-which the sync sweep never does, or a restored clip stays missing from
-text search for good.
+Search reads only the clips in sight (it joins active_assets), so a clip
+trashed or gone missing is never found, and nothing is taken out of search
+for it: its words, its scenes' and its transcript's segments are kept with
+it (ADR-019). Back in sight, from the trash, a project or its file found
+again, it's found by all of them at once, with no sync to wait for.
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +25,7 @@ from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _ru
 from tests.machine_lineage import ingest_made
 
 SRT = "1\n00:00:00,000 --> 00:00:02,000\nthe quick brown fox\n\n2\n00:00:02,000 --> 00:00:04,000\njumps over\n"
+SEGMENTS = ["the quick brown fox", "jumps over"]
 
 
 @pytest.fixture(scope="module")
@@ -45,14 +46,13 @@ def env():
         get_settings.cache_clear()
         _engines.clear()
 
-        with patch("src.server.accounts.provision_tenant_database"):
-            with TestClient(app) as client:
-                r = client.post(
-                    "/v1/admin/tenants", json={"name": "RestoreTenant", "plan": "free"},
-                    headers={"Authorization": "Bearer test-admin-restore"},
-                )
-                assert r.status_code == 200, r.text
-                tenant_id, api_key = r.json()["tenant_id"], r.json()["api_key"]
+        with patch("src.server.accounts.provision_tenant_database"), TestClient(app) as client:
+            r = client.post(
+                "/v1/admin/tenants", json={"name": "RestoreTenant", "plan": "free"},
+                headers={"Authorization": "Bearer test-admin-restore"},
+            )
+            assert r.status_code == 200, r.text
+            tenant_id, api_key = r.json()["tenant_id"], r.json()["api_key"]
 
         with PostgresContainer(PG_IMAGE) as tenant_postgres:
             tenant_url = _ensure_psycopg2(tenant_postgres.get_connection_url())
@@ -82,47 +82,68 @@ def _video(engine, library_id, rel_path) -> str:
         return make_clip(session, library_id, rel_path, media_type="video")
 
 
+def _found(env, words: str) -> dict[str, dict]:
+    """What a search of the library finds: {asset_id: its search context}."""
+    client, auth, library_id, _ = env
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", f"query:{words}")], headers=auth)
+    assert r.status_code == 200, r.text
+    return {i["asset_id"]: i["search_context"] for i in r.json()["items"]}
+
+
+def _segments(engine, asset_id) -> list[str]:
+    with engine.connect() as conn:
+        return list(conn.execute(text("SELECT text FROM transcript_segments WHERE asset_id = :a ORDER BY seq"),
+                                 {"a": asset_id}).scalars())
+
+
+def _transcribe(env, asset_id) -> None:
+    client, auth, *_ = env
+    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"},
+                    headers=auth)
+    assert r.status_code == 200, r.text
+
+
+def _found_by_its_transcript(env, asset_id) -> None:
+    hit = _found(env, "fox").get(asset_id)
+    assert hit is not None, "not found by its transcript"
+    assert (hit["hit_type"], hit["start_ms"], hit["end_ms"], hit["snippet"]) == ("transcript", 0, 2000, SEGMENTS[0])
+
+
 @pytest.mark.slow
-def test_restore_queues_the_asset_and_its_scenes_for_search_sync(env):
+def test_a_restored_clip_is_found_again_by_its_words_and_its_scenes(env):
     client, auth, library_id, engine = env
-    asset_id = _video(engine, library_id, "restore/synced.mov")
+    asset_id = _video(engine, library_id, "restore/lighthouse.mov")
     with engine.begin() as conn:
         conn.execute(text(
-            "INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, created_at, search_synced_at)"
-            " VALUES ('scn_restore_1', :a, 0, 0, 1000, 500, now(), now())"
+            "INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, description,"
+            " tags, created_at) VALUES ('scn_restore_1', :a, 0, 0, 1000, 500, 'a trawler unloading', '[]', now())"
         ), {"a": asset_id})
-        conn.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": asset_id})
+    r = client.post("/v1/upkeep/search-sync", headers=auth)  # its own words: written by the sweep
+    assert r.status_code == 200, r.text
+    assert _found(env, "lighthouse")[asset_id]["hit_type"] == "asset"
+    assert _found(env, "trawler")[asset_id]["hit_type"] == "scene"
 
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204
-    assert client.post(f"/v1/assets/{asset_id}/restore", headers=auth).status_code == 204
+    assert asset_id not in _found(env, "lighthouse") and asset_id not in _found(env, "trawler")
 
-    with engine.connect() as conn:
-        asset_synced = conn.execute(
-            text("SELECT search_synced_at FROM assets WHERE asset_id = :a"), {"a": asset_id}
-        ).scalar()
-        scene_synced = conn.execute(
-            text("SELECT search_synced_at FROM video_scenes WHERE asset_id = :a"), {"a": asset_id}
-        ).scalar()
-    assert asset_synced is None
-    assert scene_synced is None
+    assert client.post(f"/v1/assets/{asset_id}/restore", headers=auth).status_code == 204
+    assert _found(env, "lighthouse")[asset_id]["hit_type"] == "asset"
+    assert _found(env, "trawler")[asset_id]["hit_type"] == "scene"
 
 
 @pytest.mark.slow
-def test_restore_reindexes_transcript_segments(env):
+def test_a_restored_clip_is_found_again_by_its_transcript(env):
     client, auth, library_id, engine = env
     asset_id = _video(engine, library_id, "restore/transcribed.mov")
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
-    assert r.status_code == 200, r.text
+    _transcribe(env, asset_id)
+    _found_by_its_transcript(env, asset_id)
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204
+    assert asset_id not in _found(env, "fox")
+    assert _segments(engine, asset_id) == SEGMENTS  # kept with it
 
-    qw = MagicMock()
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
-        assert client.post(f"/v1/assets/{asset_id}/restore", headers=auth).status_code == 204
-
-    assert qw.ingest_tenant_transcript_documents.call_count == 1
-    docs = list(qw.ingest_tenant_transcript_documents.call_args.args[1])
-    assert [d["text"] for d in docs] == ["the quick brown fox", "jumps over"]
-    assert {d["asset_id"] for d in docs} == {asset_id}
+    assert client.post(f"/v1/assets/{asset_id}/restore", headers=auth).status_code == 204
+    _found_by_its_transcript(env, asset_id)
+    assert _segments(engine, asset_id) == SEGMENTS
 
 
 def _ingest_video(client, auth, library_id, rel_path) -> str:
@@ -144,34 +165,19 @@ def _ingest_video(client, auth, library_id, rel_path) -> str:
     return r.json()["asset_id"]
 
 
-def _synced(engine, asset_id):
-    with engine.connect() as conn:
-        return conn.execute(
-            text("SELECT search_synced_at FROM assets WHERE asset_id = :a"), {"a": asset_id}
-        ).scalar()
-
-
-def _mark_synced_with_transcript(client, auth, engine, asset_id):
-    r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
-    assert r.status_code == 200, r.text
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE assets SET search_synced_at = now() WHERE asset_id = :a"), {"a": asset_id})
-
-
 @pytest.mark.slow
 def test_a_file_that_reappears_comes_back_in_search(env):
     client, auth, library_id, engine = env
     asset_id = _ingest_video(client, auth, library_id, "reappear/clip.mov")
-    _mark_synced_with_transcript(client, auth, engine, asset_id)
+    _transcribe(env, asset_id)
+    _found_by_its_transcript(env, asset_id)
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "missing"}, headers=auth)
     assert r.status_code == 200, r.text
+    assert asset_id not in _found(env, "fox")
 
-    qw = MagicMock()
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
-        _ingest_video(client, auth, library_id, "reappear/clip.mov")  # the scan finds it again
-
-    assert _synced(engine, asset_id) is None
-    assert qw.ingest_tenant_transcript_documents.call_count == 1
+    assert _ingest_video(client, auth, library_id, "reappear/clip.mov") == asset_id  # the scan finds it again
+    _found_by_its_transcript(env, asset_id)
+    assert _segments(engine, asset_id) == SEGMENTS
 
 
 @pytest.mark.slow
@@ -179,19 +185,18 @@ def test_a_file_that_reappears_comes_back_in_search(env):
 def test_clips_restored_through_a_project_come_back_in_search(env, how):
     client, auth, library_id, engine = env
     asset_id = _ingest_video(client, auth, library_id, f"project-restore/{how}.mov")
-    _mark_synced_with_transcript(client, auth, engine, asset_id)
+    _transcribe(env, asset_id)
     project_id = client.post("/v1/projects", json={"name": how, "asset_ids": [asset_id]}, headers=auth).json()["project_id"]
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [asset_id], "reason": "user", "remove_from_projects": True}, headers=auth)
     assert r.status_code == 200, r.text
+    assert asset_id not in _found(env, "fox")
 
-    qw = MagicMock()
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
-        if how == "restore_with_clips":
-            client.delete(f"/v1/projects/{project_id}", headers=auth)
-            r = client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": True}, headers=auth)
-        else:
-            r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=auth)
-        assert r.status_code == 200, r.text
+    if how == "restore_with_clips":
+        client.delete(f"/v1/projects/{project_id}", headers=auth)
+        r = client.post(f"/v1/projects/{project_id}/restore", json={"with_clips": True}, headers=auth)
+    else:
+        r = client.post(f"/v1/projects/{project_id}/restore-clips", headers=auth)
+    assert r.status_code == 200, r.text
 
-    assert _synced(engine, asset_id) is None
-    assert qw.ingest_tenant_transcript_documents.call_count == 1
+    _found_by_its_transcript(env, asset_id)
+    assert _segments(engine, asset_id) == SEGMENTS

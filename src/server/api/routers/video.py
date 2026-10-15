@@ -12,7 +12,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, select
 
 from src.server.api.dependencies import get_tenant_session, require_editor
-from src.server.api.errors import ApiError, ConflictError
+from src.server.api.errors import ApiError, ConflictError, GoneError
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
@@ -150,10 +150,10 @@ def _described_here(request: Request) -> bool:
 
 def _swap_in(request: Request, session: Session, asset_id: str, described: dict | None) -> bool:
     """A redo's found scenes become the ones the clip shows, in one step: the
-    old ones go, then their images (at keys the server derives, and not where
-    a new scene's is) and their search entries. described: how the new ones
-    were described (recorded for the clip), or None when nothing describes
-    them. False when there's nothing to swap in (done already)."""
+    old ones go (and with them what search found of them), then their images
+    (at keys the server derives, and not where a new scene's is). described:
+    how the new ones were described (recorded for the clip), or None when
+    nothing describes them. False when there's nothing to swap in (done already)."""
     session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
     new = session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
                                " WHERE asset_id = :a AND staged = 'found'"), {"a": asset_id}).all()
@@ -163,8 +163,8 @@ def _swap_in(request: Request, session: Session, asset_id: str, described: dict 
     old = session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
                                " WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id}).all()
     session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id})
-    session.execute(text("UPDATE video_scenes SET staged = NULL, search_synced_at = NULL"
-                         " WHERE asset_id = :a AND staged = 'found'"), {"a": asset_id})
+    session.execute(text("UPDATE video_scenes SET staged = NULL WHERE asset_id = :a AND staged = 'found'"),
+                    {"a": asset_id})
     if described is not None:
         record_lineage(session, asset_id, "scene_vision", described, commit=False)
     library_id = session.execute(text("SELECT library_id FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
@@ -173,9 +173,6 @@ def _swap_in(request: Request, session: Session, asset_id: str, described: dict 
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         return True
-    from src.server.search.quickwit_client import QuickwitClient
-    from src.server.search.sync import try_sync_scene
-
     storage = get_storage()
     # Only the images at the keys the server derives (a scene's rep frame),
     # and not one a new scene shares (the same moment of the same video).
@@ -184,11 +181,6 @@ def _swap_in(request: Request, session: Session, asset_id: str, described: dict 
             storage.delete(storage.scene_rep_key(tenant_id, library_id, asset_id, ms))
         except OSError as exc:
             _log.warning("Couldn't delete a scene image of %s: %s", asset_id, exc)
-    QuickwitClient().delete_scene_index_documents_by_scene_ids(tenant_id, [r.scene_id for r in old])
-    asset = AssetRepository(session).get_by_id(asset_id)
-    for scene in VideoSceneRepository(session).get_scenes_for_asset(asset_id):
-        if asset is not None and scene.description:  # the sweep, if this fails
-            try_sync_scene(session, scene, asset, tenant_id=tenant_id)
     return True
 
 
@@ -333,7 +325,7 @@ def complete_chunk(
             meta_obj = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
             if meta_obj:
                 from src.server.search.sync import try_sync_asset
-                try_sync_asset(session, asset_obj, meta_obj, tenant_id=getattr(request.state, "tenant_id", None))
+                try_sync_asset(session, asset_obj, meta_obj)
 
     return ChunkCompleteResponse(
         chunk_id=chunk_id,
@@ -503,33 +495,19 @@ def _scene_lineage(made: dict | None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Enqueue scene-level search sync # ---------------------------------------------------------------------------
-
-
-class SceneSyncRequest(BaseModel):
-    asset_id: str
+# Retired: a scene's search sync
+# ---------------------------------------------------------------------------
 
 
 @router.post("/scenes/{scene_id}/sync", dependencies=[Depends(require_editor)])
-def sync_scene(
-    scene_id: str,
-    body: SceneSyncRequest,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Sync a scene to Quickwit search index. A redo's scene not swapped in
-    yet waits: it's searchable once the clip shows it (_swap_in)."""
-    from src.server.search.sync import try_sync_scene
-    scene = VideoSceneRepository(session).get_by_id(scene_id)
-    if scene is None:
-        raise _scene_gone(scene_id)
-    if scene.staged is not None:
-        return {"scene_id": scene_id, "status": "deferred"}
-    asset = AssetRepository(session).get_by_id(body.asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    ok = try_sync_scene(session, scene, asset, tenant_id=getattr(request.state, "tenant_id", None))
-    return {"scene_id": scene_id, "status": "synced" if ok else "deferred"}
+def sync_scene(scene_id: str) -> None:
+    """Retired (410 gone): a scene's description and tags are searchable as
+    soon as they're saved (ADR-019: its words are computed with its row)."""
+    raise GoneError(
+        "POST /v1/video/scenes/{scene_id}/sync is retired: a scene's description and tags are searchable "
+        "as soon as they're saved.",
+        ["PATCH /v1/video/scenes/{scene_id}"],
+    )
 
 
 # ---------------------------------------------------------------------------

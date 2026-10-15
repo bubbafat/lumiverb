@@ -134,11 +134,44 @@ def _worker() -> str:
     return os.environ.get("PYTEST_XDIST_WORKER", "main")
 
 
+def _a_searchable_clip(tenant_url: str) -> str:
+    """A clip with a note, its search row written by the search sync's own write."""
+    from src.server.repository.tenant import AssetRepository, LibraryRepository
+    from src.server.search.sync import try_sync_asset
+
+    engine = create_engine(tenant_url)
+    try:
+        with Session(engine) as session:
+            library = LibraryRepository(session).create("Footage", "/footage")
+            asset = AssetRepository(session).create_asset(library.library_id, "harbour.mov", 1000, None, "video")
+            asset.note = "the ferry at noon"
+            session.add(asset)
+            session.commit()
+            assert try_sync_asset(session, asset)
+            return asset.asset_id
+    finally:
+        engine.dispose()
+
+
+def _found(tenant_url: str, word: str) -> list[str]:
+    """The clips a search for the word finds (the account's own search)."""
+    from src.server.search import text_search
+
+    engine = create_engine(tenant_url)
+    try:
+        with Session(engine) as session:
+            return [hit.asset_id for hit in text_search.clips(session, text_search.build([word]), None, 10)]
+    finally:
+        engine.dispose()
+
+
 def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
     base, name = server
     w = _worker()
     control_url, tenant_url = _install(base, name(f"bk_control_{w}"), name(f"bk_ten_{w}"))
     _run(tenant_url, "INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', 'before', now())")
+    clip = _a_searchable_clip(tenant_url)
+    assert _found(tenant_url, "ferry") == [clip]
 
     made = backups.back_up(tmp_path, control_url, "now", pg_bin=PG_BIN)
     assert made.path.parent == tmp_path / "backups"
@@ -148,7 +181,9 @@ def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
     assert backups.read_state(tmp_path)["last_error"] is None
 
     _run(tenant_url, "UPDATE system_metadata SET value = 'after' WHERE key = 'note'",
-         "INSERT INTO system_metadata (key, value, updated_at) VALUES ('later', 'x', now())")
+         "INSERT INTO system_metadata (key, value, updated_at) VALUES ('later', 'x', now())",
+         "DELETE FROM asset_search")
+    assert _found(tenant_url, "ferry") == []
     _run(control_url, "UPDATE tenants SET name = 'Renamed' WHERE tenant_id = 'ten_a'")
 
     said: list[str] = []
@@ -160,7 +195,8 @@ def test_every_database_is_backed_up_and_put_back_as_it_was(server, tmp_path):
     with engine.connect() as conn:
         assert conn.execute(text("SELECT name FROM tenants WHERE tenant_id = 'ten_a'")).scalar() == "A"
     engine.dispose()
-    assert _value(tenant_url, "search.recreate") == "needed", "its search index is remade from it"
+    # Search is in the account's database (ADR-019): it comes back with it, nothing to remake.
+    assert _found(tenant_url, "ferry") == [clip]
     assert not _exists(base, f"bk_ten_{w}{backups.RESTORING}") and not _exists(base, f"bk_ten_{w}{backups.REPLACED}")
     assert said == [f"  ✓ bk_ten_{w}", f"  ✓ bk_control_{w}"]
 

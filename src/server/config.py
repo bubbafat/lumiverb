@@ -10,11 +10,6 @@ class Settings(BaseSettings):
     control_plane_database_url: str
     tenant_database_url_template: str  # contains {tenant_id}
 
-    # Quickwit
-    quickwit_url: str = "http://localhost:7280"
-    quickwit_enabled: bool = True
-    quickwit_fallback_to_postgres: bool = True
-
     # Storage
     storage_provider: str = "local"
     data_dir: str = "./data"

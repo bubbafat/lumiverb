@@ -15,20 +15,22 @@ def test_query_response_model() -> None:
         media_type="image",
         search_context=SearchContext(score=1.5, hit_type="asset", snippet="A sunset."),
     )
-    resp = QueryResponse(items=[item], total_estimate=1, search_source="quickwit")
+    resp = QueryResponse(items=[item], total_estimate=1, search_source="postgres")
     assert resp.total_estimate == 1
     assert resp.items[0].search_context.score == 1.5
 
 
 @pytest.mark.fast
-def test_postgres_search_empty_query_returns_no_results() -> None:
-    """search_assets with no matching query returns empty list."""
+@pytest.mark.parametrize("typed", ["", "   ", "!!!", "%", "_", '""'])
+def test_a_search_without_a_word_finds_nothing_and_reads_nothing(typed: str) -> None:
+    """Search terms with no word in them find nothing (search_source "none"),
+    without a query: never everything."""
     from unittest.mock import MagicMock
 
-    from src.server.search.postgres_search import search_assets
+    from src.server.api.routers.query import _run_text_search
+    from src.server.models.query_filter import SearchTerm
 
-    mock_session = MagicMock()
-    mock_session.execute.return_value.fetchall.return_value = []
-    results = search_assets(mock_session, "lib_001", "xyzzy_nonexistent", limit=10)
-    assert results == []
-
+    session = MagicMock()
+    scores, contexts, source = _run_text_search(session, [SearchTerm(q=typed)], ["lib_001"], limit=10)
+    assert (scores, contexts, source) == ({}, {}, "none")
+    session.execute.assert_not_called()

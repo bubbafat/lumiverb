@@ -165,7 +165,11 @@ def test_not_in_project_finds_everything_else(env):
 @pytest.mark.slow
 def test_with_a_text_search(env):
     """A text search's candidates are filtered in Postgres like any other filter."""
+    # The clips are found by their paths' words: the upkeep's search sync writes them.
+    r = env["client"].post("/v1/upkeep/search-sync", headers=_headers(env["owner"]))
+    assert r.status_code == 200 and r.json()["failed"] == 0, r.text
     pid = env["project_id"]
+    assert _paths(env, _query(env, env["owner"], "query:harbor")) == {"harbor/a.jpg", "harbor/b.jpg"}
     assert _paths(env, _query(env, env["owner"], "query:harbor", f"project:{pid}")) == {"harbor/a.jpg"}
     assert _paths(env, _query(env, env["owner"], "query:harbor", f"not_project:{pid}")) == {"harbor/b.jpg"}
 
