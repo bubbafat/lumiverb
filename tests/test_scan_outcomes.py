@@ -754,6 +754,44 @@ def test_a_file_a_person_removed_is_skipped_and_another_file_there_is_a_new_clip
     _settled(env, api, lib)
 
 
+@pytest.mark.parametrize("how", ["trashed", "archived", "deleted for good"])
+def test_force_add_brings_back_a_file_a_person_removed(env, api, lib, how):
+    """A person's last resort (lumiverb scan --force-add): the file comes
+    back, its clip with what people did to it when there's one to come back,
+    a new clip when it was deleted for good; later scans keep it."""
+    _image(lib, "a.png", 1)
+    _image(lib, "b.png", 2)
+    _scan(api, lib)
+    a = _in_sight(env, lib)["a.png"]
+    _note(env, a["asset_id"], "keep this")
+    _remove(env, a["asset_id"], how)
+
+    stats = _scan(api, lib, force_add=True)
+
+    clips = _in_sight(env, lib)
+    assert set(clips) == {"a.png", "b.png"}
+    if how == "deleted for good":
+        assert clips["a.png"]["asset_id"] != a["asset_id"] and clips["a.png"]["note"] is None
+        assert stats.restored == 0 and stats.new == 1
+    else:
+        assert clips["a.png"]["asset_id"] == a["asset_id"] and clips["a.png"]["note"] == "keep this"
+        assert stats.restored == 1 and stats.new == 0
+    _settled(env, api, lib)
+
+
+def test_force_add_with_a_path_prefix_brings_back_only_that_folder(env, api, lib):
+    _image(lib, "keep/a.png", 1)
+    _image(lib, "leave/b.png", 2)
+    _scan(api, lib)
+    for clip in _in_sight(env, lib).values():
+        _remove(env, clip["asset_id"], "trashed")
+
+    _scan(api, lib, force_add=True, path_prefix="keep")
+
+    assert set(_in_sight(env, lib)) == {"keep/a.png"}
+    _settled(env, api, lib)
+
+
 def test_a_trashed_file_moved_to_another_folder_comes_back_as_a_new_clip(env, api, lib):
     # What a scan skips is by path (and the content there): the same content
     # at another path isn't a file a person removed.

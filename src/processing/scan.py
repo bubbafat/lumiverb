@@ -128,6 +128,8 @@ class ScanStats:
     failed_seen: dict[str, tuple[int, str | None]] = field(default_factory=dict)
     # Files left for their retry, unchanged since they failed (run_scan's waiting).
     waiting_paths: list[str] = field(default_factory=list)
+    # Clips a person removed, brought back into sight (force_add).
+    restored: int = 0
 
 
 @dataclass
@@ -142,6 +144,10 @@ class _Work:
     candidates: list[dict] = field(default_factory=list)
     # Files a person removed.
     skipped: int = 0
+    # Files a person removed, added anyway (force_add): their clips back in
+    # sight, or deleted for good and new clips (also in new).
+    restored: int = 0
+    added_back: int = 0
     # Moves made (a dry run's: that would be).
     moved: int = 0
 
@@ -600,6 +606,10 @@ def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
         work.changed.append(f)
     elif decision == "upload":
         work.new.append(f)
+        if f["_plan"]["reason"] == "removed":
+            work.added_back += 1
+    elif decision == "restored":
+        work.restored += 1
     elif decision == "moved":
         work.moved += 1
     elif decision == "move_candidate":
@@ -694,6 +704,7 @@ def run_scan(
     skip_moves: bool = False,
     thorough: bool = False,
     allow_mass_delete: bool = False,
+    force_add: bool = False,
     waiting: Mapping[str, tuple[int, str | None]] | None = None,
     cache_previews: bool = True,
     console: Console,
@@ -705,6 +716,10 @@ def run_scan(
     none (and so archives nothing: anything gone may be half a move), else
     the server asks and so does this (the CLI's prompt). allow_mass_delete
     answers the server's question when most of a library looks gone.
+    force_add: add the files a person removed as if they never had (a
+    person's last resort, `lumiverb scan --force-add`): the server brings a
+    clip in the trash or archived back into sight when its content is at its
+    path, and a file deleted for good is uploaded as a new clip.
     waiting: files that failed and wait for their retry (the scheduler's
     back-off), with the size and modified time each had then (_as_seen,
     ScanStats.failed_seen). One still so is found, so it's never gone, but
@@ -763,7 +778,7 @@ def run_scan(
     moves = "apply" if allow_moves else "skip" if skip_moves else "ask"
     scan = client.post(f"/v1/libraries/{library_id}/scans", json={
         "scope": path_prefix or "", "media_type": media_type_filter, "thorough": thorough, "force": force,
-        "moves": moves, "dry_run": dry_run,
+        "moves": moves, "dry_run": dry_run, "force_add": force_add,
     }).json()
     scan_id = scan["scan_id"]
     try:
@@ -866,6 +881,13 @@ def _run(
         return stats
     if work.skipped:
         console.print(f"Skipping {work.skipped:,} file(s) you removed")
+    if work.restored:
+        console.print(f"{'Would bring' if dry_run else 'Brought'} back {work.restored:,} clip(s) you removed")
+    if work.added_back:
+        console.print(f"{work.added_back:,} file(s) you deleted for good {'would come' if dry_run else 'come'} "
+                      "back as new clips")
+    if not dry_run:
+        stats.restored += work.restored
 
     if work.candidates and dry_run:
         console.print(f"\n[yellow]{len(work.candidates):,} moved file(s) detected.[/yellow]")

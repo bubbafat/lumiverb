@@ -31,7 +31,7 @@ from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.faces import face_count, plant_faces
 from tests.machine_lineage import ingest_made, made
-from tests.scan_plan import scan_would
+from tests.scan_plan import add_anyway, scan_would
 
 
 @pytest.fixture(scope="module")
@@ -942,7 +942,10 @@ def test_trash_matching_filter_is_user_trash(env) -> None:
 
 
 @pytest.mark.slow
-def test_emptied_trash_is_remembered_until_unignored(env) -> None:
+def test_emptied_trash_is_remembered_until_a_scan_adds_it_anyway(env) -> None:
+    """Deleted for good, a file stays out of scans until a person asks a scan
+    to add it anyway (lumiverb scan --force-add): then it's a new clip, and
+    forgotten as deleted. The route that forgot it is retired (410 gone)."""
     client, headers, library_id, tenant_url = env
     rel_path = "trash/emptied.jpg"
     asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
@@ -957,16 +960,19 @@ def test_emptied_trash_is_remembered_until_unignored(env) -> None:
     assert _no_clip_at(tenant_url, library_id, rel_path)  # emptied, not just trashed
     assert _ingest(client, headers, library_id, rel_path).status_code == 409
 
-    r = client.request(
-        "DELETE",
-        f"/v1/libraries/{library_id}/ignored-paths",
-        json={"rel_paths": [rel_path]},
-        headers=headers,
-    )
-    assert r.json() == {"removed": 1}
+    r = client.request("DELETE", f"/v1/libraries/{library_id}/ignored-paths", json={"rel_paths": [rel_path]},
+                       headers=headers)
+    assert r.status_code == 410, r.text
+    assert r.json()["error"]["code"] == "gone"
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"  # still remembered
+
+    found = [{"rel_path": rel_path, "file_size": 5000}]
+    assert add_anyway(client, headers, library_id, found, {rel_path: "ab" * 32}) == {rel_path: "upload"}
+    assert _scan_would(client, headers, library_id, rel_path) == "upload"  # forgotten
     r = _ingest(client, headers, library_id, rel_path)
     assert r.status_code == 200, r.text
     assert r.json()["created"] is True
+    assert r.json()["asset_id"] != asset_id
 
 
 @pytest.mark.slow

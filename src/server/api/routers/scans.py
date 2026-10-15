@@ -38,7 +38,7 @@ from src.server.after_commit import AfterCommit
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
-from src.server.api.routers.assets import _ask_about_mass_missing, _out_of_search
+from src.server.api.routers.assets import _ask_about_mass_missing, _back_in_search, _out_of_search
 from src.server.api.routers.trash import hand_over_to_copies
 from src.server.models.tenant import ScanSession
 from src.server.repository import lineage
@@ -69,6 +69,11 @@ class StartScanRequest(BaseModel):
     moves: Literal["apply", "skip", "ask"] = "ask"
     # Decide everything, change nothing.
     dry_run: bool = False
+    # Add the files a person removed as if they never had (a last resort,
+    # `lumiverb scan --force-add`): a clip in the trash or archived comes back
+    # into sight when its content is at its path; a file deleted for good is a
+    # new clip, and forgotten as deleted.
+    force_add: bool = False
 
 
 class StartScanResponse(BaseModel):
@@ -142,8 +147,9 @@ class HashesRequest(BaseModel):
 
 class Decision(BaseModel):
     rel_path: str
-    decision: Literal["unchanged", "upload", "moved", "move_candidate", "move_skipped", "skipped"]
-    # The clip at this path (unchanged, upload), or the clip that moved or would move here.
+    decision: Literal["unchanged", "upload", "moved", "move_candidate", "move_skipped", "skipped", "restored"]
+    # The clip at this path (unchanged, upload), the clip that moved or would
+    # move here, or the clip brought back into sight (restored: force_add).
     asset_id: str | None = None
     moved_from: str | None = None
 
@@ -244,7 +250,7 @@ def start_scan(
     except UnsafeRelPathError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid scope: {exc}") from None
     scan = scans.start(session, library_id, scope=scope, media_type=body.media_type, thorough=body.thorough,
-                       force=body.force, moves=body.moves, dry_run=body.dry_run)
+                       force=body.force, moves=body.moves, dry_run=body.dry_run, force_add=body.force_add)
     return StartScanResponse(scan_id=scan.scan_id, follow_moves=get_follow_moves(session), expires_at=scan.expires_at)
 
 
@@ -344,10 +350,13 @@ def _bump(session: Session, library_id: str, changed: bool) -> None:
 def add_hashes(
     scan_id: str,
     body: HashesRequest,
+    request: Request,
+    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> HashesResponse:
     """Files' contents, up to 1,000 a call: a decision for each, in the order
-    sent. Moves are made now when the scan applies them."""
+    sent. Moves are made now when the scan applies them, and clips restored
+    (force_add) are back in sight and search."""
     scan = _held(session, scan_id, planned=True)
     posted = dict(zip(_rel_paths([f.rel_path for f in body.files]), (f.sha256 for f in body.files), strict=True))
     try:
@@ -359,7 +368,9 @@ def add_hashes(
         session.rollback()
         raise ConflictError("path_taken", "Another clip was just put at one of these paths: send them again.") from None
     session.commit()
-    _bump(session, scan.library_id, not scan.dry_run and any(d.decision == "moved" for d in decided))
+    restored = [] if scan.dry_run else scans.restored_ids(decided)
+    _back_in_search(background, request, session, restored)
+    _bump(session, scan.library_id, not scan.dry_run and any(d.decision in ("moved", "restored") for d in decided))
     return HashesResponse(files=[Decision(rel_path=d.rel_path, decision=d.decision, asset_id=d.asset_id,
                                           moved_from=d.moved_from) for d in decided])
 

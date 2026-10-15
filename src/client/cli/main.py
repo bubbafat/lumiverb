@@ -1040,6 +1040,7 @@ def scan(
     skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Look for no moves: a file at a new path is a new clip, and nothing is archived (anything gone may be half a move), so a moved file's old clip stays until a scan without this.")] = False,
     allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and more than half of a library's clips are missing (the server asks first: normally skipped as a likely mount problem).")] = False,
     thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
+    force_add: Annotated[bool, typer.Option("--force-add", help="Last resort: add the files you removed (trash, archive, deleted for good) as if you never had. A clip in the trash or archived comes back with everything it had when its file is unchanged; a file deleted for good comes back as a new clip. Use --path-prefix to bring back only what's under a folder.")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
 
@@ -1051,6 +1052,10 @@ def scan(
     By default, files whose mtime and size match the server are skipped
     without hashing (fast mode). Use --thorough to SHA-verify all files.
     Use --force to re-scan everything regardless of SHA.
+
+    Files you removed (trashed, archived or deleted for good) stay out of
+    scans while they're unchanged at the same path. --force-add brings them
+    back: a last resort, best with --path-prefix and a --dry-run first.
     """
     from src.processing.scan import run_scan
 
@@ -1091,6 +1096,7 @@ def scan(
         skip_moves=skip_moves,
         allow_mass_delete=allow_mass_delete,
         thorough=thorough,
+        force_add=force_add,
         console=console,
     )
 
@@ -1104,6 +1110,7 @@ def scan(
             f"{stats.unchanged:,} unchanged, "
             f"{stats.deleted:,} deleted, "
             f"{stats.moved:,} moved"
+            + (f", {stats.restored:,} brought back" if stats.restored else "")
             + (f", {stats.cache_populated:,} cache populated" if stats.cache_populated else "")
             + (f", {stats.failed:,} failed" if stats.failed else "")
             + (f", {stats.settling:,} still being written" if stats.settling else "")

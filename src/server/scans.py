@@ -13,7 +13,11 @@ The rules are today's scanner's (src/processing/scan.py), each moved here:
   when they don't, or for --thorough; uploaded for --force, and when a
   video's preview never arrived (_split_files, _preview_missing);
 - a file a person trashed, archived or deleted for good is skipped when its
-  size and time are the ones removed, or its content is (_skipped);
+  size and time are the ones removed, or its content is (_skipped); unless
+  the scan adds them anyway (force_add, `lumiverb scan --force-add`, a
+  person's last resort): then a clip trashed or archived with this content
+  at this path comes back into sight, and a file deleted for good comes
+  back as a new clip and is forgotten as deleted;
 - a move is a new path whose content is a clip gone from this scan, never a
   copy (that clip's file still there); only files of a size a gone clip has
   are hashed for it (_detect_moves);
@@ -46,6 +50,7 @@ from sqlmodel import Session, select
 from ulid import ULID
 
 from src.server.models.tenant import ScanSession
+from src.server.repository.tenant import AssetRepository
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.utils import utcnow
 
@@ -85,7 +90,7 @@ class Found:
 class Decided:
     rel_path: str
     sha256: str
-    decision: str  # unchanged | upload | moved | move_candidate | move_skipped | skipped
+    decision: str  # unchanged | upload | moved | move_candidate | move_skipped | skipped | restored
     asset_id: str | None = None
     moved_from: str | None = None
 
@@ -154,7 +159,7 @@ _PLAN = f"""
                        WHEN :thorough THEN 'hash/thorough'
                        WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime THEN 'unchanged/'
                        ELSE 'hash/changed' END
-                   WHEN r.unknown OR r.as_removed THEN 'skipped/removed'
+                   WHEN (r.unknown OR r.as_removed) AND NOT :force_add THEN 'skipped/removed'
                    WHEN r.rel_path IS NOT NULL THEN 'hash/removed'
                    WHEN :moves AND f.file_size IN (SELECT g.file_size FROM gone g WHERE g.sha256 IS NOT NULL)
                        THEN 'hash/move'
@@ -182,8 +187,15 @@ _POSTED = f"""
            a.asset_id, a.sha256 AS asset_sha256,
            COALESCE(a.file_size <> f.file_size OR a.file_mtime IS DISTINCT FROM f.file_mtime, false) AS stat_differs,
            COALESCE(a.media_type = 'video' AND a.video_preview_key IS NULL, false) AS preview_missing,
+           -- A person removed this content here, or a file here whose content was never known.
            p.rel_path IN (SELECT r.rel_path FROM ({REMOVED}) r
-                          JOIN posted q ON q.rel_path = r.rel_path AND q.sha256 = r.sha256) AS removed
+                          JOIN posted q ON q.rel_path = r.rel_path AND (q.sha256 = r.sha256 OR r.sha256 IS NULL))
+               AS removed,
+           -- Its clip, when it's in the trash or archived: the latest removed.
+           (SELECT c.asset_id FROM assets c
+            WHERE c.library_id = :library_id AND c.rel_path = p.rel_path AND c.deleted_at IS NOT NULL
+              AND c.deleted_reason IN ('user', 'archived') AND (c.sha256 = p.sha256 OR c.sha256 IS NULL)
+            ORDER BY c.deleted_at DESC, c.asset_id COLLATE "C" LIMIT 1) AS removed_clip
     FROM posted p
     LEFT JOIN scan_found f ON f.scan_id = :scan_id AND f.rel_path = p.rel_path
     LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = p.rel_path AND a.deleted_at IS NULL
@@ -203,13 +215,13 @@ def delete_expired(session: Session) -> int:
 
 
 def start(session: Session, library_id: str, *, scope: str, media_type: str, thorough: bool, force: bool,
-          moves: str, dry_run: bool) -> ScanSession:
+          moves: str, dry_run: bool, force_add: bool = False) -> ScanSession:
     """A new scan, started now. Scans expired by now go first, with their listings."""
     delete_expired(session)
     now = utcnow()
     scan = ScanSession(scan_id="scan_" + str(ULID()), library_id=library_id, scope=scope, media_type=media_type,
-                       thorough=thorough, force=force, moves=moves, dry_run=dry_run, started_at=now,
-                       expires_at=now + TTL)
+                       thorough=thorough, force=force, moves=moves, dry_run=dry_run, force_add=force_add,
+                       started_at=now, expires_at=now + TTL)
     session.add(scan)
     session.commit()
     session.refresh(scan)
@@ -266,7 +278,7 @@ def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_mov
     session.add(scan)
     session.flush()
     session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
-                                  "moves": moves_possible(scan, follow_moves)})
+                                  "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves)})
 
 
 def moves_possible(scan: ScanSession, follow_moves: bool) -> bool:
@@ -306,16 +318,19 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
     - at a path a clip holds: uploaded when its content differs (or the scan
       forces, or the video's preview never arrived), else unchanged, and its
       new size and time are recorded so the next scan's check matches;
-    - at a new path: skipped when a person removed this content here; moved
-      when it's the content of a clip gone from this scan, the first such
-      clip by id for the first such file sent, applied now when the scan
-      applies moves (apply_moves), a candidate when it asks first; else
-      uploaded.
+    - at a new path: skipped when a person removed this content here, unless
+      the scan adds them anyway (force_add): then restored, its clip in the
+      trash or archived back in sight, or else uploaded, a new clip, and
+      forgotten as deleted for good; moved when it's the content of a clip
+      gone from this scan, the first such clip by id for the first such file
+      sent, applied now when the scan applies moves (apply_moves), a
+      candidate when it asks first; else uploaded.
 
-    A dry run decides and changes nothing. A file already moved or skipped
-    keeps its decision. Raises NotPlannedError, before anything changes, for files
-    the plan doesn't list; PathTakenError when another clip took a move's path
-    meanwhile (send the hashes again: the file is then that clip's)."""
+    A dry run decides and changes nothing. A file already moved, skipped or
+    restored keeps its decision. Raises NotPlannedError, before anything
+    changes, for files the plan doesn't list; PathTakenError when another
+    clip took a move's path meanwhile (send the hashes again: the file is
+    then that clip's)."""
     rows = session.execute(text(_POSTED), {**_params(scan), "paths": [p for p, _ in posted],
                                            "shas": [s for _, s in posted]}).mappings().all()
     unknown = [r["rel_path"] for r in rows if r["action"] is None]
@@ -324,8 +339,9 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
     decided: list[Decided] = []
     stats: list[dict] = []
     matching: list[Decided] = []
+    adding: list[Decided] = []  # removed by a person, added anyway (force_add)
     for r in rows:
-        if r["decision"] in ("moved", "move_candidate", "move_skipped") or r["action"] == "skipped":
+        if r["decision"] in ("moved", "move_candidate", "move_skipped", "restored") or r["action"] == "skipped":
             decided.append(Decided(r["rel_path"], r["sha256"], r["decision"] or "skipped", r["decided_id"],
                                    r["moved_from"]))
             continue
@@ -336,6 +352,11 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
                 d.decision = "unchanged"
                 if r["stat_differs"]:
                     stats.append({"asset_id": r["asset_id"], "size": r["file_size"], "mtime": r["file_mtime"]})
+        elif r["removed"] and scan.force_add:
+            adding.append(d)
+            if r["removed_clip"] is not None:
+                d.decision, d.asset_id = "restored", r["removed_clip"]
+                stats.append({"asset_id": d.asset_id, "size": r["file_size"], "mtime": r["file_mtime"]})
         elif r["removed"]:
             d.decision = "skipped"
         elif moves_possible(scan, follow_moves):
@@ -343,12 +364,40 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
         decided.append(d)
     _match_moves(session, scan, matching)
     if not scan.dry_run:
+        _add_anyway(session, scan.library_id, adding)
         moving = [d for d in matching if d.decision == "moved"]
         _not_moved(moving, apply_moves(session, scan.library_id,
                                        [(d.asset_id, d.moved_from, d.rel_path) for d in moving]))
         record_stats(session, stats)
     _record(session, scan.scan_id, decided)
     return decided
+
+
+def _add_anyway(session: Session, library_id: str, files: list[Decided]) -> None:
+    """Files a person removed that a scan adds anyway (force_add), no commit:
+    each restored one's clip back in sight (the archive skipped too); one
+    whose clip couldn't come back (another clip in sight took its path
+    meanwhile) is an upload, which ingest makes right. And every one is
+    forgotten as deleted for good, so ingest takes it and later scans don't
+    skip it."""
+    if not files:
+        return
+    restoring = [d for d in files if d.decision == "restored"]
+    back = set(AssetRepository(session).bring_back_removed([d.asset_id for d in restoring]))
+    for d in restoring:
+        if d.asset_id not in back:
+            d.decision, d.asset_id = "upload", None
+    session.execute(text("""
+        DELETE FROM ignored_files i
+        USING unnest(CAST(:paths AS text[]), CAST(:shas AS text[])) AS f(rel_path, sha256)
+        WHERE i.library_id = :library_id AND i.rel_path = f.rel_path
+          AND (i.sha256 = f.sha256 OR i.sha256 IS NULL)
+    """), {"library_id": library_id, "paths": [d.rel_path for d in files], "shas": [d.sha256 for d in files]})
+
+
+def restored_ids(decided: list[Decided]) -> list[str]:
+    """The clips these decisions brought back into sight."""
+    return [d.asset_id for d in decided if d.decision == "restored" and d.asset_id]
 
 
 def _match_moves(session: Session, scan: ScanSession, files: list[Decided]) -> None:
