@@ -72,7 +72,7 @@ from getpass import getpass
 from pathlib import Path
 
 from src.server import backups
-from src.server.lifecycle import log, network, upkeep
+from src.server.lifecycle import log, network, private, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -365,10 +365,12 @@ def _run(args: argparse.Namespace) -> int:
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
     named = _named_env_file(args.env)
+    log_file = log.file_of(2)
     # Built first: a setting it can't use stops it before anything starts.
     children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None,
-                               env_file=named.absolute() if named else None, log_file=log.file_of(2))
+                               env_file=named.absolute() if named else None, log_file=log_file)
     log.configure()  # launchd's file, rotated, each child's lines named (log.py)
+    private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: stop.set())
