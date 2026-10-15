@@ -3,10 +3,14 @@
 # tap's PR moving the formula to it (merge that PR to ship it: `brew
 # upgrade lumiverb` then finds the new version).
 #
-#   scripts/release.sh v0.1.1 [--dry-run]
+#   scripts/release.sh v0.1.1 [--dry-run] [--accept-advisories]
 #
 # Tags origin/main as it is now, whatever is checked out here. --dry-run
-# says what it would do and changes nothing. Needs git and gh, signed in.
+# says what it would do and changes nothing. Before tagging, it audits what
+# the release ships (scripts/audit_release.py: the Python packages the
+# formula installs and the npm packages its build does) and stops at any
+# advisory, unless --accept-advisories says each listed one was judged.
+# Needs git, gh (signed in), uv and npm.
 # Run again after a failure: a version already tagged and released goes
 # straight to the tap's PR, unless the tap has it already. While that PR is
 # open, a run stops at the push (its branch exists): merge or close it first.
@@ -23,9 +27,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VERSION="${1:-}"
 DRY_RUN=false
-[[ "${2:-}" == "--dry-run" ]] && DRY_RUN=true
-[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Say the version: scripts/release.sh vX.Y.Z [--dry-run]"
-command -v gh >/dev/null || fail "gh isn't installed"
+ACCEPT_ADVISORIES=false
+for flag in "${@:2}"; do
+  case "$flag" in
+    --dry-run) DRY_RUN=true ;;
+    --accept-advisories) ACCEPT_ADVISORIES=true ;;
+    *) fail "Not an option: ${flag} (--dry-run, --accept-advisories)" ;;
+  esac
+done
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Say the version: scripts/release.sh vX.Y.Z [--dry-run] [--accept-advisories]"
+for tool in gh uv npm; do command -v "$tool" >/dev/null || fail "${tool} isn't installed"; done
 [[ "$(git remote get-url origin 2>/dev/null)" == *"${REPO}"* ]] || fail "Run it in a Lumiverb checkout (origin: ${REPO})"
 
 step "What it releases"
@@ -43,6 +54,28 @@ if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null; th
 else
   ok "${VERSION} = main at $(git log -1 --format='%h %s' "$COMMIT")"
 fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+if ! $TAGGED; then
+  step "Advisories in what it ships"
+  gh api "repos/${TAP}/contents/Formula/lumiverb.rb" --jq .content | base64 --decode > "${WORK}/formula.rb"
+  set +e
+  python3 "${HERE}/audit_release.py" "$COMMIT" "${WORK}/formula.rb"
+  AUDIT=$?
+  set -e
+  if [[ $AUDIT -eq 0 ]]; then
+    ok "None"
+  elif [[ $AUDIT -eq 3 ]] && $ACCEPT_ADVISORIES; then
+    ok "Released with the advisories above (--accept-advisories)"
+  elif [[ $AUDIT -eq 3 ]] && $DRY_RUN; then
+    ok "Would stop here: upgrade them, or judge each and run again with --accept-advisories"
+  elif [[ $AUDIT -eq 3 ]]; then
+    fail "Advisories in what it ships (above): upgrade them, or judge each and run again with --accept-advisories"
+  else
+    fail "The audit couldn't run (above)"
+  fi
+fi
 if $DRY_RUN; then
   $TAGGED || ok "Would tag it and make the GitHub release"
   ok "Would open a tap PR with ${ARCHIVE} and its sha256"
@@ -58,8 +91,6 @@ if ! $TAGGED; then
 fi
 
 step "The tap's PR"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 # GitHub makes the archive on first request: the sha256 is of what Homebrew will download.
 curl -fsSL "$ARCHIVE" -o "${WORK}/release.tar.gz"
 if command -v sha256sum >/dev/null; then HASH=(sha256sum); else HASH=(shasum -a 256); fi
