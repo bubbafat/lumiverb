@@ -248,8 +248,8 @@ export default function TrashPage() {
               {deleting.ids
                 ? clipCount(deleteCount)
                 : `Every clip in the trash${libraryName ? ` of ${libraryName}` : ""} (${clipCount(deleteCount)})`} will be
-              deleted for good, with their previews and analysis. This can&apos;t be undone. The original files on
-              your drives aren&apos;t touched.
+              deleted for good, with their previews and analysis. This can&apos;t be undone. Your files stay where
+              they are. Lumiverb won&apos;t show these again unless a file changes, moves or is renamed.
             </p>
             {deleting.usage && (
               <ProjectUsageList usage={deleting.usage}>

@@ -20,6 +20,10 @@ from src.client.cli.decisions import in_projects, send_until_decided
 trash_app = typer.Typer(help="Move clips to the trash, list it, restore from it, or delete for good.")
 console = Console()
 
+# What deleting clips for good means for the files on disk (Robert's words).
+FILES_STAY = "Your files stay where they are. Lumiverb won't show these again unless a file changes, moves or is renamed."
+BRING_BACK = "To bring a file back: lumiverb scan --library NAME --force-add --path-prefix FOLDER"
+
 
 @trash_app.command("add")
 def trash_add(
@@ -121,4 +125,10 @@ def trash_empty(
         answers={"in_projects": in_projects(yes=yes, what="deleted for good, they leave")},
         failed="Couldn't empty the trash",
     )
-    console.print(f"Deleted {clips(r.json().get('deleted', 0))} for good.")
+    deleted = r.json().get("deleted", 0)
+    console.print(f"Deleted {clips(deleted)} for good.")
+    if deleted:
+        # Lumiverb never touches the originals; it remembers each file
+        # (ignored_files) so scans don't add it back.
+        console.print(FILES_STAY)
+        console.print(f"[dim]{BRING_BACK}[/dim]", soft_wrap=True)
