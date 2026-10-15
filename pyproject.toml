@@ -29,7 +29,7 @@ dependencies = [
     "PyYAML>=6.0",
     # Shared utilities
     "python-ulid>=2.0",
-    "requests>=2.25",
+    "requests>=2.33",
     # Image normalization (proxy → WebP, thumbnail generation)
     "pillow>=12.3.0",
     "scikit-learn>=1.3",
