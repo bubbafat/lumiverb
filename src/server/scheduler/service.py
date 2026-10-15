@@ -944,6 +944,9 @@ def entry() -> None:
     code = 1
     try:
         code = main()
+    except BaseException:
+        # Said here: os._exit below ends the process before Python would print it.
+        logger.exception("scheduler: stopped by an error")
     finally:
         logging.shutdown()
         os._exit(code)
