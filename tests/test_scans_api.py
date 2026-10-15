@@ -469,6 +469,21 @@ def test_moves_asked_about_wait_for_an_answer_then_apply(env):
 
 
 @pytest.mark.slow
+def test_moves_turned_off_before_the_answer_are_refused_and_skipping_still_works(env):
+    lib = _library(env)
+    a = File("a/1.jpg", "one")
+    asset = _ingest(env, lib, a)
+    run = _scan(env, lib, [a.at("b/1.jpg")], moves="ask")
+    assert _decided(run) == {"b/1.jpg": "move_candidate"}
+    _settings(env, follow_moves=False)  # an admin, while the scan waits for its answer
+    c, h = env.client, env.editor
+    err = _error(c.post(f"/v1/scans/{run.scan_id}/moves", json={"apply": True}, headers=h), 409, "moves_off")
+    assert err["details"] == {"follow_moves": False}
+    assert _clip(env, asset)["rel_path"] == "a/1.jpg"  # nothing moved
+    assert _ok(c.post(f"/v1/scans/{run.scan_id}/moves", json={"apply": False}, headers=h))["skipped"] == 1
+
+
+@pytest.mark.slow
 def test_moves_asked_about_and_skipped_take_no_part(env):
     # Today's prompt, "Skip moves": the new path isn't uploaded, the old clip isn't archived.
     lib = _library(env)
