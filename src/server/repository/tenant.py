@@ -273,13 +273,6 @@ class LibraryRepository:
             text("UPDATE assets SET deleted_at = :now WHERE library_id = :lib AND deleted_reason = 'user'"),
             {"lib": library_id, "now": utcnow()},
         )
-        self._session.execute(
-            text(
-                "UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id IN"
-                " (SELECT asset_id FROM assets WHERE library_id = :lib AND deleted_at IS NULL)"
-            ),
-            {"lib": library_id},
-        )
         library.status = "active"
         library.is_public = False  # its public page doesn't come back without a person saying so
         library.trashed_at = None
@@ -705,9 +698,8 @@ class AssetRepository:
         trash: they come back with it. Returns (restored, skipped, to_archive),
         to_archive being the restored ones that went back to the archive.
 
-        Those back in sight go back in the queue for the next search sync,
-        with their scenes. Transcript segments aren't swept; callers re-index
-        them (reindex_restored_asset).
+        Search finds those back in sight at once: their words, scenes and
+        transcript segments were kept (ADR-019).
         """
         if not asset_ids:
             return [], [], []
@@ -817,9 +809,6 @@ class AssetRepository:
                 except IntegrityError:
                     pass
         if back:
-            self._session.execute(
-                text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = ANY(:ids)"), {"ids": back}
-            )
             # Fixes back in sight: the guesses near them are checked again (ADR-017).
             from src.server.repository import locations
 
@@ -1023,18 +1012,14 @@ class AssetRepository:
         return {"clips": int(row[0]), "libraries": int(row[1]), "projects": int(row[2])}
 
     def clear_trash(self, asset: Asset) -> None:
-        """Take an asset out of the trash and queue it and its scenes for the
-        next search sync (trashing deleted their search documents). No
-        commit. Transcript segments aren't swept: callers re-index them."""
+        """Take an asset out of the trash: search finds it again (its words
+        were kept), and its row is written again by the next search sync. No
+        commit."""
         asset.deleted_at = None
         asset.deleted_reason = None
         asset.trashed_from = None
         asset.search_synced_at = None
         self._session.add(asset)
-        self._session.execute(
-            text("UPDATE video_scenes SET search_synced_at = NULL WHERE asset_id = :a"),
-            {"a": asset.asset_id},
-        )
         # A fix back in sight: the guesses near it are checked again (ADR-017).
         from src.server.repository import locations
 
@@ -1804,8 +1789,7 @@ class VideoSceneRepository:
             raise ValueError(f"Scene not found: {scene_id}")
         scene.description = description
         scene.tags = tags
-        scene.lineage = lineage
-        scene.search_synced_at = None  # stale until search has it (the sweep, if the inline sync fails)
+        scene.lineage = lineage  # searchable once committed: its words are computed with the row
         self._session.add(scene)
         self._session.commit()
 
@@ -2831,7 +2815,7 @@ class UnifiedBrowseRepository:
     ) -> list[Asset]:
         """Keyset pagination using the QueryFilter algebra.
 
-        If candidate_ids is provided (from Quickwit text search), an
+        If candidate_ids is provided (from the text search), an
         additional ``a.asset_id = ANY(:candidate_ids)`` filter is
         applied. When candidate_scores is also provided, the result is
         ordered by relevance (score DESC) instead of the default
@@ -2843,8 +2827,8 @@ class UnifiedBrowseRepository:
         import base64 as _b64
 
         # Text search forces relevance ordering. Without this override
-        # the default sort=taken_at runs and Quickwit's BM25 ranking
-        # is thrown on the floor.
+        # the default sort=taken_at runs and the search's ranking is
+        # thrown on the floor.
         relevance_order = candidate_ids is not None and candidate_scores is not None
         sort_col = spec.sort if spec.sort in self.SORTABLE_COLUMNS else "taken_at"
         is_desc = spec.direction.lower() == "desc"
@@ -2963,7 +2947,7 @@ class UnifiedBrowseRepository:
             # array. `array_position` is O(N) per row but the candidate
             # set is bounded (≤MAX_CANDIDATE_IDS=5000) so the constant
             # is small. This replaces the old chronological default
-            # which was throwing Quickwit's BM25 ranking on the floor.
+            # which was throwing the search's ranking on the floor.
             order_clause = "array_position(:ordered_candidate_ids, a.asset_id)"
         elif sort_col == "asset_id":
             order_clause = f"a.asset_id {order_dir}"

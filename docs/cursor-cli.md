@@ -3,7 +3,7 @@
 
 ## Purpose
 The CLI is a local agent that runs on a machine that can read the source files: the machine that holds them, or the server through a read-only mount ([ADR-016](adr/016-operating-model.md)).
-It never touches the tenant DB, Quickwit, or object storage directly — it is an API client only.
+It never touches the tenant DB or object storage directly — it is an API client only.
 
 See docs/architecture.md for the full design.
 

@@ -116,13 +116,12 @@ def remove_orphan_folders(
 
 @maintenance_app.command("search-sync")
 def search_sync(
-    all_: Annotated[bool, typer.Option("--all", help="The whole account (the search index is the account's).")] = False,
-    force: Annotated[bool, typer.Option("--force", help="Clear timestamps and re-index everything.")] = False,
+    all_: Annotated[bool, typer.Option("--all", help="The whole account (search is the account's).")] = False,
+    force: Annotated[bool, typer.Option("--force", help="Write every clip's and transcript's search rows again.")] = False,
 ) -> None:
-    """Push stale assets to the Quickwit search index (--all: the whole account). Admins only.
+    """Write the search rows of clips and transcripts that changed (--all: the whole account). Admins only.
 
-    Use --force to clear all search_synced_at timestamps and re-index
-    everything into the tenant index. Useful after index migrations.
+    Use --force to write every clip's and transcript's again.
     """
     if not all_:
         console.print("[red]Give --all: search sync is for the whole account.[/red]")
@@ -131,8 +130,7 @@ def search_sync(
 
     total_synced = 0
     total_failed = 0
-    total_scenes_synced = 0
-    total_scenes_failed = 0
+    total_transcripts = 0
     batch = 0
 
     while True:
@@ -143,30 +141,27 @@ def search_sync(
         result = resp.json()
 
         synced = result.get("synced", 0)
-        failed = result.get("failed", 0)
-        scenes_synced = result.get("scenes_synced", 0)
-        scenes_failed = result.get("scenes_failed", 0)
+        failed = result.get("failed", 0) + result.get("transcripts_failed", 0)
+        transcripts = result.get("transcripts_synced", 0)
 
         total_synced += synced
         total_failed += failed
-        total_scenes_synced += scenes_synced
-        total_scenes_failed += scenes_failed
+        total_transcripts += transcripts
 
-        if synced > 0 or scenes_synced > 0:
-            console.print(f"  Batch {batch}: {synced} assets, {scenes_synced} scenes synced")
+        if synced > 0 or transcripts > 0:
+            console.print(f"  Batch {batch}: {synced} clips, {transcripts} transcripts synced")
 
-        # Done when nothing was processed
-        if synced == 0 and failed == 0 and scenes_synced == 0 and scenes_failed == 0:
+        # Done when nothing was written, or something failed (the next upkeep tries again)
+        if (synced == 0 and transcripts == 0) or failed:
             break
 
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column(style="dim")
     table.add_column()
 
-    table.add_row("Assets synced", str(total_synced))
-    table.add_row("Assets failed", str(total_failed))
-    table.add_row("Scenes synced", str(total_scenes_synced))
-    table.add_row("Scenes failed", str(total_scenes_failed))
+    table.add_row("Clips synced", str(total_synced))
+    table.add_row("Transcripts synced", str(total_transcripts))
+    table.add_row("Failed", str(total_failed))
 
     console.print()
     console.print(table)

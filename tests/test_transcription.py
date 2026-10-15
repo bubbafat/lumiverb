@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 
-
 SAMPLE_SRT = """\
 1
 00:00:05,000 --> 00:00:10,500
@@ -216,57 +215,32 @@ class TestSearchContextTranscriptType:
 
 
 @pytest.mark.fast
-class TestQuickwitTranscriptIndex:
-    """Verify QuickwitClient has transcript index methods."""
+class TestTranscriptSegmentsInSearch:
+    """What search keeps of a transcript (transcript_segments, one row a
+    segment: src/server/search/sync.py segment_rows): each segment's text
+    and times, numbered in order, so a hit says where in the video it is."""
 
-    def test_transcript_index_id(self):
-        from unittest.mock import patch
-        with patch("src.server.search.quickwit_client.get_settings") as mock:
-            mock.return_value.quickwit_url = "http://localhost:7280"
-            mock.return_value.quickwit_enabled = True
-            from src.server.search.quickwit_client import QuickwitClient
-            qw = QuickwitClient()
-            assert qw.tenant_transcript_index_id("tnt_1") == "lumiverb_tenant_tnt_1_transcripts"
+    def _rows(self, srt):
+        from src.server.models.tenant import Asset
+        from src.server.search.sync import segment_rows
 
-    def test_schema_file_exists(self):
-        from pathlib import Path
-        schema = Path("quickwit/transcript_index_schema.json")
-        assert schema.exists()
+        asset = Asset(asset_id="ast_1", library_id="lib_1", rel_path="v.mov", file_size=1, media_type="video")
+        return segment_rows(asset, srt)
 
-    def test_schema_has_text_field(self):
-        import json
-        from pathlib import Path
-        schema = json.loads(Path("quickwit/transcript_index_schema.json").read_text())
-        fields = {f["name"] for f in schema["doc_mapping"]["field_mappings"]}
-        assert "text" in fields
-        assert "start_ms" in fields
-        assert "end_ms" in fields
-        assert "asset_id" in fields
-        assert "language" in fields
+    def test_one_row_a_segment_with_its_text_and_times(self):
+        assert self._rows(SAMPLE_SRT) == [
+            {"seq": 0, "start_ms": 5000, "end_ms": 10500, "text": "Hello and welcome to the show."},
+            {"seq": 1, "start_ms": 12500, "end_ms": 18000, "text": "Today we're going to talk about photography techniques."},
+            {"seq": 2, "start_ms": 105200, "end_ms": 112800,
+             "text": "As you can see here, the lighting makes all the difference."},
+        ]
 
-    def test_default_search_field_is_text(self):
-        import json
-        from pathlib import Path
-        schema = json.loads(Path("quickwit/transcript_index_schema.json").read_text())
-        assert "text" in schema["search_settings"]["default_search_fields"]
+    def test_each_segment_has_its_own_key(self):
+        seqs = [r["seq"] for r in self._rows(SAMPLE_SRT)]
+        assert len(set(seqs)) == len(seqs)
 
-
-@pytest.mark.fast
-class TestTranscriptDocumentId:
-    """Verify transcript document IDs use timestamp-based format."""
-
-    def test_document_id_format(self):
-        from src.server.srt import parse_srt_segments
-        segments = parse_srt_segments(SAMPLE_SRT)
-        seg = segments[0]
-        doc_id = f"ast_1_{seg.start_ms}_{seg.end_ms}"
-        assert doc_id == "ast_1_5000_10500"
-
-    def test_unique_ids_for_different_segments(self):
-        from src.server.srt import parse_srt_segments
-        segments = parse_srt_segments(SAMPLE_SRT)
-        ids = {f"ast_1_{s.start_ms}_{s.end_ms}" for s in segments}
-        assert len(ids) == len(segments)
+    def test_no_transcript_no_segments(self):
+        assert self._rows(None) == [] and self._rows("") == []
 
 
 def test_audio_that_couldnt_be_read_is_tried_again_not_saved_as_silence(tmp_path, monkeypatch):

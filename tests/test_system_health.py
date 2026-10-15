@@ -8,7 +8,6 @@ drives the endpoint that gathers them.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -165,54 +164,36 @@ def test_ai_is_yellow_when_a_machine_was_never_checked():
 # -- Search -----------------------------------------------------------------------
 
 
-def search(**kw):
-    args = {"enabled": True, "fallback_on": True, "quickwit": "ok", "quickwit_error": "",
-            "last_fallback": None, "last_failure": None, "unsynced": 0, "now": NOW}
-    return h.search_row(**{**args, **kw})
+# Search is in the account's database (ADR-019): nothing to be down or fall
+# back from, so the row is about clips whose search rows aren't written yet.
 
 
-def test_search_is_green_when_quickwit_answers():
-    row = search()
-    assert row.state == h.GREEN and "Quickwit" in row.reason
+def test_search_is_green_when_every_clip_is_searchable():
+    row = h.search_row(unsynced=0, now=NOW)
+    assert (row.key, row.title, row.state) == ("search", "Search", h.GREEN)
+    assert row.reason == "Every clip is searchable."
+    assert row.checked_at == NOW
 
 
-def test_search_is_yellow_when_quickwit_is_down_and_postgres_stands_in():
-    row = search(quickwit="down", quickwit_error="ConnectionError")
+def test_a_few_clips_not_searchable_yet_are_said_and_green():
+    row = h.search_row(unsynced=1, now=NOW)
+    assert row.state == h.GREEN
+    assert row.reason == "1 clip isn't searchable yet: upkeep adds it within minutes."
+    row = h.search_row(unsynced=h.UNSYNCED_YELLOW - 1, now=NOW)
+    assert row.state == h.GREEN
+    assert row.reason == f"{h.UNSYNCED_YELLOW - 1} clips aren't searchable yet: upkeep adds them within minutes."
+
+
+def test_search_is_yellow_from_the_threshold_of_clips_not_searchable_yet():
+    assert h.search_row(unsynced=h.UNSYNCED_YELLOW - 1, now=NOW).state == h.GREEN
+    row = h.search_row(unsynced=h.UNSYNCED_YELLOW, now=NOW)
     assert row.state == h.YELLOW
-    assert row.reason == "Quickwit isn't answering (ConnectionError): search uses Postgres (simpler matching)."
-
-
-def test_search_is_yellow_when_the_index_is_missing():
-    row = search(quickwit="missing")
-    assert row.state == h.YELLOW and "index is missing" in row.reason and "Postgres" in row.reason
-
-
-def test_search_is_yellow_when_quickwit_is_off():
-    row = search(enabled=False, quickwit=None)
-    assert row.state == h.YELLOW and "Postgres" in row.reason
-
-
-def test_search_is_yellow_after_a_recent_fallback():
-    row = search(last_fallback=(ago(minutes=2), "Quickwit timed out"))
-    assert row.state == h.YELLOW and "Quickwit timed out" in row.reason and "2 minutes" in row.reason
-    assert search(last_fallback=(ago(minutes=30), "old")).state == h.GREEN
-
-
-def test_search_is_yellow_while_many_clips_wait_to_be_indexed():
-    assert search(unsynced=99).state == h.GREEN
-    row = search(unsynced=1500)
-    assert row.state == h.YELLOW and "1,500 clips" in row.reason
-
-
-def test_search_is_red_when_searches_failed_lately():
-    row = search(last_failure=(ago(minutes=1), "database timeout"))
-    assert row.state == h.RED and "database timeout" in row.reason
-    assert search(last_failure=(ago(hours=1), "old")).state == h.GREEN
-
-
-def test_search_is_red_when_quickwit_is_down_and_the_fallback_is_off():
-    row = search(quickwit="down", fallback_on=False)
-    assert row.state == h.RED and "fallback is off" in row.reason
+    assert row.reason == f"{h.UNSYNCED_YELLOW} clips aren't searchable yet: upkeep adds them within minutes."
+    row = h.search_row(unsynced=1500, now=NOW)
+    assert row.state == h.YELLOW
+    assert row.reason == "1,500 clips aren't searchable yet: upkeep adds them within minutes."
+    # However many wait, search still answers from the database: never red.
+    assert h.search_row(unsynced=10_000_000, now=NOW).state == h.YELLOW
 
 
 # -- Storage ----------------------------------------------------------------------
@@ -375,49 +356,3 @@ def test_ago_reads_plainly():
     assert h.ago(timedelta(minutes=1)) == "1 minute"
     assert h.ago(timedelta(minutes=90)) == "2 hours"
     assert h.ago(timedelta(days=3)) == "3 days"
-
-
-# -- Quickwit: whether the account's index is there, and a missing one made again --
-
-
-def test_ensure_index_says_it_made_a_missing_one(tmp_path):
-    from src.server.search.quickwit_client import QuickwitClient
-
-    (tmp_path / "asset_index_schema.json").write_text('{"doc_mapping": {}}')
-    settings = MagicMock(quickwit_enabled=True, quickwit_url="http://localhost:7280")
-    with patch("src.server.search.quickwit_client.get_settings", return_value=settings):
-        qw = QuickwitClient(schema_dir=tmp_path)
-    with patch("src.server.search.quickwit_client.requests.get", return_value=MagicMock(status_code=404)), \
-         patch("src.server.search.quickwit_client.requests.post", return_value=MagicMock(status_code=200)):
-        assert qw.ensure_tenant_index("tnt_1") is True
-    with patch("src.server.search.quickwit_client.requests.get",
-               return_value=MagicMock(status_code=200, json=lambda: {})), \
-         patch("src.server.search.quickwit_client.requests.post") as post:
-        assert qw.ensure_tenant_index("tnt_1") is False
-        post.assert_not_called()
-    # Quickwit can't say (a 5xx): not taken for missing, so nothing is reindexed.
-    with patch("src.server.search.quickwit_client.requests.get", return_value=MagicMock(status_code=503)), \
-         patch("src.server.search.quickwit_client.requests.post") as post:
-        with pytest.raises(RuntimeError):
-            qw.ensure_tenant_index("tnt_1")
-        post.assert_not_called()
-
-
-def test_index_state_reads_quickwit(tmp_path):
-    import requests
-
-    from src.server.search.quickwit_client import QuickwitClient
-
-    settings = MagicMock(quickwit_enabled=True, quickwit_url="http://localhost:7280")
-    with patch("src.server.search.quickwit_client.get_settings", return_value=settings):
-        qw = QuickwitClient(schema_dir=tmp_path)
-    get = "src.server.search.quickwit_client.requests.get"
-    with patch(get, return_value=MagicMock(status_code=200)):
-        assert qw.tenant_index_state("t") == ("ok", "")
-    with patch(get, return_value=MagicMock(status_code=404)):
-        assert qw.tenant_index_state("t") == ("missing", "")
-    with patch(get, return_value=MagicMock(status_code=503)):
-        assert qw.tenant_index_state("t") == ("down", "it answered 503")
-    with patch(get, side_effect=requests.ConnectionError("refused")):
-        state, why = qw.tenant_index_state("t")
-    assert (state, why) == ("down", "ConnectionError")

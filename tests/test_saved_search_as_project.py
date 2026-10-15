@@ -198,20 +198,22 @@ def test_rating_filters_read_the_savers_ratings(search_env):
 
 @pytest.mark.slow
 def test_a_text_search_narrowed_by_filters_is_saved_from_its_candidates(search_env):
-    from unittest.mock import MagicMock
-
     client, api_key, library_id = search_env
-    canon = _ingest_asset(client, api_key, library_id, "text/canon.jpg", exif_data={"camera_make": "Canon"})
-    sony = _ingest_asset(client, api_key, library_id, "text/sony.jpg", exif_data={"camera_make": "Sony"})
-    qw = MagicMock()
-    qw.enabled = True
-    qw.search_tenant.return_value = [{"asset_id": canon, "score": 0.95}, {"asset_id": sony, "score": 0.8}]
-    qw.search_tenant_scenes.return_value = []
-    qw.search_tenant_transcripts.return_value = []
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=qw):
-        r = _save_as_project(client, api_key, "Disney Canon", [{"type": "query", "value": "Disney"},
-                                                               {"type": "camera_make", "value": "Canon"},
-                                                               {"type": "library", "value": library_id}])
+    # Both match the words (their descriptions); only one the camera.
+    canon = _ingest_asset(client, api_key, library_id, "text/canon.jpg", exif_data={"camera_make": "Canon"},
+                          vision_data={"model_id": "test-vision", "description": "Fireworks over the Disney castle",
+                                       "tags": ["fireworks"]})
+    sony = _ingest_asset(client, api_key, library_id, "text/sony.jpg", exif_data={"camera_make": "Sony"},
+                         vision_data={"model_id": "test-vision", "description": "A Disney parade on Main Street",
+                                      "tags": ["parade"]})
+    r = _save_as_project(client, api_key, "Disney", [{"type": "query", "value": "Disney"},
+                                                     {"type": "library", "value": library_id}])
+    assert r.status_code == 201, r.text
+    assert set(_clip_ids(client, api_key, r.json()["project_id"])) == {canon, sony}
+
+    r = _save_as_project(client, api_key, "Disney Canon", [{"type": "query", "value": "Disney"},
+                                                           {"type": "camera_make", "value": "Canon"},
+                                                           {"type": "library", "value": library_id}])
     assert r.status_code == 201, r.text
     assert _clip_ids(client, api_key, r.json()["project_id"]) == [canon]
 

@@ -15,7 +15,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from src.server.search.quickwit_client import QuickwitClient
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _counts, _library
@@ -95,15 +94,20 @@ def describer(monkeypatch):
     monkeypatch.setattr(video, "_described_here", lambda request: True)
 
 
-@pytest.fixture
-def search_drops(monkeypatch) -> list[list[str]]:
-    """The scene search entries dropped, by scene id (and never all of a clip's)."""
-    dropped: list[list[str]] = []
-    monkeypatch.setattr(QuickwitClient, "delete_scene_index_documents_by_scene_ids",
-                        lambda self, tenant, ids: dropped.append(sorted(ids)))
-    monkeypatch.setattr(QuickwitClient, "delete_scene_index_documents_by_asset_ids",
-                        lambda self, tenant, ids: pytest.fail("a clip's scene entries all dropped"))
-    return dropped
+def _found(lib, words: str) -> dict[str, dict]:
+    """What a search of the library finds: {asset_id: its search context}.
+    A scene is found by its description and tags once the clip shows it."""
+    client, headers, library_id, *_ = lib
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", f"query:{words}")], headers=headers)
+    assert r.status_code == 200, r.text
+    return {i["asset_id"]: i["search_context"] for i in r.json()["items"]}
+
+
+def _search_hit(lib, vid: str, words: str) -> tuple:
+    """Where a search finds the clip: (hit type, start, end, snippet)."""
+    hit = _found(lib, words).get(vid)
+    assert hit is not None, f"{words!r} doesn't find the clip"
+    return hit["hit_type"], hit["start_ms"], hit["end_ms"], hit["snippet"]
 
 
 def _lineage(lib, vid: str) -> set[str]:
@@ -132,8 +136,7 @@ def test_scene_descriptions_and_video_faces_say_they_need_scenes(env):
     assert listed["vision"]["needs"] == ["proxy"]
 
 
-def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_described(
-        env, describer, search_drops):
+def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_described(env, describer):
     lib = _library(env, "SceneRedo")
     client, headers, library_id, storage, tenant_id, _ = lib
     vid, sha = _video_found_the_old_way(lib)
@@ -153,29 +156,30 @@ def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_desc
     assert _counts(lib, "scene_vision")["missing"] == 1  # the new scene is described next
     (found,) = _scenes(lib, vid, describing=True)
     assert (found["start_ms"], found["end_ms"], found["description"]) == (0, 30000, None)
-    assert search_drops == []
+    assert _search_hit(lib, vid, "dog")[0] == "scene"  # the old ones are still found
 
     (r,) = _describe(lib, vid, sha, [found])
     assert r.status_code == 200, r.text
     # Described: swapped in, in one step; the old ones' images go, but not
-    # the one at the moment a new scene shares (0 ms), and their search entries.
+    # the one at the moment a new scene shares (0 ms), and they're no longer found.
     assert [(s["scene_id"], s["description"]) for s in _scenes(lib, vid)] == [(found["scene_id"], "a cat")]
     assert image[0].read_bytes() == b"new jpeg" and not image[12000].exists()
-    assert search_drops == [sorted(s["scene_id"] for s in old)]
+    assert _search_hit(lib, vid, "cat") == ("scene", 0, 30000, "a cat")
+    assert vid not in _found(lib, "dog")
     assert _lineage(lib, vid) == {"scenes", "scene_vision"}
     assert _counts(lib, "scene_vision")["current"] == 1 and _counts(lib, "scenes")["current"] == 1
 
 
-def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env, search_drops):
+def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env):
     lib = _library(env, "SceneRedoNoModel")
     vid, sha = _video_found_the_old_way(lib)
-    old = _scenes(lib, vid)
+    assert _search_hit(lib, vid, "dog")[0] == "scene"
     new = _want(lib, "scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 30000)])
     (shown,) = _scenes(lib, vid)
     assert (shown["start_ms"], shown["end_ms"], shown["description"]) == (0, 30000, None)
-    assert search_drops == [sorted(s["scene_id"] for s in old)]
+    assert vid not in _found(lib, "dog")  # the old ones went, and what they said with them
     assert _lineage(lib, vid) == {"scenes"}  # described once a model is set
 
 
@@ -421,7 +425,7 @@ def _found_again_and_described(lib) -> tuple[str, str, list[dict]]:
     return vid, sha, old
 
 
-def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer, search_drops):
+def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer):
     lib = _library(env, "SceneGone")
     client, headers, *_ = lib
     vid, sha, old = _found_again_and_described(lib)
@@ -430,24 +434,29 @@ def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer, searc
         "lineage": _want(lib, "scene_vision", sha)}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "scene_gone", r.text
     assert _scenes(lib, vid)[0]["description"] == "a cat"
+    assert vid not in _found(lib, "late") and _search_hit(lib, vid, "cat")[0] == "scene"
 
 
 def test_a_scene_found_again_is_searchable_once_its_shown(env, describer):
     lib = _library(env, "SceneStagedSync")
-    client, headers, *_ = lib
     vid, sha = _video_found_the_old_way(lib)
     new = _want(lib, "scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 20000), (20000, 30000)])
-    first, _ = _scenes(lib, vid, describing=True)
+    first, second = _scenes(lib, vid, describing=True)
     (r,) = _describe(lib, vid, sha, [first])
     assert r.status_code == 200, r.text
-    r = client.post(f"/v1/video/scenes/{first['scene_id']}/sync", json={"asset_id": vid}, headers=headers)
-    assert r.status_code == 200 and r.json()["status"] == "deferred", r.text  # not shown yet
+    # Described, but not shown yet: not found, and the scenes shown still are.
     assert len(_scenes(lib, vid)) == 2 and _scenes(lib, vid)[0]["description"] == "a dog"
+    assert vid not in _found(lib, "cat")
+    assert _search_hit(lib, vid, "dog")[0] == "scene"
+
+    (r,) = _describe(lib, vid, sha, [second])  # the last one: swapped in, so found
+    assert r.status_code == 200, r.text
+    assert _search_hit(lib, vid, "cat")[0] == "scene" and vid not in _found(lib, "dog")
 
 
-def test_found_again_deletes_only_images_at_keys_the_server_makes(env, tmp_path, describer, search_drops):
+def test_found_again_deletes_only_images_at_keys_the_server_makes(env, tmp_path, describer):
     """A scene's proxy_key and thumbnail_key are what a client sent: never paths to delete."""
     lib = _library(env, "SceneRedoKeys")
     client, headers, library_id, storage, tenant_id, _ = lib
@@ -478,9 +487,14 @@ def test_found_again_deletes_only_images_at_keys_the_server_makes(env, tmp_path,
     assert outside.read_text() == "keep me" and beside.read_text() == "keep me too"
 
 
-def test_syncing_a_scene_that_was_dropped_says_its_gone(env, describer, search_drops):
+def test_a_scenes_search_sync_is_retired(env, describer):
+    """A scene is searchable once saved: a scheduler from before asking for
+    its sync is told what replaced it, whether the scene is shown or dropped."""
     lib = _library(env, "SceneGoneSync")
     client, headers, *_ = lib
     vid, _, old = _found_again_and_described(lib)
-    r = client.post(f"/v1/video/scenes/{old[0]['scene_id']}/sync", json={"asset_id": vid}, headers=headers)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "scene_gone", r.text
+    for scene_id in (old[0]["scene_id"], _scenes(lib, vid)[0]["scene_id"]):
+        r = client.post(f"/v1/video/scenes/{scene_id}/sync", json={"asset_id": vid}, headers=headers)
+        assert r.status_code == 410, r.text
+        assert r.json()["error"]["code"] == "gone"
+        assert r.json()["error"]["details"] == {"replaced_by": ["PATCH /v1/video/scenes/{scene_id}"]}

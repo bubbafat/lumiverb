@@ -1,8 +1,9 @@
 """Unified query endpoint — replaces /v1/browse and /v1/search.
 
 Accepts filter algebra via repeated ?f=prefix:value params. When a SearchTerm
-filter is present, uses the candidate-set pattern: Quickwit returns candidate
-IDs + scores, then Postgres applies all structured filters and pagination.
+filter is present, uses the candidate-set pattern: the text search
+(src/server/search/text_search.py) returns candidate IDs + scores, then the
+structured filters and pagination are applied to them.
 """
 
 from __future__ import annotations
@@ -21,24 +22,23 @@ from src.server.api.limits import MAX_PAGE
 from src.server.api.routers.projects import guard_project_filters
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
+    LOCATION_FILTERS,
     ApertureRange,
     CameraMake,
     CameraModel,
     Combinator,
     ExposureRange,
     FocalLengthRange,
+    GroupFilter,
     HasExposure,
     IsoRange,
     LensModel,
-    LOCATION_FILTERS,
-    GroupFilter,
     LibraryScope,
     PathPrefix,
     PersonFilter,
     SearchTerm,
 )
 from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
-from src.server.search import health as search_health
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +99,9 @@ class QueryResponse(BaseModel):
     items: list[QueryItem]
     next_cursor: str | None = None
     total_estimate: int | None = None
-    # Which search backend produced the candidate set — "quickwit"
-    # (BM25), "postgres_fallback" (ILIKE substring), or "none" (no
-    # text search). Lets clients (and operators) tell at a glance
-    # whether the BM25 index is engaged. None when no text search
-    # was run at all.
+    # Which search produced the candidate set: "postgres" (PostgreSQL's
+    # full-text search, ADR-019), or "none" (search terms without a word
+    # in them). None when no text search was run at all.
     search_source: str | None = None
 
 
@@ -116,352 +114,71 @@ def _encode_cursor(sort_col: str, sort_value: object, asset_id: str) -> str:
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
-def _why(exc: Exception) -> str:
-    """An error in a few words: Quickwit's answer's status, or what kind of failure."""
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    return f"it answered {status}" if status else type(exc).__name__
-
-
-def _run_quickwit_search(
-    tenant_id: str,
+def _run_text_search(
+    session: Session,
     search_terms: list[SearchTerm],
     library_ids: list[str] | None,
     limit: int,
     public_cap_ms: int | None = None,
     public: bool = False,
     capped: set[str] | None = None,
-    problems: list[str] | None = None,
 ) -> tuple[dict[str, float], dict[str, SearchContext], str]:
-    """Run text search through Quickwit (or Postgres fallback).
+    """The clips a text search finds, in the account's database
+    (src/server/search/text_search.py): their own words, their scenes' and
+    their transcripts'.
 
-    `problems`: when given, gets why Quickwit couldn't be asked or its
-    asset search failed (what a fallback to Postgres is then down to).
-
-    `capped`: when given, gets the name of each index search that came back
-    full (its max_hits): matches past it were left out. Each search is
-    capped on its own and counts documents (scenes, segments), not clips,
-    so the merged scores alone can't tell.
+    `capped`: when given, gets the name of each search that came back full
+    (its limit): matches past it were left out. Each search is capped on
+    its own and counts rows (scenes, segments), not clips, so the merged
+    scores alone can't tell.
 
     `public_cap_ms`: for a public page that plays only so much of each
-    video, search what it shows: no whole-transcript field, and no scene
-    or transcript hits from past that point. `public`: a public page's
-    search never reads notes, the team's working notes.
+    video, search what it shows: no whole-transcript words, and no scene or
+    transcript hits from past that point. `public`: a public page's search
+    never reads notes (the team's working notes) or paths.
 
     Returns:
       - scores: {asset_id: best_score}
-      - contexts: {asset_id: SearchContext} (scene/transcript annotations)
-      - source: "quickwit" | "postgres"
+      - contexts: {asset_id: SearchContext} (what matched: the clip's own
+        words, a scene or a transcript segment, with its times)
+      - source: "postgres", or "none" for terms without a word
     """
-    from src.server.search.query_builder import (
-        ASSET_FIELDS,
-        ASSET_PHRASE_FIELDS,
-        SCENE_FIELDS,
-        SCENE_PHRASE_FIELDS,
-        TRANSCRIPT_FIELDS,
-        TRANSCRIPT_PHRASE_FIELDS,
-        build_quickwit_prefix_query,
-        build_quickwit_query,
-    )
+    from src.server.search import text_search
 
-    # Quickwit's three indexes have *different* schemas — naming a
-    # field the target index doesn't define makes Quickwit return 400
-    # and the catch below silently drops the whole search into the
-    # Postgres fallback. So we build a different query string per
-    # index, each restricted to fields that index actually has.
-    def _build(fields: list[str], phrase_fields: list[str]) -> str:
-        per_term = [
-            build_quickwit_query(st.q, fields=fields, phrase_fields=phrase_fields)
-            for st in search_terms if st.q
-        ]
-        per_term = [q for q in per_term if q]
-        if not per_term:
-            return ""
-        return " AND ".join(f"({q})" for q in per_term)
-
-    def _build_prefix(fields: list[str]) -> str:
-        per_term = [
-            build_quickwit_prefix_query(st.q, fields=fields)
-            for st in search_terms if st.q
-        ]
-        per_term = [q for q in per_term if q]
-        if not per_term:
-            return ""
-        return " AND ".join(f"({q})" for q in per_term)
-
-    hidden = ({"note", "path_tokens"} if public else set()) | ({"transcript_text"} if public_cap_ms is not None else set())
-    asset_fields = [f for f in ASSET_FIELDS if f not in hidden]
-    asset_phrase_fields = [f for f in ASSET_PHRASE_FIELDS if f not in hidden]
-
-    def shown(hit: dict) -> bool:
-        """Within what a capped public page plays."""
-        start = hit.get("start_ms")
-        return public_cap_ms is None or (start is not None and start < public_cap_ms)
-
-    asset_query = _build(asset_fields, asset_phrase_fields)
-    scene_query = _build(SCENE_FIELDS, SCENE_PHRASE_FIELDS)
-    transcript_query = _build(TRANSCRIPT_FIELDS, TRANSCRIPT_PHRASE_FIELDS)
-    asset_prefix_query = _build_prefix(asset_fields)
-    scene_prefix_query = _build_prefix(SCENE_FIELDS)
-
-    if not asset_query:
+    q = text_search.build([st.q for st in search_terms if st.q])
+    if q is None:
         return {}, {}, "none"
 
     scores: dict[str, float] = {}
     contexts: dict[str, SearchContext] = {}
 
-    from src.server.config import get_settings
-    settings = get_settings()
+    def full(name: str, hits: list, cap: int) -> list:
+        if capped is not None and len(hits) >= cap:
+            capped.add(name)
+        return hits
 
-    try:
-        from src.server.search.quickwit_client import QuickwitClient
-        qw = QuickwitClient()
-    except Exception as exc:
-        logger.warning("Quickwit client init failed: %r", exc, exc_info=True)
-        qw = None
-        if problems is not None:
-            problems.append(f"Quickwit couldn't be set up ({type(exc).__name__})")
+    for hit in full("assets", text_search.clips(session, q, library_ids, limit, public=public,
+                                                public_cap_ms=public_cap_ms), limit):
+        if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
+            scores[hit.asset_id] = hit.score
+            contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet)
 
-    if qw is not None and qw.enabled:
-        # Each per-index search is wrapped in its own try/except so a
-        # failure on one index (e.g. transcript index doesn't exist for
-        # this tenant) doesn't crash the whole search into the
-        # Postgres fallback. Previously a 400 from the transcript
-        # index would discard 1142 perfectly good asset hits.
-
-        # Asset index — issue the EXACT query first, then the PREFIX
-        # query separately. They MUST be separate Quickwit calls
-        # because Quickwit's wildcard queries get constant scoring
-        # rather than BM25; OR'ing them into a single query lets
-        # exact matches dominate so completely that prefix-only
-        # results (e.g. "Disney" → "Disneyland") get buried at
-        # rank 100+. By scoring the prefix list independently with
-        # position scoring and a penalty multiplier, prefix rank 0
-        # ties with exact rank 1 and prefix-only matches surface
-        # near the top of the results.
-        try:
-            asset_hits = qw.search_tenant(
-                tenant_id=tenant_id,
-                query=asset_query,
-                library_ids=library_ids,
-                max_hits=limit,
-            )
-            if capped is not None and len(asset_hits) >= limit:
-                capped.add("assets")
-            for hit in asset_hits:
-                aid = hit["asset_id"]
-                score = hit.get("score", 0.0)
-                if aid not in scores or score > scores[aid]:
-                    scores[aid] = score
-                    # Surface the asset's AI description as the snippet
-                    # so iOS cell captions and the lightbox Match
-                    # section have something to show for photo hits.
-                    # Falls back to joining the top tags when the
-                    # description is missing.
-                    snippet = hit.get("description") or ""
-                    if not snippet:
-                        tags = hit.get("tags") or []
-                        if tags:
-                            snippet = " · ".join(tags[:4])
-                    contexts[aid] = SearchContext(
-                        score=score,
-                        hit_type="asset",
-                        snippet=snippet or None,
-                    )
-        except Exception as exc:
-            logger.warning("Quickwit asset search failed: %r", exc, exc_info=True)
-            if problems is not None:
-                problems.append(f"Quickwit's search failed ({_why(exc)})")
-
-        # Asset prefix expansion — separate call so prefix-only
-        # matches get their own position-based scoring and aren't
-        # buried by Quickwit's constant-scoring of wildcards.
-        if asset_prefix_query:
-            try:
-                prefix_hits = qw.search_tenant(
-                    tenant_id=tenant_id,
-                    query=asset_prefix_query,
-                    library_ids=library_ids,
-                    max_hits=limit,
-                )
-                if capped is not None and len(prefix_hits) >= limit:
-                    capped.add("asset prefixes")
-                # Apply prefix penalty so a prefix rank-0 ties with
-                # exact rank-1 (1/(1+1)=0.5). High-rank prefix matches
-                # still surface above low-rank exact matches.
-                PREFIX_PENALTY = 0.5
-                for hit in prefix_hits:
-                    aid = hit["asset_id"]
-                    raw_score = hit.get("score", 0.0)
-                    score = raw_score * PREFIX_PENALTY
-                    if aid not in scores or score > scores[aid]:
-                        scores[aid] = score
-                        snippet = hit.get("description") or ""
-                        if not snippet:
-                            tags = hit.get("tags") or []
-                            if tags:
-                                snippet = " · ".join(tags[:4])
-                        contexts[aid] = SearchContext(
-                            score=score,
-                            hit_type="asset",
-                            snippet=snippet or None,
-                        )
-            except Exception as exc:
-                logger.warning("Quickwit asset prefix search failed: %r", exc, exc_info=True)
-
-        # Scene index — uses scene-restricted query (description, tags only)
-        try:
-            scene_hits = qw.search_tenant_scenes(
-                tenant_id=tenant_id,
-                query=scene_query,
-                library_ids=library_ids,
-                max_hits=limit,
-            )
-            if capped is not None and len(scene_hits) >= limit:
-                capped.add("scenes")
-            for hit in scene_hits:
-                if not shown(hit):
-                    continue
-                aid = hit["asset_id"]
-                score = hit.get("score", 0.0)
-                ctx = SearchContext(
-                    score=score,
-                    hit_type="scene",
-                    snippet=hit.get("description"),
-                    start_ms=hit.get("start_ms"),
-                    end_ms=hit.get("end_ms"),
-                )
-                # Prefer scene/transcript (richer context), keep higher score
-                if aid not in scores:
-                    scores[aid] = score
-                    contexts[aid] = ctx
-                elif score > scores[aid]:
-                    scores[aid] = score
-                    contexts[aid] = ctx
-                elif contexts[aid].hit_type == "asset":
-                    # Scene has richer context even at lower score
-                    contexts[aid] = SearchContext(
-                        score=scores[aid],
-                        hit_type="scene",
-                        snippet=ctx.snippet,
-                        start_ms=ctx.start_ms,
-                        end_ms=ctx.end_ms,
-                    )
-        except Exception as exc:
-            logger.warning("Quickwit scene search failed: %r", exc, exc_info=True)
-
-        # Scene prefix expansion — same pattern as the asset prefix
-        # expansion above. Separate call so prefix matches get
-        # position-based scoring and a penalty.
-        if scene_prefix_query:
-            try:
-                scene_prefix_hits = qw.search_tenant_scenes(
-                    tenant_id=tenant_id,
-                    query=scene_prefix_query,
-                    library_ids=library_ids,
-                    max_hits=limit,
-                )
-                if capped is not None and len(scene_prefix_hits) >= limit:
-                    capped.add("scene prefixes")
-                PREFIX_PENALTY = 0.5
-                for hit in scene_prefix_hits:
-                    if not shown(hit):
-                        continue
-                    aid = hit["asset_id"]
-                    raw_score = hit.get("score", 0.0)
-                    score = raw_score * PREFIX_PENALTY
-                    ctx = SearchContext(
-                        score=score,
-                        hit_type="scene",
-                        snippet=hit.get("description"),
-                        start_ms=hit.get("start_ms"),
-                        end_ms=hit.get("end_ms"),
-                    )
-                    if aid not in scores or score > scores[aid]:
-                        scores[aid] = score
-                        contexts[aid] = ctx
-            except Exception as exc:
-                logger.warning("Quickwit scene prefix search failed: %r", exc, exc_info=True)
-
-        # Transcript index — uses transcript-restricted query (text only).
-        # It's made once the account has a transcript; until then the
-        # client finds nothing in it (quickwit_client._search_index), and
-        # other failures are logged.
-        try:
-            transcript_hits = qw.search_tenant_transcripts(
-                tenant_id=tenant_id,
-                query=transcript_query,
-                library_ids=library_ids,
-                max_hits=limit * 3,
-            )
-            if capped is not None and len(transcript_hits) >= limit * 3:
-                capped.add("transcripts")
-            # Deduplicate: keep best per asset
-            for hit in transcript_hits:
-                if not shown(hit):
-                    continue
-                aid = hit["asset_id"]
-                score = hit.get("score", 0.0)
-                ctx = SearchContext(
-                    score=score,
-                    hit_type="transcript",
-                    snippet=hit.get("text"),
-                    start_ms=hit.get("start_ms"),
-                    end_ms=hit.get("end_ms"),
-                )
-                if aid not in scores:
-                    scores[aid] = score
-                    contexts[aid] = ctx
-                elif score > scores[aid]:
-                    scores[aid] = score
-                    contexts[aid] = ctx
-                elif contexts[aid].hit_type == "asset":
-                    contexts[aid] = SearchContext(
-                        score=scores[aid],
-                        hit_type="transcript",
-                        snippet=ctx.snippet,
-                        start_ms=ctx.start_ms,
-                        end_ms=ctx.end_ms,
-                    )
-        except Exception as exc:
-            logger.warning("Quickwit transcript search failed: %r", exc, exc_info=True)
-
-        # If Quickwit (any index) returned results, use them
-        if scores:
-            return scores, contexts, "quickwit"
-
-        # Quickwit returned empty across all indexes — fall back to
-        # postgres if configured.
-        if settings.quickwit_fallback_to_postgres:
-            return scores, contexts, "postgres_fallback"
-
-        return scores, contexts, "quickwit"
-
-    # Postgres ILIKE fallback
-    return scores, contexts, "postgres_fallback"
-
-
-def _run_postgres_fallback(
-    session: Session,
-    combined_query: str,
-    library_ids: list[str] | None,
-    limit: int,
-    include_transcripts: bool = True,
-    include_notes: bool = True,
-    include_file_details: bool = True,
-) -> tuple[dict[str, float], dict[str, SearchContext]]:
-    """Postgres ILIKE fallback when Quickwit is unavailable."""
-    from src.server.search.postgres_search import search_assets
-
-    lib_id = library_ids[0] if library_ids and len(library_ids) == 1 else None
-    hits = search_assets(session, lib_id, combined_query, limit=limit, include_transcripts=include_transcripts,
-                         include_notes=include_notes, include_file_details=include_file_details)
-    scores: dict[str, float] = {}
-    contexts: dict[str, SearchContext] = {}
-    for hit in hits:
-        aid = hit["asset_id"]
-        scores[aid] = 0.0
-        contexts[aid] = SearchContext(score=0.0, hit_type="asset")
-    return scores, contexts
+    # A scene or transcript segment: kept for its richer context (where in
+    # the video) even when the clip's own words scored higher.
+    for kind, hits in (("scene", full("scenes", text_search.scenes(session, q, library_ids, limit,
+                                                                   public_cap_ms=public_cap_ms), limit)),
+                       ("transcript", full("transcripts", text_search.segments(
+                           session, q, library_ids, limit * 3, public_cap_ms=public_cap_ms), limit * 3))):
+        for hit in hits:
+            aid = hit.asset_id
+            ctx = SearchContext(score=hit.score, hit_type=kind, snippet=hit.snippet,
+                                start_ms=hit.start_ms, end_ms=hit.end_ms)
+            if aid not in scores or hit.score > scores[aid]:
+                scores[aid] = hit.score
+                contexts[aid] = ctx
+            elif contexts[aid].hit_type == "asset":
+                contexts[aid] = ctx.model_copy(update={"score": scores[aid]})
+    return scores, contexts, "postgres"
 
 
 # ---------------------------------------------------------------------------
@@ -566,9 +283,9 @@ def unified_query(
 ) -> QueryResponse:
     """Unified query endpoint — all filters via ?f=prefix:value params.
 
-    When a ``f=query:...`` filter is present, text search runs through Quickwit
-    (candidate-set pattern) with structured filters applied in Postgres. When no
-    text search filter is present, runs pure SQL browse.
+    When a ``f=query:...`` filter is present, the text search finds the
+    candidates (candidate-set pattern) and the structured filters are applied
+    to them. When no text search filter is present, runs pure SQL browse.
     """
     spec = parse_f_params(f, sort=sort, direction=dir)
 
@@ -595,45 +312,17 @@ def unified_query(
 
     # --- Text search via candidate-set pattern ---
     if search_terms:
-        tenant_id = getattr(request.state, "tenant_id", None)
-        if not tenant_id:
-            raise HTTPException(status_code=500, detail="Tenant context not available")
-
-        # Extract library_ids from the filter tree for Quickwit scoping
+        # Extract library_ids from the filter tree for the search's scope
         library_ids: list[str] | None = None
         for leaf in spec.leaves:
             if isinstance(leaf, LibraryScope):
                 library_ids = list(leaf.library_ids)
                 break
 
-        problems: list[str] = []
-        scores, contexts, source = _run_quickwit_search(
-            tenant_id, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
-            public=getattr(request.state, "is_public_request", False), problems=problems,
+        scores, contexts, search_source = _run_text_search(
+            session, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
+            public=getattr(request.state, "is_public_request", False),
         )
-        search_source = source
-
-        # Noted for the Admin page's Search row (src/server/search/health.py).
-        if problems and source == "postgres_fallback":
-            search_health.note(session, search_health.FALLBACK, problems[0])
-        elif problems and not scores:  # Quickwit failed and the fallback is off: nothing found
-            search_health.note(session, search_health.FAILURE, problems[0])
-        elif problems:  # the clip search failed; scenes and transcripts answered
-            search_health.note(session, search_health.FAILURE, f"{problems[0]}; only scenes and transcripts answered")
-
-        if source == "postgres_fallback":
-            # Join raw terms for ILIKE — no parentheses (those are Quickwit syntax)
-            pg_query = " ".join(st.q for st in search_terms if st.q)
-            try:
-                scores, contexts = _run_postgres_fallback(
-                    session, pg_query, library_ids, limit=MAX_CANDIDATE_IDS,
-                    include_transcripts=public_cap_ms is None,
-                    include_notes=not getattr(request.state, "is_public_request", False),
-                    include_file_details=not getattr(request.state, "is_public_request", False),
-                )
-            except Exception as exc:
-                search_health.note(session, search_health.FAILURE, f"The Postgres search failed ({type(exc).__name__})")
-                raise
 
         if not scores:
             return QueryResponse(

@@ -364,35 +364,34 @@ def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
     assert _row(env, original)[0] is None and _row(env, original)[2] == "ncr-race/copy-of-a.jpg"
 
 
+def _transcribed(env, asset_id: str, words: str) -> None:
+    """The clip's transcript, saved as the transcript producer saves it (search has it once saved)."""
+    client, headers, *_ = env
+    r = client.post(f"/v1/assets/{asset_id}/transcript", headers=headers, json={
+        "srt": f"1\n00:00:00,000 --> 00:00:01,000\n{words}\n", "source": "manual", "language": "en"})
+    assert r.status_code == 200, r.text
+
+
+def _found_by_its_transcript(env, asset_id: str, word: str) -> None:
+    """A search finds the clip, in sight, by a word of its transcript, at its segment."""
+    client, headers, library_id, *_ = env
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", f"query:{word}")], headers=headers)
+    assert r.status_code == 200, r.text
+    found = {i["asset_id"]: i for i in r.json()["items"]}
+    assert asset_id in found, f"{word!r} doesn't find the clip"
+    ctx = found[asset_id]["search_context"]
+    assert (ctx["hit_type"], ctx["start_ms"], ctx["end_ms"]) == ("transcript", 0, 1000)
+
+
 def test_a_handed_over_clip_keeps_its_transcript_in_search(env):
-    from unittest.mock import patch
-
-    from sqlalchemy import text
-
-    from src.server.search.quickwit_client import QuickwitClient
-    from tests.test_archive_by_hand import _db
-
     sha = _sha()
     original = _ingest(env, "ncr-ts/a.mp4", media_type="video", sha=sha)
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET transcript_srt = :t WHERE asset_id = :a"),
-                  {"t": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "a": original})
-        s.commit()
+    _transcribed(env, original, "the zephyrine regatta")
+    _found_by_its_transcript(env, original, "zephyrine")
     _ingest(env, "ncr-ts/copy.mp4", media_type="video", sha=sha)
-    calls: list[tuple[str, tuple]] = []
-
-    def index(session, tenant_id, asset):
-        calls.append(("index", (asset.asset_id,)))
-
-    def delete(self, tenant_id, asset_ids):
-        calls.append(("delete", tuple(asset_ids)))
-
-    with (patch("src.server.search.sync.index_transcript_segments", index),
-          patch.object(QuickwitClient, "delete_tenant_documents_by_asset_ids", delete)):
-        _ingest(env, "ncr-ts/a.mp4", media_type="video", sha=_sha())  # overwritten
+    _ingest(env, "ncr-ts/a.mp4", media_type="video", sha=_sha())  # overwritten
     assert _row(env, original)[2] == "ncr-ts/copy.mp4"  # handed over
-    about = [c[0] for c in calls if original in c[1]]
-    assert about and about[-1] == "index", about
+    _found_by_its_transcript(env, original, "zephyrine")
 
 
 def _someone_else_takes(env, rel_path: str):
@@ -454,31 +453,22 @@ def test_a_library_back_from_the_trash_onto_a_taken_path_archives_that_clip(env)
 # Review round 3: the race's other orders.
 
 
-def test_a_clip_back_in_sight_before_its_search_delete_runs_keeps_its_documents(env):
-    # The overwrite queues the original's search delete (its handover found
-    # no copy yet); the copy's ingest then moves the original back in sight;
-    # the queued delete runs last, and leaves it alone.
+def test_a_clip_back_in_sight_after_the_overwrite_keeps_its_transcript_in_search(env):
+    # The overwrite runs start to finish (the original goes missing: its
+    # handover found no copy yet) while the copy's ingest is under way; the
+    # copy's ingest then moves the original back in sight. Nothing was taken
+    # out of search for it meanwhile: it's found as it was.
     from unittest.mock import patch
 
     from fastapi.testclient import TestClient
-    from sqlalchemy import text
 
-    import src.server.api.routers.assets as assets_router
     from src.server.api.main import app
     from src.server.repository.tenant import AssetRepository
-    from src.server.search.quickwit_client import QuickwitClient
-    from tests.test_archive_by_hand import _db
 
     client, *_ = env
     sha = _sha()
     original = _ingest(env, "ncr3-ts/a.mp4", media_type="video", sha=sha)
-    with _db(env) as s:
-        s.execute(text("UPDATE assets SET transcript_srt = :t WHERE asset_id = :a"),
-                  {"t": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "a": original})
-        s.commit()
-    deleted: list[str] = []
-    queued: list[tuple] = []
-    real_drop = assets_router._drop_from_search
+    _transcribed(env, original, "the quarvel lighthouse")
     real_find = AssetRepository.find_missing_by_sha
     fired = []
 
@@ -490,15 +480,11 @@ def test_a_clip_back_in_sight_before_its_search_delete_runs_keeps_its_documents(
             assert r.status_code == 200, r.text
         return found
 
-    with (patch.object(assets_router, "_drop_from_search", lambda *a: queued.append(a)),
-          patch.object(QuickwitClient, "delete_tenant_documents_by_asset_ids",
-                       lambda self, tenant_id, ids: deleted.extend(ids)),
-          patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha)):
+    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
         r = _post(client, env, "ncr3-ts/copy.mp4", sha)
-        assert r.status_code == 200 and r.json()["asset_id"] == original, r.text
-        for args in queued:  # the overwrite's background work, after all that
-            real_drop(*args)
-    assert queued and original not in deleted
+    assert fired and r.status_code == 200 and r.json()["asset_id"] == original, r.text
+    assert _row(env, original)[2] == "ncr3-ts/copy.mp4"
+    _found_by_its_transcript(env, original, "quarvel")
 
 
 def test_the_copy_handed_over_to_by_the_other_ingest_answers_with_the_clip_there(env):

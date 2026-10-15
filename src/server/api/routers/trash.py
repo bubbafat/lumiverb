@@ -108,7 +108,7 @@ def empty_trash(
     Permanently delete trashed assets. Admin only.
     asset_ids, or all: true (every clip in the trash, narrowed by library_id,
     path and trashed_before); neither or both is a 400 scope_required.
-    Deletes DB rows in FK-safe order, then best-effort file and Quickwit cleanup.
+    Deletes DB rows in FK-safe order (their search rows go with them), then best-effort file cleanup.
     """
     require_scope(body.asset_ids is not None, body.all, "asset_ids")
     asset_repo = AssetRepository(session)
@@ -227,12 +227,6 @@ def _hand_over(session: Session, request: Request, asset_id: str, after: AfterCo
         return None  # nothing was deleted: the caller rolls the move back
     session.expunge(copy)  # its row is gone
     logger.info("Asset %s moved to its copy at %s (copy %s removed)", asset_id, path, copy_id)
-    if archived.transcript_srt and tenant_id:
-        from src.server.search.sync import index_transcript_segments
-
-        # Reads the transcript as committed: the next search sync re-indexes it if this fails.
-        after.add(f"Re-indexing {asset_id}'s transcript after the move",
-                  partial(index_transcript_segments, session, tenant_id, archived))
     return library_id
 
 
@@ -291,7 +285,6 @@ def purge_assets(
     cleanup.add("Removing deleted clips' files", partial(_remove_files, keys_to_remove))
     if tenant_id:
         cleanup.add("Removing deleted clips' playback cuts", partial(_clear_cuts, tenant_id, asset_ids))
-        cleanup.add("Dropping deleted clips from search", partial(_drop_documents, tenant_id, asset_ids))
     if after is None:
         cleanup.run()
     return deleted_count
@@ -314,15 +307,6 @@ def _clear_cuts(tenant_id: str, asset_ids: list[str]) -> None:
         clear_cuts(tenant_id, asset_ids)
     except OSError as e:
         logger.warning("Failed to remove playback cuts after empty trash: %s", e)
-
-
-def _drop_documents(tenant_id: str, asset_ids: list[str]) -> None:
-    try:
-        from src.server.search.quickwit_client import QuickwitClient
-
-        QuickwitClient().delete_tenant_documents_by_asset_ids(tenant_id, asset_ids)
-    except Exception as e:
-        logger.warning("Quickwit delete after empty trash failed: %s", e)
 
 
 def purge_expired_trash(session: Session, tenant_id: str, *, limit: int = 500) -> dict[str, int]:

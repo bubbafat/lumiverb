@@ -9,21 +9,19 @@ POST /v1/upkeep                    — search sync, face names, expired trash, m
                                      empty dismissed people, face clusters when faces changed,
                                      expired scans (and, all accounts, old revoked tokens and the
                                      nightly backup)
-POST /v1/upkeep/search-sync        — search sync sweep only (force=true: reindex everything)
+POST /v1/upkeep/search-sync        — search sync sweep only (force=true: every clip's and transcript's again)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true);
                                      folders the database doesn't list are only reported
 POST /v1/upkeep/remove-orphan-folders — remove those folders (folder_ids or all: true)
 POST /v1/upkeep/recluster          — recompute face clusters
-POST /v1/upkeep/recreate-search-indexes — wipe and remake the Quickwit indexes
 POST /v1/upkeep/cleanup-dismissed  — delete dismissed people with zero face matches
 
 Every-account sweeps run in the request, on purpose: their callers are the
 systemd timers (oneshot units: the unit's exit status and journal are the
-run's result) and the operator by hand, who needs the result (recreating
-the indexes must be followed by a search sync). FastAPI runs these plain
-handlers on its thread pool, so the API keeps answering meanwhile, and each
-call's work is bounded (1,000 clips and scenes per account per search sync,
-500 trashed clips per purge). The scheduler hands out per-clip jobs per
+run's result) and the operator by hand, who needs the result. FastAPI runs
+these plain handlers on its thread pool, so the API keeps answering
+meanwhile, and each call's work is bounded (30 seconds of search sync per
+account, 500 trashed clips per purge). The scheduler hands out per-clip jobs per
 account and has no every-account periodic task to give them to.
 """
 
@@ -39,6 +37,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from src.server.api.errors import GoneError
 from src.server.api.limits import MAX_IDS, require_scope
 from src.server.config import get_settings
 
@@ -58,10 +57,10 @@ class CleanupDismissedResult(BaseModel):
 
 
 class SearchSyncResult(BaseModel):
+    # Clips and transcripts written and marked synced; failed: batches that
+    # couldn't be written (tried next sweep), or accounts whose sweep failed.
     synced: int = 0
     failed: int = 0
-    scenes_synced: int = 0
-    scenes_failed: int = 0
     transcripts_synced: int = 0
     transcripts_failed: int = 0
 
@@ -403,7 +402,7 @@ def _recluster_if_changed(session) -> dict:
 
 
 def _reset_search_synced_at(session) -> None:
-    """Clear the sync times of all assets, scenes and transcripts to force full re-index."""
+    """Clear the sync times of every clip and transcript: all are written again."""
     from src.server.search.sync import REINDEX_RESETS
 
     for reset in REINDEX_RESETS.values():
@@ -417,8 +416,7 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     from src.server.repository.control_plane import TenantRepository
     from src.server.search.sync import run_search_sync_sweep
 
-    totals = {"synced": 0, "failed": 0, "scenes_synced": 0, "scenes_failed": 0,
-              "transcripts_synced": 0, "transcripts_failed": 0}
+    totals = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0}
 
     with get_control_session() as control_session:
         tenants = TenantRepository(control_session).list_all()
@@ -428,7 +426,7 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
             with get_tenant_session(tenant.tenant_id) as session:
                 if force:
                     _reset_search_synced_at(session)
-                result = run_search_sync_sweep(session, tenant_id=tenant.tenant_id)
+                result = run_search_sync_sweep(session)
                 for key in totals:
                     totals[key] += result.get(key, 0)
         except Exception as exc:
@@ -445,7 +443,7 @@ def _run_sweep_single_tenant(scope: UpkeepScope, force: bool = False) -> dict:
     with _tenant_session(scope) as session:
         if force:
             _reset_search_synced_at(session)
-        return run_search_sync_sweep(session, tenant_id=scope.tenant_id)
+        return run_search_sync_sweep(session)
 
 
 def _cleanup_revoked_tokens() -> int:
@@ -550,11 +548,11 @@ def _previews_move() -> str:
 @router.post("/search-sync", response_model=SearchSyncResult)
 def run_search_sync(
     scope: Scope,
-    force: bool = Query(default=False, description="Reset all search_synced_at timestamps and re-index everything"),
+    force: bool = Query(default=False, description="Write every clip's and transcript's search rows again"),
 ) -> SearchSyncResult:
     """Run search sync sweep, for one account or (tenants=all) every account.
 
-    force=true: clears the sync times of all assets, scenes and transcripts so everything is re-indexed.
+    force=true: clears the sync times of every clip and transcript, so all are written again.
     """
     if scope.all_tenants:
         result = _run_sweep_all_tenants(force=force)
@@ -663,45 +661,16 @@ def run_recluster(scope: Scope) -> ReclusterResult:
     return ReclusterResult(**_each_account(scope, "Recluster", recluster, pausable=False))
 
 
-class RecreateSearchIndexesResult(BaseModel):
-    tenants_processed: int = 0
-    errors: list[str] = []
-
-
-@router.post("/recreate-search-indexes", response_model=RecreateSearchIndexesResult)
-def recreate_search_indexes(scope: Scope) -> RecreateSearchIndexesResult:
-    """Make Quickwit indexes again from Postgres (to clean up duplicate
-    documents, or an index that's gone wrong): each account's three are
-    made again beside the live ones, which search keeps answering from
-    while the search-sync sweep fills the new ones, then they're live and
-    the old ones go (src/server/search/indexes.py). Nothing is wiped first.
-
-    An account admin's key does that account's indexes; the admin key with
-    tenants=all every account's.
-    """
-    from src.server.database import get_tenant_session
-    from src.server.search import indexes as search_indexes
-    from src.server.search.quickwit_client import QuickwitClient
-    from src.server.search.sync import rebuild
-
-    qw = QuickwitClient()
-    if not qw.enabled:
-        return RecreateSearchIndexesResult(
-            tenants_processed=0, errors=["Quickwit disabled"],
-        )
-
-    errors: list[str] = []
-    processed = 0
-    for tenant_id in _tenant_ids(scope):
-        try:
-            with get_tenant_session(tenant_id) as tsession:
-                rebuild(tsession, qw, tenant_id, search_indexes.KINDS)
-            processed += 1
-        except Exception as exc:
-            errors.append(f"{tenant_id}: {exc}")
-            logger.warning("Rebuilding Quickwit indexes failed for %s: %s", tenant_id, exc)
-
-    return RecreateSearchIndexesResult(tenants_processed=processed, errors=errors)
+@router.post("/recreate-search-indexes")
+def recreate_search_indexes(scope: Scope) -> None:  # noqa: ARG001 — whose key it takes, as it was
+    """Retired (410 gone): search is in each account's database (ADR-019),
+    with nothing to make again; a search sync with force=true writes every
+    clip's and transcript's rows again."""
+    raise GoneError(
+        "POST /v1/upkeep/recreate-search-indexes is retired: search is in the account's database. "
+        "POST /v1/upkeep/search-sync?force=true writes every clip's and transcript's search rows again.",
+        ["POST /v1/upkeep/search-sync"],
+    )
 
 
 @router.post("/cleanup-dismissed", response_model=CleanupDismissedResult)

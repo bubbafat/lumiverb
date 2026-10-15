@@ -256,30 +256,41 @@ def test_the_redo_question_says_a_paused_producer_waits(env):
 
 
 def test_while_upkeep_is_paused_it_deletes_and_changes_nothing_but_search_stays_current(env):
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
-    from tests.test_trash_days import _age, _exists, _ingest, _trash
+    from sqlalchemy import text
+
+    from tests.test_trash_days import _age, _db, _exists, _ingest, _trash
     from tests.test_trash_days import _sha as _new_sha
 
     client, headers, *_ = env
     old = _ingest(env, "killswitch/old.mov", sha=_new_sha())
     _trash(env, old)
     _age(env, "assets", "deleted_at", "asset_id", old, 31)
+    fresh = _ingest(env, "killswitch/fresh.mov", sha=_new_sha())
+    with _db(env) as s:  # its search row not written yet (as after a note or a move)
+        s.execute(text("DELETE FROM asset_search WHERE asset_id = :a"), {"a": fresh})
+        s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": fresh})
+        s.commit()
     try:
         assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
-                patch("src.server.repository.tenant.FaceRepository.propagate_assignments") as propagate:
+        with patch("src.server.repository.tenant.FaceRepository.propagate_assignments") as propagate:
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200, r.text
             assert not propagate.called  # names aren't spread to faces meanwhile
             # Skipped for the pause, which reads apart from "nothing to do".
             assert r.json()["face_propagate"]["paused"] is True and r.json()["trash_purge"]["paused"] is True
             assert _exists(env, "assets", "asset_id", old)  # the trash isn't emptied meanwhile
+        # Search sync goes on: the clip is searchable.
+        assert r.json()["search_sync"]["synced"] >= 1 and r.json()["search_sync"]["failed"] == 0
+        assert _exists(env, "asset_search", "asset_id", fresh)
+        with _db(env) as s:
+            assert s.execute(text("SELECT search_synced_at FROM assets WHERE asset_id = :a"),
+                             {"a": fresh}).scalar() is not None
     finally:
         assert client.post("/v1/producers/upkeep/resume", json={"scope": "work"}, headers=headers).status_code == 204
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
-            patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
-                  return_value={"assigned": 0, "scanned": 0}) as propagate:
+    with patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
+               return_value={"assigned": 0, "scanned": 0}) as propagate:
         r = client.post("/v1/upkeep", headers=headers)
         assert r.status_code == 200 and propagate.called
         assert r.json()["face_propagate"]["paused"] is False and r.json()["trash_purge"]["paused"] is False
@@ -287,7 +298,7 @@ def test_while_upkeep_is_paused_it_deletes_and_changes_nothing_but_search_stays_
 
 
 def test_pausing_everything_else_leaves_upkeep_running(env):
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     from src.shared.producers import pause_targets
 
@@ -297,9 +308,8 @@ def test_pausing_everything_else_leaves_upkeep_running(env):
             if target != "upkeep":
                 assert client.post(f"/v1/producers/{target}/pause", json={"scope": "work"}, headers=headers).status_code == 204
         assert _queue(env)["state"] == "partly"
-        with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()), \
-                patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
-                      return_value={"assigned": 0, "scanned": 0}) as propagate:
+        with patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
+                   return_value={"assigned": 0, "scanned": 0}) as propagate:
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200 and propagate.called and r.json()["trash_purge"]["paused"] is False
     finally:

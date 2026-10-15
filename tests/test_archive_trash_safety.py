@@ -18,7 +18,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -116,8 +115,7 @@ def test_emptying_everything_leaves_a_trashed_librarys_clips_to_the_library(env)
     assert _reason(env, clip) == "user"
     # ...and the automatic purge leaves it to the library as well.
     _age(env, "assets", "deleted_at", "asset_id", clip, 400)
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()):
-        client.post("/v1/upkeep", headers=headers)
+    assert client.post("/v1/upkeep", headers=headers).status_code == 200
     assert _reason(env, clip) == "user"
 
 
@@ -391,8 +389,7 @@ def test_a_restored_librarys_trashed_clips_get_their_days_again(env):
     _age(env, "assets", "deleted_at", "asset_id", clip, 40)
     client.delete(f"/v1/libraries/{lib_env[2]}", headers=headers)
     assert client.post(f"/v1/libraries/{lib_env[2]}/restore", headers=headers).status_code == 200
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=MagicMock()):
-        client.post("/v1/upkeep", headers=headers)
+    assert client.post("/v1/upkeep", headers=headers).status_code == 200
     assert _reason(env, clip) == "user"
     item = client.get("/v1/trash", params={"library_id": lib_env[2]}, headers=headers).json()["items"][0]
     from datetime import datetime

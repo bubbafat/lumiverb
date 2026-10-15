@@ -404,10 +404,6 @@ def _add_anyway(session: Session, library_id: str, files: list[Decided]) -> None
     """), {"library_id": library_id, "paths": [d.rel_path for d in files], "shas": [d.sha256 for d in files]})
 
 
-def restored_ids(decided: list[Decided]) -> list[str]:
-    """The clips these decisions brought back into sight."""
-    return [d.asset_id for d in decided if d.decision == "restored" and d.asset_id]
-
 
 def _match_moves(session: Session, scan: ScanSession, files: list[Decided]) -> None:
     """Each file at a new path whose content is a gone clip's takes that clip:

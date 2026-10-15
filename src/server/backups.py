@@ -670,8 +670,6 @@ def restore(backup: Backup, control_url: str, *, tenant_url_template: str | None
     for entry, url in sorted(targets, key=lambda t: t[0].get("role") == "control"):
         _restore_one(url, backup.path / str(entry["file"]), pg_restore, say)
 
-    from src.server.search.sync import mark_recreate
-
     engine = create_engine(control_url)
     try:
         with engine.begin() as conn:
@@ -683,15 +681,5 @@ def restore(backup: Backup, control_url: str, *, tenant_url_template: str | None
         raise BackupError(f"Put back, but the accounts' routing wasn't updated: {_first(exc)}") from None
     finally:
         engine.dispose()
-    for entry, url in targets:
-        if entry.get("role") == "account":
-            account = create_engine(url)
-            try:
-                with account.begin() as conn:
-                    mark_recreate(conn)
-            except SQLAlchemyError as exc:
-                say(f"  ! {entry['tenant_id']}'s search index isn't marked to be remade: {_first(exc)}")
-            finally:
-                account.dispose()
     restored = {make_url(url).database for _, url in targets}
     return sorted(d.name for d in now_there if d.name not in restored)

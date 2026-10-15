@@ -10,8 +10,6 @@ the reconciler.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 from sqlalchemy import text
 
@@ -87,16 +85,27 @@ def test_a_batch_doesnt_need_descriptions_either(env):
     assert _summary(lib)["missing_ocr"] == 0
 
 
+def _found(lib, words: str) -> list[str]:
+    """The clips a search of the library finds."""
+    client, headers, library_id, *_ = lib
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("f", f"query:{words}")], headers=headers)
+    assert r.status_code == 200, r.text
+    return [i["asset_id"] for i in r.json()["items"]]
+
+
+def _search_row(env, clip: str):
+    """The clip's row in search (asset_search), or None."""
+    with _db(env) as s:
+        return s.execute(text("SELECT described, ocr_text FROM asset_search WHERE asset_id = :a"),
+                         {"a": clip}).first()
+
+
 @pytest.mark.slow
 def test_the_postgres_search_finds_words_in_an_image(env):
-    from src.server.search.postgres_search import search_assets
-
     lib = _library(env, "OcrSearch")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     _ocr(lib, clip, "Grand Central Terminal", None)
-    with _db(env) as s:
-        hits = search_assets(s, lib[2], "central terminal")
-    assert [h["asset_id"] for h in hits] == [clip]
+    assert _found(lib, "central terminal") == [clip]
 
 
 @pytest.mark.slow
@@ -107,33 +116,25 @@ def test_the_search_sweep_covers_every_clip_and_carries_its_ocr(env):
     undescribed = _ingest_with(lib, "a.jpg", _sha(), None)
     video = _ingest_with(lib, "b.mov", _sha(), None, media_type="video")
     _ocr(lib, undescribed, "PLATFORM 9", None)
-    qw = MagicMock()
-    qw.ensure_tenant_index.return_value = False  # the index was there already
-    qw.outdated.return_value = False  # with its schema as now: nothing rebuilt
     with _db(env) as s:
+        s.execute(text("DELETE FROM asset_search WHERE asset_id IN (SELECT asset_id FROM assets"
+                       " WHERE library_id = :l)"), {"l": lib[2]})
         s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE library_id = :l"), {"l": lib[2]})
         s.commit()
-        with patch("src.server.search.sync._get_quickwit", return_value=qw):
-            run_search_sync_sweep(s, tenant_id=env[4])
-    docs = {d["asset_id"]: d for call in qw.method_calls for arg in call.args if isinstance(arg, list)
-            for d in arg if isinstance(d, dict) and "asset_id" in d}
-    assert undescribed in docs and video in docs
-    assert docs[undescribed]["ocr_text"] == "PLATFORM 9"
+        run_search_sync_sweep(s)
+    assert _search_row(env, undescribed) is not None and _search_row(env, video) is not None
+    assert _search_row(env, undescribed).ocr_text == "PLATFORM 9"
+    assert _found(lib, "platform") == [undescribed]
 
-    # OCR newer than the clip's search document brings it back into the sweep.
-    qw = MagicMock()
-    qw.ensure_tenant_index.return_value = False  # the index was there already
-    qw.outdated.return_value = False  # with its schema as now: nothing rebuilt
+    # OCR newer than the clip's search row brings it back into the sweep.
     with _db(env) as s:
-        s.execute(text("UPDATE assets SET search_synced_at = now()"))  # the sweep is tenant-wide
-        s.execute(text("UPDATE asset_ocr SET text = 'PLATFORM 10', generated_at = now() + interval '1 minute'"
+        s.execute(text("UPDATE assets SET search_synced_at = now()"))  # the sweep is account-wide
+        s.execute(text("UPDATE asset_ocr SET text = 'PLATFORM 10 CONCOURSE', generated_at = now() + interval '1 minute'"
                        " WHERE asset_id = :a"), {"a": undescribed})
         s.commit()
-        with patch("src.server.search.sync._get_quickwit", return_value=qw):
-            run_search_sync_sweep(s, tenant_id=env[4])
-    docs = {d["asset_id"]: d for call in qw.method_calls for arg in call.args if isinstance(arg, list)
-            for d in arg if isinstance(d, dict) and "asset_id" in d}
-    assert set(docs) == {undescribed} and docs[undescribed]["ocr_text"] == "PLATFORM 10"
+        assert run_search_sync_sweep(s)["synced"] == 1  # that clip only
+    assert _search_row(env, undescribed).ocr_text == "PLATFORM 10 CONCOURSE"
+    assert _found(lib, "concourse") == [undescribed]
     with _db(env) as s:  # back from the future, or every sweep after this redoes it for a minute
         s.execute(text("UPDATE asset_ocr SET generated_at = now() WHERE asset_id = :a"), {"a": undescribed})
         s.commit()
@@ -145,14 +146,12 @@ def test_the_summary_counts_stale_search_by_the_sweeps_own_rule(env):
 
     lib = _library(env, "OcrStaleCount")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    qw = MagicMock()
-    qw.ensure_tenant_index.return_value = False
     with _db(env) as s:
         s.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
     assert _summary(lib)["stale_search_sync"] == 1  # undescribed, never synced
-    with _db(env) as s, patch("src.server.search.sync._get_quickwit", return_value=qw):
-        while run_search_sync_sweep(s, tenant_id=env[4])["synced"]:
+    with _db(env) as s:
+        while run_search_sync_sweep(s)["synced"]:
             pass
     assert _summary(lib)["stale_search_sync"] == 0
     with _db(env) as s:  # newer OCR than its document
@@ -168,13 +167,12 @@ def test_describing_again_keeps_the_ocr_in_its_search_document(env):
     lib = _library(env, "OcrDocKept")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     _ocr(lib, clip, "NO ENTRY", None)
-    qw = MagicMock()
-    with patch("src.server.search.sync._get_quickwit", return_value=qw):
-        r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door",
-                                                            "lineage": _want(env, "vision", None)}, headers=headers)
+    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door",
+                                                        "lineage": _want(env, "vision", None)}, headers=headers)
     assert r.status_code == 200, r.text
-    [docs] = [c.args[1] for c in qw.ingest_tenant_documents.call_args_list]
-    assert docs[0]["ocr_text"] == "NO ENTRY" and docs[0]["description"] == "a door"
+    row = _search_row(env, clip)
+    assert (row.ocr_text, row.described) == ("NO ENTRY", "a door")
+    assert _found(lib, "entry") == [clip] and _found(lib, "door") == [clip]
 
 
 @pytest.mark.slow

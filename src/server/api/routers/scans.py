@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
@@ -40,7 +40,7 @@ from src.server.after_commit import AfterCommit
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
-from src.server.api.routers.assets import _ask_about_mass_missing, _back_in_search, _out_of_search
+from src.server.api.routers.assets import _ask_about_mass_missing
 from src.server.api.routers.trash import hand_over_to_copies
 from src.server.models.tenant import ScanSession
 from src.server.repository import lineage
@@ -412,13 +412,11 @@ def _bump(session: Session, library_id: str, changed: bool) -> None:
 def add_hashes(
     scan_id: str,
     body: HashesRequest,
-    request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> HashesResponse:
     """Files' contents, up to 1,000 a call: a decision for each, in the order
     sent. Moves are made now when the scan applies them, and clips restored
-    (force_add) are back in sight and search."""
+    (force_add) are back in sight."""
     scan = _held(session, scan_id, planned=True)
     posted = dict(zip(_rel_paths([f.rel_path for f in body.files]), (f.sha256 for f in body.files), strict=True))
     try:
@@ -430,8 +428,6 @@ def add_hashes(
         session.rollback()
         raise ConflictError("path_taken", "Another clip was just put at one of these paths: send them again.") from None
     session.commit()
-    restored = [] if scan.dry_run else scans.restored_ids(decided)
-    _back_in_search(background, request, session, restored)
     _bump(session, scan.library_id, not scan.dry_run and any(d.decision in ("moved", "restored") for d in decided))
     return HashesResponse(files=[Decision(rel_path=d.rel_path, decision=d.decision, asset_id=d.asset_id,
                                           moved_from=d.moved_from) for d in decided])
@@ -476,7 +472,6 @@ def finish_scan(
     scan_id: str,
     body: FinishRequest,
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> FinishResponse:
     """Archive what's gone as missing, as DELETE /v1/assets does (its guard
@@ -511,14 +506,13 @@ def finish_scan(
     if archiving and not scan.dry_run and not body.allow_mass_missing:
         _ask_about_mass_missing(session, archiving, None, answer="allow_mass_missing: true")
     scans.close(session, scan)
-    archived, handed_over, out_of_sight = len(archiving), [], []
+    archived, handed_over = len(archiving), []
     after = AfterCommit()
     if archiving and not scan.dry_run:
         trashed, _ = AssetRepository(session).trash_many(archiving, reason="missing", commit=False)
         if trashed and follow_moves:
             handed_over = hand_over_to_copies(session, request, scans.with_newer_copies(session, trashed),
                                               after=after)
-        out_of_sight = [a for a in trashed if a not in handed_over]
         archived = len(trashed) - len(handed_over)
     answer = FinishResponse(
         archived=archived, moved=totals["moved"] + len(handed_over), handed_over=len(handed_over),
@@ -531,7 +525,6 @@ def finish_scan(
     # never a clip archived whose copy it should have taken.
     session.commit()
     after.run()
-    _out_of_search(background, request, out_of_sight)
     return answer
 
 

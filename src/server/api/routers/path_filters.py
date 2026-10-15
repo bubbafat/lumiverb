@@ -116,11 +116,6 @@ def create_library_filter(
         trashed_ids, _ = asset_repo.trash_many(matching_ids, reason="user")
         trashed_count = len(trashed_ids)
         LibraryRepository(session).bump_revision(library_id)
-        tenant_id = getattr(request.state, "tenant_id", None)
-        if tenant_id and trashed_ids:
-            from src.server.search.quickwit_client import QuickwitClient
-
-            background.add_task(QuickwitClient().delete_tenant_documents_by_asset_ids, tenant_id, trashed_ids)
 
     return LibraryFilterItemWithType(
         filter_id=row.filter_id,

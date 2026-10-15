@@ -132,10 +132,6 @@ class LeafFilter(ABC):
         """Reads the effective location: the query joins LOCATION_JOIN (as loc)."""
         return False
 
-    def to_quickwit(self) -> str | None:
-        """Return Quickwit query clause, or None if not a text search filter."""
-        return None
-
     def _param_name(self, base: str, counter: list[int]) -> str:
         """Generate a unique bind parameter name."""
         name = f"{base}_{counter[0]}"
@@ -275,17 +271,10 @@ class SearchTerm(LeafFilter):
         return self.q
 
     def to_sql(self, params: dict, counter: list[int]) -> str:
-        # SearchTerm is handled by Quickwit, not SQL.
-        # When used in SQL (postgres fallback), generate ILIKE conditions.
-        p = self._param_name("q", counter)
-        params[p] = f"%{self.q}%"
-        return (
-            f"(a.rel_path ILIKE :{p}"
-            f" OR a.camera_make ILIKE :{p}"
-            f" OR a.camera_model ILIKE :{p}"
-            f" OR a.note ILIKE :{p}"
-            f" OR a.transcript_text ILIKE :{p})"
-        )
+        # Nothing of its own: a search term's matches are the text search's
+        # candidates (src/server/search/text_search.py), found before the
+        # structured filters apply (QuerySpec.structured_filters leaves it out).
+        return "TRUE"
 
     def to_url_value(self) -> str:
         return self.q
@@ -293,10 +282,6 @@ class SearchTerm(LeafFilter):
     @classmethod
     def from_url_value(cls, raw: str) -> SearchTerm:
         return cls(q=raw)
-
-    def to_quickwit(self) -> str | None:
-        return self.q
-
 
 @dataclass(frozen=True)
 class LibraryScope(LeafFilter):

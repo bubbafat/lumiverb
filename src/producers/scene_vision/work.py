@@ -119,8 +119,7 @@ class SceneVision(Work):
                                 data={"rep_frame_ms": str(s.scene["rep_frame_ms"])})
                 client.patch(f"/v1/video/scenes/{scene_id}", json={
                     "model_id": self.model, "model_version": "1", "description": s.description, "tags": s.tags,
-                    "lineage": self.lineage(clip, used=self.used)})
-                client.post(f"/v1/video/scenes/{scene_id}/sync", json={"asset_id": asset_id})
+                    "lineage": self.lineage(clip, used=self.used)})  # searchable once saved
             except LumiverbAPIError as e:
                 if e.code != "scene_gone":
                     raise

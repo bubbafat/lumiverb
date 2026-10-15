@@ -16,7 +16,7 @@ import posixpath
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -227,7 +227,7 @@ def _do_ingest(
             meta_obj = meta_repo.get_latest(asset_id=asset_id)
             if asset_obj and meta_obj:
                 from src.server.search.sync import try_sync_asset
-                try_sync_asset(session, asset_obj, meta_obj, tenant_id=tenant_id)
+                try_sync_asset(session, asset_obj, meta_obj)
             final_status = asset_status.DESCRIBED
 
     # --- Store embeddings if provided ---
@@ -319,7 +319,6 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
 @router.post("/v1/ingest", response_model=IngestResponse, dependencies=[Depends(require_editor)])
 async def create_and_ingest(
     request: Request,
-    background: BackgroundTasks,
     session: Annotated[Session, Depends(get_tenant_session)],
     proxy: UploadFile = File(...),
     library_id: str = Form(...),
@@ -414,7 +413,6 @@ async def create_and_ingest(
     # Create or find existing asset
     asset_repo = AssetRepository(session)
     existing = asset_repo.get_by_library_and_rel_path(library_id, rel_path)
-    reappeared = None  # set when a file the scanner marked missing is back
     created = False
 
     # A different file at the same path is a new clip, and the old one goes
@@ -430,18 +428,13 @@ async def create_and_ingest(
                 _normalize_proxy(raw_proxy)
             except Exception:
                 raise HTTPException(status_code=400, detail="Failed to process proxy image") from None
-            from src.server.api.routers.assets import _out_of_search
-
             asset_repo.trash_many([existing.asset_id], reason="missing")  # commits
-            moved: list[str] = []
             if get_follow_moves(session):
                 # Its content may already be at another path (copied, then
                 # overwritten here): it moves there, with everything it had.
                 from src.server.api.routers.trash import hand_over_to_copies
 
-                moved = hand_over_to_copies(session, request, [existing.asset_id])
-            # Not one that moved: it's back in search, transcript and all.
-            _out_of_search(background, request, [a for a in [existing.asset_id] if a not in moved])
+                hand_over_to_copies(session, request, [existing.asset_id])
         # This content's own clip at this path, if it had one: back where it was.
         existing = asset_repo.find_at(library_id, rel_path, sha)
 
@@ -494,13 +487,12 @@ async def create_and_ingest(
         if file_mtime_dt is not None:
             existing.file_mtime = file_mtime_dt
         existing.media_type = media_type
-        # A file the scanner marked missing has reappeared: restore it, and
-        # put it back in search (trashing deleted its search documents).
-        # Without this, the asset stays invisible (active_assets filters
-        # deleted_at) and the scanner re-discovers it every cycle.
+        # A file the scanner marked missing has reappeared: restore it (search
+        # finds it again: its words were kept). Without this, the asset stays
+        # invisible (active_assets filters deleted_at) and the scanner
+        # re-discovers it every cycle.
         if existing.deleted_at is not None:
             AssetRepository(session).clear_trash(existing)
-            reappeared = existing
         session.add(existing)
 
     from sqlalchemy.exc import IntegrityError
@@ -547,10 +539,6 @@ async def create_and_ingest(
             handed_to = took_its_place()
             if handed_to is None:
                 raise
-    if reappeared is not None and reappeared.transcript_srt:
-        from src.server.search.sync import index_transcript_segments
-
-        index_transcript_segments(session, tenant_id, reappeared)
     if created and handed_to is None and sha and get_follow_moves(session):
         # A clip with this content may have gone missing while this one was
         # made (a copy and the overwritten original in one scan, ingested at

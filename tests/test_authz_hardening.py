@@ -24,7 +24,6 @@ from src.server.api.rate_limit import forgot_password_limiter, login_limiter
 from src.server.api.routers import auth
 from src.server.config import get_settings
 from tests.test_public_library_middleware import _ingest, located, public_lib_client  # noqa: F401
-from tests.test_public_search_cap import FakeQuickwit
 
 _PASSWORD = "correct horse battery"
 
@@ -107,26 +106,16 @@ def test_by_path_isnt_public(public_lib_client, located):
 # The model "XU1" holds a U, which no asset id (Crockford base32) can: "X1" matched random ids.
 @pytest.mark.parametrize("term", ["secret", "beach", "Acme", "XU1"])
 def test_public_search_doesnt_read_paths_or_cameras(public_lib_client, located, term):
-    """Quickwit is off in tests: this is the Postgres fallback."""
+    """The real search (ADR-019), over the clip's row as the search sync writes it."""
     client, api_key, library_id, _ = public_lib_client
+    r = client.post("/v1/upkeep/search-sync", headers=_bearer(api_key))
+    assert r.status_code == 200 and r.json()["failed"] == 0, r.text
     params = [("f", f"library:{library_id}"), ("f", f"query:{term}")]
     assert located not in [i["asset_id"] for i in client.get("/v1/query", params=params).json()["items"]]
-    assert located in [i["asset_id"] for i in
-                       client.get("/v1/query", params=params, headers=_bearer(api_key)).json()["items"]]
-
-
-@pytest.mark.fast
-def test_public_quickwit_search_leaves_path_tokens_out(monkeypatch):
-    from src.server.api.routers.query import _run_quickwit_search
-    from src.server.models.query_filter import SearchTerm
-
-    fake = FakeQuickwit()
-    monkeypatch.setattr("src.server.search.quickwit_client.QuickwitClient", lambda: fake)
-    _run_quickwit_search("ten_1", [SearchTerm(q="beach")], ["lib_1"], limit=50, public=True)
-    public, fake.asset_queries = fake.asset_queries, []
-    _run_quickwit_search("ten_1", [SearchTerm(q="beach")], ["lib_1"], limit=50, public=False)
-    assert public and not any("path_tokens" in q for q in public)
-    assert any("path_tokens" in q for q in fake.asset_queries)
+    if term in ("secret", "beach"):  # the path's words: the account's own search reads them
+        assert located in [i["asset_id"] for i in
+                           client.get("/v1/query", params=params, headers=_bearer(api_key)).json()["items"]]
+    # A camera's make and model aren't searched by anyone (the camera_make: and camera_model: filters are).
 
 
 @pytest.mark.slow

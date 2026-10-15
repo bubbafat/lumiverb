@@ -1,10 +1,9 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
-"""What someone types is taken literally in a LIKE: a path, a search or a
-person's name with % or _ matches those characters, never everything."""
+"""What someone types is taken literally: a path or a person's name with %
+or _ matches those characters in a LIKE, never everything; a text search
+reads them as no word at all (src/server/search/query_builder.py)."""
 
 from __future__ import annotations
-
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -37,17 +36,21 @@ def test_a_path_is_taken_literally(browse_env):
     assert _ids(client, api_key, f"library:{lib}", "path:esc/axb") == {other}
 
 
-@pytest.mark.fast
-@pytest.mark.parametrize(("typed", "bound"), [("%", r"%\%%"), ("_", r"%\_%"), ("a_b", "%a%")])
-def test_the_postgres_search_takes_what_was_typed_literally(typed, bound):
-    from src.server.search.postgres_search import search_assets
+@pytest.mark.slow
+def test_a_text_search_takes_what_was_typed_literally(browse_env):
+    """% and _ are no wildcards in a search: alone they find nothing (never
+    everything), and between words they only part them."""
+    client, api_key, lib, _ = browse_env
+    # Words of two letters: matched whole, never as a prefix.
+    parted = _ingest_asset(client, api_key, lib, "lit/qu_zi/x.jpg")
+    joined = _ingest_asset(client, api_key, lib, "lit/quxzi/y.jpg")
+    r = client.post("/v1/upkeep/search-sync", headers=_headers(api_key))  # their paths' words, searchable
+    assert r.status_code == 200 and r.json()["failed"] == 0, r.text
+    assert _ids(client, api_key, f"library:{lib}", "query:lit") >= {parted, joined}  # both found by a word
 
-    session = MagicMock()
-    session.execute.return_value.fetchall.return_value = []
-    search_assets(session, None, typed, limit=10)
-    sql, params = session.execute.call_args.args
-    assert params["like_0"] == bound
-    assert str(sql).count("ILIKE :like_0 ESCAPE '\\'") >= 7
+    for typed in ("%", "_", "%%", "_%_"):
+        assert _ids(client, api_key, f"library:{lib}", f"query:{typed}") == set(), typed
+    assert _ids(client, api_key, f"library:{lib}", "query:qu_zi") == {parted}
 
 
 @pytest.mark.slow

@@ -94,13 +94,9 @@ class TestSearchTerm:
         # outer wrapping, so quoted-phrase queries don't double up.
         assert SearchTerm(q='"negative space"').label() == '"negative space"'
 
-    def test_to_sql_is_ilike_fallback(self):
+    def test_to_sql_adds_nothing_its_matches_are_the_text_searchs(self):
         frag, params = _sql(SearchTerm(q="castle"))
-        assert "ILIKE" in frag
-        assert "%castle%" in params.values()
-
-    def test_to_quickwit(self):
-        assert SearchTerm(q="hello world").to_quickwit() == "hello world"
+        assert frag == "TRUE" and params == {}
 
     def test_url_roundtrip(self):
         f = SearchTerm(q="Disney world")

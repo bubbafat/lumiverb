@@ -5,7 +5,7 @@ Tests:
   - Query with structured filters narrows correctly
   - Multiple filters AND together
   - Keyset cursor pagination
-  - Candidate-set pattern with mocked Quickwit
+  - Candidate-set pattern: the real text search (PostgreSQL), then the structured filters
   - Search context annotation on results
   - Empty result set
   - Capabilities endpoint returns all filters
@@ -18,7 +18,7 @@ from __future__ import annotations
 import io
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,6 +31,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made
+from tests.scenes import Scene, described_scenes
 
 
 def _ingest_asset(
@@ -77,6 +78,11 @@ def _ingest_asset(
 
 def _headers(api_key: str) -> dict:
     return {"Authorization": f"Bearer {api_key}"}
+
+
+def _vision(description: str, tags: list[str] | None = None) -> dict:
+    """An ingest's vision results: the clip's search row is written with them."""
+    return {"model_id": "test-vision", "description": description, "tags": tags or []}
 
 
 @pytest.fixture(scope="module")
@@ -329,37 +335,36 @@ def test_query_pagination(query_env):
 
 
 # ---------------------------------------------------------------------------
-# Text search with mocked Quickwit
+# Text search: the real search's candidates, then the structured filters
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
 def test_query_text_search_with_structured_filter(query_env):
     """Text search + structured filter: candidate set intersected with SQL filters.
 
-    Mock Quickwit to return canon_photo and sony_photo as text search hits.
-    Then apply camera_make:Canon — only canon_photo should survive.
+    Two clips' descriptions match "landscape"; camera_make:Canon leaves only
+    the Canon one.
     """
     e = query_env
+    client, key, lib = e["client"], e["api_key"], e["library_id"]
+    canon = _ingest_asset(client, key, lib, "hills/canon.jpg", exif_data={"camera_make": "Canon"},
+                          vision_data=_vision("A mountain landscape at dawn"))
+    sony = _ingest_asset(client, key, lib, "hills/sony.jpg", exif_data={"camera_make": "Sony"},
+                         vision_data=_vision("A coastal landscape with cliffs"))
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    mock_qw.search_tenant.return_value = [
-        {"asset_id": e["canon_photo"], "score": 0.95},
-        {"asset_id": e["sony_photo"], "score": 0.80},
-    ]
-    mock_qw.search_tenant_scenes.return_value = []
-    mock_qw.search_tenant_transcripts.return_value = []
+    r = client.get("/v1/query?f=query:landscape", headers=_headers(key))
+    assert r.status_code == 200, r.text
+    assert {canon, sony} <= {i["asset_id"] for i in r.json()["items"]}  # both match the words
 
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get(
-            "/v1/query?f=query:landscape&f=camera_make:Canon",
-            headers=_headers(e["api_key"]),
-        )
+    r = client.get(
+        "/v1/query?f=query:landscape&f=camera_make:Canon",
+        headers=_headers(key),
+    )
     assert r.status_code == 200
     data = r.json()
     ids = [i["asset_id"] for i in data["items"]]
-    assert e["canon_photo"] in ids
-    assert e["sony_photo"] not in ids  # excluded by camera_make filter
+    assert canon in ids
+    assert sony not in ids  # excluded by camera_make filter
 
 
 @pytest.mark.slow
@@ -367,55 +372,42 @@ def test_query_text_search_context_annotation(query_env):
     """Text search results include search_context with score and hit_type."""
     e = query_env
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    mock_qw.search_tenant.return_value = [
-        {"asset_id": e["canon_photo"], "score": 0.9},
-    ]
-    mock_qw.search_tenant_scenes.return_value = []
-    mock_qw.search_tenant_transcripts.return_value = []
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get("/v1/query?f=query:test", headers=_headers(e["api_key"]))
+    r = e["client"].get("/v1/query?f=query:woman", headers=_headers(e["api_key"]))
     assert r.status_code == 200
     items = r.json()["items"]
     assert len(items) >= 1
-    item = next(i for i in items if i["asset_id"] == e["canon_photo"])
-    assert item["search_context"] is not None
-    assert item["search_context"]["score"] == 0.9
-    assert item["search_context"]["hit_type"] == "asset"
+    item = next(i for i in items if i["asset_id"] == e["described_photo"])
+    ctx = item["search_context"]
+    assert ctx is not None
+    assert ctx["score"] > 0
+    assert ctx["hit_type"] == "asset"  # its own words: no place in a video
+    assert ctx["snippet"] == "A woman standing in a sunlit garden"
+    assert ctx["start_ms"] is None and ctx["end_ms"] is None
 
 
 @pytest.mark.slow
 def test_query_text_search_scene_context_preferred(query_env):
-    """When same asset matches via asset and scene index, scene context wins."""
+    """When a clip matches by its own words and by a scene, scene context
+    wins, and the clip is one result however many of its words matched."""
     e = query_env
+    client, key = e["client"], e["api_key"]
+    video = _ingest_asset(client, key, e["library_id"], "clips/evening.mp4", media_type="video",
+                          vision_data=_vision("Waves at sunset on a beach"))
+    described_scenes(client, _headers(key), video, [
+        Scene(0, 5000, "People walking on the sand"),
+        Scene(5000, 10000, "A beautiful sunset scene", ("sunset", "sky")),
+    ])
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    mock_qw.search_tenant.return_value = [
-        {"asset_id": e["sony_video"], "score": 0.5},
-    ]
-    mock_qw.search_tenant_scenes.return_value = [
-        {
-            "asset_id": e["sony_video"],
-            "score": 0.7,
-            "description": "A beautiful sunset scene",
-            "start_ms": 5000,
-            "end_ms": 10000,
-        },
-    ]
-    mock_qw.search_tenant_transcripts.return_value = []
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get("/v1/query?f=query:sunset", headers=_headers(e["api_key"]))
+    r = client.get("/v1/query?f=query:sunset", headers=_headers(key))
     assert r.status_code == 200
     items = r.json()["items"]
-    item = next(i for i in items if i["asset_id"] == e["sony_video"])
-    ctx = item["search_context"]
+    matching = [i for i in items if i["asset_id"] == video]
+    assert len(matching) == 1
+    ctx = matching[0]["search_context"]
     assert ctx["hit_type"] == "scene"
     assert ctx["snippet"] == "A beautiful sunset scene"
     assert ctx["start_ms"] == 5000
+    assert ctx["end_ms"] == 10000
 
 
 # ---------------------------------------------------------------------------
@@ -432,60 +424,47 @@ def test_query_no_matches(query_env):
 
 
 # ---------------------------------------------------------------------------
-# Postgres fallback text search (Quickwit disabled)
+# Text search in the account's database (ADR-019)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_query_text_search_postgres_fallback(query_env):
-    """Text search with Quickwit disabled falls back to Postgres ILIKE.
-
-    This exercises the real database path — no mocks. Verifies that the
-    query term is not wrapped in Quickwit syntax (parentheses) when passed
-    to the postgres ILIKE search.
-    """
+def test_query_text_search_finds_a_description(query_env):
+    """The words of an ingested clip's description find it: PostgreSQL's
+    search, the real database path, no mocks."""
     e = query_env
 
-    # Mock Quickwit as disabled — forces postgres fallback
-    mock_qw = MagicMock()
-    mock_qw.enabled = False
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get(
-            "/v1/query?f=query:woman",
-            headers=_headers(e["api_key"]),
-        )
+    r = e["client"].get(
+        "/v1/query?f=query:woman",
+        headers=_headers(e["api_key"]),
+    )
     assert r.status_code == 200
+    assert r.json()["search_source"] == "postgres"
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert e["described_photo"] in ids, (
-        f"Postgres fallback search for 'woman' should find the described photo. "
+        f"Search for 'woman' should find the described photo. "
         f"Got {len(ids)} results: {ids}"
     )
 
 
 @pytest.mark.slow
-def test_query_text_search_postgres_fallback_with_structured_filter(query_env):
-    """Postgres fallback text search + structured filter AND together."""
+def test_query_text_search_and_a_structured_filter_and_together(query_env):
+    """Text search + structured filter AND together."""
     e = query_env
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = False
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        # Search for "woman" + camera_make:Canon → should find described_photo (Canon)
-        r = e["client"].get(
-            "/v1/query?f=query:woman&f=camera_make:Canon",
-            headers=_headers(e["api_key"]),
-        )
+    # Search for "woman" + camera_make:Canon → should find described_photo (Canon)
+    r = e["client"].get(
+        "/v1/query?f=query:woman&f=camera_make:Canon",
+        headers=_headers(e["api_key"]),
+    )
     assert r.status_code == 200
     ids = [i["asset_id"] for i in r.json()["items"]]
     assert e["described_photo"] in ids
 
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        # Search for "woman" + camera_make:Sony → should find nothing
-        r2 = e["client"].get(
-            "/v1/query?f=query:woman&f=camera_make:Sony",
-            headers=_headers(e["api_key"]),
-        )
+    # Search for "woman" + camera_make:Sony → should find nothing
+    r2 = e["client"].get(
+        "/v1/query?f=query:woman&f=camera_make:Sony",
+        headers=_headers(e["api_key"]),
+    )
     assert r2.status_code == 200
     ids2 = [i["asset_id"] for i in r2.json()["items"]]
     assert e["described_photo"] not in ids2
@@ -515,24 +494,26 @@ def test_query_text_search_pages_through_every_match_in_relevance_order(query_en
     """A text search's next_cursor goes on past the first page. It used to be
     ignored in relevance order, so page 2 repeated page 1 (Oct 9 review)."""
     e = query_env
-    ranked = [v for v in e.values() if isinstance(v, str) and v.startswith("ast_")]
-    assert len(ranked) >= 4
+    client, key = e["client"], e["api_key"]
+    # Five clips saying "meadow" five times down to once: each ranks below the one before.
+    ranked = [_ingest_asset(client, key, e["library_id"], f"fields/{n}.jpg",
+                            vision_data=_vision(" ".join(["meadow"] * n)))
+              for n in (5, 4, 3, 2, 1)]
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    mock_qw.search_tenant.return_value = [{"asset_id": a, "score": 1.0 - i / 100} for i, a in enumerate(ranked)]
-    mock_qw.search_tenant_scenes.return_value = []
-    mock_qw.search_tenant_transcripts.return_value = []
+    r = client.get("/v1/query?f=query:meadow", headers=_headers(key))
+    assert r.status_code == 200, r.text
+    assert [i["asset_id"] for i in r.json()["items"]] == ranked
+    scores = [i["search_context"]["score"] for i in r.json()["items"]]
+    assert scores == sorted(scores, reverse=True) and len(set(scores)) == len(scores)
 
     seen: list[str] = []
     after = None
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        for _ in range(len(ranked)):
-            url = "/v1/query?f=query:landscape&limit=2" + (f"&after={after}" if after else "")
-            r = e["client"].get(url, headers=_headers(e["api_key"]))
-            assert r.status_code == 200, r.text
-            seen += [i["asset_id"] for i in r.json()["items"]]
-            after = r.json().get("next_cursor")
-            if not after:
-                break
+    for _ in range(len(ranked)):
+        url = "/v1/query?f=query:meadow&limit=2" + (f"&after={after}" if after else "")
+        r = client.get(url, headers=_headers(key))
+        assert r.status_code == 200, r.text
+        seen += [i["asset_id"] for i in r.json()["items"]]
+        after = r.json().get("next_cursor")
+        if not after:
+            break
     assert seen == ranked

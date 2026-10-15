@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +34,7 @@ def _ingest_asset(
     *,
     media_type="image",
     exif_data=None,
+    description=None,
 ) -> str:
     from PIL import Image as PILImage
 
@@ -53,6 +54,8 @@ def _ingest_asset(
     }
     if exif_data is not None:
         data["exif"] = json.dumps(exif_data)
+    if description is not None:  # its search row is written with it
+        data["vision"] = json.dumps({"model_id": "test-vision", "description": description, "tags": []})
 
     r = client.post(
         "/v1/ingest",
@@ -127,7 +130,7 @@ def facet_env():
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                # Ingest diverse assets
+                # Ingest diverse assets; only the Sony ones' descriptions say "sunset"
                 canon1 = _ingest_asset(
                     client, api_key, library_id, "canon/photo1.jpg",
                     exif_data={"camera_make": "Canon", "camera_model": "EOS R5", "iso": 200},
@@ -139,11 +142,13 @@ def facet_env():
                 sony1 = _ingest_asset(
                     client, api_key, library_id, "sony/photo1.jpg",
                     exif_data={"camera_make": "Sony", "camera_model": "A7IV", "iso": 800},
+                    description="A red sunset over the harbour",
                 )
                 sony_vid = _ingest_asset(
                     client, api_key, library_id, "sony/video1.mp4",
                     media_type="video",
                     exif_data={"camera_make": "Sony", "camera_model": "A7IV"},
+                    description="Boats coming in at sunset",
                 )
 
                 yield {
@@ -292,34 +297,24 @@ def test_facets_with_favorite_filter(facet_env):
 
 
 # ---------------------------------------------------------------------------
-# Text search with mocked Quickwit
+# Text search: the real search's candidates
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
 def test_facets_with_text_search(facet_env):
-    """Facets with text search scope aggregation to Quickwit candidates."""
+    """Facets with text search scope aggregation to the search's candidates."""
     e = facet_env
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    # Quickwit returns only Sony assets as search candidates
-    mock_qw.search_tenant.return_value = [
-        {"asset_id": e["sony1"], "score": 0.9},
-        {"asset_id": e["sony_vid"], "score": 0.8},
-    ]
-    mock_qw.search_tenant_scenes.return_value = []
-    mock_qw.search_tenant_transcripts.return_value = []
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get(
-            f"/v1/assets/facets?f=query:sunset&f=library:{e['library_id']}",
-            headers=_headers(e["api_key"]),
-        )
+    r = e["client"].get(
+        f"/v1/assets/facets?f=query:sunset&f=library:{e['library_id']}",
+        headers=_headers(e["api_key"]),
+    )
     assert r.status_code == 200
     data = r.json()
-    # Only Sony assets are in the candidate set
+    # Only Sony assets are in the candidate set: only their descriptions say "sunset"
     assert data["camera_makes"] == ["Sony"]
     assert "Canon" not in data["camera_makes"]
+    assert data["media_types"] == ["image", "video"]
 
 
 @pytest.mark.slow
@@ -327,17 +322,10 @@ def test_facets_text_search_no_results(facet_env):
     """Facets with text search returning no candidates yields empty facets."""
     e = facet_env
 
-    mock_qw = MagicMock()
-    mock_qw.enabled = True
-    mock_qw.search_tenant.return_value = []
-    mock_qw.search_tenant_scenes.return_value = []
-    mock_qw.search_tenant_transcripts.return_value = []
-
-    with patch("src.server.search.quickwit_client.QuickwitClient", return_value=mock_qw):
-        r = e["client"].get(
-            f"/v1/assets/facets?f=query:nonexistent&f=library:{e['library_id']}",
-            headers=_headers(e["api_key"]),
-        )
+    r = e["client"].get(
+        f"/v1/assets/facets?f=query:nonexistent&f=library:{e['library_id']}",
+        headers=_headers(e["api_key"]),
+    )
     assert r.status_code == 200
     data = r.json()
     assert data["camera_makes"] == []
