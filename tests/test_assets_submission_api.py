@@ -1,5 +1,5 @@
 """API tests for the asset submission surface (vision/ocr/transcript/note/
-embedding/face/move endpoints), including their batch counterparts.
+embedding/face endpoints), including their batch counterparts.
 
 These exercise the largest uncovered branches in
 ``src/server/api/routers/assets.py``: every single-asset submission endpoint
@@ -13,6 +13,7 @@ following the same pattern as ``test_assets_api.py``.
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from typing import Iterator
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
 
@@ -93,45 +95,11 @@ def submission_client() -> Iterator[tuple[TestClient, dict[str, str], str, list[
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                image_asset_ids: list[str] = []
-                for i, rel_path in enumerate(["sub_a.jpg", "sub_b.jpg", "sub_c.jpg"]):
-                    r_up = client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": rel_path,
-                            "file_size": 2000 + i,
-                            "file_mtime": "2025-02-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
-                    assert r_up.status_code == 200
-                    r_by = client.get(
-                        "/v1/assets/by-path",
-                        params={"library_id": library_id, "rel_path": rel_path},
-                        headers=auth,
-                    )
-                    image_asset_ids.append(r_by.json()["asset_id"])
-
-                r_vid = client.post(
-                    "/v1/assets/upsert",
-                    json={
-                        "library_id": library_id,
-                        "rel_path": "sub_video.mp4",
-                        "file_size": 50_000,
-                        "file_mtime": "2025-02-01T12:00:00Z",
-                        "media_type": "video",
-                    },
-                    headers=auth,
-                )
-                assert r_vid.status_code == 200
-                r_by = client.get(
-                    "/v1/assets/by-path",
-                    params={"library_id": library_id, "rel_path": "sub_video.mp4"},
-                    headers=auth,
-                )
-                video_asset_id = r_by.json()["asset_id"]
+                mtime = datetime(2025, 2, 1, 12, 0, tzinfo=UTC)
+                image_asset_ids = [make_clip(tenant_url, library_id, rel_path, file_size=2000 + i, file_mtime=mtime)
+                                   for i, rel_path in enumerate(["sub_a.jpg", "sub_b.jpg", "sub_c.jpg"])]
+                video_asset_id = make_clip(tenant_url, library_id, "sub_video.mp4", media_type="video",
+                                           file_size=50_000, file_mtime=mtime)
 
                 yield client, auth, library_id, image_asset_ids, video_asset_id
 
@@ -320,36 +288,6 @@ def test_submit_embedding_single_404(submission_client) -> None:
         headers=auth,
     )
     assert r.status_code == 404
-
-
-# ---- batch moves ----------------------------------------------------------
-
-
-@pytest.mark.slow
-def test_batch_moves_updates_rel_path(submission_client) -> None:
-    client, auth, library_id, image_asset_ids, _ = submission_client
-
-    new_path = "moved/sub_b_renamed.jpg"
-    payload = {
-        "items": [
-            {"asset_id": image_asset_ids[1], "rel_path": new_path},
-            {"asset_id": "ast_doesnotexist0000000000000", "rel_path": "x.jpg"},
-        ]
-    }
-    r = client.post("/v1/assets/batch-moves", json=payload, headers=auth)
-    assert r.status_code == 200
-    body = r.json()
-    assert body["updated"] == 1
-    assert body["skipped"] == 1
-
-    # Confirm the move actually happened
-    r2 = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": new_path},
-        headers=auth,
-    )
-    assert r2.status_code == 200
-    assert r2.json()["asset_id"] == image_asset_ids[1]
 
 
 # ---- batch faces ----------------------------------------------------------

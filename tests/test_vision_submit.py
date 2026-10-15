@@ -17,6 +17,7 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
 
@@ -96,29 +97,9 @@ def vision_env(tmp_path_factory):
                 assert r_lib.status_code == 200
                 library_id = r_lib.json()["library_id"]
 
-                def _upsert(rel_path: str) -> str:
-                    raw_client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": rel_path,
-                            "file_size": 1000,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth_headers,
-                    )
-                    r = raw_client.get(
-                        "/v1/assets/by-path",
-                        params={"library_id": library_id, "rel_path": rel_path},
-                        headers=auth_headers,
-                    )
-                    assert r.status_code == 200
-                    return r.json()["asset_id"]
-
-                active_id = _upsert("active.jpg")
-                nosha_id = _upsert("nosha.jpg")
-                deleted_id = _upsert("deleted.jpg")
+                active_id = make_clip(tenant_url, library_id, "active.jpg")
+                nosha_id = make_clip(tenant_url, library_id, "nosha.jpg")
+                deleted_id = make_clip(tenant_url, library_id, "deleted.jpg")
 
                 # Set proxy_sha256 directly on the active asset via the DB
                 from src.server.database import get_engine_for_url

@@ -14,11 +14,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made
 
@@ -75,23 +77,15 @@ def env():
     _engines.clear()
 
 
-def _video(client, auth, library_id, rel_path) -> str:
-    r = client.post(
-        "/v1/assets/upsert",
-        json={"library_id": library_id, "rel_path": rel_path, "file_size": 1000,
-              "file_mtime": "2025-01-01T12:00:00Z", "media_type": "video"},
-        headers=auth,
-    )
-    assert r.status_code == 200, r.text
-    return client.get(
-        "/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}, headers=auth,
-    ).json()["asset_id"]
+def _video(engine, library_id, rel_path) -> str:
+    with Session(engine) as session:
+        return make_clip(session, library_id, rel_path, media_type="video")
 
 
 @pytest.mark.slow
 def test_restore_queues_the_asset_and_its_scenes_for_search_sync(env):
     client, auth, library_id, engine = env
-    asset_id = _video(client, auth, library_id, "restore/synced.mov")
+    asset_id = _video(engine, library_id, "restore/synced.mov")
     with engine.begin() as conn:
         conn.execute(text(
             "INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms, created_at, search_synced_at)"
@@ -115,8 +109,8 @@ def test_restore_queues_the_asset_and_its_scenes_for_search_sync(env):
 
 @pytest.mark.slow
 def test_restore_reindexes_transcript_segments(env):
-    client, auth, library_id, _ = env
-    asset_id = _video(client, auth, library_id, "restore/transcribed.mov")
+    client, auth, library_id, engine = env
+    asset_id = _video(engine, library_id, "restore/transcribed.mov")
     r = client.post(f"/v1/assets/{asset_id}/transcript", json={"source": "manual", "srt": SRT, "language": "en"}, headers=auth)
     assert r.status_code == 200, r.text
     assert client.delete(f"/v1/assets/{asset_id}", headers=auth).status_code == 204

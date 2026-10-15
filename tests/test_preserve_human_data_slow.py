@@ -30,6 +30,7 @@ from src.server.repository.tenant import FaceRepository, PersonRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made
+from tests.scan_plan import scan_would
 
 
 @pytest.fixture(scope="module")
@@ -283,10 +284,17 @@ def _ingest(client, headers, library_id: str, rel_path: str):
     )
 
 
-def _ignored(client, headers, library_id: str) -> dict[str, str]:
-    r = client.get(f"/v1/libraries/{library_id}/ignored-paths", headers=headers)
-    assert r.status_code == 200, r.text
-    return {i["rel_path"]: i["reason"] for i in r.json()["items"]}
+def _scan_would(client, headers, library_id: str, rel_path: str) -> str:
+    """What a scan does with the file at rel_path (_ingest's size): "skipped"
+    when a person removed it, "upload" when it's new or comes back."""
+    return scan_would(client, headers, library_id, [{"rel_path": rel_path, "file_size": 5000}])[rel_path]
+
+
+def _no_clip_at(tenant_url: str, library_id: str, rel_path: str) -> bool:
+    """No clip at rel_path at all, in sight, archived or in the trash: deleted for good."""
+    with _db(tenant_url) as s:
+        return s.execute(text("SELECT 1 FROM assets WHERE library_id = :l AND rel_path = :p"),
+                         {"l": library_id, "p": rel_path}).first() is None
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +856,7 @@ def test_user_trash_survives_rescan(env) -> None:
     asset_id = r.json()["asset_id"]
 
     assert client.delete(f"/v1/assets/{asset_id}", headers=headers).status_code == 204
-    assert _ignored(client, headers, library_id).get("trash/user.jpg") == "trashed"
+    assert _scan_would(client, headers, library_id, "trash/user.jpg") == "skipped"
 
     r = _ingest(client, headers, library_id, "trash/user.jpg")
     assert r.status_code == 409, r.text
@@ -864,7 +872,7 @@ def test_missing_file_is_restored_when_it_reappears(env) -> None:
     body: dict = {"asset_ids": [asset_id], "reason": "missing"}
     r = client.request("DELETE", "/v1/assets", json=body, headers=headers)
     assert r.json()["trashed"] == [asset_id]
-    assert rel_path not in _ignored(client, headers, library_id)
+    assert _scan_would(client, headers, library_id, rel_path) == "upload"
 
     r = _ingest(client, headers, library_id, rel_path)
     assert r.status_code == 200, r.text
@@ -884,7 +892,7 @@ def test_user_can_trash_a_missing_asset(env) -> None:
 
     assert client.delete(f"/v1/assets/{asset_id}", headers=headers).status_code == 204
 
-    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"
     assert _ingest(client, headers, library_id, rel_path).status_code == 409
 
 
@@ -900,14 +908,14 @@ def test_batch_user_trash_upgrades_missing(env) -> None:
                        headers=headers)
 
     assert r.json()["trashed"] == [asset_id]
-    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"
 
 
 @pytest.mark.slow
 def test_empty_trash_without_ids_spares_missing_files(env) -> None:
     """Emptying the trash purges what the user trashed, never files that are
     only missing (an unplugged drive): those keep their human data."""
-    client, headers, library_id, _ = env
+    client, headers, library_id, tenant_url = env
     missing = _ingest(client, headers, library_id, "trash/spare-missing.jpg").json()["asset_id"]
     trashed = _ingest(client, headers, library_id, "trash/spare-trashed.jpg").json()["asset_id"]
     client.request("DELETE", "/v1/assets", json={"asset_ids": [missing], "reason": "missing"},
@@ -917,7 +925,8 @@ def test_empty_trash_without_ids_spares_missing_files(env) -> None:
     r = client.request("DELETE", "/v1/trash/empty", json={"all": True}, headers=headers)
 
     assert r.status_code == 200, r.text
-    assert _ignored(client, headers, library_id).get("trash/spare-trashed.jpg") == "emptied"
+    assert _scan_would(client, headers, library_id, "trash/spare-trashed.jpg") == "skipped"
+    assert _no_clip_at(tenant_url, library_id, "trash/spare-trashed.jpg")  # emptied, not just trashed
     back = _ingest(client, headers, library_id, "trash/spare-missing.jpg")
     assert back.status_code == 200
     assert back.json()["asset_id"] == missing  # the same asset, restored
@@ -941,13 +950,13 @@ def test_trash_matching_filter_is_user_trash(env) -> None:
     assert client.get(f"/v1/assets/{asset_id}", headers=headers).status_code == 404
     client.delete(f"/v1/libraries/{library_id}/filters/{filter_id}", headers=headers)
 
-    assert _ignored(client, headers, library_id).get(rel_path) == "trashed"
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"
     assert _ingest(client, headers, library_id, rel_path).status_code == 409
 
 
 @pytest.mark.slow
 def test_emptied_trash_is_remembered_until_unignored(env) -> None:
-    client, headers, library_id, _ = env
+    client, headers, library_id, tenant_url = env
     rel_path = "trash/emptied.jpg"
     asset_id = _ingest(client, headers, library_id, rel_path).json()["asset_id"]
     assert client.delete(f"/v1/assets/{asset_id}", headers=headers).status_code == 204
@@ -957,7 +966,8 @@ def test_emptied_trash_is_remembered_until_unignored(env) -> None:
     )
     assert r.status_code == 200, r.text
     assert r.json()["deleted"] == 1
-    assert _ignored(client, headers, library_id).get(rel_path) == "emptied"
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"
+    assert _no_clip_at(tenant_url, library_id, rel_path)  # emptied, not just trashed
     assert _ingest(client, headers, library_id, rel_path).status_code == 409
 
     r = client.request(
@@ -991,7 +1001,7 @@ def test_a_missing_clip_is_deleted_for_good_only_through_the_trash(env) -> None:
     assert r.json()["trashed"] == [asset_id]
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [asset_id]}, headers=headers)
     assert r.json()["deleted"] == 1
-    assert rel_path in _ignored(client, headers, library_id)
+    assert _scan_would(client, headers, library_id, rel_path) == "skipped"
 
 
 @pytest.mark.slow

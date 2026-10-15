@@ -25,6 +25,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -103,34 +104,9 @@ def audit_fixes_client() -> tuple[TestClient, str, str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _upsert_asset(
-    client: TestClient,
-    auth: dict,
-    library_id: str,
-    rel_path: str,
-    media_type: str = "image",
-) -> str:
-    """Upsert an asset, return its asset_id."""
-    r_up = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": media_type,
-        },
-        headers=auth,
-    )
-    assert r_up.status_code == 200, (r_up.status_code, r_up.text)
-
-    r_asset = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-        headers=auth,
-    )
-    assert r_asset.status_code == 200, (r_asset.status_code, r_asset.text)
-    return r_asset.json()["asset_id"]
+def _clip(tenant_url: str, library_id: str, rel_path: str, media_type: str = "image") -> str:
+    """A clip at rel_path: its asset_id."""
+    return make_clip(tenant_url, library_id, rel_path, media_type=media_type, file_size=5000)
 
 
 def _set_proxy_key(tenant_url: str, asset_id: str, proxy_key: str) -> None:
@@ -185,7 +161,7 @@ def test_stale_proxy_is_a_404_that_changes_nothing(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, f"stale_proxy_{public}.jpg")
+    asset_id = _clip(tenant_url, library_id, f"stale_proxy_{public}.jpg")
     _set_proxy_key(tenant_url, asset_id, "nonexistent/fake_proxy.jpg")
     if public:
         assert client.patch(f"/v1/libraries/{library_id}", json={"is_public": True}, headers=auth).status_code == 200
@@ -207,7 +183,7 @@ def test_stale_thumbnail_is_a_404_that_changes_nothing(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "stale_thumb_image.jpg", "image")
+    asset_id = _clip(tenant_url, library_id, "stale_thumb_image.jpg", "image")
     _set_thumbnail_key(tenant_url, asset_id, "nonexistent/fake_thumb.jpg")
 
     r = client.get(f"/v1/assets/{asset_id}/artifacts/thumbnail", headers=auth)
@@ -228,7 +204,7 @@ def test_asset_response_includes_duration_sec(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "duration_test.mp4", "video")
+    asset_id = _clip(tenant_url, library_id, "duration_test.mp4", "video")
 
     # Set duration_sec directly via SQL
     engine = create_engine(tenant_url)
@@ -257,7 +233,7 @@ def test_asset_detail_duration_sec_from_duration_sec(
     client, api_key, library_id, tenant_url = audit_fixes_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    asset_id = _upsert_asset(client, auth, library_id, "duration_check.mp4", "video")
+    asset_id = _clip(tenant_url, library_id, "duration_check.mp4", "video")
 
     engine = create_engine(tenant_url)
     try:
@@ -297,8 +273,8 @@ def test_library_trash_soft_deletes_assets(
     assert r_lib.status_code == 200
     test_library_id = r_lib.json()["library_id"]
 
-    asset_id_1 = _upsert_asset(client, auth, test_library_id, "asset1.jpg")
-    asset_id_2 = _upsert_asset(client, auth, test_library_id, "asset2.jpg")
+    asset_id_1 = _clip(tenant_url, test_library_id, "asset1.jpg")
+    asset_id_2 = _clip(tenant_url, test_library_id, "asset2.jpg")
 
     # Trash the library
     r_del = client.delete(f"/v1/libraries/{test_library_id}", headers=auth)

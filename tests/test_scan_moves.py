@@ -4,8 +4,7 @@ The server finds moves now (ADR-018 decision 12): the same content at a new
 path, gone from its old one, only files of a gone clip's size hashed for it,
 never a copy (tests/test_scans_api.py; end to end, tests/test_scan_outcomes.py).
 What the scan does about them (applies them, asks, skips them) is in
-tests/test_scan.py. These are the CLI's flags and the batch-moves endpoint's
-request model.
+tests/test_scan.py. These are the CLI's flags.
 """
 
 from __future__ import annotations
@@ -49,20 +48,6 @@ class TestCliFlags:
         from src.client.cli.main import scan
         option = typing.get_type_hints(scan, include_extras=True)["skip_moves"].__metadata__[0]
         assert "new clip" in option.help and "nothing is archived" in option.help
-
-
-@pytest.mark.fast
-class TestBatchMovesModel:
-    """Verify batch-moves request model."""
-
-    def test_model_structure(self):
-        from src.server.api.routers.assets import BatchMoveItem, BatchMoveRequest
-        req = BatchMoveRequest(items=[
-            BatchMoveItem(asset_id="ast_1", rel_path="new/path.jpg"),
-        ])
-        assert len(req.items) == 1
-        assert req.items[0].asset_id == "ast_1"
-        assert req.items[0].rel_path == "new/path.jpg"
 
 
 @pytest.mark.fast

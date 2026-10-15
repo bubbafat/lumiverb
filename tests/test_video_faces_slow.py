@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+from sqlmodel import Session
 from testcontainers.postgres import PostgresContainer
 
 from src.server.api.main import app
@@ -27,6 +28,7 @@ from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import get_storage
 from src.shared.face_crop import face_crop
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made, made_json
 
@@ -96,13 +98,9 @@ def env(tmp_path_factory):
     get_storage.cache_clear()
 
 
-def _clip(client, auth, library_id, rel_path: str, media_type: str = "video") -> str:
-    r = client.post("/v1/assets/upsert", json={
-        "library_id": library_id, "rel_path": rel_path, "file_size": 1000,
-        "file_mtime": "2025-01-01T12:00:00Z", "media_type": media_type}, headers=auth)
-    assert r.status_code == 200, r.text
-    return client.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path},
-                      headers=auth).json()["asset_id"]
+def _clip(engine, library_id, rel_path: str, media_type: str = "video") -> str:
+    with Session(engine) as session:
+        return make_clip(session, library_id, rel_path, media_type=media_type)
 
 
 def _unit(i: int, tilt: float = 0.0) -> list[float]:
@@ -133,7 +131,7 @@ def _send(client, auth, asset_id: str, faces: list[dict], crops: list[bytes] | N
 
 def test_a_videos_people_are_saved_with_their_times_and_crops(env):
     client, auth, library_id, engine = env
-    asset_id = _clip(client, auth, library_id, "faces/interview.mov")
+    asset_id = _clip(engine, library_id, "faces/interview.mov")
     crops = [_crop((200, 120, 90)), _crop((30, 60, 200))]
     r = _send(client, auth, asset_id, [PERSON_A, PERSON_B], crops)
     assert r.status_code == 200, r.text
@@ -156,7 +154,7 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
 
 def test_a_video_with_no_one_in_it_is_done(env):
     client, auth, library_id, engine = env
-    asset_id = _clip(client, auth, library_id, "faces/landscape.mov")
+    asset_id = _clip(engine, library_id, "faces/landscape.mov")
     r = _send(client, auth, asset_id, [])
     assert r.status_code == 200, r.text
     assert r.json() == {"face_count": 0, "face_ids": []}
@@ -166,8 +164,8 @@ def test_a_video_with_no_one_in_it_is_done(env):
 
 
 def test_a_named_face_keeps_its_name_when_found_again(env):
-    client, auth, library_id, _ = env
-    asset_id = _clip(client, auth, library_id, "faces/again.mov")
+    client, auth, library_id, engine = env
+    asset_id = _clip(engine, library_id, "faces/again.mov")
     a_id, b_id = _send(client, auth, asset_id, [{**PERSON_A, "embedding": _unit(3)},
                                                 {**PERSON_B, "embedding": _unit(5)}]).json()["face_ids"]
     person = client.post("/v1/people", json={"display_name": "Ada", "face_ids": [a_id]}, headers=auth)
@@ -188,8 +186,8 @@ def test_a_named_face_keeps_its_name_when_found_again(env):
 
 
 def test_a_persons_faces_and_the_person_filter_bring_the_video(env):
-    client, auth, library_id, _ = env
-    video = _clip(client, auth, library_id, "faces/party.mov")
+    client, auth, library_id, engine = env
+    video = _clip(engine, library_id, "faces/party.mov")
     # Someone no other test names (a face like a named one is theirs at once).
     face_id = _send(client, auth, video, [{**PERSON_A, "embedding": _unit(7)}]).json()["face_ids"][0]
     person_id = client.post("/v1/people", json={"display_name": "Grace", "face_ids": [face_id]},
@@ -206,7 +204,7 @@ def test_a_persons_faces_and_the_person_filter_bring_the_video(env):
 
 def test_a_video_faces_crop_is_never_cut_from_its_poster(env):
     client, auth, library_id, engine = env
-    asset_id = _clip(client, auth, library_id, "faces/poster.mov")
+    asset_id = _clip(engine, library_id, "faces/poster.mov")
     face_id = _send(client, auth, asset_id, [PERSON_A]).json()["face_ids"][0]
     # The video has a poster, and its face has lost its crop: a crop cut from
     # the poster would be of another moment, so there's none.
@@ -223,7 +221,7 @@ def test_a_video_faces_crop_is_never_cut_from_its_poster(env):
 @pytest.mark.parametrize("case", ["photo", "crops", "not_webp", "no_lineage", "not_json", "other_producer", "no_times"])
 def test_what_isnt_a_videos_faces_is_refused_before_anything_is_saved(env, case):
     client, auth, library_id, engine = env
-    asset_id = _clip(client, auth, library_id, f"faces/refused-{case}.{'jpg' if case == 'photo' else 'mov'}",
+    asset_id = _clip(engine, library_id, f"faces/refused-{case}.{'jpg' if case == 'photo' else 'mov'}",
                      "image" if case == "photo" else "video")
     status, code = {
         "photo": (400, "not_a_video"),
@@ -303,7 +301,7 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
                     "-loop", "1", "-t", "3", "-i", str(FIXTURES / "face_group.jpg"),
                     "-filter_complex", f"[0]{fit}[a];[1]{fit}[b];[a][b]concat=n=2:v=1:a=0",
                     "-r", "25", "-pix_fmt", "yuv420p", str(clip)], check=True)
-    asset_id = _clip(client, auth, library_id, "faces/two_shots.mp4")
+    asset_id = _clip(engine, library_id, "faces/two_shots.mp4")
     with engine.begin() as conn:
         for i, (start, end, rep) in enumerate([(0, 3000, 1500), (3000, 6000, 4500)]):
             conn.execute(text("INSERT INTO video_scenes (scene_id, asset_id, scene_index, start_ms, end_ms, rep_frame_ms,"
@@ -391,7 +389,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
     render_analysis_proxy(Path(TWO_PEOPLE), proxy)
     duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
                                      str(proxy)], capture_output=True, text=True, check=True).stdout)
-    asset_id = _clip(client, auth, library_id, "faces/two_people.mov")
+    asset_id = _clip(engine, library_id, "faces/two_people.mov")
     server = _Server(client, auth)
     index_video_scenes(client=server, source_path=proxy, asset_id=asset_id, duration_sec=duration,
                        rel_path="faces/two_people.mov", lineage=made_lineage("scenes"), detail="normal")

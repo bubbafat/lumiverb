@@ -13,12 +13,13 @@ from testcontainers.postgres import PostgresContainer
 from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
 @pytest.fixture(scope="module")
-def assets_client() -> tuple[TestClient, str]:
-    """Two testcontainers Postgres; create tenant; yield (client, api_key)."""
+def assets_client() -> tuple[TestClient, str, str]:
+    """Two testcontainers Postgres; create tenant; yield (client, api_key, tenant_url)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
@@ -62,14 +63,14 @@ def assets_client() -> tuple[TestClient, str]:
                 session.commit()
 
             with TestClient(app) as client:
-                yield client, api_key
+                yield client, api_key, tenant_url
         _engines.clear()
 
 
 @pytest.mark.slow
-def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> None:
+def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str, str]) -> None:
     """Create library + asset; GET /v1/assets/by-path returns matching AssetResponse."""
-    client, api_key = assets_client
+    client, api_key, tenant_url = assets_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r_lib = client.post(
@@ -84,17 +85,7 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
     library_id = r_lib.json()["library_id"]
 
     rel_path = "photos/one.jpg"
-    client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 123,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-        },
-        headers=auth,
-    )
+    make_clip(tenant_url, library_id, rel_path, file_size=123)
 
     # Resolve by path
     r = client.get(
@@ -110,14 +101,14 @@ def test_get_asset_by_path_happy_path(assets_client: tuple[TestClient, str]) -> 
 
 
 @pytest.mark.slow
-def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path: Path) -> None:
+def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str, str], tmp_path: Path) -> None:
     """Create library + asset + proxy file; GET /v1/assets/{asset_id}/artifacts/proxy streams JPEG bytes."""
     from src.server.config import get_settings
     from src.server.database import get_tenant_session
     from src.server.repository.tenant import AssetRepository
     from src.server.storage.local import get_storage
 
-    client, api_key = assets_client
+    client, api_key, tenant_url = assets_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     # Create library
@@ -133,17 +124,7 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path
     library_id = r_lib.json()["library_id"]
 
     rel_path = "photos/proxy.jpg"
-    client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 123,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-        },
-        headers=auth,
-    )
+    make_clip(tenant_url, library_id, rel_path, file_size=123)
 
     # Resolve asset_id
     r_asset = client.get(
@@ -199,9 +180,9 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str], tmp_path
 
 
 @pytest.mark.slow
-def test_get_asset_by_path_404_when_missing(assets_client: tuple[TestClient, str]) -> None:
+def test_get_asset_by_path_404_when_missing(assets_client: tuple[TestClient, str, str]) -> None:
     """GET /v1/assets/by-path returns 404 for unknown rel_path."""
-    client, api_key = assets_client
+    client, api_key, _ = assets_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r_lib = client.post(

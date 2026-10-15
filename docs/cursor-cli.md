@@ -136,4 +136,4 @@ The CLI is an API client and never queries the DB directly, so it is not subject
 The API server enforces these rules (see `docs/cursor-api.md` for the full contract):
 - All asset reads go through the `active_assets` view (`deleted_at IS NULL`).
 - Ingesting a file the scanner marked missing (`deleted_reason` `missing`) **restores** it (same `asset_id`, `deleted_at` cleared). It does not create a new record and does not leave a zombie.
-- A file a person trashed or archived (`deleted_reason` `"user"` or `"archived"`), or emptied from the trash, is **not** restored: ingest returns 409 and the scan's plan skips it (`src/server/scans.py`; `GET /v1/libraries/{id}/ignored-paths` lists them) (ADR-016).
+- A file a person trashed or archived (`deleted_reason` `"user"` or `"archived"`), or emptied from the trash, is **not** restored: ingest returns 409 and the scan's plan skips it (`src/server/scans.py`) (ADR-016).

@@ -35,6 +35,7 @@ from src.server.config import get_settings
 from src.server.database import _engines, get_engine_for_url
 from src.server.models.tenant import Asset
 from src.server.storage.local import LocalStorage
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
 
@@ -652,10 +653,8 @@ def test_unlisted_folders_still_let_moves_happen(env):
 def test_most_of_a_library_gone_asks_first_then_archives_when_allowed(env):
     lib = _library(env)
     files = [File(f"f{i:02}.jpg", f"f{i}") for i in range(60)]
-    for f in files:  # upserted: no content, as an older scan left them
-        _ok(env.client.post("/v1/assets/upsert", headers=env.editor, json={
-            "library_id": lib, "rel_path": f.rel_path, "file_size": f.file_size, "file_mtime": f.mtime.isoformat(),
-            "media_type": "image"}))
+    for f in files:  # no content known, as an older scan left them
+        make_clip(env.tenant_url, lib, f.rel_path, file_size=f.file_size, file_mtime=f.mtime)
     run = _scan(env, lib, files[:5])
     err = _error(run.finish_error, 409, "mass_missing")
     assert err["details"]["count"] == 55 and "allow_mass_missing: true" in err["message"]
@@ -726,10 +725,10 @@ def test_a_scan_doesnt_archive_what_another_scan_made_or_moved_meanwhile(env):
     _ingest(env, lib, a)
     m_asset = _ingest(env, lib, m)
     scan_id = _start(env, lib, moves="apply")
-    # While this scan walks, another one ingests a new file and moves m.
+    # While this scan walks, a new file is ingested and another scan moves m.
     made = _ingest(env, lib, File("new.jpg", "new"))
-    _ok(env.client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": m_asset, "rel_path": "m2.jpg"}]},
-                        headers=env.editor))
+    other = _scan(env, lib, [a, m.at("m2.jpg"), File("new.jpg", "new")], moves="apply")
+    assert _decided(other) == {"m2.jpg": "moved"} and other.finish["archived"] == 0
     c, h = env.client, env.editor
     _ok(c.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([a, m])}, headers=h))  # walked before
     plan = _ok(c.post(f"/v1/scans/{scan_id}/plan", json={}, headers=h))

@@ -18,6 +18,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -92,41 +93,6 @@ def bug_fixes_api_client() -> tuple[TestClient, str, str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _upsert_asset(
-    client: TestClient,
-    auth: dict,
-    library_id: str,
-    rel_path: str,
-    media_type: str = "image",
-) -> str:
-    """Upsert an asset, return its asset_id."""
-    r_up = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": media_type,
-        },
-        headers=auth,
-    )
-    assert r_up.status_code == 200, (r_up.status_code, r_up.text)
-
-    r_asset = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-        headers=auth,
-    )
-    assert r_asset.status_code == 200, (r_asset.status_code, r_asset.text)
-    return r_asset.json()["asset_id"]
-
-
-# ---------------------------------------------------------------------------
 # Fix 1: hard_delete missing asset_embeddings (FK crash)
 # ---------------------------------------------------------------------------
 
@@ -155,7 +121,7 @@ def test_hard_delete_library_with_asset_embeddings_no_fk_crash(
     assert r_lib.status_code == 200, (r_lib.status_code, r_lib.text)
     library_id = r_lib.json()["library_id"]
 
-    asset_id = _upsert_asset(client, auth, library_id, "embed_test.jpg")
+    asset_id = make_clip(tenant_url, library_id, "embed_test.jpg", file_size=5000)
 
     # Insert a row into asset_embeddings directly via SQL to simulate the embed worker.
     engine = create_engine(tenant_url)

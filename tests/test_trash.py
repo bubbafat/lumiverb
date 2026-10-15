@@ -14,35 +14,18 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
-def _create_asset_for_test(client: TestClient, auth: dict[str, str], library_id: str, rel_path: str) -> str:
+def _create_asset_for_test(tenant_url: str, library_id: str, rel_path: str) -> str:
     """Create a new asset in library and return its asset_id (order-independent for module fixtures)."""
-    r_up = client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 1234,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "image",
-        },
-        headers=auth,
-    )
-    assert r_up.status_code == 200, (r_up.status_code, r_up.text)
-    r_by_path = client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-        headers=auth,
-    )
-    assert r_by_path.status_code == 200, (r_by_path.status_code, r_by_path.text)
-    return r_by_path.json()["asset_id"]
+    return make_clip(tenant_url, library_id, rel_path, file_size=1234)
 
 
 @pytest.fixture(scope="module")
-def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
-    """Control + tenant DB; one tenant, one library, three assets. Yields (client, api_key, library_id, asset_ids)."""
+def trash_api_client() -> tuple[TestClient, str, str, list[str], str]:
+    """Control + tenant DB; one tenant, one library, three assets. Yields (client, api_key, library_id, asset_ids, tenant_url)."""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with PostgresContainer(PG_IMAGE) as control_postgres:
         control_url = _ensure_psycopg2(control_postgres.get_connection_url())
@@ -99,18 +82,7 @@ def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
 
                 asset_ids: list[str] = []
                 for i, rel_path in enumerate(["x.jpg", "y.jpg", "z.png"]):
-                    r_up = client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": rel_path,
-                            "file_size": 1000 + i,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
-                    assert r_up.status_code == 200
+                    make_clip(tenant_url, library_id, rel_path, file_size=1000 + i)
                     r_by_path = client.get(
                         "/v1/assets/by-path",
                         params={"library_id": library_id, "rel_path": rel_path},
@@ -119,15 +91,15 @@ def trash_api_client() -> tuple[TestClient, str, str, list[str]]:
                     assert r_by_path.status_code == 200
                     asset_ids.append(r_by_path.json()["asset_id"])
 
-                yield client, api_key, library_id, asset_ids
+                yield client, api_key, library_id, asset_ids, tenant_url
 
         _engines.clear()
 
 
 @pytest.mark.slow
-def test_trash_asset_204(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_trash_asset_204(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/assets/{id} returns 204; then GET returns 404."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     aid = asset_ids[0]
 
@@ -139,9 +111,9 @@ def test_trash_asset_204(trash_api_client: tuple[TestClient, str, str, list[str]
 
 
 @pytest.mark.slow
-def test_trash_asset_404_not_found(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_trash_asset_404_not_found(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/assets/{id} with non-existent id returns 404."""
-    client, api_key, _library_id, _asset_ids = trash_api_client
+    client, api_key, _library_id, _asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     r = client.delete("/v1/assets/ast_nonexistent999", headers=auth)
@@ -149,9 +121,9 @@ def test_trash_asset_404_not_found(trash_api_client: tuple[TestClient, str, str,
 
 
 @pytest.mark.slow
-def test_trash_asset_404_already_trashed(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_trash_asset_404_already_trashed(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/assets/{id} twice: first 204, second 404. Use asset_ids[1] to avoid fixture ordering."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     aid = asset_ids[1]
 
@@ -163,9 +135,9 @@ def test_trash_asset_404_already_trashed(trash_api_client: tuple[TestClient, str
 
 
 @pytest.mark.slow
-def test_restore_asset_204(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_restore_asset_204(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """Trash then POST restore returns 204; GET then returns 200."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     aid = asset_ids[0]
 
@@ -179,9 +151,9 @@ def test_restore_asset_204(trash_api_client: tuple[TestClient, str, str, list[st
 
 
 @pytest.mark.slow
-def test_restore_asset_404_not_trashed(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_restore_asset_404_not_trashed(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """POST /v1/assets/{id}/restore on non-trashed asset returns 404. Use asset_ids[2] to avoid fixture ordering."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     aid = asset_ids[2]
 
@@ -190,13 +162,13 @@ def test_restore_asset_404_not_trashed(trash_api_client: tuple[TestClient, str, 
 
 
 @pytest.mark.slow
-def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/assets with body returns trashed and not_found."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     # Create fresh assets to avoid ordering dependence on module-scoped fixture.
-    existing = _create_asset_for_test(client, auth, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
-    other = _create_asset_for_test(client, auth, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
+    existing = _create_asset_for_test(tenant_url, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
+    other = _create_asset_for_test(tenant_url, _library_id, f"batch_{os.urandom(4).hex()}.jpg")
     nonexistent = "ast_00000000000000000000000000"
 
     r = client.request(
@@ -212,13 +184,13 @@ def test_batch_trash(trash_api_client: tuple[TestClient, str, str, list[str]]) -
 
 
 @pytest.mark.slow
-def test_empty_trash_requires_admin(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_empty_trash_requires_admin(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/trash/empty with viewer key returns 403."""
     import hashlib
     from src.server.database import get_control_session
     from sqlmodel import text as sql_text
 
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth_admin = {"Authorization": f"Bearer {api_key}"}
 
     # Create a key (inherits admin), then downgrade to viewer.
@@ -247,9 +219,9 @@ def test_empty_trash_requires_admin(trash_api_client: tuple[TestClient, str, str
 
 
 @pytest.mark.slow
-def test_empty_trash_returns_count(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_empty_trash_returns_count(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """DELETE /v1/trash/empty with admin key returns { deleted: N }."""
-    client, api_key, _library_id, asset_ids = trash_api_client
+    client, api_key, _library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
     for aid in asset_ids[:2]:
@@ -262,11 +234,11 @@ def test_empty_trash_returns_count(trash_api_client: tuple[TestClient, str, str,
 
 
 @pytest.mark.slow
-def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """After trash, asset does not appear in GET /v1/assets/page."""
-    client, api_key, library_id, asset_ids = trash_api_client
+    client, api_key, library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _create_asset_for_test(client, auth, library_id, f"list_{os.urandom(4).hex()}.jpg")
+    aid = _create_asset_for_test(tenant_url, library_id, f"list_{os.urandom(4).hex()}.jpg")
 
     r_before = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
     assert r_before.status_code == 200
@@ -282,11 +254,11 @@ def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str,
 
 
 @pytest.mark.slow
-def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, str, str, list[str]]) -> None:
+def test_trashed_asset_absent_from_search(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
     """Trashed asset does not appear in search results (postgres fallback uses active_assets)."""
-    client, api_key, library_id, asset_ids = trash_api_client
+    client, api_key, library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
-    aid = _create_asset_for_test(client, auth, library_id, f"search_{os.urandom(4).hex()}.jpg")
+    aid = _create_asset_for_test(tenant_url, library_id, f"search_{os.urandom(4).hex()}.jpg")
 
     # Use postgres fallback by disabling Quickwit
     orig = os.environ.get("QUICKWIT_ENABLED")

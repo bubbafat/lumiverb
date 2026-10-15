@@ -1,6 +1,7 @@
 """API tests for library directory tree endpoint and assets page path_prefix filter."""
 
 import os
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +14,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -88,18 +90,7 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
                     "2023/img4.jpg",
                 ]
                 for i, rp in enumerate(nested_paths):
-                    r_up = client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": nested_library_id,
-                            "rel_path": rp,
-                            "file_size": 2000 + i,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
-                    assert r_up.status_code == 200
+                    make_clip(tenant_url, nested_library_id, rp, file_size=2000 + i)
 
                 # Library with flat assets only (no subdirectories)
                 r_lib_flat = client.post(
@@ -112,18 +103,8 @@ def directory_api_client() -> tuple[TestClient, str, str, str]:
 
                 flat_paths = ["a.jpg", "b.png", "c.heic"]
                 for i, rp in enumerate(flat_paths):
-                    r_up = client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": flat_library_id,
-                            "rel_path": rp,
-                            "file_size": 3000 + i,
-                            "file_mtime": "2025-01-02T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
-                    assert r_up.status_code == 200
+                    make_clip(tenant_url, flat_library_id, rp, file_size=3000 + i,
+                              file_mtime=datetime(2025, 1, 2, 12, 0, tzinfo=UTC))
 
                 yield client, api_key, nested_library_id, flat_library_id
 

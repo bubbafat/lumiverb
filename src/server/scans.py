@@ -120,7 +120,7 @@ GONE = """
 
 # Files a person removed from the library, with each one's content, size and
 # time: trashed or archived by a person (their clips), or deleted for good
-# (ignored_files). What GET /v1/libraries/{id}/ignored-paths lists.
+# (ignored_files). A scan skips them; no client is told the list.
 REMOVED = """
     SELECT rel_path, sha256, file_size, file_mtime FROM assets
     WHERE library_id = :library_id AND deleted_at IS NOT NULL AND deleted_reason IN ('user', 'archived')
@@ -309,8 +309,8 @@ def decide(session: Session, scan: ScanSession, posted: list[tuple[str, str]], *
     - at a new path: skipped when a person removed this content here; moved
       when it's the content of a clip gone from this scan, the first such
       clip by id for the first such file sent, applied now when the scan
-      applies moves (as POST /v1/assets/batch-moves), a candidate when it
-      asks first; else uploaded.
+      applies moves (apply_moves), a candidate when it asks first; else
+      uploaded.
 
     A dry run decides and changes nothing. A file already moved or skipped
     keeps its decision. Raises NotPlannedError, before anything changes, for files
@@ -382,7 +382,8 @@ def _not_moved(moving: list[Decided], applied: set[str]) -> None:
 def apply_moves(session: Session, library_id: str, moves: list[tuple[str, str, str]]) -> set[str]:
     """Move clips to their new paths, one statement: (asset_id, from, to).
     Only a clip still in sight at its old path, to a path no clip in sight
-    holds; each goes back in search, as with batch-moves. Returns the clips moved."""
+    holds; each goes back in search (its document has the new path). Returns
+    the clips moved."""
     if not moves:
         return set()
     try:
@@ -405,8 +406,8 @@ def apply_moves(session: Session, library_id: str, moves: list[tuple[str, str, s
 
 def record_stats(session: Session, stats: list[dict]) -> None:
     """Unchanged files' new size and time (touched, copied back), one
-    statement, as POST /v1/assets/upsert records them: otherwise every later
-    scan reads the whole file again."""
+    statement, the clip online: otherwise every later scan reads the whole
+    file again."""
     if stats:
         session.execute(text("""
             UPDATE assets a SET file_size = s.size, file_mtime = s.mtime, availability = 'online'
@@ -440,7 +441,7 @@ def move_candidates(session: Session, scan_id: str, limit: int | None = None) ->
 
 def settle_moves(session: Session, scan: ScanSession, apply: bool) -> tuple[int, int, list[str]]:
     """The person's say on the scan's move candidates (no commit): applied
-    (as batch-moves), or skipped, when the moved files take no part: not
+    (apply_moves), or skipped, when the moved files take no part: not
     uploaded, and their clips not archived (today's prompt, "Skip moves").
     Returns (moved, skipped, the new paths to upload: moves that couldn't be
     made). A dry run records the answer and moves nothing."""

@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, text
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import AssetRepository, LibraryRepository
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
 
@@ -78,33 +79,16 @@ def face_client() -> Tuple[_AuthClient, str, str]:
         _engines.clear()
 
 
-def _create_asset(auth_client: _AuthClient, library_id: str, name: str) -> str:
+def _create_asset(tenant_url: str, library_id: str, name: str) -> str:
     """Create a test asset and return its asset_id."""
-    rel_path = f"photos/{name}.jpg"
-    r = auth_client.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 1000,
-            "file_mtime": "2024-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    assert r.status_code == 200, (r.status_code, r.text)
-    r2 = auth_client.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": rel_path},
-    )
-    assert r2.status_code == 200, (r2.status_code, r2.text)
-    return r2.json()["asset_id"]
+    return make_clip(tenant_url, library_id, f"photos/{name}.jpg")
 
 
 @pytest.mark.slow
 def test_submit_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
     """POST /v1/assets/{id}/faces creates face records and sets face_count."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_submit")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_submit")
 
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
@@ -135,8 +119,8 @@ def test_submit_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
 @pytest.mark.slow
 def test_list_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/assets/{id}/faces returns submitted faces."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_list")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_list")
 
     # Submit faces
     auth_client.post(
@@ -167,8 +151,8 @@ def test_list_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
 @pytest.mark.slow
 def test_submit_faces_idempotent(face_client: Tuple[_AuthClient, str, str]) -> None:
     """Resubmitting faces replaces the old ones."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_idempotent")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_idempotent")
 
     # First submission: 2 faces
     auth_client.post(
@@ -203,8 +187,8 @@ def test_submit_faces_idempotent(face_client: Tuple[_AuthClient, str, str]) -> N
 @pytest.mark.slow
 def test_submit_no_faces_sets_zero(face_client: Tuple[_AuthClient, str, str]) -> None:
     """Submitting empty faces array sets face_count=0 (processed, no faces)."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_zero")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_zero")
 
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
@@ -236,10 +220,10 @@ def test_list_faces_not_found(face_client: Tuple[_AuthClient, str, str]) -> None
 @pytest.mark.slow
 def test_repair_summary_missing_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
     """repair-summary includes missing_faces count."""
-    auth_client, library_id, _ = face_client
+    auth_client, library_id, tenant_url = face_client
 
     # Create an asset without face detection
-    asset_id = _create_asset(auth_client, library_id, "face_repair_summary")
+    asset_id = _create_asset(tenant_url, library_id, "face_repair_summary")
 
     r = auth_client.get(f"/v1/assets/repair-summary?library_id={library_id}")
     assert r.status_code == 200
@@ -252,10 +236,10 @@ def test_repair_summary_missing_faces(face_client: Tuple[_AuthClient, str, str])
 @pytest.mark.slow
 def test_page_missing_faces_filter(face_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/assets/page?missing_faces=true filters correctly."""
-    auth_client, library_id, _ = face_client
+    auth_client, library_id, tenant_url = face_client
 
     # Create asset and submit faces for it
-    asset_with = _create_asset(auth_client, library_id, "face_page_with")
+    asset_with = _create_asset(tenant_url, library_id, "face_page_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
         json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
@@ -263,7 +247,7 @@ def test_page_missing_faces_filter(face_client: Tuple[_AuthClient, str, str]) ->
     )
 
     # Create asset without faces
-    asset_without = _create_asset(auth_client, library_id, "face_page_without")
+    asset_without = _create_asset(tenant_url, library_id, "face_page_without")
 
     # Page with missing_faces=true should include the unprocessed asset
     r = auth_client.get(f"/v1/assets/page?library_id={library_id}&missing_faces=true")
@@ -277,8 +261,8 @@ def test_page_missing_faces_filter(face_client: Tuple[_AuthClient, str, str]) ->
 @pytest.mark.slow
 def test_submit_faces_without_embedding(face_client: Tuple[_AuthClient, str, str]) -> None:
     """Faces can be submitted without embedding (embedding=null)."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_no_embed")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_no_embed")
 
     r = auth_client.post(
         f"/v1/assets/{asset_id}/faces",
@@ -303,10 +287,10 @@ def test_submit_faces_without_embedding(face_client: Tuple[_AuthClient, str, str
 @pytest.mark.slow
 def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/assets/page?has_faces=true filters to assets with detected faces."""
-    auth_client, library_id, _ = face_client
+    auth_client, library_id, tenant_url = face_client
 
     # Asset with faces
-    asset_with = _create_asset(auth_client, library_id, "has_faces_with")
+    asset_with = _create_asset(tenant_url, library_id, "has_faces_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
         json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
@@ -314,7 +298,7 @@ def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> 
     )
 
     # Asset with no faces (processed, face_count=0)
-    asset_zero = _create_asset(auth_client, library_id, "has_faces_zero")
+    asset_zero = _create_asset(tenant_url, library_id, "has_faces_zero")
     auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": [], "lineage": made("faces")})
 
     # has_faces=true -> only asset_with
@@ -340,10 +324,10 @@ def test_has_faces_filter_on_page(face_client: Tuple[_AuthClient, str, str]) -> 
 @pytest.mark.slow
 def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/query?f=has_faces:yes filters via SQL in UnifiedBrowseRepository."""
-    auth_client, library_id, _ = face_client
+    auth_client, library_id, tenant_url = face_client
 
     # Asset with faces
-    asset_with = _create_asset(auth_client, library_id, "browse_faces_with")
+    asset_with = _create_asset(tenant_url, library_id, "browse_faces_with")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
         json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
@@ -351,7 +335,7 @@ def test_has_faces_filter_on_browse(face_client: Tuple[_AuthClient, str, str]) -
     )
 
     # Asset without faces (processed)
-    asset_zero = _create_asset(auth_client, library_id, "browse_faces_zero")
+    asset_zero = _create_asset(tenant_url, library_id, "browse_faces_zero")
     auth_client.post(f"/v1/assets/{asset_zero}/faces", json={"faces": [], "lineage": made("faces")})
 
     # has_faces=true -> only asset_with
@@ -370,7 +354,7 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
     import json as _json
 
     # Create asset with faces + metadata (so Postgres search can find it)
-    asset_with = _create_asset(auth_client, library_id, "search_faces_sunset")
+    asset_with = _create_asset(tenant_url, library_id, "search_faces_sunset")
     auth_client.post(
         f"/v1/assets/{asset_with}/faces",
         json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
@@ -386,7 +370,7 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
     engine.dispose()
 
     # Create asset without faces but also searchable
-    asset_no = _create_asset(auth_client, library_id, "search_nofaces_sunset")
+    asset_no = _create_asset(tenant_url, library_id, "search_nofaces_sunset")
     auth_client.post(f"/v1/assets/{asset_no}/faces", json={"faces": [], "lineage": made("faces")})
     engine = create_engine(tenant_url)
     with engine.begin() as conn:
@@ -413,10 +397,10 @@ def test_has_faces_filter_on_search(face_client: Tuple[_AuthClient, str, str]) -
 @pytest.mark.slow
 def test_facets_has_face_count(face_client: Tuple[_AuthClient, str, str]) -> None:
     """GET /v1/assets/facets returns has_face_count field."""
-    auth_client, library_id, _ = face_client
+    auth_client, library_id, tenant_url = face_client
 
     # Create an asset with faces
-    asset_id = _create_asset(auth_client, library_id, "facets_face")
+    asset_id = _create_asset(tenant_url, library_id, "facets_face")
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
         json={"faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9}],
@@ -433,8 +417,8 @@ def test_facets_has_face_count(face_client: Tuple[_AuthClient, str, str]) -> Non
 @pytest.mark.slow
 def test_list_faces_response_shape(face_client: Tuple[_AuthClient, str, str]) -> None:
     """Regression: GET /v1/assets/{id}/faces response shape matches what the lightbox expects."""
-    auth_client, library_id, _ = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_shape")
+    auth_client, library_id, tenant_url = face_client
+    asset_id = _create_asset(tenant_url, library_id, "face_shape")
 
     auth_client.post(
         f"/v1/assets/{asset_id}/faces",
@@ -477,7 +461,7 @@ def test_resubmit_faces_with_person_assignment(face_client: Tuple[_AuthClient, s
     import numpy as np
 
     auth_client, library_id, tenant_url = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_resubmit_person")
+    asset_id = _create_asset(tenant_url, library_id, "face_resubmit_person")
 
     # Use a random embedding to avoid auto-assignment from other tests' centroids
     rng = np.random.default_rng(42)
@@ -543,7 +527,7 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
     from src.server.repository.tenant import PersonRepository
 
     auth_client, library_id, tenant_url = face_client
-    asset_id = _create_asset(auth_client, library_id, "face_cleanup_dismissed")
+    asset_id = _create_asset(tenant_url, library_id, "face_cleanup_dismissed")
 
     # Use random embedding to avoid auto-assignment collisions
     rng = np.random.default_rng(99)

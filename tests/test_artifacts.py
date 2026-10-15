@@ -29,6 +29,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made_json
 
@@ -115,24 +116,7 @@ def artifact_env(tmp_path_factory):
                     assert r_lib.status_code == 200
                     library_id = r_lib.json()["library_id"]
 
-                    raw_client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": "photo.jpg",
-                            "file_size": 1000,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth_headers,
-                    )
-                    r_asset = raw_client.get(
-                        "/v1/assets/by-path",
-                        params={"library_id": library_id, "rel_path": "photo.jpg"},
-                        headers=auth_headers,
-                    )
-                    assert r_asset.status_code == 200
-                    asset_id = r_asset.json()["asset_id"]
+                    asset_id = make_clip(tenant_url, library_id, "photo.jpg")
 
                     yield auth, raw_client, library_id, asset_id, storage, tenant_url, api_key
 
@@ -319,30 +303,7 @@ def test_upload_thumbnail_persists_sha256_in_db(artifact_env) -> None:
 def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
     """video_preview upload stores the file and returns a key but has no sha256 column."""
     auth, _, library_id, _, storage, tenant_url, _ = artifact_env
-    from unittest.mock import patch
-
-    # Need a video asset.
-    raw_client_ref = None
-    api_key_ref = None
-
-    # Re-use the raw_client from artifact_env by calling the fixture differently.
-    # Instead, use the auth client directly to create a video asset.
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": "clip.mp4",
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get(
-        "/v1/assets/by-path",
-        params={"library_id": library_id, "rel_path": "clip.mp4"},
-    )
-    assert r_vid.status_code == 200, r_vid.text
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, "clip.mp4", media_type="video", file_size=5000)
 
     mp4_content = b"FTYP" + secrets.token_bytes(512)
     r = auth.post(
@@ -368,23 +329,11 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
 
 @pytest.mark.slow
 def test_upload_scene_rep_writes_file_to_scenes_path(artifact_env) -> None:
-    auth, _, library_id, _, storage, _, _ = artifact_env
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
 
     # Create a video asset for scene representative frame uploads.
     rel_path = f"scene_rep_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    assert r_vid.status_code == 200, r_vid.text
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     content = _make_jpeg(96)
     r = auth.post(
@@ -419,18 +368,7 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     rel_path = f"scene_rep_no_clobber_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     # Step 1: upload an MP4 video preview, capturing the resulting key.
     mp4_content = b"FTYP" + secrets.token_bytes(512)
@@ -470,21 +408,10 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
 
 @pytest.mark.slow
 def test_upload_scene_rep_requires_rep_frame_ms(artifact_env) -> None:
-    auth, _, library_id, _, _, _, _ = artifact_env
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     rel_path = f"scene_rep_missing_ms_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     r = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/scene_rep",
@@ -568,18 +495,7 @@ def test_upload_soft_deleted_asset_returns_404(artifact_env) -> None:
 
     # Create a fresh asset.
     rel_path = f"to_trash_{secrets.token_hex(4)}.jpg"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 100,
-            "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    trash_id = r_a.json()["asset_id"]
+    trash_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
 
     # Soft-delete directly in the DB (avoids needing a delete method on _AuthClient).
     engine = create_engine(tenant_url)
@@ -641,21 +557,10 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
 
 @pytest.mark.slow
 def test_download_video_preview_returns_bytes(artifact_env) -> None:
-    auth, _, library_id, _, _, _, _ = artifact_env
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     rel_path = f"dl_clip_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     mp4_content = b"FTYP" + secrets.token_bytes(512)
     auth.post(
@@ -672,21 +577,10 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
 
 @pytest.mark.slow
 def test_download_scene_rep_returns_bytes(artifact_env) -> None:
-    auth, _, library_id, _, _, _, _ = artifact_env
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     rel_path = f"dl_scene_rep_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r_vid = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    video_asset_id = r_vid.json()["asset_id"]
+    video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     content = _make_jpeg(128)
     rep_frame_ms = 7777
@@ -709,21 +603,10 @@ def test_download_scene_rep_returns_bytes(artifact_env) -> None:
 @pytest.mark.slow
 def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
     """Asset with no proxy uploaded returns 404 with artifact_not_ready code."""
-    auth, _, library_id, _, _, _, _ = artifact_env
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
     rel_path = f"fresh_{secrets.token_hex(4)}.jpg"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 100,
-            "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    fresh_id = r_a.json()["asset_id"]
+    fresh_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
 
     r = auth.get(f"/v1/assets/{fresh_id}/artifacts/proxy")
     assert r.status_code == 404
@@ -733,22 +616,11 @@ def test_download_proxy_not_ready_returns_404(artifact_env) -> None:
 @pytest.mark.slow
 def test_download_proxy_file_missing_returns_404(artifact_env) -> None:
     """Key set in DB but file deleted from disk → 404 with artifact_missing code."""
-    auth, _, library_id, _, storage, _, _ = artifact_env
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
 
     # Use a fresh asset so deleting the file doesn't affect other tests.
     rel_path = f"missing_{secrets.token_hex(4)}.jpg"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 100,
-            "file_mtime": "2025-01-01T00:00:00Z",
-            "media_type": "image",
-        },
-    )
-    r_a = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    isolated_id = r_a.json()["asset_id"]
+    isolated_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
 
     r_up = auth.post(
         f"/v1/assets/{isolated_id}/artifacts/proxy",
@@ -769,9 +641,7 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
     upkeep clears the key of a file still gone so the producer makes it again."""
     auth, _, library_id, _, storage, tenant_url, _ = artifact_env
     rel_path = f"repair_{secrets.token_hex(4)}.jpg"
-    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 100,
-                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "image"})
-    asset_id = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()["asset_id"]
+    asset_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
     key = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy",
                     files={"file": ("proxy.jpg", _make_jpeg(), "image/jpeg")},
                     data={"lineage": made_json("proxy")}).json()["key"]
@@ -796,12 +666,10 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
     assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] is None
 
 
-def _clip_with_preview_and_thumbnail(auth, library_id: str) -> tuple[str, str, str]:
+def _clip_with_preview_and_thumbnail(auth, tenant_url: str, library_id: str) -> tuple[str, str, str]:
     """A photo with its preview (1024 px) and its thumbnail: its id and their keys."""
     rel_path = f"thumb_{secrets.token_hex(4)}.jpg"
-    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 100,
-                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "image"})
-    asset_id = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()["asset_id"]
+    asset_id = make_clip(tenant_url, library_id, rel_path, file_size=100)
     proxy = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(1024), "image/jpeg")},
                       data={"lineage": made_json("proxy")}).json()["key"]
     thumb = auth.post(f"/v1/assets/{asset_id}/artifacts/thumbnail",
@@ -822,7 +690,7 @@ def test_a_missing_thumbnail_is_made_again_from_the_preview_which_stays(artifact
     """The server made it from the preview at ingest, so it makes it again:
     the preview isn't taken out of service, and no scan is needed."""
     auth, _, library_id, _, storage, tenant_url, _ = artifact_env
-    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, library_id)
+    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, tenant_url, library_id)
     preview = storage.abs_path(proxy).read_bytes()
     storage.abs_path(thumb).unlink()
     assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404  # reported
@@ -847,8 +715,8 @@ def test_a_missing_thumbnail_is_made_again_from_the_preview_which_stays(artifact
 
 @pytest.mark.slow
 def test_a_missing_thumbnail_without_its_preview_leaves_both_for_a_scan(artifact_env) -> None:
-    auth, _, library_id, _, storage, *_ = artifact_env
-    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, library_id)
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
+    asset_id, proxy, thumb = _clip_with_preview_and_thumbnail(auth, tenant_url, library_id)
     storage.abs_path(proxy).unlink()
     storage.abs_path(thumb).unlink()
     assert auth.get(f"/v1/assets/{asset_id}/artifacts/thumbnail").status_code == 404
@@ -910,29 +778,17 @@ def test_download_missing_auth_returns_401(artifact_env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _create_video_asset(auth, library_id: str, *, prefix: str) -> str:
-    """Helper: upsert a video asset and return its id."""
-    rel_path = f"{prefix}_{secrets.token_hex(4)}.mp4"
-    auth.post(
-        "/v1/assets/upsert",
-        json={
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": 5000,
-            "file_mtime": "2025-01-01T12:00:00Z",
-            "media_type": "video",
-        },
-    )
-    r = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path})
-    assert r.status_code == 200, r.text
-    return r.json()["asset_id"]
+def _create_video_asset(tenant_url: str, library_id: str, *, prefix: str) -> str:
+    """Helper: a video clip's id."""
+    return make_clip(tenant_url, library_id, f"{prefix}_{secrets.token_hex(4)}.mp4", media_type="video",
+                     file_size=5000)
 
 
 @pytest.mark.slow
 def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     """The video_preview artifact returns the bytes uploaded as video_preview."""
-    auth, _, library_id, _, _, _, _ = artifact_env
-    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_stream")
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
+    video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_stream")
 
     mp4_content = b"FTYP" + secrets.token_bytes(2048)
     r_up = auth.post(
@@ -957,8 +813,8 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     the JPG path, and /preview would stream the JPG bytes labelled as video/mp4
     — exactly what the browser <video> element couldn't decode.
     """
-    auth, _, library_id, _, _, _, _ = artifact_env
-    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_after_scene")
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
+    video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_after_scene")
 
     mp4_content = b"FTYP" + secrets.token_bytes(2048)
     r_up = auth.post(
@@ -992,8 +848,8 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
 def test_preview_endpoint_returns_404_when_no_preview(artifact_env) -> None:
     """Video asset with no video_preview yet → 404 (so the UI can show a placeholder
     rather than render <video> with bogus bytes)."""
-    auth, _, library_id, _, _, _, _ = artifact_env
-    video_asset_id = _create_video_asset(auth, library_id, prefix="preview_missing")
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
+    video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_missing")
 
     r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 404
@@ -1037,13 +893,11 @@ def test_an_uploaded_image_is_stored_without_the_originals_metadata(artifact_env
 def test_an_uploaded_scene_frame_is_stored_without_the_originals_metadata(artifact_env) -> None:
     from tests.test_preview_metadata import METADATA, photo
 
-    auth, _, library_id, _, storage, _, _ = artifact_env
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
     rel_path = f"frame_check_{secrets.token_hex(4)}.mp4"
-    auth.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": rel_path, "file_size": 2048,
-                                         "file_mtime": "2025-01-01T00:00:00Z", "media_type": "video"})
-    video = auth.get("/v1/assets/by-path", params={"library_id": library_id, "rel_path": rel_path}).json()
+    video_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=2048)
     r = auth.post(
-        f"/v1/assets/{video['asset_id']}/artifacts/scene_rep",
+        f"/v1/assets/{video_id}/artifacts/scene_rep",
         files={"file": ("frame.jpg", photo("JPEG"), "image/jpeg")},
         data={"rep_frame_ms": "1000"},
     )

@@ -1619,16 +1619,10 @@ def test_trashing_a_project_updates_it(projects_env):
 @pytest.mark.slow
 @pytest.mark.parametrize("bad", ["/etc/passwd", "../outside.jpg", "a/../../outside.jpg"])
 def test_writes_refuse_rel_paths_outside_the_library(projects_env, bad):
-    """upsert, batch-moves and ingest share one rule: relative, no "..", no leading "/"."""
+    """Ingest takes a path in one form: relative, no "..", no leading "/" (a
+    scan's files are held to the same rule: test_scans_api.py
+    test_what_a_client_sends_is_checked)."""
     client, api_key, library_id = projects_env
-    h = _headers(api_key)
-    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": bad, "file_size": 1,
-                                               "file_mtime": None, "media_type": "image"}, headers=h)
-    assert r.status_code == 400, r.text
-    clip = _ingest_asset(client, api_key, library_id, f"relpath/{len(bad)}-{bad.count('/')}.jpg")
-    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": clip, "rel_path": bad}]}, headers=h)
-    assert r.status_code == 400, r.text
-    assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("relpath/")
     with pytest.raises(AssertionError, match="400"):
         _ingest_asset(client, api_key, library_id, bad)
 
@@ -1636,8 +1630,9 @@ def test_writes_refuse_rel_paths_outside_the_library(projects_env, bad):
 @pytest.mark.slow
 @pytest.mark.parametrize("bad", ["new\nline.jpg", "Shoots\t/a.jpg", "a\x7f.jpg"])
 def test_writes_refuse_a_name_with_a_control_character(projects_env, bad):
-    """A control character in any name (a newline, a tab, DEL): upsert,
-    batch-moves and ingest answer 400 in the error envelope, and keep nothing."""
+    """A control character in any name (a newline, a tab, DEL): ingest
+    answers 400 in the error envelope, and keeps nothing (a scan's files are
+    held to the same rule: test_scans_api.py test_what_a_client_sends_is_checked)."""
     from PIL import Image as PILImage
 
     client, api_key, library_id = projects_env
@@ -1646,13 +1641,6 @@ def test_writes_refuse_a_name_with_a_control_character(projects_env, bad):
     def refused(r) -> bool:
         return r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
 
-    r = client.post("/v1/assets/upsert", json={"library_id": library_id, "rel_path": bad, "file_size": 1,
-                                               "file_mtime": None, "media_type": "image"}, headers=h)
-    assert refused(r), r.text
-    clip = _ingest_asset(client, api_key, library_id, f"control/{bad.encode().hex()}.jpg")
-    r = client.post("/v1/assets/batch-moves", json={"items": [{"asset_id": clip, "rel_path": bad}]}, headers=h)
-    assert refused(r), r.text
-    assert client.get(f"/v1/assets/{clip}", headers=h).json()["rel_path"].startswith("control/")
     buf = io.BytesIO()
     PILImage.new("RGB", (16, 16)).save(buf, format="JPEG")
     buf.seek(0)

@@ -13,6 +13,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -79,17 +80,7 @@ def page_api_client() -> tuple[TestClient, str, str, list[str]]:
                 rel_paths = ["one.jpg", "two.jpg", "three.jpg", "four.jpg", "five.png"]
                 asset_ids: list[str] = []
                 for i, rp in enumerate(rel_paths):
-                    client.post(
-                        "/v1/assets/upsert",
-                        json={
-                            "library_id": library_id,
-                            "rel_path": rp,
-                            "file_size": 1000 + i,
-                            "file_mtime": "2025-01-01T12:00:00Z",
-                            "media_type": "image",
-                        },
-                        headers=auth,
-                    )
+                    make_clip(tenant_url, library_id, rp, file_size=1000 + i)
                     r_by_path = client.get(
                         "/v1/assets/by-path",
                         params={"library_id": library_id, "rel_path": rp},

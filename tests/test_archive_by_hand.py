@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
+from tests.scan_plan import scan_would
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 
 
@@ -222,9 +223,10 @@ def test_a_scan_never_undoes_an_archive(env):
     clip = _ingest(env, "scan/kept.mov", sha=sha)
     _archive(env, asset_ids=[clip])
 
-    items = client.get(f"/v1/libraries/{library_id}/ignored-paths", params={"limit": 500}, headers=headers).json()
-    item = next(i for i in items["items"] if i["rel_path"] == "scan/kept.mov")
-    assert item["reason"] == "archived" and [f["sha256"] for f in item["files"]] == [sha]
+    path = "scan/kept.mov"
+    found = [{"rel_path": path, "file_size": 1000}]
+    assert scan_would(client, headers, library_id, found, hashes={path: sha}) == {path: "skipped"}
+    assert scan_would(client, headers, library_id, found, hashes={path: _sha()}) == {path: "upload"}  # only that file
     with pytest.raises(AssertionError, match="409"):
         _ingest(env, "scan/kept.mov", sha=sha)
     assert _row(env, clip)[1] == "archived"
