@@ -868,7 +868,9 @@ def main() -> int:
 
     from src.server.scheduler.settings import SettingError, read_settings
 
+    from src.server.config import get_settings
     from src.server.database import set_application_name
+    from src.shared import secrets_env
 
     configure_logging()
     set_application_name("lumiverb-scheduler")  # its connections, as PostgreSQL shows them
@@ -880,6 +882,11 @@ def main() -> int:
         return 1
     here = settings.machine()
     machine.use(here)  # never the CLI's config
+    # Its settings read (and kept: get_settings), its secrets leave the
+    # environment, so what it starts (ffmpeg, exiftool, its face and
+    # transcript processes) has none.
+    get_settings()
+    secrets_env.forget()
     lock = ServiceLock()
     if not lock.acquire():
         logger.error("scheduler: another scheduler (or the old worker) is running on this machine")
