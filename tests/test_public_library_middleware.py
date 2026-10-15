@@ -146,15 +146,6 @@ def test_unauthenticated_get_directories_public_library(public_lib_client) -> No
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
-def test_unauthenticated_assets_page_public_library(public_lib_client) -> None:
-    """GET /v1/assets/page?library_id= for a public library without auth → 200 (empty items)."""
-    client, _, library_id, _ = public_lib_client
-    r = client.get("/v1/assets/page", params={"library_id": library_id})
-    assert r.status_code == 200
-    assert isinstance(r.json()["items"], list)
-
-
-@pytest.mark.slow
 def test_unauthenticated_query_public_library(public_lib_client) -> None:
     """
     GET /v1/query?f=library:<id> for a public library without auth: what a
@@ -170,7 +161,8 @@ def test_unauthenticated_query_public_library(public_lib_client) -> None:
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "private_filter", ["favorite:true", "stars:3+", "person:per_nope", "project:prj_nope", "not_project:prj_nope"],
+    "private_filter", ["favorite:true", "stars:3+", "color:red", "has_rating:yes", "person:per_nope", "project:prj_nope",
+                       "not_project:prj_nope"],
 )
 def test_public_queries_cant_use_signed_in_filters(public_lib_client, private_filter) -> None:
     """Ratings belong to signed-in people, who's in a photo isn't for visitors
@@ -495,15 +487,6 @@ def test_a_public_library_doesnt_show_its_folder_on_the_server(public_lib_client
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("param", [{"person_id": "per_x"}, {"favorite": "true"}, {"star_min": "3"}, {"color": "red"},
-                                   {"has_rating": "true"}])
-def test_asset_pages_refuse_visitors_private_filters(public_lib_client, param):
-    client, _, library_id, _ = public_lib_client
-    r = client.get("/v1/assets/page", params={"library_id": library_id, **param})
-    assert r.status_code == 403, (param, r.status_code, r.text)
-
-
-@pytest.mark.slow
 def test_similar_from_a_trashed_clip_isnt_public(public_lib_client):
     client, api_key, library_id, _ = public_lib_client
     asset_id = _ingest(client, api_key, library_id, "sim/trashed.jpg", media_type="image")
@@ -578,16 +561,13 @@ def test_public_library_detail_is_the_visitor_view(public_lib_client, located):
 
 
 @pytest.mark.slow
-def test_public_library_page_and_query_are_trimmed(public_lib_client, located):
+def test_public_library_query_is_trimmed(public_lib_client, located):
     client, _, library_id, _ = public_lib_client
-    page = client.get("/v1/assets/page", params={"library_id": library_id})
-    assert page.status_code == 200, page.text
     query = client.get("/v1/query", params=[("f", f"library:{library_id}")])
     assert query.status_code == 200, query.text
-    for items in (page.json()["items"], query.json()["items"]):
-        mine = [i for i in items if i["asset_id"] == located]
-        assert mine, items
-        _assert_trimmed(mine[0])
+    mine = [i for i in query.json()["items"] if i["asset_id"] == located]
+    assert mine, query.json()["items"]
+    _assert_trimmed(mine[0])
 
 
 @pytest.mark.slow
@@ -656,14 +636,6 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("location_params", [{"has_gps": "true"}, {"near_lat": "48.8584", "near_lon": "2.2945"}])
-def test_public_page_cant_filter_by_location(public_lib_client, located, location_params):
-    client, _, library_id, _ = public_lib_client
-    r = client.get("/v1/assets/page", params={"library_id": library_id, **location_params})
-    assert r.status_code == 403, r.text
-
-
-@pytest.mark.slow
 def test_public_facets_count_no_locations_or_cameras(public_lib_client, located):
     client, api_key, library_id, _ = public_lib_client
     params = [("f", f"library:{library_id}")]
@@ -681,5 +653,3 @@ def test_public_queries_cant_filter_by_camera(public_lib_client, located, camera
     params = [("f", f"library:{library_id}"), ("f", camera_filter)]
     assert client.get("/v1/query", params=params).status_code == 403
     assert client.get("/v1/assets/facets", params=params).status_code == 403
-    r = client.get("/v1/assets/page", params={"library_id": library_id, "camera_make": "Acme"})
-    assert r.status_code == 403, r.text

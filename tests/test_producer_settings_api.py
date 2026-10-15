@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import text
 
 from tests.clips import make_clip
+from tests.faces import plant_faces
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_by_hand import _sha
 from tests.test_archive_trash_safety import _key_with_role
@@ -237,13 +238,12 @@ def test_faces_are_found_by_level_and_off_finds_none(env):
     sha = _sha()
     named = _ingest_with(lib, "named.jpg", sha, None)
     waiting = _ingest_with(lib, "waiting.jpg", _sha(), None)
-    r = client.post(f"/v1/assets/{named}/faces", json={
-        "detection_model": "insightface", "detection_model_version": "buffalo_l",
-        "faces": [{"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9,
-                   "embedding": [0.0] * 100 + [1.0] + [0.0] * 411}],
-        "lineage": _want(lib, "faces", sha)}, headers=headers)
-    assert r.status_code == 201, r.text
-    assert client.post("/v1/people", json={"display_name": "Kept", "face_ids": r.json()["face_ids"]},
+    face_ids = plant_faces(client, named, [
+        {"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9,
+         "embedding": [0.0] * 100 + [1.0] + [0.0] * 411}],
+        headers=headers, lineage=_want(lib, "faces", sha),
+        detection_model="insightface", detection_model_version="buffalo_l")
+    assert client.post("/v1/people", json={"display_name": "Kept", "face_ids": face_ids},
                        headers=headers).status_code in (200, 201)
     counts = _counts(lib, "faces")
     assert (counts["applicable"], counts["current"], counts["missing"]) == (2, 1, 1)
@@ -342,10 +342,8 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     client, headers, *_ = lib
     sha = _sha()
     photo = _ingest_with(lib, "a.jpg", sha, None)
-    r = client.post(f"/v1/assets/{photo}/faces", json={
-        "detection_model": "insightface", "detection_model_version": "buffalo_l", "faces": [],
-        "lineage": _want(lib, "faces", sha)}, headers=headers)
-    assert r.status_code == 201, r.text
+    plant_faces(client, photo, [], headers=headers, lineage=_want(lib, "faces", sha),
+                detection_model="insightface", detection_model_version="buffalo_l")
 
     distance = FACES.setting("merge_distance").default
     before = _producer(env, "faces")

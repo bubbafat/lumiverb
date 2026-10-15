@@ -297,12 +297,11 @@ def test_library_trash_soft_deletes_assets(
         engine.dispose()
 
     # Assets should no longer appear in active assets via API
-    r_list = client.get(
-        "/v1/assets/page",
-        params={"library_id": test_library_id},
-        headers=auth,
-    )
-    assert r_list.json().get("items", []) == [], "Trashed library assets should not appear in active list"
+    r_list = client.get("/v1/query", params={"limit": 500}, headers=auth)
+    assert r_list.status_code == 200, r_list.text
+    assert r_list.json()["next_cursor"] is None
+    listed = {i["asset_id"] for i in r_list.json()["items"]}
+    assert not listed & {asset_id_1, asset_id_2}, "Trashed library assets should not appear in active list"
 
 
 # ---------------------------------------------------------------------------

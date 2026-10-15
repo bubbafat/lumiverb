@@ -16,7 +16,7 @@ from sqlalchemy import text
 from src.shared import producers as P
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _row, _sha, _want
-from tests.test_reconciler import _due, _library
+from tests.test_reconciler import _analysis_proxy_made, _due, _library
 
 SRT_MACHINE = "1\n00:00:00,000 --> 00:00:02,000\nhello from whisper\n"
 SRT_MACHINE_2 = "1\n00:00:00,000 --> 00:00:02,000\nhello again from whisper\n"
@@ -30,6 +30,7 @@ def _video(env, name: str) -> tuple[tuple, str, str]:
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
         s.commit()
+    _analysis_proxy_made(env, vid)  # what its transcript is made from: the scheduler hands it out
     return lib, vid, sha
 
 
@@ -80,7 +81,7 @@ def test_a_persons_transcript_replaces_the_machines_and_keeps_no_copy(env):
     _remove(env, vid)
     assert _shown(env, vid) == {"srt": None, "source": None}
     assert _lineage_row(env, vid, "transcript") is None
-    assert _due(lib, "missing_transcription") == [vid]
+    assert _due(lib, "transcript") == [vid]
     _transcribe(env, vid, SRT_MACHINE_2, sha)
     assert _shown(env, vid) == {"srt": SRT_MACHINE_2, "source": "whisper"}
 
@@ -100,7 +101,7 @@ def test_a_persons_transcript_over_no_speech_and_removed_is_made_again(env):
     _transcribe(env, vid, SRT_PERSON, source="manual")
     _remove(env, vid)
     assert _shown(env, vid)["srt"] is None
-    assert _due(lib, "missing_transcription") == [vid]
+    assert _due(lib, "transcript") == [vid]
 
 
 @pytest.mark.slow
@@ -110,7 +111,7 @@ def test_removing_the_machines_transcript_is_for_good(env):
     _transcribe(env, vid, SRT_MACHINE, sha)
     _remove(env, vid, "machine")
     assert _shown(env, vid) == {"srt": None, "source": None}
-    assert _due(lib, "missing_transcription") == []
+    assert _due(lib, "transcript") == []
     assert _row(env, vid, "transcript")[0] == P.PERSON
 
 
@@ -134,7 +135,7 @@ def test_removing_without_saying_whose_removes_whats_shown(env):
     lib, vid, sha = _video(env, "CorrRemoveShown")
     _transcribe(env, vid, SRT_MACHINE, sha)
     _remove(env, vid, None)
-    assert _shown(env, vid)["srt"] is None and _due(lib, "missing_transcription") == []
+    assert _shown(env, vid)["srt"] is None and _due(lib, "transcript") == []
     client, headers, *_ = env
     assert client.delete(f"/v1/assets/{vid}/transcript", params={"which": "all"},
                          headers=headers).status_code == 422
@@ -257,7 +258,7 @@ def test_a_persons_description_is_the_one_copy(env):
     assert _correct(env, clip, description=None).status_code == 200
     d = _detail(env, clip)
     assert d["ai_description"] is None and d["corrected"] == []
-    assert _due(lib, "missing_vision") == [clip] and _lineage_row(env, clip, "vision") is None
+    assert _due(lib, "vision") == [clip] and _lineage_row(env, clip, "vision") is None
     _describe_as(env, clip, "a grey cat asleep", ["cat"])
     assert _detail(env, clip)["ai_description"] == "a grey cat asleep"
 
@@ -338,7 +339,7 @@ def test_a_persons_ocr_is_the_one_copy(env):
         assert s.execute(text("SELECT text FROM asset_ocr WHERE asset_id = :a"), {"a": clip}).scalar() == ""
     _correct(env, clip, ocr_text=None)
     assert _detail(env, clip)["ocr_text"] is None
-    assert _due(lib, "missing_ocr") == [clip]
+    assert _due(lib, "ocr") == [clip]
 
 
 @pytest.mark.slow
@@ -370,7 +371,7 @@ def test_a_clip_with_no_description_can_be_given_one_and_the_machine_leaves_it(e
     _describe_as(env, clip, "a building", ["building"])  # it was missing: the machine makes it
     d = _detail(env, clip)
     assert d["ai_description"] == "The old station" and d["ai_tags"] == ["station"]
-    assert _due(lib, "missing_vision") == []
+    assert _due(lib, "vision") == []
 
 
 @pytest.mark.slow
@@ -442,10 +443,10 @@ def test_text_a_person_wrote_isnt_read_again_or_counted_for_a_new_model(env, vis
     # On a clip never read, it isn't missing either: the reading would only be dropped.
     unread = _ingest_with(lib, "b.jpg", _sha(), None)
     _correct(lib, unread, ocr_text="EXIT")
-    assert unread not in _due(lib, "missing_ocr")
+    assert unread not in _due(lib, "ocr")
     # Removed, it's the machine's to read again.
     _correct(lib, unread, ocr_text=None)
-    assert unread in _due(lib, "missing_ocr")
+    assert unread in _due(lib, "ocr")
 
 
 @pytest.mark.slow
@@ -462,11 +463,11 @@ def test_a_description_and_tags_a_person_wrote_arent_described_again(env, vision
     assert _redo_due(lib, "redo_vision") == []
     unread = _ingest_with(lib, "b.jpg", _sha(), None)
     _correct(lib, unread, description="The old station", tags=["station"])
-    assert unread not in _due(lib, "missing_vision")
+    assert unread not in _due(lib, "vision")
     assert _detail(lib, unread)["ai_description"] == "The old station"
     # Removing the description makes it the machine's again; the person's tags stay theirs.
     _correct(lib, unread, description=None)
-    assert unread in _due(lib, "missing_vision")
+    assert unread in _due(lib, "vision")
     assert _detail(lib, unread)["ai_tags"] == ["station"]
 
 

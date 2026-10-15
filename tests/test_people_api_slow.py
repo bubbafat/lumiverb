@@ -19,7 +19,7 @@ from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
-from tests.machine_lineage import made
+from tests.faces import plant_faces
 
 
 @pytest.fixture(scope="module")
@@ -103,10 +103,7 @@ def _create_asset_with_faces(auth_client: _AuthClient, tenant_url: str, library_
         }
         for i in range(n_faces)
     ]
-    r3 = auth_client.post(f"/v1/assets/{asset_id}/faces", json={"faces": faces, "lineage": made("faces")})
-    assert r3.status_code == 201
-    face_ids = r3.json()["face_ids"]
-    return asset_id, face_ids
+    return asset_id, plant_faces(auth_client, asset_id, faces)
 
 
 @pytest.mark.slow

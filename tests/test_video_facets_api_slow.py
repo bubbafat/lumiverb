@@ -25,6 +25,7 @@ from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made
+from tests.producer_fakes import due
 
 FACET = {
     "duration_sec": 7.07,
@@ -50,7 +51,7 @@ def _probed(facet: dict) -> dict:
 
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
-    """Yields (client, headers, library_id)."""
+    """Yields (client, headers, library_id, tenant_url)."""
     storage = LocalStorage(str(tmp_path_factory.mktemp("facet_storage")))
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -98,7 +99,7 @@ def env(tmp_path_factory):
                     headers=headers,
                 )
                 assert r.status_code == 200, r.text
-                yield client, headers, r.json()["library_id"]
+                yield client, headers, r.json()["library_id"], tenant_url
 
     _engines.clear()
 
@@ -122,21 +123,17 @@ def _ingest(client, headers, library_id: str, rel_path: str, media_type: str, **
     return r.json()["asset_id"]
 
 
-def _missing_probe(client, headers, library_id: str) -> set[str]:
-    r = client.get(
-        "/v1/assets/page",
-        params={"library_id": library_id, "missing_probe": "true", "limit": 500},
-        headers=headers,
-    )
-    assert r.status_code == 200, r.text
-    return {i["asset_id"] for i in r.json()["items"]}
+def _missing_probe(env) -> set[str]:
+    """The videos the scheduler hands out to be probed (its queue)."""
+    _, _, library_id, tenant_url = env
+    return {c["asset_id"] for c in due(tenant_url, "probe", [library_id])}
 
 
 @pytest.mark.slow
 def test_put_facet_is_returned_and_sets_duration(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(client, headers, library_id, "v/put.mov", "video")
-    assert asset_id in _missing_probe(client, headers, library_id)
+    assert asset_id in _missing_probe(env)
 
     r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
     assert r.status_code == 200, r.text
@@ -144,12 +141,12 @@ def test_put_facet_is_returned_and_sets_duration(env) -> None:
     detail = client.get(f"/v1/assets/{asset_id}", headers=headers).json()
     assert detail["video_facet"] == FACET
     assert detail["duration_sec"] == pytest.approx(7.07)
-    assert asset_id not in _missing_probe(client, headers, library_id)
+    assert asset_id not in _missing_probe(env)
 
 
 @pytest.mark.slow
 def test_put_facet_replaces_previous(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(client, headers, library_id, "v/replace.mov", "video")
     client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
 
@@ -162,31 +159,31 @@ def test_put_facet_replaces_previous(env) -> None:
 
 @pytest.mark.slow
 def test_ingest_stores_facet(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(
         client, headers, library_id, "v/ingested.mov", "video", video_facet=json.dumps(FACET)
     )
 
     detail = client.get(f"/v1/assets/{asset_id}", headers=headers).json()
     assert detail["video_facet"] == FACET
-    assert asset_id not in _missing_probe(client, headers, library_id)
+    assert asset_id not in _missing_probe(env)
 
 
 @pytest.mark.slow
 def test_facet_rejected_for_images(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(client, headers, library_id, "i/photo.jpg", "image")
 
     r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(FACET), headers=headers)
 
     assert r.status_code == 400
-    assert asset_id not in _missing_probe(client, headers, library_id)
+    assert asset_id not in _missing_probe(env)
     assert client.get(f"/v1/assets/{asset_id}", headers=headers).json()["video_facet"] is None
 
 
 @pytest.mark.slow
 def test_facet_for_unknown_asset_is_404(env) -> None:
-    client, headers, _ = env
+    client, headers, *_ = env
 
     r = client.put("/v1/assets/ast_nope/video-facet", json=_probed(FACET), headers=headers)
 
@@ -195,7 +192,7 @@ def test_facet_for_unknown_asset_is_404(env) -> None:
 
 @pytest.mark.slow
 def test_emptying_trash_removes_facet(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(
         client, headers, library_id, "v/gone.mov", "video", video_facet=json.dumps(FACET)
     )
@@ -222,7 +219,7 @@ def test_emptying_trash_removes_facet(env) -> None:
 def test_invalid_facets_are_rejected(env, bad) -> None:
     """A malformed facet would break every export of every project holding
     the clip, so it's refused at the door."""
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(client, headers, library_id, f"v/bad-{abs(hash(str(bad)))}.mov", "video")
 
     r = client.put(f"/v1/assets/{asset_id}/video-facet", json=_probed(dict(FACET, **bad)), headers=headers)
@@ -234,7 +231,7 @@ def test_invalid_facets_are_rejected(env, bad) -> None:
 def test_ingest_keeps_the_video_when_its_facet_is_invalid(env) -> None:
     """A probe value the server can't accept never blocks ingest: the video
     is stored without a facet (enrich --job-type probe can retry)."""
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     r = client.post(
         "/v1/ingest", headers=headers,
         files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
@@ -245,12 +242,12 @@ def test_ingest_keeps_the_video_when_its_facet_is_invalid(env) -> None:
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
     assert client.get(f"/v1/assets/{asset_id}", headers=headers).json()["video_facet"] is None
-    assert asset_id in _missing_probe(client, headers, library_id)
+    assert asset_id in _missing_probe(env)
 
 
 @pytest.mark.slow
 def test_infinite_duration_is_rejected(env) -> None:
-    client, headers, library_id = env
+    client, headers, library_id, _ = env
     asset_id = _ingest(client, headers, library_id, "v/inf.mov", "video")
 
     r = client.put(

@@ -285,8 +285,8 @@ def test_each_kind_of_write_records_its_artifact(env):
         ("clip", img, lambda: client.post(f"/v1/assets/{img}/embeddings", json={
             "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": vec,
             "lineage": _want(env, "clip", sha)}, headers=headers)),
-        ("faces", img, lambda: client.post(f"/v1/assets/{img}/faces", json={
-            "faces": [], "lineage": _want(env, "faces", sha)}, headers=headers)),
+        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+            "items": [{"asset_id": img, "faces": []}], "lineage": _want(env, "faces", sha)}, headers=headers)),
         ("probe", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={
             "duration_sec": 12.0, "lineage": _want(env, "probe", sha)}, headers=headers)),
         ("analysis_proxy", vid, lambda: client.post(
@@ -519,7 +519,6 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         ("clip", img, lambda: client.post("/v1/assets/batch-embeddings", json={"items": [{
             "asset_id": img, "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}]},
             headers=headers)),
-        ("faces", img, lambda: client.post(f"/v1/assets/{img}/faces", json={"faces": [face]}, headers=headers)),
         ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
             "items": [{"asset_id": img, "faces": [face]}]}, headers=headers)),
         ("transcript", vid, lambda: client.post(f"/v1/assets/{vid}/transcript", json={
@@ -563,8 +562,9 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
             "model_id": "m", "description": "d", "lineage": {"producer": "vision"}}, headers=headers)),
         ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={
             "ocr_text": "EXIT", "lineage": "not lineage"}, headers=headers)),
-        ("faces", img, lambda: client.post(f"/v1/assets/{img}/faces", json={"faces": [face], "lineage": {
-            "producer": "insightface", "version": "", "settings_hash": ""}}, headers=headers)),
+        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+            "items": [{"asset_id": img, "faces": [face]}], "lineage": {
+                "producer": "insightface", "version": "", "settings_hash": ""}}, headers=headers)),
     ]
     for artifact, clip, write in writes:
         before = _everything(env, clip)

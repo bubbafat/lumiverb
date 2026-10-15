@@ -98,11 +98,11 @@ def assets_api_client() -> tuple[TestClient, str, str, list[str]]:
 
 @pytest.mark.slow
 def test_list_assets_by_library(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets/page?library_id=... returns the assets for that library."""
+    """GET /v1/query?f=library:... returns the assets for that library."""
     client, api_key, library_id, asset_ids = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
-    r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
+    r = client.get("/v1/query", params={"f": f"library:{library_id}"}, headers=auth)
     assert r.status_code == 200
     assets = r.json()["items"]
     assert len(assets) >= 3
@@ -116,7 +116,7 @@ def test_list_assets_by_library(assets_api_client: tuple[TestClient, str, str, l
 
 @pytest.mark.slow
 def test_list_assets_empty_library(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets/page?library_id=... on a library with no assets returns no items."""
+    """GET /v1/query?f=library:... on a library with no assets returns no items."""
     client, api_key, _, _ = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -128,14 +128,14 @@ def test_list_assets_empty_library(assets_api_client: tuple[TestClient, str, str
     assert r_lib.status_code == 200
     library_id = r_lib.json()["library_id"]
 
-    r = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
+    r = client.get("/v1/query", params={"f": f"library:{library_id}"}, headers=auth)
     assert r.status_code == 200
     assert r.json()["items"] == []
 
 
 @pytest.mark.slow
 def test_the_unpaged_asset_list_is_gone(assets_api_client: tuple[TestClient, str, str, list[str]]) -> None:
-    """GET /v1/assets (every asset at once, the whole account without library_id) is gone: page with /page."""
+    """GET /v1/assets (every asset at once, the whole account without library_id) is gone: page with /v1/query."""
     client, api_key, library_id, _ = assets_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
 
@@ -184,7 +184,7 @@ def test_list_assets_requires_auth(assets_api_client: tuple[TestClient, str, str
     """Missing Authorization header returns 401."""
     client, _, library_id, _ = assets_api_client
 
-    r = client.get("/v1/assets/page", params={"library_id": library_id})
+    r = client.get("/v1/query", params={"f": f"library:{library_id}"})
     assert r.status_code == 401
 
 

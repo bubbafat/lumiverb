@@ -121,9 +121,9 @@ def test_a_producer_is_one_folder(tmp_path):
     Two dropped in (one bringing an AI job of its own) show everywhere the
     producers are read from: lineage and the reconciler, the scheduler's
     kinds, pools (their slots, their GPU sharing, an AI job's per_request),
-    runners and AI jobs, where an account keeps the job's model, the asset
-    page's missing_* filter and the repair summary, what goes when it's made
-    again, and GET /v1/producers, and its work runs through the runner."""
+    runners and AI jobs, where an account keeps the job's model, its
+    missing_* condition (the queue's) and the repair summary, what goes when
+    it's made again, and GET /v1/producers, and its work runs through the runner."""
     _folder(tmp_path / "producers", "example", _EXAMPLE, _EXAMPLE_WORK)
     _folder(tmp_path / "producers", "other", _OTHER, "from src.producers.runner import Work\n\n\nclass Other(Work):\n    artifact = 'other'\n")
     script = textwrap.dedent(f"""
@@ -135,7 +135,7 @@ def test_a_producer_is_one_folder(tmp_path):
         from src.processing.machine import Machine
         from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
         from src.shared.producers import MISSING_FLAGS, PRODUCERS, effective_settings, pause_targets
-        from src.server.api.routers.assets import RepairSummary, missing_filters
+        from src.server.api.routers.assets import RepairSummary
         from src.server.models.control_plane import Tenant
         from src.server.repository import ai_machines, lineage
         from src.server.repository.tenant import MISSING_CONDITIONS
@@ -143,9 +143,8 @@ def test_a_producer_is_one_folder(tmp_path):
         from src.server.scheduler.runners import runners
         from src.server.scheduler.service import Scheduler, default_capacity, gpu_holds
         from src.server.scheduler.dispatch import Job
-        import inspect
 
-        tenant = Tenant(tenant_id="t", name="t", ai_job_models={{}})
+        tenant =Tenant(tenant_id="t", name="t", ai_job_models={{}})
         ai_machines.set_job_model(tenant, "vision", "qwen")
 
         acct = MagicMock()
@@ -173,7 +172,6 @@ def test_a_producer_is_one_folder(tmp_path):
             "made_from": list(lineage.made_from("example")),
             "joined": "src_example" in lineage.LINEAGE_JOIN,
             "missing": "missing_example" in MISSING_CONDITIONS,
-            "page_filter": "missing_example" in inspect.signature(missing_filters).parameters,
             "summary": "missing_example" in RepairSummary.model_fields,
             "kind": [KINDS["example"].spec.tier, KINDS["example"].spec.pool, KINDS["example"].spec.per_account,
                      KINDS["example"].extra],
@@ -198,7 +196,7 @@ def test_a_producer_is_one_folder(tmp_path):
     assert seen == {
         "listed": ["other", "example"], "flag": "example", "settings": {"strength": 3, "model": "geo-2"},
         "applies": "a.media_type = 'image'", "due": True, "redo": True, "made_from": ["example", "vision"],
-        "joined": True, "missing": True, "page_filter": True, "summary": True,
+        "joined": True, "missing": True, "summary": True,
         "kind": [3, "example", True, "(a.proxy_key IS NOT NULL)"], "redo_kind": 4,
         "runner": None, "saved": "/v1/example/a1",
         "job": ["Places", ["example", "redo_example"], False],

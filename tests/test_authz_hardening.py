@@ -59,12 +59,9 @@ def _user(client: TestClient, admin: dict, email: str, role: str) -> tuple[str, 
                                   "created_at"])
 def test_public_pages_refuse_sorts_a_cursor_would_leak(public_lib_client, located, sort):
     client, api_key, library_id, _ = public_lib_client
-    page = {"library_id": library_id, "sort": sort, "limit": 1}
     query = [("f", f"library:{library_id}"), ("sort", sort), ("limit", "1")]
-    assert client.get("/v1/assets/page", params=page).status_code == 403
     assert client.get("/v1/query", params=query).status_code == 403
     # Signed in, every sort works.
-    assert client.get("/v1/assets/page", params=page, headers=_bearer(api_key)).status_code == 200
     assert client.get("/v1/query", params=query, headers=_bearer(api_key)).status_code == 200
 
 
@@ -73,27 +70,15 @@ def test_public_pages_refuse_sorts_a_cursor_would_leak(public_lib_client, locate
 def test_public_pages_page_by_date_or_id(public_lib_client, located, sort):
     client, _, library_id, _ = public_lib_client
     _ingest(client, public_lib_client[1], library_id, f"trips/by-{sort}.jpg", media_type="image")
-    for r in (client.get("/v1/assets/page", params={"library_id": library_id, "sort": sort, "limit": 1}),
-              client.get("/v1/query", params=[("f", f"library:{library_id}"), ("sort", sort), ("limit", "1")])):
-        assert r.status_code == 200, r.text
-        cursor = _decode(r.json()["next_cursor"])
-        assert "trips" not in json.dumps(cursor) and "beach" not in json.dumps(cursor)
+    r = client.get("/v1/query", params=[("f", f"library:{library_id}"), ("sort", sort), ("limit", "1")])
+    assert r.status_code == 200, r.text
+    cursor = _decode(r.json()["next_cursor"])
+    assert "trips" not in json.dumps(cursor) and "beach" not in json.dumps(cursor)
 
 
 # ---------------------------------------------------------------------------
 # 4, 5. Probing file names and cameras
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.slow
-def test_public_page_narrows_to_folders_not_files(public_lib_client, located):
-    client, _, library_id, _ = public_lib_client
-    r = client.get("/v1/assets/page", params={"library_id": library_id, "path_prefix": "trips"})
-    assert r.status_code == 200, r.text
-    assert located in [i["asset_id"] for i in r.json()["items"]]
-    for probe in ("trips/secret-beach.jpg", "nope", "trip", "t%"):
-        r = client.get("/v1/assets/page", params={"library_id": library_id, "path_prefix": probe})
-        assert r.status_code == 403, (probe, r.status_code)
 
 
 @pytest.mark.slow
@@ -103,7 +88,9 @@ def test_public_query_narrows_to_folders_not_files(public_lib_client, located):
     r = client.get("/v1/query", params=[*base, ("f", "path:trips")])
     assert r.status_code == 200, r.text
     assert located in [i["asset_id"] for i in r.json()["items"]]
-    assert client.get("/v1/query", params=[*base, ("f", "path:trips/secret-beach.jpg")]).status_code == 403
+    for probe in ("trips/secret-beach.jpg", "nope", "trip", "t%"):
+        r = client.get("/v1/query", params=[*base, ("f", f"path:{probe}")])
+        assert r.status_code == 403, (probe, r.status_code)
     assert client.get("/v1/assets/facets", params=[*base, ("f", "path:trips/secret-beach.jpg")]).status_code == 403
 
 

@@ -26,7 +26,7 @@ def test_the_api_keeps_playback_links_out_of_the_access_log() -> None:
     access = logging.getLogger("uvicorn.access")
     assert not access.filter(_access_line("/v1/stream/tok_secret"))
     assert not access.filter(_access_line("/v1/stream/tok_secret?t=1"))
-    assert access.filter(_access_line("/v1/assets/page"))
+    assert access.filter(_access_line("/v1/query"))
 
 
 def test_uvicorn_configuring_its_loggers_keeps_the_filter() -> None:

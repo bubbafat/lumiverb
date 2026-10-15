@@ -235,20 +235,22 @@ def test_empty_trash_returns_count(trash_api_client: tuple[TestClient, str, str,
 
 @pytest.mark.slow
 def test_trashed_asset_absent_from_list(trash_api_client: tuple[TestClient, str, str, list[str], str]) -> None:
-    """After trash, asset does not appear in GET /v1/assets/page."""
+    """After trash, asset does not appear in the library's clips (GET /v1/query?f=library:…)."""
     client, api_key, library_id, asset_ids, tenant_url = trash_api_client
     auth = {"Authorization": f"Bearer {api_key}"}
     aid = _create_asset_for_test(tenant_url, library_id, f"list_{os.urandom(4).hex()}.jpg")
+    listing = {"f": f"library:{library_id}", "limit": 500}
 
-    r_before = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
+    r_before = client.get("/v1/query", params=listing, headers=auth)
     assert r_before.status_code == 200
     ids_before = {a["asset_id"] for a in r_before.json()["items"]}
     assert aid in ids_before
 
     client.delete(f"/v1/assets/{aid}", headers=auth)
 
-    r_after = client.get("/v1/assets/page", params={"library_id": library_id}, headers=auth)
+    r_after = client.get("/v1/query", params=listing, headers=auth)
     assert r_after.status_code == 200
+    assert r_after.json()["next_cursor"] is None
     ids_after = {a["asset_id"] for a in r_after.json()["items"]}
     assert aid not in ids_after
 

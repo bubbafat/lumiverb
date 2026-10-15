@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import create_engine, text
 
+from tests.faces import plant_faces
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_by_hand import _sha
 from tests.test_lineage_api import _ingest_with, _want
@@ -37,13 +38,12 @@ def _clip_with_faces(lib, name: str, label: str, n: int = 3) -> tuple[str, list[
     client, headers, *_ = lib
     sha = _sha()
     asset_id = _ingest_with(lib, f"{name}.jpg", sha, None)
-    r = client.post(f"/v1/assets/{asset_id}/faces", json={
-        "detection_model": "insightface", "detection_model_version": "buffalo_l",
-        "faces": [{"bounding_box": {"x": 0.1 * i, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9,
-                   "embedding": _embedding(label, i)} for i in range(n)],
-        "lineage": _want(lib, "faces", sha)}, headers=headers)
-    assert r.status_code == 201, r.text
-    return asset_id, r.json()["face_ids"]
+    face_ids = plant_faces(client, asset_id, [
+        {"bounding_box": {"x": 0.1 * i, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9,
+         "embedding": _embedding(label, i)} for i in range(n)],
+        headers=headers, lineage=_want(lib, "faces", sha),
+        detection_model="insightface", detection_model_version="buffalo_l")
+    return asset_id, face_ids
 
 
 @contextmanager

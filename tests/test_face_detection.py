@@ -9,10 +9,11 @@ import pytest
 
 @pytest.mark.fast
 def test_face_submit_request_model() -> None:
-    """FaceSubmitRequest validates with default model fields."""
-    from src.server.api.routers.assets import FaceSubmitRequest, FaceDetectionItem
+    """A batch-faces item (the faces producer's) validates with default model fields."""
+    from src.server.api.routers.assets import BatchFaceItem, FaceDetectionItem
 
-    req = FaceSubmitRequest(
+    req = BatchFaceItem(
+        asset_id="ast_a",
         faces=[
             FaceDetectionItem(
                 bounding_box={"x": 0.1, "y": 0.2, "w": 0.15, "h": 0.2},
@@ -23,6 +24,7 @@ def test_face_submit_request_model() -> None:
     )
     assert req.detection_model == "insightface"
     assert req.detection_model_version == "buffalo_l"
+    assert req.embedding_model == "buffalo_l"
     assert len(req.faces) == 1
 
 
@@ -36,16 +38,6 @@ def test_face_submit_request_no_embedding() -> None:
         detection_confidence=0.8,
     )
     assert item.embedding is None
-
-
-@pytest.mark.fast
-def test_face_submit_response_model() -> None:
-    """FaceSubmitResponse serializes correctly."""
-    from src.server.api.routers.assets import FaceSubmitResponse
-
-    resp = FaceSubmitResponse(face_count=2, face_ids=["face_a", "face_b"])
-    assert resp.face_count == 2
-    assert len(resp.face_ids) == 2
 
 
 @pytest.mark.fast

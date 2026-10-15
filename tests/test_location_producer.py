@@ -543,26 +543,22 @@ def test_a_guess_being_checked_again_isnt_missing(env) -> None:
         r = client.get("/v1/producers", params={"library_id": lib}, headers=headers)
         return next(p["counts"] for p in r.json()["producers"] if p["artifact"] == "location")
 
-    def missing_filter() -> set:
-        r = client.get("/v1/assets/page", params={"library_id": lib, "missing_location": "true"}, headers=headers)
-        assert r.status_code == 200, r.text
-        return {i["asset_id"] for i in r.json()["items"]}
-
     def summary() -> int:
         r = client.get("/v1/assets/repair-summary", params={"library_id": lib}, headers=headers)
         return r.json()["missing_location"]
 
-    assert counts()["missing"] == 0 and counts()["rechecking"] == 0 and summary() == 0 and missing_filter() == set()
+    assert counts()["missing"] == 0 and counts()["rechecking"] == 0 and summary() == 0 and _due(env, lib) == set()
     _clip(env, lib, "Phone/b.jpg", "2024-06-15T11:05:00", gps=(1.0, 1.001), device=PHONE)
     _clip(env, lib, "Phone/d.jpg", "2024-06-17T11:05:00", gps=(2.0, 2.0), device=PHONE)
-    # c has a guess being checked again; empty had none, so it's missing again.
+    # c has a guess being checked again; empty had none, so it's missing again. The
+    # scheduler hands out both; only empty counts as missing.
     assert _recheck(env, c) == "new_fix" and {c, empty} <= _due(env, lib)
     n = counts()
     assert n["rechecking"] == 1 and n["missing"] == 1 and n["current"] == n["applicable"] - 2, n
-    assert summary() == 1 and missing_filter() == {empty}
+    assert summary() == 1
     _run(env, lib)
     n = counts()
-    assert n["rechecking"] == 0 and n["missing"] == 0 and summary() == 0 and missing_filter() == set()
+    assert n["rechecking"] == 0 and n["missing"] == 0 and summary() == 0 and _due(env, lib) == set()
 
 
 def test_nothing_else_checks_a_guess_again_and_a_persons_location_is_never_touched(env) -> None:

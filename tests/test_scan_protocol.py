@@ -33,11 +33,11 @@ from tests.test_scan_outcomes import Lib, _image, _in_sight, _missing, _move, _n
 
 pytestmark = pytest.mark.slow
 
-# How a scan compared before the server did: the library's whole listing,
-# the account's settings, and archiving sent clip by clip. (What a person
+# How a scan compared before the server did: the account's settings, and
+# archiving sent clip by clip. (The library's whole listing, what a person
 # removed, moves and new times had endpoints of their own, which answer 410
 # now: tests/test_retired_endpoints.py.)
-OLD_COMPARISON = {"GET /v1/assets/page", "GET /v1/tenant/settings", "DELETE /v1/assets"}
+OLD_COMPARISON = {"GET /v1/tenant/settings", "DELETE /v1/assets"}
 _ID = re.compile(r"/(ast|scan|lib)_[A-Za-z0-9]+")
 
 

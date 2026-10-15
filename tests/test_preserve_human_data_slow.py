@@ -29,6 +29,7 @@ from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.repository.tenant import FaceRepository, PersonRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
+from tests.faces import face_count, plant_faces
 from tests.machine_lineage import ingest_made, made
 from tests.scan_plan import scan_would
 
@@ -230,26 +231,18 @@ def _seed_match(
 
 
 def _redetect(client, headers, asset_id: str, faces: list[tuple[dict, object]]) -> dict:
-    """Submit detections; each embedding is a _unit index or an explicit vector."""
-    r = client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={
-            "detection_model": "apple_vision",
-            "detection_model_version": "2",
-            "faces": [
-                {
-                    "bounding_box": box,
-                    "detection_confidence": 0.9,
-                    "embedding": _unit(emb) if isinstance(emb, int) else emb,
-                }
-                for box, emb in faces
-            ],
-            "lineage": made("faces"),
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
+    """Submit detections (as the faces producer saves them); each embedding is a
+    _unit index or an explicit vector. Returns each face's id, in the order
+    sent, and the clip's face_count after."""
+    face_ids = plant_faces(client, asset_id, [
+        {
+            "bounding_box": box,
+            "detection_confidence": 0.9,
+            "embedding": _unit(emb) if isinstance(emb, int) else emb,
+        }
+        for box, emb in faces
+    ], headers=headers, detection_model="apple_vision", detection_model_version="2")
+    return {"face_ids": face_ids, "face_count": face_count(client, asset_id, headers=headers)}
 
 
 def _match(tenant_url: str, face_id: str) -> tuple[str, bool] | None:
@@ -494,16 +487,10 @@ def test_faces_without_embeddings_pair_by_solid_overlap(env) -> None:
     face_id = _seed_face(tenant_url, asset_id, _box(0.10, 0.10), emb=None)
     _seed_match(tenant_url, face_id, person_id, confirmed=True, confidence=None)
 
-    r = client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={"detection_model": "apple_vision", "detection_model_version": "2",
-              "faces": [{"bounding_box": _box(0.12, 0.12), "detection_confidence": 0.9}],
-              "lineage": made("faces")},
-        headers=headers,
-    )
+    face_ids = plant_faces(client, asset_id, [{"bounding_box": _box(0.12, 0.12), "detection_confidence": 0.9}],
+                           headers=headers, detection_model="apple_vision", detection_model_version="2")
 
-    assert r.status_code == 201, r.text
-    assert r.json()["face_ids"] == [face_id]
+    assert face_ids == [face_id]
     assert _match(tenant_url, face_id) == (person_id, True)
 
 
@@ -1090,20 +1077,12 @@ def test_machine_transcript_never_replaces_manual(env) -> None:
 
 
 def _redetect_with(client, headers, asset_id: str, faces: list[tuple[dict, object]], embedding_model: str) -> dict:
-    r = client.post(
-        f"/v1/assets/{asset_id}/faces",
-        json={
-            "detection_model": "insightface",
-            "detection_model_version": embedding_model,
-            "embedding_model": embedding_model,
-            "faces": [{"bounding_box": box, "detection_confidence": 0.9,
-                       "embedding": _unit(emb) if isinstance(emb, int) else emb} for box, emb in faces],
-            "lineage": made("faces"),
-        },
-        headers=headers,
-    )
-    assert r.status_code == 201, r.text
-    return r.json()
+    face_ids = plant_faces(client, asset_id, [
+        {"bounding_box": box, "detection_confidence": 0.9, "embedding": _unit(emb) if isinstance(emb, int) else emb}
+        for box, emb in faces
+    ], headers=headers, detection_model="insightface", detection_model_version=embedding_model,
+        embedding_model=embedding_model)
+    return {"face_ids": face_ids, "face_count": face_count(client, asset_id, headers=headers)}
 
 
 def _embedding_model(tenant_url: str, face_id: str) -> str | None:
