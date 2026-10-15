@@ -9,12 +9,15 @@ from src.producers.contract import VIDEO, ProducerSpec, Setting
 from src.producers.pools import SCENES
 from src.producers.scenes.detail import DEFAULT, DETAILS
 
-# Version 3: scenes by Detail (windows scaled to the video's length, cuts
-# within them, alike neighbours merged). 2: scenes at the video's own time.
-# 1 timed each 30 s chunk from where it was scanned, and scanned every chunk
-# to the clip's end.
+# Version 4: found again on analysis proxies with a keyframe every 2 s
+# (analysis_proxy version 2): those found on older proxies cut at their
+# sparser keyframes (Robert, Oct 14: redo them, after all new work; a
+# redo's tier is the last, src/server/scheduler/kinds.py). 3: scenes by
+# Detail (windows scaled to the video's length, cuts within them, alike
+# neighbours merged). 2: scenes at the video's own time. 1 timed each 30 s
+# chunk from where it was scanned, and scanned every chunk to the clip's end.
 PRODUCER = ProducerSpec(
-    artifact="scenes", producer="scene-detect", version="3", media=VIDEO, unit="second", title="Scenes", order=50,
+    artifact="scenes", producer="scene-detect", version="4", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.video_indexed",
