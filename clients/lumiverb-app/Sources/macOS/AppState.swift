@@ -51,11 +51,13 @@ class AppState: ObservableObject {
     /// drives scroll commands.
     let scrollAccessor: MacScrollAccessor = MacScrollAccessor()
 
-    /// The vision and whisper settings the app's own AI kept, before the
-    /// server's scheduler did all the processing.
+    /// The settings the app's own AI (vision, whisper) and its own scan
+    /// (paused or not) kept, before the server's scheduler did all the
+    /// processing and all the scanning.
     private static let retiredSettingKeys = [
         "visionApiUrl", "visionModelId",
         "whisperEnabled", "whisperModelSize", "whisperLanguage", "whisperBinaryPath",
+        "scanPaused",
     ]
 
     init() {
@@ -63,8 +65,9 @@ class AppState: ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "serverURL"), !saved.isEmpty {
             serverURL = saved
         }
-        // Forget what the app's own AI kept: the vision service's key (a
-        // secret nothing reads any more) and its settings. A no-op once gone.
+        // Forget what the app's own AI and scan kept: the vision service's
+        // key (a secret nothing reads any more) and their settings. A no-op
+        // once gone.
         try? tokenStore.delete(key: "visionApiKey")
         for key in Self.retiredSettingKeys {
             UserDefaults.standard.removeObject(forKey: key)
@@ -192,12 +195,11 @@ class AppState: ObservableObject {
 
     /// Update a library's name and/or root path via `PATCH /v1/libraries/{id}`.
     /// Only non-nil fields are sent. Refreshes the local list on success so
-    /// the sidebar and scanner immediately pick up the new values.
+    /// the sidebar immediately picks up the new values.
     ///
     /// Note: changing `rootPath` on the server does not move any files or
-    /// re-scan. The scanner will see the new path on its next run; if the
-    /// path is wrong the pipeline surfaces "Library root not found" on next
-    /// scan. The UI should be clear that this is re-pointing, not moving.
+    /// re-scan. The server's scheduler scans the new path on its next scan.
+    /// The UI should be clear that this is re-pointing, not moving.
     @discardableResult
     func updateLibrary(
         libraryId: String,

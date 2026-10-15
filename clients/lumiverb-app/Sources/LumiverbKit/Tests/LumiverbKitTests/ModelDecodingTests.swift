@@ -129,36 +129,6 @@ final class AssetPageItemTests: XCTestCase {
         let item = try decoder.decode(AssetPageItem.self, from: json)
         XCTAssertEqual(item.aspectRatio, 1.0)
     }
-
-    func testDecodesAssetPageResponse() throws {
-        let json = """
-        {
-            "items": [
-                {"asset_id": "a1", "rel_path": "a.jpg", "file_size": 100, "media_type": "image", "status": "pending"},
-                {"asset_id": "a2", "rel_path": "b.jpg", "file_size": 200, "media_type": "image", "status": "described"}
-            ],
-            "next_cursor": "eyJ2IjogIjIwMjQtMDEtMDEiLCAiaWQiOiAiYTIifQ"
-        }
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(AssetPageResponse.self, from: json)
-        XCTAssertEqual(response.items.count, 2)
-        XCTAssertEqual(response.items[0].assetId, "a1")
-        XCTAssertEqual(response.nextCursor, "eyJ2IjogIjIwMjQtMDEtMDEiLCAiaWQiOiAiYTIifQ")
-    }
-
-    func testDecodesAssetPageResponseNullCursor() throws {
-        let json = """
-        {
-            "items": [],
-            "next_cursor": null
-        }
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(AssetPageResponse.self, from: json)
-        XCTAssertTrue(response.items.isEmpty)
-        XCTAssertNil(response.nextCursor)
-    }
 }
 
 // MARK: - Asset Detail
@@ -334,6 +304,19 @@ final class AssetDetailTests: XCTestCase {
         XCTAssertNil(detail.cameraDescription)
         XCTAssertNil(detail.exposureDescription)
         XCTAssertNil(detail.dimensionsDescription)
+    }
+
+    func testAssetDetailDecodesAPersonsLocation() throws {
+        let json = """
+        {"asset_id": "a", "library_id": "l", "rel_path": "x.jpg", "media_type": "image", "status": "ok",
+         "gps_lat": 40.0, "gps_lon": -74.0, "gps_accuracy_m": 5.0,
+         "location": {"lat": 1.0, "lon": 2.0, "radius_m": 0, "source": "person", "status": "applied",
+                      "basis_summary": null, "set_by": "rob@x.io", "set_at": "2026-10-09T00:00:00+00:00"}}
+        """.data(using: .utf8)!
+        let detail = try decoder.decode(AssetDetail.self, from: json)
+        XCTAssertEqual(detail.location?.source, "person")
+        XCTAssertEqual(detail.location?.setBy, "rob@x.io")
+        XCTAssertEqual(detail.gpsAccuracyM, 5.0)
     }
 }
 
@@ -627,240 +610,6 @@ final class ImageCacheTests: XCTestCase {
     }
 }
 
-// MARK: - File Extensions
-
-final class FileExtensionTests: XCTestCase {
-
-    func testImageExtensionsSupported() {
-        XCTAssertTrue(FileExtensions.isSupported("photo.jpg"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.JPG"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.jpeg"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.png"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.webp"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.bmp"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.tif"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.tiff"))
-    }
-
-    func testRAWExtensionsSupported() {
-        XCTAssertTrue(FileExtensions.isSupported("photo.cr2"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.cr3"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.nef"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.arw"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.raf"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.orf"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.rw2"))
-        XCTAssertTrue(FileExtensions.isSupported("photo.dng"))
-    }
-
-    func testVideoExtensionsSupported() {
-        XCTAssertTrue(FileExtensions.isSupported("clip.mp4"))
-        XCTAssertTrue(FileExtensions.isSupported("clip.mkv"))
-        XCTAssertTrue(FileExtensions.isSupported("clip.mov"))
-        XCTAssertTrue(FileExtensions.isSupported("clip.MOV"))
-    }
-
-    func testUnsupportedExtensions() {
-        XCTAssertFalse(FileExtensions.isSupported("document.pdf"))
-        XCTAssertFalse(FileExtensions.isSupported("archive.zip"))
-        XCTAssertFalse(FileExtensions.isSupported("readme.txt"))
-        XCTAssertFalse(FileExtensions.isSupported("noext"))
-        XCTAssertFalse(FileExtensions.isSupported(".hidden"))
-    }
-
-    func testMediaTypeDetection() {
-        XCTAssertEqual(FileExtensions.mediaType(for: "photo.jpg"), "image")
-        XCTAssertEqual(FileExtensions.mediaType(for: "photo.CR2"), "image")
-        XCTAssertEqual(FileExtensions.mediaType(for: "clip.mp4"), "video")
-        XCTAssertEqual(FileExtensions.mediaType(for: "clip.MOV"), "video")
-        XCTAssertNil(FileExtensions.mediaType(for: "readme.txt"))
-        XCTAssertNil(FileExtensions.mediaType(for: "noext"))
-    }
-
-    func testPathWithDirectories() {
-        XCTAssertTrue(FileExtensions.isSupported("2024/vacation/IMG_001.jpg"))
-        XCTAssertTrue(FileExtensions.isSupported("/mnt/photos/raw/DSC_0001.nef"))
-        XCTAssertEqual(FileExtensions.mediaType(for: "videos/2024/clip.mp4"), "video")
-    }
-}
-
-// MARK: - Path Filter
-
-final class PathFilterTests: XCTestCase {
-
-    func testDefaultAllowsAll() {
-        let filter = PathFilter()
-        XCTAssertTrue(filter.isAllowed("photo.jpg"))
-        XCTAssertTrue(filter.isAllowed("2024/vacation/photo.jpg"))
-    }
-
-    func testTenantExclude() {
-        let rules = [PathFilterRule(pattern: "**/*.tmp", filterType: "exclude")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertFalse(filter.isAllowed("cache/file.tmp"))
-        XCTAssertFalse(filter.isAllowed("deep/nested/file.tmp"))
-        XCTAssertTrue(filter.isAllowed("photo.jpg"))
-    }
-
-    func testTenantInclude() {
-        let rules = [PathFilterRule(pattern: "photos/**", filterType: "include")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertTrue(filter.isAllowed("photos/2024/img.jpg"))
-        XCTAssertFalse(filter.isAllowed("trash/junk.jpg"))
-    }
-
-    func testLibraryExcludeOverridesTenantInclude() {
-        let tenantRules = [PathFilterRule(pattern: "**/*.jpg", filterType: "include")]
-        let libraryRules = [PathFilterRule(pattern: "Trash/**", filterType: "exclude")]
-        let filter = PathFilter(tenantRules: tenantRules, libraryRules: libraryRules)
-
-        XCTAssertFalse(filter.isAllowed("Trash/deleted.jpg"))
-        XCTAssertTrue(filter.isAllowed("photos/img.jpg"))
-    }
-
-    func testLibraryIncludeOverridesTenantExclude() {
-        let tenantRules = [PathFilterRule(pattern: "raw/**", filterType: "exclude")]
-        let libraryRules = [PathFilterRule(pattern: "raw/important/**", filterType: "include")]
-        let filter = PathFilter(tenantRules: tenantRules, libraryRules: libraryRules)
-
-        XCTAssertTrue(filter.isAllowed("raw/important/keep.jpg"))
-        XCTAssertFalse(filter.isAllowed("raw/other/skip.jpg"))
-    }
-
-    func testStarMatchesSingleSegment() {
-        let rules = [PathFilterRule(pattern: "*.tmp", filterType: "exclude")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertFalse(filter.isAllowed("file.tmp"))
-        XCTAssertTrue(filter.isAllowed("dir/file.tmp")) // * doesn't cross /
-    }
-
-    func testDoubleStarMatchesAcrossSegments() {
-        let rules = [PathFilterRule(pattern: "**/*.tmp", filterType: "exclude")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertFalse(filter.isAllowed("file.tmp"))
-        XCTAssertFalse(filter.isAllowed("dir/file.tmp"))
-        XCTAssertFalse(filter.isAllowed("a/b/c/file.tmp"))
-    }
-
-    func testQuestionMarkMatchesSingleChar() {
-        let rules = [PathFilterRule(pattern: "IMG_????.jpg", filterType: "include")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertTrue(filter.isAllowed("IMG_0001.jpg"))
-        XCTAssertTrue(filter.isAllowed("IMG_9999.jpg"))
-        XCTAssertFalse(filter.isAllowed("IMG_1.jpg"))
-    }
-
-    func testCaseInsensitive() {
-        let rules = [PathFilterRule(pattern: "**/*.JPG", filterType: "include")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertTrue(filter.isAllowed("photo.jpg"))
-        XCTAssertTrue(filter.isAllowed("photo.JPG"))
-        XCTAssertTrue(filter.isAllowed("photo.Jpg"))
-    }
-
-    func testBackslashNormalized() {
-        let rules = [PathFilterRule(pattern: "photos/**", filterType: "include")]
-        let filter = PathFilter(tenantRules: rules)
-
-        XCTAssertTrue(filter.isAllowed("photos\\2024\\img.jpg"))
-    }
-
-    func testPathFilterRuleDecoding() throws {
-        let json = """
-        {"pattern": "**/*.tmp", "filter_type": "exclude"}
-        """.data(using: .utf8)!
-
-        let d = JSONDecoder()
-        d.keyDecodingStrategy = .convertFromSnakeCase
-        let rule = try d.decode(PathFilterRule.self, from: json)
-        XCTAssertEqual(rule.pattern, "**/*.tmp")
-        XCTAssertEqual(rule.filterType, "exclude")
-    }
-}
-
-// MARK: - Ingest Response
-
-final class IngestResponseTests: XCTestCase {
-
-    private var decoder: JSONDecoder {
-        let d = JSONDecoder()
-        d.keyDecodingStrategy = .convertFromSnakeCase
-        return d
-    }
-
-    func testDecodesIngestResponse() throws {
-        let json = """
-        {
-            "asset_id": "ast_new_001",
-            "proxy_key": "proxies/ast_new_001.webp",
-            "proxy_sha256": "abc123",
-            "thumbnail_key": "thumbs/ast_new_001.webp",
-            "thumbnail_sha256": "def456",
-            "status": "PROXY_READY",
-            "width": 2048,
-            "height": 1365,
-            "created": true
-        }
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(IngestResponse.self, from: json)
-        XCTAssertEqual(response.assetId, "ast_new_001")
-        XCTAssertEqual(response.proxyKey, "proxies/ast_new_001.webp")
-        XCTAssertEqual(response.status, "PROXY_READY")
-        XCTAssertEqual(response.width, 2048)
-        XCTAssertTrue(response.created)
-    }
-
-    func testDecodesIngestResponseUpdate() throws {
-        let json = """
-        {
-            "asset_id": "ast_existing",
-            "proxy_key": "proxies/ast_existing.webp",
-            "proxy_sha256": "abc",
-            "thumbnail_key": "thumbs/ast_existing.webp",
-            "thumbnail_sha256": "def",
-            "status": "DESCRIBED",
-            "width": 1920,
-            "height": 1080,
-            "created": false
-        }
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(IngestResponse.self, from: json)
-        XCTAssertFalse(response.created)
-        XCTAssertEqual(response.status, "DESCRIBED")
-    }
-
-    func testDecodesBatchDeleteResponse() throws {
-        let json = """
-        {
-            "trashed": ["id1", "id2"],
-            "not_found": ["id3"]
-        }
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(BatchDeleteResponse.self, from: json)
-        XCTAssertEqual(response.trashed.count, 2)
-        XCTAssertEqual(response.notFound.count, 1)
-    }
-
-    func testDecodesBatchMoveResponse() throws {
-        let json = """
-        {"updated": 5, "skipped": 1}
-        """.data(using: .utf8)!
-
-        let response = try decoder.decode(BatchMoveResponse.self, from: json)
-        XCTAssertEqual(response.updated, 5)
-        XCTAssertEqual(response.skipped, 1)
-    }
-}
-
 // MARK: - Mac Proxy Disk Cache
 
 final class MacProxyDiskCacheTests: XCTestCase {
@@ -880,44 +629,6 @@ final class MacProxyDiskCacheTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPutScanAndGet() {
-        let data = Data("fake-jpeg-bytes".utf8)
-        cache.putScan(assetId: "ast_001", jpegData: data, sourceSHA256: "abc123")
-
-        let retrieved = cache.get(assetId: "ast_001")
-        XCTAssertEqual(retrieved, data)
-    }
-
-    func testGetSHA() {
-        let data = Data("image".utf8)
-        cache.putScan(assetId: "ast_002", jpegData: data, sourceSHA256: "deadbeef")
-
-        let sha = cache.getSHA(assetId: "ast_002")
-        XCTAssertEqual(sha, "deadbeef")
-    }
-
-    func testGetSHAMissing() {
-        XCTAssertNil(cache.getSHA(assetId: "nonexistent"))
-    }
-
-    func testIsValidTrue() {
-        let data = Data("image".utf8)
-        cache.putScan(assetId: "ast_003", jpegData: data, sourceSHA256: "match123")
-
-        XCTAssertTrue(cache.isValid(assetId: "ast_003", sourceSHA256: "match123"))
-    }
-
-    func testIsValidFalseMismatch() {
-        let data = Data("image".utf8)
-        cache.putScan(assetId: "ast_004", jpegData: data, sourceSHA256: "old_sha")
-
-        XCTAssertFalse(cache.isValid(assetId: "ast_004", sourceSHA256: "new_sha"))
-    }
-
-    func testIsValidFalseMissing() {
-        XCTAssertFalse(cache.isValid(assetId: "ast_005", sourceSHA256: "any"))
-    }
-
     func testHas() {
         XCTAssertFalse(cache.has(assetId: "ast_006"))
 
@@ -925,17 +636,19 @@ final class MacProxyDiskCacheTests: XCTestCase {
         XCTAssertTrue(cache.has(assetId: "ast_006"))
     }
 
-    func testRemove() {
-        let data = Data("image".utf8)
-        cache.putScan(assetId: "ast_007", jpegData: data, sourceSHA256: "sha")
+    func testRemove() throws {
+        // A proxy the Python CLI's scan wrote, with its `.sha` sidecar
+        // (docs/proxy-cache-protocol.md): remove takes both.
+        cache.put(assetId: "ast_007", data: Data("image".utf8))
+        let sidecar = tempDir.appendingPathComponent("ast_007.sha")
+        try Data("sha".utf8).write(to: sidecar)
 
         XCTAssertTrue(cache.has(assetId: "ast_007"))
-        XCTAssertNotNil(cache.getSHA(assetId: "ast_007"))
 
         cache.remove(assetId: "ast_007")
 
         XCTAssertFalse(cache.has(assetId: "ast_007"))
-        XCTAssertNil(cache.getSHA(assetId: "ast_007"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar.path))
     }
 
     func testPutForBrowse() {
@@ -945,7 +658,9 @@ final class MacProxyDiskCacheTests: XCTestCase {
         let retrieved = cache.get(assetId: "ast_008")
         XCTAssertEqual(retrieved, data)
         // No SHA sidecar for browse-cached items
-        XCTAssertNil(cache.getSHA(assetId: "ast_008"))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: tempDir.appendingPathComponent("ast_008.sha").path
+        ))
     }
 
     func testGetMissing() {

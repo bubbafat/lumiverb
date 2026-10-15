@@ -440,7 +440,7 @@ For full details on what the script does, directory layout, nginx config, backup
 | 1 | Done | CLI + API, scan + ingest, BM25 search |
 | 2 | Planned | Visual similarity, face clustering, keyword fingerprinting |
 | 3 | Done | Web UI (React + TypeScript + Tailwind) |
-| 4 | Planned | Mac app (local agent with GUI) |
+| 4 | In progress | Mac app (a browse client in the menu bar: the server's scheduler scans every library) |
 | 5 | Done | User accounts (email/password + JWT), role-based access |
 | 6 | Planned | Cloud self-service, Stripe billing |
 

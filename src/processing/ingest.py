@@ -291,8 +291,8 @@ def _walk_library(
         if ext not in SUPPORTED_EXTENSIONS or _control_named(root_path, p):
             continue
 
-        # NFC, as the macOS scanner stores it: one identity per file whichever
-        # machine scans it. Disk access goes through resolve_source_path.
+        # NFC, as the macOS app's scan stored it (before the server scanned
+        # every library): one identity per file whichever machine scans it. Disk access goes through resolve_source_path.
         rel_path = unicodedata.normalize("NFC", str(p.relative_to(root_path)))
 
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):

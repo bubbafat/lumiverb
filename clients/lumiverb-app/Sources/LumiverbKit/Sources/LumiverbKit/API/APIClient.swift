@@ -190,92 +190,7 @@ public actor APIClient {
         try await request("POST", path: path, body: body, authenticated: false)
     }
 
-    // MARK: - Multipart upload
-
-    /// POST multipart/form-data with file data and text fields.
-    /// Used for `/v1/ingest` which requires a proxy image plus metadata fields.
-    public func postMultipart<T: Decodable>(
-        _ path: String,
-        fields: [String: String],
-        fileField: String,
-        fileData: Data,
-        fileName: String,
-        mimeType: String
-    ) async throws -> T {
-        guard let token = accessToken else {
-            throw APIError.noToken
-        }
-
-        let boundary = "Boundary-\(UUID().uuidString)"
-        let url = baseURL.appendingPathComponent(path)
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-
-        var body = Data()
-
-        // Text fields
-        for (key, value) in fields {
-            body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n")
-            body.append("\(value)\r\n")
-        }
-
-        // File field
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(fileName)\"\r\n")
-        body.append("Content-Type: \(mimeType)\r\n\r\n")
-        body.append(fileData)
-        body.append("\r\n")
-
-        body.append("--\(boundary)--\r\n")
-
-        urlRequest.httpBody = body
-
-        var data: Data
-        var response: URLResponse
-        do {
-            (data, response) = try await session.data(for: urlRequest)
-        } catch {
-            throw APIError.networkError(error.localizedDescription)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.networkError("Invalid response")
-        }
-
-        if http.statusCode == 401 {
-            if let refreshHandler, await refreshHandler() {
-                // Retry with fresh token — rebuild entire multipart request
-                return try await postMultipart(
-                    path, fields: fields, fileField: fileField,
-                    fileData: fileData, fileName: fileName, mimeType: mimeType
-                )
-            }
-            throw APIError.unauthorized(unauthorizedMessage(from: data))
-        }
-
-        if http.statusCode >= 400 {
-            if let envelope = try? decoder.decode(ErrorEnvelope.self, from: data) {
-                throw APIError.serverError(
-                    statusCode: http.statusCode,
-                    message: envelope.error.message
-                )
-            }
-            let bodyStr = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw APIError.serverError(statusCode: http.statusCode, message: bodyStr)
-        }
-
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(binary)"
-            throw APIError.decodingError("Multipart response decode failed: \(error) — response: \(preview)")
-        }
-    }
-
-    /// POST multipart/form-data for DELETE body (JSON body with asset IDs).
+    /// DELETE with a JSON body (e.g. the asset ids to remove from a project).
     public func deleteWithBody<T: Decodable>(
         _ path: String,
         body: (any Encodable)? = nil
@@ -688,15 +603,4 @@ extension APIClient {
 /// Placeholder for endpoints that return no body.
 public struct EmptyResponse: Decodable, Sendable {
     public init() {}
-}
-
-// MARK: - Data helpers
-
-extension Data {
-    /// Append a UTF-8 encoded string to the data buffer.
-    mutating func append(_ string: String) {
-        if let data = string.data(using: .utf8) {
-            append(data)
-        }
-    }
 }

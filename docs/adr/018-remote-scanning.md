@@ -194,7 +194,7 @@ Robert, 2026-10-13, worried that remote scanning turns one source of truth into 
 
 - **The scheduler on the client.** It reads what's due from the database directly; a remote client would need the database exposed. The client's needs are a per-file pass and a list (decisions 2 and 3), not a scheduler.
 - **A table of client jobs.** Rejected for decision 3's computed list.
-- **The macOS app's scan as the client.** It's a second implementation of the same producers (Apple's image libraries, not libvips), the duplication ADR-016 removed. The first client is the Python scan in the Homebrew package; the app can become its interface. The protocol doesn't care which client sends.
+- **The macOS app's scan as the client.** It's a second implementation of the same producers (Apple's image libraries, not libvips), the duplication ADR-016 removed. The first client is the Python scan in the Homebrew package; the app can become its interface. The protocol doesn't care which client sends. The app's own scan is removed (Oct 14): it browses, and the server's scheduler scans every library.
 - **Single-request uploads.** Rejected for decision 9.
 - **A client-side record of the library, synced** (the client's own database, from the start). Rejected for now for decision 13: a second truth to keep in step, for a speed nobody has shown is needed.
 

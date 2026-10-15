@@ -4,8 +4,8 @@ The server finds moves now (ADR-018 decision 12): the same content at a new
 path, gone from its old one, only files of a gone clip's size hashed for it,
 never a copy (tests/test_scans_api.py; end to end, tests/test_scan_outcomes.py).
 What the scan does about them (applies them, asks, skips them) is in
-tests/test_scan.py. These are the CLI's flags and the endpoint the Mac app
-still moves clips with.
+tests/test_scan.py. These are the CLI's flags and the batch-moves endpoint's
+request model.
 """
 
 from __future__ import annotations

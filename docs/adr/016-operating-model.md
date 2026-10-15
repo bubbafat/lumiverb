@@ -12,7 +12,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 |-------|-------------|--------|
 | 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
 | 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
-| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: the macOS app's change reports (Swift), finishing the fresh ingest. The macOS app's AI is retired (Oct 14) |
+| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: finishing the fresh ingest. The macOS app's AI and its scan are retired (Oct 14): it browses, and reports no changes (the full scan every 15 minutes finds them) |
 | 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
 | 4 | Producers and endpoints | Producers in progress: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints not started |
 
@@ -67,7 +67,7 @@ Lumiverb has three roles. They can be separate machines or share one.
 | Server | Runs the catalog (API, Postgres, Quickwit), schedules all producers, holds derived media, serves the web UI. Reaches storage over the network, read-only. | A Linux box with an NVIDIA GPU |
 | Edit stations | Where cutting happens, and where the web UI is used to find and collect. | The Mac Studio (masters), a MacBook (proxies) |
 
-The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retired in phase 2 (Oct 14). Because the server can't watch a network mount for changes, the macOS app reports the file changes it sees on storage.
+The macOS app keeps browsing. Its built-in AI (Apple Vision faces and OCR, CoreML ArcFace, FeaturePrint, whisper.cpp) retired in phase 2 (Oct 14), and its scan with it: it scans nothing and reports no changes. The server can't watch a network mount for changes, so it scans each library in full every 15 minutes, and scans changes reported to it (`POST /v1/changes`, `lumiverb library report-changes`) at once.
 
 ### AI inference runs at named endpoints
 
@@ -111,7 +111,7 @@ Decided (Robert, Oct 9): changing a setting or a model is the approval (stale wo
 | Today | Under this ADR |
 |---|---|
 | Processing runs on the machine that holds the files (CLI or macOS app) | The server schedules all processing; storage is mounted read-only |
-| macOS app enriches with Apple Vision, CoreML, FeaturePrint, whisper.cpp | Retired in phase 2; the app browses and reports file changes |
+| macOS app enriches with Apple Vision, CoreML, FeaturePrint, whisper.cpp | Retired in phase 2, with the app's scan; the app browses |
 | Two producers each for faces, CLIP and transcripts | One producer per artifact |
 | `lumiverb enrich` and `MISSING_CONDITIONS` decide what runs | A reconciler computes missing, stale and current |
 | Library scanner | Discovery: gives each asset its identity. Not a producer |
@@ -143,7 +143,7 @@ Known limitations after phase 0 (accepted for now; each is a follow-up):
 | A "not this person" on a face that re-detection doesn't find again is dropped with the face | If a later detection of the same face isn't paired, it can be auto-assigned to that person again | Narrow; revisit with region-anchored corrections (phase 3) |
 | Re-detection pairs a face with its old self only within embedding distance 0.4 | The same face seen more than 0.4 apart becomes a second face next to the kept confirmed one (nothing is lost); identical twins closer than 0.4 can still be paired | Tune the gate on real Apple Vision vs InsightFace data |
 | Trash is tracked by path | A trashed file that is renamed or moved on disk comes back as a new asset | Use the stored SHA-256 to recognise it |
-| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Fix in Swift, or moot once scanning moves to the server (phase 2) |
+| The macOS scanner doesn't read the trashed list | It re-uploads trashed files and logs a 409 for each, every scan; no data changes | Resolved (Oct 14): the macOS app scans nothing; the server's scheduler scans every library |
 | Assets marked missing have no listing or purge UI | They wait, with their human data, until the file returns or someone purges them by id | A "missing files" view |
 | Two rows whose paths differ only in Unicode form are left as they are by the migration | The NFD one is marked missing on the next scan | Merge them by hand; the migration logs the count |
 
@@ -158,8 +158,8 @@ Phase 0 targets, read from the repo on 2026-10-07:
 | Dismissals lost after re-detect | `src/server/repository/tenant.py` `cleanup_empty_dismissed`; `POST /v1/upkeep/cleanup-dismissed` (`lumiverb maintenance cleanup-dismissed`; a faces redo no longer calls it) | Dismissed people with zero matches are deleted |
 | Rescan un-trashes | `src/server/api/routers/ingest.py` (`existing.deleted_at = None`) | Scanner soft-deletes missing files with the same `deleted_at` as user trash (`src/processing/scan.py` `_detect_deletions`) |
 | Manual transcripts overwritten | `src/server/api/routers/assets.py` `submit_transcript` | `source` is accepted but never stored |
-| No mass-deletion guard in Python | `src/processing/scan.py` `run_scan` | macOS has one: `clients/lumiverb-app/Sources/macOS/Scan/ScanPipeline.swift` (5% / 50 files) |
-| No NFC normalization in Python | `src/processing/ingest.py` (file discovery, `rel_path`) | macOS normalizes in `ScanPipeline.swift` |
+| No mass-deletion guard in Python | `src/processing/scan.py` `run_scan` | macOS had one in its scan (5% / 50 files). Resolved: one rule on the server (409 `mass_missing`, Oct 9), and the macOS app's scan is gone (Oct 14) |
+| No NFC normalization in Python | `src/processing/ingest.py` (file discovery, `rel_path`) | macOS normalized in its scan. Resolved: `rel_path` is NFC everywhere, and the macOS app's scan is gone (Oct 14) |
 | What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS` | Replaced by the reconciler in phase 3 |
 | Closest model for reconciliation | `src/server/upgrade/` | Upgrade-step registry |
 | Projects (formerly "collections") | `src/server/api/routers/projects.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
@@ -223,13 +223,13 @@ The server reads storage, schedules all rendering and enrichment, and is where L
 - Install the production stack on `media` (`scripts/deploy-api.sh`, `scripts/deploy-web.sh`), reachable over the LAN and Tailscale
 - Mount storage read-only; map each library's root to that mount in the server's own config, not the database
 - Render full-length analysis proxies at the Rendered milestone; transcription, scenes and vision read these instead of originals
-- Run scan and enrich as a service on the server (since phase 4, the scheduler); the storage machine reports file changes it sees
-- Retire the macOS app's built-in AI steps (done Oct 14: the app scans and browses, and processes nothing)
+- Run scan and enrich as a service on the server (since phase 4, the scheduler); a full scan of each library every 15 minutes finds the changes on storage, and changes reported to it are scanned at once
+- Retire the macOS app's built-in AI steps and its scan (done Oct 14: the app browses, and scans and processes nothing)
 - Ingest the whole library fresh
 
 **Done when:** footage copied to storage becomes searchable and transcribed without starting anything on an edit station, and enrichment continues from proxies while storage sleeps.
 
-**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported the way the macOS app will report it was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/linux-server.md` has the install, which needs sudo, and the Swift changes for the macOS app. Its built-in AI is gone (Oct 14): enrichment, re-enrich and the vision and Whisper settings, with the CoreML conversion scripts; it still scans until its change reports are done. Prod is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
+**Where it stands:** the code is built and checked on the dev stack. A clip copied into a mapped library and reported (`POST /v1/changes`) was transcribed and searchable 12 seconds later. With the storage unreachable, the worker scanned nothing, kept the report, and still transcribed and found scenes in a clip from its analysis proxy. When the storage came back, it scanned the reported folder. Production, dev and tests run Postgres 18, which Ubuntu 26.04 ships with pgvector. `docs/linux-server.md` has the install, which needs sudo. The macOS app's built-in AI is gone (Oct 14): enrichment, re-enrich and the vision and Whisper settings, with the CoreML conversion scripts; and so is its scan (Oct 14): it reports no changes either, as the full scan every 15 minutes finds them. Prod is installed from this branch and ingesting its first library. Playback grew out of it: the web plays whole videos from their analysis proxies (a mix of every audio track first), public pages 10 seconds unless raised, and public pages show visitors only what the page itself does. Five independent review rounds; the last found nothing blocking.
 
 ### Phase 3 — Lineage and reconciliation
 

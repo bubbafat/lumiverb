@@ -312,8 +312,8 @@ struct FaceOverlayView: View {
     /// Original asset width / height in pixels, from `AssetDetail`. The
     /// aspect-fit math only needs the ratio, so the proxy being a scaled
     /// copy of the source doesn't matter as long as the scaler preserves
-    /// the aspect ratio (which it does — `ProxyGenerator` uses
-    /// `kCGImageSourceThumbnailMaxPixelSize` which is uniform-scale).
+    /// the aspect ratio (which it does — the server's proxies are scaled
+    /// uniformly to a maximum long edge).
     let imageWidth: Int
     let imageHeight: Int
     @ObservedObject var vm: LightboxFacesViewModel

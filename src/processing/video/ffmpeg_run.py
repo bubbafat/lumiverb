@@ -37,7 +37,6 @@ SHARED_MEMORY = ("videotoolbox",)
 # (src/shared/file_extensions.py; an extension added there needs its demuxer
 # here). A whitelist matches any of a demuxer's names: "mov" is the one named
 # "mov,mp4,m4a,3gp,3g2,mj2", "matroska" the one named "matroska,webm".
-# Twin: LumiverbKit's FFmpegInput.swift.
 DEMUXERS = {".mov": "mov", ".mp4": "mov", ".mkv": "matroska"}
 INPUT_FORMATS = ",".join(sorted({DEMUXERS[ext] for ext in VIDEO_EXTENSIONS}))
 

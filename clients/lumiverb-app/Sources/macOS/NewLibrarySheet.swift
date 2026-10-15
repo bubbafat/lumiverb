@@ -4,8 +4,8 @@ import AppKit
 
 /// Modal sheet for creating a new library. Collects a display name and a
 /// local folder (picked via `NSOpenPanel`), POSTs to `/v1/libraries`, then
-/// reports the created library id to the caller so it can be selected and
-/// scanning can kick off.
+/// reports the created library id to the caller so it can be selected.
+/// The server's scheduler scans it; this app scans nothing.
 ///
 /// Keeps its own in-flight / error state so the sheet can stay open and
 /// show the server's error message (409 on duplicate name is the common
@@ -14,7 +14,7 @@ struct NewLibrarySheet: View {
     @ObservedObject var appState: AppState
 
     /// Invoked on successful create with the new library id so the
-    /// caller can select it and trigger a scan.
+    /// caller can select it.
     let onCreated: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
