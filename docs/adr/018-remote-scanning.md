@@ -84,7 +84,7 @@ Information flows both ways; each field has one writer, so nothing is merged.
 
 ### 6. Quality changes and remakes
 
-- **Quality is a notch** (three to five, "good / better / best"), not an encoder's number. Each encoder maps a notch to its own setting (x264 or x265 CRF, VideoToolbox quality, NVENC CQ). Today's defaults (CRF 28; WebP 80) are notches, so nothing becomes stale when the setting is introduced. Retuning a notch is a new producer version.
+- **Quality is a notch** (three to five, "good / better / best"), not an encoder's number. Each encoder maps a notch to its own setting (x264 CRF, NVENC CQ). Today's defaults (CRF 28; WebP 80) are notches, so nothing becomes stale when the setting is introduced. Retuning a notch is a new producer version.
 - **A change to what the client makes asks:** "New files only" (the default) or "Also remake the 12,408 existing ones, after everything else". The choice is stored on the server.
 - **Old ones are kept by choice.** Each records how it was made, so the processing page offers "12,408 previews at the earlier quality · Remake" as a standing offer, not a warning; health counts don't treat them as a problem.
 - **"After everything else"** means the client's three resources are idle: the originals' drive, the encoder, the upload link. A remake yields at the next file when new work arrives, and waits for mains power and a network that isn't metered.
@@ -121,14 +121,18 @@ A 60-minute analysis proxy is hundreds of MB. One request is the wrong shape for
 What the server made itself becomes a client's word. On a hosted server, other accounts' clients are part of the threat.
 
 - **Images:** re-encoded by the server, only JPEG, PNG and WebP read (as every preview already is, `src/server/preview_image.py`).
-- **Videos** (analysis proxies, video previews): only MP4 with H.264 or HEVC and AAC; checked, then rewritten without metadata before they're stored; their length measured by the server, never taken from the client. Decoding them (scenes, transcripts, frames) runs in a separate process with limits.
+- **Videos** (analysis proxies, video previews): only what a browser plays (decision 11): MP4 with its index first, H.264 8-bit 4:2:0 and AAC; checked, then rewritten without metadata before they're stored; their length measured by the server, never taken from the client. Decoding them (scenes, transcripts, frames) runs in a separate process with limits.
 - **Caps**, set by the server admin: bitrate (bytes per second of video) rather than file size, so an hour is fine and an hour in 20 GB isn't; a longest length; storage and processing quotas per account; fair scheduling across accounts, since an hour of uploaded video is an hour of transcription.
 - **Facts are claims:** hashes, EXIF, probe facts, paths. Typed and length-limited; good for the account's own catalog, never used across accounts (no spotting the same file in two accounts by hash); escaped wherever they leave the server (editor exports, download names, command lines).
 - **The other way:** the client trusts the server's settings only as typed values. Anything that reaches its tools is a number from a known range, never a string.
 
 ### 11. Codecs
 
-The client may send H.264 or HEVC. Measured on 17 clips of a real library (2026-10-12, an M4 Max): the first 60 seconds of each, a mix of iPhone H.264 and ProRes, DJI and Sony HEVC, a 5.3K GoPro, 1080p and 720p. Each encoder ran at several settings; every result was scored with VMAF against a lossless copy at the same size and compared at the VMAF of today's setting (x264, CRF 28).
+**Every video Lumiverb keeps is one a browser plays**, whoever makes it: H.264, 8-bit 4:2:0 (High profile at most), AAC at most stereo, in an MP4 with its index first (faststart). The client makes x264, as the server does, and the server takes nothing else from a client (decision 10). The web player streams the analysis proxy, or the preview until it exists (`src/server/api/routers/playback.py`), and copies them as they are; nothing re-encodes for a browser. `tests/test_browser_playable_video.py` holds both renders to this.
+
+Robert, 2026-10-14: "Revert to h264 high compatibility MP4's for preview/proxy. Sucks but the estimate is 70% of users impacted." HEVC halves the upload (below), but Firefox and Linux browsers don't play it, and Chrome only where the hardware decodes it. A second, H.264 copy for those browsers would be server work that gives the saving back. This closes the question of HEVC in the browser.
+
+What was measured, for when browsers change (or for AV1, which Firefox and Chrome play and older Macs' Safari doesn't; unmeasured): 17 clips of a real library (2026-10-12, an M4 Max): the first 60 seconds of each, a mix of iPhone H.264 and ProRes, DJI and Sony HEVC, a 5.3K GoPro, 1080p and 720p. Each encoder ran at several settings; every result was scored with VMAF against a lossless copy at the same size and compared at the VMAF of today's setting (x264, CRF 28).
 
 | Encoder | Size at today's quality | Range |
 |---|---|---|
@@ -138,14 +142,13 @@ The client may send H.264 or HEVC. Measured on 17 clips of a real library (2026-
 | VideoToolbox H.264 | 134% | |
 
 - **HEVC pays only from x265:** about half the upload at the same quality. A full render from a 4K original took about as long as today's (3.5–3.8× realtime against 3.7–3.9×, on 3 clips), since decoding the original is most of the work; the encode itself takes about three times the CPU, which a smaller Mac will feel.
-- **The Mac's hardware encoders don't help:** the same size or bigger, and no faster here.
-- **So the client defaults to x265**, where the upload matters, and a server making its own analysis proxies keeps x264, which plays everywhere and costs less.
-- **Sizes:** with x265 at today's quality, about 260 MB an hour at 960px and about 400 MB an hour at 1280px (720p), audio included; today's encoder made 433 MB an hour on these clips.
-- **Notches map per encoder:** today's x264 CRF 28 is about x265 CRF 33 by VMAF.
+- **The Mac's hardware encoders don't help:** the same size or bigger, and no faster here. So the client makes x264, not VideoToolbox H.264.
+- **Sizes:** x264 at today's quality made 433 MB an hour on these clips, audio included; x265 would make about 260 MB an hour at 960px and about 400 MB an hour at 1280px (720p).
+- **Notches, if HEVC comes back:** today's x264 CRF 28 is about x265 CRF 33 by VMAF.
 
 **Keyframes are set, not left to the encoder.** Scenes are found from the analysis proxy's keyframes alone, with thresholds tuned for keyframes about 2 seconds apart (`src/producers/scenes/detail.py`). Left to themselves, encoders add keyframes at changes of picture: in 60 seconds of a fast-moving clip, x264 as configured placed 50 (as close as 0.23 s apart), x265 38, VideoToolbox 30. Told to place one every 2 seconds and no others, x264 and x265 both give 30. Every analysis proxy, whichever encoder or machine makes it, has keyframes every 2 seconds and nowhere else, so scenes don't depend on who rendered it.
 
-**Downstream, the codec doesn't matter otherwise.** At the same quality the models see the same detail; transcripts hear the AAC either way; a server decodes only keyframes for scenes and a few frames for faces, and a GPU decodes both codecs.
+**Downstream, only the browser cares about the codec.** At the same quality the models see the same detail; transcripts hear the AAC either way; a server decodes only keyframes for scenes and a few frames for faces, and a GPU decodes both codecs.
 
 ### 12. Today's scan moves onto this protocol
 
@@ -203,4 +206,3 @@ A server on the internet with many accounts needs TLS, the isolation in decision
 
 - Does "New files only" by default cover only what the client makes (previews, analysis proxies), or every producer, including the server's AI output? Recommended: only what the client makes, since that's where a remake costs someone else's machine and upload link.
 - When to build library admins (phase 6): needed for teams, not for the first client.
-- Browser playback of HEVC analysis proxies: the web player streams the analysis proxy; Safari plays HEVC, Chrome where the hardware can, Firefox and Linux browsers don't. Acceptable for device-read libraries, or should the client send x264 (no saving), or the server keep an H.264 copy for those browsers (server work)? AV1 (Firefox and Chrome play it; older Macs' Safari doesn't) is unmeasured.
