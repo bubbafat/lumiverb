@@ -56,6 +56,23 @@ def test_a_validation_error_is_an_envelope():
     assert err["message"].startswith(("email", "password"))
 
 
+def test_a_file_sent_where_json_was_asked_for_is_a_422_envelope():
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post("/v1/auth/login", content=bytes(range(256)) * 4,
+                    headers={"Content-Type": "application/octet-stream"})
+    assert r.status_code == 422
+    err = _envelope(r)
+    assert err["code"] == "invalid_request"
+    assert err["details"]["errors"][0]["input"] == "1024 bytes that aren't text"
+
+
+def test_a_body_that_isnt_json_is_still_echoed_as_text():
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post("/v1/auth/login", content=b'{"email": "a@b.c",', headers={"Content-Type": "application/json"})
+    assert r.status_code == 422
+    assert _envelope(r)["code"] == "invalid_request"
+
+
 def _toy() -> TestClient:
     from src.server.api.errors import (
         ApiError,
