@@ -122,13 +122,13 @@ def _reads(lib: Lib):
     from src.processing import scan
 
     read: list[str] = []
-    real = scan.compute_sha256
+    real = scan.content_hash
 
     def sha(path: Path):
         read.append(Path(path).relative_to(lib.root.resolve()).as_posix())
         return real(path)
 
-    return read, patch("src.processing.scan.compute_sha256", side_effect=sha)
+    return read, patch("src.processing.scan.content_hash", side_effect=sha)
 
 
 def test_only_files_of_a_gone_clips_size_are_read_for_a_move(env, api, lib):

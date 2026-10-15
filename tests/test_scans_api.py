@@ -319,7 +319,8 @@ def test_the_unchanged_files_are_listed_with_their_clips_on_request(env):
     first = _ok(env.client.post(f"/v1/scans/{scan_id}/plan", json={}, headers=env.editor))
     assert first["files"] == []
     page = _ok(env.client.get(f"/v1/scans/{scan_id}/plan", params={"action": "unchanged"}, headers=env.editor))
-    assert page["files"] == [{"rel_path": "a.jpg", "action": "unchanged", "reason": None, "asset_id": asset}]
+    assert page["files"] == [{"rel_path": "a.jpg", "action": "unchanged", "reason": None, "asset_id": asset,
+                              "legacy": False}]
     _error(env.client.get(f"/v1/scans/{scan_id}/plan", params={"action": "gone"}, headers=env.editor),
            422, "invalid_request")
 
@@ -358,7 +359,7 @@ def test_a_video_whose_preview_never_arrived_is_uploaded_again(env):
     _ingest(env, lib, with_)
     run = _scan(env, lib, [without, with_])
     assert run.plan == {"v1.mov": {"rel_path": "v1.mov", "action": "upload", "reason": "preview_missing",
-                                   "asset_id": asset}}
+                                   "asset_id": asset, "legacy": False}}
     assert run.counts["unchanged"] == 1
     assert run.uploaded == {"v1.mov": asset}
 

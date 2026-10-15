@@ -10,6 +10,7 @@ which charges no clip for it.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -876,12 +877,12 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     cache.has.return_value = False
     cache.stored_path.return_value = None  # no preview the API keeps on this machine
     (tmp_path / "a.jpg").write_bytes(b"photo")
+    now = hashlib.sha256(b"photo").hexdigest()
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: b"proxy")
-    monkeypatch.setattr("src.processing.workers.exif_extract.compute_sha256", lambda source: "sha-now")
-    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": "sha-now"}, tmp_path, cache)
+    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": now}, tmp_path, cache)
     cache.put.assert_called_once_with("ast_1", b"proxy")
-    assert (cache.path / "ast_1.sha").read_text() == "sha-now"
-    assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "sha256": "sha-then"}, tmp_path, cache)
+    assert (cache.path / "ast_1.sha").read_text() == now
+    assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "sha256": "0" * 64}, tmp_path, cache)
 
 
 def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_path, monkeypatch) -> None:
@@ -895,7 +896,6 @@ def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_pat
     (tmp_path / "a.jpg").write_bytes(b"photo, changed since")
     made = []
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: made.append(source))
-    monkeypatch.setattr("src.processing.workers.exif_extract.compute_sha256", lambda source: "sha-now")
     assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": "sha-then"}, tmp_path, cache)
     assert made == [] and not cache.put.called
 

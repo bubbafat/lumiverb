@@ -129,6 +129,11 @@ class ScanFound(SQLModel, table=True):
     # The clip at this path when planned; for a move, the clip moving here.
     asset_id: str | None = Field(default=None, nullable=True)
     sha256: str | None = Field(default=None, nullable=True)
+    # The plan asks for the whole file's SHA-256 too (a hash made before fp1
+    # of a file its size is in the library: src/shared/content_hash.py), and
+    # what was sent.
+    legacy: bool = Field(default=False, nullable=False)
+    legacy_sha256: str | None = Field(default=None, nullable=True)
     decision: str | None = Field(default=None, nullable=True)
     moved_from: str | None = Field(default=None, nullable=True)
 

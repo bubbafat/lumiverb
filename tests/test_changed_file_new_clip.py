@@ -149,7 +149,7 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
         patch("src.processing.scan._scan_one"),
         patch("src.processing.scan.ProxyCache", MagicMock()),
         patch("src.processing.scan._populate_cache_for_unchanged"),
-        patch("src.processing.scan.compute_sha256", return_value="f" * 64),
+        patch("src.processing.scan.content_hash", return_value="f" * 64),
     ):
         return run_scan(_cli(env), {"library_id": library_id, "root_path": str(root)}, path_prefix=prefix,
                         console=Console(width=200))

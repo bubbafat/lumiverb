@@ -39,6 +39,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.shared.content_hash import FULL_UP_TO
+from src.shared.content_hash import PREFIX as CONTENT_PREFIX
 from src.shared.producers import (
     MISSING_FLAGS,
     PERSON,
@@ -576,7 +578,11 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
     """Record how an artifact was just made. A write that doesn't say (an
     old client, the macOS app today) is an unknown producer's: stale, so
     the server makes it again. person: a person made it (only the server
-    says so; a client can't). The source defaults to the clip's file now.
+    says so; a client can't). The source defaults to the clip's file now;
+    one given as its file's whole hash, made before fp1, is the clip's fp1
+    once a scan swapped them (src/server/scans.py rekey): a clip's content
+    hash changes only that way (another file is another clip), so work
+    handed out before the swap is still of this content.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}
     producer = PERSON if person else str(lineage.get("producer") or UNKNOWN)
@@ -594,7 +600,10 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
         "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
         " source_sha256, produced_at, outcome, error, attempts, retry_at, level)"
         " VALUES (:a, :artifact, :producer, :version, :hash,"
-        "         COALESCE(:source, (SELECT sha256 FROM assets WHERE asset_id = :a)), :now, :outcome, NULL, 0, NULL,"
+        "         COALESCE((SELECT c.sha256 FROM assets c WHERE c.asset_id = :a"
+        f"                   AND c.sha256 LIKE '{CONTENT_PREFIX}%' AND c.file_size > {FULL_UP_TO}"
+        "                   AND CAST(:source AS text) ~ '^[0-9a-f]{64}$'),"
+        "                  :source, (SELECT sha256 FROM assets WHERE asset_id = :a)), :now, :outcome, NULL, 0, NULL,"
         "         :level)"
         " ON CONFLICT (asset_id, artifact) DO UPDATE SET producer = EXCLUDED.producer,"
         "   producer_version = EXCLUDED.producer_version, settings_hash = EXCLUDED.settings_hash,"

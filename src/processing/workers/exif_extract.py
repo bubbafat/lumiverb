@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -112,19 +111,6 @@ def extract_exif_many(paths: list[Path]) -> dict[str, dict]:
         if source is not None:
             out[str(source)] = _cleaned(raw)
     return out
-
-
-def compute_sha256(source_path: Path) -> str | None:
-    """Compute SHA256 hash of file. Returns hex string or None on error."""
-    try:
-        h = hashlib.sha256()
-        with open(source_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except OSError as e:
-        logger.warning("SHA256 failed for %s: %s", source_path, e)
-        return None
 
 
 def parse_gps(exif: dict) -> tuple[float | None, float | None]:

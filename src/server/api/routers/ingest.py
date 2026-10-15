@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import posixpath
+import re
 from datetime import datetime
 from typing import Annotated
 
@@ -23,6 +24,8 @@ from sqlmodel import Session
 from src.server import preview_image
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.shared import asset_status
+from src.shared.content_hash import PATTERN as CONTENT_HASH
+from src.shared.content_hash import sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
 from src.server.repository.tenant import (
@@ -296,6 +299,24 @@ def _do_ingest(
 # ---------------------------------------------------------------------------
 
 
+def _swap_whole_file_hash(session: Session, library_id: str, file_size: int, sha: str | None,
+                          legacy: str | None) -> bool:
+    """The file's whole SHA-256 sent beside its fp1 (exif legacy_sha256: its
+    scan's plan asked, as a clip or file deleted for good of its size has a
+    hash made before fp1): those hashes are swapped for the fp1 first, so the
+    file is compared with what was (src/server/scans.py rekey). Whether any
+    was sent."""
+    if legacy is None:
+        return False
+    if not (isinstance(legacy, str) and isinstance(sha, str) and re.fullmatch(CONTENT_HASH, sha)
+            and whole_file(legacy, file_size) and sampled(sha)):
+        raise HTTPException(status_code=400, detail="exif legacy_sha256 is the whole file's SHA-256 beside its fp1")
+    from src.server.scans import rekey
+
+    rekey(session, library_id, [(legacy, sha, file_size)])
+    return True
+
+
 def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
     """Validate the optional video_facet form field (a probe result, see VideoFacetModel)."""
     if raw is None:
@@ -422,6 +443,8 @@ async def create_and_ingest(
     from src.server.tenant_settings import get_follow_moves
 
     sha = (exif_data or {}).get("sha256")
+    if _swap_whole_file_hash(session, library_id, file_size, sha, (exif_data or {}).get("legacy_sha256")):
+        session.expire_all()  # the clips read before have their hashes as they are now
     if existing is not None and sha and existing.sha256 and existing.sha256 != sha:
         if existing.deleted_at is None:
             try:  # a proxy that can't be read is a bad request, which changes nothing

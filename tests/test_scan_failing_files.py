@@ -57,7 +57,7 @@ def lib(env, tmp_path: Path) -> Lib:
 def read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Each file a scan reads: hashed, or its preview made."""
     names: list[str] = []
-    real_sha, real_proxy = scan_module.compute_sha256, scan_module._generate_proxy_bytes
+    real_sha, real_proxy = scan_module.content_hash, scan_module._generate_proxy_bytes
 
     def sha(path):
         names.append(Path(path).name)
@@ -67,7 +67,7 @@ def read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         names.append(Path(path).name)
         return real_proxy(path)
 
-    monkeypatch.setattr(scan_module, "compute_sha256", sha)
+    monkeypatch.setattr(scan_module, "content_hash", sha)
     monkeypatch.setattr(scan_module, "_generate_proxy_bytes", proxy)
     return names
 
