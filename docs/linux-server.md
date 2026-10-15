@@ -20,7 +20,7 @@ Settled so prod and dev run side by side. Don't use other ports without updating
 | Postgres | 5433 (Docker, pgvector:pg18) | **5434** (Ubuntu postgresql-18 + pgvector) |
 | Quickwit | 7280 (Docker) | **7290** REST, 7291 gRPC |
 | API | 8000 (uvicorn --reload) | **8100**, 127.0.0.1 only |
-| Web | 5173 (Vite) | **80** (nginx, any address, HTTP) |
+| Web | 5173 (Vite, 127.0.0.1 only) | **80** (nginx, any address, HTTP) |
 
 Already taken by other things: 5432 (DaVinci Resolve's Postgres), 8080 (ResourceSpace), 3001 (Resolve pgAdmin), 9000 (thelounge). This box gets no firewall from the scripts (`--no-firewall`): ufw would cut those off.
 
