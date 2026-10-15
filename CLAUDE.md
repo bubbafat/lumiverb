@@ -135,6 +135,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 ## Gotchas
 
 - **`active_assets` view** must be dropped + recreated when adding columns to `assets`.
+- **`app.routes` holds an included router as one entry** (FastAPI 0.143+): a test that checks every route walks them with `tests/app_routes.py` `api_routes(app)`, never `app.routes` alone (which finds none and checks nothing). FastAPI is `fastapi`, not `fastapi[standard]` (it brings OpenTelemetry's exporter), and its telemetry is off (`main.py` `NO_TELEMETRY`; `tests/test_no_telemetry.py`).
 - **ONNX Runtime leaks ~35 MB/inference.** Batch work is subprocess-isolated for exactly this reason — don't collapse it.
 - **`ThreadPoolExecutor`**: never submit all futures at once; cap at `concurrency * 2` and `_drain()`.
 - **`systemd` units**: `update.sh` (its `update-api.sh`) writes the scheduler's (when the install does processing) and the upkeep timers' units afresh but only patches the API's and Quickwit's: an entry-point change there needs the unit fixed by hand (or `deploy-api.sh` run again).

@@ -11,7 +11,6 @@ import re
 from unittest.mock import patch
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -21,6 +20,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines
 
+from tests.app_routes import api_routes
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 # Writes a viewer may make: their own ratings and saved views, and reads
@@ -50,14 +50,14 @@ def _outside_tenant_auth(path: str) -> bool:
 
 def _writes() -> list[tuple[str, str]]:
     out = []
-    for r in app.routes:
-        if not isinstance(r, APIRoute) or _outside_tenant_auth(r.path):
+    for path, methods in api_routes(app):
+        if _outside_tenant_auth(path):
             continue
-        for m in sorted(r.methods - {"GET", "HEAD", "OPTIONS"}):
-            out.append((m, r.path))
-        for m in r.methods & {"GET"}:
-            if (m, r.path) in WRITING_GETS:
-                out.append((m, r.path))
+        for m in sorted(methods - {"GET", "HEAD", "OPTIONS"}):
+            out.append((m, path))
+        for m in methods & {"GET"}:
+            if (m, path) in WRITING_GETS:
+                out.append((m, path))
     return out
 
 
@@ -106,7 +106,7 @@ def viewer_client():
 
 
 def test_the_allowlist_names_real_routes() -> None:
-    routes = {(m, r.path) for r in app.routes if isinstance(r, APIRoute) for m in r.methods}
+    routes = {(m, path) for path, methods in api_routes(app) for m in methods}
     assert VIEWER_WRITABLE <= routes
     assert WRITING_GETS <= routes
 

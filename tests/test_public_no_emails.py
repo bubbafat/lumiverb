@@ -17,11 +17,11 @@ import os
 import re
 
 import pytest
-from fastapi.routing import APIRoute
 from PIL import Image
 
 from src.server.api.main import app
 from src.server.api.middleware import _PUBLIC_ELIGIBLE_PATH
+from tests.app_routes import api_routes
 from tests.machine_lineage import ingest_made
 from tests.test_public_library_middleware import public_lib_client  # noqa: F401 — the shared server fixture
 
@@ -34,12 +34,12 @@ ARTIST = "photographer@example.org"
 def public_get_routes() -> list[str]:
     """Every GET route an unauthenticated visitor's request can reach."""
     out = []
-    for r in app.routes:
-        if not isinstance(r, APIRoute) or "GET" not in r.methods:
+    for path, methods in api_routes(app):
+        if "GET" not in methods:
             continue
-        sample = re.sub(r"\{[^}]+\}", "x", r.path)
+        sample = re.sub(r"\{[^}]+\}", "x", path)
         if _PUBLIC_ELIGIBLE_PATH.match(sample) or sample.startswith(("/v1/public/projects/", "/v1/stream/")):
-            out.append(r.path)
+            out.append(path)
     return out
 
 

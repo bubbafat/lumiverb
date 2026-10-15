@@ -13,10 +13,15 @@ license = {text = "MIT"}
 # Base dependencies: API server + shared core (what the VPS needs)
 dependencies = [
     # API & web framework
-    "fastapi[standard]>=0.115",
+    # Not fastapi[standard]: it brings OpenTelemetry's exporter, and Lumiverb
+    # sends nothing anywhere. What the server uses of it is listed here.
+    "fastapi>=0.143",
+    "starlette>=1.3.1",
+    "python-multipart>=0.0.31",
+    "httpx>=0.27",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.0",
-    "pydantic-settings>=2.0",
+    "pydantic-settings>=2.14.2",
     # Database
     "sqlmodel>=0.0.14",
     "alembic>=1.13",

@@ -56,11 +56,11 @@ def test_local_artifact_store_read_refuses_outside_keys(tmp_path: Path) -> None:
 
 
 def test_routes_that_took_paths_from_the_client_are_gone() -> None:
-    from fastapi.routing import APIRoute
-
     from src.server.api.main import app
+    from tests.app_routes import api_routes
 
-    paths = {(r.path, m) for r in app.routes if isinstance(r, APIRoute) for m in r.methods}
+    paths = {(path, m) for path, methods in api_routes(app) for m in methods}
+    assert ("/v1/assets/{asset_id}/artifacts/{artifact_type}", "POST") in paths  # the walk found the routes
     assert ("/v1/assets/{asset_id}/thumbnail-key", "POST") not in paths
     assert ("/v1/video/reset", "POST") not in paths
 
