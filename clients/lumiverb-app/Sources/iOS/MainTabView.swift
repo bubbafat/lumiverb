@@ -21,10 +21,7 @@ struct MainTabView: View {
         self.appState = appState
 
         let context = iOSBrowseAppContext(appState: appState)
-        let bs = BrowseState(appContext: context)
-        bs.reEnrichInvoker = nil
-
-        self._browseState = StateObject(wrappedValue: bs)
+        self._browseState = StateObject(wrappedValue: BrowseState(appContext: context))
         self._peopleState = StateObject(wrappedValue: PeopleState(client: appState.client))
         self._collectionsState = StateObject(wrappedValue: CollectionsState(client: appState.client))
         self._clusterReviewState = StateObject(wrappedValue: ClusterReviewState(client: appState.client))

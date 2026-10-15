@@ -8,8 +8,8 @@ ownership live here; logic, schemas, and thresholds do not — read the code.
 ## Stack & topology
 
 Python 3.12 (FastAPI + SQLModel + Postgres 18 + Quickwit), React 18 +
-Vite + TanStack web UI, Swift 5.9 / SwiftUI / CoreML / Vision for native
-macOS + iOS (shared `LumiverbKit` package, XcodeGen project).
+Vite + TanStack web UI, Swift 5.9 / SwiftUI for native macOS + iOS
+(shared `LumiverbKit` package, XcodeGen project).
 
 FastAPI and the scheduler (`lumiverb-scheduler`, all processing, on the
 same box) are the persistent services; the CLI and macOS scan and browse;
@@ -42,7 +42,7 @@ clients/resolve/           DaVinci Resolve Studio Workflow Integration (prototyp
 
 tests/        Python tests (pytest)
 migrations/   Alembic — control/ + tenant/ trees
-scripts/      Ops (update.sh = one-command update, logged; release.sh vX.Y.Z = audit what it ships (audit_release.py: the formula's Python extras and npm build; stops at an advisory unless --accept-advisories), tag, GitHub release and the Homebrew tap's PR; deploy-*, update-*, migrate.sh, convert-models/, …)
+scripts/      Ops (update.sh = one-command update, logged; release.sh vX.Y.Z = audit what it ships (audit_release.py: the formula's Python extras and npm build; stops at an advisory unless --accept-advisories), tag, GitHub release and the Homebrew tap's PR; deploy-*, update-*, migrate.sh, …)
 docs/         Long-form docs + ADRs
 quickwit/     Quickwit index schemas
 ```
@@ -79,10 +79,6 @@ quickwit/     Quickwit index schemas
 | CLI command | `src/client/cli/<command>.py` or `commands/`. Dispatcher: `main.py`. HTTP: `client.py` (`LumiverbClient`, over `src/processing/api.py`, which tries a call again when its answer may be lost: every GET, and a write only when its caller says it's safe to send twice, `retry=True`). Scan: `src/processing/scan.py` (`run_scan` walks, says what it found, hashes what the server asks about and uploads previews; `src/server/scans.py` decides; every call but the start is safe to repeat, and the finish is one transaction, its files and search documents after the commit: `src/server/after_commit.py`) |
 | Face detection (Python) | `src/processing/workers/faces/insightface_provider.py` (InsightFace buffalo_l, kept in `DATA_DIR/insightface-cache`: `model_root`, told to InsightFace as root=, which reads no setting; a `~/.insightface` copy is brought in once); the faces producer runs it in a process of its own (`src/producers/faces/detect.py`). How much is found is a level per media, Off / Low / Normal / High (`src/producers/faces/levels.py`: photos' gates; Off is the producer's `applies`). Faces in videos: `src/producers/video_faces/` (frames from the analysis proxy by Detail, `frames.py`; the faces found grouped into the people seen, one face each with `frame_ms` and `seen_ms`, `appearances.py`; crops cut from the frames, `src/shared/face_crop.py`, the photos' too), saved by `routers/video.py` `POST /v1/video/{id}/faces` |
 | GPU / device choice | torch models (CLIP in the workers and the API): `src/shared/torch_device.py`, CUDA → Apple's GPU (MPS) → CPU; Linux picks as it always did. Faces: ONNX Runtime in `insightface_provider.py` (CUDA → CoreML → CPU). Whisper: CTranslate2 (CUDA or CPU; no Apple GPU). Decoding videos (analysis proxies, a scan's previews): `src/processing/video/ffmpeg_run.py` `decoded_by`, Vulkan → a Mac's VideoToolbox (every render, no GPU turns; previews too) → CPU, the pictures the same (a picture the hardware fails on stops it, `hwaccel_args`' -xerror, and the CPU makes it all); ffmpeg is stopped only when it makes no progress (`run`), never for taking long. Every ffmpeg and ffprobe that opens a video (an original or Lumiverb's own) opens a local file only, read only as a container Lumiverb takes in: `input_args` before its -i (`-protocol_whitelist file`, `-format_whitelist` from `DEMUXERS`, one per extension in `src/shared/file_extensions.py`) |
-| Face detection (macOS/iOS) | `LumiverbKit/Sources/LumiverbKit/Faces/FaceDetectionProvider.swift` (Vision). Lives in LumiverbKit so tests drive the full gate chain end-to-end. Callers: `Sources/macOS/Enrich/{EnrichmentPipeline,ReEnrichmentRunner}.swift` |
-| ArcFace (macOS) | `Sources/macOS/Enrich/ArcFaceProvider.swift`; CoreML built by `scripts/convert-models/convert_arcface.py` |
-| Whisper transcription (macOS) | `Sources/macOS/Enrich/WhisperProvider.swift` (orchestrator). Audio extraction + subprocess wrapper live in LumiverbKit so tests drive the pipeline end-to-end: `LumiverbKit/Sources/LumiverbKit/Audio/{AudioExtraction,WhisperRunner}.swift`. UX: opt-in toggle in Settings, model auto-downloaded on Save (`Sources/macOS/Enrich/WhisperModelManager.swift` + `WhisperDownloadSheet.swift`). Single-active-model invariant — old models cleaned up on size change. Requires `brew install whisper-cpp`. Fixture tests at `Tests/LumiverbKitTests/Fixtures/transcribe-*.mov` (English / Spanish / silence / music). `WhisperRunner.sanitizeSRT` strips whisper's `[BLANK_AUDIO]` placeholders and IPA-glyph silence-loop hallucinations (a known whisper.cpp behavior on near-silent input + macOS AAC decoder dithering). |
-| Enrichment orchestration (macOS) | `Sources/macOS/Enrich/` |
 | Scan orchestration (macOS) | `Sources/macOS/Scan/{ScanState,ScanPipeline,LibraryWatcher}.swift`. `ScanState` is the @MainActor coordinator (persistent pause via `UserDefaults("scanPaused")`, `pendingRescan` to catch mid-scan FSEvents). `LibraryWatcher` uses leading-schedule debounce — first event in a quiet window schedules a fire, subsequent events do NOT reset the timer (intentional, prevents pathological writers from starving the queue). `ScanPipeline.discoverFiles()` applies a 30s mtime quarantine so half-written files (renders, copies) get picked up on a later pass. Initial scan kicks on `startWatching()`. |
 | Menu bar / app lifecycle (macOS) | `Sources/macOS/{LumiverbApp,MenuBarView}.swift`. 3-state SF symbol: `pause.rectangle.fill` (paused) / `arrow.triangle.2.circlepath` (scanning) / `photo.stack` (idle). Favorites (`AppState.favoriteLibraryIds`, persisted) surface in the menu bar; clicking sets `appState.pendingSelectedLibraryId` which `BrowseWindow.consumePendingLibraryId()` consumes on appear/onChange. Start at Login via `SMAppService.mainApp` toggle in Settings (requires app in `/Applications` to actually fire). |
 | Proxy gen / cache (Python) | `src/processing/proxy/proxy_gen.py`, `proxy_cache.py`. pyvips only from `src/processing/libvips.py` (a test holds `src` to it): importing it blocks libvips's untrusted loaders (8.13+; BMP is Pillow's, RAW rawpy's), and its `open_file` / `thumbnail_file` open a file by its exact name (libvips reads a trailing `[...]` as options). Previews carry the picture only: libvips keeps the colour profile and nothing else (`proxy_gen.KEEP`), and the server re-encodes every preview a client sends the same way (`src/server/preview_image.py`, for `/v1/ingest` and image artifact uploads). Wherever the server decodes a picture (those, a search's, a proxy cut into face crops or embedded) it reads only JPEG, PNG and WebP, up to 120 MP, checked before decoding: `src/server/images.py`. Video previews and analysis proxies drop it with `-map_metadata -1` |
@@ -102,7 +98,6 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 
 - **uv only** — no `pip`. Use `uv add` / `uv run` / `uv sync`.
 - **macOS app** — `cd clients/lumiverb-app && xcodegen generate && xcodebuild -project Lumiverb.xcodeproj -scheme Lumiverb-macOS -configuration Debug build CODE_SIGNING_ALLOWED=NO`
-- **ArcFace convert** — `scripts/convert-models/` has its own venv
 
 ---
 
@@ -139,7 +134,6 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 - **ONNX Runtime leaks ~35 MB/inference.** Batch work is subprocess-isolated for exactly this reason — don't collapse it.
 - **`ThreadPoolExecutor`**: never submit all futures at once; cap at `concurrency * 2` and `_drain()`.
 - **`systemd` units**: `update.sh` (its `update-api.sh`) writes the scheduler's (when the install does processing) and the upkeep timers' units afresh but only patches the API's and Quickwit's: an entry-point change there needs the unit fixed by hand (or `deploy-api.sh` run again).
-- **Vision `VNDetectFaceCaptureQualityRequest` is not deterministic** across runs — the same face can score ~0.02 apart in different processes because Vision dispatches across CPU/GPU/ANE based on system load. Don't calibrate thresholds against a single observed value, and don't write count-based face-detection tests on fixtures with subjects sitting near the gate (`face_crowd.jpg`). Leave ≥ 0.05 headroom; assert *existence* not *count* on borderline fixtures.
 - **Prod**: never SSH or run commands on the VPS. User handles deploys; server auto-updates after push.
 
 ---

@@ -311,28 +311,8 @@ public class BrowseState: ObservableObject {
 
     @Published public var focusedIndex: Int = 0
 
-    /// Mirror of `appState.whisperEnabled`. SwiftUI views that observe
-    /// `BrowseState` (LightboxView, LibrarySidebar, DirectoryTreeView) need
-    /// to react to whisper enable/disable changes when they host a
-    /// `ReEnrichMenu`. They don't observe `appState` directly, so reads
-    /// via `browseState.appState.whisperEnabled` would never trigger
-    /// re-renders — the menu would stay greyed out forever after the
-    /// initial paint. This published mirror is fed by a Combine sink in
-    /// `init` so any change to the underlying value flows through to the
-    /// observers automatically.
-    @Published public var whisperEnabled: Bool = false
-
-    private var cancellables: Set<AnyCancellable> = []
-
     public init(appContext: any BrowseAppContext) {
         self.appContext = appContext
-        self.whisperEnabled = appContext.whisperEnabled
-        appContext.whisperEnabledPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.whisperEnabled = newValue
-            }
-            .store(in: &cancellables)
     }
 
     public var client: APIClient? { appContext.client }
@@ -925,11 +905,8 @@ public class BrowseState: ObservableObject {
 
         do {
             // Pass the embedding model so the server looks up the right
-            // vectors. The model id/version come from the platform
-            // BrowseAppContext: macOS reports whichever local provider is
-            // available (CLIP if loaded, otherwise FeaturePrint); iOS
-            // reports the canonical CLIP id since iOS doesn't enrich
-            // and just needs to ask for the most-likely-indexed model.
+            // vectors: the platform BrowseAppContext names the server's
+            // CLIP model, the one the scheduler embeds every photo with.
             let embeddingModelId = appContext.embeddingModelId
             let embeddingModelVersion = appContext.embeddingModelVersion
 
@@ -1012,181 +989,6 @@ public class BrowseState: ObservableObject {
     public func selectPath(_ path: String?) {
         selectedPath = path
     }
-
-    // MARK: - Re-enrichment
-
-    @Published public var isReEnriching = false
-    @Published public var reEnrichPhase = ""
-    @Published public var reEnrichTotal = 0
-    @Published public var reEnrichProcessed = 0
-    @Published public var reEnrichSkipped: [String] = []
-
-    /// Pluggable re-enrichment runner. macOS sets this from
-    /// `BrowseWindow` to a `MacReEnrichInvoker` that wraps the real
-    /// `ReEnrichmentRunner` and its CLIP/ArcFace/Whisper providers.
-    /// iOS leaves this nil — the lightbox's re-enrich menu is hidden,
-    /// and the `reEnrich*` methods below short-circuit on a nil
-    /// invoker. Public so the platform-specific entry point can install
-    /// it after constructing `BrowseState`.
-    public var reEnrichInvoker: (any ReEnrichInvoker)?
-
-    /// Re-enrich assets in the current library, optionally scoped to a path prefix.
-    public func reEnrich(operations: Set<EnrichmentOperation>, pathPrefix: String? = nil) {
-        guard let invoker = reEnrichInvoker,
-              client != nil,
-              let libraryId = selectedLibraryId,
-              !isReEnriching else { return }
-
-        Task {
-            isReEnriching = true
-            reEnrichPhase = "fetching assets"
-            reEnrichProcessed = 0
-            reEnrichTotal = 0
-
-            // Push the media_type filter to the server when the operation
-            // set is single-modality. A 16k-image library was previously
-            // dragging all 16k rows over the wire when the user only
-            // wanted to transcribe 131 videos — the runner filters
-            // internally either way, but we'd already paid the network +
-            // server cost. Mixed operations (e.g. "All") still fetch
-            // unfiltered.
-            let mediaType = mediaTypeFilter(forOperations: operations)
-            let assets = await fetchAllAssets(
-                libraryId: libraryId,
-                pathPrefix: pathPrefix,
-                mediaType: mediaType,
-            )
-            guard !assets.isEmpty else {
-                isReEnriching = false
-                return
-            }
-
-            let result = await invoker.reEnrich(
-                libraryId: libraryId,
-                libraryRootPath: selectedLibraryRootPath,
-                assets: assets,
-                operations: operations
-            ) { [weak self] processed, total, phase in
-                self?.reEnrichProcessed = processed
-                self?.reEnrichTotal = total
-                self?.reEnrichPhase = phase
-            }
-
-            isReEnriching = false
-            reEnrichPhase = ""
-            reEnrichSkipped = result.skipped
-
-            // Refresh the grid and detail if open
-            reloadAssets()
-            if let assetId = selectedAssetId {
-                await loadAssetDetail(assetId: assetId)
-            }
-        }
-    }
-
-    /// Re-enrich a single asset (from lightbox actions).
-    public func reEnrichAsset(assetId: String, operations: Set<EnrichmentOperation>) {
-        guard let invoker = reEnrichInvoker,
-              client != nil,
-              let libraryId = selectedLibraryId,
-              !isReEnriching else { return }
-
-        // Find the asset in current display or fetch it
-        let asset = assets.first { $0.assetId == assetId }
-        guard let asset else { return }
-
-        Task {
-            isReEnriching = true
-            reEnrichPhase = ""
-            reEnrichProcessed = 0
-            reEnrichTotal = 1
-
-            let result = await invoker.reEnrich(
-                libraryId: libraryId,
-                libraryRootPath: selectedLibraryRootPath,
-                assets: [asset],
-                operations: operations
-            ) { [weak self] processed, total, phase in
-                self?.reEnrichProcessed = processed
-                self?.reEnrichTotal = total
-                self?.reEnrichPhase = phase
-            }
-
-            isReEnriching = false
-            reEnrichPhase = ""
-            reEnrichSkipped = result.skipped
-
-            // Refresh the lightbox detail
-            await loadAssetDetail(assetId: assetId)
-        }
-    }
-
-    public func cancelReEnrich() {
-        Task {
-            await reEnrichInvoker?.cancel()
-        }
-    }
-
-    /// Returns the appropriate `media_type` query value for an
-    /// enrichment operation set, or nil if the set is mixed-modality.
-    /// Used by `reEnrich` to push the media-type filter down to the
-    /// server side and avoid pulling all images across the wire when
-    /// only video operations are requested.
-    private func mediaTypeFilter(forOperations ops: Set<EnrichmentOperation>) -> String? {
-        let imageOps: Set<EnrichmentOperation> = [.faces, .embeddings, .ocr, .vision]
-        let videoOps: Set<EnrichmentOperation> = [.videoPreview, .transcribe]
-        if !ops.isEmpty && ops.isSubset(of: videoOps) { return "video" }
-        if !ops.isEmpty && ops.isSubset(of: imageOps) { return "image" }
-        return nil
-    }
-
-    /// Fetch all assets for a library/path (paginated). When `mediaType`
-    /// is set the server filters to only that media type, avoiding the
-    /// network + server cost of returning the other side of a mixed
-    /// library.
-    private func fetchAllAssets(
-        libraryId: String,
-        pathPrefix: String?,
-        mediaType: String? = nil,
-    ) async -> [AssetPageItem] {
-        guard let client else { return [] }
-        var all: [AssetPageItem] = []
-        var cursor: String?
-
-        repeat {
-            var leafFilters = [LeafFilter(type: "library", value: libraryId)]
-            if let pathPrefix { leafFilters.append(LeafFilter(type: "path", value: pathPrefix)) }
-            if let mediaType { leafFilters.append(LeafFilter(type: "media", value: mediaType)) }
-            let items = filtersToQueryItems(
-                leafFilters,
-                sort: "asset_id",
-                direction: "asc",
-                after: cursor,
-                limit: 500
-            )
-
-            do {
-                let response: QueryResponse = try await client.get(
-                    "/v1/query", queryItems: items
-                )
-                all.append(contentsOf: response.items.map { $0.toPageItem() })
-                cursor = response.nextCursor
-                reEnrichTotal = all.count
-            } catch {
-                self.error = "Failed to fetch assets: \(error)"
-                break
-            }
-        } while cursor != nil
-
-        return all
-    }
-
-    // Note: progress polling moved out of BrowseState. The polling is
-    // now the responsibility of `ReEnrichInvoker` implementations,
-    // which call BrowseState's progress closure (passed into
-    // `reEnrich(...)` above) every ~250 ms while work is in flight.
-    // BrowseState only owns the @Published mirror, not the polling
-    // mechanics.
 
     // MARK: - Person search
 

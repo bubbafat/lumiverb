@@ -112,13 +112,6 @@ struct LibrarySidebar: View {
                                 Button("Open Source Location") {
                                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: lib.rootPath)
                                 }
-                                Divider()
-                                ReEnrichMenu(
-                                    onReEnrich: { ops in
-                                        browseState.reEnrich(operations: ops)
-                                    },
-                                    whisperEnabled: browseState.whisperEnabled,
-                                )
                             }
                     }
                 } header: {
@@ -212,7 +205,7 @@ struct LibrarySidebar: View {
     /// favorite via the context menu reorders the sidebar live.
     /// Small colored dot reflecting the library's health:
     /// - green: idle / up-to-date
-    /// - orange: currently scanning or enriching
+    /// - orange: currently scanning
     /// - red: root path is offline (unmounted volume or bad path)
     ///
     /// Defaults to green when the library has no recorded status yet

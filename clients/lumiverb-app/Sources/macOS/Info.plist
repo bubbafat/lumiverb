@@ -25,6 +25,6 @@
         <true/>
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Lumiverb connects to local services for image enrichment (e.g. LM Studio, Ollama).</string>
+    <string>Lumiverb connects to your Lumiverb server when it is on your local network.</string>
 </dict>
 </plist>
