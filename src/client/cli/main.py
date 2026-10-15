@@ -1041,6 +1041,8 @@ def scan(
     allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and more than half of a library's clips are missing (the server asks first: normally skipped as a likely mount problem).")] = False,
     thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
     force_add: Annotated[bool, typer.Option("--force-add", help="Last resort: add the files you removed (trash, archive, deleted for good) as if you never had. A clip in the trash or archived comes back with everything it had when its file is unchanged; a file deleted for good comes back as a new clip. Use --path-prefix to bring back only what's under a folder.")] = False,
+    explain: Annotated[bool, typer.Option("--explain", help="List every difference between the disk and Lumiverb: each media file on disk it doesn't show, and why, and each clip whose file isn't on disk. Changes nothing (a --dry-run).")] = False,
+    include_trash: Annotated[bool, typer.Option("--include-trash", help="With --explain: list the files whose clips are in the trash too (otherwise only counted).")] = False,
 ) -> None:
     """Discover files, compute SHA, extract EXIF, generate proxies, upload.
 
@@ -1056,12 +1058,19 @@ def scan(
     Files you removed (trashed, archived or deleted for good) stay out of
     scans while they're unchanged at the same path. --force-add brings them
     back: a last resort, best with --path-prefix and a --dry-run first.
+
+    --explain lists every difference between the disk and Lumiverb, changing nothing.
     """
     from src.processing.scan import run_scan
 
     if allow_moves and skip_moves:
         console.print("[red]Cannot use both --allow-moves and --skip-moves[/red]")
         raise typer.Exit(1)
+
+    if include_trash and not explain:
+        console.print("[red]--include-trash goes with --explain: it lists the files whose clips are in the trash[/red]")
+        raise typer.Exit(1)
+    dry_run = dry_run or explain  # --explain changes nothing
 
     if media_type not in ("image", "video", "all"):
         console.print(f"[red]Invalid --media-type: {media_type}. Must be image, video, or all.[/red]")
@@ -1097,6 +1106,8 @@ def scan(
         allow_mass_delete=allow_mass_delete,
         thorough=thorough,
         force_add=force_add,
+        explain=explain,
+        include_trash=include_trash,
         console=console,
     )
 

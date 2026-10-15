@@ -18,7 +18,8 @@ What stays here: the walk (filters, hidden files, no symlinks, control
 characters, refused folders, names in NFC, folders it couldn't list),
 files still being written, a scope folder that's gone, whether the storage
 is still there before anything is moved or archived, reading the files
-(hashes, previews, EXIF), the proxy cache, and the CLI's question about moves.
+(hashes, previews, EXIF), the proxy cache, the CLI's question about moves,
+and --explain's listing of every difference between the disk and Lumiverb.
 
 A dropped connection, or the API restarting, doesn't end a scan: every call
 of the conversation but its start is safe to send twice (the server answers
@@ -46,6 +47,7 @@ from pathlib import Path, PurePosixPath
 from stat import S_ISDIR
 
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -58,6 +60,7 @@ from rich.progress import (
 from src.processing.api import ApiClient
 from src.processing.ingest import (
     _build_exif_payload,
+    _detect_media_type,
     _extract_video_poster,
     _generate_proxy_bytes,
     _generate_video_preview,
@@ -76,6 +79,7 @@ from src.shared.io_utils import (
     resolve_source_path,
     stat_if_present,
 )
+from src.shared.path_filter import has_control_character
 from src.shared.producers import effective_settings
 from src.shared.producers import lineage as producer_lineage
 
@@ -148,8 +152,31 @@ class _Work:
     # sight, or deleted for good and new clips (also in new).
     restored: int = 0
     added_back: int = 0
+    # Their paths, both kinds: --explain lists them.
+    added_anyway: list[str] = field(default_factory=list)
     # Moves made (a dry run's: that would be).
     moved: int = 0
+    # The moves the hashes made (a dry run's: would make), each
+    # {rel_path, asset_id, moved_from}: --explain lists them.
+    moved_files: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class _Differences:
+    """What --explain lists besides what a dry run keeps anyway (run_scan's
+    explain): the media files the walk left out, by a path filter
+    (filtered) or for their names (refused; a folder's ends in "/"); then,
+    from the server, the files the scan skips because a person removed
+    them, by how ("trash", "archived", "deleted"), the clips it didn't find
+    and why they'd be kept (the finish's held_back_reason), and the clips
+    archived already because their files went missing."""
+
+    filtered: list[str] = field(default_factory=list)
+    refused: list[str] = field(default_factory=list)
+    removed: dict[str, list[str]] = field(default_factory=dict)
+    gone: list[str] = field(default_factory=list)
+    held_back: str | None = None
+    missing: list[str] = field(default_factory=list)
 
 
 def _existing_folder(root: Path, rel: str) -> str | None:
@@ -421,11 +448,18 @@ def _prompt_move_decision(console: Console, moves: list[dict]) -> str:
         console.print("[red]Invalid choice. Enter 1, 2, or 3.[/red]")
 
 
-def _show_moves(console: Console, moves: list[dict]) -> None:
-    for m in moves[:10]:
-        console.print(f"  {m['moved_from']} [dim]→[/dim] {m['rel_path']}")
-    if len(moves) > 10:
-        console.print(f"  [dim]... and {len(moves) - 10:,} more[/dim]")
+def _show_moves(console: Console, moves: list[dict], *, limit: int | None = 10, indent: str = "  ") -> None:
+    """Each move as `from → to`, the first `limit` of them (None: every one)."""
+    for m in moves[:limit]:
+        console.print(f"{indent}{_shown(m['moved_from'])} [dim]→[/dim] {_shown(m['rel_path'])}",
+                      highlight=False, soft_wrap=True)
+    if limit is not None and len(moves) > limit:
+        console.print(f"{indent}[dim]... and {len(moves) - limit:,} more[/dim]")
+
+
+def _shown(rel_path: str) -> str:
+    """A path as printed: markup escaped, a control character made visible (repr)."""
+    return escape(repr(rel_path) if has_control_character(rel_path) else rel_path)
 
 
 def _progress(console: Console, label: str, *, eta: bool = False) -> Progress:
@@ -608,10 +642,13 @@ def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
         work.new.append(f)
         if f["_plan"]["reason"] == "removed":
             work.added_back += 1
+            work.added_anyway.append(f["rel_path"])
     elif decision == "restored":
         work.restored += 1
+        work.added_anyway.append(f["rel_path"])
     elif decision == "moved":
         work.moved += 1
+        work.moved_files.append(d)
     elif decision == "move_candidate":
         work.candidates.append(d)
     elif decision == "skipped":
@@ -691,6 +728,127 @@ def _upload(
             _, inflight = _drain(inflight)
 
 
+# ---------------------------------------------------------------------------
+# --explain: every difference between the disk and what Lumiverb shows
+# ---------------------------------------------------------------------------
+
+_FORCE_ADD = "lumiverb scan --force-add brings them back"
+# Why the clips a scan didn't find wouldn't be archived (the finish's held_back_reason).
+_HELD_BACK = {
+    "unlisted": "kept, as some folders couldn't be listed",
+    "skip_moves": "kept, as --skip-moves archives nothing",
+    "nothing_found": "kept, as the scan found no media files: is the volume mounted?",
+}
+
+
+def _listed(client: ApiClient, path: str, key: str, console: Console, label: str,
+            params: dict | None = None) -> list[dict]:
+    """Every item of a listing paged by cursor, PLAN_PAGE a call, with a
+    progress bar once there's more than one page (its total when the
+    listing says it)."""
+    params = {**(params or {}), "limit": PLAN_PAGE}
+    page = client.get(path, params=params).json()
+    items = list(page[key])
+    cursor = page.get("next_cursor")
+    if cursor:
+        progress = _progress(console, label)
+        with progress:
+            tid = progress.add_task(label, total=page.get("total"), completed=len(items))
+            while cursor:
+                page = client.get(path, params={**params, "after": cursor}).json()
+                items.extend(page[key])
+                progress.update(tid, completed=len(items))
+                cursor = page.get("next_cursor")
+    return items
+
+
+def _removed_and_gone(client: ApiClient, scan_id: str, d: _Differences, console: Console) -> None:
+    """What the server says of the scan's listing, before its finish drops
+    it: the files it skips because a person removed them, and the clips it
+    didn't find."""
+    for f in _listed(client, f"/v1/scans/{scan_id}/skipped", "files", console, "Removed"):
+        d.removed.setdefault(f["removed_as"], []).append(f["rel_path"])
+    d.gone = [c["rel_path"] for c in _listed(client, f"/v1/scans/{scan_id}/gone", "clips", console, "Not found")]
+
+
+def _missing_archived(client: ApiClient, library_id: str, scope: str | None, media_type: str,
+                      console: Console) -> list[str]:
+    """The clips of the scan's folder and media type archived already
+    because their files went missing (GET /v1/archive)."""
+    params = {"library_id": library_id, "kind": "missing", **({"path": scope} if scope else {})}
+    return [c["rel_path"] for c in _listed(client, "/v1/archive", "items", console, "Missing", params)
+            if media_type in ("all", c["media_type"])]
+
+
+def _of_media_type(rel_path: str, media_type: str) -> bool:
+    """A file of the scan's media type, by its extension; a folder (its path ends in "/") always."""
+    return (media_type == "all" or rel_path.endswith("/")
+            or _detect_media_type(PurePosixPath(rel_path).suffix.lower()) == media_type)
+
+
+def _group(console: Console, title: str, paths: list[str], note: str = "") -> None:
+    """One group of --explain: its title, how many and a note, then a path a
+    line, in order. Nothing when there are none."""
+    if not paths:
+        return
+    console.print(f"  [bold]{title}[/bold] ({len(paths):,})" + (f": {note}" if note else ""), highlight=False)
+    for p in sorted(paths):
+        console.print(f"    {_shown(p)}", highlight=False, soft_wrap=True)
+
+
+def _explain(console: Console, d: _Differences, *, include_trash: bool, media_type: str, of_type: list[dict],
+             stats: ScanStats, work: _Work) -> None:
+    """Every difference the dry run found, grouped: the media files on disk
+    Lumiverb doesn't show, and why; then the clips whose files aren't on
+    disk. Files in the trash are only counted unless include_trash."""
+    trash = d.removed.get("trash", [])
+    removed = [
+        ("Deleted for good", d.removed.get("deleted", []),
+         f"a person emptied the trash or deleted them forever; {_FORCE_ADD}"),
+        ("Archived by a person", d.removed.get("archived", []), _FORCE_ADD),
+        ("In the trash", trash if include_trash else [], "restore them from the trash to bring them back"),
+    ]
+    more_in_trash = 0 if include_trash else len(trash)
+    left = [
+        ("Left out by a path filter", [p for p in d.filtered if _of_media_type(p, media_type)], ""),
+        ("Names Lumiverb can't take", [p for p in d.refused if _of_media_type(p, media_type)],
+         "a control character, a backslash, or too long"),
+        ("Empty files", [f["rel_path"] for f in of_type if f["file_size"] == 0], "0 bytes, never added"),
+        ("Still being written", stats.settling_paths, "a later scan takes them"),
+        ("Brought back by --force-add", work.added_anyway, "a person removed them; this scan would add them"),
+        ("Not added yet", [f["rel_path"] for f in work.new if f["rel_path"] not in set(work.added_anyway)],
+         "the next scan adds these"),
+        ("Changed on disk", [f["rel_path"] for f in work.changed], "the next scan reads them again"),
+        ("Folders that couldn't be listed", [f"{u}/" if u else "/" for u in stats.unlisted],
+         "what's in them isn't known"),
+    ]
+    moves = sorted(work.moved_files + work.candidates, key=lambda m: m["rel_path"])
+    not_on_disk = [
+        ("Not found", d.gone, _HELD_BACK.get(d.held_back or "", "the next scan archives these as missing")),
+        ("Archived because their files went missing", d.missing, ""),
+    ]
+    on_disk = any(paths for _, paths, _ in removed + left) or more_in_trash or moves
+    if not on_disk and not any(paths for _, paths, _ in not_on_disk):
+        console.print("\n[green]Nothing differs: every media file on disk is in Lumiverb, "
+                      "and every clip's file is on disk.[/green]")
+        return
+    if on_disk:
+        console.print("\n[bold]On disk, not shown in Lumiverb:[/bold]")
+        for title, paths, note in removed:
+            _group(console, title, paths, note)
+        if more_in_trash:
+            console.print(f"  {more_in_trash:,} more in the trash: --include-trash lists them", highlight=False)
+        for title, paths, note in left:
+            _group(console, title, paths, note)
+        if moves:
+            console.print(f"  [bold]Moved or renamed[/bold] ({len(moves):,})", highlight=False)
+            _show_moves(console, moves, limit=None, indent="    ")
+    if any(paths for _, paths, _ in not_on_disk):
+        console.print("\n[bold]In Lumiverb, not on disk:[/bold]")
+        for title, paths, note in not_on_disk:
+            _group(console, title, paths, note)
+
+
 def run_scan(
     client: ApiClient,
     library: dict,
@@ -707,10 +865,18 @@ def run_scan(
     force_add: bool = False,
     waiting: Mapping[str, tuple[int, str | None]] | None = None,
     cache_previews: bool = True,
+    explain: bool = False,
+    include_trash: bool = False,
     console: Console,
 ) -> ScanStats:
     """Walk the library, tell the server what's there, read what it asks
     about, and upload what it says is new or changed.
+
+    explain: a dry run (whatever dry_run says) that also lists every
+    difference between the disk and what Lumiverb shows (_explain): each
+    media file on disk it doesn't show, and why, and each clip whose file
+    isn't on disk. include_trash lists the files whose clips are in the
+    trash too; without it they're counted.
 
     moves: allow_moves applies them (the scheduler's), skip_moves looks for
     none (and so archives nothing: anything gone may be half a move), else
@@ -732,6 +898,7 @@ def run_scan(
     """
     library_id = library["library_id"]
     root_path = reachable_root(library)
+    dry_run = dry_run or explain
 
     if root_path is None:
         here = local_library_root(library)
@@ -786,7 +953,9 @@ def run_scan(
                     follow_moves=scan.get("follow_moves", True), moves=moves, force=force,
                     media_type_filter=media_type_filter, dry_run=dry_run, allow_mass_delete=allow_mass_delete,
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
-                    waiting=waiting or {}, cache_previews=cache_previews, console=console)
+                    waiting=waiting or {}, cache_previews=cache_previews,
+                    differences=_Differences() if explain else None, include_trash=include_trash,
+                    console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -796,16 +965,21 @@ def _run(
     client: ApiClient, library: dict, root_path: Path, scan_id: str, stats: ScanStats, *,
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
-    waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, console: Console,
+    waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, differences: _Differences | None,
+    include_trash: bool, console: Console,
 ) -> ScanStats:
-    """run_scan once its scan is started: walk, list, plan, hash, finish, upload."""
+    """run_scan once its scan is started: walk, list, plan, hash, finish,
+    upload. With differences (--explain, a dry run), what it collects is
+    listed before the dry run's summary (_explain)."""
     library_id = library["library_id"]
+    d = differences
     if not follow_moves:
         console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
 
     console.print("[bold]Discovering files...[/bold]")
     walked = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
-                           unlisted=stats.unlisted)
+                           unlisted=stats.unlisted, filtered=d.filtered if d is not None else None,
+                           refused_names=d.refused if d is not None else None)
     if stats.unlisted:
         console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
                       "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
@@ -815,8 +989,13 @@ def _run(
     # them) too: none of them is gone.
     on_disk: dict[str, dict] = {}
     for f in walked:
-        if f["rel_path"] not in on_disk and not _refused_name(f["rel_path"]):
-            on_disk[f["rel_path"]] = f
+        if f["rel_path"] in on_disk:
+            continue
+        if _refused_name(f["rel_path"]):
+            if d is not None:
+                d.refused.append(f["rel_path"])
+            continue
+        on_disk[f["rel_path"]] = f
     of_type = [f for f in on_disk.values() if media_type_filter in ("all", f["media_type"])]
     console.print(f"Found {len(of_type):,} media files")
 
@@ -890,9 +1069,10 @@ def _run(
         stats.restored += work.restored
 
     if work.candidates and dry_run:
-        console.print(f"\n[yellow]{len(work.candidates):,} moved file(s) detected.[/yellow]")
-        _show_moves(console, work.candidates)
-        console.print("[dim]Use --allow-moves to apply, or --skip-moves to ignore.[/dim]")
+        if d is None:  # --explain lists them with every other difference
+            console.print(f"\n[yellow]{len(work.candidates):,} moved file(s) detected.[/yellow]")
+            _show_moves(console, work.candidates)
+            console.print("[dim]Use --allow-moves to apply, or --skip-moves to ignore.[/dim]")
     elif work.candidates:
         choice = _prompt_move_decision(console, work.candidates)
         if choice == "abort":
@@ -912,9 +1092,16 @@ def _run(
             console.print(f"[dim]Skipping {answer['skipped']:,} moves[/dim]")
 
     if dry_run:
+        if d is not None:  # before the finish: it drops the scan's listing
+            _removed_and_gone(client, scan_id, d, console)
         finished = _answer(client, client.raw("POST", f"/v1/scans/{scan_id}/finish",
                                                json={"allow_mass_missing": False}, retry=True))
         _abandon(client, scan_id)
+        if d is not None:
+            d.held_back = finished.get("held_back_reason")
+            d.missing = _missing_archived(client, library_id, path_prefix, media_type_filter, console)
+            _explain(console, d, include_trash=include_trash, media_type=media_type_filter, of_type=of_type,
+                     stats=stats, work=work)
         console.print(
             f"\n[bold]Scan summary:[/bold] "
             f"{len(work.new):,} new, "

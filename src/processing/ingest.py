@@ -224,14 +224,17 @@ def _is_refused(path: Path, refused: dict[str, set[tuple[int, int]]]) -> bool:
     return (st.st_dev, st.st_ino) in same_name
 
 
-def _control_named(root_path: Path, path: Path) -> bool:
+def _control_named(root_path: Path, path: Path, refused: list[str] | None = None, *, folder: bool = False) -> bool:
     """A file or folder whose name has a control character (a newline, a
     tab): never scanned, nor anything in a folder so named. Said once, as a
-    warning (repr: the name made printable); it isn't a failure to try again."""
+    warning (repr: the name made printable); it isn't a failure to try again.
+    Its rel path goes in `refused` when given (a folder's ends in "/")."""
     if not has_control_character(path.name):
         return False
     rel = unicodedata.normalize("NFC", str(path.relative_to(root_path)))
     logger.warning("Not scanning %r: its name has a control character", rel)
+    if refused is not None:
+        refused.append(rel + "/" if folder else rel)
     return True
 
 
@@ -241,16 +244,20 @@ def _walk_library(
     tenant_filters: list[PathFilter] | None = None,
     library_filters: list[PathFilter] | None = None,
     unlisted: list[str] | None = None,
+    filtered: list[str] | None = None,
+    refused_names: list[str] | None = None,
 ) -> list[dict]:
     """Walk the library root and return a list of file descriptors.
 
     Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
-    Files that don't pass the merged tenant + library filters are silently skipped.
-    Hidden files are listed; symlinks aren't followed. A file or folder whose
-    name has a control character is skipped with a warning. Folders that
-    can't be listed, or that hold a media file that can't be checked, go in
-    `unlisted` as rel paths ("" is the library root), so the caller doesn't
-    take their files for deleted.
+    Media files that don't pass the merged tenant + library filters are
+    skipped, silently: in `filtered` as rel paths when it's given (what a
+    scan's --explain lists). Hidden files are listed; symlinks aren't
+    followed. A media file or a folder whose name has a control character is
+    skipped with a warning (in `refused_names` when given; a folder's path
+    ends in "/"). Folders that can't be listed, or that hold a media file
+    that can't be checked, go in `unlisted` as rel paths ("" is the library
+    root), so the caller doesn't take their files for deleted.
     """
     walk_root = root_path
     if path_prefix:
@@ -280,7 +287,7 @@ def _walk_library(
     for folder, dirs, names in os.walk(walk_root, onerror=_unreadable):
         if refused:
             dirs[:] = [d for d in dirs if not _is_refused(Path(folder, d), refused)]
-        dirs[:] = [d for d in dirs if not _control_named(root_path, Path(folder, d))]
+        dirs[:] = [d for d in dirs if not _control_named(root_path, Path(folder, d), refused_names, folder=True)]
         found.extend(Path(folder, name) for name in names)
 
     results = []
@@ -288,7 +295,7 @@ def _walk_library(
         # Only files the scan would take are stat'ed: one that can't be
         # checked holds back deletions in its folder.
         ext = p.suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS or _control_named(root_path, p):
+        if ext not in SUPPORTED_EXTENSIONS or _control_named(root_path, p, refused_names):
             continue
 
         # NFC, as the macOS app's scan stored it (before the server scanned
@@ -296,6 +303,8 @@ def _walk_library(
         rel_path = unicodedata.normalize("NFC", str(p.relative_to(root_path)))
 
         if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
+            if filtered is not None:
+                filtered.append(rel_path)
             continue
 
         try:
