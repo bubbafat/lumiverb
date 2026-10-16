@@ -11,6 +11,7 @@ import {
   type NewFolderFacts,
 } from "../../api/client";
 import { MakeFolder, asked } from "./StorageSection";
+import { copyText } from "../../lib/copyText";
 
 export const BACKUPS_QUERY_KEY = ["system", "backups"];
 
@@ -290,12 +291,10 @@ function Command({ command }: { command: string }) {
   const input = useRef<HTMLInputElement>(null);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
+    if (await copyText(command)) {
       setCopied(true);
-    } catch {
-      // No clipboard here (a page that isn't https or this machine's): select it to copy by hand.
-      input.current?.select();
+    } else {
+      input.current?.select();  // this browser won't copy from here: selected to copy by hand
     }
   }
 

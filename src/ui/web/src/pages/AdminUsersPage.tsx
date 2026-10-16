@@ -13,6 +13,7 @@ import {
 import { decodeJwtClaims } from "../api/jwt";
 import type { UserItem } from "../api/types";
 import { timeAgo } from "../lib/format";
+import { copyText } from "../lib/copyText";
 
 const ROLES = ["admin", "editor", "viewer"] as const;
 type Role = (typeof ROLES)[number];
@@ -331,12 +332,10 @@ function CopyableLink({ url, label }: { url: string; label: string }) {
   const input = useRef<HTMLInputElement>(null);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
+    if (await copyText(url)) {
       setCopied(true);
-    } catch {
-      // No clipboard here (a page that isn't https or this machine's): select it to copy by hand.
-      input.current?.select();
+    } else {
+      input.current?.select();  // this browser won't copy from here: selected to copy by hand
     }
   }
 
