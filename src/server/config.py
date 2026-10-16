@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +11,7 @@ class Settings(BaseSettings):
     control_plane_database_url: str
     tenant_database_url_template: str  # contains {tenant_id}
 
-    # Storage
+    # Storage: the Store's provider (src/server/storage/store.py); an install naming one there isn't refuses to start
     storage_provider: str = "local"
     data_dir: str = "./data"
 
@@ -50,6 +51,16 @@ class Settings(BaseSettings):
     # Settings › Network's (src/server/lifecycle/network.py)
     nginx_config: str = ""
     web_port: int = 0
+
+    @field_validator("storage_provider")
+    @classmethod
+    def _a_provider_there_is(cls, value: str) -> str:
+        from src.server.storage.store import PROVIDERS
+
+        if value not in PROVIDERS:
+            raise ValueError(f"STORAGE_PROVIDER={value!r} isn't a storage provider: the providers are "
+                             f"{', '.join(PROVIDERS)} (ADR-020 decision 8)")
+        return value
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),

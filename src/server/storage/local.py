@@ -4,16 +4,14 @@ import errno
 import os
 import threading
 from functools import lru_cache
-from pathlib import Path, PurePosixPath
-
-from ulid import ULID
+from pathlib import Path
 
 from src.server.config import get_settings
+from src.server.storage import store
+from src.server.storage.store import UnsafeKeyError
 from src.shared import previews_location
 
-
-class UnsafeKeyError(ValueError):
-    """A storage key that would reach outside the previews folder."""
+__all__ = ["LocalStorage", "UnsafeKeyError", "get_storage"]
 
 
 class LocalStorage:
@@ -60,94 +58,22 @@ class LocalStorage:
         """Where new files go, but a library's with a folder of its own."""
         return self.location.previews
 
-    @staticmethod
-    def _bucket_from_asset_id(asset_id: str) -> int:
-        """Extract ULID from asset_id (strip ast_ prefix) and return bucket 0-99."""
-        ulid_str = asset_id.removeprefix("ast_")
-        ulid = ULID.from_str(ulid_str)
-        return int(ulid) % 100
-
-    def proxy_key(
-        self, tenant_id: str, library_id: str, asset_id: str, original_filename: str
-    ) -> str:
-        bucket = self._bucket_from_asset_id(asset_id)
-        original_stem = Path(original_filename).stem
-        return f"{tenant_id}/{library_id}/proxies/{bucket:02d}/{asset_id}_{original_stem}.webp"
-
-    def thumbnail_key(
-        self, tenant_id: str, library_id: str, asset_id: str, original_filename: str
-    ) -> str:
-        bucket = self._bucket_from_asset_id(asset_id)
-        original_stem = Path(original_filename).stem
-        return f"{tenant_id}/{library_id}/thumbnails/{bucket:02d}/{asset_id}_{original_stem}.webp"
-
-    def scene_rep_key(
-        self, tenant_id: str, library_id: str, asset_id: str, rep_frame_ms: int
-    ) -> str:
-        bucket = self._bucket_from_asset_id(asset_id)
-        return (
-            f"{tenant_id}/{library_id}/scenes/{bucket:02d}"
-            f"/{asset_id}_{rep_frame_ms:010d}.jpg"
-        )
-
-    def video_preview_key(
-        self, tenant_id: str, library_id: str, asset_id: str, rel_path: str
-    ) -> str:
-        """
-        Return the storage key for a generated MP4 video preview.
-
-        Uses the same bucketing scheme as proxies/thumbnails and preserves the
-        original stem from the relative path, but always uses `.mp4` as the
-        extension for the preview clip.
-        """
-        bucket = self._bucket_from_asset_id(asset_id)
-        original_stem = Path(rel_path).stem
-        return (
-            f"{tenant_id}/{library_id}/previews/{bucket:02d}/"
-            f"{asset_id}_{original_stem}.mp4"
-        )
-
-    def analysis_proxy_key(
-        self, tenant_id: str, library_id: str, asset_id: str, rel_path: str
-    ) -> str:
-        """Storage key for a video's full-length analysis proxy (MP4)."""
-        bucket = self._bucket_from_asset_id(asset_id)
-        original_stem = Path(rel_path).stem
-        return (
-            f"{tenant_id}/{library_id}/analysis/{bucket:02d}/"
-            f"{asset_id}_{original_stem}.mp4"
-        )
-
-    @staticmethod
-    def _bucket_from_face_id(face_id: str) -> int:
-        """Extract ULID from face_id (strip face_ prefix) and return bucket 0-99."""
-        ulid_str = face_id.removeprefix("face_")
-        ulid = ULID.from_str(ulid_str)
-        return int(ulid) % 100
-
-    def face_crop_key(
-        self, tenant_id: str, library_id: str, face_id: str
-    ) -> str:
-        bucket = self._bucket_from_face_id(face_id)
-        return f"{tenant_id}/{library_id}/face_crops/{bucket:02d}/{face_id}.webp"
-
-    def face_crop_key_of(self, tenant_id: str, library_id: str, face_id: str) -> str | None:
-        """The face's crop key, or None for an id that isn't "face_" and a
-        ULID (no crop was ever written for one)."""
-        try:
-            return self.face_crop_key(tenant_id, library_id, face_id)
-        except ValueError:
-            return None
+    # The key builders are the Store's (src/server/storage/store.py); these
+    # stay for the callers that build keys through a LocalStorage until they
+    # use the Store (ADR-020 phase 2).
+    proxy_key = staticmethod(store.proxy_key)
+    thumbnail_key = staticmethod(store.thumbnail_key)
+    scene_rep_key = staticmethod(store.scene_rep_key)
+    video_preview_key = staticmethod(store.video_preview_key)
+    analysis_proxy_key = staticmethod(store.analysis_proxy_key)
+    face_crop_key = staticmethod(store.face_crop_key)
+    face_crop_key_of = staticmethod(store.face_crop_key_of)
 
     @staticmethod
     def _under(root: Path, key: str) -> Path:
         """The key's path in `root`. A key that would leave it is refused: an
         absolute key, one with a `..` part, or one that resolves outside it."""
-        if not isinstance(key, str) or not key or "\x00" in key:
-            raise UnsafeKeyError(f"Invalid storage key: {key!r}")
-        rel = PurePosixPath(key)
-        if rel.is_absolute() or key.startswith("\\") or ".." in rel.parts:
-            raise UnsafeKeyError(f"Storage key leaves the previews folder: {key!r}")
+        store.check_key(key)
         base = os.path.abspath(root)
         path = Path(base) / key
         # Checked on the path itself, not through links: a link inside the
