@@ -68,11 +68,26 @@ def _main() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _at_a_terminal() -> bool:
+    return sys.stdin.isatty()
+
+
+def _key_from_stdin(what: str) -> str:
+    """A key given as -: at a terminal, asked for and not shown (Enter ends
+    it, as a paste does); piped in, all of it. Kept off the command line,
+    so out of the shell's history."""
+    if _at_a_terminal():
+        import getpass
+
+        return getpass.getpass(f"{what} (not shown; paste it and press Enter): ").strip()
+    return sys.stdin.read().strip()
+
+
 @config_app.command("set")
 def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
-    api_key: Annotated[str | None, typer.Option("--api-key", help="The key, or - to read it from stdin.")] = None,
-    admin_key: Annotated[str | None, typer.Option("--admin-key", help="The key, or - to read it from stdin.")] = None,
+    api_key: Annotated[str | None, typer.Option("--api-key", help="The key, or - to paste it (not shown; Enter ends it) or pipe it in.")] = None,
+    admin_key: Annotated[str | None, typer.Option("--admin-key", help="The key, or - to paste it (not shown; Enter ends it) or pipe it in.")] = None,
     cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the scheduler's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json.
@@ -83,7 +98,7 @@ def config_set(
         console.print("[red]Only one key can come from stdin.[/red]")
         raise typer.Exit(1)
     if "-" in (api_key, admin_key):
-        key = sys.stdin.read().strip()
+        key = _key_from_stdin("API key" if api_key == "-" else "Admin key")
         if not key:
             console.print("[red]No key on stdin.[/red]")
             raise typer.Exit(1)
