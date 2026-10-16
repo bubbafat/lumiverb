@@ -1385,8 +1385,27 @@ def _print_similar_results(hits: list, data: dict, output: str, total: int) -> N
         console.print(f"[dim]{total} result(s)[/dim]")
 
 
+def unreachable(exc: Exception) -> str:
+    """What to say when the server can't be reached: where this CLI looked,
+    and how to tell it where the server is."""
+    import httpx
+
+    from src.client.cli.config import _config_path
+
+    url = load_config().api_url
+    why = "connection refused" if isinstance(exc, httpx.ConnectError) and "refused" in str(exc).lower() \
+        else (str(exc) or type(exc).__name__)
+    said = f"Can't reach Lumiverb at {url} ({why})."
+    if not _config_path().exists():
+        said += " No server is set for this CLI yet, so it tried the default."
+    return (said + " Set where it is with: lumiverb config set --api-url URL"
+            " (a Mac's install: http://localhost:6464; lumiverb config show says what's set).")
+
+
 def main() -> None:
     """Entry point for the lumiverb script."""
+    import httpx
+
     try:
         app()
     except LumiverbAPIError:
@@ -1394,6 +1413,9 @@ def main() -> None:
         sys.exit(1)
     except ConfigError as exc:
         print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except httpx.TransportError as exc:  # no answer at all: not a server's error
+        print(f"Error: {unreachable(exc)}", file=sys.stderr)
         sys.exit(1)
 
 

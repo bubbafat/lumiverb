@@ -508,3 +508,50 @@ def test_download_saves_to_directory(tmp_path: Path) -> None:
     expected_file = out_dir / "DSC07171_proxy.jpg"
     assert expected_file.exists()
     assert expected_file.read_bytes() == b"\x00" * 4
+
+
+def _closed_port() -> int:
+    """A port on this machine nothing listens on."""
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize("configured", [True, False])
+def test_a_server_it_cant_reach_is_said_plainly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+                                                configured: bool) -> None:
+    """Where it looked and how to say where the server is: no traceback."""
+    import importlib
+    import sys
+
+    from src.client.cli import config as cli_config
+
+    cli_main = importlib.import_module("src.client.cli.main")
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr(cli_config, "_config_path", lambda: config_file)
+    url = f"http://127.0.0.1:{_closed_port()}"
+    if configured:
+        assert runner.invoke(app, ["config", "set", "--api-url", url, "--api-key", "k"]).exit_code == 0
+    else:  # no file: the defaults, with a closed port for the default address (a Mac's install may be at the real one)
+        defaults = lambda: cli_config.CLIConfig(api_url=url)  # noqa: E731
+        monkeypatch.setattr(cli_config, "load_config", defaults)
+        monkeypatch.setattr(cli_main, "load_config", defaults)
+    monkeypatch.setattr(sys, "argv", ["lumiverb", "maintenance", "cleanup", "--all"])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+    assert exited.value.code == 1
+    err = capsys.readouterr().err
+    assert f"Can't reach Lumiverb at {url} (connection refused)." in err and "Traceback" not in err
+    assert "lumiverb config set --api-url URL" in err
+    assert ("No server is set for this CLI yet" in err) is not configured
+
+
+@pytest.mark.fast
+def test_with_nothing_set_it_looks_for_a_macs_install_on_this_machine() -> None:
+    from src.client.cli.config import CLIConfig
+    from src.server.lifecycle.init import WEB_PORT
+
+    assert CLIConfig().api_url == f"http://localhost:{WEB_PORT}"
