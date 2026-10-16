@@ -67,20 +67,43 @@ def test_the_newest_is_always_kept():
     assert backups.to_keep(only, now) == {Path("/b/old")}
 
 
-def test_prune_removes_only_its_own_and_unfinished_ones_a_day_old(tmp_path):
-    now = datetime.now(UTC)
+def _in_one_week(now: datetime, weeks_ago: int) -> tuple[datetime, datetime]:
+    """A Wednesday and the Tuesday before it, at noon here, that many weeks
+    ago: one week's two backups whatever day it is today (weeks are this
+    machine's ISO weeks, Monday to Sunday)."""
+    then = now.astimezone() - timedelta(weeks=weeks_ago)
+    wednesday = (then - timedelta(days=then.weekday() - 2)).replace(hour=12, minute=0, second=0, microsecond=0)
+    return wednesday, wednesday - timedelta(days=1)
+
+
+@pytest.mark.parametrize("days_on", range(7))  # as if today were each day of the week
+def test_prune_removes_only_its_own_and_unfinished_ones_a_day_old(tmp_path, days_on):
+    now = datetime.now(UTC) + timedelta(days=days_on)
     fresh = _backup(tmp_path, now - timedelta(hours=1))
-    old = _backup(tmp_path, now - timedelta(days=60))
-    older = _backup(tmp_path, now - timedelta(days=61))
+    newer, earlier = _in_one_week(now, 9)
+    old = _backup(tmp_path, newer)
+    older = _backup(tmp_path, earlier)
     died = _backup(tmp_path, now - timedelta(days=3), partial=True)
     os.utime(died, (died.stat().st_atime, (now - timedelta(days=2)).timestamp()))
     working = _backup(tmp_path, now, "now", partial=True)  # being made now
+    os.utime(working, (now.timestamp(), now.timestamp()))
     (tmp_path / "lumiverb-photos").mkdir()  # someone else's, in the same folder
     (tmp_path / "notes.txt").write_text("mine")
     removed = backups.prune(tmp_path, now)
     assert set(removed) == {older, died}  # `old` is the newest of its week
     assert fresh.exists() and old.exists() and working.exists()
     assert (tmp_path / "lumiverb-photos").exists() and (tmp_path / "notes.txt").exists()
+
+
+def test_a_monday_starts_another_week(tmp_path):
+    # A Sunday's backup and the next Monday's are two weeks': each is the
+    # newest of its own, so both are kept (in one week the Sunday's would go).
+    now = datetime.now(UTC)
+    wednesday, _ = _in_one_week(now, 9)
+    monday = _backup(tmp_path, wednesday - timedelta(days=2))
+    sunday = _backup(tmp_path, wednesday - timedelta(days=3))
+    assert backups.prune(tmp_path, now) == []
+    assert monday.exists() and sunday.exists()
 
 
 def test_only_whole_backups_are_listed_newest_first(tmp_path):
