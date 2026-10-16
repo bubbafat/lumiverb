@@ -17,7 +17,8 @@ class CLIConfig(BaseModel):
     still has are ignored.
     """
 
-    api_url: str = "http://localhost:8000"
+    # A Mac's install, on this machine (src/server/lifecycle/init.py WEB_PORT); elsewhere, config set says where.
+    api_url: str = "http://localhost:6464"
     api_key: str = ""
     admin_key: str = ""
     # Library roots as stored on the server -> where they are on this
