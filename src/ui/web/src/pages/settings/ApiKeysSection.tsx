@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { listApiKeys, createApiKey, revokeApiKey, getCurrentUser, ApiError } from "../../api/client";
 import type { ApiKeyItem } from "../../api/types";
+import { copyText, selectText } from "../../lib/copyText";
 import { timeAgo } from "../../lib/format";
 
 function relativeTime(iso: string | null): string {
@@ -73,6 +74,9 @@ export default function ApiKeysSection() {
   const [label, setLabel] = useState("");
   const [role, setRole] = useState("");
   const [newPlaintext, setNewPlaintext] = useState<string | null>(null);
+  // Whether the key was copied: "copied", "select" (it couldn't be: selected to copy by hand), or not yet.
+  const [copied, setCopied] = useState<"copied" | "select" | null>(null);
+  const keyText = useRef<HTMLElement>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
 
@@ -124,15 +128,17 @@ export default function ApiKeysSection() {
     e.preventDefault();
     setCreateError(null);
     setNewPlaintext(null);
+    setCopied(null);
     createMutation.mutate({ l: label.trim(), r: role });
   }
 
   async function handleCopy() {
     if (!newPlaintext) return;
-    try {
-      await navigator.clipboard.writeText(newPlaintext);
-    } catch {
-      window.prompt("Copy this key:", newPlaintext);
+    if (await copyText(newPlaintext)) {
+      setCopied("copied");
+    } else {
+      selectText(keyText.current);
+      setCopied("select");
     }
   }
 
@@ -181,7 +187,7 @@ export default function ApiKeysSection() {
             Copy this key now. It won't be shown again.
           </p>
           <div className="flex items-center gap-2">
-            <code className="flex-1 break-all rounded bg-gray-800 px-3 py-2 text-sm text-gray-100 font-mono">
+            <code ref={keyText} className="flex-1 break-all rounded bg-gray-800 px-3 py-2 text-sm text-gray-100 font-mono select-all">
               {newPlaintext}
             </code>
             <button
@@ -189,9 +195,12 @@ export default function ApiKeysSection() {
               onClick={() => void handleCopy()}
               className="shrink-0 rounded-lg border border-gray-600 px-3 py-2 text-sm font-medium text-gray-300 transition-colors duration-150 hover:border-gray-500 hover:bg-gray-800/50"
             >
-              Copy
+              {copied === "copied" ? "Copied" : "Copy"}
             </button>
           </div>
+          {copied === "select" && (
+            <p className="text-xs text-gray-400">This browser won't copy from here: the key is selected, so press ⌘C (Ctrl+C).</p>
+          )}
         </div>
       )}
 

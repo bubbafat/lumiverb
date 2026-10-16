@@ -18,6 +18,7 @@ import { Badge } from "../components/Badge";
 import { Modal } from "../components/Modal";
 import { ProjectUsageList, clipCount } from "../components/ProjectUsageList";
 import { SkeletonRow } from "../components/SkeletonRow";
+import { copyText } from "../lib/copyText";
 import { deletedForGoodOn, shortDate } from "../lib/format";
 import { useCanEdit, useRole } from "../lib/useCanEdit";
 
@@ -41,6 +42,8 @@ export default function LibrariesPage() {
   const [addPath, setAddPath] = useState("");
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  // A library's share link just copied, or shown to copy by hand when this browser won't copy from here.
+  const [shareLink, setShareLink] = useState<{ libraryId: string; copied: boolean } | null>(null);
   // The API asked about the library's clips that projects use: hidden there in
   // the trash, gone from them once the library is deleted for good.
   const [projectsAsk, setProjectsAsk] = useState<{ id: string; usage: ProjectUsage } | null>(null);
@@ -183,13 +186,12 @@ export default function LibrariesPage() {
     },
   });
 
+  function shareUrl(libraryId: string): string {
+    return `${window.location.origin}/libraries/${libraryId}/browse`;
+  }
+
   async function copyShareLink(libraryId: string): Promise<void> {
-    const url = `${window.location.origin}/libraries/${libraryId}/browse`;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      window.prompt("Copy link", url);
-    }
+    setShareLink({ libraryId, copied: await copyText(shareUrl(libraryId)) });
   }
 
   const trashedCount = libraries?.filter((l) => l.status === "trashed").length ?? 0;
@@ -382,8 +384,19 @@ export default function LibrariesPage() {
                                 visibilityUpdatingId === lib.library_id
                               }
                             >
-                              Copy link
+                              {shareLink?.libraryId === lib.library_id && shareLink.copied ? "Copied" : "Copy link"}
                             </button>
+                          )}
+                          {lib.is_public && shareLink?.libraryId === lib.library_id && !shareLink.copied && (
+                            <input
+                              readOnly
+                              autoFocus
+                              aria-label="Share link"
+                              title="This browser won't copy from here: press ⌘C (Ctrl+C)"
+                              value={shareUrl(lib.library_id)}
+                              onFocus={(e) => e.currentTarget.select()}
+                              className="w-72 rounded-lg border border-gray-600 bg-gray-800 px-2 py-1.5 font-mono text-xs text-gray-200"
+                            />
                           )}
                         </>
                       )}
