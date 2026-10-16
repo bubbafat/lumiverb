@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-10-16), for Robert's review.
+Accepted (2026-10-16, Robert).
 
 ## Progress
 
