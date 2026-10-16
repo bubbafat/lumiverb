@@ -31,7 +31,8 @@ from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
-from tests.machine_lineage import made_json
+from tests.machine_lineage import made, made_json
+from tests.stored_in import stored_in
 
 
 # ---------------------------------------------------------------------------
@@ -99,11 +100,8 @@ def artifact_env(tmp_path_factory):
                 session.add(row)
                 session.commit()
 
-            # Patch get_storage in every router that streams artifact files
-            # so the test storage_root is used end-to-end. Each router imports
-            # get_storage at module load, so they need separate patch targets.
-            with patch("src.server.api.routers.artifacts.get_storage", return_value=storage), \
-                 patch("src.server.api.routers.assets.get_storage", return_value=storage):
+            # The test's storage, end to end (tests/stored_in.py).
+            with stored_in(storage):
                 with TestClient(app) as raw_client:
                     auth = _AuthClient(raw_client, api_key)
                     auth_headers = {"Authorization": f"Bearer {api_key}"}
@@ -914,3 +912,52 @@ def test_an_upload_that_isnt_a_jpeg_png_or_webp_is_refused(artifact_env) -> None
         data={"lineage": made_json("proxy")},
     )
     assert r.status_code == 400 and "JPEG, PNG or WebP" in r.text
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("artifact_type", ["proxy", "thumbnail"])
+def test_the_batch_upload_stores_an_image_as_the_single_upload_does(artifact_env, artifact_type) -> None:
+    # One way an image is kept (_save_upload): re-encoded, nothing of the original's metadata.
+    from tests.test_preview_metadata import METADATA, photo, upright_with_profile
+
+    auth, _, _, asset_id, storage, _, _ = artifact_env
+    r = auth.post(
+        f"/v1/assets/{asset_id}/artifacts",
+        files={artifact_type: ("p.webp", photo("WEBP"), "image/webp")},
+        data={"lineage": json.dumps({"proxy": made("proxy")})},
+    )
+    assert r.status_code == 200, r.text
+    [item] = r.json()["items"]
+    stored = storage.abs_path(item["key"]).read_bytes()
+    assert [m for m in METADATA if m in stored] == [] and upright_with_profile(stored)
+    assert item["sha256"] == _sha256(stored), "the stored file's"
+    r = auth.post(f"/v1/assets/{asset_id}/artifacts",
+                  files={artifact_type: ("p.jpg", b"\xff\xd8\xff" + secrets.token_bytes(64), "image/jpeg")},
+                  data={"lineage": json.dumps({"proxy": made("proxy")})})
+    assert r.status_code == 400 and "JPEG, PNG or WebP" in r.text
+
+
+@pytest.mark.slow
+def test_an_upload_while_the_previews_cant_be_reached_is_503_and_keeps_nothing(artifact_env, monkeypatch) -> None:
+    from src.server.api.routers import artifacts
+    from src.server.storage.store import Unavailable
+
+    auth, _, library_id, _, _, tenant_url, _ = artifact_env
+    asset_id = make_clip(tenant_url, library_id, f"unplugged_{secrets.token_hex(4)}.jpg")
+
+    class Unplugged:
+        def writing(self, key, suffix=""):
+            raise Unavailable("/Volumes/Clips: its drive isn't plugged in")
+
+    monkeypatch.setattr(artifacts, "get_store", lambda: Unplugged())
+    r = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
+                  data={"lineage": made_json("proxy")})
+    assert r.status_code == 503 and r.headers["retry-after"] == "30"
+    error = r.json()["error"]
+    assert error["code"] == "storage_unavailable" and "/Volumes" not in error["message"], "no folder named"
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(tenant_url)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar() is None
+    engine.dispose()

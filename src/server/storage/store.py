@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
-from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Protocol, runtime_checkable
 
@@ -145,9 +144,9 @@ def check_key(key: object) -> str:
 # -- The install's store --------------------------------------------------------------
 
 
-@lru_cache(maxsize=1)
 def get_store() -> Store:
-    """The install's Store: the provider STORAGE_PROVIDER names."""
+    """The install's Store: the provider STORAGE_PROVIDER names, over the
+    install's storage as it is now (get_storage: one for the process)."""
     from src.server.config import get_settings
 
     provider = get_settings().storage_provider

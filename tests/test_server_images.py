@@ -253,31 +253,33 @@ def test_clip_embeds_only_jpeg_png_and_webp(monkeypatch, tmp_path: Path, other_r
     assert seen == [("RGB", (64, 48))] * 3
 
 
+FACE = "face_01HZ0000000000000000000003"
+
+
 def _face_crops(monkeypatch, tmp_path: Path, proxy: bytes) -> tuple[list[str], SimpleNamespace]:
     """Cut a face's crop from a photo whose stored proxy is `proxy`: (the keys
     written, the session)."""
     from unittest.mock import MagicMock
 
-    from src.server.api.routers import assets
+    from src.server.api.routers.assets import _generate_face_crops
+    from src.server.storage import store as store_module
+    from src.server.storage.files import FileStore
+    from src.server.storage.local import LocalStorage
 
-    (tmp_path / "proxy").write_bytes(proxy)
-    written: list[str] = []
-    storage = SimpleNamespace(
-        abs_path=lambda key: tmp_path / key,
-        face_crop_key=lambda tenant_id, library_id, face_id: f"crops/{face_id}.webp",
-        write=lambda key, data: written.append(key),
-    )
-    monkeypatch.setattr(assets, "get_storage", lambda: storage)
+    store = FileStore(LocalStorage(str(tmp_path)))
+    store.write("ten_1/lib_1/proxies/00/ast_1_photo.webp", proxy)
+    monkeypatch.setattr(store_module, "get_store", lambda: store)
     session = MagicMock()
-    assets._generate_face_crops("t1", SimpleNamespace(proxy_key="proxy", library_id="lib1"), ["face1"],
-                                [{"bounding_box": {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}}], session)
-    return written, session
+    _generate_face_crops("ten_1", SimpleNamespace(proxy_key="ten_1/lib_1/proxies/00/ast_1_photo.webp",
+                                                  library_id="lib_1"), [FACE],
+                         [{"bounding_box": {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}}], session)
+    return list(store.list("ten_1/lib_1/face_crops/")), session
 
 
 @pytest.mark.parametrize("fmt", READ)
 def test_a_photos_face_crop_is_cut_from_a_jpeg_png_or_webp_proxy(fmt, monkeypatch, tmp_path):
     written, session = _face_crops(monkeypatch, tmp_path, sample(fmt))
-    assert written == ["crops/face1.webp"] and session.execute.called
+    assert written == ["ten_1/lib_1/face_crops/79/face_01HZ0000000000000000000003.webp"] and session.execute.called
 
 
 @pytest.mark.parametrize("fmt", NOT_READ)

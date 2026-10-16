@@ -863,19 +863,19 @@ def get_face_crop(
     session: Annotated[Session, Depends(get_tenant_session)],
 ):
     """Serve the 128x128 face crop thumbnail. Generates on demand if missing."""
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import Response
 
     from src.server.models.tenant import Face
-    from src.server.storage.local import get_storage
+    from src.server.storage.store import NotFound, get_store
 
     face = session.get(Face, face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
 
-    storage = get_storage()
+    store = get_store()
 
     # Generate crop on demand if missing
-    if not face.crop_key or not storage.abs_path(face.crop_key).exists():
+    if not face.crop_key or not store.exists(face.crop_key):
         if face.frame_ms is not None:  # a video's: cut from its frame when found, never from the poster
             raise HTTPException(status_code=404, detail="No crop for this face")
         if not face.bounding_box_json:
@@ -893,15 +893,12 @@ def get_face_crop(
         if not face.crop_key:
             raise HTTPException(status_code=404, detail="Crop generation failed")
 
-    crop_path = storage.abs_path(face.crop_key)
-    if not crop_path.exists():
-        raise HTTPException(status_code=404, detail="Crop file missing")
+    try:
+        crop = store.read(face.crop_key)  # a 128 x 128 WebP: read whole
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Crop file missing") from None
 
-    return StreamingResponse(
-        open(crop_path, "rb"),
-        media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
-    )
+    return Response(crop, media_type="image/webp", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @faces_router.post("/{face_id}/assign", status_code=200, dependencies=[Depends(require_editor)])

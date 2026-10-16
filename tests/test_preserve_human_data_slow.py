@@ -32,6 +32,7 @@ from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _ru
 from tests.faces import face_count, plant_faces
 from tests.machine_lineage import ingest_made, made
 from tests.scan_plan import add_anyway, scan_would
+from tests.stored_in import stored_in
 
 
 @pytest.fixture(scope="module")
@@ -73,8 +74,7 @@ def env(tmp_path_factory):
                 session.commit()
 
             with (
-                patch("src.server.api.routers.ingest.get_storage", return_value=storage),
-                patch("src.server.api.routers.trash.get_storage", return_value=storage),
+                stored_in(storage),
                 TestClient(app) as client,
             ):
                 headers = {"Authorization": f"Bearer {api_key}"}

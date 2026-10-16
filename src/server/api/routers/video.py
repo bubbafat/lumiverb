@@ -27,7 +27,8 @@ from src.server.repository.tenant import (
     VideoIndexChunkRepository,
     VideoSceneRepository,
 )
-from src.server.storage.local import get_storage
+from src.server.storage import store as stored
+from src.server.storage.store import get_store
 
 import logging
 _log = logging.getLogger(__name__)
@@ -175,13 +176,13 @@ def _swap_in(request: Request, session: Session, asset_id: str, described: dict 
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         return True
-    storage = get_storage()
+    store = get_store()
     # Only the images at the keys the server derives (a scene's rep frame),
     # and not one a new scene shares (the same moment of the same video).
     for ms in {r.rep_frame_ms for r in old} - {r.rep_frame_ms for r in new}:  # best effort: only space
         try:
-            storage.delete(storage.scene_rep_key(tenant_id, library_id, asset_id, ms))
-        except OSError as exc:
+            store.delete(stored.scene_rep_key(tenant_id, library_id, asset_id, ms))
+        except OSError as exc:  # Unavailable too: the daily sweep takes it once it can
             _log.warning("Couldn't delete a scene image of %s: %s", asset_id, exc)
     return True
 
@@ -622,10 +623,10 @@ def submit_video_faces(
 
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
-        storage = get_storage()
+        store = get_store()
         for face_id, data in zip(face_ids, images, strict=True):
-            key = storage.face_crop_key(tenant_id, asset.library_id, face_id)
-            storage.write(key, data)
+            key = stored.face_crop_key(tenant_id, asset.library_id, face_id)
+            store.write(key, data)
             session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
     session.commit()
     LibraryRepository(session).bump_revision(asset.library_id)

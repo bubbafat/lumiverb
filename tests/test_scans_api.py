@@ -38,8 +38,8 @@ from src.server.storage.local import LocalStorage
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
+from tests.stored_in import stored_in
 
-_STORAGE_USERS = ("artifacts", "assets", "trash", "ingest", "video")
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 T1 = T0 + timedelta(hours=1)
 
@@ -97,8 +97,7 @@ def env(tmp_path_factory):
             _route(other_id, other_url)
 
             with ExitStack() as stack:
-                for mod in _STORAGE_USERS:
-                    stack.enter_context(patch(f"src.server.api.routers.{mod}.get_storage", return_value=storage))
+                stack.enter_context(stored_in(storage))
                 with TestClient(app) as client:
                     admin = {"Authorization": f"Bearer {api_key}"}
 

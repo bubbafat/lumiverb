@@ -149,6 +149,21 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
     return envelope(422, "invalid_request", f"{where}: {msg}" if where else msg, {"errors": errors})
 
 
+# Said to whoever asked, however they're signed in: no folder named.
+STORAGE_UNAVAILABLE = ("Where Lumiverb keeps its previews can't be reached now (is its drive plugged in?). "
+                       "Try again when it's back.")
+
+
+async def storage_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    """The Store couldn't reach where a key is kept (src/server/storage/store.py
+    Unavailable): 503, to try again, never a 404 (nothing is missing). The
+    folder is the log's, not the answer's."""
+    import logging
+
+    logging.getLogger(__name__).warning("%s %s: %s", request.method, request.url.path, exc)
+    return envelope(503, "storage_unavailable", STORAGE_UNAVAILABLE, headers={"Retry-After": "30"})
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """A 500 in the envelope. Starlette still logs the exception (and re-raises it to the server)."""
     return envelope(500, "internal_error", "Something went wrong on the server.")

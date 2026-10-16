@@ -29,6 +29,14 @@ from src.server.upgrade.steps.backfill_artifact_sha256 import (
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db
 
 
+def _store(root: Path):
+    """The Store over a folder: keys are paths under it."""
+    from src.server.storage.files import FileStore
+    from src.server.storage.local import LocalStorage
+
+    return FileStore(LocalStorage(str(root)))
+
+
 # ---------------------------------------------------------------------------
 # Helpers shared by fast tests
 # ---------------------------------------------------------------------------
@@ -136,11 +144,8 @@ def test_proxy_run_skips_missing_file(tmp_path: Path) -> None:
     meta = _FakeMetadataRepo()
     ctx = UpgradeContext(session=session, metadata=meta)
 
-    storage_mock = MagicMock()
-    storage_mock.abs_path.return_value = tmp_path / "nonexistent.jpg"
-
-    step = BackfillProxySha256Step()
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
+    step = BackfillProxySha256Step()  # nothing kept at its key
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=_store(tmp_path)):
         result = step.run(ctx)
 
     assert result["missing"] == 1
@@ -152,10 +157,25 @@ def test_proxy_run_skips_missing_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.fast
+def test_files_that_cant_be_reached_stop_it_never_taken_for_missing(tmp_path: Path) -> None:
+    from src.server.storage.store import Unavailable
+
+    session = MagicMock()
+    session.exec.return_value.fetchall.side_effect = [[("ast_001", "ten1/lib_1/proxies/01/ast_001_photo.jpg")], []]
+    unplugged = MagicMock()
+    unplugged.open.side_effect = Unavailable("its drive isn't plugged in")
+    with (patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=unplugged),
+          pytest.raises(Unavailable)):
+        BackfillProxySha256Step().run(UpgradeContext(session=session, metadata=_FakeMetadataRepo()))
+    assert not any("UPDATE" in str(c[0][0]) for c in session.exec.call_args_list)
+
+
+@pytest.mark.fast
 def test_proxy_run_writes_hash_for_existing_file(tmp_path: Path) -> None:
     content = b"fake proxy bytes"
     expected_sha = hashlib.sha256(content).hexdigest()
-    proxy_file = tmp_path / "proxy.jpg"
+    proxy_file = tmp_path / "some/key.jpg"
+    proxy_file.parent.mkdir()
     proxy_file.write_bytes(content)
 
     session = MagicMock()
@@ -167,11 +187,8 @@ def test_proxy_run_writes_hash_for_existing_file(tmp_path: Path) -> None:
     meta = _FakeMetadataRepo()
     ctx = UpgradeContext(session=session, metadata=meta)
 
-    storage_mock = MagicMock()
-    storage_mock.abs_path.return_value = proxy_file
-
     step = BackfillProxySha256Step()
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage_mock):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=_store(tmp_path)):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -274,15 +291,14 @@ def test_proxy_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -> No
         _insert_asset(conn, asset_id=asset_id, library_id=lib_id, proxy_key=proxy_key, thumbnail_key=None)
         conn.commit()
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
 
     ctx = _make_ctx(backfill_db)
     step = BackfillProxySha256Step()
 
     assert step.needs_work(ctx) is True
 
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -318,13 +334,12 @@ def test_thumbnail_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
         _insert_asset(conn, asset_id=asset_id, library_id=lib_id, proxy_key=None, thumbnail_key=thumb_key)
         conn.commit()
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
 
     ctx = _make_ctx(backfill_db)
     step = BackfillThumbnailSha256Step()
 
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -351,13 +366,12 @@ def test_proxy_backfill_skips_missing_file_leaves_null(backfill_db, tmp_path: Pa
         _insert_asset(conn, asset_id=asset_id, library_id=lib_id, proxy_key=proxy_key, thumbnail_key=None)
         conn.commit()
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
 
     ctx = _make_ctx(backfill_db)
     step = BackfillProxySha256Step()
 
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage):
         result = step.run(ctx)
 
     assert result["missing"] == 1
@@ -409,15 +423,14 @@ def test_scene_rep_backfill_writes_correct_sha256(backfill_db, tmp_path: Path) -
         )
         conn.commit()
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
 
     ctx = _make_ctx(backfill_db)
     step = BackfillSceneRepSha256Step()
 
     assert step.needs_work(ctx) is True
 
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage):
         result = step.run(ctx)
 
     assert result["updated"] == 1
@@ -448,10 +461,9 @@ def test_runner_marks_all_three_steps_completed(backfill_db, tmp_path: Path) -> 
 
     runner = TenantUpgradeRunner()
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
 
-    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage):
+    with patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage):
         result = runner.execute(ctx, max_steps=10)
 
     status = runner.get_status(ctx)
@@ -487,12 +499,11 @@ def test_proxy_backfill_pages_past_missing_files(backfill_db, tmp_path: Path) ->
     path = tmp_path / f"ten1/{lib_id}/proxies/{present}.jpg"
     path.parent.mkdir(parents=True)
     path.write_bytes(b"there")
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda key: tmp_path / key
+    storage = _store(tmp_path)
     ctx = _make_ctx(backfill_db)
     try:
         with (
-            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage),
+            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage),
             patch("src.server.upgrade.steps.backfill_artifact_sha256._BATCH_SIZE", 2),
         ):
             result = BackfillProxySha256Step().run(ctx)
@@ -517,10 +528,10 @@ def test_proxy_backfill_never_overwrites_a_rerender(backfill_db, tmp_path: Path,
     path.parent.mkdir(parents=True)
     path.write_bytes(b"old render")
 
-    def hash_then_rerender(storage, k):
-        from src.server.upgrade.steps.backfill_artifact_sha256 import _hash_file
+    from src.server.upgrade.steps.backfill_artifact_sha256 import _hash_key
 
-        sha = _hash_file(storage.abs_path(k))
+    def hash_then_rerender(store, k):
+        sha = _hash_key(store, k)
         with backfill_db.connect() as conn:  # the render lands between the read and the write
             if rerender == "new_key":
                 conn.execute(text("UPDATE assets SET proxy_key = :k WHERE asset_id = :id"),
@@ -530,12 +541,11 @@ def test_proxy_backfill_never_overwrites_a_rerender(backfill_db, tmp_path: Path,
             conn.commit()
         return sha
 
-    storage = MagicMock()
-    storage.abs_path.side_effect = lambda k: tmp_path / k
+    storage = _store(tmp_path)
     ctx = _make_ctx(backfill_db)
     try:
         with (
-            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_storage", return_value=storage),
+            patch("src.server.upgrade.steps.backfill_artifact_sha256.get_store", return_value=storage),
             patch("src.server.upgrade.steps.backfill_artifact_sha256._hash_key", side_effect=hash_then_rerender),
         ):
             BackfillProxySha256Step().run(ctx)

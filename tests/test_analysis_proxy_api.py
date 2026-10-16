@@ -29,8 +29,8 @@ from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
+from tests.stored_in import stored_in
 
-_STORAGE_USERS = ("artifacts", "assets", "trash", "ingest", "video")
 
 
 @pytest.fixture(scope="module")
@@ -77,10 +77,7 @@ def env(tmp_path_factory):
                 session.commit()
 
             with ExitStack() as stack:
-                for mod in _STORAGE_USERS:
-                    stack.enter_context(patch(f"src.server.api.routers.{mod}.get_storage", return_value=storage))
-                # And where it's looked up when needed (a re-detection's dropped crops).
-                stack.enter_context(patch("src.server.storage.local.get_storage", return_value=storage))
+                stack.enter_context(stored_in(storage))
                 with TestClient(app) as client:
                     headers = {"Authorization": f"Bearer {api_key}"}
                     r = client.post("/v1/libraries", json={"name": "Footage", "root_path": "/Volumes/media-01/Footage"},

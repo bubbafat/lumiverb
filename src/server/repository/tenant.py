@@ -3329,13 +3329,13 @@ def _remove_keys(keys: list[str]) -> None:
     """Files of the previews folder whose rows are gone (wherever each is: a move may be under way)."""
     import logging
 
-    from src.server.storage.local import get_storage
+    from src.server.storage.store import get_store
 
-    storage = get_storage()
+    store = get_store()
     for key in keys:
         try:
-            storage.delete(key)
-        except (OSError, ValueError) as exc:  # ValueError: a key outside the previews folder, never deleted
+            store.delete(key)
+        except (OSError, ValueError) as exc:  # Unavailable: the daily sweep takes it; ValueError: never outside
             logging.getLogger(__name__).warning("Couldn't remove %s: %s", key, exc)
 
 

@@ -18,7 +18,8 @@ from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.shared.utils import utcnow
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository, LibraryRepository
-from src.server.storage.local import get_storage
+from src.server.storage import store as stored
+from src.server.storage.store import Unavailable, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -283,31 +284,32 @@ def purge_assets(
 def _files_of(session: Session, tenant_id: str | None, clips: list) -> list[str]:
     """Every file of these clips the previews folder holds: their previews
     and analysis proxies, their scenes' pictures and frames (a frame's key
-    is derived, storage.scene_rep_key: never in a column), and their faces'
+    is derived, store.scene_rep_key: never in a column), and their faces'
     crops."""
     keys = [k for a in clips for k in (a.proxy_key, a.thumbnail_key, getattr(a, "video_preview_key", None),
                                        getattr(a, "analysis_proxy_key", None)) if k]
     ids = [a.asset_id for a in clips]
     library_of = {a.asset_id: a.library_id for a in clips}
-    storage = get_storage()
     for asset_id, rep_frame_ms, proxy_key, thumbnail_key in session.execute(text(
         "SELECT asset_id, rep_frame_ms, proxy_key, thumbnail_key FROM video_scenes WHERE asset_id = ANY(:ids)"
     ), {"ids": ids}).all():
         keys += [k for k in (proxy_key, thumbnail_key) if k]
         if tenant_id:
-            keys.append(storage.scene_rep_key(tenant_id, library_of[asset_id], asset_id, rep_frame_ms))
+            keys.append(stored.scene_rep_key(tenant_id, library_of[asset_id], asset_id, rep_frame_ms))
     for asset_id, face_id, crop_key in session.execute(text(
         "SELECT asset_id, face_id, crop_key FROM faces WHERE asset_id = ANY(:ids)"), {"ids": ids}).all():
-        keys += [k for k in (crop_key, tenant_id and storage.face_crop_key_of(tenant_id, library_of[asset_id], face_id))
+        keys += [k for k in (crop_key, tenant_id and stored.face_crop_key_of(tenant_id, library_of[asset_id], face_id))
                  if k]
     return list(dict.fromkeys(keys))
 
 
 def _remove_files(keys: list[str]) -> None:
-    storage = get_storage()
+    store = get_store()
     for key in keys:
         try:
-            storage.delete(key)  # wherever it is (a move may be under way)
+            store.delete(key)  # wherever it is (a move may be under way)
+        except Unavailable as e:  # left for the daily sweep once it can be reached
+            logger.warning("Couldn't remove %s after empty trash: %s", key, e)
         except (OSError, ValueError) as e:  # ValueError: a key outside the previews folder, never deleted
             logger.warning("Failed to remove file %s after empty trash: %s", key, e)
 

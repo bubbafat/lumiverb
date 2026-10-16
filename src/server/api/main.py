@@ -18,9 +18,11 @@ from src.server.api.errors import (
     api_error_handler,
     envelope,
     http_exception_handler,
+    storage_unavailable_handler,
     unhandled_error_handler,
     validation_error_handler,
 )
+from src.server.storage.store import Unavailable
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
 
@@ -108,6 +110,7 @@ app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetr
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
+app.add_exception_handler(Unavailable, storage_unavailable_handler)
 
 
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

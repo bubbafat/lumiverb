@@ -30,7 +30,6 @@ from src.shared.producers import CLIP_MODEL_ID
 from src.shared.producers import PERSON as P_PERSON
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
-from src.server.storage.local import get_storage
 from src.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -1541,19 +1540,21 @@ def _generate_face_crops(
     """Generate 128x128 WebP face crop thumbnails from the asset proxy (a
     photo's: a video's faces bring their crops, cut from their frames)."""
     from src.server.images import rgb
+    from src.server.storage import store as keys
+    from src.server.storage.store import NotFound, get_store
     from src.shared.face_crop import face_crop
 
-    storage = get_storage()
+    store = get_store()
     proxy_key = asset.proxy_key  # type: ignore[union-attr]
     if not proxy_key:
         return
-
-    proxy_path = storage.abs_path(proxy_key)
-    if not proxy_path.exists():
+    try:
+        proxy = store.read(proxy_key)
+    except NotFound:
         return
 
     try:
-        img = rgb(proxy_path.read_bytes())  # an image the server reads (src/server/images.py)
+        img = rgb(proxy)  # an image the server reads (src/server/images.py)
     except Exception as exc:
         logger.warning("Cannot open proxy for face crops: %s (%s)", proxy_key, exc)
         return
@@ -1568,8 +1569,8 @@ def _generate_face_crops(
                 crop_bytes = face_crop(img, bb)
                 if crop_bytes is None:
                     continue
-                crop_key = storage.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
-                storage.write(crop_key, crop_bytes)
+                crop_key = keys.face_crop_key(tenant_id, asset.library_id, face_id)  # type: ignore[union-attr]
+                store.write(crop_key, crop_bytes)
 
                 # Update face record
                 from sqlalchemy import text as sa_text
