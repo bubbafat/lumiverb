@@ -12,7 +12,7 @@ Proposed (2026-10-16), for Robert's review.
 | 1 | The `Store` interface and its filesystem provider; contract tests | Not started |
 | 2 | The API's own code through the `Store` (no paths outside the provider) | Not started |
 | 3 | Producers get inputs and scratch from the runner; caches with caps | Not started |
-| 4 | Originals behind a read-only `Originals` interface | Not started |
+| 4 | The server's originals behind its read-only `Originals` interface; the API documented as a client's whole contract | Not started |
 | 5 | Clients keep only bounded caches of their own | Not started |
 
 ## Overview
@@ -135,13 +135,14 @@ job.scratch: Path   # a folder of its own; removed when the job ends
 - **Originals are read only by producers that declare `storage=True`, through `inputs.original`.** The faces producer and the preview fallback stop reading originals behind the scheduler's back. When storage is asleep, they wait or use the stored preview.
 - **A test holds `src/producers` to this, as one holds `src` to libvips:** no imports of `tempfile`, `shutil`, `cache_dir`, `get_storage`/`get_store` or `resolve_source_path`, and no `open()` on a path.
 
-### 5. Originals: a separate, read-only interface
+### 5. Originals: the server's own interface, for the libraries it reads
 
-This answers the open question: originals don't go through the `Store`. They aren't Lumiverb's (they're never written), and they differ in four ways:
+A library is read by the server or by a device, never both (ADR-018 decision 1). When the server reads it, the scheduler reads the originals through `Originals`, its own interface. So no producer opens an original file, which is Robert's rule for the `Store` applied to the originals. It's server-internal, like the `Store`: no client uses it or needs to.
+
+Originals don't go through the `Store`. They aren't Lumiverb's (they're never written), and they differ in three ways:
 - they're named by library and relative path, not by key;
-- each machine maps them differently (`LUMIVERB_ROOT_MAP`);
-- they may be unmounted or asleep (`reachable_root`);
-- each library names who reads it (ADR-018 decision 13).
+- the server maps them (`LUMIVERB_ROOT_MAP`);
+- they may be unmounted or asleep (`reachable_root`).
 
 ```python
 class Originals(Protocol):
@@ -152,9 +153,9 @@ class Originals(Protocol):
     def local_file(self, library, rel_path: str) -> Iterator[Path]: ...
 ```
 
-- The read side has the same shape as the `Store`'s, so a reader on another machine (ADR-018) can be a provider later.
 - `roots.py`, `resolve_source_path` and the scan's walk move behind it.
-- Nothing writes through it, and nothing outside it opens an original.
+- Nothing writes through it, and nothing on the server outside it opens an original.
+- For a library a device reads, the server never uses it: everything comes through the API (decision 9).
 
 ### 6. Everything transient has an end
 
@@ -178,6 +179,25 @@ The interface is shaped so one fits:
 
 One contract test suite runs against every provider (only the filesystem one for now), so an S3 provider later passes the same tests or isn't done. If one is ever built, `fsspec` or boto3 can serve inside it.
 
+### 9. The server relies only on the API, never on a client being ours
+
+When a device reads a library, the server's whole contract with it is the API. A client may reuse our code (the Python CLI does: `run_scan` is the scheduler's own scanner). It may be written from scratch against the API, such as a Swift scanner in the Mac app. It may even simulate a library with no original files at all. The server can't tell, and nothing depends on it:
+- **What arrives is a claim, checked where it can be.** Facts are paths, sizes, times and content hashes. Artifacts are previews, analysis proxies, EXIF and probe facts. Previews are re-encoded, and pictures are read only as JPEG, PNG or WebP up to 120 MP (`server/images.py`, `server/preview_image.py`). Videos from a client are checked and rewritten (ADR-018 phase 5). The server never assumes an original exists.
+- **`docs/cursor-api.md` must be enough to build a client from scratch.** Anything the server needs from a client is specified there, not only in our code.
+
+Three parts of that contract:
+
+- **Content hashes are labelled with their scheme, and only hashes of one scheme are compared.**
+  - To the server a content hash is a label: the same content, the same string. It never reads one.
+  - A client may hash however it likes, under its own prefix. Moves, a person's trash and changed files are told apart by comparing the reader's own hashes with each other.
+  - The server's own schemes are defined exactly, so a library can change readers in either direction someday: a plain SHA-256 for a file up to 64 MiB, `fp1:` above (`src/shared/content_hash.py`, pinned by tests, and in cursor-api's Content hashes).
+  - Changing a library's reader is a re-key handshake. For each file unchanged by size and time, the new reader sends its hash, and that hash takes the old one's place, with its lineage. That's the general form of the fp1 swap (`scans.py` `rekey`). It isn't built yet: today the API takes only the server's schemes.
+- **The server is opinionated about artifact formats.** The web app has to play and show what's stored, so the server says what it takes: preview sizes and formats, and analysis proxies as H.264 8-bit 4:2:0 with AAC and the index first (ADR-018 decision 11). It refuses or rewrites anything else. These are specified in cursor-api.
+- **A remake is reader work with a defined contract.**
+  - When the server's settings or a producer's version make an artifact only the reader can make stale (previews, analysis proxies, probe facts), the server lists that work for the library's reader through the API. The reader makes the artifacts again and uploads them.
+  - Until then the old ones are served (ADR-016 principle 11).
+  - The server's scheduler is this reader for its own libraries. For a device, it's ADR-018's phase 3 (one computed list of the work that needs the originals) and phase 7 (the remake choice).
+
 ## Edge Cases
 
 | Scenario | Behavior |
@@ -192,6 +212,9 @@ One contract test suite runs against every provider (only the filesystem one for
 | An object store's `local_file` | Downloaded into scratch, removed on exit; a crash leaves it for the start-up sweep |
 | Two writers of one key | The last whole write wins (as with rename today) |
 | A face re-detected away | Its crop file goes with its row |
+| A client simulates a library (no originals at all) | Nothing changes for the server: it stores and processes what arrives, checked as any client's |
+| A client uses its own hash scheme | Its hashes are compared only with each other; a library changing reader re-keys (decision 9) |
+| An artifact only the reader can make goes stale | It's listed for the reader through the API; the old one is served until a new one arrives |
 
 ## Code References
 
@@ -261,9 +284,11 @@ These are bugs whatever happens to the rest.
 - The faces producer and the preview fallback read originals only through `inputs.original`.
 - The import test for `src/producers`.
 
-### Phase 4 — Originals behind `Originals`
+### Phase 4 — The server's originals, and the client contract
 
-**Deliverables:** the interface, with `roots.py`, `resolve_source_path` and the scan's walk behind it. Nothing outside it opens an original.
+**Deliverables:**
+- The server's `Originals`, with `roots.py`, `resolve_source_path` and the scan's walk behind it. Nothing on the server outside it opens an original.
+- `docs/cursor-api.md` as a client's whole contract (decision 9): the content-hash rule and the server's schemes, the artifact formats the server takes, and the scan protocol. Remakes for a device come with ADR-018 phases 3 and 7.
 
 ### Phase 5 — Clients
 
@@ -277,11 +302,13 @@ These are bugs whatever happens to the rest.
 
 - **Keep paths and add discipline.** That's how eight callers came to work around `LocalStorage`. Rejected: an interface without paths is the discipline.
 - **`fsspec` as the interface.** It brings S3 and others for free. But it speaks in paths everywhere, and the guarantees we rely on (atomic whole-file writes, a drive unplugged told apart from a file missing, moves between folders) aren't the same across its backends. Rejected as the interface; it can serve inside an object-store provider.
-- **Originals through the same `Store`.** Rejected (decision 5): they aren't ours, they're named by library and path, mapped per machine, may be asleep, and are read by the library's reader.
+- **Originals through the same `Store`.** Rejected (decision 5): they aren't ours, they're named by library and path, mapped by the server, and may be asleep.
+- **Clients share the server's code for reading originals.** Rejected (decision 9): the API is the whole contract. Our CLI may reuse the scheduler's scanner, but nothing may depend on a client doing so.
+- **The server reads a device's originals on demand, through the API.** That would keep clients thin, with every producer on the server. But it moves originals off their machine, which ADR-016 principle 1 and ADR-018 rule out.
 - **The scheduler always downloads over the API, even beside it.** Simple and uniform, but it copies every preview and analysis proxy the API already has on the same disk. Rejected: beside the API it reads the `Store`, which is the API's own code, not a back door.
 
 ## What This Does NOT Include
 
 - An S3 or other object-store provider (decision 8).
 - Moving the database backups or install state behind the `Store`.
-- Remote readers of originals (ADR-018 phase 3); this only gives them an interface to implement.
+- Devices that read libraries (ADR-018). Their contract is the API (decision 9), and building them is ADR-018's, as is the re-key handshake when a library changes reader.
