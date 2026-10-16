@@ -7,7 +7,7 @@ import type { AssetPageItem } from "../api/types";
 
 const detail = {
   asset_id: "ast_1", library_id: "", rel_path: "", media_type: "video", status: "active",
-  proxy_key: null, thumbnail_key: null, width: 1280, height: 720, file_size: null, sha256: null,
+  proxy_key: null, thumbnail_key: null, width: 1280, height: 720, file_size: null, content_hash: null,
   taken_at: null, duration_sec: 25, transcript_srt: null, transcript_language: null,
   note: null, note_author: null, note_updated_at: null, ai_tags: [], video_facet: null,
 };
@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 const asset = {
-  asset_id: "ast_1", rel_path: "", file_size: 0, file_mtime: null, sha256: null, media_type: "video",
+  asset_id: "ast_1", rel_path: "", file_size: 0, file_mtime: null, content_hash: null, media_type: "video",
   width: 1280, height: 720, taken_at: null, status: "active", duration_sec: 25, camera_make: null,
   camera_model: null, iso: null, aperture: null, focal_length: null, focal_length_35mm: null,
   lens_model: null, flash_fired: null, gps_lat: null, gps_lon: null, face_count: 0, created_at: null,

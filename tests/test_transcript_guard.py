@@ -30,7 +30,7 @@ from tests.test_transcribers import _Server
 
 pytestmark = pytest.mark.fast
 
-SHA = "ab" * 32
+SHA = "sha256:" + "ab" * 32
 BUILT_IN = {"machine_id": "aim_self", "name": "Built in", "api_url": "", "api_key": "", "at_once": 1, "built_in": True}
 
 
@@ -60,7 +60,7 @@ def _client(machines: list[dict], model: str = "small") -> MagicMock:
 
 
 def _clips(*ids: str) -> list[dict]:
-    return [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0, "sha256": SHA, "has_analysis_proxy": True}
+    return [{"asset_id": x, "rel_path": f"{x}.mov", "duration_sec": 4.0, "content_hash": SHA, "has_analysis_proxy": True}
             for x in ids]
 
 

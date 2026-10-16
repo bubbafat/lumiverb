@@ -236,7 +236,7 @@ final class APIClientAdditionalTests: XCTestCase {
         let json = """
         {
             "asset_id": "ast_1", "library_id": "lib_1", "rel_path": "photo.jpg",
-            "sha256": "abc", "file_size": 1000, "media_type": "image",
+            "content_hash": "sha256:abc", "file_size": 1000, "media_type": "image",
             "status": "active", "created_at": "2024-01-01T00:00:00+00:00",
             "camera_make": null, "camera_model": null
         }

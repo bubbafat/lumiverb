@@ -13,7 +13,7 @@ public struct AssetDetail: Decodable, Identifiable, Sendable {
     public let durationSec: Double?
     public let width: Int?
     public let height: Int?
-    public let sha256: String?
+    public let contentHash: String?
     public let exifExtractedAt: String?
     public let cameraMake: String?
     public let cameraModel: String?

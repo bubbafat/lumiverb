@@ -206,7 +206,7 @@ def test_ingest_with_exif(ingest_env) -> None:
     asset_id = create_asset("exif_test.jpg")
 
     exif_data = {
-        "sha256": "abc123",
+        "content_hash": "sha256:" + "abc123" * 10 + "abcd",
         "camera_make": "Sony",
         "camera_model": "A7R IV",
         "taken_at": "2025-06-15T14:30:00Z",
@@ -357,7 +357,7 @@ def test_ingest_is_idempotent(ingest_env) -> None:
     )
     assert r2.status_code == 200
 
-    # Second ingest should have different sha256 (different image)
+    # Second ingest should have different content_hash (different image)
     assert r1.json()["proxy_sha256"] != r2.json()["proxy_sha256"]
 
 

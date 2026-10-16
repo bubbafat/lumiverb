@@ -967,7 +967,7 @@ def test_emptied_trash_is_remembered_until_a_scan_adds_it_anyway(env) -> None:
     assert _scan_would(client, headers, library_id, rel_path) == "skipped"  # still remembered
 
     found = [{"rel_path": rel_path, "file_size": 5000}]
-    assert add_anyway(client, headers, library_id, found, {rel_path: "ab" * 32}) == {rel_path: "upload"}
+    assert add_anyway(client, headers, library_id, found, {rel_path: "sha256:" + "ab" * 32}) == {rel_path: "upload"}
     assert _scan_would(client, headers, library_id, rel_path) == "upload"  # forgotten
     r = _ingest(client, headers, library_id, rel_path)
     assert r.status_code == 200, r.text

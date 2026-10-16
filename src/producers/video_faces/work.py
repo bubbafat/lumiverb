@@ -116,6 +116,6 @@ class VideoFaces(Work):
                 "detection_model": found.detection_model,
                 "detection_model_version": found.detection_model_version,
                 "embedding_model": found.embedding_model,
-                "source_sha256": clip.get("sha256") or "",
+                "source_hash": clip.get("content_hash") or "",
                 "lineage": json.dumps({**self.lineage(clip, used=self.used), "level": level}),
             }, files=[("crops", (f"{i}.webp", crop, "image/webp")) for i, crop in enumerate(found.crops)])

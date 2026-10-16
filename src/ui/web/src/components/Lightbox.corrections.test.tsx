@@ -12,7 +12,7 @@ vi.mock("../api/client", async (orig) => ({
   getCurrentUser: vi.fn(async () => ({ role: "editor" })),
   getAsset: vi.fn(async (id: string) => ({
     asset_id: id, library_id: "", rel_path: `${id}.jpg`, media_type: "image", status: "active",
-    proxy_key: null, thumbnail_key: null, width: 100, height: 100, file_size: null, sha256: null,
+    proxy_key: null, thumbnail_key: null, width: 100, height: 100, file_size: null, content_hash: null,
     taken_at: null, duration_sec: null, note: null, note_author: null, note_updated_at: null,
     ai_description: `about ${id}`, ai_tags: [], video_facet: null, corrected: [],
   })),
@@ -27,7 +27,7 @@ vi.mock("../api/useAuthenticatedImage", () => ({
 afterEach(cleanup);
 
 const item = (id: string) => ({
-  asset_id: id, rel_path: `${id}.jpg`, file_size: 0, file_mtime: null, sha256: null, media_type: "image",
+  asset_id: id, rel_path: `${id}.jpg`, file_size: 0, file_mtime: null, content_hash: null, media_type: "image",
   width: 100, height: 100, taken_at: null, status: "active", duration_sec: null, camera_make: null,
   camera_model: null, iso: null, aperture: null, focal_length: null, focal_length_35mm: null,
   lens_model: null, flash_fired: null, gps_lat: null, gps_lon: null, face_count: 0, created_at: null,

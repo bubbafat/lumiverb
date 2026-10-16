@@ -150,7 +150,7 @@ def test_a_producer_is_one_folder(tmp_path):
         acct = MagicMock()
         acct.stopping = threading.Event()
         acct.producers.lineage.return_value = {{"producer": "example"}}
-        job = Job("t", "example", 3, ({{"asset_id": "a1", "library_id": "l", "rel_path": "a.jpg", "sha256": "s"}},))
+        job = Job("t", "example", 3, ({{"asset_id": "a1", "library_id": "l", "rel_path": "a.jpg", "content_hash": "s"}},))
         outcome = runners()["example"](acct, job)
 
         from src.server.scheduler.account import Account

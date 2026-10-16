@@ -93,7 +93,7 @@ def test_an_item_says_what_its_job_needs(env) -> None:
     assert item["asset_id"] == video
     assert item["library_id"] == lib[2]
     assert item["rel_path"] == "Day 1/clip.mov"
-    assert item["sha256"] == sha
+    assert item["content_hash"] == sha
     assert item["has_analysis_proxy"] is False
     assert item["created_at"][:2] == "20"
 

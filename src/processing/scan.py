@@ -2,7 +2,7 @@
 
 Scan is the only operation that touches source files. It produces three
 outputs per file: a server-side asset record, a server-side 2048px proxy,
-and a local proxy cache entry with SHA sidecar.
+and a local proxy cache entry with its hash sidecar.
 
 The client says what it found; the server decides (ADR-018 decision 12,
 src/server/scans.py). A scan is a session on the server: started before the
@@ -192,17 +192,17 @@ def _existing_folder(root: Path, rel: str) -> str | None:
     return None
 
 
-def _made(artifact: str, source_sha256: str | None) -> dict:
+def _made(artifact: str, source_hash: str | None) -> dict:
     """Lineage for what the scan makes: proxies, probes and previews come out
     of its own constants, which are the registry's settings (a test holds
     them together)."""
-    return producer_lineage(artifact, effective_settings(artifact), source_sha256)
+    return producer_lineage(artifact, effective_settings(artifact), source_hash)
 
 
 def _hashes(f: dict) -> dict:
     """What an upload's EXIF payload takes of the file's hashes: those its
     hashing found, and whether its plan asks for the whole file's too."""
-    return {"sha256": f.get("source_sha256"), "legacy_sha256": f.get("legacy_sha256"),
+    return {"content_hash": f.get("content_hash"), "previous_hash": f.get("previous_hash"),
             "whole_too": bool(f.get("_plan", {}).get("legacy"))}
 
 
@@ -257,16 +257,16 @@ def _scan_one(
         if f.get("file_mtime") is not None:
             data["file_mtime"] = f["file_mtime"].isoformat()
         # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
-        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("source_sha256")),
-                                      "capture": _made("capture", f.get("source_sha256"))})
+        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("content_hash")),
+                                      "capture": _made("capture", f.get("content_hash"))})
 
         resp = client.post("/v1/ingest", files=files, data=data)
         result = resp.json()
         asset_id = result.get("asset_id")
 
-        # 5. Cache the 2048px proxy + SHA sidecar
+        # 5. Cache the 2048px proxy + hash sidecar
         if proxy_cache is not None and asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("source_sha256") or "")
+            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
         del jpeg_bytes
 
         with stats.lock:
@@ -337,10 +337,10 @@ def _scan_one_video(
         # Frame rate, timecode, audio layout for editor exports. A failed
         # probe doesn't block ingest; `lumiverb enrich --job-type probe`
         # backfills it.
-        made = {"proxy": _made("proxy", f.get("source_sha256")), "capture": _made("capture", f.get("source_sha256"))}
+        made = {"proxy": _made("proxy", f.get("content_hash")), "capture": _made("capture", f.get("content_hash"))}
         try:
             data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
-            made["probe"] = _made("probe", f.get("source_sha256"))
+            made["probe"] = _made("probe", f.get("content_hash"))
         except Exception as exc:  # noqa: BLE001 — any ffprobe failure
             logger.warning("Probe failed for %s: %s", rel_path, exc)
         data["lineage"] = json.dumps(made)
@@ -353,13 +353,13 @@ def _scan_one_video(
             client.post(
                 f"/v1/assets/{asset_id}/artifacts/video_preview",
                 files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
-                data={"lineage": json.dumps(_made("video_preview", f.get("source_sha256")))},
+                data={"lineage": json.dumps(_made("video_preview", f.get("content_hash")))},
             )
         del preview_bytes
 
-        # 7. Cache the poster proxy + SHA sidecar
+        # 7. Cache the poster proxy + hash sidecar
         if proxy_cache is not None and asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("source_sha256") or "")
+            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
         del jpeg_bytes
 
         with stats.lock:
@@ -407,8 +407,7 @@ def _populate_cache_for_unchanged(
                     client._url(f"/v1/assets/{asset_id}/artifacts/proxy"),
                 )
                 if resp.status_code == 200:
-                    sha = f.get("source_sha256") or ""
-                    proxy_cache.put_scan(asset_id, resp.content, sha)
+                    proxy_cache.put_scan(asset_id, resp.content, f.get("content_hash") or "")
                     with stats.lock:
                         stats.cache_populated += 1
                 resp.close()
@@ -589,14 +588,14 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
     return counts, plan
 
 
-def _sha_of(root_path: Path, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
-    """The file's content hash, and the whole file's SHA-256 when asked for
+def _hashes_of(root_path: Path, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
+    """The file's content hash, and the whole file's "sha256" when asked for
     and that isn't it (a file over 64 MiB, its plan's legacy), or None when
     it can't be read."""
     try:
         path = resolve_source_path(root_path, rel_path)
-        sha = content_hash(path)
-        return sha, whole_file_sha256(path) if whole_too and sampled(sha) else None
+        found = content_hash(path)
+        return found, whole_file_sha256(path) if whole_too and sampled(found) else None
     except (OSError, UnsafeRelPathError) as exc:
         logger.warning("Can't read %s: %s", rel_path, exc)
         return None
@@ -604,13 +603,14 @@ def _sha_of(root_path: Path, rel_path: str, whole_too: bool = False) -> tuple[st
 
 def _hashed(root_path: Path, files: list[dict], concurrency: int
             ) -> Iterator[tuple[dict, tuple[str, str | None] | None]]:
-    """Each file with its hashes (_sha_of; None: it couldn't be read), in the
+    """Each file with its hashes (_hashes_of; None: it couldn't be read), in the
     order given, read `concurrency` at a time and never more than
     concurrency * 2 waiting."""
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="hash") as pool:
         waiting: deque[tuple[dict, Future]] = deque()
         for f in files:
-            waiting.append((f, pool.submit(_sha_of, root_path, f["rel_path"], bool(f.get("_plan", {}).get("legacy")))))
+            waiting.append((f, pool.submit(_hashes_of, root_path, f["rel_path"],
+                                           bool(f.get("_plan", {}).get("legacy")))))
             if len(waiting) >= concurrency * 2:
                 done, fut = waiting.popleft()
                 yield done, fut.result()
@@ -686,8 +686,8 @@ def _hash_and_decide(
         if moves_now and any(not f["_plan"]["asset_id"] for f in batch) and _storage_gone(library):
             return False
         sent = {f["rel_path"]: f for f in batch}
-        body = {"files": [{"rel_path": f["rel_path"], "sha256": f["source_sha256"],
-                           **({"legacy_sha256": f["legacy_sha256"]} if f.get("legacy_sha256") else {})}
+        body = {"files": [{"rel_path": f["rel_path"], "content_hash": f["content_hash"],
+                           **({"previous_hash": f["previous_hash"]} if f.get("previous_hash") else {})}
                           for f in batch]}
         for d in _post_again_if_taken(client, f"/v1/scans/{scan_id}/hashes", body)["files"]:
             _take(sent[d["rel_path"]], d, work, stats)
@@ -702,7 +702,7 @@ def _hash_and_decide(
             if hashed is None:
                 _unread(f, work, stats)
                 continue
-            f["source_sha256"], f["legacy_sha256"] = hashed
+            f["content_hash"], f["previous_hash"] = hashed
             batch.append(f)
             if len(batch) == FILES_PER_CALL:
                 if not decide(batch):

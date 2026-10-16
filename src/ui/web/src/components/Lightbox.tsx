@@ -1701,16 +1701,16 @@ export function Lightbox({
                         </dd>
                       </div>
                     ) : null}
-                    {(detail?.sha256 || asset.sha256) && (
+                    {(detail?.content_hash || asset.content_hash) && (
                       <div className="flex">
                         <dt className="w-2/5 text-xs text-gray-500">Content hash</dt>
                         <dd
                           className="w-3/5 font-mono text-xs text-gray-400"
                           title={
-                            (detail?.sha256 || asset.sha256) ?? undefined
+                            (detail?.content_hash || asset.content_hash) ?? undefined
                           }
                         >
-                          {(detail?.sha256 || asset.sha256)?.slice(0, 16)}…
+                          {(detail?.content_hash || asset.content_hash)?.slice(0, 20)}…
                         </dd>
                       </div>
                     )}
@@ -1823,7 +1823,7 @@ export function Lightbox({
                                       rel_path: hit.rel_path,
                                       file_size: hit.file_size ?? 0,
                                       file_mtime: null,
-                                      sha256: null,
+                                      content_hash: null,
                                       media_type:
                                         hit.media_type ?? "image/jpeg",
                                       width: hit.width ?? null,

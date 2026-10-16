@@ -67,7 +67,7 @@ def _scan(server: FakeScans, root: Path, **kwargs) -> ScanStats:
 
 
 def _sha(name: str) -> str:
-    return hashlib.sha256(name.encode()).hexdigest()
+    return "sha256:" + hashlib.sha256(name.encode()).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ def test_what_the_server_says_to_upload_is_uploaded_after_the_finish(root: Path)
     assert (stats.new, stats.changed, stats.unchanged, stats.moved, stats.deleted) == (2, 2, 2, 1, 1)
     assert stats.failed_paths == []
     # The hashes are the files' own.
-    assert {f["rel_path"]: f["sha256"] for b in server.hashed() for f in b} == {
+    assert {f["rel_path"]: f["content_hash"] for b in server.hashed() for f in b} == {
         rel: _sha(rel) for rel in ("changed.jpg", "moved.jpg", "new-path.jpg", "touched.jpg")}
 
 
@@ -420,7 +420,7 @@ class TestPopulateCacheForUnchanged:
 
         _populate_cache_for_unchanged(
             mock_client,
-            [{"asset_id": "id-1", "source_sha256": "sha"}],
+            [{"asset_id": "id-1", "content_hash": "sha256:1"}],
             cache, stats, console,
         )
         mock_client._client.get.assert_not_called()
@@ -444,9 +444,9 @@ class TestPopulateCacheForUnchanged:
 
         _populate_cache_for_unchanged(
             mock_client,
-            [{"asset_id": "id-1", "source_sha256": "sha-1"}],
+            [{"asset_id": "id-1", "content_hash": "sha256:1"}],
             cache, stats, console,
         )
         assert stats.cache_populated == 1
         assert (tmp_path / "id-1").read_bytes() == b"server-proxy-bytes"
-        assert (tmp_path / "id-1.sha").read_text() == "sha-1"
+        assert (tmp_path / "id-1.sha").read_text() == "sha256:1"

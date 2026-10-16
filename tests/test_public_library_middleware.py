@@ -303,7 +303,7 @@ def _ingest(client, api_key, library_id, rel_path, media_type="video") -> str:
     r = client.post(
         "/v1/ingest",
         data={"library_id": library_id, "rel_path": rel_path, "file_size": "10", "media_type": media_type,
-              "width": "32", "height": "18", "exif": _json.dumps({"sha256": os.urandom(32).hex()}),
+              "width": "32", "height": "18", "exif": _json.dumps({"content_hash": "sha256:" + os.urandom(32).hex()}),
               "lineage": ingest_made()},
         files={"proxy": ("p.jpg", buf, "image/jpeg")},
         headers={"Authorization": f"Bearer {api_key}"},
@@ -428,7 +428,7 @@ def shared_clip(public_lib_client):
     buf = io.BytesIO()
     Image.new("RGB", (32, 18)).save(buf, format="JPEG")
     buf.seek(0)
-    exif = {"sha256": os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Sony"}
+    exif = {"content_hash": "sha256:" + os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Sony"}
     r = client.post("/v1/ingest", data={"library_id": private_library_id, "rel_path": "Clients/ACME/interview_jane.mov",
                                         "file_size": "10", "media_type": "video", "width": "32", "height": "18",
                                         "exif": _json.dumps(exif), "lineage": ingest_made()},
@@ -452,7 +452,7 @@ def test_a_public_projects_clip_detail_is_privacy_stripped(public_lib_client, sh
     assert (d["asset_id"], d["media_type"], d["width"], d["height"]) == (asset_id, "video", 32, 18)
     # Not where it lives, where it was shot, what shot it, or what the team noted.
     assert d["rel_path"] == "" and d["library_id"] == ""
-    for field in ("gps_lat", "gps_lon", "sha256", "camera_make", "camera_model", "proxy_key", "thumbnail_key",
+    for field in ("gps_lat", "gps_lon", "content_hash", "camera_make", "camera_model", "proxy_key", "thumbnail_key",
                   "video_preview_key", "note", "note_author", "note_updated_at", "file_size"):
         assert d.get(field) in (None, ""), (field, d.get(field))
     # What's seen or heard still comes through, within the public cap.

@@ -39,8 +39,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.shared.content_hash import FULL_UP_TO
-from src.shared.content_hash import PREFIX as CONTENT_PREFIX
+from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
     MISSING_FLAGS,
     PERSON,
@@ -126,14 +125,15 @@ def desired(session: Session, artifact: str, job_models: Mapping[str, str] | Non
 def _stale_sql() -> str:
     return (
         "l.producer <> :person AND (l.producer <> :producer OR l.producer_version <> :version"
-        " OR l.settings_hash <> :hash OR (a.sha256 IS NOT NULL AND l.source_sha256 IS DISTINCT FROM a.sha256))"
+        " OR l.settings_hash <> :hash"
+        " OR (a.content_hash IS NOT NULL AND l.source_hash IS DISTINCT FROM a.content_hash))"
     )
 
 
 def _lineage_cols() -> str:
     cols = []
     for artifact in MISSING_FLAGS.values():
-        cols.append(f"max(l.source_sha256) FILTER (WHERE l.artifact = '{artifact}'"
+        cols.append(f"max(l.source_hash) FILTER (WHERE l.artifact = '{artifact}'"
                     f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
         cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
     return ", ".join(cols)
@@ -158,11 +158,12 @@ NOT_REDONE_ON_SOURCE_CHANGE = frozenset(a for a, p in PRODUCERS.items() if not p
 
 def source_changed(artifact: str) -> str:
     """Made from a file whose content has since changed. A person's never
-    counts, nor one made before the file's SHA-256 was known (unknown isn't
+    counts, nor one made before the file's content hash was known (unknown isn't
     changed: it's stale, waiting for approval like any other)."""
     if artifact in NOT_REDONE_ON_SOURCE_CHANGE:
         return "false"
-    return f"(a.sha256 IS NOT NULL AND la.src_{artifact} IS NOT NULL AND la.src_{artifact} <> a.sha256)"
+    return (f"(a.content_hash IS NOT NULL AND la.src_{artifact} IS NOT NULL"
+            f" AND la.src_{artifact} <> a.content_hash)")
 
 
 def waiting(artifact: str) -> str:
@@ -222,8 +223,8 @@ def _changed_sql(artifact: str) -> str:
     producer from a file whose content has since changed."""
     if artifact in NOT_REDONE_ON_SOURCE_CHANGE:
         return "false"
-    return ("(a.sha256 IS NOT NULL AND l.producer NOT IN ('', :person) AND l.source_sha256 IS NOT NULL"
-            " AND l.source_sha256 <> a.sha256)")
+    return ("(a.content_hash IS NOT NULL AND l.producer NOT IN ('', :person) AND l.source_hash IS NOT NULL"
+            " AND l.source_hash <> a.content_hash)")
 
 
 # A failure isn't waiting its turn (nor given up): on the producer's own lineage row (l).
@@ -573,14 +574,15 @@ def made_by_a_producer(session: Session, artifacts: list[str] | tuple[str, ...])
 
 
 def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, Any] | None,
-           *, outcome: str = "ok", source_sha256: str | None = None, person: bool = False,
+           *, outcome: str = "ok", source_hash: str | None = None, person: bool = False,
            produced_at: datetime | None = None, commit: bool = True) -> None:
     """Record how an artifact was just made. A write that doesn't say (an
     old client, the macOS app today) is an unknown producer's: stale, so
     the server makes it again. person: a person made it (only the server
-    says so; a client can't). The source defaults to the clip's file now;
-    one given as its file's whole hash, made before fp1, is the clip's fp1
-    once a scan swapped them (src/server/scans.py rekey): a clip's content
+    says so; a client can't). The source (lineage's source_hash, a content
+    hash) defaults to the clip's file now; one given as its file's whole
+    "sha256", made before fp1, is the clip's fp1 once a scan swapped them
+    (src/server/scans.py rekey): a clip's content
     hash changes only that way (another file is another clip), so work
     handed out before the swap is still of this content.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
@@ -590,7 +592,7 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
         # Another kind's producer can't make this one, and a client can't
         # claim a person made it: whatever it is, it isn't current.
         producer = UNKNOWN
-    source = lineage.get("source_sha256") or source_sha256
+    source = lineage.get("source_hash") or source_hash
     # The level it was made at, for a producer with a level setting (kept apart from the hash).
     setting, level = PRODUCERS[artifact].level, lineage.get("level")
     if producer in (UNKNOWN, PERSON) or setting is None or isinstance(level, bool) \
@@ -598,16 +600,17 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
         level = None
     session.execute(text(
         "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-        " source_sha256, produced_at, outcome, error, attempts, retry_at, level)"
+        " source_hash, produced_at, outcome, error, attempts, retry_at, level)"
         " VALUES (:a, :artifact, :producer, :version, :hash,"
-        "         COALESCE((SELECT c.sha256 FROM assets c WHERE c.asset_id = :a"
-        f"                   AND c.sha256 LIKE '{CONTENT_PREFIX}%' AND c.file_size > {FULL_UP_TO}"
-        "                   AND CAST(:source AS text) ~ '^[0-9a-f]{64}$'),"
-        "                  :source, (SELECT sha256 FROM assets WHERE asset_id = :a)), :now, :outcome, NULL, 0, NULL,"
+        "         COALESCE((SELECT c.content_hash FROM assets c WHERE c.asset_id = :a"
+        f"                   AND starts_with(c.content_hash, '{FP1}') AND c.file_size > {FULL_UP_TO}"
+        f"                   AND starts_with(CAST(:source AS text), '{SHA256}')),"
+        "                  :source, (SELECT content_hash FROM assets WHERE asset_id = :a)),"
+        "         :now, :outcome, NULL, 0, NULL,"
         "         :level)"
         " ON CONFLICT (asset_id, artifact) DO UPDATE SET producer = EXCLUDED.producer,"
         "   producer_version = EXCLUDED.producer_version, settings_hash = EXCLUDED.settings_hash,"
-        "   source_sha256 = EXCLUDED.source_sha256, produced_at = EXCLUDED.produced_at,"
+        "   source_hash = EXCLUDED.source_hash, produced_at = EXCLUDED.produced_at,"
         "   outcome = EXCLUDED.outcome, error = NULL, attempts = 0, retry_at = NULL, level = EXCLUDED.level"
     ), {"a": asset_id, "artifact": artifact, "producer": producer, "level": level,
         "version": "" if producer in (UNKNOWN, PERSON) else str(lineage.get("version") or ""),
@@ -658,7 +661,7 @@ def record_failure(session: Session, asset_id: str, artifact: str, error: str, *
     wait = min(RETRY_FIRST * (2 ** (attempts - 1)), RETRY_MAX)
     session.execute(text(
         "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-        " source_sha256, produced_at, outcome, error, attempts, retry_at, failed_at)"
+        " source_hash, produced_at, outcome, error, attempts, retry_at, failed_at)"
         " VALUES (:a, :artifact, '', '', '', NULL, :now, 'failed', :error, :attempts,"
         "         CASE WHEN :give_up THEN 'infinity'::timestamptz ELSE :retry END, :now)"
         " ON CONFLICT (asset_id, artifact) DO UPDATE SET error = EXCLUDED.error,"

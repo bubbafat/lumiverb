@@ -60,5 +60,5 @@ class Clip(Work):
         # The batch route, one clip: search is left to the upkeep sweep, not committed per clip.
         for clip, item in made:
             client.post("/v1/assets/batch-embeddings", json={
-                "items": [{**item, "source_sha256": clip.get("sha256")}],
+                "items": [{**item, "source_hash": clip.get("content_hash")}],
                 "lineage": self.lineage(None, used=self.used)})

@@ -25,7 +25,7 @@ from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the sha
 
 
 def _sha() -> str:
-    return os.urandom(32).hex()
+    return "sha256:" + os.urandom(32).hex()
 
 
 @contextmanager
@@ -49,12 +49,12 @@ def _want(env, artifact: str, sha: str | None) -> dict:
     """Lineage as a current worker would send it."""
     p = _producers(env, counts="false")[artifact]
     return {"producer": p["producer"], "version": p["version"], "settings_hash": p["settings_hash"],
-            "source_sha256": sha, **({"level": p["level"]} if p.get("level") is not None else {})}
+            "source_hash": sha, **({"level": p["level"]} if p.get("level") is not None else {})}
 
 
 def _row(env, asset_id: str, artifact: str):
     with _db(env) as s:
-        return s.execute(text("SELECT producer, producer_version, settings_hash, source_sha256, outcome"
+        return s.execute(text("SELECT producer, producer_version, settings_hash, source_hash, outcome"
                               " FROM artifact_lineage WHERE asset_id = :a AND artifact = :k"),
                          {"a": asset_id, "k": artifact}).first()
 
@@ -91,7 +91,7 @@ def _ingest_post(env, rel_path: str, sha: str, lineage: dict | None | object = N
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": sha}), **fields}
+            "width": "64", "height": "36", "exif": json.dumps({"content_hash": sha}), **fields}
     if lineage is None:
         lineage = {"proxy": _want(env, "proxy", sha)}
     if lineage is not SAYS_NOTHING:
@@ -203,7 +203,7 @@ def test_a_changed_file_makes_what_was_made_from_it_stale(env):
     assert r.status_code == 200, r.text
     assert _state(env, clip, "vision") == "current"
     with _db(env) as s:  # the file's content changed on disk (a scan saw a new hash)
-        s.execute(text("UPDATE assets SET sha256 = :n WHERE asset_id = :a"), {"n": new, "a": clip})
+        s.execute(text("UPDATE assets SET content_hash = :n WHERE asset_id = :a"), {"n": new, "a": clip})
         s.commit()
     assert _state(env, clip, "vision") == "stale" and _state(env, clip, "proxy") == "stale"
 
@@ -384,7 +384,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
     before = _everything(env, img)
     r = client.post(f"/v1/assets/{img}/vision", json={
         "model_id": "m", "description": "d",
-        "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x", "source_sha256": sha}}, headers=headers)
+        "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x", "source_hash": sha}}, headers=headers)
     _refused(r, "lineage_wrong_producer")
     assert _everything(env, img) == before and _row(env, img, "vision") is None
 
@@ -435,12 +435,16 @@ def test_a_form_fields_lineage_is_checked(env):
     sha = _sha()
     vid = _ingest_with(env, "lin/badform.mov", sha, None, media_type="video")
     before = _everything(env, vid)
-    for bad in ({"producer": "analysis-proxy", "version": "1", "settings_hash": "x", "source_sha256": 12},
-                {"producer": "analysis-proxy", "version": "1" * 500, "settings_hash": "x"}, ["not", "a", "dict"]):
+    source = {"producer": "analysis-proxy", "version": "1", "settings_hash": "x"}
+    for bad, code in (({**source, "version": "1" * 500}, "lineage_required"),  # unreadable is the same as not saying
+                      (["not", "a", "dict"], "lineage_required"),
+                      # A source that's no content hash the server takes says so.
+                      ({**source, "source_hash": 12}, "content_hash_not_valid"),
+                      ({**source, "source_hash": sha.removeprefix("sha256:")}, "content_hash_not_valid")):
         r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
                         files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
                         data={"lineage": json.dumps(bad)}, headers=headers)
-        _refused(r)  # unreadable is the same as not saying
+        _refused(r, code)
         assert _everything(env, vid) == before and _row(env, vid, "analysis_proxy") is None
     r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
                     files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
@@ -460,7 +464,7 @@ def test_an_ingest_records_only_what_it_stored(env):
     buf.seek(0)
     r = client.post("/v1/ingest", data={
         "library_id": library_id, "rel_path": "lin/nothing-stored.jpg", "file_size": "1000", "media_type": "image",
-        "width": "64", "height": "36", "exif": json.dumps({"sha256": sha}),
+        "width": "64", "height": "36", "exif": json.dumps({"content_hash": sha}),
         "vision": json.dumps({"model_id": "", "description": "dropped"}), "embeddings": json.dumps([]),
         "lineage": json.dumps({"proxy": _want(env, "proxy", sha), "vision": _want(env, "vision", sha),
                                "clip": _want(env, "clip", sha)}),

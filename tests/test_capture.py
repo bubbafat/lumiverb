@@ -137,7 +137,7 @@ def _ingest(env, rel_path: str, exif: dict, *, says_capture: bool = True, librar
         kinds["capture"] = made("capture")
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id or lib, "rel_path": rel_path, "file_size": "10", "media_type": "image",
-        "lineage": json.dumps(kinds), "exif": json.dumps({"sha256": sha or os.urandom(32).hex(), **exif})})
+        "lineage": json.dumps(kinds), "exif": json.dumps({"content_hash": sha or "sha256:" + os.urandom(32).hex(), **exif})})
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 
@@ -197,7 +197,7 @@ def test_the_capture_route_stores_what_the_file_says(env) -> None:
 @pytest.mark.slow
 def test_a_scan_that_says_how_it_read_them_isnt_read_again_and_one_that_doesnt_is(env, tmp_path) -> None:
     lib = _library(env, tmp_path)
-    sha = os.urandom(32).hex()
+    sha = "sha256:" + os.urandom(32).hex()
     python = _ingest(env, "py.jpg", {"taken_at": "2024-06-15T14:30:00+00:00"}, library_id=lib, sha=sha)
     mac = _ingest(env, "mac.jpg", {"taken_at": "2024-06-15T18:30:00+00:00"}, says_capture=False, library_id=lib)
     assert [c["asset_id"] for c in due(env[-1], "capture", [lib])] == [mac]

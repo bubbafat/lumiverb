@@ -52,7 +52,7 @@ public struct QueryItem: Decodable, Identifiable, Sendable, Equatable {
             relPath: relPath,
             fileSize: fileSize,
             fileMtime: nil,
-            sha256: nil,
+            contentHash: nil,
             mediaType: mediaType,
             width: width,
             height: height,

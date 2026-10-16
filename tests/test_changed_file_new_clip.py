@@ -149,7 +149,7 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
         patch("src.processing.scan._scan_one"),
         patch("src.processing.scan.ProxyCache", MagicMock()),
         patch("src.processing.scan._populate_cache_for_unchanged"),
-        patch("src.processing.scan.content_hash", return_value="f" * 64),
+        patch("src.processing.scan.content_hash", return_value="sha256:" + "f" * 64),
     ):
         return run_scan(_cli(env), {"library_id": library_id, "root_path": str(root)}, path_prefix=prefix,
                         console=Console(width=200))
@@ -220,7 +220,7 @@ def test_a_trashed_file_back_at_its_path_stays_in_the_trash(env):
     buf.seek(0)
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
                     data={"library_id": library_id, "rel_path": path, "file_size": "1000", "media_type": "image",
-                          "exif": json.dumps({"sha256": trashed_sha}), "lineage": ingest_made(trashed_sha)})
+                          "exif": json.dumps({"content_hash": trashed_sha}), "lineage": ingest_made(trashed_sha)})
     assert r.status_code == 409  # a person's trash stands
     assert _row(env, trashed)[1] == "user" and _row(env, live)[1] == "missing"
     r = client.post(f"/v1/assets/{trashed}/restore", headers=headers)  # and the path is free for it
@@ -279,7 +279,7 @@ def test_the_other_ingest_refuses_a_different_file(env):
     buf.seek(0)
     other = _sha()
     r = client.post(f"/v1/assets/{clip}/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
-                    data={"exif": json.dumps({"sha256": other}), "lineage": ingest_made(other)})
+                    data={"exif": json.dumps({"content_hash": other}), "lineage": ingest_made(other)})
     assert r.status_code == 409 and r.json()["error"]["code"] == "different_file", r.text
 
 
@@ -294,7 +294,7 @@ def test_a_path_remembers_each_file_deleted_there_for_good(env):
     r = client.request("DELETE", "/v1/trash/empty", json={"asset_ids": [first, second]}, headers=headers)
     assert r.status_code == 200 and r.json()["deleted"] == 2, r.text
     with _db(env) as s:  # each file remembered with its content and size
-        remembered = s.execute(text("SELECT sha256, file_size FROM ignored_files"
+        remembered = s.execute(text("SELECT content_hash, file_size FROM ignored_files"
                                     " WHERE library_id = :l AND rel_path = :p"), {"l": library_id, "p": path}).all()
     assert sorted(remembered) == sorted([(first_sha, 1000), (second_sha, 1000)])
     found = [{"rel_path": path, "file_size": 1000}]
@@ -328,7 +328,7 @@ def _post(client, env, rel_path: str, sha: str):
     return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")},
                        data={"library_id": library_id, "rel_path": rel_path, "file_size": "1000",
                              "media_type": "video" if rel_path.endswith(".mp4") else "image",
-                             "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha)})
+                             "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha)})
 
 
 def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
@@ -346,10 +346,10 @@ def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
     sha = _sha()
     original = _ingest(env, "ncr-race/a.jpg", media_type="image", sha=sha)
     _note(env, original, "keep me")
-    real = AssetRepository.find_missing_by_sha
+    real = AssetRepository.find_missing_by_hash
     fired = []
 
-    def find_missing_by_sha(self, library_id, s):
+    def find_missing_by_hash(self, library_id, s):
         found = real(self, library_id, s)  # the original is still in sight: nothing
         if s == sha and not fired:
             fired.append(1)
@@ -357,7 +357,7 @@ def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
             assert r.status_code == 200, r.text
         return found
 
-    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
+    with patch.object(AssetRepository, "find_missing_by_hash", find_missing_by_hash):
         r = _post(client, env, "ncr-race/copy-of-a.jpg", sha)
     assert fired and r.status_code == 200, r.text
     assert r.json()["asset_id"] == original and r.json()["created"] is False
@@ -469,10 +469,10 @@ def test_a_clip_back_in_sight_after_the_overwrite_keeps_its_transcript_in_search
     sha = _sha()
     original = _ingest(env, "ncr3-ts/a.mp4", media_type="video", sha=sha)
     _transcribed(env, original, "the quarvel lighthouse")
-    real_find = AssetRepository.find_missing_by_sha
+    real_find = AssetRepository.find_missing_by_hash
     fired = []
 
-    def find_missing_by_sha(self, library_id, s):
+    def find_missing_by_hash(self, library_id, s):
         found = real_find(self, library_id, s)
         if s == sha and not fired:
             fired.append(1)
@@ -480,7 +480,7 @@ def test_a_clip_back_in_sight_after_the_overwrite_keeps_its_transcript_in_search
             assert r.status_code == 200, r.text
         return found
 
-    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
+    with patch.object(AssetRepository, "find_missing_by_hash", find_missing_by_hash):
         r = _post(client, env, "ncr3-ts/copy.mp4", sha)
     assert fired and r.status_code == 200 and r.json()["asset_id"] == original, r.text
     assert _row(env, original)[2] == "ncr3-ts/copy.mp4"
@@ -501,17 +501,17 @@ def test_the_copy_handed_over_to_by_the_other_ingest_answers_with_the_clip_there
     sha = _sha()
     original = _ingest(env, "ncr3-win/a.jpg", media_type="image", sha=sha)
     _note(env, original, "keep")
-    real = AssetRepository.missing_ids_with_sha
+    real = AssetRepository.missing_ids_with_hash
     fired = []
 
-    def missing_ids_with_sha(self, library_id, s):
+    def missing_ids_with_hash(self, library_id, s):
         if s == sha and not fired:
             fired.append(1)
             r = _post(TestClient(app), env, "ncr3-win/a.jpg", _sha())  # its handover finds the copy
             assert r.status_code == 200, r.text
         return real(self, library_id, s)
 
-    with patch.object(AssetRepository, "missing_ids_with_sha", missing_ids_with_sha):
+    with patch.object(AssetRepository, "missing_ids_with_hash", missing_ids_with_hash):
         r = _post(client, env, "ncr3-win/copy.jpg", sha)
     assert r.status_code == 200, r.text
     assert r.json()["asset_id"] == original and r.json()["created"] is False
@@ -549,7 +549,7 @@ def test_a_video_copy_handed_over_to_before_its_facet_is_stored_is_not_a_500(env
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": "ncr3-fac/copy.mp4", "file_size": "1000", "media_type": "video",
-            "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha), "video_facet": json.dumps(facet)}
+            "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha), "video_facet": json.dumps(facet)}
     with patch.object(AssetRepository, "upsert_video_facet", upsert_video_facet):
         r = TestClient(app, raise_server_exceptions=False).post(
             "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data=data)
@@ -574,10 +574,10 @@ def test_one_missing_clip_moves_onto_a_new_copy(env):
     first = _ingest(env, "ncr3-two/a1.jpg", media_type="image", sha=sha)
     _note(env, first, "human")
     second = _ingest(env, "ncr3-two/a2.jpg", media_type="image", sha=sha)
-    real = AssetRepository.find_missing_by_sha
+    real = AssetRepository.find_missing_by_hash
     fired = []
 
-    def find_missing_by_sha(self, library_id, s):
+    def find_missing_by_hash(self, library_id, s):
         found = real(self, library_id, s)
         if s == sha and not fired:
             fired.append(1)
@@ -586,9 +586,9 @@ def test_one_missing_clip_moves_onto_a_new_copy(env):
             assert rr.status_code in (200, 204), rr.text
         return found
 
-    with patch.object(AssetRepository, "find_missing_by_sha", find_missing_by_sha):
+    with patch.object(AssetRepository, "find_missing_by_hash", find_missing_by_hash):
         r = _post(client, env, "ncr3-two/copy.jpg", sha)
     assert r.status_code == 200, r.text
     with _db(env) as s:
-        alive = {row[0] for row in s.execute(text("SELECT asset_id FROM assets WHERE sha256 = :s"), {"s": sha})}
+        alive = {row[0] for row in s.execute(text("SELECT asset_id FROM assets WHERE content_hash = :s"), {"s": sha})}
     assert {first, second} <= alive  # neither deleted for good

@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import posixpath
-import re
 from datetime import datetime
 from typing import Annotated
 
@@ -22,9 +21,9 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server import preview_image
+from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.shared import asset_status
-from src.shared.content_hash import PATTERN as CONTENT_HASH
 from src.shared.content_hash import sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
@@ -190,7 +189,7 @@ def _do_ingest(
     if exif_data is not None:
         asset_repo.update_exif(
             asset_id=asset_id,
-            sha256=exif_data.get("sha256"),
+            content_hash=exif_data.get("content_hash"),
             exif=exif_data.get("exif", {}),
             camera_make=exif_data.get("camera_make"),
             camera_model=exif_data.get("camera_model"),
@@ -299,21 +298,34 @@ def _do_ingest(
 # ---------------------------------------------------------------------------
 
 
-def _swap_whole_file_hash(session: Session, library_id: str, file_size: int, sha: str | None,
-                          legacy: str | None) -> bool:
-    """The file's whole SHA-256 sent beside its fp1 (exif legacy_sha256: its
+def _exif_hashes(exif_data: dict | None) -> tuple[str | None, str | None]:
+    """The file's content hash an upload's exif carries (content_hash), and
+    the whole file's beside it (previous_hash): each one the server takes
+    (src/server/api/content_hashes.py), else 400. Neither is required."""
+    hashes = []
+    for name in ("content_hash", "previous_hash"):
+        value = (exif_data or {}).get(name)
+        if value is not None and (why := why_not(value)) is not None:
+            raise HTTPException(status_code=400, detail=f"exif {name}: {why}")
+        hashes.append(value)
+    return hashes[0], hashes[1]
+
+
+def _swap_whole_file_hash(session: Session, library_id: str, file_size: int, content_hash: str | None,
+                          previous: str | None) -> bool:
+    """The file's whole "sha256" sent beside its fp1 (exif previous_hash: its
     scan's plan asked, as a clip or file deleted for good of its size has a
     hash made before fp1): those hashes are swapped for the fp1 first, so the
     file is compared with what was (src/server/scans.py rekey). Whether any
     was sent."""
-    if legacy is None:
+    if previous is None:
         return False
-    if not (isinstance(legacy, str) and isinstance(sha, str) and re.fullmatch(CONTENT_HASH, sha)
-            and whole_file(legacy, file_size) and sampled(sha)):
-        raise HTTPException(status_code=400, detail="exif legacy_sha256 is the whole file's SHA-256 beside its fp1")
+    if not (whole_file(previous, file_size) and sampled(content_hash)):
+        raise HTTPException(status_code=400,
+                            detail="exif previous_hash is the whole file's sha256: hash beside its fp1: hash")
     from src.server.scans import rekey
 
-    rekey(session, library_id, [(legacy, sha, file_size)])
+    rekey(session, library_id, [(previous, content_hash, file_size)])
     return True
 
 
@@ -418,6 +430,7 @@ async def create_and_ingest(
 
     # Parse optional JSON
     exif_data = _parse_optional_json(exif, "exif")
+    content_hash, previous = _exif_hashes(exif_data)
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
     facet_data = _parse_video_facet(video_facet, media_type)
@@ -442,10 +455,9 @@ async def create_and_ingest(
     # whatever becomes of this file: the file at its path isn't its any more.
     from src.server.tenant_settings import get_follow_moves
 
-    sha = (exif_data or {}).get("sha256")
-    if _swap_whole_file_hash(session, library_id, file_size, sha, (exif_data or {}).get("legacy_sha256")):
+    if _swap_whole_file_hash(session, library_id, file_size, content_hash, previous):
         session.expire_all()  # the clips read before have their hashes as they are now
-    if existing is not None and sha and existing.sha256 and existing.sha256 != sha:
+    if existing is not None and content_hash and existing.content_hash and existing.content_hash != content_hash:
         if existing.deleted_at is None:
             try:  # a proxy that can't be read is a bad request, which changes nothing
                 _normalize_proxy(raw_proxy)
@@ -459,7 +471,7 @@ async def create_and_ingest(
 
                 hand_over_to_copies(session, request, [existing.asset_id])
         # This content's own clip at this path, if it had one: back where it was.
-        existing = asset_repo.find_at(library_id, rel_path, sha)
+        existing = asset_repo.find_at(library_id, rel_path, content_hash)
 
     # An archived asset back at its own path: lock it before restoring. A copy
     # of the file ingested at the same time may have claimed it by content;
@@ -467,7 +479,7 @@ async def create_and_ingest(
     if existing is not None and existing.deleted_at is not None and not asset_repo.lock_for_restore(existing, rel_path):
         existing = None
     if existing is None:
-        if asset_repo.is_ignored(library_id, rel_path, sha):
+        if asset_repo.is_ignored(library_id, rel_path, content_hash):
             raise HTTPException(
                 status_code=409,
                 detail=f"File was removed from the library (trash emptied): {rel_path}",
@@ -476,7 +488,7 @@ async def create_and_ingest(
         # (moved, or renamed while the scan wasn't looking). Restore that asset
         # at its new path, with everything it had, instead of starting over;
         # unless the account doesn't follow moves (the path is the identity).
-        archived = asset_repo.find_missing_by_sha(library_id, sha) if get_follow_moves(session) else None
+        archived = asset_repo.find_missing_by_hash(library_id, content_hash) if get_follow_moves(session) else None
         if archived is not None:
             archived.rel_path = rel_path
             existing = archived
@@ -562,7 +574,7 @@ async def create_and_ingest(
             handed_to = took_its_place()
             if handed_to is None:
                 raise
-    if created and handed_to is None and sha and get_follow_moves(session):
+    if created and handed_to is None and content_hash and get_follow_moves(session):
         # A clip with this content may have gone missing while this one was
         # made (a copy and the overwritten original in one scan, ingested at
         # once): then this is its copy, and it moves here, as copy-then-delete.
@@ -570,7 +582,7 @@ async def create_and_ingest(
         # the one that went last.
         from src.server.api.routers.trash import hand_over_to_copies
 
-        went = asset_repo.missing_ids_with_sha(library_id, sha)[:1]
+        went = asset_repo.missing_ids_with_hash(library_id, content_hash)[:1]
         if went and hand_over_to_copies(session, request, went):
             handed_to = took_its_place()
     if created and handed_to is None and asset_repo.get_by_id(asset_id) is None:
@@ -615,17 +627,17 @@ async def ingest_asset(
     tenant_id: str = request.state.tenant_id
 
     exif_data = _parse_optional_json(exif, "exif")
+    content_hash, _ = _exif_hashes(exif_data)
     vision_data = _parse_optional_json(vision, "vision")
     embeddings_data = _parse_optional_json_list(embeddings, "embeddings")
     made = _required_lineage(lineage, vision_data, embeddings_data, exif_data=exif_data)
     # A different file is a new clip (POST /v1/ingest makes it and archives
     # this one); this clip keeps the content its analysis was made from.
-    sha = (exif_data or {}).get("sha256")
-    if sha and asset.sha256 and sha != asset.sha256:
+    if content_hash and asset.content_hash and content_hash != asset.content_hash:
         from src.server.api.errors import ConflictError
 
         raise ConflictError("different_file", "A different file is a new clip: ingest it with POST /v1/ingest",
-                            {"asset_sha256": asset.sha256, "sha256": sha})
+                            {"asset_content_hash": asset.content_hash, "content_hash": content_hash})
 
     return _do_ingest(
         asset_id=asset_id,

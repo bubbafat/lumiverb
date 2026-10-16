@@ -64,9 +64,9 @@ class ProducerSettings:
         for this step (it may have changed since these settings were read)."""
         return {**self.settings(artifact), "model": model}
 
-    def lineage(self, artifact: str, source_sha256: str | None, used: dict[str, Any] | None = None) -> dict:
+    def lineage(self, artifact: str, source_hash: str | None, used: dict[str, Any] | None = None) -> dict:
         """What a write records: this producer, its version, the hash of the
         settings actually used (the server's unless `used` says otherwise),
         and the source file's SHA-256 (and the level now, for a producer with one)."""
-        return lineage(artifact, self.settings(artifact) if used is None else used, source_sha256,
+        return lineage(artifact, self.settings(artifact) if used is None else used, source_hash,
                        level_of(artifact, self.uses(artifact)))

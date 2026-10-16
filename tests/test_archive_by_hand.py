@@ -26,7 +26,7 @@ from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the sha
 
 
 def _sha() -> str:
-    return os.urandom(32).hex()
+    return "sha256:" + os.urandom(32).hex()
 
 
 @contextmanager

@@ -105,10 +105,10 @@ def _hashed_before_fp1(env, asset_id: str, path: Path) -> str:
     whole = whole_file_sha256(path)
     with _db(env) as session:
         made = session.execute(text(
-            "UPDATE artifact_lineage SET source_sha256 = :w"
-            " WHERE asset_id = :a AND source_sha256 = (SELECT sha256 FROM assets WHERE asset_id = :a)"),
+            "UPDATE artifact_lineage SET source_hash = :w"
+            " WHERE asset_id = :a AND source_hash = (SELECT content_hash FROM assets WHERE asset_id = :a)"),
             {"w": whole, "a": asset_id}).rowcount
-        session.execute(text("UPDATE assets SET sha256 = :w WHERE asset_id = :a"), {"w": whole, "a": asset_id})
+        session.execute(text("UPDATE assets SET content_hash = :w WHERE asset_id = :a"), {"w": whole, "a": asset_id})
         session.commit()
     assert made > 0  # its preview and capture facts, at least
     return whole
@@ -117,13 +117,13 @@ def _hashed_before_fp1(env, asset_id: str, path: Path) -> str:
 def _sources(env, asset_id: str) -> set[str | None]:
     """What everything made from the clip was made from."""
     with _db(env) as session:
-        return set(session.execute(text("SELECT source_sha256 FROM artifact_lineage WHERE asset_id = :a"),
+        return set(session.execute(text("SELECT source_hash FROM artifact_lineage WHERE asset_id = :a"),
                                    {"a": asset_id}).scalars())
 
 
 def _ignored(env, lib: Lib) -> list[str]:
     with _db(env) as session:
-        return list(session.execute(text("SELECT sha256 FROM ignored_files WHERE library_id = :lib"),
+        return list(session.execute(text("SELECT content_hash FROM ignored_files WHERE library_id = :lib"),
                                     {"lib": lib.id}).scalars())
 
 
@@ -150,8 +150,8 @@ def test_a_big_new_file_is_known_by_its_fp1(env, api, lib):
     with _whole_reads(lib) as whole:
         _scan(api, lib)
     clip = _in_sight(env, lib)["a.png"]
-    assert clip["sha256"] == content_hash(path) and sampled(clip["sha256"])
-    assert _sources(env, clip["asset_id"]) == {clip["sha256"]}
+    assert clip["content_hash"] == content_hash(path) and sampled(clip["content_hash"])
+    assert _sources(env, clip["asset_id"]) == {clip["content_hash"]}
     assert whole == []  # nothing hashed before fp1: no file read whole
     _settled(env, api, lib)
 
@@ -169,9 +169,9 @@ def test_an_unchanged_clip_hashed_before_fp1_takes_its_fp1_and_keeps_everything(
 
     after = _in_sight(env, lib)["a.png"]
     assert after["asset_id"] == clip["asset_id"] and after["note"] == "keeper"
-    assert after["sha256"] == content_hash(path)
+    assert after["content_hash"] == content_hash(path)
     # Everything made from it was made from this content: nothing is made again.
-    assert _sources(env, clip["asset_id"]) == {after["sha256"]} and whole_hash not in _sources(env, clip["asset_id"])
+    assert _sources(env, clip["asset_id"]) == {after["content_hash"]} and whole_hash not in _sources(env, clip["asset_id"])
     assert (stats.new, stats.changed, stats.unchanged) == (0, 0, 1)
     assert after["updated_at"] == before["updated_at"]
     assert whole == []  # 3 MiB of it, as it was unchanged
@@ -192,8 +192,8 @@ def test_a_moved_clip_hashed_before_fp1_is_found_by_its_whole_file(env, api, lib
     clips = _in_sight(env, lib)
     assert set(clips) == {"moved/a.png", "b.png"}
     assert clips["moved/a.png"]["asset_id"] == clip["asset_id"]
-    assert clips["moved/a.png"]["sha256"] == content_hash(lib.root / "moved/a.png")
-    assert _sources(env, clip["asset_id"]) == {clips["moved/a.png"]["sha256"]}
+    assert clips["moved/a.png"]["content_hash"] == content_hash(lib.root / "moved/a.png")
+    assert _sources(env, clip["asset_id"]) == {clips["moved/a.png"]["content_hash"]}
     assert whole == ["moved/a.png"]  # its size is a clip's hashed before fp1: compared with what was
     assert _missing(env, lib) == {}
     _settled(env, api, lib)
@@ -213,7 +213,7 @@ def test_a_removed_file_hashed_before_fp1_stays_out_when_touched(env, api, lib, 
     # A dry run tells it's the file removed, and swaps nothing.
     assert _group(_explain(api, lib, include_trash=True), heading) == ["a.png"]
     removed = _clip(env, lib, clip["asset_id"])
-    assert (removed["sha256"] if removed else _ignored(env, lib)[0]) == whole_hash
+    assert (removed["content_hash"] if removed else _ignored(env, lib)[0]) == whole_hash
 
     with _whole_reads(lib) as whole:
         _scan(api, lib)
@@ -222,7 +222,7 @@ def test_a_removed_file_hashed_before_fp1_stays_out_when_touched(env, api, lib, 
     if how == "deleted for good":
         assert _ignored(env, lib) == [content_hash(path)]
     else:
-        assert _clip(env, lib, clip["asset_id"])["sha256"] == content_hash(path)
+        assert _clip(env, lib, clip["asset_id"])["content_hash"] == content_hash(path)
     _settled(env, api, lib)
 
 
@@ -245,7 +245,7 @@ def test_a_missing_clip_hashed_before_fp1_comes_back_at_a_new_path(env, api, lib
 
     clips = _in_sight(env, lib)
     assert clips["back/a.png"]["asset_id"] == clip["asset_id"] and clips["back/a.png"]["note"] == "keeper"
-    assert clips["back/a.png"]["sha256"] == content_hash(lib.root / "back/a.png")
+    assert clips["back/a.png"]["content_hash"] == content_hash(lib.root / "back/a.png")
     assert whole == ["back/a.png"]
     assert _missing(env, lib) == {}
     _settled(env, api, lib)
@@ -263,7 +263,7 @@ def test_a_dry_run_swaps_no_hash(env, api, lib):
     assert _rows(env, lib) == before and _sources(env, clip["asset_id"]) == {whole_hash}
     assert (stats.new, stats.changed, stats.unchanged) == (0, 0, 1)
     _scan(api, lib)
-    assert _in_sight(env, lib)["a.png"]["sha256"] == content_hash(path)
+    assert _in_sight(env, lib)["a.png"]["content_hash"] == content_hash(path)
 
 
 def test_another_file_where_a_clip_hashed_before_fp1_was_is_a_new_clip(env, api, lib):
@@ -277,9 +277,9 @@ def test_another_file_where_a_clip_hashed_before_fp1_was_is_a_new_clip(env, api,
         _scan(api, lib)
 
     now = _in_sight(env, lib)["a.png"]
-    assert now["asset_id"] != clip["asset_id"] and now["sha256"] == content_hash(path)
+    assert now["asset_id"] != clip["asset_id"] and now["content_hash"] == content_hash(path)
     old = _clip(env, lib, clip["asset_id"])
-    assert old["deleted_reason"] == "missing" and old["sha256"] == whole_hash  # its content wasn't seen
+    assert old["deleted_reason"] == "missing" and old["content_hash"] == whole_hash  # its content wasn't seen
     assert whole == ["a.png"]
     _settled(env, api, lib)
 
@@ -289,12 +289,15 @@ def test_a_whole_file_hash_comes_only_beside_an_fp1(env, lib):
     buf = io.BytesIO()
     Image.new("RGB", (16, 16), (1, 2, 3)).save(buf, format="JPEG")
     for size, exif in (
-        (SIZE, {"sha256": "a" * 64, "legacy_sha256": "b" * 64}),  # a whole file's hash isn't an fp1
-        (SIZE, {"sha256": "fp1:" + "a" * 64, "legacy_sha256": "fp1:" + "b" * 64}),
-        (100, {"sha256": "fp1:" + "a" * 64, "legacy_sha256": "b" * 64}),  # no fp1 for a file up to 64 MiB
+        (SIZE, {"content_hash": "sha256:" + "a" * 64, "previous_hash": "sha256:" + "b" * 64}),  # not beside an fp1
+        (SIZE, {"content_hash": "fp1:" + "a" * 64, "previous_hash": "fp1:" + "b" * 64}),
+        (100, {"content_hash": "fp1:" + "a" * 64, "previous_hash": "sha256:" + "b" * 64}),  # no fp1 up to 64 MiB
+        (SIZE, {"content_hash": "fp1:" + "a" * 64, "previous_hash": "b" * 64}),  # a bare hash names no scheme
+        (100, {"content_hash": "a" * 64}),
+        (100, {"content_hash": "md5:" + "a" * 32}),  # not a scheme this server takes
     ):
         data = {"library_id": lib.id, "rel_path": "x.jpg", "file_size": str(size), "media_type": "image",
-                "exif": json.dumps(exif), "lineage": ingest_made(exif["sha256"])}
+                "exif": json.dumps(exif), "lineage": ingest_made(exif["content_hash"])}
         buf.seek(0)
         r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
         assert r.status_code == 400, (exif, r.text)
@@ -303,7 +306,9 @@ def test_a_whole_file_hash_comes_only_beside_an_fp1(env, lib):
     r = client.post(f"/v1/libraries/{lib.id}/scans", json={}, headers=headers)
     assert r.status_code == 200, r.text
     scan_id = r.json()["scan_id"]
-    for bad in ({"sha256": "fp1:" + "a" * 63}, {"sha256": "fp1:" + "a" * 64, "legacy_sha256": "fp1:" + "b" * 64}):
+    for bad in ({"content_hash": "fp1:" + "a" * 63}, {"content_hash": "a" * 64}, {"content_hash": "SHA256:" + "a" * 64},
+                {"content_hash": "fp1:" + "a" * 64, "previous_hash": "fp1:" + "b" * 64},
+                {"content_hash": "fp1:" + "a" * 64, "previous_hash": "b" * 64}):
         r = client.post(f"/v1/scans/{scan_id}/hashes", json={"files": [{"rel_path": "x.png", **bad}]}, headers=headers)
         assert r.status_code == 422, (bad, r.text)
 
@@ -331,6 +336,6 @@ def test_work_handed_out_before_the_swap_is_of_this_content(env, api, lib):
                     json={"ocr_text": "", "lineage": made("ocr", whole_hash)}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(env) as session:
-        source = session.execute(text("SELECT source_sha256 FROM artifact_lineage WHERE asset_id = :a"
+        source = session.execute(text("SELECT source_hash FROM artifact_lineage WHERE asset_id = :a"
                                       " AND artifact = 'ocr'"), {"a": other["asset_id"]}).scalar_one()
-    assert source == whole_hash and other["sha256"] == whole_file_sha256(small)
+    assert source == whole_hash and other["content_hash"] == whole_file_sha256(small)

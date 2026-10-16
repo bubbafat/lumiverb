@@ -24,14 +24,13 @@ def face_proxy(item: dict, root_path: Path | None, proxy_cache: Any) -> bool:
     from src.shared.content_hash import matches
     from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
 
-    asset_id, expected = item["asset_id"], item.get("sha256")
+    asset_id, expected = item["asset_id"], item.get("content_hash")
     if proxy_cache.stored_path(asset_id) is not None:
         return True
     if proxy_cache.has(asset_id):
-        sha_file = proxy_cache.sha_path(asset_id)
         if not expected:
             return True  # no hash to check: the cache is trusted
-        if sha_file.exists() and sha_file.read_text().strip() == expected:
+        if proxy_cache.get_source_hash(asset_id) == expected:
             return True
     if root_path is None:
         return True
@@ -89,6 +88,6 @@ class Faces(Work):
         from src.shared.producers import level_of
 
         client.post("/v1/assets/batch-faces", json={
-            "items": [{"asset_id": clip["asset_id"], "source_sha256": clip.get("sha256"), **found}
+            "items": [{"asset_id": clip["asset_id"], "source_hash": clip.get("content_hash"), **found}
                       for clip, found in made],
             "lineage": {**self.lineage(None, used=self.used), "level": level_of(self.artifact, {"detail": self.detail})}})

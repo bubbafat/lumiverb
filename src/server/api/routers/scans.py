@@ -37,6 +37,7 @@ from sqlmodel import Session
 
 from src.server import scans
 from src.server.after_commit import AfterCommit
+from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
@@ -46,7 +47,6 @@ from src.server.models.tenant import ScanSession
 from src.server.repository import lineage
 from src.server.repository.tenant import AssetRepository, LibraryRepository
 from src.server.tenant_settings import get_follow_moves
-from src.shared.content_hash import PATTERN as CONTENT_HASH
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 from src.shared.utils import utcnow
 
@@ -117,7 +117,7 @@ class PlannedFile(BaseModel):
     reason: str | None = None
     # The clip at this path, when there is one.
     asset_id: str | None = None
-    # Send the whole file's SHA-256 too (legacy_sha256; with an upload, in its exif): a hash
+    # Send the whole file's "sha256" too (previous_hash; with an upload, in its exif): a hash
     # made before fp1 of a file its size is in the library (src/shared/content_hash.py).
     legacy: bool = False
 
@@ -169,10 +169,11 @@ class GonePage(BaseModel):
 
 class HashedFile(BaseModel):
     rel_path: str = Field(max_length=MAX_PATH)
-    # Its content hash (src/shared/content_hash.py): a file over 64 MiB, "fp1:" and 64 hex digits.
-    sha256: str = Field(pattern=CONTENT_HASH)
-    # The whole file's SHA-256, when the plan asks (legacy).
-    legacy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # Its content hash (src/shared/content_hash.py): "sha256:" and 64 hex digits, a file
+    # over 64 MiB "fp1:" and 64.
+    content_hash: ContentHash
+    # The whole file's "sha256" hash beside its fp1, when the plan asks (legacy).
+    previous_hash: ContentHash | None = Field(default=None, pattern=r"^sha256:")
 
 
 class HashesRequest(BaseModel):
@@ -427,7 +428,8 @@ def add_hashes(
     (force_add) are back in sight."""
     scan = _held(session, scan_id, planned=True)
     rel_paths = _rel_paths([f.rel_path for f in body.files])
-    posted = {p: scans.Hashed(p, f.sha256, f.legacy_sha256) for p, f in zip(rel_paths, body.files, strict=True)}
+    posted = {p: scans.Hashed(p, f.content_hash, f.previous_hash)
+              for p, f in zip(rel_paths, body.files, strict=True)}
     try:
         decided = scans.decide(session, scan, list(posted.values()), follow_moves=get_follow_moves(session))
     except scans.NotPlannedError as exc:

@@ -192,7 +192,7 @@ def test_build_exif_payload_image():
     assert payload["aperture"] == pytest.approx(2.8, abs=0.1)
     assert payload["focal_length"] == pytest.approx(35.0, abs=0.1)
     assert payload["lens_model"] == "TestLens 35mm f/2.8"
-    assert payload["sha256"] is not None
+    assert payload["content_hash"] is not None
     assert payload["duration_sec"] is None
 
 
@@ -226,7 +226,7 @@ def test_build_exif_payload_video():
 
     payload = _build_exif_payload(SAMPLE_VIDEO, "video")
 
-    assert payload["sha256"] is not None
+    assert payload["content_hash"] is not None
     assert payload["duration_sec"] is not None
     assert payload["duration_sec"] > 0
 

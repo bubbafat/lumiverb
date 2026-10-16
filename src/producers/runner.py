@@ -203,7 +203,7 @@ class Work:
     def lineage(self, clip: dict | None, used: dict[str, Any] | None = None) -> dict:
         """What a save records: this producer, its version, the settings used
         (the server's unless used says) and the clip's file."""
-        return self.acct.producers.lineage(self.artifact, clip.get("sha256") if clip else None, used=used)
+        return self.acct.producers.lineage(self.artifact, clip.get("content_hash") if clip else None, used=used)
 
     def machines_or_clip(self, error: object) -> Exception:
         """A failure of the producer's AI job: the clip's (Failed) when its

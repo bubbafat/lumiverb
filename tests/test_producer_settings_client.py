@@ -85,10 +85,10 @@ def test_it_uses_the_servers_settings_and_says_so():
 
     ps = ProducerSettings(_client({"transcript": {"model": "medium"}}))
     assert ps.settings("transcript")["model"] == "medium"
-    lin = ps.lineage("transcript", "ab" * 32)
+    lin = ps.lineage("transcript", "sha256:" + "ab" * 32)
     assert lin == {"producer": "whisper", "version": "1",
                    "settings_hash": P.settings_hash({**P.effective_settings("transcript"), "model": "medium"}),
-                   "source_sha256": "ab" * 32}
+                   "source_hash": "sha256:" + "ab" * 32}
 
 
 def test_an_older_server_means_the_registrys_settings():
@@ -111,7 +111,7 @@ def test_settings_actually_used_are_what_lineage_hashes():
 # The scan says how it made each clip's proxy, probe and preview.
 # ---------------------------------------------------------------------------
 
-SHA = "cd" * 32
+SHA = "sha256:" + "cd" * 32
 
 
 def _scan_args(tmp_path, media_type: str) -> dict:
@@ -121,7 +121,7 @@ def _scan_args(tmp_path, media_type: str) -> dict:
     client = MagicMock()
     client.post.return_value.json.return_value = {"asset_id": "ast_a"}
     return dict(client=client, library_id="lib_1", root_path=tmp_path,
-                f={"rel_path": "a.file", "file_size": 1, "media_type": media_type, "source_sha256": SHA},
+                f={"rel_path": "a.file", "file_size": 1, "media_type": media_type, "content_hash": SHA},
                 proxy_cache=MagicMock(), stats=ScanStats(), progress=MagicMock(), task_id=1, counter_field="new")
 
 

@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, select
 
+from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, GoneError
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
@@ -560,7 +561,7 @@ def submit_video_faces(
     detection_model: Annotated[str, Form(max_length=100)] = "insightface",
     detection_model_version: Annotated[str, Form(max_length=100)] = "buffalo_l",
     embedding_model: Annotated[str, Form(max_length=100)] = "buffalo_l",
-    source_sha256: Annotated[str, Form(max_length=128)] = "",
+    source_hash: Annotated[str, Form(max_length=300)] = "",
     crops: Annotated[list[UploadFile] | None, File()] = None,
 ) -> VideoFacesResponse:
     """A video's faces, one a person seen (multipart): faces, a JSON list of
@@ -572,6 +573,8 @@ def submit_video_faces(
     from src.server.repository import lineage as lineage_repo
 
     made = require_lineage(lineage, "video_faces")  # before anything is saved
+    if source_hash and (why := why_not(source_hash)) is not None:
+        raise ApiError(400, "content_hash_not_valid", f"source_hash: {why}", {"source_hash": source_hash[:100]})
     try:
         items = TypeAdapter(list[VideoFaceIn]).validate_json(faces)
     except ValidationError as e:
@@ -610,7 +613,7 @@ def submit_video_faces(
                 "seen_ms": sorted({*f.seen_ms, f.frame_ms})} for f in items],
         embedding_model=embedding_model,
     )
-    lineage_repo.record(session, asset_id, "video_faces", with_source(made, source_sha256 or None),
+    lineage_repo.record(session, asset_id, "video_faces", with_source(made, source_hash or None),
                         outcome="ok" if items else "empty")
 
     tenant_id = getattr(request.state, "tenant_id", None)

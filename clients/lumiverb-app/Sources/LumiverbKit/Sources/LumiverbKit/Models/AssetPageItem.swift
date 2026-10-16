@@ -8,7 +8,7 @@ public struct AssetPageItem: Decodable, Identifiable, Sendable, Equatable {
     public let relPath: String
     public let fileSize: Int
     public let fileMtime: String?
-    public let sha256: String?
+    public let contentHash: String?
     public let mediaType: String
     public let width: Int?
     public let height: Int?

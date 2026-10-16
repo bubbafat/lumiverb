@@ -85,13 +85,13 @@ def test_put_scan_stores_proxy_and_sha(tmp_path):
 
 def test_get_sha_returns_none_when_missing(tmp_path):
     cache = _test_cache(tmp_path)
-    assert cache.get_sha("nonexistent") is None
+    assert cache.get_source_hash("nonexistent") is None
 
 
 def test_get_sha_reads_sidecar(tmp_path):
     cache = _test_cache(tmp_path)
     cache.put_scan("asset_1", b"data", "deadbeef")
-    assert cache.get_sha("asset_1") == "deadbeef"
+    assert cache.get_source_hash("asset_1") == "deadbeef"
 
 
 def test_put_scan_overwrites_existing(tmp_path):
@@ -101,7 +101,7 @@ def test_put_scan_overwrites_existing(tmp_path):
     cache.put_scan("asset_1", b"new-proxy", "new-sha")
 
     assert (tmp_path / "asset_1").read_bytes() == b"new-proxy"
-    assert cache.get_sha("asset_1") == "new-sha"
+    assert cache.get_source_hash("asset_1") == "new-sha"
 
 
 def test_remove_cleans_sha_sidecar(tmp_path):

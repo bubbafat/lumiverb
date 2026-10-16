@@ -17,7 +17,7 @@ For each asset:
 | File | Contents | Purpose |
 |------|----------|---------|
 | `{asset_id}` | JPEG image bytes (no extension) | 2048px max long edge proxy image |
-| `{asset_id}.sha` | The source file's content hash (UTF-8, no newline): 64 hex, or `fp1:` and 64 for a file over 64 MiB | The source's content hash at time of proxy generation (`src/shared/content_hash.py`) |
+| `{asset_id}.sha` | The source file's content hash (UTF-8, no newline): `sha256:` and 64 hex, or `fp1:` and 64 for a file over 64 MiB (a bare 64 hex, written before hashes named their scheme, is read as `sha256:`) | The source's content hash at time of proxy generation (`src/shared/content_hash.py`) |
 
 ## Operations
 

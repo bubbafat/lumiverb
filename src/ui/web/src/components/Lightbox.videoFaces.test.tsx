@@ -10,7 +10,7 @@ vi.mock("../api/client", async (orig) => ({
   getCurrentUser: vi.fn(async () => ({ role: "editor" })),
   getAsset: vi.fn(async (id: string) => ({
     asset_id: id, library_id: "", rel_path: "party.mov", media_type: "video", status: "active",
-    proxy_key: null, thumbnail_key: null, width: 1920, height: 1080, file_size: null, sha256: null,
+    proxy_key: null, thumbnail_key: null, width: 1920, height: 1080, file_size: null, content_hash: null,
     taken_at: null, duration_sec: 120, note: null, note_author: null, note_updated_at: null,
     ai_description: null, ai_tags: [], video_facet: null, corrected: [], face_count: 2,
   })),
@@ -47,7 +47,7 @@ afterEach(() => {
 
 // As a page that doesn't say how many faces it has would pass it: the clip's details say.
 const video = {
-  asset_id: "ast_party", rel_path: "party.mov", file_size: 0, file_mtime: null, sha256: null, media_type: "video",
+  asset_id: "ast_party", rel_path: "party.mov", file_size: 0, file_mtime: null, content_hash: null, media_type: "video",
   width: 1920, height: 1080, taken_at: null, status: "active", duration_sec: 120, camera_make: null,
   camera_model: null, iso: null, aperture: null, focal_length: null, focal_length_35mm: null, lens_model: null,
   flash_fired: null, gps_lat: null, gps_lon: null, created_at: null,

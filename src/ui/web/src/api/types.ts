@@ -39,7 +39,7 @@ export interface AssetPageItem {
   rel_path: string;
   file_size: number;
   file_mtime: string | null;
-  sha256: string | null;
+  content_hash: string | null;
   media_type: string;
   width: number | null;
   height: number | null;
@@ -145,7 +145,7 @@ export interface AssetDetail {
   // page item is a synthesized placeholder (e.g. cluster review face
   // drill-down).
   file_size?: number | null;
-  sha256: string | null;
+  content_hash: string | null;
   exif_extracted_at: string | null;
   camera_make: string | null;
   camera_model: string | null;

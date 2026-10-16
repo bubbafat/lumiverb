@@ -128,7 +128,7 @@ def level_of(artifact: str, uses: Mapping[str, Any] | None = None) -> int | None
     return setting.choices.index(value if value in setting.choices else setting.default)
 
 
-def lineage(artifact: str, settings: Mapping[str, Any], source_sha256: str | None,
+def lineage(artifact: str, settings: Mapping[str, Any], source_hash: str | None,
             level: int | None = None) -> dict[str, Any]:
     """What a write records about how the artifact was made. level: the
     level it was made at, for a producer with a level setting (its default's
@@ -138,7 +138,7 @@ def lineage(artifact: str, settings: Mapping[str, Any], source_sha256: str | Non
         "producer": p.producer,
         "version": p.version,
         "settings_hash": settings_hash(settings),
-        "source_sha256": source_sha256,
+        "source_hash": source_hash,
     }
     if p.level is not None:
         out["level"] = level_of(artifact) if level is None else level

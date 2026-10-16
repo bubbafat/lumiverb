@@ -53,7 +53,7 @@ def _vision_on(env):
 
 def _made_old(env, clip: str, sha: str, artifact: str = "vision") -> None:
     client, headers, *_ = env
-    old = {"producer": artifact, "version": "1", "settings_hash": OLD, "source_sha256": sha}
+    old = {"producer": artifact, "version": "1", "settings_hash": OLD, "source_hash": sha}
     if artifact == "vision":
         r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "old words",
                                                             "lineage": old}, headers=headers)
@@ -124,7 +124,7 @@ def test_a_clip_whose_file_changed_is_due_as_missing_not_as_a_redo(env):
     lib = _library(env, "RedoChanged")
     clip, sha = _stale_clip(lib, "a.jpg")
     with _db(lib) as s:
-        s.execute(text("UPDATE assets SET sha256 = :n WHERE asset_id = :a"), {"n": _sha(), "a": clip})
+        s.execute(text("UPDATE assets SET content_hash = :n WHERE asset_id = :a"), {"n": _sha(), "a": clip})
         s.commit()
     assert _due(lib, "vision") == [clip]
     assert _due(lib, "redo_vision") == []
@@ -193,7 +193,7 @@ def test_a_machine_transcript_made_with_another_model_is_redone(env):
         s.commit()
     r = client.post(f"/v1/assets/{vid}/transcript", json={
         "srt": SRT, "source": "whisper",
-        "lineage": {"producer": "whisper", "version": "1", "settings_hash": OLD, "source_sha256": sha}},
+        "lineage": {"producer": "whisper", "version": "1", "settings_hash": OLD, "source_hash": sha}},
         headers=headers)
     assert r.status_code == 200, r.text
     assert _due(lib, "redo_transcript") == [vid]
@@ -220,7 +220,7 @@ def _video_with_scenes(lib, n: int = 2) -> tuple[str, str, list[str]]:
                                                             "l": json.dumps(old)})
         s.execute(text(
             "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-            " source_sha256, produced_at, outcome, attempts) VALUES (:a, 'scene_vision', 'scene-vision', '1', :h,"
+            " source_hash, produced_at, outcome, attempts) VALUES (:a, 'scene_vision', 'scene-vision', '1', :h,"
             " :sha, now(), 'ok', 0)"), {"a": vid, "h": OLD, "sha": sha})
         s.commit()
     return vid, sha, scenes

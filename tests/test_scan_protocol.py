@@ -160,7 +160,7 @@ def test_a_gone_clip_whose_content_isnt_known_is_no_moves_source(env, api, lib):
         "width": "16", "height": "16", "exif": json.dumps({}), "lineage": ingest_made()})
     assert r.status_code == 200, r.text
     old = r.json()["asset_id"]
-    assert _in_sight(env, lib)["inbox/a.png"]["sha256"] is None
+    assert _in_sight(env, lib)["inbox/a.png"]["content_hash"] is None
     _move(lib, "inbox/a.png", "sorted/a.png")
 
     read, hashing = _reads(lib)

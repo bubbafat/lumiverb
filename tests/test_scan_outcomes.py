@@ -167,7 +167,7 @@ def _copy(lib: Lib, old: str, new: str) -> None:
 
 
 def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _mtime(path: Path) -> datetime:
@@ -183,7 +183,7 @@ def _rows(env, lib: Lib) -> list[dict]:
     """Every clip of the library, in sight or not, oldest first."""
     with _db(env) as session:
         rows = session.execute(text(
-            "SELECT asset_id, rel_path, sha256, file_size, file_mtime, media_type, deleted_at, deleted_reason,"
+            "SELECT asset_id, rel_path, content_hash, file_size, file_mtime, media_type, deleted_at, deleted_reason,"
             "       video_preview_key, note, updated_at"
             "  FROM assets WHERE library_id = :lib ORDER BY created_at, asset_id"), {"lib": lib.id}).mappings().all()
     return [dict(r) for r in rows]
@@ -235,7 +235,7 @@ def _seed(env, lib: Lib, rel: str, *, media_type: str = "image") -> str:
     buf.seek(0)
     data = {"library_id": lib.id, "rel_path": rel, "file_size": str(path.stat().st_size),
             "file_mtime": _mtime(path).isoformat(), "media_type": media_type, "width": "16", "height": "16",
-            "exif": json.dumps({"sha256": sha}), "lineage": ingest_made(sha)}
+            "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made(sha)}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
@@ -256,7 +256,7 @@ def test_new_files_are_ingested_and_a_second_scan_changes_nothing(env, api, lib)
     clips = _in_sight(env, lib)
     assert set(clips) == {"a.png", "day 1/b.png", "day 1/clip.mp4"}
     for rel, path in (("a.png", a), ("day 1/b.png", b), ("day 1/clip.mp4", v)):
-        assert clips[rel]["sha256"] == _sha(path)
+        assert clips[rel]["content_hash"] == _sha(path)
         assert clips[rel]["file_size"] == path.stat().st_size
         assert clips[rel]["file_mtime"] == _mtime(path)
     assert clips["a.png"]["media_type"] == "image"
@@ -283,10 +283,10 @@ def test_a_changed_file_at_the_same_path_is_a_new_clip_and_the_old_one_goes_miss
 
     new = _in_sight(env, lib)["a.png"]
     assert new["asset_id"] != old["asset_id"]
-    assert new["sha256"] == _sha(changed) and new["note"] is None  # nothing carries over
+    assert new["content_hash"] == _sha(changed) and new["note"] is None  # nothing carries over
     was = _clip(env, lib, old["asset_id"])
     assert was["deleted_reason"] == "missing" and was["rel_path"] == "a.png"  # archived where it was
-    assert was["sha256"] == old["sha256"] and was["note"] == "the first take"
+    assert was["content_hash"] == old["content_hash"] and was["note"] == "the first take"
     assert _project_clips(env, project) == {old["asset_id"]}  # still in its project, as missing
     _settled(env, api, lib)
 
@@ -304,7 +304,7 @@ def test_the_old_content_back_at_its_path_brings_its_clip_back(env, api, lib):
     _scan(api, lib)
 
     back = _in_sight(env, lib)["a.png"]
-    assert back["asset_id"] == old["asset_id"] and back["sha256"] == first_sha
+    assert back["asset_id"] == old["asset_id"] and back["content_hash"] == first_sha
     assert _missing(env, lib)["a.png"]["asset_id"] == second["asset_id"]
     assert len(_rows(env, lib)) == 2
     _settled(env, api, lib)
@@ -319,7 +319,7 @@ def test_a_touched_file_stays_its_clip_and_its_new_time_is_recorded(env, api, li
     _scan(api, lib)
 
     after = _in_sight(env, lib)["a.png"]
-    assert after["asset_id"] == before["asset_id"] and after["sha256"] == before["sha256"]
+    assert after["asset_id"] == before["asset_id"] and after["content_hash"] == before["content_hash"]
     # The server has the new time, so the next scan finds the file unchanged
     # by its size and time alone.
     assert after["file_mtime"] == _mtime(a) != before["file_mtime"]
@@ -352,11 +352,11 @@ def test_thorough_catches_new_content_with_the_same_size_and_time(env, api, lib)
 
     _scan(api, lib)  # by size and time it's unchanged
     assert _in_sight(env, lib)["a.png"]["asset_id"] == old["asset_id"]
-    assert _in_sight(env, lib)["a.png"]["sha256"] == old["sha256"]
+    assert _in_sight(env, lib)["a.png"]["content_hash"] == old["content_hash"]
 
     _scan(api, lib, thorough=True)
     new = _in_sight(env, lib)["a.png"]
-    assert new["asset_id"] != old["asset_id"] and new["sha256"] == _sha(a)
+    assert new["asset_id"] != old["asset_id"] and new["content_hash"] == _sha(a)
     assert _missing(env, lib)["a.png"]["asset_id"] == old["asset_id"]
     _settled(env, api, lib)
 
@@ -369,7 +369,7 @@ def test_a_video_whose_preview_never_arrived_gets_one(env, api, lib):
     _scan(api, lib)
 
     now = _in_sight(env, lib)["clip.mp4"]
-    assert now["asset_id"] == clip and now["sha256"] == _sha(v)
+    assert now["asset_id"] == clip and now["content_hash"] == _sha(v)
     assert now["video_preview_key"] is not None
     assert len(_rows(env, lib)) == 1
     _settled(env, api, lib)
@@ -394,7 +394,7 @@ def test_a_moved_file_keeps_its_clip_and_what_people_did_to_it(env, api, lib):
     clips = _in_sight(env, lib)
     assert set(clips) == {"sorted/a renamed.png", "inbox/b.png"}
     moved = clips["sorted/a renamed.png"]
-    assert moved["asset_id"] == a["asset_id"] and moved["sha256"] == a["sha256"] and moved["note"] == "keeper"
+    assert moved["asset_id"] == a["asset_id"] and moved["content_hash"] == a["content_hash"] and moved["note"] == "keeper"
     assert _project_clips(env, project) == {a["asset_id"]}
     assert len(_rows(env, lib)) == 2  # nothing archived, nothing new
     _settled(env, api, lib)
@@ -450,7 +450,7 @@ def test_a_copy_is_a_clip_of_its_own(env, api, lib):
     assert set(clips) == {"a.png", "copies/a.png"}
     assert clips["a.png"]["asset_id"] == original["asset_id"] and clips["a.png"]["note"] == "the original"
     assert clips["copies/a.png"]["asset_id"] != original["asset_id"]
-    assert clips["copies/a.png"]["sha256"] == original["sha256"] and clips["copies/a.png"]["note"] is None
+    assert clips["copies/a.png"]["content_hash"] == original["content_hash"] and clips["copies/a.png"]["note"] is None
     assert _missing(env, lib) == {}
     _settled(env, api, lib)
 
@@ -508,7 +508,7 @@ def test_a_copy_made_then_the_original_overwritten_takes_the_clip_with_it(env, a
     assert set(clips) == {"a.png", "copies/a.png"}
     assert clips["copies/a.png"]["asset_id"] == original["asset_id"]
     assert clips["copies/a.png"]["note"] == "the original"
-    assert clips["a.png"]["asset_id"] != original["asset_id"] and clips["a.png"]["sha256"] == _sha(overwritten)
+    assert clips["a.png"]["asset_id"] != original["asset_id"] and clips["a.png"]["content_hash"] == _sha(overwritten)
     assert _missing(env, lib) == {}
     assert len(_rows(env, lib)) == 2  # the copy's own clip, made in the same scan, gone for good
     _settled(env, api, lib)
@@ -544,7 +544,7 @@ def test_a_moved_and_edited_file_is_a_new_clip(env, api, lib):
 
     clips = _in_sight(env, lib)
     assert set(clips) == {"sorted/a.png"}
-    assert clips["sorted/a.png"]["asset_id"] != a["asset_id"] and clips["sorted/a.png"]["sha256"] == _sha(edited)
+    assert clips["sorted/a.png"]["asset_id"] != a["asset_id"] and clips["sorted/a.png"]["content_hash"] == _sha(edited)
     assert _missing(env, lib)["inbox/a.png"]["asset_id"] == a["asset_id"]
     _settled(env, api, lib)
 
@@ -749,7 +749,7 @@ def test_a_file_a_person_removed_is_skipped_and_another_file_there_is_a_new_clip
     _scan(api, lib)
     clips = _in_sight(env, lib)
     assert set(clips) == {"a.png", "b.png"}
-    assert clips["a.png"]["asset_id"] != a["asset_id"] and clips["a.png"]["sha256"] == _sha(other)
+    assert clips["a.png"]["asset_id"] != a["asset_id"] and clips["a.png"]["content_hash"] == _sha(other)
     assert _clip(env, lib, a["asset_id"]) == removed
     _settled(env, api, lib)
 
@@ -860,7 +860,7 @@ def test_files_still_settling_wait_and_are_never_taken_for_missing(env, api, lib
     _scan(api, lib)
     clips = _in_sight(env, lib)
     assert set(clips) == {"a.png", "fresh.png"}
-    assert clips["a.png"]["asset_id"] != a["asset_id"] and clips["a.png"]["sha256"] == _sha(rewritten)
+    assert clips["a.png"]["asset_id"] != a["asset_id"] and clips["a.png"]["content_hash"] == _sha(rewritten)
     _settled(env, api, lib)
 
 

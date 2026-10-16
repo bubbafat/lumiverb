@@ -25,7 +25,7 @@ from src.producers.runner import NOT_TRIED, Crashed, run
 from src.server.scheduler import runners
 from src.server.scheduler.dispatch import Job
 
-SHA = "a" * 64
+SHA = "sha256:" + "a" * 64
 
 pytestmark = pytest.mark.fast
 
@@ -79,7 +79,7 @@ class FakeAccount:
 
 
 def _job(kind: str, *ids: str, **extra) -> Job:
-    return Job("t1", kind, 3, tuple({"asset_id": i, "library_id": "lib_1", "rel_path": f"{i}.jpg", "sha256": SHA,
+    return Job("t1", kind, 3, tuple({"asset_id": i, "library_id": "lib_1", "rel_path": f"{i}.jpg", "content_hash": SHA,
                                      **extra} for i in ids))
 
 
@@ -121,7 +121,7 @@ def test_a_description_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     # The batch route, one clip: search is left to the upkeep sweep, not committed per clip.
     item, lineage = _item_posted(acct, "/v1/assets/batch-vision")
     assert item["description"] == "a dog on a beach" and item["asset_id"] == "ast_1"
-    assert item["source_sha256"] == SHA
+    assert item["source_hash"] == SHA
     assert lineage == acct.producers.lineage("vision", None,
                                              used=acct.producers.with_model("vision", acct.vision.model))
 
@@ -166,7 +166,7 @@ def test_text_in_an_image_is_saved_with_its_lineage(acct, monkeypatch) -> None:
                                                                           "ocr_text": "STOP"})
     _run(acct, "ocr", "ast_1")
     body = _posted(acct)["/v1/assets/batch-ocr"]
-    assert body["items"] == [{"asset_id": "ast_1", "ocr_text": "STOP", "source_sha256": SHA}]
+    assert body["items"] == [{"asset_id": "ast_1", "ocr_text": "STOP", "source_hash": SHA}]
     assert body["model_id"] == acct.vision.model and body["lineage"]["producer"] == "ocr"
 
 
@@ -182,7 +182,7 @@ def test_a_clip_embedding_is_saved_with_its_lineage(acct, monkeypatch) -> None:
         "asset_id": kw["asset_id"], "model_id": "clip", "model_version": "ViT-B-32", "vector": [0.1, 0.2]})
     _run(acct, "clip", "ast_1")
     item, lineage = _item_posted(acct, "/v1/assets/batch-embeddings")
-    assert item["vector"] == [0.1, 0.2] and item["source_sha256"] == SHA
+    assert item["vector"] == [0.1, 0.2] and item["source_hash"] == SHA
     assert lineage["producer"] == "clip"
     # The model is the scheduler's, as the account's settings say.
     acct.models.clip.assert_called_once_with("ViT-B-32", "openai")
@@ -232,7 +232,7 @@ def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypa
     body = acct.client.put.call_args.kwargs["json"]
     assert acct.client.put.call_args.args[0] == "/v1/assets/ast_1/video-facet"
     assert body["duration_sec"] == 2.0 and body["lineage"]["producer"] == "ffprobe"
-    assert body["lineage"]["source_sha256"] == SHA
+    assert body["lineage"]["source_hash"] == SHA
 
 
 def test_a_probe_that_ffprobe_cant_read_is_the_clips(acct, monkeypatch, tmp_path) -> None:
@@ -804,7 +804,7 @@ def test_a_jobs_faces_are_saved_together_and_the_clips_that_failed_charged(acct,
     assert _run(acct, "faces", "ast_1", "ast_2", "ast_3") is None
     body = _posted(acct)["/v1/assets/batch-faces"]
     assert [i["asset_id"] for i in body["items"]] == ["ast_1", "ast_3"]
-    assert body["items"][0]["source_sha256"] == SHA and body["lineage"]["producer"] == "insightface"
+    assert body["items"][0]["source_hash"] == SHA and body["lineage"]["producer"] == "insightface"
     assert _charged(acct) == [("faces", "ast_2")]
     from src.producers.faces.levels import gates
 
@@ -877,12 +877,12 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     cache.has.return_value = False
     cache.stored_path.return_value = None  # no preview the API keeps on this machine
     (tmp_path / "a.jpg").write_bytes(b"photo")
-    now = hashlib.sha256(b"photo").hexdigest()
+    now = "sha256:" + hashlib.sha256(b"photo").hexdigest()
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: b"proxy")
-    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": now}, tmp_path, cache)
+    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "content_hash": now}, tmp_path, cache)
     cache.put.assert_called_once_with("ast_1", b"proxy")
     assert (cache.path / "ast_1.sha").read_text() == now
-    assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "sha256": "0" * 64}, tmp_path, cache)
+    assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "content_hash": "sha256:" + "0" * 64}, tmp_path, cache)
 
 
 def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_path, monkeypatch) -> None:
@@ -896,7 +896,7 @@ def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_pat
     (tmp_path / "a.jpg").write_bytes(b"photo, changed since")
     made = []
     monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: made.append(source))
-    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "sha256": "sha-then"}, tmp_path, cache)
+    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "content_hash": "sha-then"}, tmp_path, cache)
     assert made == [] and not cache.put.called
 
 

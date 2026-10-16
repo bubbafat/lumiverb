@@ -859,15 +859,15 @@ class AssetRepository:
             text("SELECT DISTINCT library_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}
         ).scalars().all())
 
-    def find_at(self, library_id: str, rel_path: str, sha256: str | None) -> Asset | None:
+    def find_at(self, library_id: str, rel_path: str, content_hash: str | None) -> Asset | None:
         """The clip archived or trashed at this path with this content: the old
         content back where it was. A person's trash or archive comes first (it
         stands); else the most recently missing."""
-        if not sha256:
+        if not content_hash:
             return None
         stmt = (
             select(Asset)
-            .where(Asset.library_id == library_id, Asset.rel_path == rel_path, Asset.sha256 == sha256,
+            .where(Asset.library_id == library_id, Asset.rel_path == rel_path, Asset.content_hash == content_hash,
                    Asset.deleted_at.is_not(None),  # type: ignore[union-attr]
                    Asset.deleted_reason.in_(("missing", "user", "archived")))  # type: ignore[union-attr]
             .order_by((Asset.deleted_reason == "missing").asc(), Asset.deleted_at.desc())  # type: ignore[union-attr]
@@ -875,26 +875,26 @@ class AssetRepository:
         )
         return self._session.exec(stmt).first()
 
-    def missing_ids_with_sha(self, library_id: str, sha256: str) -> list[str]:
+    def missing_ids_with_hash(self, library_id: str, content_hash: str) -> list[str]:
         """The library's clips archived as missing with this content (no lock)."""
         return list(self._session.execute(
-            text("SELECT asset_id FROM assets WHERE library_id = :lib AND sha256 = :sha"
+            text("SELECT asset_id FROM assets WHERE library_id = :lib AND content_hash = :hash"
                  "   AND deleted_at IS NOT NULL AND deleted_reason = 'missing'"
                  " ORDER BY deleted_at DESC, created_at DESC, asset_id"),
-            {"lib": library_id, "sha": sha256},
+            {"lib": library_id, "hash": content_hash},
         ).scalars())
 
-    def find_missing_by_sha(self, library_id: str, sha256: str | None) -> Asset | None:
+    def find_missing_by_hash(self, library_id: str, content_hash: str | None) -> Asset | None:
         """The library's most recently missing asset with this content,
         locked for restoring. A row someone else holds is waited for, not
         skipped: if another ingest claimed it meanwhile, it no longer matches
         and this file gets its own asset; if other work held it (a re-index, an
         OCR batch), it's still here to restore."""
-        if not sha256:
+        if not content_hash:
             return None
         stmt = (
             select(Asset)
-            .where(Asset.library_id == library_id, Asset.sha256 == sha256, _missing_file())
+            .where(Asset.library_id == library_id, Asset.content_hash == content_hash, _missing_file())
             .order_by(Asset.deleted_at.desc())
             .limit(1)
             .with_for_update()
@@ -912,22 +912,22 @@ class AssetRepository:
         rather than vanishing)."""
         for copy_id in self.newer_copy_candidates(asset):
             copy = self.lock_copy(copy_id)
-            if copy is not None and copy.sha256 == asset.sha256 and not self.has_human_data(copy_id):
+            if copy is not None and copy.content_hash == asset.content_hash and not self.has_human_data(copy_id):
                 return copy
         return None
 
     def newer_copy_candidates(self, asset: Asset) -> list[str]:
         """Active assets in the same library with the same content, made after this one, first made first."""
-        if not asset.sha256:
+        if not asset.content_hash:
             return []
         rows = self._session.execute(
             text(
                 "SELECT asset_id FROM assets"
-                " WHERE library_id = :library_id AND sha256 = :sha256 AND deleted_at IS NULL"
+                " WHERE library_id = :library_id AND content_hash = :content_hash AND deleted_at IS NULL"
                 "   AND asset_id <> :asset_id AND created_at > :created_at"
                 " ORDER BY created_at, asset_id"
             ),
-            {"library_id": asset.library_id, "sha256": asset.sha256, "asset_id": asset.asset_id,
+            {"library_id": asset.library_id, "content_hash": asset.content_hash, "asset_id": asset.asset_id,
              "created_at": asset.created_at},
         )
         return [r[0] for r in rows]
@@ -1059,14 +1059,14 @@ class AssetRepository:
             return None
         return {k: getattr(row, k) for k in self.VIDEO_FACET_FIELDS}
 
-    def is_ignored(self, library_id: str, rel_path: str, sha256: str | None = None) -> bool:
+    def is_ignored(self, library_id: str, rel_path: str, content_hash: str | None = None) -> bool:
         """True if the user emptied this file's trash (see ignored_files). A
         different file at that path (both contents known) isn't: it's a new
         file (Robert, Oct 9)."""
         return self._session.execute(
             text("SELECT 1 FROM ignored_files WHERE library_id = :lib AND rel_path = :path"
-                 "   AND (sha256 IS NULL OR CAST(:sha AS text) IS NULL OR sha256 = :sha) LIMIT 1"),
-            {"lib": library_id, "path": normalize_rel_path(rel_path), "sha": sha256},
+                 "   AND (content_hash IS NULL OR CAST(:hash AS text) IS NULL OR content_hash = :hash) LIMIT 1"),
+            {"lib": library_id, "path": normalize_rel_path(rel_path), "hash": content_hash},
         ).first() is not None
 
     def list_trashed(
@@ -1157,15 +1157,15 @@ class AssetRepository:
         # still be on disk. Remember it, or the next scan would bring it back.
         self._session.execute(
             text(
-                "INSERT INTO ignored_files (library_id, rel_path, sha256, file_size, file_mtime, created_at)"
-                " SELECT a.library_id, a.rel_path, a.sha256, a.file_size, a.file_mtime, :now FROM assets a"
+                "INSERT INTO ignored_files (library_id, rel_path, content_hash, file_size, file_mtime, created_at)"
+                " SELECT a.library_id, a.rel_path, a.content_hash, a.file_size, a.file_mtime, :now FROM assets a"
                 " WHERE a.asset_id = ANY(:asset_ids)"
                 "   AND a.deleted_at IS NOT NULL AND a.deleted_reason = 'user'"
                 # A file whose content isn't known names the whole path: not
                 # one a clip in sight holds now (a changed file is a new clip).
-                "   AND (a.sha256 IS NOT NULL OR NOT EXISTS (SELECT 1 FROM assets o"
+                "   AND (a.content_hash IS NOT NULL OR NOT EXISTS (SELECT 1 FROM assets o"
                 "        WHERE o.library_id = a.library_id AND o.rel_path = a.rel_path AND o.deleted_at IS NULL))"
-                " ON CONFLICT (library_id, rel_path, (COALESCE(sha256, ''))) DO NOTHING"
+                " ON CONFLICT (library_id, rel_path, (COALESCE(content_hash, ''))) DO NOTHING"
             ),
             {**params, "now": utcnow()},
         )
@@ -1369,7 +1369,7 @@ class AssetRepository:
     def update_exif(
         self,
         asset_id: str,
-        sha256: str | None,
+        content_hash: str | None,
         exif: dict,
         camera_make: str | None,
         camera_model: str | None,
@@ -1413,7 +1413,7 @@ class AssetRepository:
             text(
                 f"""
                 UPDATE assets SET
-                    sha256 = :sha256,
+                    content_hash = :content_hash,
                     exif = :exif,
                     exif_extracted_at = :now,
                     camera_make = :camera_make,
@@ -1437,7 +1437,7 @@ class AssetRepository:
                 """
             ),
             {
-                "sha256": sha256,
+                "content_hash": content_hash,
                 "exif": json.dumps(exif) if exif else None,
                 "now": utcnow(),
                 "camera_make": camera_make,
