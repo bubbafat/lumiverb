@@ -21,7 +21,7 @@ def scan_would(client, headers: dict, library_id: str, files: list[dict],
                dry_run: bool = True) -> dict[str, str]:
     """Each file's action in a dry-run scan's plan ("upload", "hash",
     "unchanged" or "skipped"; files: [{rel_path, file_size, file_mtime?}]).
-    A file the plan hashes takes the decision for its sha256 in hashes
+    A file the plan hashes takes the decision for its content_hash in hashes
     ("skipped", "upload", "unchanged" or, adding removed files anyway,
     "restored"). No moves are looked for: a file's own path decides."""
     scan_id = _ok(client.post(f"/v1/libraries/{library_id}/scans",
@@ -33,7 +33,7 @@ def scan_would(client, headers: dict, library_id: str, files: list[dict],
                                headers=headers))
         assert plan["next_cursor"] is None, "one page of files"
         would = {f["rel_path"]: f["action"] for f in plan["files"]}
-        sent = [{"rel_path": p, "sha256": sha} for p, sha in (hashes or {}).items() if would.get(p) == "hash"]
+        sent = [{"rel_path": p, "content_hash": sha} for p, sha in (hashes or {}).items() if would.get(p) == "hash"]
         if sent:
             for d in _ok(client.post(f"/v1/scans/{scan_id}/hashes", json={"files": sent}, headers=headers))["files"]:
                 would[d["rel_path"]] = d["decision"]

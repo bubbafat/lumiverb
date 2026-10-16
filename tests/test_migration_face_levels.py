@@ -99,7 +99,9 @@ def test_faces_found_as_the_account_had_them_are_current_at_normal() -> None:
         with engine.connect() as conn:
             kept = conn.execute(text("SELECT value FROM system_metadata WHERE key = 'producer.faces'")).scalar()
         assert json.loads(kept) == {"merge_distance": 0.3}  # the gate goes, the grouping stays
-        # As the server counts them: the one found with the account's gates is current, at Normal.
+        # As the server counts them: the one found with the account's gates is current, at Normal
+        # (today's server reads today's schema: migrated on to the latest first).
+        _alembic(url, "upgrade", "head")
         with Session(engine) as session:
             counts = lineage.counts(session, "faces", lineage.desired(session, "faces"))
         assert (counts["current"], counts["stale"], counts["below"]) == (2, 1, 0)  # made_then, and the person's

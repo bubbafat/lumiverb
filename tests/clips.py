@@ -5,7 +5,7 @@ API, ADR-018); a client can no longer write a clip row from its own word
 (tests/test_retired_endpoints.py). A test that only needs a clip to try
 something else on makes it here, with the repository call ingest makes it
 with (AssetRepository.create_asset): at its path, with its file's size,
-time and media type, pending and online, its content (sha256) and previews
+time and media type, pending and online, its content (content_hash) and previews
 not known yet. A test about ingest or scans makes its clips through those.
 """
 

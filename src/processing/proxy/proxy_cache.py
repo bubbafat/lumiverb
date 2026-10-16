@@ -8,9 +8,9 @@ JPEG proxies without thinking about resolution. The cache handles:
 - Generating proxies from source files on demand via get()
 - Falling back to server download when local source isn't available
 - Persistent storage across runs in ~/.cache/lumiverb/proxies/
-- SHA-256 sidecar files for source file change detection
+- a sidecar per proxy with its source's content hash, for change detection
 
-Scan writes 2048px proxies + SHA sidecars. Enrich reads and resizes
+Scan writes 2048px proxies + hash sidecars. Enrich reads and resizes
 as needed. The cache is the handoff point between the two phases.
 
 Where the API keeps the previews on this machine (the scheduler beside it:
@@ -22,16 +22,19 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
 from src.processing.cache_dir import cache_dir, cache_entry
+from src.shared.content_hash import SHA256
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_EDGE = 1280
+_BARE = re.compile(r"[0-9a-f]{64}")
 _JPEG_QUALITY = 75
 
 
@@ -39,7 +42,7 @@ class ProxyCache:
     """Disk-backed cache of JPEG proxy images.
 
     Scan stores full-resolution 2048px proxies via put_scan() with a
-    .sha sidecar for change detection. Legacy callers use put() which
+    .sha sidecar (its source's content hash) for change detection. Legacy callers use put() which
     downscales to max_edge (default 1280px).
 
     Uses a persistent directory (~/.cache/lumiverb/proxies/) so proxies
@@ -76,7 +79,8 @@ class ProxyCache:
         return cache_entry(self._dir, asset_id)
 
     def sha_path(self, asset_id: str) -> Path:
-        """The asset's .sha sidecar: the source's SHA-256 the proxy was made from."""
+        """The asset's .sha sidecar: the content hash of the source the proxy
+        was made from (src/shared/content_hash.py)."""
         return cache_entry(self._dir, asset_id, ".sha")
 
     def put(self, asset_id: str, image_bytes: bytes) -> None:
@@ -84,22 +88,25 @@ class ProxyCache:
         image_bytes = self._ensure_size(image_bytes)
         self._atomic_write(self._entry(asset_id), image_bytes)
 
-    def put_scan(self, asset_id: str, jpeg_bytes: bytes, source_sha256: str) -> None:
-        """Store a full-resolution 2048px proxy from scan with SHA sidecar.
+    def put_scan(self, asset_id: str, jpeg_bytes: bytes, source_hash: str) -> None:
+        """Store a full-resolution 2048px proxy from scan with its hash sidecar.
 
         Writes are atomic (temp + rename) so concurrent readers never see
         partial files. The .sha sidecar is written after the proxy — a
         reader that sees a .sha file can trust the proxy is complete.
         """
         self._atomic_write(self._entry(asset_id), jpeg_bytes)
-        self._atomic_write(self.sha_path(asset_id), source_sha256.encode())
+        self._atomic_write(self.sha_path(asset_id), source_hash.encode())
 
-    def get_sha(self, asset_id: str) -> str | None:
-        """Read the SHA-256 sidecar for an asset. Returns None if missing."""
-        sha_path = self.sha_path(asset_id)
-        if sha_path.exists():
-            return sha_path.read_text().strip()
-        return None
+    def get_source_hash(self, asset_id: str) -> str | None:
+        """The content hash the asset's proxy was made from (its sidecar), or
+        None when there's none. One written before content hashes named their
+        scheme, a bare SHA-256, is read as the "sha256:" it is."""
+        try:
+            value = self.sha_path(asset_id).read_text().strip()
+        except FileNotFoundError:
+            return None
+        return SHA256 + value if _BARE.fullmatch(value) else value
 
     def put_from_path(self, asset_id: str, source_path: Path) -> bytes:
         """Generate proxy from a source file and cache it. Returns the bytes."""

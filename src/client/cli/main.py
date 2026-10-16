@@ -1032,19 +1032,19 @@ def download(
 def scan(
     library: Annotated[str, typer.Option("--library", "-l", help="Library name.")],
     path_prefix: Annotated[str | None, typer.Option("--path-prefix", "-p", help="Only scan files under this subdirectory.")] = None,
-    force: Annotated[bool, typer.Option("--force", "-f", help="Re-scan unchanged files (re-generate proxy even if SHA matches).")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Re-scan unchanged files (re-generate proxy even if the content hash matches).")] = False,
     concurrency: Annotated[int, typer.Option("--concurrency", help="Number of parallel workers.")] = 4,
     media_type: Annotated[str, typer.Option("--media-type", help="Filter: image, video, or all.")] = "all",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would happen without making changes.")] = False,
     allow_moves: Annotated[bool, typer.Option("--allow-moves", help="Automatically apply detected file moves (update paths on server).")] = False,
     skip_moves: Annotated[bool, typer.Option("--skip-moves", help="Look for no moves: a file at a new path is a new clip, and nothing is archived (anything gone may be half a move), so a moved file's old clip stays until a scan without this.")] = False,
     allow_mass_delete: Annotated[bool, typer.Option("--allow-mass-delete", help="Archive missing files even when more than 50 clips and more than half of a library's clips are missing (the server asks first: normally skipped as a likely mount problem).")] = False,
-    thorough: Annotated[bool, typer.Option("--thorough", help="SHA-verify all existing files instead of fast mtime+size check.")] = False,
+    thorough: Annotated[bool, typer.Option("--thorough", help="Hash all existing files instead of the fast mtime+size check.")] = False,
     force_add: Annotated[bool, typer.Option("--force-add", help="Last resort: add the files you removed (trash, archive, deleted for good) as if you never had. A clip in the trash or archived comes back with everything it had when its file is unchanged; a file deleted for good comes back as a new clip. Use --path-prefix to bring back only what's under a folder.")] = False,
     explain: Annotated[bool, typer.Option("--explain", help="List every difference between the disk and Lumiverb: each media file on disk it doesn't show, and why, and each clip whose file isn't on disk. Changes nothing (a --dry-run).")] = False,
     include_trash: Annotated[bool, typer.Option("--include-trash", help="With --explain: list the files whose clips are in the trash too (otherwise only counted).")] = False,
 ) -> None:
-    """Discover files, compute SHA, extract EXIF, generate proxies, upload.
+    """Discover files, hash their content, extract EXIF, generate proxies, upload.
 
     Scan touches source files, generates 2048px proxies, and uploads them to
     the server. The rest (CLIP, vision, OCR, faces, ...) is the scheduler's;
@@ -1052,8 +1052,8 @@ def scan(
     found and the server decides what's new, changed, moved and missing.
 
     By default, files whose mtime and size match the server are skipped
-    without hashing (fast mode). Use --thorough to SHA-verify all files.
-    Use --force to re-scan everything regardless of SHA.
+    without hashing (fast mode). Use --thorough to hash all files.
+    Use --force to re-scan everything regardless of content hash.
 
     Files you removed (trashed, archived or deleted for good) stay out of
     scans while they're unchanged at the same path. --force-add brings them

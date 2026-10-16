@@ -10,7 +10,11 @@ from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Int
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
+from src.shared.content_hash import GRAMMAR as _GRAMMAR
 from src.shared.utils import utcnow
+
+# Every stored content hash is one (src/shared/content_hash.py), whatever its scheme.
+CONTENT_HASH_GRAMMAR = _GRAMMAR
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +120,8 @@ class ScanFound(SQLModel, table=True):
     __table_args__ = (
         Index("ix_scan_found_moving", "scan_id", "asset_id",
               postgresql_where=text("decision IN ('moved', 'move_candidate', 'move_skipped')")),
+        CheckConstraint(f"content_hash ~ '{CONTENT_HASH_GRAMMAR}'", name="ck_scan_found_content_hash"),
+        CheckConstraint(f"previous_hash ~ '{CONTENT_HASH_GRAMMAR}'", name="ck_scan_found_previous_hash"),
     )
 
     scan_id: str = Field(foreign_key="scan_sessions.scan_id", primary_key=True)
@@ -128,12 +134,11 @@ class ScanFound(SQLModel, table=True):
     reason: str | None = Field(default=None, nullable=True)
     # The clip at this path when planned; for a move, the clip moving here.
     asset_id: str | None = Field(default=None, nullable=True)
-    sha256: str | None = Field(default=None, nullable=True)
-    # The plan asks for the whole file's SHA-256 too (a hash made before fp1
-    # of a file its size is in the library: src/shared/content_hash.py), and
-    # what was sent.
+    content_hash: str | None = Field(default=None, nullable=True)  # src/shared/content_hash.py
+    # The plan asks for the whole file's "sha256" too (a hash made before fp1
+    # of a file its size is in the library), and what was sent.
     legacy: bool = Field(default=False, nullable=False)
-    legacy_sha256: str | None = Field(default=None, nullable=True)
+    previous_hash: str | None = Field(default=None, nullable=True)
     decision: str | None = Field(default=None, nullable=True)
     moved_from: str | None = Field(default=None, nullable=True)
 
@@ -172,12 +177,13 @@ class Asset(SQLModel, table=True):
               postgresql_where=text("deleted_at IS NULL")),
         Index("ix_assets_library_rel_path", "library_id", "rel_path"),
         CheckConstraint("media_type IN ('image', 'video')", name="ck_assets_media_type"),
+        CheckConstraint(f"content_hash ~ '{CONTENT_HASH_GRAMMAR}'", name="ck_assets_content_hash"),
     )
 
     asset_id: str = Field(primary_key=True)
     library_id: str = Field(foreign_key="libraries.library_id", nullable=False)
     rel_path: str = Field(nullable=False)
-    sha256: str | None = Field(default=None, nullable=True)
+    content_hash: str | None = Field(default=None, nullable=True)  # src/shared/content_hash.py
     file_size: int = Field(sa_column=Column(BigInteger, nullable=False))
     file_mtime: datetime | None = Field(
         default=None,
@@ -633,7 +639,7 @@ class VideoFacetRow(SQLModel, table=True):
 class ArtifactLineage(SQLModel, table=True):
     """How one clip's artifact of one kind was made (ADR-016 phase 3): the
     producer, its version, the hash of the settings that change its output,
-    and the source file's SHA-256 it was made from. When any of them differs
+    and the content hash of the source file it was made from (source_hash). When any of them differs
     from what's registered now (src/shared/producers.py), the artifact is
     stale. Faces and scenes count as one set per clip.
 
@@ -645,13 +651,16 @@ class ArtifactLineage(SQLModel, table=True):
     made below the level now is out of date ("below"), at or above it current."""
 
     __tablename__ = "artifact_lineage"
+    __table_args__ = (
+        CheckConstraint(f"source_hash ~ '{CONTENT_HASH_GRAMMAR}'", name="ck_artifact_lineage_source_hash"),
+    )
 
     asset_id: str = Field(foreign_key="assets.asset_id", primary_key=True)
     artifact: str = Field(primary_key=True)
     producer: str = Field(nullable=False)
     producer_version: str = Field(nullable=False)
     settings_hash: str = Field(nullable=False)
-    source_sha256: str | None = Field(default=None, nullable=True)
+    source_hash: str | None = Field(default=None, nullable=True)  # the content hash it was made from
     produced_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -703,18 +712,19 @@ class IgnoredFile(SQLModel, table=True):
     """A file whose trash the user emptied. Its asset row is gone, but scans
     and ingest keep skipping that file at that path while it's still on disk.
     A path can have several (versions deleted over time); one without a
-    SHA-256 names whatever is at the path. Unique by (library, path, content)."""
+    content hash names whatever is at the path. Unique by (library, path, content)."""
 
     __tablename__ = "ignored_files"
 
     __table_args__ = (
-        Index("uq_ignored_files_file", "library_id", "rel_path", text("COALESCE(sha256, '')"), unique=True),
+        Index("uq_ignored_files_file", "library_id", "rel_path", text("COALESCE(content_hash, '')"), unique=True),
+        CheckConstraint(f"content_hash ~ '{CONTENT_HASH_GRAMMAR}'", name="ck_ignored_files_content_hash"),
     )
 
     ignored_id: int | None = Field(default=None, primary_key=True)
     library_id: str = Field(foreign_key="libraries.library_id")
     rel_path: str
-    sha256: str | None = Field(default=None, nullable=True)
+    content_hash: str | None = Field(default=None, nullable=True)
     # When it was deleted: a scan hashes the file at the path only when these differ.
     file_size: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     file_mtime: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))

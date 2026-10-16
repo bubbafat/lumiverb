@@ -93,7 +93,7 @@ export default function ProjectDetailPage() {
       page.items.map((item) => ({
         ...item,
         file_mtime: null,
-        sha256: null,
+        content_hash: null,
         iso: null,
         aperture: null,
         focal_length: null,

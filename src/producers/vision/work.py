@@ -77,5 +77,5 @@ class Vision(Work):
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
         for clip, result in made:
             client.post("/v1/assets/batch-vision", json={
-                "items": [{**result, "source_sha256": clip.get("sha256")}],
+                "items": [{**result, "source_hash": clip.get("content_hash")}],
                 "lineage": self.lineage(None, used=self.used)})

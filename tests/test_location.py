@@ -95,7 +95,7 @@ def _ingest(env, rel_path: str, exif: dict | None = None) -> str:
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "10", "media_type": "image",
             "width": "32", "height": "18", "lineage": ingest_made(None),
-            "exif": json.dumps({"sha256": os.urandom(32).hex(), **(exif or {})})}
+            "exif": json.dumps({"content_hash": "sha256:" + os.urandom(32).hex(), **(exif or {})})}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]

@@ -19,22 +19,22 @@ _REGISTRY = ProducerSettings(None)
 INGEST_KINDS = ("proxy", "vision", "clip", "probe", "capture")
 
 
-def made(artifact: str, source_sha256: str | None = None) -> dict:
+def made(artifact: str, source_hash: str | None = None) -> dict:
     """How a worker made the artifact, with the registry's settings. Without
     a source hash the server records the clip's file as it is now."""
-    return _REGISTRY.lineage(artifact, source_sha256)
+    return _REGISTRY.lineage(artifact, source_hash)
 
 
-def made_json(artifact: str, source_sha256: str | None = None) -> str:
+def made_json(artifact: str, source_hash: str | None = None) -> str:
     """made() as a multipart form field (a single artifact upload's lineage)."""
-    return json.dumps(made(artifact, source_sha256))
+    return json.dumps(made(artifact, source_hash))
 
 
-def ingest_made(source_sha256: str | None = None) -> str:
+def ingest_made(source_hash: str | None = None) -> str:
     """An ingest's lineage form field: every kind it can store, by kind."""
-    return json.dumps({kind: made(kind, source_sha256) for kind in INGEST_KINDS})
+    return json.dumps({kind: made(kind, source_hash) for kind in INGEST_KINDS})
 
 
-def artifacts_made(source_sha256: str | None = None) -> str:
+def artifacts_made(source_hash: str | None = None) -> str:
     """The batch artifact upload's lineage form field: the proxy and the preview, by kind."""
-    return json.dumps({kind: made(kind, source_sha256) for kind in ("proxy", "video_preview")})
+    return json.dumps({kind: made(kind, source_hash) for kind in ("proxy", "video_preview")})

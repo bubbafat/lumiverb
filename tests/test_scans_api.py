@@ -138,11 +138,11 @@ class File:
 
     @property
     def sha(self) -> str:
-        return hashlib.sha256(self.content.encode()).hexdigest()
+        return "sha256:" + hashlib.sha256(self.content.encode()).hexdigest()
 
     @property
     def file_size(self) -> int:
-        return self.size if self.size is not None else 1000 + int(self.sha[:5], 16)
+        return self.size if self.size is not None else 1000 + int(self.sha.removeprefix("sha256:")[:5], 16)
 
     def at(self, rel_path: str) -> File:
         return File(rel_path, self.content, self.mtime, self.size)
@@ -169,7 +169,7 @@ def _ingest(env, library_id: str, f: File, *, preview: bool = True) -> str:
     r = env.client.post("/v1/ingest", headers=env.editor, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id, "rel_path": f.rel_path, "file_size": str(f.file_size),
         "file_mtime": f.mtime.isoformat(), "media_type": "video" if video else "image", "width": "64",
-        "height": "36", "exif": json.dumps({"sha256": f.sha}), "lineage": ingest_made(f.sha)})
+        "height": "36", "exif": json.dumps({"content_hash": f.sha}), "lineage": ingest_made(f.sha)})
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
     if video and preview:
@@ -253,7 +253,7 @@ def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unli
     on_disk = {f.rel_path: f for f in disk}
     to_hash = [p for p, f in run.plan.items() if f["action"] == "hash"]
     for i in range(0, len(to_hash), 1000):
-        sent = [{"rel_path": p, "sha256": on_disk[p].sha} for p in to_hash[i:i + 1000]]
+        sent = [{"rel_path": p, "content_hash": on_disk[p].sha} for p in to_hash[i:i + 1000]]
         for d in _ok(c.post(f"/v1/scans/{run.scan_id}/hashes", json={"files": sent}, headers=h))["files"]:
             run.decisions[d["rel_path"]] = d
     if answer is not None and any(d["decision"] == "move_candidate" for d in run.decisions.values()):
@@ -539,7 +539,7 @@ def test_hashes_sent_again_keep_their_decision(env):
     asset = _ingest(env, lib, a)
     run = _scan(env, lib, [a.at("b.jpg")], moves="ask")
     again = _ok(env.client.post(f"/v1/scans/{run.scan_id}/hashes",
-                                json={"files": [{"rel_path": "b.jpg", "sha256": a.sha}]}, headers=env.editor))
+                                json={"files": [{"rel_path": "b.jpg", "content_hash": a.sha}]}, headers=env.editor))
     assert again["files"] == [{"rel_path": "b.jpg", "decision": "move_candidate", "asset_id": asset,
                                "moved_from": "a.jpg"}]
 
@@ -867,7 +867,7 @@ def test_force_add_brings_back_a_clip_whose_content_was_never_known(env):
     asset_id = _ingest(env, lib, f)
     _ok(env.client.delete(f"/v1/assets/{asset_id}", headers=env.editor), 204)
     with env.db.begin() as conn:
-        conn.execute(text("UPDATE assets SET sha256 = NULL WHERE asset_id = :a"), {"a": asset_id})
+        conn.execute(text("UPDATE assets SET content_hash = NULL WHERE asset_id = :a"), {"a": asset_id})
     assert _planned(_scan(env, lib, [f], dry_run=True)) == {"old.jpg": ("skipped", "removed")}
     run = _scan(env, lib, [f], force_add=True)
     assert _decided(run) == {"old.jpg": "restored"}
@@ -923,7 +923,7 @@ def test_force_add_hashes_sent_again_keep_their_decision(env):
     scan_id = _start(env, lib, force_add=True)
     _ok(c.post(f"/v1/scans/{scan_id}/found", json={"files": _listing([f])}, headers=h))
     _ok(c.post(f"/v1/scans/{scan_id}/plan", json={}, headers=h))
-    sent = {"files": [{"rel_path": f.rel_path, "sha256": f.sha}]}
+    sent = {"files": [{"rel_path": f.rel_path, "content_hash": f.sha}]}
     first = _ok(c.post(f"/v1/scans/{scan_id}/hashes", json=sent, headers=h))
     second = _ok(c.post(f"/v1/scans/{scan_id}/hashes", json=sent, headers=h))
     assert first == second == {"files": [{"rel_path": "a.jpg", "decision": "restored", "asset_id": asset_id,
@@ -1233,7 +1233,7 @@ def test_a_plan_sent_again_for_the_same_listing_is_the_same_plan(env):
     assert _ok(c.post(f"/v1/scans/{s}/plan", params={"limit": 1}, json={"unlisted": ["x"]}, headers=h)) == first
     _error(c.post(f"/v1/scans/{s}/plan", json={"unlisted": []}, headers=h), 409, "scan_planned")
     # The plan made once: the scan goes on as if it had been sent once.
-    moved = _ok(c.post(f"/v1/scans/{s}/hashes", json={"files": [{"rel_path": "b/1.jpg", "sha256": a.sha}]},
+    moved = _ok(c.post(f"/v1/scans/{s}/hashes", json={"files": [{"rel_path": "b/1.jpg", "content_hash": a.sha}]},
                        headers=h))
     assert moved["files"][0]["decision"] == "moved" and _clips(env, lib)["b/1.jpg"] == asset
     # Sent again after that, still the counts it answered (the move made since isn't a clip gone less).
@@ -1373,11 +1373,11 @@ def test_what_a_client_sends_is_checked(env):
     _error(c.post(f"/v1/scans/{s}/plan", json={"unlisted": ["../x"]}, headers=h), 400, "bad_request")
     _ok(c.post(f"/v1/scans/{s}/plan", json={}, headers=h))
     hashes = f"/v1/scans/{s}/hashes"
-    _error(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "sha256": "XYZ"}]}, headers=h), 422, "invalid_request")
-    err = _error(c.post(hashes, json={"files": [{"rel_path": "other.jpg", "sha256": a.sha}]}, headers=h),
+    _error(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "content_hash": "XYZ"}]}, headers=h), 422, "invalid_request")
+    err = _error(c.post(hashes, json={"files": [{"rel_path": "other.jpg", "content_hash": a.sha}]}, headers=h),
                  422, "not_planned")
     assert err["details"] == {"rel_paths": ["other.jpg"], "count": 1}
-    assert _ok(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "sha256": a.sha}]}, headers=h))["files"][0][
+    assert _ok(c.post(hashes, json={"files": [{"rel_path": "a.jpg", "content_hash": a.sha}]}, headers=h))["files"][0][
         "decision"] == "unchanged"
     _error(c.post(f"/v1/libraries/{lib}/scans", json={"scope": "../x"}, headers=h), 400, "bad_request")
     _error(c.post(f"/v1/libraries/{lib}/scans", json={"moves": "sometimes"}, headers=h), 422, "invalid_request")
@@ -1566,7 +1566,7 @@ def _library_of(env, n: int) -> tuple[str, list[File]]:
     lib = _library(env)
     files = [File(f"k/{i:05}.jpg", f"k{i}") for i in range(n)]
     with Session(env.db) as session:
-        session.add_all([Asset(asset_id=f"ast_{lib}_{i:05}", library_id=lib, rel_path=f.rel_path, sha256=f.sha,
+        session.add_all([Asset(asset_id=f"ast_{lib}_{i:05}", library_id=lib, rel_path=f.rel_path, content_hash=f.sha,
                                file_size=f.file_size, file_mtime=f.mtime, media_type="image", status="proxy_ready",
                                created_at=T0, updated_at=T0) for i, f in enumerate(files)])
         session.commit()
@@ -1608,7 +1608,7 @@ def _round_trips(env, n: int) -> dict[str, int]:
     decided: list[dict] = []
     for i in range(0, len(to_hash), 1000):
         decided += call("hashes", "POST", f"/v1/scans/{s}/hashes",
-                        json={"files": [{"rel_path": p, "sha256": sha[p]} for p in to_hash[i:i + 1000]]})["files"]
+                        json={"files": [{"rel_path": p, "content_hash": sha[p]} for p in to_hash[i:i + 1000]]})["files"]
     assert sum(d["decision"] == "moved" for d in decided) == tenth
     assert sum(d["decision"] == "unchanged" for d in decided) == tenth
     # What --explain lists: a page of what's gone, or skipped, is one statement whatever the library's size.

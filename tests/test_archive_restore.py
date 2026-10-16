@@ -26,7 +26,7 @@ from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the sha
 
 
 def _sha() -> str:
-    return os.urandom(32).hex()
+    return "sha256:" + os.urandom(32).hex()
 
 
 def _jpeg() -> bytes:
@@ -172,7 +172,7 @@ def test_a_path_the_user_emptied_from_the_trash_refuses_only_that_file(env):
     def post(content: str):
         return client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                            data={"library_id": env[2], "rel_path": "ignored/O001.mov", "file_size": "1000",
-                                 "media_type": "video", "exif": json.dumps({"sha256": content}),
+                                 "media_type": "video", "exif": json.dumps({"content_hash": content}),
                                  "lineage": ingest_made(content)})
 
     assert post(gone_sha).status_code == 409  # the file deleted for good
@@ -220,12 +220,12 @@ def test_two_ingests_cant_claim_the_same_archived_asset(env):
     asset = _ingest(env, "race/G001.mov", sha=sha)
     _archive(env, asset)
     with _sessions(env) as [(first_session, first), (_, second)]:
-        claimed = first.find_missing_by_sha(library_id, sha)
+        claimed = first.find_missing_by_hash(library_id, sha)
         assert claimed.asset_id == asset
         claimed.rel_path = "race/copy of G001.mov"
         first.clear_trash(claimed)
         first_session.flush()
-        waiting = _waiting(second.find_missing_by_sha, library_id, sha)
+        waiting = _waiting(second.find_missing_by_hash, library_id, sha)
         first_session.commit()
         # Claimed meanwhile: the second file gets an asset of its own.
         assert waiting.result(timeout=10) is None
@@ -240,7 +240,7 @@ def test_a_file_back_at_its_path_locks_out_a_copy_claiming_it_by_content(env):
     with _sessions(env) as [(path_session, by_path), (_, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/H001.mov")
         assert by_path.lock_for_restore(found, "race/H001.mov")
-        waiting = _waiting(by_content.find_missing_by_sha, library_id, sha)
+        waiting = _waiting(by_content.find_missing_by_hash, library_id, sha)
         by_path.clear_trash(found)
         path_session.commit()
         assert waiting.result(timeout=10) is None
@@ -256,7 +256,7 @@ def test_a_lock_from_other_work_doesnt_split_the_asset(env):
     _archive(env, asset)
     with _sessions(env) as [(other_session, _), (_, ingest)]:
         other_session.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": asset})
-        waiting = _waiting(ingest.find_missing_by_sha, library_id, sha)
+        waiting = _waiting(ingest.find_missing_by_hash, library_id, sha)
         other_session.commit()
         assert waiting.result(timeout=10).asset_id == asset
 
@@ -269,7 +269,7 @@ def test_a_file_back_at_its_path_after_a_copy_claimed_it_gets_its_own_asset(env)
     _archive(env, asset)
     with _sessions(env) as [(_, by_path), (content_session, by_content)]:
         found = by_path.get_by_library_and_rel_path(library_id, "race/I001.mov")  # read before the copy's commit
-        claimed = by_content.find_missing_by_sha(library_id, sha)
+        claimed = by_content.find_missing_by_hash(library_id, sha)
         claimed.rel_path = "race/copy of I001.mov"
         by_content.clear_trash(claimed)
         content_session.commit()
@@ -372,10 +372,10 @@ def test_only_missing_files_come_back_by_content(env):
             session.execute(text("UPDATE assets SET deleted_reason = :r WHERE asset_id = :a"),
                             {"r": reason, "a": asset})
             session.commit()
-            assert repo.find_missing_by_sha(library_id, sha) is None, reason
+            assert repo.find_missing_by_hash(library_id, sha) is None, reason
         session.execute(text("UPDATE assets SET deleted_reason = 'missing' WHERE asset_id = :a"), {"a": asset})
         session.commit()
-        assert repo.find_missing_by_sha(library_id, sha).asset_id == asset
+        assert repo.find_missing_by_hash(library_id, sha).asset_id == asset
         session.rollback()
 
 
@@ -438,7 +438,7 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
     client, headers, *_ = env
     library_id, archived, lib_env = _library_with_archived(env, "TrashedLib")
     with _sessions(env, 1) as [(session, _)]:
-        sha = session.execute(text("SELECT sha256 FROM assets WHERE asset_id = :a"), {"a": archived}).scalar()
+        sha = session.execute(text("SELECT content_hash FROM assets WHERE asset_id = :a"), {"a": archived}).scalar()
     assert client.delete(f"/v1/libraries/{library_id}", headers=headers).status_code == 204
 
     import io
@@ -446,7 +446,7 @@ def test_a_trashed_library_s_archived_clips_arent_restored_by_content(env):
 
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_jpeg()), "image/jpeg")},
                     data={"library_id": library_id, "rel_path": "back.mov", "file_size": "1000",
-                          "media_type": "video", "exif": json.dumps({"sha256": sha}), "lineage": ingest_made()})
+                          "media_type": "video", "exif": json.dumps({"content_hash": sha}), "lineage": ingest_made()})
     assert r.status_code == 409
     with _sessions(env, 1) as [(session, _)]:
         row = session.execute(text("SELECT rel_path, deleted_reason FROM assets WHERE asset_id = :a"),

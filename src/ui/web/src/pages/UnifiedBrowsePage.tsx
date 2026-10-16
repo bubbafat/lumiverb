@@ -255,7 +255,7 @@ export default function UnifiedBrowsePage() {
         rel_path: item.rel_path,
         file_size: item.file_size,
         file_mtime: null,
-        sha256: null,
+        content_hash: null,
         media_type: item.media_type,
         width: item.width,
         height: item.height,

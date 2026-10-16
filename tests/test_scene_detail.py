@@ -341,7 +341,7 @@ def test_the_scheduler_hands_the_indexer_the_accounts_detail_and_records_its_lev
     proxy = tmp_path / "v.mp4"
     proxy.write_bytes(b"x")
     acct.analysis_cache.get.return_value = proxy
-    job = Job("t1", "scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "sha256": "s1",
+    job = Job("t1", "scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "content_hash": "s1",
                                    "redo": True},))
     with patch("src.producers.scenes.work.index_video_scenes") as index:
         index.return_value = {"scenes": 1, "chunks": 1, "elapsed": 0.1}
@@ -357,7 +357,7 @@ def test_a_redo_asks_the_server_to_start_the_clip_over_with_its_windows():
     client = MagicMock()
     client.post.side_effect = lambda path, *a, **k: (_Resp(204) if path.endswith("/chunks/next")
                                                      else _Resp(data={"chunk_count": 1, "already_initialized": True}))
-    made = {"producer": "scene-detect", "version": "3", "settings_hash": "abc", "source_sha256": None, "level": 0}
+    made = {"producer": "scene-detect", "version": "3", "settings_hash": "abc", "source_hash": None, "level": 0}
     with patch("src.producers.scenes.work.VideoScanner"):
         index_video_scenes(client=client, source_path=MagicMock(), asset_id="ast_1", duration_sec=300.0,
                            rel_path="v.mp4", lineage=made, detail="low", redo=True)

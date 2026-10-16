@@ -141,7 +141,7 @@ def test_cache_paths_refuse_ids_that_are_not_plain_names(tmp_path: Path, asset_i
         lambda: proxies.put_scan(asset_id, b"x", "sha"),
         lambda: proxies.get(asset_id),
         lambda: proxies.has(asset_id),
-        lambda: proxies.get_sha(asset_id),
+        lambda: proxies.get_source_hash(asset_id),
         lambda: proxies.remove(asset_id),
         lambda: analysis.path_for(asset_id),
     ):

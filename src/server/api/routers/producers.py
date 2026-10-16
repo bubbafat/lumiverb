@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, model_serializer
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.api.content_hashes import ContentHash, why_not
 from src.server.api.dependencies import (
     get_current_user_id,
     get_tenant_session,
@@ -61,21 +62,21 @@ router = APIRouter(prefix="/v1/producers", tags=["producers"])
 class LineageIn(BaseModel):
     """How an artifact a write carries was made: the producer and version that
     made it, the hash of the settings it used (as GET /v1/producers gave
-    them), and the SHA-256 of the source file it was made from. Every
-    machine write says (require_lineage)."""
+    them), and the content hash of the source file it was made from
+    (src/shared/content_hash.py). Every machine write says (require_lineage)."""
 
     producer: str = Field(max_length=100)
     version: str = Field(min_length=1, max_length=50)
     settings_hash: str = Field(min_length=1, max_length=64)
-    source_sha256: str | None = Field(default=None, max_length=128)
+    source_hash: ContentHash | None = None
     # The level it was made at (its index, lowest 0), for a producer with a
     # level setting (scenes' Detail): kept apart from the settings hash.
     level: int | None = Field(default=None, ge=0, le=31)
 
 
-def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None = None) -> dict | None:
+def lineage_dict(value: LineageIn | dict | str | None, source_hash: str | None = None) -> dict | None:
     """A request's lineage as a plain dict (a multipart form sends JSON text);
-    a per-item source SHA-256 fills in the batch's. None when absent or unreadable."""
+    a per-item source content hash fills in the batch's. None when absent or unreadable."""
     import json
 
     if value is None:
@@ -97,25 +98,37 @@ def lineage_dict(value: LineageIn | dict | str | None, source_sha256: str | None
     out = value.model_dump()
     if out.get("level") is None:
         out.pop("level", None)
-    if source_sha256:
-        out["source_sha256"] = source_sha256
+    if source_hash:
+        out["source_hash"] = source_hash
     return out
 
 
-def with_source(made: dict | None, source_sha256: str | None) -> dict | None:
-    """A batch's lineage for one item: its own source SHA-256 when it gives one."""
-    return {**made, "source_sha256": source_sha256} if made is not None and source_sha256 else made
+def with_source(made: dict | None, source_hash: str | None) -> dict | None:
+    """A batch's lineage for one item: its own source content hash when it gives one."""
+    return {**made, "source_hash": source_hash} if made is not None and source_hash else made
 
 
 def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict:
     """A machine write's lineage, which it must give (Robert, Oct 9: the API
     doesn't take writes that don't say how they were made): 422
     lineage_required when it's absent or unreadable, 422
-    lineage_wrong_producer when another kind's producer says it made it.
-    Checked before anything is saved."""
+    lineage_wrong_producer when another kind's producer says it made it;
+    422 content_hash_not_valid when its source isn't a content hash the
+    server takes. Checked before anything is saved."""
+    import json
+
     from src.server.api.errors import InvalidChoiceError
 
     producer = PRODUCERS[artifact]
+    sent = value
+    if isinstance(sent, str):
+        try:
+            sent = json.loads(sent) if sent.strip() else None
+        except ValueError:
+            sent = None
+    if isinstance(sent, dict) and sent.get("source_hash") is not None \
+            and (why := why_not(sent["source_hash"])) is not None:
+        raise InvalidChoiceError("content_hash_not_valid", f"lineage source_hash: {why}", {"artifact": artifact})
     made = lineage_dict(value)
     if made is None:
         raise InvalidChoiceError(

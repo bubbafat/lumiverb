@@ -319,12 +319,12 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
     lib = _library(env, "RecNoSha")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     with _db(env) as s:  # made while the file's SHA-256 wasn't known
-        s.execute(text("UPDATE assets SET sha256 = NULL WHERE asset_id = :a"), {"a": clip})
+        s.execute(text("UPDATE assets SET content_hash = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
     _describe(lib, clip, None)
     with _db(env) as s:
-        s.execute(text("UPDATE artifact_lineage SET source_sha256 = NULL WHERE asset_id = :a"), {"a": clip})
-        s.execute(text("UPDATE assets SET sha256 = :s WHERE asset_id = :a"), {"s": _sha(), "a": clip})
+        s.execute(text("UPDATE artifact_lineage SET source_hash = NULL WHERE asset_id = :a"), {"a": clip})
+        s.execute(text("UPDATE assets SET content_hash = :s WHERE asset_id = :a"), {"s": _sha(), "a": clip})
         s.commit()
     assert _due(lib, "vision") == []
     assert _counts(lib, "vision")["stale"] == 1
@@ -339,8 +339,8 @@ def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
         s.execute(text("INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-                       " source_sha256, produced_at, outcome, attempts) VALUES (:a, 'scenes', 'scene-detect', '1',"
-                       " 'h', 'old', now(), 'ok', 0)"), {"a": vid})
+                       " source_hash, produced_at, outcome, attempts) VALUES (:a, 'scenes', 'scene-detect', '1',"
+                       " 'h', 'sha256:old', now(), 'ok', 0)"), {"a": vid})
         s.commit()
     _analysis_proxy_made(env, vid)  # what its scenes are found in: only the stale hash can hold it back
     assert _due(lib, "scenes") == []

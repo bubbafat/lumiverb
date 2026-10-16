@@ -47,7 +47,7 @@ def _ingest(client, auth, library_id: str, rel_path: str, media_type: str) -> st
     buf = io.BytesIO()
     Image.new("RGB", (32, 18), color=(40, 50, 60)).save(buf, format="JPEG")
     buf.seek(0)
-    exif = {"sha256": os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Acme",
+    exif = {"content_hash": "sha256:" + os.urandom(32).hex(), "gps_lat": 40.7, "gps_lon": -74.0, "camera_make": "Acme",
             "exif": {"Artist": ARTIST, "Copyright": f"(c) {ARTIST}"}}
     r = client.post("/v1/ingest", data={"library_id": library_id, "rel_path": rel_path, "file_size": "10",
                                         "media_type": media_type, "width": "32", "height": "18",

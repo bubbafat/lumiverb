@@ -48,7 +48,7 @@ These are the rules other docs defer to.
    | Derived data | Probes, proxies, thumbnails, embeddings, transcripts, descriptions, faces | Lumiverb | Yes, at any time. |
 
 3. **Human data is never overwritten automatically.** A correction to a derived value (naming a face cluster, fixing a description, un-assigning a face) is human data layered over the derived value. When the derived value is regenerated, the correction still wins.
-4. **Derived data is a cache with lineage.** Every derived artifact is a function of four inputs: the original (its content hash: the SHA-256 of a file up to 64 MiB, of a sampled 3 MiB of a bigger one, `src/shared/content_hash.py`), the producer, the producer's version, and the settings that affect its output. Each artifact records that lineage. If any input changes, the artifact is stale and can be rebuilt without anyone deciding what the right value was.
+4. **Derived data is a cache with lineage.** Every derived artifact is a function of four inputs: the original (its content hash, naming its scheme: `sha256:` for a file up to 64 MiB, `fp1:` for a sampled 3 MiB of a bigger one, `src/shared/content_hash.py`), the producer, the producer's version, and the settings that affect its output. Each artifact records that lineage. If any input changes, the artifact is stale and can be rebuilt without anyone deciding what the right value was.
 5. **Desired-state reconciliation.** The system compares what should exist with what does and sorts every artifact into missing, stale or current. Missing work runs right away at high priority. Stale work is flagged and upgraded in the background when the user approves. Retries, failures, partial runs and empty outputs collapse into one idea: an artifact that isn't current yet.
 6. **One producer per artifact kind.** A producer declares the milestone it needs (never another producer by name), which assets it applies to (a condition such as "only video"), which of its settings change its output, and which scarce resources it uses. AI producers also name a model and an endpoint. Producers are first-party for now.
 7. **Milestones, not a chain of workers.** Discovered (the asset exists and has an identity) → Probed (technical facts known) → Rendered (proxies and thumbnails exist) → Enriched (AI outputs exist) → Indexed (searchable). A producer whose prerequisites can never exist is disabled with a stated reason instead of failing on every asset.
@@ -236,7 +236,7 @@ The server reads storage, schedules all rendering and enrichment, and is where L
 Every derived artifact says how it was made, and the system works out what is missing or stale.
 
 **Deliverables:**
-- A lineage record on every artifact kind (probe, proxy, thumbnail, preview, scenes, vision, OCR, CLIP, faces, transcripts, search documents): producer, producer version, output-affecting settings hash, source SHA-256
+- A lineage record on every artifact kind (probe, proxy, thumbnail, preview, scenes, vision, OCR, CLIP, faces, transcripts, search documents): producer, producer version, output-affecting settings hash, source content hash
 - A reconciler replacing `MISSING_CONDITIONS` and the `enrich` repair loop
 - One producer per artifact; OCR stored apart from vision descriptions
 - Human corrections are the one copy: the derived value they replace is dropped and never regenerated over them (Robert, Oct 9)

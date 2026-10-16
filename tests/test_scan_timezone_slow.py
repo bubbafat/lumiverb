@@ -53,12 +53,12 @@ def _scanner(env) -> tuple[object, list[str]]:
 def _ingest(env, root: Path, f: dict) -> None:
     """The clip as a scan made it: its content, size and modified time."""
     client, headers, library_id, _ = env
-    sha = hashlib.sha256((root / f["rel_path"]).read_bytes()).hexdigest()
+    sha = "sha256:" + hashlib.sha256((root / f["rel_path"]).read_bytes()).hexdigest()
     r = client.post(
         "/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(_image()), "image/jpeg")},
         data={"library_id": library_id, "rel_path": f["rel_path"], "file_size": str(f["file_size"]),
               "file_mtime": f["file_mtime"].isoformat(), "media_type": "image", "lineage": ingest_made(sha),
-              "exif": json.dumps({"sha256": sha})},
+              "exif": json.dumps({"content_hash": sha})},
     )
     assert r.status_code == 200, r.text
 

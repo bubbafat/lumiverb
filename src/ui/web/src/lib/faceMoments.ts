@@ -46,7 +46,7 @@ export function clipOfFace(face: PersonFaceItem): AssetPageItem {
     rel_path: face.rel_path ?? "",
     file_size: 0,
     file_mtime: null,
-    sha256: null,
+    content_hash: null,
     media_type: isVideoFace(face) ? "video" : "image",
     width: null,
     height: null,

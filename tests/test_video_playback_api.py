@@ -137,7 +137,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", duration: float | Non
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
             "width": "64", "height": "36",
-            "exif": json.dumps({"sha256": os.urandom(32).hex(), **({"duration_sec": duration} if duration else {})}),
+            "exif": json.dumps({"content_hash": "sha256:" + os.urandom(32).hex(), **({"duration_sec": duration} if duration else {})}),
             "lineage": ingest_made()}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
@@ -754,7 +754,7 @@ def test_the_cap_goes_by_the_file_not_a_stored_duration(env, media, tmp_path):
     Image.new("RGB", (64, 36)).save(buf, format="JPEG")
     buf.seek(0)
     data = {"library_id": library_id, "rel_path": "lies.mov", "file_size": "1000", "media_type": "video",
-            "width": "64", "height": "36", "exif": json.dumps({"sha256": os.urandom(32).hex(), "duration_sec": 2}),
+            "width": "64", "height": "36", "exif": json.dumps({"content_hash": "sha256:" + os.urandom(32).hex(), "duration_sec": 2}),
             "lineage": ingest_made()}
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=admin)
     assert r.status_code == 200, r.text

@@ -128,7 +128,7 @@ class FakeScans:
             if self.hashes:
                 return self.hashes.pop(0)
             return answer(200, {"files": [{"rel_path": f["rel_path"], "asset_id": None, "moved_from": None,
-                                           **self.decide(f["rel_path"], f["sha256"])} for f in body["files"]]})
+                                           **self.decide(f["rel_path"], f["content_hash"])} for f in body["files"]]})
         if method == "POST" and path == f"{scan}/moves":
             return self._next(self.moves, answer(200, {"moved": 0, "skipped": 0, "upload": []}))
         if method == "POST" and path == f"{scan}/finish":

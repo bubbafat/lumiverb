@@ -99,7 +99,7 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
             "width": "64", "height": "36", "lineage": ingest_made(sha)}
     if sha:
-        data["exif"] = json.dumps({"sha256": sha})
+        data["exif"] = json.dumps({"content_hash": sha})
     if facet is not None:
         data["video_facet"] = json.dumps(facet)
     r = client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
@@ -266,14 +266,14 @@ def test_trashed_videos_are_not_counted(env) -> None:
 
 @pytest.mark.slow
 def test_changed_file_needs_a_new_proxy(env) -> None:
-    video = _ingest(env, "changed/a.mov", sha="a" * 64)
+    video = _ingest(env, "changed/a.mov", sha="sha256:" + "a" * 64)
     _upload(env, video)
-    _ingest(env, "changed/a.mov", sha="a" * 64)  # rescan, same content
+    _ingest(env, "changed/a.mov", sha="sha256:" + "a" * 64)  # rescan, same content
     client, headers, *_ = env
     assert client.get(f"/v1/assets/{video}", headers=headers).status_code == 200  # still in sight
     assert _analysis_proxy_key(env, video) is not None
 
-    replaced = _ingest(env, "changed/a.mov", sha="b" * 64)  # another file there: a new clip (Robert, Oct 9)
+    replaced = _ingest(env, "changed/a.mov", sha="sha256:" + "b" * 64)  # another file there: a new clip (Robert, Oct 9)
     assert replaced != video
     assert client.get(f"/v1/assets/{replaced}", headers=headers).status_code == 200
     assert _analysis_proxy_key(env, replaced) is None
@@ -336,7 +336,7 @@ def test_library_health_counts_videos_waiting_for_a_proxy(env) -> None:
     before = pending()
     # Probed, length unknown: nothing else is missing, so only the proxy counts.
     # As a scan sends it: with its EXIF, so its capture facts count as read.
-    video = _ingest(env, "health/a.mov", sha=os.urandom(32).hex(), facet={"video_codec": "h264"})
+    video = _ingest(env, "health/a.mov", sha="sha256:" + os.urandom(32).hex(), facet={"video_codec": "h264"})
     assert pending() == before + 1
     _upload(env, video)
     assert pending() == before

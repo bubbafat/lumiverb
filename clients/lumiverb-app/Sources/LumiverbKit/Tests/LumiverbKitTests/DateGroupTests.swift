@@ -15,7 +15,7 @@ private func makeAsset(
         "rel_path": "\(id).jpg",
         "file_size": 100,
         "file_mtime": nil,
-        "sha256": nil,
+        "content_hash": nil,
         "media_type": "image",
         "width": 100,
         "height": 100,

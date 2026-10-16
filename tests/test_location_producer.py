@@ -47,7 +47,7 @@ def _clip(env, lib: str, rel_path: str, when: str, *, offset: int | None = None,
     buf = io.BytesIO()
     Image.new("RGB", (16, 16)).save(buf, format="JPEG")
     buf.seek(0)
-    exif = {"sha256": sha or os.urandom(32).hex(), **device, "taken_at": f"{when}+00:00",
+    exif = {"content_hash": sha or "sha256:" + os.urandom(32).hex(), **device, "taken_at": f"{when}+00:00",
             "taken_at_offset_min": offset, "exif": {"SerialNumber": serial} if serial else {}}
     if gps:
         exif |= {"gps_lat": gps[0], "gps_lon": gps[1]}

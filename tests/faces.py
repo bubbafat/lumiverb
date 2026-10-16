@@ -27,7 +27,7 @@ def plant_faces(client: Any, asset_id: str, faces: list[dict], *, headers: dict 
     """Save one photo's faces as the faces producer does, and return their
     ids: one per face sent, in order (a face found again keeps its id). item:
     the batch item's other fields (detection_model, detection_model_version,
-    embedding_model, source_sha256). lineage: the producer's, as a worker
+    embedding_model, source_hash). lineage: the producer's, as a worker
     sends it (the registry's settings unless given)."""
     auth = {"headers": headers} if headers is not None else {}
     r = client.post("/v1/assets/batch-faces", json={

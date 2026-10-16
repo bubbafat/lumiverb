@@ -68,5 +68,5 @@ class Ocr(Work):
         for clip, result in made:
             client.post("/v1/assets/batch-ocr", json={
                 "items": [{"asset_id": clip["asset_id"], "ocr_text": result["ocr_text"],
-                           "source_sha256": clip.get("sha256")}],
+                           "source_hash": clip.get("content_hash")}],
                 "model_id": self.model, "lineage": self.lineage(None, used=self.used)})

@@ -41,7 +41,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         # What's missing, and what's made but due to be checked again.
         condition = f"({MISSING_CONDITIONS[kind.flag]} OR {lineage.rechecking(kind.artifact)})"
     rows = session.execute(text(
-        "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.sha256, a.duration_sec,"
+        "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.content_hash, a.duration_sec,"
         " a.created_at, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
         f" WHERE a.library_id = ANY(:libs) AND ({condition}) AND ({kind.extra})"

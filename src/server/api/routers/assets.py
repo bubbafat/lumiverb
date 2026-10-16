@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
+from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.dependencies import require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
@@ -77,7 +78,8 @@ class AssetResponse(BaseModel):
     # drill-down, which only has a face_id + asset_id and synthesizes a
     # placeholder list-item with file_size=0 (the web's AssetPageItem).
     file_size: int | None = None
-    sha256: str | None = None
+    # Its content hash (src/shared/content_hash.py): "sha256:…", or "fp1:…" over 64 MiB.
+    content_hash: str | None = None
     exif_extracted_at: str | None = None  # ISO8601
     camera_make: str | None = None
     camera_model: str | None = None
@@ -487,7 +489,7 @@ def _to_asset_response(asset) -> AssetResponse:
         width=asset.width,
         height=asset.height,
         file_size=asset.file_size,
-        sha256=asset.sha256,
+        content_hash=asset.content_hash,
         exif_extracted_at=asset.exif_extracted_at.isoformat() if asset.exif_extracted_at else None,
         camera_make=asset.camera_make,
         camera_model=asset.camera_model,
@@ -946,7 +948,7 @@ def submit_ocr(
 class BatchOcrItem(BaseModel):
     asset_id: str
     ocr_text: str
-    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
+    source_hash: ContentHash | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchOcrRequest(BaseModel):
@@ -976,7 +978,7 @@ def submit_batch_ocr(
             skipped += 1
             continue
         ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
-        lineage.record(session, item.asset_id, "ocr", with_source(made, item.source_sha256),
+        lineage.record(session, item.asset_id, "ocr", with_source(made, item.source_hash),
                        outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1
     session.commit()
@@ -1001,7 +1003,7 @@ class BatchVisionItem(BaseModel):
     model_version: str = "1"
     description: str
     tags: list[str] = []
-    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
+    source_hash: ContentHash | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchVisionRequest(BaseModel):
@@ -1034,7 +1036,7 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
-        lineage.record(session, item.asset_id, "vision", with_source(made, item.source_sha256))
+        lineage.record(session, item.asset_id, "vision", with_source(made, item.source_hash))
         updated += 1
 
     if updated > 0:
@@ -1395,7 +1397,7 @@ class BatchEmbeddingItem(BaseModel):
     model_id: str
     model_version: str
     vector: list[float]
-    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
+    source_hash: ContentHash | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchEmbeddingRequest(BaseModel):
@@ -1430,7 +1432,7 @@ def submit_batch_embeddings(
             vector=[float(x) for x in item.vector],
         )
         if item.model_id == CLIP_MODEL_ID:
-            lineage.record(session, item.asset_id, "clip", with_source(made, item.source_sha256),
+            lineage.record(session, item.asset_id, "clip", with_source(made, item.source_hash),
                            commit=False)
         updated += 1
 
@@ -1589,7 +1591,7 @@ class BatchFaceItem(BaseModel):
     # The model that embedded the faces (the faces producer's `model`).
     embedding_model: str = Field(default="buffalo_l", max_length=100)
     faces: list[FaceDetectionItem]
-    source_sha256: str | None = None  # the file it was made from; the batch's lineage otherwise
+    source_hash: ContentHash | None = None  # the file it was made from; the batch's lineage otherwise
 
 
 class BatchFaceRequest(BaseModel):
@@ -1635,7 +1637,7 @@ def submit_batch_faces(
             faces=faces_data,
             embedding_model=item.embedding_model,
         )
-        lineage.record(session, item.asset_id, "faces", with_source(made, item.source_sha256),
+        lineage.record(session, item.asset_id, "faces", with_source(made, item.source_hash),
                        outcome="ok" if faces_data else "empty")
 
         if tenant_id and asset.proxy_key:

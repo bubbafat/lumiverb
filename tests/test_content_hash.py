@@ -1,8 +1,10 @@
 """A file's content hash (src/shared/content_hash.py).
 
-fp1 is a durable format: every clip over 64 MiB is known by it, so its tag,
-sample sizes, offsets and threshold never change. These pin it with a value
-worked out once, and show what it sees and what it can't.
+Every content hash names its scheme ("scheme:value"), and the server's are
+durable formats: every clip is known by one, so "sha256" stays the SHA-256
+of every byte, and fp1's tag, sample sizes, offsets and threshold never
+change. These pin them with values worked out once, and show what fp1 sees
+and what it can't.
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ def _poke(path: Path, offset: int, value: int = 0xFF) -> None:
 
 
 def test_the_format_is_pinned(tmp_path):
-    assert (ch.FULL_UP_TO, ch.HEAD, ch.TAIL, ch.SAMPLES, ch.SAMPLE, ch.TAG, ch.PREFIX) == (
-        64 * 1024 * 1024, 1024 * 1024, 1024 * 1024, 16, 64 * 1024, b"lumiverb-fp1", "fp1:")
+    assert (ch.FULL_UP_TO, ch.HEAD, ch.TAIL, ch.SAMPLES, ch.SAMPLE, ch.TAG, ch.FP1, ch.SHA256) == (
+        64 * 1024 * 1024, 1024 * 1024, 1024 * 1024, 16, 64 * 1024, b"lumiverb-fp1", "fp1:", "sha256:")
     assert ch.sample_offsets(BIG) == [
         1048576, 5379144, 9709712, 14040280, 18370848, 22701416, 27031984, 31362552,
         35693120, 40023688, 44354256, 48684824, 53015392, 57345960, 61676528, 66007097]
@@ -52,10 +54,10 @@ def test_the_format_is_pinned(tmp_path):
 def test_up_to_64_mib_a_file_is_known_by_its_whole_sha256(tmp_path):
     small = tmp_path / "small"
     small.write_bytes(b"hello world")
-    assert ch.content_hash(small) == hashlib.sha256(b"hello world").hexdigest()
+    assert ch.content_hash(small) == "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
 
     edge = _marked(tmp_path / "edge", ch.FULL_UP_TO)
-    assert ch.content_hash(edge) == hashlib.sha256(edge.read_bytes()).hexdigest()
+    assert ch.content_hash(edge) == "sha256:" + hashlib.sha256(edge.read_bytes()).hexdigest()
     assert not ch.sampled(ch.content_hash(edge))
 
 
@@ -126,24 +128,55 @@ def test_a_file_cut_short_while_hashed_cant_be_hashed():
 def test_a_hash_made_before_fp1_is_still_its_files(tmp_path):
     big = _marked(tmp_path / "big", BIG)
     whole = ch.whole_file_sha256(big)
-    assert whole == hashlib.sha256(big.read_bytes()).hexdigest()
+    assert whole == "sha256:" + hashlib.sha256(big.read_bytes()).hexdigest()
     assert ch.whole_file(whole, BIG)
     assert ch.matches(big, whole)
     assert ch.matches(big, ch.content_hash(big))
-    assert not ch.matches(big, "0" * 64)
+    assert not ch.matches(big, "sha256:" + "0" * 64)
     assert not ch.matches(big, "fp1:" + "0" * 64)
+    assert not ch.matches(big, whole.removeprefix("sha256:")), "a bare hash names no scheme: never this file's"
 
     small = tmp_path / "small"
     small.write_bytes(b"x")
-    sha = hashlib.sha256(b"x").hexdigest()
+    sha = "sha256:" + hashlib.sha256(b"x").hexdigest()
     assert not ch.whole_file(sha, 1)  # a small file's hash is its whole file's, now as then
     assert ch.matches(small, sha)
+    assert not ch.matches(small, sha.removeprefix("sha256:"))
 
 
 def test_telling_the_kinds_apart():
-    sha = "a" * 64
-    assert ch.sampled("fp1:" + sha) and not ch.sampled(sha) and not ch.sampled(None)
-    assert ch.whole_file(sha, ch.FULL_UP_TO + 1)
-    assert not ch.whole_file(sha, ch.FULL_UP_TO)
-    assert not ch.whole_file("fp1:" + sha, ch.FULL_UP_TO + 1)
-    assert not ch.whole_file(None, ch.FULL_UP_TO + 1) and not ch.whole_file(sha, None)
+    hexed = "a" * 64
+    assert ch.sampled("fp1:" + hexed) and not ch.sampled("sha256:" + hexed) and not ch.sampled(None)
+    assert ch.whole_file("sha256:" + hexed, ch.FULL_UP_TO + 1)
+    assert not ch.whole_file("sha256:" + hexed, ch.FULL_UP_TO)
+    assert not ch.whole_file("fp1:" + hexed, ch.FULL_UP_TO + 1)
+    assert not ch.whole_file(hexed, ch.FULL_UP_TO + 1), "a bare hash is no scheme's"
+    assert not ch.whole_file(None, ch.FULL_UP_TO + 1) and not ch.whole_file("sha256:" + hexed, None)
+
+
+@pytest.mark.parametrize(("value", "well_formed", "ours", "scheme"), [
+    ("sha256:" + "0123456789abcdef" * 4, True, True, "sha256"),
+    ("fp1:" + "0123456789abcdef" * 4, True, True, "fp1"),
+    ("blake3:" + "ab" * 32, True, False, "blake3"),            # another reader's scheme: a hash, not ours
+    ("x1:Az09._~-", True, False, "x1"),                         # every character a value may hold
+    ("a" * 32 + ":v", True, False, "a" * 32),                   # the longest scheme
+    ("s:" + "v" * 128, True, False, "s"),                       # the longest value
+    ("0123456789abcdef" * 4, False, False, None),               # bare: no scheme named
+    ("SHA256:" + "0123456789abcdef" * 4, False, False, None),   # schemes are lowercase
+    ("sha256:" + "0123456789ABCDEF" * 4, True, False, "sha256"),  # ours are lowercase hex
+    ("sha256:" + "a" * 63, True, False, "sha256"),              # ours are 64 digits
+    ("fp1:" + "a" * 65, True, False, "fp1"),
+    ("a" * 33 + ":v", False, False, None),                      # scheme too long
+    ("s:" + "v" * 129, False, False, None),                     # value too long
+    ("sha-256:abc", False, False, None),                        # letters and digits only
+    ("s:a:b", False, False, None),                              # one ":"
+    ("s:a b", False, False, None),
+    (":abc", False, False, None),
+    ("s:", False, False, None),
+    ("", False, False, None),
+    (None, False, False, None),
+])
+def test_the_grammar(value, well_formed, ours, scheme):
+    assert ch.well_formed(value) is well_formed
+    assert ch.ours(value) is ours
+    assert ch.scheme(value) == scheme

@@ -94,7 +94,7 @@ export default function PublicProjectPage() {
         rel_path: "",
         file_size: 0,
         file_mtime: null,
-        sha256: null,
+        content_hash: null,
         media_type: item.media_type,
         width: item.width,
         height: item.height,

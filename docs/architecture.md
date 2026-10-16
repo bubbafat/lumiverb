@@ -80,7 +80,7 @@ Each tenant gets a dedicated Postgres database on the same Postgres instance (sc
 libraries         — library_id, name, root_path, status, scan_status,
                     last_scan_at, is_public, revision (int), created_at,
                     updated_at
-assets            — asset_id, library_id, rel_path, sha256 (content hash), file_size,
+assets            — asset_id, library_id, rel_path, content_hash (scheme:value), file_size,
                     file_mtime, media_type, width, height, duration_sec,
                     proxy_key, proxy_sha256, thumbnail_key, thumbnail_sha256,
                     video_preview_key, video_indexed (bool),
