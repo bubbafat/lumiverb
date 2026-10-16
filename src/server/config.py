@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # Storage: the Store's provider (src/server/storage/store.py); an install naming one there isn't refuses to start
     storage_provider: str = "local"
     data_dir: str = "./data"
+    # Each account's playback cuts (src/server/storage/cache.py playback_cuts): at most this many GB.
+    lumiverb_playback_cache_gb: float = 2.0
 
     # API
     api_host: str = "0.0.0.0"

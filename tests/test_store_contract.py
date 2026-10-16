@@ -33,6 +33,8 @@ class Provided:
     store: Store
     unplug: Callable[[], None]  # AWAY's storage can't be reached
     plug_in: Callable[[], None]  # and can again
+    # Whether what's kept elsewhere is still reached meanwhile (a cache is one folder: all or nothing).
+    in_parts: bool = True
 
 
 def _files(tmp_path: Path) -> Provided:
@@ -51,7 +53,23 @@ def _files(tmp_path: Path) -> Provided:
                     plug_in=lambda: marker.write_text(""))
 
 
-PROVIDERS = {"files": _files}
+def _cache(tmp_path: Path) -> Provided:
+    """A Cache is a Store with a cap (ADR-020 decision 3): held to the same contract, under its cap."""
+    from src.server.storage.cache import FileCache
+
+    folder = tmp_path / "cache"
+    away = {"now": False}
+
+    def root() -> Path:
+        if away["now"]:
+            raise FileNotFoundError("its drive isn't plugged in")
+        return folder
+
+    return Provided(FileCache(root, cap_bytes=10**9), unplug=lambda: away.update(now=True),
+                    plug_in=lambda: away.update(now=False), in_parts=False)
+
+
+PROVIDERS = {"files": _files, "cache": _cache}
 
 
 @pytest.fixture(params=sorted(PROVIDERS))
@@ -72,9 +90,13 @@ def test_each_provider_is_a_store(store):
 
 
 def test_what_is_written_is_read_back_whole(store):
+    import time
+
     store.write(KEY, b"a proxy")
     assert store.read(KEY) == b"a proxy"
     assert store.size(KEY) == 7 and store.exists(KEY)
+    st = store.stat(KEY)
+    assert st.size == 7 and abs(st.modified - time.time()) < 60
     with store.open(KEY) as f:
         f.seek(2)  # a range is a seek
         assert f.read(3) == b"pro"
@@ -93,7 +115,7 @@ def test_written_again_it_is_the_new_one_only(store):
 
 def test_a_key_with_no_file_is_not_found(store):
     assert not store.exists(KEY)
-    for read in (store.read, store.size, store.open, lambda k: store.local_file(k).__enter__()):
+    for read in (store.read, store.size, store.stat, store.open, lambda k: store.local_file(k).__enter__()):
         with pytest.raises(NotFound):
             read(KEY)
 
@@ -159,14 +181,15 @@ def test_unreachable_is_unavailable_never_not_found(provided):
     store.write(AWAY, b"a frame")
     store.write(KEY, b"a proxy")
     provided.unplug()
-    for touch in (store.read, store.size, store.exists, store.open, store.delete,
+    for touch in (store.read, store.size, store.stat, store.exists, store.open, store.delete,
                   lambda k: store.write(k, b"x"), lambda k: store.local_file(k).__enter__(),
                   lambda k: store.writing(k).__enter__(), lambda k: list(store.list("ten_a/lib_9/"))):
         with pytest.raises(Unavailable):
             touch(AWAY)
     with pytest.raises(Unavailable):
         list(store.list("ten_a/"))  # a list that isn't whole never is
-    assert store.read(KEY) == b"a proxy", "what can be reached still is"
+    if provided.in_parts:
+        assert store.read(KEY) == b"a proxy", "what can be reached still is"
     provided.plug_in()
     assert store.read(AWAY) == b"a frame", "nothing was taken for missing"
 

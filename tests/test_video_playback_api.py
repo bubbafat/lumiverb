@@ -666,22 +666,25 @@ def test_malformed_tokens_read_as_nothing(token, monkeypatch):
 @pytest.mark.fast
 def test_the_daily_sweep_drops_cuts_of_gone_assets_and_stale_temp_files(tmp_path):
     from src.server.api.routers.playback import sweep_cuts
+    from src.server.storage.cache import FileCache
+    from src.server.storage.files import PARTIAL
 
     kept = "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP"
     gone = "ast_01M4CWVZYN681BTVTSA2CYJQNZ"
     names = [f"{kept}_analysis_proxy_abc_10s.mp4", f"{gone}_preview_1-2_5s.mp4",
-             f".{kept}_fresh.mp4", f".{gone}_old.mp4", "stray.txt"]
+             f"{PARTIAL}fresh.mp4", f"{PARTIAL}old.mp4", "stray.txt"]
     for n in names:
         (tmp_path / n).write_bytes(b"x")
     old = time.time() - 3600
-    os.utime(tmp_path / f".{gone}_old.mp4", (old, old))
+    os.utime(tmp_path / f"{PARTIAL}old.mp4", (old, old))
+    cuts = FileCache(lambda: tmp_path, cap_bytes=10**9)
 
-    assert sweep_cuts(tmp_path, {kept}, dry_run=True) == 3
+    assert sweep_cuts(cuts, {kept}, dry_run=True) == 3
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(names)
-    assert sweep_cuts(tmp_path, {kept}, dry_run=False) == 3
+    assert sweep_cuts(cuts, {kept}, dry_run=False) == 3
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted([f"{kept}_analysis_proxy_abc_10s.mp4",
-                                                                  f".{kept}_fresh.mp4"])
-    assert sweep_cuts(tmp_path / "missing", {kept}, dry_run=False) == 0
+                                                                  f"{PARTIAL}fresh.mp4"])
+    assert sweep_cuts(FileCache(lambda: tmp_path / "missing", cap_bytes=10**9), {kept}, dry_run=False) == 0
 
 
 @pytest.mark.fast
@@ -793,14 +796,18 @@ def test_an_unreadable_public_setting_stays_capped():
 def test_clearing_cuts_for_deleted_assets_leaves_the_rest(tmp_path, monkeypatch):
     from src.server.api.routers import playback
 
+    from src.server.storage import local
+    from src.server.storage.files import PARTIAL
+
     folder = tmp_path / "ten_1" / "playback"
     folder.mkdir(parents=True)
     a, b = "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "ast_01M4CWVZYN681BTVTSA2CYJQNZ"
-    for n in (f"{a}_preview_1-2_5s.mp4", f".{a}_tmp.mp4", f"{b}_analysis_proxy_x_5s.mp4"):
+    for n in (f"{a}_preview_1-2_5s.mp4", f"{a}_preview_1-2.duration", f"{PARTIAL}0f.mp4", f"{b}_analysis_proxy_x_5s.mp4"):
         (folder / n).write_bytes(b"x")
-    monkeypatch.setattr(playback, "get_storage", lambda: LocalStorage(str(tmp_path)))
+    monkeypatch.setattr(local, "get_storage", lambda: LocalStorage(str(tmp_path)))
     playback.clear_cuts("ten_1", [a])
-    assert [p.name for p in folder.iterdir()] == [f"{b}_analysis_proxy_x_5s.mp4"]
+    # A write in progress names no clip: the daily sweep takes it if it's left.
+    assert sorted(p.name for p in folder.iterdir()) == sorted([f"{PARTIAL}0f.mp4", f"{b}_analysis_proxy_x_5s.mp4"])
 
 
 @pytest.mark.fast
@@ -813,7 +820,12 @@ def test_stopping_the_api_kills_a_running_cut(tmp_path, monkeypatch):
     real = playback.subprocess.Popen
     monkeypatch.setattr(playback.subprocess, "Popen",
                         lambda cmd, *a, **k: real(["sleep", "60"], *a, **k) if cmd[0] == "ffmpeg" else real(cmd, *a, **k))
-    ask = playback._Ask(tmp_path / "src.mp4", None, LocalStorage(str(tmp_path)), "ten_1",
+    from src.server.storage.cache import playback_cuts
+    from src.server.storage.files import FileStore
+
+    store = FileStore(LocalStorage(str(tmp_path)))
+    store.write("ten_1/lib_1/previews/00/src.mp4", b"a preview")
+    ask = playback._Ask(store, "ten_1/lib_1/previews/00/src.mp4", None, playback_cuts("ten_1", root=tmp_path),
                         "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP", "preview", "v1", strip=True)
     failed: list[Exception] = []
 

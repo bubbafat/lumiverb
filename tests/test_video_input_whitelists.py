@@ -56,15 +56,21 @@ def real(tmp_path_factory) -> Path:
 
 
 def _playback_cut(path: Path, tmp: Path) -> bool:
-    """The API's capped playback: probed, then cut to its first second."""
+    """The API's capped playback: probed, then cut to its first second. The
+    file is kept in a Store over its own folder (the key is its name), so
+    what's opened is the file itself."""
     from src.server.api.routers import playback
+    from src.server.storage.cache import playback_cuts
+    from src.server.storage.files import FileStore
     from src.server.storage.local import LocalStorage
 
-    ask = playback._Ask(path, 1, LocalStorage(str(tmp / "data")), "ten_1", "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP",
+    store = FileStore(LocalStorage(str(path.parent)))
+    cuts = playback_cuts("ten_1", root=tmp / "data")
+    ask = playback._Ask(store, path.name, 1, cuts, "ast_01M4CWVZ2MPTAV6FSGG6B6VXVP",
                         "analysis_proxy", path.stem, strip=False)
     playback.start_cuts()
     playback._make_cut(ask)
-    return playback._cut_for(ask)[0].is_file()
+    return cuts.exists(playback._cut_for(ask)[0])
 
 
 def _playback_duration(path: Path, tmp: Path) -> float | None:
