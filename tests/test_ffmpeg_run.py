@@ -7,6 +7,7 @@ does) plays the slow and the stuck ones; a real one, a real render."""
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,22 @@ def _fake_ffmpeg(tmp_path: Path, body: str) -> Path:
     return script
 
 
+def _launched(monkeypatch) -> list[subprocess.Popen]:
+    """The processes ffmpeg_run starts, as it starts them: the test knows each
+    one whatever it got to do (a busy machine may stop a fake for no
+    progress before its first line runs)."""
+    started: list[subprocess.Popen] = []
+    real = subprocess.Popen
+
+    def recording(*args, **kwargs):
+        proc = real(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(ffmpeg_run.subprocess, "Popen", recording)
+    return started
+
+
 def _gone(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -51,20 +68,24 @@ def test_a_slow_one_that_moves_finishes(tmp_path):
     assert finished == ffmpeg_run.Finished(0, "done")
 
 
-def test_one_whose_progress_stops_is_stopped_and_says_so(tmp_path):
+def test_one_whose_progress_stops_is_stopped_and_says_so(tmp_path, monkeypatch):
     fake = _fake_ffmpeg(tmp_path, "report(1)\ntime.sleep(600)\n")
+    started = _launched(monkeypatch)
     with pytest.raises(ffmpeg_run.StalledError, match="ffmpeg made no progress for 1 s"):
         ffmpeg_run.run([str(fake)], stall_after=1.0)
-    assert _gone(int((tmp_path / "pid").read_text())), "the stuck ffmpeg is stopped, not left running"
+    [proc] = started
+    assert _gone(proc.pid), "the stuck ffmpeg is stopped, not left running"
 
 
-def test_reports_that_say_the_same_thing_arent_progress(tmp_path):
+def test_reports_that_say_the_same_thing_arent_progress(tmp_path, monkeypatch):
     # ffmpeg keeps writing its report while stuck on a read: the same frame
     # over and over.
     fake = _fake_ffmpeg(tmp_path, "while True:\n    report(7)\n    time.sleep(0.05)\n")
+    started = _launched(monkeypatch)
     with pytest.raises(ffmpeg_run.StalledError):
         ffmpeg_run.run([str(fake)], stall_after=1.0)
-    assert _gone(int((tmp_path / "pid").read_text()))
+    [proc] = started
+    assert _gone(proc.pid)
 
 
 def test_its_exit_and_what_it_said_come_back(tmp_path):
