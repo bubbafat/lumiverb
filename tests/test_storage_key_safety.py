@@ -46,13 +46,18 @@ def test_abs_path_keeps_ordinary_keys(tmp_path: Path) -> None:
     assert storage.exists("ten_1/lib_1/proxies/00/a.webp")
 
 
-def test_local_artifact_store_read_refuses_outside_keys(tmp_path: Path) -> None:
-    from src.server.storage.artifact_store import LocalArtifactStore
+@pytest.mark.parametrize("key", ["../secret", "ten_1/../../secret", "/etc/passwd", "ten_1/\x00", ""])
+def test_the_store_refuses_outside_keys_for_everything(tmp_path: Path, key: str) -> None:
+    from src.server.storage.files import FileStore
 
     (tmp_path / "secret").write_bytes(b"s")
-    store = LocalArtifactStore(LocalStorage(str(tmp_path / "data")), "ten_1")
-    with pytest.raises(UnsafeKeyError):
-        store.read_artifact("../secret", asset_id="ast_x", artifact_type="proxy")
+    store = FileStore(LocalStorage(str(tmp_path / "data")))
+    for touch in (store.open, store.read, store.size, store.exists, store.delete,
+                  lambda k: store.write(k, b"x"), lambda k: store.local_file(k).__enter__(),
+                  lambda k: store.writing(k).__enter__()):
+        with pytest.raises(UnsafeKeyError):
+            touch(key)
+    assert (tmp_path / "secret").read_bytes() == b"s"
 
 
 def test_routes_that_took_paths_from_the_client_are_gone() -> None:

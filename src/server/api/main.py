@@ -86,6 +86,10 @@ from src.server.api.routers.locations import router as locations_router
 async def lifespan(app: FastAPI):
     if not os.environ.get("JWT_SECRET"):
         raise RuntimeError("JWT_SECRET environment variable is required but not set")
+    # The install's Store, its provider read now: one there isn't stops the API here (ADR-020 decision 2).
+    from src.server.storage.store import get_store
+
+    get_store()
     playback.start_cuts()
     yield
     # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.

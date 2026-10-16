@@ -9,7 +9,7 @@ Accepted (2026-10-16, Robert).
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Leaks fixed now: face crops and scene frames go with their clip; a deleted library's folder goes with it | Done (v0.1.32) |
-| 1 | The `Store` interface and its filesystem provider; contract tests | Not started |
+| 1 | The `Store` interface and its filesystem provider; contract tests | Done (v0.1.35) |
 | 2 | The API's own code through the `Store` (no paths outside the provider) | Not started |
 | 3 | Producers get inputs and scratch from the runner; caches with caps | Not started |
 | 4 | The server's originals behind its read-only `Originals` interface; the API documented as a client's whole contract | Not started |

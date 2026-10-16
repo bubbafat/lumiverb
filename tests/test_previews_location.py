@@ -241,6 +241,44 @@ def test_one_move_at_a_time(install, tmp_path):
         move.start(data, other, background=False)
 
 
+# -- The Store over these folders (src/server/storage/files.py) ------------------------
+
+
+def test_the_store_reads_a_key_where_it_is_during_a_move_and_writes_to_the_new_folder(install):
+    from src.server.storage.files import FileStore
+
+    data, drive = install
+    store = FileStore(LocalStorage(str(data)))
+    _moving(data, drive)
+    assert store.read(PROXY) == b"proxy", "not moved yet: read where it is"
+    store.write(THUMB, b"new thumb")
+    assert (drive / THUMB).read_bytes() == b"new thumb" and store.read(THUMB) == b"new thumb"
+    assert sorted(store.list("ten_a/lib_1/")) == [PROXY, THUMB], "each once, wherever it is"
+    store.delete(THUMB)
+    assert not (drive / THUMB).exists() and not (data / THUMB).exists(), "deleted in both"
+
+
+def test_the_store_lists_only_keys_never_the_install_s_own_things(install):
+    from src.server.storage.files import FileStore
+
+    data, _ = install
+    keys = sorted(FileStore(LocalStorage(str(data))).list(""))
+    assert keys == sorted([PROXY, THUMB, ANALYSIS, CUT]), "not postgres, the caches or storage.json"
+
+
+def test_a_move_leaves_a_store_s_write_in_progress_alone(install):
+    from src.server.storage.files import FileStore
+
+    data, drive = install
+    store = FileStore(LocalStorage(str(data)))
+    with store.writing(ANALYSIS, suffix=".mp4") as partial:
+        partial.write_bytes(b"half a render")
+        (drive / previews_location.MARKER).write_text("")
+        move.start(data, drive, background=False)  # everything else goes; the render being written stays
+        assert partial.read_bytes() == b"half a render"
+    assert store.read(ANALYSIS) == b"half a render"
+
+
 # -- A library deleted for good ---------------------------------------------------
 
 

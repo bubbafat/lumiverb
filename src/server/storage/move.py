@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.server import drives, write_check
+from src.server.storage.files import PARTIAL
 from src.shared import previews_location
 from src.shared.previews_location import Location
 
@@ -437,8 +438,8 @@ def _move_all(data_dir: Path, location: Location, scope: Scope, old: Path, new: 
         if rel.parts[1:2] == (PLAYBACK,):
             path.unlink(missing_ok=True)  # made again on demand
             continue
-        if path.name.endswith((".tmp", MOVING_SUFFIX)):
-            # An upload's temp file, or a copy of ours a stop left: in use while young.
+        if path.name.endswith((".tmp", MOVING_SUFFIX)) or path.name.startswith(PARTIAL):
+            # An upload's temp file, a Store's write in progress, or a copy of ours a stop left: in use while young.
             with contextlib.suppress(OSError):
                 if time.time() - path.stat().st_mtime > STALE_TMP_SEC:
                     path.unlink()
