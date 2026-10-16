@@ -34,6 +34,19 @@ def test_a_childs_lines_are_said_by_whom_without_colour(caplog):
     assert out.closed
 
 
+def test_the_operating_systems_noise_is_dropped(caplog):
+    # macOS, in each ffmpeg the scheduler starts once Metal is loaded: one a frame grabbed.
+    caplog.set_level(logging.INFO, logger=log.RELAYED)
+    log.relay("scheduler", io.BytesIO(
+        b"Python(30032) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.\n"
+        b"2026-10-15 20:31:07,353 INFO scene-enrich: a.MOV\n"
+        b"ffmpeg(41456) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.\n"
+        b"MallocStackLogging: can't turn off malloc stack logging because it was not enabled. (not this)\n"))
+    assert [r.getMessage() for r in caplog.records if r.name == log.RELAYED] == [
+        "scheduler | 2026-10-15 20:31:07,353 INFO scene-enrich: a.MOV",
+        "scheduler | MallocStackLogging: can't turn off malloc stack logging because it was not enabled. (not this)"]
+
+
 def test_launchds_file_is_the_one_kept_and_rotated(tmp_path):
     target = tmp_path / "lumiverb.log"
     with open(target, "a") as f:

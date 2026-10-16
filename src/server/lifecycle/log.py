@@ -27,6 +27,12 @@ LOG_KEPT = 4  # lumiverb.log.1 ... .4 beside the current: at most 50 MB in all
 RELAYED = "lumiverb-server.relay"
 QUIET = ("alembic.runtime.plugins",)  # six "setup plugin ..." lines every start
 _COLOUR = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Lines a child's output carries that say nothing about Lumiverb, dropped.
+# macOS prints this in every process forked by one that has loaded Metal (the
+# scheduler, once CLIP runs on the Apple GPU), before it becomes the program
+# run: a line for each ffmpeg, thousands an hour, named after the parent
+# ("Python(4321)").
+NOISE = (re.compile(r"\S+\(\d+\) MallocStackLogging: can't turn off malloc stack logging because it was not enabled\."),)
 
 
 def file_of(fd: int) -> Path | None:
@@ -86,12 +92,13 @@ def configure(stderr_fd: int = 2) -> logging.Handler:
 
 def relay(name: str, stream: IO[bytes]) -> None:
     """A child's output, line by line, said by whom and without colour
-    codes, until it closes. Runs in a thread of its own per child."""
+    codes or the operating system's NOISE, until it closes. Runs in a
+    thread of its own per child."""
     log = logging.getLogger(RELAYED)
     try:
         for raw in iter(stream.readline, b""):
             line = _COLOUR.sub("", raw.decode("utf-8", "replace")).rstrip("\r\n")
-            if line:
+            if line and not any(n.fullmatch(line) for n in NOISE):
                 log.info("%s | %s", name, line)
     finally:
         with contextlib.suppress(OSError):
