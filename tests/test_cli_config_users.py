@@ -139,6 +139,27 @@ def test_config_set_reads_a_key_from_stdin(config_file: Path, flag: str) -> None
     assert json.loads(config_file.read_text())[field] == "lv_from_stdin"
 
 
+@pytest.mark.parametrize("flag", ["--api-key", "--admin-key"])
+def test_at_a_terminal_a_key_is_asked_for_hidden_and_enter_ends_it(config_file: Path, monkeypatch, flag: str) -> None:
+    import getpass
+    import importlib
+
+    asked = []
+
+    def typed(prompt: str = "") -> str:  # getpass reads one line, Enter ending it, and echoes nothing
+        asked.append(prompt)
+        return "lv_pasted  "
+
+    monkeypatch.setattr(getpass, "getpass", typed)
+    monkeypatch.setattr(importlib.import_module("src.client.cli.main"), "_at_a_terminal", lambda: True)
+    result = runner.invoke(app, ["config", "set", flag, "-"])
+
+    assert result.exit_code == 0, result.output
+    assert asked == [f"{'API' if flag == '--api-key' else 'Admin'} key (not shown; paste it and press Enter): "]
+    assert json.loads(config_file.read_text())[flag.removeprefix("--").replace("-", "_")] == "lv_pasted"
+    assert "lv_pasted" not in result.output
+
+
 def test_config_set_still_takes_a_key_in_argv(config_file: Path) -> None:
     assert runner.invoke(app, ["config", "set", "--api-key", "lv_argv"]).exit_code == 0
     assert json.loads(config_file.read_text())["api_key"] == "lv_argv"

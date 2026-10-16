@@ -45,7 +45,7 @@ There is no worker command. Processing runs in the server-side scheduler (`lumiv
 ### Management
 
 #### Config
-- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>] [--cache-home <dir>]` — Write config. `admin keys` and `admin tenants` take the admin key from `--admin-key`, else `LUMIVERB_ADMIN_KEY`, else the config's `admin_key`. The vision endpoint and model are set in the web app (Settings → AI).
+- `lumiverb config set [--api-url <url>] [--api-key <key>] [--admin-key <key>] [--cache-home <dir>]` — Write config. A key given as `-` stays out of the shell's history: at a terminal it's asked for and not shown (paste it, then Enter); piped in, it's all of stdin. `admin keys` and `admin tenants` take the admin key from `--admin-key`, else `LUMIVERB_ADMIN_KEY`, else the config's `admin_key`. The vision endpoint and model are set in the web app (Settings → AI).
 - `lumiverb config show` — Show current config, including root mappings.
 - `lumiverb config map-root <server-prefix> <local-prefix>` — Where a library root prefix is on this machine, e.g. `/Volumes/media-01 /mnt/media-01`. Libraries keep the editing machine's path (exports point editors there); the CLI's scan and `library list` use the mapped one (the scheduler has its own map: `LUMIVERB_ROOT_MAP`, docs/linux-server.md). Whole folders, longest prefix wins, Unicode form and trailing slashes ignored. Saves even when the target isn't mounted, with a warning.
 - `lumiverb config unmap-root <server-prefix>` — Remove a mapping.
