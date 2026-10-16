@@ -188,9 +188,10 @@ When a device reads a library, the server's whole contract with it is the API. A
 Three parts of that contract:
 
 - **Content hashes are labelled with their scheme, and only hashes of one scheme are compared.**
+  - Every content hash is `scheme ":" value`, with no ambiguity. The scheme is 1–32 lowercase letters and digits. The value is 1–128 of `A-Z a-z 0-9 . _ ~ -`, and the scheme defines it. Two hashes name the same content only when both scheme and value are equal. Nothing is stored that isn't one: a check on each column enforces the grammar. Shipped in v0.1.31 (#227): the fields are `content_hash`, a lineage's `source_hash`, and `previous_hash` for the whole-file hash sent beside an fp1.
   - To the server a content hash is a label: the same content, the same string. It never reads one.
-  - A client may hash however it likes, under its own prefix. Moves, a person's trash and changed files are told apart by comparing the reader's own hashes with each other.
-  - The server's own schemes are defined exactly, so a library can change readers in either direction someday: a plain SHA-256 for a file up to 64 MiB, `fp1:` above (`src/shared/content_hash.py`, pinned by tests, and in cursor-api's Content hashes).
+  - A client may hash however it likes, under its own scheme. Moves, a person's trash and changed files are told apart by comparing the reader's own hashes with each other.
+  - The server's own schemes are defined exactly, so a library can change readers in either direction someday: `sha256:` and 64 lowercase hex for a file up to 64 MiB, `fp1:` and 64 above (`src/shared/content_hash.py`, pinned by tests, and in cursor-api's Content hashes).
   - Changing a library's reader is a re-key handshake. For each file unchanged by size and time, the new reader sends its hash, and that hash takes the old one's place, with its lineage. That's the general form of the fp1 swap (`scans.py` `rekey`). It isn't built yet: today the API takes only the server's schemes.
 - **The server is opinionated about artifact formats.** The web app has to play and show what's stored, so the server says what it takes: preview sizes and formats, and analysis proxies as H.264 8-bit 4:2:0 with AAC and the index first (ADR-018 decision 11). It refuses or rewrites anything else. These are specified in cursor-api.
 - **A remake is reader work with a defined contract.**
@@ -288,7 +289,7 @@ These are bugs whatever happens to the rest.
 
 **Deliverables:**
 - The server's `Originals`, with `roots.py`, `resolve_source_path` and the scan's walk behind it. Nothing on the server outside it opens an original.
-- `docs/cursor-api.md` as a client's whole contract (decision 9): the content-hash rule and the server's schemes, the artifact formats the server takes, and the scan protocol. Remakes for a device come with ADR-018 phases 3 and 7.
+- `docs/cursor-api.md` as a client's whole contract (decision 9): the artifact formats the server takes and the scan protocol. The content-hash format and the server's schemes are already there (v0.1.31); taking a client's own scheme comes with the re-key handshake. Remakes for a device come with ADR-018 phases 3 and 7.
 
 ### Phase 5 — Clients
 
