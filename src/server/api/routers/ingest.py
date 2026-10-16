@@ -34,7 +34,8 @@ from src.server.repository.tenant import (
     LibraryRepository,
     PathFilterRepository,
 )
-from src.server.storage.local import LocalStorage, get_storage
+from src.server.storage import store as keys
+from src.server.storage.store import get_store
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def _do_ingest(
     from src.shared.producers import CLIP_MODEL_ID
 
     lineage_by_kind = lineage_by_kind or {}
-    storage: LocalStorage = get_storage()
+    store = get_store()
     asset_repo = AssetRepository(session)
 
     # --- Normalize proxy to WebP ---
@@ -163,18 +164,12 @@ def _do_ingest(
     # --- Generate thumbnail from normalized proxy ---
     thumb_bytes = _generate_thumbnail(proxy_bytes)
 
-    # --- Write proxy to storage ---
-    proxy_key = storage.proxy_key(tenant_id, library_id, asset_id, rel_path)
-    proxy_path = storage.write_path(proxy_key)
-    proxy_path.parent.mkdir(parents=True, exist_ok=True)
-    proxy_path.write_bytes(proxy_bytes)
+    # --- Keep proxy and thumbnail: each whole or not at all ---
+    proxy_key = keys.proxy_key(tenant_id, library_id, asset_id, rel_path)
+    store.write(proxy_key, proxy_bytes)
     proxy_sha256 = hashlib.sha256(proxy_bytes).hexdigest()
-
-    # --- Write thumbnail to storage ---
-    thumb_key = storage.thumbnail_key(tenant_id, library_id, asset_id, rel_path)
-    thumb_path = storage.write_path(thumb_key)
-    thumb_path.parent.mkdir(parents=True, exist_ok=True)
-    thumb_path.write_bytes(thumb_bytes)
+    thumb_key = keys.thumbnail_key(tenant_id, library_id, asset_id, rel_path)
+    store.write(thumb_key, thumb_bytes)
     thumb_sha256 = hashlib.sha256(thumb_bytes).hexdigest()
 
     # --- Update DB: proxy + thumbnail ---

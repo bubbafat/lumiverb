@@ -26,6 +26,7 @@ from src.server.repository.control_plane import TenantDbRoutingRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made
+from tests.stored_in import stored_in
 
 FACET = {
     "duration_sec": 7.07, "container": "mov", "video_codec": "h264", "width": 640,
@@ -76,7 +77,7 @@ def env(tmp_path_factory):
                 session.commit()
 
             with (
-                patch("src.server.api.routers.ingest.get_storage", return_value=storage),
+                stored_in(storage),
                 TestClient(app) as client,
             ):
                 headers = {"Authorization": f"Bearer {api_key}"}

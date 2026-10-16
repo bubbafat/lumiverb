@@ -5,6 +5,8 @@ Each step reads files already present on disk and writes their SHA-256 into the 
 Workers must be drained before running; the system should be in maintenance mode.
 
 Missing files (key set but file not on disk) are skipped — proxy_sha256 remains NULL.
+Files kept where the Store can't reach now (a drive unplugged) stop the step
+(Unavailable): it isn't done, and isn't taken for missing.
 The runner marks each step completed only after the batch loop exhausts all hashable rows.
 """
 
@@ -12,11 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from pathlib import Path
 
 from sqlalchemy import text
 
-from src.server.storage.local import get_storage
+from src.server.storage.store import NotFound, Store, get_store
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.step import UpgradeStepInfo
 
@@ -25,26 +26,19 @@ logger = logging.getLogger(__name__)
 _BATCH_SIZE = 500
 
 
-def _hash_file(path: Path) -> str | None:
-    """Return SHA-256 hex digest of a file, or None if the file does not exist."""
-    if not path.exists():
-        return None
+def _hash_key(store: Store, key: str) -> str | None:
+    """The SHA-256 of a stored key's file; None (as missing) when it has
+    none, or for a key that would leave the store. Unavailable propagates."""
+    from src.server.storage.store import UnsafeKeyError
+
     hasher = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def _hash_key(storage, key: str) -> str | None:
-    """_hash_file of a stored key; None (as missing) for a key outside DATA_DIR."""
-    from src.server.storage.local import UnsafeKeyError
-
     try:
-        path = storage.abs_path(key)
-    except UnsafeKeyError:
+        with store.open(key) as f:
+            while chunk := f.read(65536):
+                hasher.update(chunk)
+    except (NotFound, UnsafeKeyError):
         return None
-    return _hash_file(path)
+    return hasher.hexdigest()
 
 
 def _backfill(ctx: UpgradeContext, *, table: str, id_col: str, key_col: str, sha_col: str, what: str) -> dict:
@@ -52,7 +46,7 @@ def _backfill(ctx: UpgradeContext, *, table: str, id_col: str, key_col: str, sha
     (keyset: missing files are passed over, not re-read every page). The
     write only lands while the row still names that file and has no hash: a
     re-render meanwhile records its own."""
-    storage = get_storage()
+    store = get_store()
     updated = 0
     missing = 0
     after = ""
@@ -68,7 +62,7 @@ def _backfill(ctx: UpgradeContext, *, table: str, id_col: str, key_col: str, sha
             break
 
         for row_id, key in rows:
-            sha256 = _hash_key(storage, key)
+            sha256 = _hash_key(store, key)
             if sha256 is None:
                 logger.warning("%s file missing for %s: %s", what, row_id, key)
                 missing += 1

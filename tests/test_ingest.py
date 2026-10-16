@@ -25,6 +25,7 @@ from src.server.storage.local import LocalStorage
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made
+from tests.stored_in import stored_in
 
 
 def _make_test_image(width: int = 300, height: int = 200, fmt: str = "JPEG") -> bytes:
@@ -93,8 +94,7 @@ def ingest_env(tmp_path_factory):
                 session.commit()
 
             with (
-                patch("src.server.api.routers.artifacts.get_storage", return_value=storage),
-                patch("src.server.api.routers.ingest.get_storage", return_value=storage),
+                stored_in(storage),
             ):
                 with TestClient(app) as raw_client:
                     auth_headers = {"Authorization": f"Bearer {api_key}"}

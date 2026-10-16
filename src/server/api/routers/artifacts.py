@@ -18,7 +18,9 @@ from src.server.repository.lineage import record as record_lineage
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository
+from src.server.storage import store as keys
 from src.server.storage.local import LocalStorage, get_storage
+from src.server.storage.store import Store, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,34 @@ def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type: str) -> str:
+    """The upload, kept under key: streamed (never all in memory) to a write
+    nothing sees until it's whole, an image re-encoded (IMAGE_ARTIFACTS), then
+    put in its place. Its SHA-256 as kept. 413 past the type's limit, 400 for
+    an image that isn't one; nothing is kept then."""
+    from starlette.concurrency import run_in_threadpool
+
+    from src.server.preview_image import NotAnImageError
+
+    max_bytes = _max_upload_bytes(artifact_type)
+    hasher = hashlib.sha256()
+    total = 0
+    with store.writing(key, suffix=Path(key).suffix) as partial:
+        with open(partial, "wb") as f:
+            while chunk := await upload.read(UPLOAD_CHUNK_SIZE):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail="File too large")
+                hasher.update(chunk)
+                f.write(chunk)
+        if artifact_type not in IMAGE_ARTIFACTS:
+            return hasher.hexdigest()
+        try:
+            return await run_in_threadpool(_reencode_image_file, partial, *IMAGE_ARTIFACTS[artifact_type])
+        except NotAnImageError:
+            raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
+
+
 class ArtifactUploadResponse(BaseModel):
     key: str
     sha256: str
@@ -81,9 +111,8 @@ async def upload_artifact(
     """Upload a proxy, thumbnail, video_preview, scene_rep or analysis_proxy artifact for an asset.
 
     analysis_proxy is a video's full-length low-resolution copy with audio,
-    for transcription, scenes and vision (ADR-016 phase 2). Streams the upload to disk in chunks (never fully buffered in memory), computes
-    SHA-256 incrementally, and atomic-renames the temp file into place. DB is updated
-    after the file is safely on disk.
+    for transcription, scenes and vision (ADR-016 phase 2). Kept in the
+    Store (_save_upload); the database is updated once it's kept whole.
     """
     from src.server.api.routers.producers import require_lineage
 
@@ -114,59 +143,22 @@ async def upload_artifact(
         raise HTTPException(status_code=400, detail="Analysis proxies are for videos only")
 
     tenant_id: str = request.state.tenant_id
-    storage: LocalStorage = get_storage()
-    max_bytes = _max_upload_bytes(artifact_type)
-
     if artifact_type == "proxy":
-        key = storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        key = keys.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
     elif artifact_type == "thumbnail":
-        key = storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        key = keys.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
     elif artifact_type == "video_preview":
-        key = storage.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        key = keys.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
     elif artifact_type == "analysis_proxy":
-        key = storage.analysis_proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+        key = keys.analysis_proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
     else:  # scene_rep
         if rep_frame_ms is None:
             raise HTTPException(
                 status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
             )
-        key = storage.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
+        key = keys.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
-    path = storage.write_path(key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
-
-    hasher = hashlib.sha256()
-    total_bytes = 0
-
-    try:
-        with open(tmp_path, "wb") as f:
-            while True:
-                chunk = await file.read(UPLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                total_bytes += len(chunk)
-                if total_bytes > max_bytes:
-                    raise HTTPException(status_code=413, detail="File too large")
-                hasher.update(chunk)
-                f.write(chunk)
-        sha256 = hasher.hexdigest()
-        if artifact_type in IMAGE_ARTIFACTS:
-            from starlette.concurrency import run_in_threadpool
-
-            from src.server.preview_image import NotAnImageError
-
-            try:
-                sha256 = await run_in_threadpool(_reencode_image_file, tmp_path, *IMAGE_ARTIFACTS[artifact_type])
-            except NotAnImageError:
-                raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
-        tmp_path.rename(path)
-    except HTTPException:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail="Failed to write artifact to storage")
+    sha256 = await _save_upload(get_store(), key, file, artifact_type)
 
     if artifact_type == "proxy":
         asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
@@ -213,7 +205,8 @@ async def upload_artifacts_batch(
     """Upload multiple artifacts for an asset in a single request.
 
     Accepts optional multipart fields: proxy, thumbnail, video_preview.
-    Each file is streamed to disk, SHA-256 computed, and DB updated.
+    Each is kept as a single upload keeps it (_save_upload: a proxy or
+    thumbnail re-encoded), then the database updated.
     """
     from src.server.api.routers.ingest import _per_kind
     from src.server.api.routers.producers import require_lineage
@@ -241,46 +234,20 @@ async def upload_artifacts_batch(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     tenant_id: str = request.state.tenant_id
-    storage: LocalStorage = get_storage()
+    store = get_store()
     items: list[BatchArtifactItem] = []
 
     for artifact_type, upload_file in files.items():
         if artifact_type == "proxy":
-            key = storage.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+            key = keys.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
         elif artifact_type == "thumbnail":
-            key = storage.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+            key = keys.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
         elif artifact_type == "video_preview":
-            key = storage.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
+            key = keys.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
 
-        path = storage.write_path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_name(path.name + ".tmp")
-
-        hasher = hashlib.sha256()
-        total_bytes = 0
-
-        try:
-            with open(tmp_path, "wb") as f:
-                while True:
-                    chunk = await upload_file.read(UPLOAD_CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    total_bytes += len(chunk)
-                    if total_bytes > MAX_UPLOAD_BYTES:
-                        raise HTTPException(status_code=413, detail="File too large")
-                    hasher.update(chunk)
-                    f.write(chunk)
-            tmp_path.rename(path)
-        except HTTPException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise HTTPException(status_code=500, detail="Failed to write artifact to storage")
-
-        sha256 = hasher.hexdigest()
+        sha256 = await _save_upload(store, key, upload_file, artifact_type)
 
         if artifact_type == "proxy":
             asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
