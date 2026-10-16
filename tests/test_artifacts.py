@@ -961,3 +961,35 @@ def test_an_upload_while_the_previews_cant_be_reached_is_503_and_keeps_nothing(a
     with engine.connect() as conn:
         assert conn.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar() is None
     engine.dispose()
+
+
+@pytest.mark.slow
+def test_a_download_while_the_previews_cant_be_reached_is_503_never_missing(artifact_env, monkeypatch) -> None:
+    from src.server.api.routers import artifacts, playback
+    from src.server.storage.store import Unavailable
+
+    auth, _, library_id, asset_id, _, tenant_url, _ = artifact_env
+    r = auth.post(f"/v1/assets/{asset_id}/artifacts/proxy", files={"file": ("p.jpg", _make_jpeg(), "image/jpeg")},
+                  data={"lineage": made_json("proxy")})
+    assert r.status_code == 200, r.text
+    video_id = make_clip(tenant_url, library_id, f"away_{secrets.token_hex(4)}.mov", media_type="video")
+    r = auth.post(f"/v1/assets/{video_id}/artifacts/video_preview",
+                  files={"file": ("p.mp4", b"\x00\x00\x00\x18ftypmp42 preview", "video/mp4")},
+                  data={"lineage": made_json("video_preview")})
+    assert r.status_code == 200, r.text
+
+    class Unplugged:
+        def __getattr__(self, name):
+            def unreachable(*args, **kwargs):
+                raise Unavailable("/Volumes/Clips: its drive isn't plugged in")
+            return unreachable
+
+    reported = []
+    monkeypatch.setattr(artifacts, "get_store", lambda: Unplugged())
+    monkeypatch.setattr(playback, "get_store", lambda: Unplugged())
+    monkeypatch.setattr("src.server.missing_artifacts.report", lambda *a: reported.append(a))
+    for path in (f"/v1/assets/{asset_id}/artifacts/proxy", f"/v1/assets/{video_id}/artifacts/video_preview",
+                 f"/v1/assets/{video_id}/playback"):
+        r = auth.get(path)
+        assert r.status_code == 503 and r.json()["error"]["code"] == "storage_unavailable", (path, r.text)
+    assert reported == [], "nothing is taken for missing"

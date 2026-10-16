@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Protocol, runtime_checkable
 
@@ -40,6 +41,15 @@ class Unavailable(OSError):
     a FileNotFoundError, so a drive unplugged is never taken for files gone."""
 
 
+@dataclass(frozen=True)
+class Stat:
+    """What a stored file is now: its size, and when it was last written
+    (seconds since the epoch): a version for what's made from it."""
+
+    size: int
+    modified: float
+
+
 @runtime_checkable
 class Store(Protocol):
     def open(self, key: str) -> BinaryIO:
@@ -50,6 +60,9 @@ class Store(Protocol):
 
     def size(self, key: str) -> int:
         """Its size in bytes. NotFound, Unavailable."""
+
+    def stat(self, key: str) -> Stat:
+        """Its size and when it was last written. NotFound, Unavailable."""
 
     def exists(self, key: str) -> bool:
         """Whether the key has a file. Unavailable when that can't be known."""

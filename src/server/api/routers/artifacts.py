@@ -19,8 +19,7 @@ from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.models.tenant import Asset
 from src.server.repository.tenant import AssetRepository
 from src.server.storage import store as keys
-from src.server.storage.local import LocalStorage, get_storage
-from src.server.storage.store import Store, get_store
+from src.server.storage.store import NotFound, Store, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -304,7 +303,6 @@ def download_artifact(
             raise HTTPException(status_code=400, detail="Give a public library or a public project, not both")
         _check_public(session, asset, public_library_id, public_project_id)
 
-    storage: LocalStorage = get_storage()
     if artifact_type == "proxy":
         key = asset.proxy_key
     elif artifact_type == "thumbnail":
@@ -333,47 +331,38 @@ def download_artifact(
             cap = playback_cap(session, public=True)
             if cap is not None and rep_frame_ms >= cap * 1000:
                 raise HTTPException(status_code=403, detail="Past what public pages play")
-        key = storage.scene_rep_key(request.state.tenant_id, asset.library_id, asset_id, rep_frame_ms)
+        key = keys.scene_rep_key(request.state.tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
     if key is None:
         raise ApiError(404, "artifact_not_ready", "Artifact has not been generated yet")
 
-    path = storage.abs_path(key)
-    if not path.is_file():
+    from src.server.api.streaming import stream_stored
+
+    store = get_store()
+    media_type = CONTENT_TYPES[artifact_type]
+    if artifact_type in ("proxy", "thumbnail"):
+        media_type = _IMAGE_TYPES.get(Path(key).suffix.lower(), media_type)
+    etag = None
+    try:
+        if artifact_type == "analysis_proxy" and asset.analysis_proxy_sha256:
+            etag = f'"{asset.analysis_proxy_sha256}"'
+        if artifact_type == "video_preview":
+            # Within the playback cap for whoever is asking, like /playback.
+            from src.server.api.routers.playback import capped
+            from src.server.tenant_settings import playback_cap
+
+            st = store.stat(key)
+            store, key = capped(
+                store, key, playback_cap(session, public=public),
+                tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
+                version=f"{int(st.modified)}-{st.size}", strip=public,
+            )
+        return stream_stored(store, key, request, media_type=media_type, etag=etag)
+    except NotFound:
         from src.server import missing_artifacts
 
         missing_artifacts.report(session, asset_id, artifact_type)
-        raise ApiError(404, "artifact_missing", "Artifact file not found on storage")
-
-    from src.server.api.routers.assets import _stream_file_with_range
-
-    if artifact_type == "analysis_proxy":
-        etag = f'"{asset.analysis_proxy_sha256}"' if asset.analysis_proxy_sha256 else None
-        return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type], etag=etag)
-
-    if artifact_type == "video_preview":
-        # Within the playback cap for whoever is asking, like /playback.
-        from src.server.api.routers.playback import capped
-        from src.server.tenant_settings import playback_cap
-
-        st = path.stat()
-        path = capped(
-            path, playback_cap(session, public=public),
-            storage=storage, tenant_id=request.state.tenant_id, asset_id=asset_id, source="preview",
-            version=f"{int(st.st_mtime)}-{st.st_size}", strip=public,
-        )
-        return _stream_file_with_range(path, request, media_type=CONTENT_TYPES[artifact_type])
-
-    media_type = CONTENT_TYPES[artifact_type]
-    if artifact_type in ("proxy", "thumbnail"):
-        media_type = _IMAGE_TYPES.get(path.suffix.lower(), media_type)
-
-    def _iter():
-        with open(path, "rb") as f:
-            while chunk := f.read(UPLOAD_CHUNK_SIZE):
-                yield chunk
-
-    return StreamingResponse(_iter(), media_type=media_type)
+        raise ApiError(404, "artifact_missing", "Artifact file not found on storage") from None
 
 
 # Older proxies and thumbnails are JPEGs.

@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 from src.server.storage.local import LocalStorage
-from src.server.storage.store import NotFound, Unavailable, check_key
+from src.server.storage.store import NotFound, Stat, Unavailable, check_key
 
 # What a write in progress is called while it's written: never a key.
 PARTIAL = ".partial-"
@@ -81,6 +81,10 @@ class FileStore:
 
     def size(self, key: str) -> int:
         return self._found(key).stat().st_size
+
+    def stat(self, key: str) -> Stat:
+        st = self._found(key).stat()
+        return Stat(st.st_size, st.st_mtime)
 
     def exists(self, key: str) -> bool:
         try:
