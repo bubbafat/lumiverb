@@ -23,7 +23,7 @@ from pathlib import Path
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.storage.local import LocalStorage
+from src.server.storage import store as stored
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,6 @@ def _get_expected_keys_for_library(
     session: Session,
     library_id: str,
     tenant_id: str,
-    storage: LocalStorage,
 ) -> set[str] | None:
     """Return the set of all artifact keys for a library (including trashed assets).
 
@@ -122,9 +121,9 @@ def _get_expected_keys_for_library(
       - video_scenes.{proxy_key, thumbnail_key} (per-scene WebP artifacts)
       - scene_rep JPG paths derived from (tenant, library, asset_id, rep_frame_ms)
         — these are NOT stored in any column; they live at the deterministic
-        path returned by storage.scene_rep_key(). Without computing them here,
+        path returned by store.scene_rep_key(). Without computing them here,
         cleanup would flag every scene_rep JPG on disk as orphaned.
-      - each face's crop: faces.crop_key, and the key storage.face_crop_key()
+      - each face's crop: faces.crop_key, and the key store.face_crop_key()
         gives it (a crop written before its row says so is still its face's).
     """
     try:
@@ -161,7 +160,7 @@ def _get_expected_keys_for_library(
             if scene_thumb_key:
                 keys.add(scene_thumb_key)
             keys.add(
-                storage.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
+                stored.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
             )
 
         for face_id, crop_key in session.execute(text("""
@@ -170,7 +169,7 @@ def _get_expected_keys_for_library(
             JOIN assets a ON a.asset_id = f.asset_id
             WHERE a.library_id = :lib_id
         """), {"lib_id": library_id}).fetchall():
-            keys.update(k for k in (crop_key, storage.face_crop_key_of(tenant_id, library_id, face_id)) if k)
+            keys.update(k for k in (crop_key, stored.face_crop_key_of(tenant_id, library_id, face_id)) if k)
 
         return keys
     except Exception as exc:
@@ -193,7 +192,6 @@ def run_cleanup_for_tenant(
     """
     result = CleanupResult()
     tenant_dir = data_dir / tenant_id
-    storage = LocalStorage(str(data_dir))
 
     if not tenant_dir.is_dir():
         return result
@@ -222,9 +220,7 @@ def run_cleanup_for_tenant(
             continue
 
         # Library exists in DB — check individual files
-        expected_keys = _get_expected_keys_for_library(
-            session, lib_dir_name, tenant_id, storage,
-        )
+        expected_keys = _get_expected_keys_for_library(session, lib_dir_name, tenant_id)
         if expected_keys is None:
             result.skipped_libraries += 1
             result.errors.append(f"Skipped library {lib_dir_name}: DB query failed")

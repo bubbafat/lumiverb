@@ -56,9 +56,12 @@ class FileStore:
         """The key's file where it is now. NotFound; Unavailable when it may be
         in a folder that can't be reached."""
         reached, unreachable = self._places(key)
-        for path in reached:
-            if path.is_file():
-                return path
+        # During a move a file is linked into its new folder before it leaves
+        # the old one: one missed between the two is found by looking again.
+        for _ in range(2 if self._storage.location.moving else 1):
+            for path in reached:
+                if path.is_file():
+                    return path
         if unreachable:
             raise Unavailable(f"Where {key} is kept can't be reached: {unreachable[0]}. Is its drive plugged in?")
         raise NotFound(f"No file for {key}")

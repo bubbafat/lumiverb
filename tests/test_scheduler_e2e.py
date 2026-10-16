@@ -139,7 +139,7 @@ def test_the_scheduler_reads_the_stored_analysis_proxy_where_the_api_keeps_it(en
     body = b"\x00\x00\x00\x18ftypmp42 stored here"
     assert _upload(env, with_proxy, body).status_code == 200
     without = _ingest(env, "stored/b.mov")
-    find = stored_analysis_proxy(env[4], storage=env[3])
+    find = stored_analysis_proxy(env[4])
     assert find(with_proxy).read_bytes() == body
     assert find(without) is None
 
@@ -150,6 +150,6 @@ def test_the_scheduler_reads_the_stored_preview_where_the_api_keeps_it(env) -> N
     from tests.test_analysis_proxy_api import _ingest
 
     clip = _ingest(env, "stored/c.jpg", media_type="image")
-    found = stored_preview(env[4], storage=env[3])(clip)
+    found = stored_preview(env[4])(clip)
     assert found is not None and found.read_bytes()[8:12] == b"WEBP"
-    assert stored_preview(env[4], storage=env[3])("ast_nothing_here") is None
+    assert stored_preview(env[4])("ast_nothing_here") is None
