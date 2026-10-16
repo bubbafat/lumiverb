@@ -542,48 +542,50 @@ def forget_preview_copies() -> tuple[int, int] | None:
     return files, sizes
 
 
-def stored_analysis_proxy(tenant_id: str, storage: Any = None) -> Callable[[str], Any]:
-    """The account's clip's analysis proxy as the API stored it, read where
-    it is on this disk (src/server/storage/local.py: during a move, either
-    folder): the scheduler's cache then holds no second copy. None when the
-    clip has none, or its file isn't there (a drive unplugged): the cache
-    downloads it then, as before."""
-    return _stored_file(tenant_id, "analysis_proxy_key", storage)
+def stored_analysis_proxy(tenant_id: str) -> Callable[[str], Any]:
+    """The account's clip's analysis proxy as the API stored it, read from
+    the Store on this disk (during a move, either folder): the scheduler's
+    cache then holds no second copy. None when the clip has none, or its
+    file isn't there or can't be reached (a drive unplugged): the cache
+    downloads it then, as before. Only used where stores_here()."""
+    return _stored_file(tenant_id, "analysis_proxy_key")
 
 
-def stored_preview(tenant_id: str, storage: Any = None) -> Callable[[str], Any]:
+def stored_preview(tenant_id: str) -> Callable[[str], Any]:
     """The account's clip's preview (its proxy) as the API stored it, read
-    where it is on this disk, as stored_analysis_proxy: what CLIP, faces,
+    from the Store on this disk, as stored_analysis_proxy: what CLIP, faces,
     OCR and descriptions see (src/processing/proxy/proxy_cache.py), with no
     copy in the scheduler's cache."""
-    return _stored_file(tenant_id, "proxy_key", storage)
+    return _stored_file(tenant_id, "proxy_key")
 
 
 # The assets columns a stored file's key is read from.
 _STORED_KEYS = {"analysis_proxy_key", "proxy_key"}
 
 
-def _stored_file(tenant_id: str, column: str, storage: Any) -> Callable[[str], Any]:
+def _stored_file(tenant_id: str, column: str) -> Callable[[str], Any]:
     from sqlalchemy import text
 
     from src.server.database import get_tenant_session
+    from src.server.storage.store import NotFound, Unavailable, get_store
 
     if column not in _STORED_KEYS:
         raise ValueError(column)
 
     def find(asset_id: str):
-        nonlocal storage
         with get_tenant_session(tenant_id) as session:
             key = session.execute(text(f"SELECT {column} FROM assets WHERE asset_id = :a"),  # noqa: S608 — a known column
                                   {"a": asset_id}).scalar()
         if not key:
             return None
-        if storage is None:
-            from src.server.storage.local import get_storage
-
-            storage = get_storage()
-        path = storage.abs_path(key)
-        return path if path.is_file() else None
+        try:
+            # The filesystem provider's local file is the stored file itself, there
+            # after the block (stores_here gates this). The runner will hold the
+            # block open for the job instead (ADR-020 phase 3, Inputs).
+            with get_store().local_file(key) as path:
+                return path
+        except (NotFound, Unavailable):
+            return None
 
     return find
 

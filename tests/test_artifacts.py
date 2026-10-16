@@ -657,8 +657,7 @@ def test_a_missing_file_is_reported_and_upkeep_repairs_it(artifact_env) -> None:
         engine.dispose()
     assert reported.count(f"{asset_id}:proxy") == 1
 
-    with patch("src.server.missing_artifacts.get_storage", return_value=storage):
-        r = auth.post("/v1/upkeep")
+    r = auth.post("/v1/upkeep")
     assert r.status_code == 200, r.text
     assert r.json()["missing_files"]["cleared"] >= 1
     assert auth.get(f"/v1/assets/{asset_id}").json()["proxy_key"] is None
@@ -677,8 +676,7 @@ def _clip_with_preview_and_thumbnail(auth, tenant_url: str, library_id: str) -> 
 
 
 def _upkeep(auth, storage) -> dict:
-    with patch("src.server.missing_artifacts.get_storage", return_value=storage):
-        r = auth.post("/v1/upkeep")
+    r = auth.post("/v1/upkeep")  # the test's storage: stored_in, the fixture's
     assert r.status_code == 200, r.text
     return r.json()["missing_files"]
 
@@ -741,7 +739,9 @@ def test_upkeep_repairs_nothing_while_the_data_folder_is_gone(tmp_path, layout) 
         (data / "ten_1").mkdir()
     session = MagicMock()
     session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), "ten_1/lib_1/proxies/00/ast_1.webp"]
-    with patch("src.server.missing_artifacts.get_storage", return_value=LocalStorage(str(data))):
+    from src.server.storage.files import FileStore
+
+    with patch("src.server.missing_artifacts.get_store", return_value=FileStore(LocalStorage(str(data)))):
         assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0, "remade": 0}
     assert not any("UPDATE" in str(c.args[0]) for c in session.execute.call_args_list)
     session.rollback.assert_called_once()

@@ -28,7 +28,7 @@ import time
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.server.storage.local import get_storage
+from src.server.storage.store import NotFound, Store, Unavailable, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +96,7 @@ def repair(session: Session) -> dict[str, int]:
         entries = [e for e in json.loads(raw) if isinstance(e, str)] if raw else []
     except ValueError:
         entries = []
-    storage = get_storage()
-    if storage.location.moving:
-        session.rollback()  # files are in two places at once: the reports wait for the move
-        return nothing
+    store = get_store()
     checked = cleared = remade = 0
     for entry in entries:
         asset_id, _, kind = entry.rpartition(":")
@@ -111,15 +108,19 @@ def repair(session: Session) -> dict[str, int]:
                               {"a": asset_id}).scalar()
         if not key:
             continue
-        if _storage_gone(storage, key):
-            logger.warning("Missing files not repaired: the previews folder (or the account's) is missing or empty")
+        try:
+            if _storage_gone(store, key):
+                logger.warning("Missing files not repaired: its library has no files kept at all (a disk unmounted?)")
+                session.rollback()  # the reports stay for the next upkeep
+                return nothing
+            gone = not store.exists(key)
+        except Unavailable as exc:
+            logger.warning("Missing files not repaired: %s", exc)
             session.rollback()  # the reports stay for the next upkeep
             return nothing
-        try:
-            gone = not storage.abs_path(key).is_file()
-        except ValueError:  # a key storage refuses is as good as gone
+        except ValueError:  # a key the store refuses is as good as gone
             gone = True
-        if gone and kind == "thumbnail" and _thumbnail_again(session, storage, asset_id, key):
+        if gone and kind == "thumbnail" and _thumbnail_again(session, store, asset_id, key):
             remade += 1
             logger.info("Made the missing thumbnail of %s again from its preview", asset_id)
         elif gone:
@@ -131,22 +132,19 @@ def repair(session: Session) -> dict[str, int]:
     return {"checked": checked, "cleared": cleared, "remade": remade}
 
 
-def _thumbnail_again(session: Session, storage, asset_id: str, key: str) -> bool:
+def _thumbnail_again(session: Session, store: Store, asset_id: str, key: str) -> bool:
     """Make a clip's thumbnail again at its key from its preview, as ingest
     made it. False when the preview is gone too, or isn't an image."""
     from src.server.preview_image import NotAnImageError, thumbnail
 
     proxy_key = session.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
+    if not proxy_key:
+        return False
     try:
-        proxy = storage.abs_path(proxy_key) if proxy_key else None
-        if proxy is None or not proxy.is_file():
-            return False
-        data = thumbnail(proxy.read_bytes())
-        path = storage.write_path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        part = path.with_name(path.name + ".part")
-        part.write_bytes(data)
-        part.replace(path)
+        data = thumbnail(store.read(proxy_key))
+        store.write(key, data)
+    except NotFound:
+        return False
     except (ValueError, OSError, NotAnImageError) as exc:  # NotAnImageError is a ValueError
         logger.warning("Couldn't make the thumbnail of %s again from its preview: %s", asset_id, exc)
         return False
@@ -155,20 +153,10 @@ def _thumbnail_again(session: Session, storage, asset_id: str, key: str) -> bool
     return True
 
 
-def _storage_gone(storage, key: str) -> bool:
-    """The key's previews folder (its library's own, or the server's), or
-    the account's folder in it (a key's first part), missing or empty: an
-    unmounted disk, not files gone one by one."""
-    location = storage.location
-    root = location.root_for(location.library_of(key))
-    try:
-        account = storage._under(root, key.split("/", 1)[0])
-    except ValueError:  # a key storage refuses: judged on its own below
-        return False
-    for folder in (root, account):
-        try:
-            if next(folder.iterdir(), None) is None:
-                return True
-        except OSError:
-            return True
-    return False
+def _storage_gone(store: Store, key: str) -> bool:
+    """No file kept for the key's library (its account, for a key of no
+    library) at all: an unmounted disk (its empty mount point), not files
+    gone one by one. Unavailable (where it's kept can't be reached) propagates."""
+    parts = key.split("/", 2)
+    where = "/".join(parts[:2] if len(parts) > 2 else parts[:1])
+    return next(iter(store.list(f"{where}/")), None) is None

@@ -387,18 +387,47 @@ def test_cleanup_waits_for_a_move(install, monkeypatch):
         get_settings.cache_clear()
 
 
-def test_missing_files_aren_t_repaired_during_a_move(install, monkeypatch):
+def test_during_a_move_the_repair_finds_a_file_in_either_folder(install, monkeypatch):
+    # The Store reads where a file is (moved or not yet): nothing is taken for missing meanwhile.
     from unittest.mock import MagicMock
 
     from src.server import missing_artifacts
+    from src.server.storage.files import FileStore
+
+    data, drive = install
+    _moving(data, drive)  # PROXY is still in the old folder
+    monkeypatch.setattr(missing_artifacts, "get_store", lambda: FileStore(LocalStorage(str(data))))
+    session = MagicMock()
+    session.execute.return_value.scalar.side_effect = [json.dumps(["ast_1:proxy"]), PROXY]
+    assert missing_artifacts.repair(session) == {"checked": 1, "cleared": 0, "remade": 0}
+    assert not any("UPDATE" in str(c.args[0]) for c in session.execute.call_args_list)
+
+
+def test_a_file_moving_between_its_folders_as_it_s_looked_for_is_found(install, monkeypatch):
+    # Linked into the new folder before it leaves the old: one missed between them is there the next look.
+    from src.server.storage.files import FileStore
 
     data, drive = install
     _moving(data, drive)
-    monkeypatch.setattr(missing_artifacts, "get_storage", lambda: LocalStorage(str(data)))
-    session = MagicMock()
-    session.execute.return_value.scalar.return_value = json.dumps(["ast_1:proxy"])
-    assert missing_artifacts.repair(session) == {"checked": 0, "cleared": 0, "remade": 0}
-    session.rollback.assert_called_once()
+    store = FileStore(LocalStorage(str(data)))
+    real = Path.is_file
+    looks: list[Path] = []
+
+    def moving(path: Path) -> bool:
+        if path.name != Path(PROXY).name:
+            return real(path)  # the folders' markers, and the rest
+        looks.append(path)
+        if path == drive / PROXY and len(looks) == 1:
+            return False  # not in the new folder yet...
+        if path == data / PROXY and len(looks) == 2:
+            (drive / PROXY).parent.mkdir(parents=True, exist_ok=True)
+            os.replace(data / PROXY, drive / PROXY)  # ...and gone from the old one by the time it's looked for
+            return False
+        return real(path)
+
+    monkeypatch.setattr(Path, "is_file", moving)
+    assert store.read(PROXY) == b"proxy"
+    assert looks[:3] == [drive / PROXY, data / PROXY, drive / PROXY]
 
 
 # -- Never scanned -------------------------------------------------------------------------
@@ -513,14 +542,18 @@ def test_a_library_s_folder_unplugged_stops_only_its_writes(install):
 def test_missing_files_aren_t_repaired_when_a_library_s_drive_is_unplugged(install):
     from src.server import missing_artifacts
 
+    from src.server.storage.files import FileStore
+    from src.server.storage.store import Unavailable
+
     data, drive = install
     move.start(data, drive, library_id="lib_2", background=False)
-    storage = LocalStorage(str(data))
-    assert not missing_artifacts._storage_gone(storage, ANALYSIS)
+    store = FileStore(LocalStorage(str(data)))
+    assert not missing_artifacts._storage_gone(store, ANALYSIS)
     shutil.rmtree(drive / "ten_a")
     (drive / previews_location.MARKER).unlink()  # unplugged: an empty mount point
-    assert missing_artifacts._storage_gone(storage, ANALYSIS)
-    assert not missing_artifacts._storage_gone(storage, PROXY), "the other library's are judged as before"
+    with pytest.raises(Unavailable):
+        missing_artifacts._storage_gone(store, ANALYSIS)
+    assert not missing_artifacts._storage_gone(store, PROXY), "the other library's are judged as before"
 
 
 def test_a_library_can_t_move_where_it_is(install):
