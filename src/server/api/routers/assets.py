@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.shared.io_utils import normalize_rel_path
+from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
 from src.server.api.dependencies import require_tenant_admin
@@ -1630,15 +1631,18 @@ def submit_batch_faces(
             }
             for f in item.faces
         ]
+        dropped = AfterCommit()
         face_ids = face_repo.submit_faces(
             asset_id=item.asset_id,
             detection_model=item.detection_model,
             detection_model_version=item.detection_model_version,
             faces=faces_data,
             embedding_model=item.embedding_model,
+            after=dropped,
         )
         lineage.record(session, item.asset_id, "faces", with_source(made, item.source_hash),
-                       outcome="ok" if faces_data else "empty")
+                       outcome="ok" if faces_data else "empty")  # commits
+        dropped.run()  # the crops of faces not found again
 
         if tenant_id and asset.proxy_key:
             _generate_face_crops(tenant_id, asset, face_ids, faces_data, session)

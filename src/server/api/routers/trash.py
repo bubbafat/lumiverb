@@ -269,17 +269,7 @@ def purge_assets(
                 "removes them from those projects. Send remove_from_projects: true to go ahead.",
                 usage.model_dump(),
             )
-    # Collect keys for file cleanup before DB delete
-    keys_to_remove: list[str] = []
-    for a in to_delete:
-        if a.proxy_key:
-            keys_to_remove.append(a.proxy_key)
-        if a.thumbnail_key:
-            keys_to_remove.append(a.thumbnail_key)
-        if getattr(a, "video_preview_key", None):
-            keys_to_remove.append(a.video_preview_key)
-        if getattr(a, "analysis_proxy_key", None):
-            keys_to_remove.append(a.analysis_proxy_key)
+    keys_to_remove = _files_of(session, tenant_id, to_delete)  # read before their rows go
     deleted_count = asset_repo.permanently_delete(asset_ids, commit=after is None)
     cleanup = AfterCommit() if after is None else after
     cleanup.add("Removing deleted clips' files", partial(_remove_files, keys_to_remove))
@@ -288,6 +278,29 @@ def purge_assets(
     if after is None:
         cleanup.run()
     return deleted_count
+
+
+def _files_of(session: Session, tenant_id: str | None, clips: list) -> list[str]:
+    """Every file of these clips the previews folder holds: their previews
+    and analysis proxies, their scenes' pictures and frames (a frame's key
+    is derived, storage.scene_rep_key: never in a column), and their faces'
+    crops."""
+    keys = [k for a in clips for k in (a.proxy_key, a.thumbnail_key, getattr(a, "video_preview_key", None),
+                                       getattr(a, "analysis_proxy_key", None)) if k]
+    ids = [a.asset_id for a in clips]
+    library_of = {a.asset_id: a.library_id for a in clips}
+    storage = get_storage()
+    for asset_id, rep_frame_ms, proxy_key, thumbnail_key in session.execute(text(
+        "SELECT asset_id, rep_frame_ms, proxy_key, thumbnail_key FROM video_scenes WHERE asset_id = ANY(:ids)"
+    ), {"ids": ids}).all():
+        keys += [k for k in (proxy_key, thumbnail_key) if k]
+        if tenant_id:
+            keys.append(storage.scene_rep_key(tenant_id, library_of[asset_id], asset_id, rep_frame_ms))
+    for asset_id, face_id, crop_key in session.execute(text(
+        "SELECT asset_id, face_id, crop_key FROM faces WHERE asset_id = ANY(:ids)"), {"ids": ids}).all():
+        keys += [k for k in (crop_key, tenant_id and storage.face_crop_key_of(tenant_id, library_of[asset_id], face_id))
+                 if k]
+    return list(dict.fromkeys(keys))
 
 
 def _remove_files(keys: list[str]) -> None:

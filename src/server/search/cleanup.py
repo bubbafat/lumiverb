@@ -33,7 +33,7 @@ _MIN_AGE_SECONDS = 3600  # 1 hour
 _MAX_DELETE_FRACTION = 0.25
 
 # Subdirectories under a library dir that contain artifacts.
-_ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes", "analysis")
+_ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes", "analysis", "face_crops")
 
 
 @dataclass
@@ -124,6 +124,8 @@ def _get_expected_keys_for_library(
         — these are NOT stored in any column; they live at the deterministic
         path returned by storage.scene_rep_key(). Without computing them here,
         cleanup would flag every scene_rep JPG on disk as orphaned.
+      - each face's crop: faces.crop_key, and the key storage.face_crop_key()
+        gives it (a crop written before its row says so is still its face's).
     """
     try:
         # Asset artifacts: proxy_key, thumbnail_key, video_preview_key, analysis_proxy_key
@@ -161,6 +163,14 @@ def _get_expected_keys_for_library(
             keys.add(
                 storage.scene_rep_key(tenant_id, library_id, asset_id, rep_frame_ms)
             )
+
+        for face_id, crop_key in session.execute(text("""
+            SELECT f.face_id, f.crop_key
+            FROM faces f
+            JOIN assets a ON a.asset_id = f.asset_id
+            WHERE a.library_id = :lib_id
+        """), {"lib_id": library_id}).fetchall():
+            keys.update(k for k in (crop_key, storage.face_crop_key_of(tenant_id, library_id, face_id)) if k)
 
         return keys
     except Exception as exc:

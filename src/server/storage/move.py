@@ -324,6 +324,44 @@ def go_on(data_dir: Path, *, now: float | None = None, waits: bool = False) -> s
     return "started"
 
 
+# -- A library deleted for good -------------------------------------------------------
+
+
+def forget_library(data_dir: Path, tenant_id: str, library_id: str) -> list[Path]:
+    """A library deleted for good (its rows committed gone): its previews go
+    from every folder previews may be in now (the server's, a library's own,
+    where a move is carrying them from), then its own folder's entry in
+    storage.json. Under the move lock, so no move carries its files
+    meanwhile. A folder whose drive isn't plugged in keeps them, and while
+    that's its own the entry stays too: the daily cleanup walks the folders
+    storage.json names, and reports the library's as one the database
+    doesn't list (remove-orphan-folders). Returns the folders removed.
+    Raises MoveError when a move holds the lock: the files stay, reported
+    the same way."""
+    data_dir = Path(os.path.abspath(data_dir))
+    if not (tenant_id.startswith(ACCOUNT_PREFIX) and library_id.startswith(previews_location.LIBRARY_PREFIX)
+            and Path(tenant_id).name == tenant_id and Path(library_id).name == library_id):
+        raise ValueError(f"Not an account and a library: {tenant_id!r}, {library_id!r}")
+    removed: list[Path] = []
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
+        location = previews_location.read(data_dir)
+        for root in location.roots:
+            folder = root / tenant_id / library_id
+            if not location.available(data_dir, root) or not folder.is_dir() or folder.is_symlink():
+                continue
+            shutil.rmtree(folder)
+            removed.append(folder)
+        unplugged = [r for r in location.roots_for(library_id) if not location.available(data_dir, r)]
+        if not unplugged and (library_id in location.libraries or library_id in location.libraries_moving_from):
+            previews_location.write(
+                data_dir, location.previews, location.moving_from,
+                libraries={k: v for k, v in location.libraries.items() if k != library_id},
+                libraries_moving_from={k: v for k, v in location.libraries_moving_from.items() if k != library_id})
+    for folder in removed:
+        logger.info("Library %s deleted for good: its previews in %s are gone", library_id, folder)
+    return removed
+
+
 # -- Moving ---------------------------------------------------------------------------
 
 

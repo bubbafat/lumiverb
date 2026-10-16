@@ -120,7 +120,7 @@ system_metadata   — key, value, updated_at
 **Artifact lifecycle:**
 - When a library is trashed (`DELETE /v1/libraries/{id}`), all its assets get `deleted_at` set (soft-deleted). Trashed assets are excluded from search sync sweeps.
 - If a proxy or thumbnail key points to a missing file, the endpoint returns 404 and clears the stale key from the asset record.
-- On empty-trash (hard delete), artifact files in object storage are deleted best-effort, then DB rows are removed in FK-safe order.
+- On empty-trash (hard delete), DB rows are removed in FK-safe order, then (once committed) every file stored for those clips: previews, analysis proxies, scene frames, face crops, playback cuts. A re-detection that drops a face removes its crop the same way; a library deleted for good takes its previews folder (`storage/move.py` `forget_library`). The daily cleanup sweeps whatever is left (`search/cleanup.py`, face crops included).
 
 **Face detection tables (ADR-009):**
 

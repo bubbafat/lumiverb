@@ -131,6 +131,14 @@ class LocalStorage:
         bucket = self._bucket_from_face_id(face_id)
         return f"{tenant_id}/{library_id}/face_crops/{bucket:02d}/{face_id}.webp"
 
+    def face_crop_key_of(self, tenant_id: str, library_id: str, face_id: str) -> str | None:
+        """The face's crop key, or None for an id that isn't "face_" and a
+        ULID (no crop was ever written for one)."""
+        try:
+            return self.face_crop_key(tenant_id, library_id, face_id)
+        except ValueError:
+            return None
+
     @staticmethod
     def _under(root: Path, key: str) -> Path:
         """The key's path in `root`. A key that would leave it is refused: an

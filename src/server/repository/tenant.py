@@ -13,6 +13,7 @@ from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
+from src.server.after_commit import AfterCommit
 from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
 from src.shared.utils import escape_like, utcnow
 from src.server.repository import corrections as _corr
@@ -3324,6 +3325,20 @@ def current_face_model(session: Session) -> str:
     return str(lineage.desired(session, "faces")["settings"].get("model") or "buffalo_l")
 
 
+def _remove_keys(keys: list[str]) -> None:
+    """Files of the previews folder whose rows are gone (wherever each is: a move may be under way)."""
+    import logging
+
+    from src.server.storage.local import get_storage
+
+    storage = get_storage()
+    for key in keys:
+        try:
+            storage.delete(key)
+        except (OSError, ValueError) as exc:  # ValueError: a key outside the previews folder, never deleted
+            logging.getLogger(__name__).warning("Couldn't remove %s: %s", key, exc)
+
+
 class FaceRepository:
     """CRUD for detected faces. Operates within a tenant session."""
 
@@ -3399,6 +3414,12 @@ class FaceRepository:
     # carries over only where the boxes overlap substantially (Robert, Oct 9).
     REDETECT_MIN_IOU_ACROSS_SWITCH = 0.5
 
+    def _dropped_crops(self, asset_id: str, face_ids: list[str]) -> list[str]:
+        """The crops of these faces of the clip (the keys their rows hold)."""
+        return list(self._session.execute(text(
+            "SELECT crop_key FROM faces WHERE asset_id = :a AND face_id = ANY(:ids) AND crop_key IS NOT NULL"
+        ), {"a": asset_id, "ids": face_ids}).scalars())
+
     def submit_faces(
         self,
         asset_id: str,
@@ -3406,9 +3427,12 @@ class FaceRepository:
         detection_model_version: str,
         faces: list[dict],
         embedding_model: str = "buffalo_l",
+        *,
+        after: AfterCommit | None = None,
     ) -> list[str]:
         """Store a fresh set of face detections for an asset and update face_count.
         embedding_model: which model embedded them (compared only within one model).
+        after: the dropped faces' crops are removed once the caller has committed.
 
         A detection that re-finds an existing face (by box overlap, else by
         embedding) updates that face in place: it keeps its face_id, its
@@ -3507,7 +3531,10 @@ class FaceRepository:
                 ),
                 {"fids": dropped_ids},
             )
-            # Rejections on these faces go with them (ON DELETE CASCADE).
+            # Rejections on these faces go with them (ON DELETE CASCADE), and their crops after the commit.
+            if after is not None:
+                crops = self._dropped_crops(asset_id, dropped_ids)
+                after.add("Removing dropped faces' crops", lambda: _remove_keys(crops))
             self._session.execute(sa_delete(Face).where(Face.face_id.in_(dropped_ids)))
 
         face_ids: list[str] = []

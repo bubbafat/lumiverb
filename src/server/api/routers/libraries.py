@@ -1,5 +1,6 @@
 """Libraries API: create and list libraries. All routes require tenant auth (middleware)."""
 
+import logging
 from datetime import datetime
 from typing import Annotated
 
@@ -25,6 +26,8 @@ from src.server.repository.tenant import AssetRepository, LibraryRepository, Pat
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.readers import SERVER, read_by_server
 from src.shared.utils import utcnow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 
@@ -307,7 +310,8 @@ def delete_libraries_for_good(
     session: Session, tenant_id: str | None, libraries: list, *, before: datetime | None = None,
 ) -> int:
     """Delete trashed libraries with everything in them: rows, search documents
-    and public pages. Their files go with the daily cleanup. Returns how many.
+    and public pages, and once those are committed, their previews folder
+    (storage/move.py forget_library). Returns how many.
 
     Each is re-checked under a row lock (still in the trash, since before
     `before`): one restored since it was listed is never deleted, and a
@@ -324,7 +328,23 @@ def delete_libraries_for_good(
         # Trash cleared is_public, so any public row left behind goes regardless.
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).delete(library_id)
+        if tenant_id:
+            _forget_previews(tenant_id, library_id)
     return deleted
+
+
+def _forget_previews(tenant_id: str, library_id: str) -> None:
+    """A deleted library's previews: gone now, or (a move under way, a drive
+    away) left for the daily cleanup to report."""
+    from pathlib import Path
+
+    from src.server.config import get_settings
+    from src.server.storage import move
+
+    try:
+        move.forget_library(Path(get_settings().data_dir), tenant_id, library_id)
+    except (move.MoveError, OSError, ValueError) as exc:
+        logger.warning("Library %s deleted for good; its previews stay for now: %s", library_id, exc)
 
 
 @router.get("/{library_id}", response_model=LibraryResponse)

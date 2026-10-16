@@ -79,6 +79,8 @@ def env(tmp_path_factory):
             with ExitStack() as stack:
                 for mod in _STORAGE_USERS:
                     stack.enter_context(patch(f"src.server.api.routers.{mod}.get_storage", return_value=storage))
+                # And where it's looked up when needed (a re-detection's dropped crops).
+                stack.enter_context(patch("src.server.storage.local.get_storage", return_value=storage))
                 with TestClient(app) as client:
                     headers = {"Authorization": f"Bearer {api_key}"}
                     r = client.post("/v1/libraries", json={"name": "Footage", "root_path": "/Volumes/media-01/Footage"},
