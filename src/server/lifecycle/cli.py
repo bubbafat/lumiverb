@@ -611,6 +611,85 @@ def _restore(args: argparse.Namespace) -> int:
     return 0
 
 
+_STATE_WORDS = {"running": "running", "partly": "partly paused", "paused": "paused"}
+
+
+def _pausing(args: argparse.Namespace) -> int:
+    """pause|resume: a switch (upkeep, a producer), every library's scans
+    or one's, or all, as Settings › Processing and `lumiverb pause|resume`
+    do (the same routes' code, without a key: on the machine itself), in
+    every account or the one named. Then each account's state."""
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.server.api.errors import ApiError
+    from src.server.api.routers import libraries as library_routes
+    from src.server.api.routers import producers as producer_routes
+    from src.server.config import get_settings
+    from src.server.database import get_control_session, get_tenant_session
+    from src.server.repository import lineage
+    from src.server.repository.control_plane import TenantRepository
+    from src.shared.producers import PAUSE_ALL, PAUSE_SCANS, pause_state, pause_targets
+
+    pausing = args.command == "pause"
+    names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
+    if args.name not in names:
+        print(f"✗ Nothing here is called {args.name}: {', '.join(names)}", file=sys.stderr)
+        return 2
+    if args.library and args.name != PAUSE_SCANS:
+        print("✗ --library goes with scans: a library's own Scans pause", file=sys.stderr)
+        return 2
+    env, _ = _env_and_url(args)
+    os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
+    get_settings.cache_clear()
+    try:
+        with get_control_session() as ctrl:
+            accounts = [(t.tenant_id, t.name) for t in TenantRepository(ctrl).list_all()
+                        if args.account in (None, t.tenant_id, t.name)]
+        if not accounts:
+            print(f"✗ No account here is {args.account}" if args.account else "✗ This Lumiverb has no account yet",
+                  file=sys.stderr)
+            return 1
+        acted = 0
+        for tenant_id, name in accounts:
+            with get_tenant_session(tenant_id) as session:
+                if args.name == PAUSE_SCANS:
+                    libraries = session.execute(text(
+                        "SELECT library_id FROM libraries WHERE library_id = :l OR name = :l"),
+                        {"l": args.library}).scalars().all() if args.library else None
+                    if libraries == []:
+                        continue  # no such library in this account
+                    body = library_routes.ScansPauseRequest(library_ids=libraries, all=libraries is None)
+                    if pausing:
+                        library_routes.pause_scans(body, session, None)
+                    else:
+                        library_routes.resume_scans(body, session)
+                else:
+                    work = producer_routes.PauseIn(scope=lineage.WORK)
+                    if pausing:
+                        producer_routes.pause_switch(args.name, work, session, None)
+                    else:
+                        producer_routes.resume_switch(args.name, work, session)
+                acted += 1
+                held = lineage.pauses(session)
+                active = session.execute(text("SELECT library_id FROM libraries WHERE status = 'active'")).scalars().all()
+                state = pause_state(set(held.work), libraries=len(active),
+                                    libraries_paused=sum(1 for lib in active if held.scans_paused(lib)))
+                print(f"✓ {name}: processing {_STATE_WORDS[state]}")
+    except (ApiError, HTTPException) as exc:
+        print(f"✗ {getattr(exc, 'message', None) or exc.detail}", file=sys.stderr)
+        return 1
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"✗ Can't reach the databases: {first}", file=sys.stderr)
+        return 1
+    if not acted:
+        print(f"✗ No library here is {args.library}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _has_database(url: str) -> bool:
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import SQLAlchemyError
@@ -671,10 +750,19 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(restore_command, argparse.SUPPRESS)
     restore_command.add_argument("backup", help="the backup's folder, or its name in the backups folder")
     restore_command.add_argument("--yes", action="store_true", help="don't ask first")
+    for verb, does in (("pause", "pause processing here (what's running finishes)"),
+                       ("resume", "resume processing here")):
+        command = commands.add_parser(
+            verb, help=f"{does}: all, scans, upkeep or a producer, in every account (no API key: on this machine)")
+        _env_option(command, argparse.SUPPRESS)
+        command.add_argument("name", help="all, scans, upkeep or a producer (e.g. vision)")
+        command.add_argument("--library", help="with scans: this library's only (its name or id)")
+        command.add_argument("--account", help="this account's only (its name or id)")
     args = parser.parse_args(argv)
     try:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
-                "reset-password": _reset_password, "backup": _backup, "restore": _restore}[args.command](args)
+                "reset-password": _reset_password, "backup": _backup, "restore": _restore,
+                "pause": _pausing, "resume": _pausing}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
