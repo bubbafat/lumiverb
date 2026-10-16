@@ -64,16 +64,32 @@ class LumiverbAPIError(Exception):
         super().__init__(f"[{code}]: {message}")
 
 
+# A body this long, or with markup in it, isn't a message: a proxy's or another server's page.
+_SAID_UP_TO = 300
+
+
+def _not_the_apis(response: httpx.Response) -> str:
+    """An answer that isn't the API's error envelope: its status and where
+    from, and its body only when that's a short line of text (never a proxy's
+    HTML page). 502-504 are a proxy saying the API behind it isn't answering."""
+    status = f"HTTP {response.status_code} {response.reason_phrase}".strip()
+    origin = f"{response.request.url.scheme}://{response.request.url.netloc.decode()}"
+    if response.status_code in RETRY_STATUSES:
+        return f"{status} from {origin}: Lumiverb isn't answering behind it (starting up?). Try again in a moment."
+    text = response.text.strip()
+    if text and len(text) <= _SAID_UP_TO and "<" not in text and "\n" not in text:
+        return f"{status} from {origin}: {text}"
+    return f"{status} from {origin}, not an answer from Lumiverb's API: is that where it is?"
+
+
 def _error_of(response: httpx.Response) -> LumiverbAPIError:
     try:
         data = response.json()
-        error = data.get("error", {})
-        message = error.get("message", response.text or str(response.status_code))
-        code = error.get("code", "unknown")
+        error = data["error"]
+        return LumiverbAPIError(error.get("code", "unknown"), error.get("message") or _not_the_apis(response),
+                                response.status_code)
     except Exception:  # noqa: BLE001 — not the envelope: say what came back
-        message = response.text or f"HTTP {response.status_code}"
-        code = "unknown"
-    return LumiverbAPIError(code, message, response.status_code)
+        return LumiverbAPIError("unknown", _not_the_apis(response), response.status_code)
 
 
 class ApiClient:
