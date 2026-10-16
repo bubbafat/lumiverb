@@ -190,3 +190,33 @@ def test_its_own_folder_it_cant_write_any_more_is_flagged(mac):
     assert own["available"] is True and own["write_error"] == said
     assert listed == [{"library_id": library_id, "name": "Trips", "folder": str(drive), "available": True,
                        "write_error": said}]
+
+
+def test_a_library_deleted_for_good_takes_its_previews_and_its_folder_choice(mac):
+    # ADR-020 phase 0: its rows go, then (once committed) its previews from
+    # every folder they may be in, and storage.json forgets its own folder.
+    data, originals, tmp, control_url = mac
+    drive = tmp / "Video"
+    drive.mkdir()
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth, library_id, tenant_id = _library(client, control_url, originals)
+        other = client.post("/v1/libraries", json={"name": "Kept", "root_path": str(originals)}, headers=auth)
+        assert other.status_code == 200, other.text
+        kept = data / tenant_id / other.json()["library_id"] / "proxies/00/ast_2_b.webp"
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes(b"another library's")
+        assert client.put(f"/v1/libraries/{library_id}/previews", json={"folder": str(drive), "move": True},
+                          headers=auth).status_code == 202
+        assert _settled(client, auth, library_id)["own"] is True
+        own = drive / tenant_id / library_id / "face_crops/07/face_1.webp"
+        left = data / tenant_id / library_id / "scenes/00/ast_1_0000000000.jpg"  # one a move left behind
+        for path in (own, left):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x")
+        assert client.delete(f"/v1/libraries/{library_id}", headers=auth).status_code == 204
+        r = client.post("/v1/libraries/empty-trash", json={"library_ids": [library_id], "remove_from_projects": True},
+                        headers=auth)
+        assert r.status_code == 200 and r.json()["deleted"] == 1, r.text
+    assert not (drive / tenant_id / library_id).exists() and not (data / tenant_id / library_id).exists()
+    assert previews_location.read(data).libraries == {}
+    assert kept.read_bytes() == b"another library's" and (drive / previews_location.MARKER).is_file()

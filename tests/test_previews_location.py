@@ -241,6 +241,52 @@ def test_one_move_at_a_time(install, tmp_path):
         move.start(data, other, background=False)
 
 
+# -- A library deleted for good ---------------------------------------------------
+
+
+def test_a_library_deleted_for_good_goes_from_every_folder_its_previews_may_be_in(install, tmp_path):
+    data, drive = install
+    (drive / previews_location.MARKER).write_text("")
+    own = tmp_path / "Volumes" / "Clips"
+    (own / "ten_a/lib_1/scenes/00").mkdir(parents=True)
+    (own / previews_location.MARKER).write_text("")
+    (own / "ten_a/lib_1/scenes/00/ast_1_0000000000.jpg").write_bytes(b"frame")
+    # The server's previews moving to `drive`; lib_1 has a folder of its own, and the move left one of its files.
+    previews_location.write(data, drive, data, libraries={"lib_1": own})
+    assert move.forget_library(data, "ten_a", "lib_1") == [data / "ten_a/lib_1", own / "ten_a/lib_1"]
+    assert not (data / "ten_a/lib_1").exists() and not (own / "ten_a/lib_1").exists()
+    assert (data / ANALYSIS).read_bytes() == b"analysis" * 100, "another library's stay"
+    assert previews_location.read(data) == previews_location.Location(drive, data), "only its choice is forgotten"
+
+
+def test_a_library_s_previews_on_a_drive_not_plugged_in_stay(install, tmp_path):
+    data, _ = install
+    unplugged = tmp_path / "Volumes" / "Gone"  # its mount point, empty: no marker
+    (unplugged / "ten_a/lib_3").mkdir(parents=True)
+    previews_location.write(data, data, None, libraries={"lib_3": unplugged})
+    assert move.forget_library(data, "ten_a", "lib_3") == []
+    assert (unplugged / "ten_a/lib_3").is_dir()
+    # Its folder is still named, so the daily cleanup finds it there when it's plugged in, and reports it.
+    assert previews_location.read(data).libraries == {"lib_3": unplugged}
+
+
+def test_a_library_isn_t_forgotten_while_a_move_holds_the_lock(install, monkeypatch):
+    data, _ = install
+    monkeypatch.setattr(move, "LOOK_WAIT_SEC", 0.05)
+    with move._one_at_a_time(data), pytest.raises(move.MoveError):
+        move.forget_library(data, "ten_a", "lib_1")
+    assert (data / PROXY).exists()
+
+
+@pytest.mark.parametrize(("tenant_id", "library_id"), [("ten_a", "../lib_1"), ("ten_a", "lib_1/.."), ("..", "lib_1"),
+                                                       ("ten_a", "proxies"), ("other", "lib_1")])
+def test_only_an_account_s_library_folder_is_ever_removed(install, tenant_id, library_id):
+    data, _ = install
+    with pytest.raises(ValueError):
+        move.forget_library(data, tenant_id, library_id)
+    assert (data / PROXY).exists()
+
+
 @pytest.mark.parametrize(("folder", "said"), [
     ("", "Say which folder"),
     ("relative", "full path"),

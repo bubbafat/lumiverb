@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session, select
 
+from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, GoneError
@@ -602,6 +603,7 @@ def submit_video_faces(
         raise ApiError(400, "not_a_video", "Faces with times are a video's; a photo's go to /v1/assets/batch-faces.",
                        {"media_type": asset.media_type})
 
+    dropped = AfterCommit()
     face_ids = FaceRepository(session).submit_faces(
         asset_id=asset_id,
         detection_model=detection_model,
@@ -612,9 +614,11 @@ def submit_video_faces(
                 "frame_ms": f.frame_ms,
                 "seen_ms": sorted({*f.seen_ms, f.frame_ms})} for f in items],
         embedding_model=embedding_model,
+        after=dropped,
     )
     lineage_repo.record(session, asset_id, "video_faces", with_source(made, source_hash or None),
-                        outcome="ok" if items else "empty")
+                        outcome="ok" if items else "empty")  # commits
+    dropped.run()  # the crops of faces not found again
 
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
