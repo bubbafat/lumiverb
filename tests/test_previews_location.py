@@ -316,6 +316,37 @@ def test_a_library_isn_t_forgotten_while_a_move_holds_the_lock(install, monkeypa
     assert (data / PROXY).exists()
 
 
+def test_an_account_that_s_gone_goes_from_every_folder_its_previews_may_be_in(install, tmp_path):
+    data, _ = install
+    own = tmp_path / "Volumes" / "Clips"
+    (own / "ten_a/lib_1/scenes/00").mkdir(parents=True)
+    (own / previews_location.MARKER).write_text("")
+    away = tmp_path / "Volumes" / "Gone"  # its mount point, empty: no marker
+    (away / "ten_a/lib_3").mkdir(parents=True)
+    (data / "ten_b/lib_9").mkdir(parents=True)
+    previews_location.write(data, data, None, libraries={"lib_1": own, "lib_3": away})
+    assert move.forget_account(data, "ten_a") == [data / "ten_a", own / "ten_a"]
+    assert not (data / "ten_a").exists() and not (own / "ten_a").exists()
+    assert (away / "ten_a/lib_3").is_dir(), "a drive that isn't plugged in keeps it"
+    assert (data / "ten_b/lib_9").is_dir(), "another account's stay"
+
+
+@pytest.mark.parametrize("tenant_id", ["..", "ten_a/..", "ten_a/lib_1", "lib_1", "other", ""])
+def test_only_an_account_s_folder_is_ever_removed_as_one(install, tenant_id):
+    data, _ = install
+    with pytest.raises(ValueError):
+        move.forget_account(data, tenant_id)
+    assert (data / PROXY).exists()
+
+
+def test_an_account_isn_t_forgotten_while_a_move_holds_the_lock(install, monkeypatch):
+    data, _ = install
+    monkeypatch.setattr(move, "LOOK_WAIT_SEC", 0.05)
+    with move._one_at_a_time(data), pytest.raises(move.MoveError):
+        move.forget_account(data, "ten_a")
+    assert (data / PROXY).exists()
+
+
 @pytest.mark.parametrize(("tenant_id", "library_id"), [("ten_a", "../lib_1"), ("ten_a", "lib_1/.."), ("..", "lib_1"),
                                                        ("ten_a", "proxies"), ("other", "lib_1")])
 def test_only_an_account_s_library_folder_is_ever_removed(install, tenant_id, library_id):
@@ -372,19 +403,20 @@ def test_what_a_move_carries_leaves_out_playback_cuts(install):
 # -- Waiting for a move -------------------------------------------------------------------
 
 
-def test_cleanup_waits_for_a_move(install, monkeypatch):
-    from src.server.config import get_settings
+def test_cleanup_waits_for_a_move(install):
     from src.server.search import cleanup
+    from src.server.storage import folders
+    from tests.stored_in import stored_in
 
     data, drive = install
-    monkeypatch.setenv("DATA_DIR", str(data))
-    get_settings.cache_clear()
-    try:
-        assert cleanup.previews_folder() == (data, None)
+    with stored_in(LocalStorage(str(data))):
+        assert folders.why_waiting() is None
         _moving(data, drive)
-        assert cleanup.previews_folder() == (None, cleanup.MOVING)
-    finally:
-        get_settings.cache_clear()
+        assert folders.why_waiting() == folders.MOVING
+        assert cleanup.run_cleanup_single_tenant("ten_a", None, dry_run=False).errors == [folders.MOVING]
+        removed = cleanup.remove_orphan_folders(tenant_id="ten_a", session=None, folder_ids=None, dry_run=False)
+        assert removed.errors == [folders.MOVING]
+    assert (data / PROXY).exists() and (data / ANALYSIS).exists()
 
 
 def test_during_a_move_the_repair_finds_a_file_in_either_folder(install, monkeypatch):
@@ -560,23 +592,6 @@ def test_a_library_can_t_move_where_it_is(install):
     data, drive = install
     with pytest.raises(move.MoveError, match="already"):
         move.plan(data, None, library_id="lib_2")  # the server's folder: where it is
-
-
-def test_cleanup_visits_a_library_s_own_folder(install, monkeypatch):
-    from src.server.config import get_settings
-    from src.server.search import cleanup
-
-    data, drive = install
-    move.start(data, drive, library_id="lib_2", background=False)
-    monkeypatch.setenv("DATA_DIR", str(data))
-    get_settings.cache_clear()
-    try:
-        assert cleanup.library_folders("ten_a") == [("lib_2", drive)]
-        assert cleanup.library_folders("ten_b") == []
-        (drive / previews_location.MARKER).unlink()
-        assert cleanup.library_folders("ten_a") == [], "unplugged: nothing to clean there"
-    finally:
-        get_settings.cache_clear()
 
 
 def test_a_library_walk_never_goes_into_a_library_s_previews_folder(tmp_path):

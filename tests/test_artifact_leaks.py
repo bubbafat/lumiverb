@@ -123,7 +123,6 @@ def test_the_daily_sweep_takes_crops_no_face_has(env):
                 os.utime(p, (an_hour_ago, an_hour_ago))
 
     with _db(env) as session:
-        result = run_cleanup_for_tenant(storage.location.previews, tenant_id, session, dry_run=False,
-                                        library_id=library_id)
+        result = run_cleanup_for_tenant(tenant_id, session, dry_run=False, library_id=library_id)
     assert result.errors == [] and result.skipped_libraries == 0
     assert not _there(env, stray) and _there(env, crop)

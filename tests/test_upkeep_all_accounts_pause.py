@@ -87,17 +87,18 @@ def test_the_trash_is_emptied_only_in_the_accounts_not_paused():
 
 def test_files_are_cleaned_up_only_in_the_accounts_not_paused(tmp_path):
     from src.server.search import cleanup
+    from src.server.storage.local import LocalStorage
+    from tests.stored_in import stored_in
 
     for t in (PAUSED, BROKEN, RUNNING):
         (tmp_path / t).mkdir()
     done: list[str] = []
 
-    def for_tenant(data_dir, tenant_id, session, *, dry_run):
+    def for_tenant(tenant_id, session, *, dry_run):
         done.append(tenant_id)
         return cleanup.CleanupResult(orphan_files=1)
 
-    with _accounts(), patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))), \
-            patch.object(cleanup, "run_cleanup_for_tenant", for_tenant):
+    with _accounts(), stored_in(LocalStorage(str(tmp_path))), patch.object(cleanup, "run_cleanup_for_tenant", for_tenant):
         result = cleanup.run_cleanup_all_tenants(dry_run=False)
         assert done == [RUNNING] and result.orphan_files == 1
         assert result.paused and result.paused_tenants == [PAUSED]

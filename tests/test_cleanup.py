@@ -1,718 +1,389 @@
-"""Tests for filesystem cleanup logic (src/search/cleanup.py)."""
+"""The daily sweep (src/server/search/cleanup.py): the stored files no row
+names, removed through the Store a library at a time, and the folders the
+database doesn't list, reported (src/server/storage/folders.py).
 
+Over a real FileStore in the test's folder. The account's database is a
+stand-in answering the sweep's queries; the real one: test_artifact_leaks.py,
+test_analysis_proxy_api.py, test_processing_pause_api.py.
+"""
+
+from __future__ import annotations
+
+import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.server.search.cleanup import (
     CleanupResult,
-    _MAX_DELETE_FRACTION,
-    _MIN_AGE_SECONDS,
-    _file_age_seconds,
-    _list_subdirs,
-    _walk_files,
+    remove_orphan_folders,
+    run_cleanup_all_tenants,
     run_cleanup_for_tenant,
+    run_cleanup_single_tenant,
 )
+from src.server.storage import store as stored
+from src.server.storage.files import PARTIAL
+from src.server.storage.local import LocalStorage
+from src.shared import previews_location
+from tests.stored_in import stored_in
+
+pytestmark = pytest.mark.fast
+
+T, LIB, OWN = "ten_AAAA", "lib_BBBB", "lib_OWN"
+OLD = 7200  # seconds: past the sweep's hour
 
 
-# ---------------------------------------------------------------------------
-# Helper: build a fake on-disk layout
-# ---------------------------------------------------------------------------
-
-def _make_file(path: Path, content: bytes = b"x", age_seconds: float = 7200) -> None:
-    """Create a file and set its mtime to `age_seconds` ago."""
+def _put(root: Path, key: str, body: bytes = b"x", *, age: float = OLD) -> Path:
+    path = root / key
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    old_time = time.time() - age_seconds
-    import os
-    os.utime(path, (old_time, old_time))
+    path.write_bytes(body)
+    then = time.time() - age
+    os.utime(path, (then, then))
+    return path
 
 
-def _setup_library_dir(
-    data_dir: Path,
-    tenant_id: str,
-    library_id: str,
-    proxy_keys: list[str],
-    *,
-    age_seconds: float = 7200,
-) -> None:
-    """Create proxy files on disk under data_dir/tenant_id/library_id/proxies/."""
-    for key in proxy_keys:
-        _make_file(data_dir / key, age_seconds=age_seconds)
+def _proxy(name: object, library_id: str = LIB, tenant_id: str = T) -> str:
+    return f"{tenant_id}/{library_id}/proxies/00/ast_{name}_photo.webp"
 
 
-# ---------------------------------------------------------------------------
-# Unit tests for helpers
-# ---------------------------------------------------------------------------
+class _Db:
+    """An account's database as the sweep asks it: its libraries, and each
+    one's keys (any of the clip's key columns), scenes and faces."""
 
-@pytest.mark.fast
-def test_list_subdirs(tmp_path: Path) -> None:
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
-    (tmp_path / "file.txt").write_text("x")
-    result = _list_subdirs(tmp_path)
-    assert sorted(result) == ["a", "b"]
+    def __init__(self, libraries, *, keys=None, scenes=None, faces=None, assets=(), listed_later=(),
+                 broken=False) -> None:
+        self.libraries = list(libraries)
+        self.keys = keys or {}
+        self.scenes = scenes or {}
+        self.faces = faces or {}
+        self.assets = list(assets)
+        self.listed_later = set(listed_later)  # found by the check just before a removal
+        self.broken = broken  # the clips' keys can't be read
 
-
-@pytest.mark.fast
-def test_list_subdirs_missing_dir() -> None:
-    result = _list_subdirs(Path("/nonexistent"))
-    assert result == []
-
-
-@pytest.mark.fast
-def test_walk_files(tmp_path: Path) -> None:
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "a.txt").write_text("x")
-    (tmp_path / "sub" / "b.txt").write_text("y")
-    result = _walk_files(tmp_path)
-    names = sorted(f.name for f in result)
-    assert names == ["a.txt", "b.txt"]
-
-
-@pytest.mark.fast
-def test_walk_files_missing_dir() -> None:
-    result = _walk_files(Path("/nonexistent"))
-    assert result == []
-
-
-@pytest.mark.fast
-def test_file_age_seconds(tmp_path: Path) -> None:
-    f = tmp_path / "test.txt"
-    f.write_text("x")
-    age = _file_age_seconds(f)
-    assert 0 <= age < 5  # just created
-
-
-# ---------------------------------------------------------------------------
-# Cleanup for a single tenant
-# ---------------------------------------------------------------------------
-
-def _mock_session_with_libraries(library_ids: list[str], asset_keys: dict[str, list[str]]):
-    """Build a mock Session that returns library_ids and asset keys.
-
-    asset_keys: {library_id: [key1, key2, ...]}
-    """
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-
-        if "FROM libraries" in sql:
-            rows = [MagicMock(**{"__getitem__": lambda self, i, lid=lid: lid}) for lid in library_ids]
-            # Make row[0] return library_id
-            for row, lid in zip(rows, library_ids):
-                row.__getitem__ = lambda self, i, lid=lid: lid
-            result.fetchall.return_value = rows
-        elif "FROM assets" in sql:
-            lib_id = params.get("lib_id", "") if params else ""
-            keys = asset_keys.get(lib_id, [])
-            rows = []
-            for key in keys:
-                row = MagicMock()
-                row.__iter__ = lambda self, k=key: iter([k, None, None])
-                rows.append(row)
-            result.fetchall.return_value = rows
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-
-        return result
-
-    session.execute.side_effect = execute_side_effect
-    return session
-
-
-@pytest.mark.fast
-def test_cleanup_no_orphans(tmp_path: Path) -> None:
-    """All files on disk have matching DB keys — nothing to delete."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    key = f"{tenant_id}/{library_id}/proxies/00/ast_CCCC_photo.webp"
-
-    _setup_library_dir(tmp_path, tenant_id, library_id, [key])
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            row = MagicMock()
-            row.__iter__ = lambda self: iter([key, None, None])
-            result.fetchall.return_value = [row]
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
-
-    assert result.orphan_files == 0
-    assert result.orphan_folders == []
-    assert result.bytes_freed == 0
-    # File still exists
-    assert (tmp_path / key).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_orphan_file_dry_run(tmp_path: Path) -> None:
-    """An orphan file is detected in dry-run but not deleted."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    orphan_key = f"{tenant_id}/{library_id}/proxies/00/ast_ORPHAN_photo.webp"
-    known_key = f"{tenant_id}/{library_id}/proxies/00/ast_KNOWN_photo.webp"
-
-    # Put both files on disk
-    _setup_library_dir(tmp_path, tenant_id, library_id, [orphan_key, known_key])
-    # Also create some more known files to stay under the 25% threshold
-    for i in range(10):
-        extra_key = f"{tenant_id}/{library_id}/proxies/00/ast_KNOWN{i}_photo.webp"
-        _setup_library_dir(tmp_path, tenant_id, library_id, [extra_key])
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            # Only known_key and the extras are in DB — orphan_key is missing
-            db_keys = [known_key] + [
-                f"{tenant_id}/{library_id}/proxies/00/ast_KNOWN{i}_photo.webp"
-                for i in range(10)
-            ]
-            rows = []
-            for k in db_keys:
-                row = MagicMock()
-                row.__iter__ = lambda self, k=k: iter([k, None, None])
-                rows.append(row)
-            result.fetchall.return_value = rows
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
-
-    assert result.orphan_files == 1
-    assert result.bytes_freed > 0
-    # File still exists (dry-run)
-    assert (tmp_path / orphan_key).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_orphan_file_execute(tmp_path: Path) -> None:
-    """An orphan file is actually deleted when dry_run=False."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    orphan_key = f"{tenant_id}/{library_id}/proxies/00/ast_ORPHAN_photo.webp"
-
-    # Create enough known files to keep orphan under 25%
-    known_keys = [
-        f"{tenant_id}/{library_id}/proxies/00/ast_KNOWN{i}_photo.webp"
-        for i in range(10)
-    ]
-    all_keys = [orphan_key] + known_keys
-    _setup_library_dir(tmp_path, tenant_id, library_id, all_keys)
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            rows = []
-            for k in known_keys:
-                row = MagicMock()
-                row.__iter__ = lambda self, k=k: iter([k, None, None])
-                rows.append(row)
-            result.fetchall.return_value = rows
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 1
-    assert not (tmp_path / orphan_key).exists()
-    # Known files still exist
-    for k in known_keys:
-        assert (tmp_path / k).exists()
-
-
-def _lib_dir(data_dir: Path, tenant_id: str, lib: str) -> Path:
-    _make_file(data_dir / tenant_id / lib / "proxies" / "00" / "ast_X_photo.webp", content=b"xyz")
-    return data_dir / tenant_id / lib
-
-
-def _session(listed: list[str], *, listed_later: tuple[str, ...] = ()) -> MagicMock:
-    """A tenant session listing `listed`; listed_later are found by the check just before removal."""
-    session = MagicMock()
-
-    def execute(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
+    def execute(self, sql, params=None):
+        sql, params = str(sql), params or {}
+        library_id = params.get("lib_id")
         if "WHERE library_id = :id" in sql:
-            result.first.return_value = (1,) if params["id"] in listed or params["id"] in listed_later else None
+            listed = params["id"] in self.libraries or params["id"] in self.listed_later
+            return SimpleNamespace(first=lambda: (1,) if listed else None)
+        if "FROM video_scenes" in sql:
+            rows = self.scenes.get(library_id, [])
+        elif "FROM faces" in sql:
+            rows = self.faces.get(library_id, [])
+        elif "proxy_key" in sql:
+            if self.broken:
+                raise RuntimeError("DB connection lost")
+            rows = [(key, None, None, None) for key in self.keys.get(library_id, [])]
+        elif "FROM assets" in sql:
+            rows = [(a,) for a in self.assets]
         elif "FROM libraries" in sql:
-            result.fetchall.return_value = [(lib,) for lib in listed]
+            rows = [(lib,) for lib in self.libraries]
         else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute
-    return session
+            raise AssertionError(f"A query the sweep doesn't make: {sql}")
+        return SimpleNamespace(fetchall=lambda: rows)
 
 
-@pytest.mark.fast
-def test_cleanup_reports_library_dirs_the_db_doesnt_list_and_keeps_them(tmp_path: Path, caplog) -> None:
+@pytest.fixture
+def data(tmp_path) -> Iterator[Path]:
+    """The install's DATA_DIR, where its previews are; Upkeep isn't paused (test_processing_pause_api.py)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    with stored_in(LocalStorage(str(data))), patch("src.server.search.cleanup._paused", return_value=False):
+        yield data
+
+
+@pytest.fixture
+def drive(data, tmp_path) -> Path:
+    """OWN's folder of its own, on a drive that's plugged in."""
+    drive = tmp_path / "Volumes" / "Clips"
+    drive.mkdir(parents=True)
+    (drive / previews_location.MARKER).write_text("")
+    previews_location.write(data, data, None, libraries={OWN: drive})
+    return drive
+
+
+@contextmanager
+def _accounts(dbs: dict[str, _Db]):
+    """The control plane lists these accounts, each with its database."""
+
+    @contextmanager
+    def tenant_session(tenant_id):
+        yield dbs[tenant_id]
+
+    repo = MagicMock()
+    repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id=t) for t in dbs]
+    with (
+        patch("src.server.database.get_control_session"),
+        patch("src.server.database.get_tenant_session", tenant_session),
+        patch("src.server.repository.control_plane.TenantRepository", repo),
+    ):
+        yield
+
+
+# -- Files no row names ------------------------------------------------------------
+
+
+def test_the_files_rows_name_stay(data):
+    keys = [_proxy(n) for n in range(3)]
+    for key in keys:
+        _put(data, key)
+    assert run_cleanup_for_tenant(T, _Db([LIB], keys={LIB: keys}), dry_run=False) == CleanupResult()
+    assert all((data / key).exists() for key in keys)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_file_no_row_names_goes(data, dry_run):
+    known = [_proxy(n) for n in range(10)]
+    for key in known:
+        _put(data, key)
+    orphan = _put(data, _proxy("ORPHAN"), b"orphan")
+
+    result = run_cleanup_for_tenant(T, _Db([LIB], keys={LIB: known}), dry_run=dry_run)
+
+    assert (result.orphan_files, result.bytes_freed, result.errors) == (1, 6, [])
+    assert orphan.exists() is dry_run
+    assert all((data / key).exists() for key in known)
+
+
+def test_a_file_under_an_hour_old_stays(data):
+    """It may be mid-ingest: written before its row."""
+    known = [_proxy(n) for n in range(10)]
+    for key in known:
+        _put(data, key)
+    new = _put(data, _proxy("NEW"), age=10)
+    assert run_cleanup_for_tenant(T, _Db([LIB], keys={LIB: known}), dry_run=False).orphan_files == 0
+    assert new.exists()
+
+
+def test_a_library_over_a_quarter_of_whose_files_would_go_is_skipped(data):
+    orphans = [_put(data, _proxy(f"O{n}")) for n in range(4)]
+    result = run_cleanup_for_tenant(T, _Db([LIB]), dry_run=False)
+    assert (result.orphan_files, result.skipped_libraries) == (0, 1)
+    [error] = result.errors
+    assert "safety threshold" in error and LIB in error
+    assert all(p.exists() for p in orphans)
+
+
+def test_a_library_whose_rows_can_t_be_read_is_skipped(data):
+    path = _put(data, _proxy(1))
+    result = run_cleanup_for_tenant(T, _Db([LIB], broken=True), dry_run=False)
+    assert (result.orphan_files, result.skipped_libraries) == (0, 1)
+    assert path.exists()
+
+
+def test_a_trashed_library_s_files_stay(data):
+    """A trashed library still has its row, and its clips theirs."""
+    key = _proxy(1, "lib_TRASHED")
+    _put(data, key)
+    result = run_cleanup_for_tenant(T, _Db(["lib_TRASHED"], keys={"lib_TRASHED": [key]}), dry_run=False)
+    assert result == CleanupResult()
+    assert (data / key).exists()
+
+
+def test_only_what_lumiverb_keeps_under_a_library_is_looked_at(data):
+    known = [_proxy(n) for n in range(4)]
+    for key in known:
+        _put(data, key)
+    strays = [_put(data, f"{T}/{LIB}/notes.txt"), _put(data, f"{T}/{LIB}/other/00/x.webp"),
+              _put(data, f"{T}/random_dir/file.txt")]
+    result = run_cleanup_for_tenant(T, _Db([LIB], keys={LIB: known}), dry_run=False)
+    assert result == CleanupResult()
+    assert all(p.exists() for p in strays)
+
+
+def test_every_kind_is_looked_at_and_scene_frames_and_crops_are_known_by_their_rows(data):
+    """Scene frames and face crops are named by no column of a clip's: the
+    sweep makes their keys from the scene's and the face's rows
+    (store.scene_rep_key, store.face_crop_key)."""
+    asset_x, asset_y = "ast_01HX0000000000000000000001", "ast_01HY0000000000000000000002"
+    face = "face_01HY0000000000000000000002"
+    named = [stored.proxy_key(T, LIB, asset_x, "photo.jpg"), stored.thumbnail_key(T, LIB, asset_x, "photo.jpg"),
+             stored.video_preview_key(T, LIB, asset_y, "video.mp4"),
+             stored.analysis_proxy_key(T, LIB, asset_y, "video.mp4")]
+    made = [stored.scene_rep_key(T, LIB, asset_y, 1000), stored.face_crop_key(T, LIB, face)]
+    orphans = [stored.thumbnail_key(T, LIB, asset_x, "orphan.jpg"),
+               stored.face_crop_key(T, LIB, "face_01HZ0000000000000000000009")]
+    for key in [*named, *made, *orphans]:
+        _put(data, key)
+    assert {stored.kind_of(k) for k in [*named, *made]} == set(stored.KINDS)
+
+    db = _Db([LIB], keys={LIB: named}, scenes={LIB: [(asset_y, 1000, None, None)]}, faces={LIB: [(face, None)]})
+    result = run_cleanup_for_tenant(T, db, dry_run=False)
+
+    assert result.orphan_files == 2, result.errors
+    assert not any((data / k).exists() for k in orphans)
+    assert all((data / k).exists() for k in [*named, *made])
+
+
+def test_scene_frames_no_column_names_are_never_taken_for_orphans(data):
+    """Regression: before the sweep made scene frames' keys, every one was
+    flagged; 3 of 20 is under the cap, so they'd have gone."""
+    asset_id = "ast_01HZ0000000000000000000003"
+    frames = [stored.scene_rep_key(T, LIB, asset_id, ms) for ms in (1000, 5000, 9000)]
+    proxies = [stored.proxy_key(T, LIB, asset_id, f"x{i}.jpg") for i in range(17)]
+    for key in frames + proxies:
+        _put(data, key)
+    db = _Db([LIB], keys={LIB: proxies}, scenes={LIB: [(asset_id, ms, None, None) for ms in (1000, 5000, 9000)]})
+    result = run_cleanup_for_tenant(T, db, dry_run=False)
+    assert (result.orphan_files, result.skipped_libraries) == (0, 0), result.errors
+    assert all((data / k).exists() for k in frames)
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_write_a_crash_left_goes_once_it_s_an_hour_old(data, dry_run):
+    """A write that ends removes its partial file (files.PARTIAL), and no
+    listing shows one: one an hour untouched was left by a crash."""
+    known = [_proxy(n) for n in range(4)]
+    for key in known:
+        _put(data, key)
+    left = _put(data, f"{T}/{LIB}/analysis/00/{PARTIAL}0123456789abcdef.mp4", b"half")
+    writing = _put(data, f"{T}/{LIB}/analysis/00/{PARTIAL}fedcba9876543210.mp4", b"half", age=10)
+
+    result = run_cleanup_for_tenant(T, _Db([LIB], keys={LIB: known}), dry_run=dry_run)
+
+    assert (result.orphan_files, result.bytes_freed) == (1, 4)
+    assert left.exists() is dry_run and writing.exists()
+
+
+# -- A library's folder of its own ---------------------------------------------------
+
+
+def test_a_library_with_a_folder_of_its_own_is_swept_there(data, drive):
+    own, ours = [_proxy(n, OWN) for n in range(10)], [_proxy(n) for n in range(10)]
+    for key in own:
+        _put(drive, key)
+    for key in ours:
+        _put(data, key)
+    orphans = [_put(drive, _proxy("ORPHAN", OWN)), _put(data, _proxy("ORPHAN"))]
+
+    result = run_cleanup_for_tenant(T, _Db([LIB, OWN], keys={LIB: ours, OWN: own}), dry_run=False)
+
+    assert (result.orphan_files, result.errors) == (2, [])
+    assert not any(p.exists() for p in orphans)
+    assert all((drive / k).exists() for k in own) and all((data / k).exists() for k in ours)
+
+
+def test_a_library_whose_drive_isn_t_plugged_in_is_skipped_and_says_so(data, drive):
+    """Nothing on a drive that isn't there is taken for orphaned; the other
+    libraries are swept as ever."""
+    own, ours = [_proxy(n, OWN) for n in range(10)], [_proxy(n) for n in range(10)]
+    for key in own:
+        _put(drive, key)
+    for key in ours:
+        _put(data, key)
+    theirs, mine = _put(drive, _proxy("ORPHAN", OWN)), _put(data, _proxy("ORPHAN"))
+    (drive / previews_location.MARKER).unlink()
+
+    result = run_cleanup_for_tenant(T, _Db([LIB, OWN], keys={LIB: ours, OWN: own}), dry_run=False)
+
+    assert result.errors == [f"Skipped library {OWN}: its previews can't be reached now (is its drive plugged in?)"]
+    assert (result.orphan_files, result.skipped_libraries) == (1, 1)
+    assert not mine.exists() and theirs.exists()
+    (drive / previews_location.MARKER).write_text("")
+    assert all((drive / k).exists() for k in own)
+
+
+def test_one_library_is_swept_alone(data, drive):
+    _put(drive, _proxy("ORPHAN", OWN))
+    for n in range(10):
+        _put(drive, _proxy(n, OWN))
+    mine = _put(data, _proxy("ORPHAN"))
+    _put(data, f"{T}/lib_GONE/proxies/00/ast_1_photo.webp")
+    db = _Db([LIB, OWN], keys={OWN: [_proxy(n, OWN) for n in range(10)]})
+
+    result = run_cleanup_single_tenant(T, db, dry_run=False, library_id=OWN)
+
+    assert (result.orphan_files, result.orphan_folders, result.errors) == (1, [], [])
+    assert mine.exists(), "another library's are left for its own run"
+
+
+# -- Folders the database doesn't list -------------------------------------------------
+
+
+def test_library_folders_the_database_doesn_t_list_are_reported_and_kept(data, caplog):
     """A database restored from an older backup (or empty) lists none of the
     newer libraries: their folders are reported, never removed (Robert)."""
-    from src.server.search.cleanup import run_cleanup_single_tenant
+    paths = [_put(data, _proxy("X", lib), b"xyz") for lib in ("lib_A", "lib_B")]
 
-    tenant_id = "ten_AAAA"
-    dirs = [_lib_dir(tmp_path, tenant_id, lib) for lib in ("lib_A", "lib_B")]
+    with caplog.at_level("WARNING", logger="src.server.search.cleanup"):
+        result = run_cleanup_single_tenant(T, _Db([]), dry_run=False)
 
-    with (
-        patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))),
-        patch("src.server.search.cleanup._paused", return_value=False),
-        caplog.at_level("WARNING", logger="src.server.search.cleanup"),
-    ):
-        result = run_cleanup_single_tenant(tenant_id, _session([]), dry_run=False)
-
-    assert all(d.exists() for d in dirs)
+    assert all(p.exists() for p in paths)
     assert sorted((f["folder_id"], f["path"], f["bytes"]) for f in result.orphan_folders) == [
-        ("lib_A", f"{tenant_id}/lib_A", 3), ("lib_B", f"{tenant_id}/lib_B", 3)]
+        ("lib_A", f"{T}/lib_A", 3), ("lib_B", f"{T}/lib_B", 3)]
     assert all(f["newest_mtime"] for f in result.orphan_folders)
     [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert "2 folder(s)" in warning and "lib_A" in warning and "lib_B" in warning
 
 
-@pytest.mark.fast
-def test_cleanup_of_every_account_reports_account_dirs_the_db_doesnt_list(tmp_path: Path, caplog) -> None:
-    from types import SimpleNamespace
+def test_a_library_deleted_while_its_drive_was_away_is_reported_when_it_s_back(data, drive):
+    """Its folder stays, and its choice (move.forget_library): when the drive
+    is back the sweep reports it, and removing it takes the choice too."""
+    _put(drive, _proxy("X", OWN), b"xyz")
 
-    from src.server.search.cleanup import run_cleanup_all_tenants
+    result = run_cleanup_single_tenant(T, _Db([LIB]), dry_run=False)
+    assert [(f["folder_id"], f["path"], f["bytes"]) for f in result.orphan_folders] == [(OWN, f"{T}/{OWN}", 3)]
+    assert str(drive) not in str(result), "a folder is named by what it holds, never where it is"
 
-    for t in ("ten_A", "ten_B"):
-        _make_file(tmp_path / t / "x")
-    repo = MagicMock()
-    repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id="ten_B")]
-    with (
-        patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(tmp_path))),
-        patch("src.server.database.get_control_session"),
-        patch("src.server.database.get_tenant_session"),
-        patch("src.server.repository.control_plane.TenantRepository", repo),
-        patch("src.server.search.cleanup.run_cleanup_for_tenant",
-              return_value=CleanupResult(orphan_folders=[{"folder_id": "lib_Z", "path": "ten_B/lib_Z"}])),
-        patch("src.server.search.cleanup._paused", return_value=False),
-        caplog.at_level("WARNING", logger="src.server.search.cleanup"),
-    ):
+    out = remove_orphan_folders(tenant_id=T, session=_Db([LIB]), folder_ids=[OWN], dry_run=False)
+    assert [f["folder_id"] for f in out.removed] == [OWN] and out.errors == []
+    assert not (drive / T / OWN).exists()
+    assert previews_location.read(data).libraries == {}
+
+
+def test_a_linked_folder_is_neither_reported_nor_removed(data, tmp_path):
+    """A link in the previews folder is an operator's: nothing is ever removed through one."""
+    elsewhere = tmp_path / "elsewhere"
+    kept = _put(elsewhere, "proxies/00/ast_1_photo.webp")
+    (data / T).mkdir()
+    (data / T / "lib_LINK").symlink_to(elsewhere)
+    assert run_cleanup_single_tenant(T, _Db([]), dry_run=False).orphan_folders == []
+    out = remove_orphan_folders(tenant_id=T, session=_Db([]), folder_ids=["lib_LINK"], dry_run=False)
+    assert (out.removed, out.not_found) == ([], ["lib_LINK"])
+    assert kept.exists()
+
+
+def test_account_folders_the_control_plane_doesn_t_list_are_reported(data, caplog):
+    _put(data, "ten_A/x")
+    _put(data, _proxy(1, "lib_Z", "ten_B"))
+    with _accounts({"ten_B": _Db([])}), caplog.at_level("WARNING", logger="src.server.search.cleanup"):
         result = run_cleanup_all_tenants(dry_run=False)
-
-    assert sorted(f["folder_id"] for f in result.orphan_folders) == ["lib_Z", "ten_A"]
-    assert (tmp_path / "ten_A").exists()
+    assert sorted(f["path"] for f in result.orphan_folders) == ["ten_A", "ten_B/lib_Z"]
+    assert (data / "ten_A").exists() and (data / "ten_B" / "lib_Z").exists()
     assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1  # one per run
 
 
-@pytest.mark.fast
-def test_remove_orphan_folders_removes_only_what_is_named(tmp_path: Path) -> None:
-    from src.server.search.cleanup import remove_orphan_folders
+def test_remove_orphan_folders_removes_only_what_is_named(data):
+    gone, other, known = (_put(data, _proxy("X", lib), b"xyz") for lib in ("lib_GONE", "lib_OTHER", "lib_KNOWN"))
 
-    t = "ten_AAAA"
-    gone, other, known = (_lib_dir(tmp_path, t, lib) for lib in ("lib_GONE", "lib_OTHER", "lib_KNOWN"))
-
-    dry = remove_orphan_folders(tmp_path, tenant_id=t, session=_session(["lib_KNOWN"]),
-                                folder_ids=["lib_GONE"], dry_run=True)
+    dry = remove_orphan_folders(tenant_id=T, session=_Db(["lib_KNOWN"]), folder_ids=["lib_GONE"], dry_run=True)
     assert [f["folder_id"] for f in dry.removed] == ["lib_GONE"] and gone.exists()
 
-    out = remove_orphan_folders(tmp_path, tenant_id=t, session=_session(["lib_KNOWN"]),
+    out = remove_orphan_folders(tenant_id=T, session=_Db(["lib_KNOWN"]),
                                 folder_ids=["lib_GONE", "lib_KNOWN", "lib_NOPE"], dry_run=False)
     assert [f["folder_id"] for f in out.removed] == ["lib_GONE"] and out.bytes_freed == 3
     assert out.not_found == ["lib_KNOWN", "lib_NOPE"]
     assert not gone.exists() and other.exists() and known.exists()
 
 
-@pytest.mark.fast
-def test_remove_orphan_folders_checks_the_db_again_before_each(tmp_path: Path) -> None:
+def test_remove_orphan_folders_checks_the_database_again_before_each(data):
     """A library the database lists by the time its folder's turn comes is kept."""
-    from src.server.search.cleanup import remove_orphan_folders
-
-    t = "ten_AAAA"
-    a, b = _lib_dir(tmp_path, t, "lib_A"), _lib_dir(tmp_path, t, "lib_B")
-
-    out = remove_orphan_folders(tmp_path, tenant_id=t, session=_session([], listed_later=("lib_A",)),
-                                folder_ids=None, dry_run=False)
-
+    a, b = _put(data, _proxy("X", "lib_A")), _put(data, _proxy("X", "lib_B"))
+    out = remove_orphan_folders(tenant_id=T, session=_Db([], listed_later=("lib_A",)), folder_ids=None,
+                                dry_run=False)
     assert [f["folder_id"] for f in out.removed] == ["lib_B"]
     assert a.exists() and not b.exists()
 
 
-@pytest.mark.fast
-def test_remove_orphan_folders_of_every_account_takes_gone_accounts(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from src.server.search.cleanup import remove_orphan_folders
-
-    _make_file(tmp_path / "ten_GONE" / "x")
-    _lib_dir(tmp_path, "ten_LIVE", "lib_KNOWN")
-    repo = MagicMock()
-    repo.return_value.list_all.return_value = [SimpleNamespace(tenant_id="ten_LIVE")]
-    tenant_session = MagicMock()
-    tenant_session.return_value.__enter__.return_value = _session(["lib_KNOWN"])
-    with (
-        patch("src.server.database.get_control_session"),
-        patch("src.server.database.get_tenant_session", tenant_session),
-        patch("src.server.repository.control_plane.TenantRepository", repo),
-    ):
-        out = remove_orphan_folders(tmp_path, tenant_id=None, session=None, folder_ids=None, dry_run=False)
-
+def test_remove_orphan_folders_of_every_account_takes_gone_accounts(data):
+    _put(data, "ten_GONE/x")
+    kept = _put(data, _proxy("X", "lib_KNOWN", "ten_LIVE"))
+    with _accounts({"ten_LIVE": _Db(["lib_KNOWN"])}):
+        out = remove_orphan_folders(tenant_id=None, session=None, folder_ids=None, dry_run=False)
     assert [f["folder_id"] for f in out.removed] == ["ten_GONE"]
-    assert not (tmp_path / "ten_GONE").exists() and (tmp_path / "ten_LIVE" / "lib_KNOWN").exists()
-
-
-@pytest.mark.fast
-def test_cleanup_skips_new_files(tmp_path: Path) -> None:
-    """Files newer than the age threshold are not deleted."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    new_orphan = f"{tenant_id}/{library_id}/proxies/00/ast_NEW_photo.webp"
-
-    # Create file with age = 10 seconds (below 1hr threshold)
-    _setup_library_dir(tmp_path, tenant_id, library_id, [new_orphan], age_seconds=10)
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            result.fetchall.return_value = []  # no assets in DB
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 0
-    # File still exists because it's too new
-    assert (tmp_path / new_orphan).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_safety_cap_aborts_library(tmp_path: Path) -> None:
-    """If >25% of files would be deleted, skip the library."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-
-    # Create 4 files, all orphans (100% > 25%)
-    orphan_keys = [
-        f"{tenant_id}/{library_id}/proxies/00/ast_ORPHAN{i}_photo.webp"
-        for i in range(4)
-    ]
-    _setup_library_dir(tmp_path, tenant_id, library_id, orphan_keys)
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            result.fetchall.return_value = []  # none in DB
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 0  # nothing deleted
-    assert result.skipped_libraries == 1
-    assert len(result.errors) == 1
-    assert "safety threshold" in result.errors[0]
-    # All files still exist
-    for k in orphan_keys:
-        assert (tmp_path / k).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_db_error_skips_library(tmp_path: Path) -> None:
-    """If DB query fails for a library, it is skipped."""
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    key = f"{tenant_id}/{library_id}/proxies/00/ast_X_photo.webp"
-    _setup_library_dir(tmp_path, tenant_id, library_id, [key])
-
-    call_count = 0
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        nonlocal call_count
-        call_count += 1
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-            return result
-        elif "FROM assets" in sql:
-            raise RuntimeError("DB connection lost")
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 0
-    assert result.skipped_libraries == 1
-    assert (tmp_path / key).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_trashed_library_preserved(tmp_path: Path) -> None:
-    """A trashed library still has a DB row, so its dir should NOT be deleted."""
-    tenant_id = "ten_AAAA"
-    trashed_lib = "lib_TRASHED"
-    key = f"{tenant_id}/{trashed_lib}/proxies/00/ast_X_photo.webp"
-    _setup_library_dir(tmp_path, tenant_id, trashed_lib, [key])
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            # Trashed library still appears in DB
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: trashed_lib
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            row = MagicMock()
-            row.__iter__ = lambda self: iter([key, None, None])
-            result.fetchall.return_value = [row]
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = []
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_folders == []
-    assert result.orphan_files == 0
-    assert (tmp_path / key).exists()
-
-
-@pytest.mark.fast
-def test_cleanup_no_tenant_dir(tmp_path: Path) -> None:
-    """If tenant dir doesn't exist on disk, returns empty result."""
-    session = MagicMock()
-    result = run_cleanup_for_tenant(tmp_path, "ten_NONEXISTENT", session, dry_run=True)
-    assert result == CleanupResult()
-
-
-@pytest.mark.fast
-def test_cleanup_ignores_non_lib_dirs(tmp_path: Path) -> None:
-    """Directories not starting with lib_ are ignored."""
-    tenant_id = "ten_AAAA"
-    (tmp_path / tenant_id / "random_dir").mkdir(parents=True)
-    (tmp_path / tenant_id / "random_dir" / "file.txt").write_text("x")
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_folders == []
-    assert (tmp_path / tenant_id / "random_dir" / "file.txt").exists()
-
-
-@pytest.mark.fast
-def test_cleanup_handles_multiple_artifact_types(tmp_path: Path) -> None:
-    """Cleanup checks proxies, thumbnails, previews, and scenes subdirs.
-
-    Critically, scene_rep JPGs (under /scenes/) are not stored in any DB column —
-    they live at a deterministic path derived from (tenant_id, library_id,
-    asset_id, rep_frame_ms) by LocalStorage.scene_rep_key(). Cleanup must
-    compute that path from video_scenes rows and treat the file as expected.
-    A previous version of this test stuffed the scene path into the
-    video_scenes.proxy_key column slot, which masked a bug where cleanup had
-    no idea about scene_rep JPGs at all.
-    """
-    from src.server.storage.local import LocalStorage
-
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    # Real ULIDs — scene_rep_key() decodes them for bucketing.
-    asset_x = "ast_01HX0000000000000000000001"
-    asset_y = "ast_01HY0000000000000000000002"
-    rep_frame_ms = 1000
-
-    storage = LocalStorage(str(tmp_path))
-    proxy_key = storage.proxy_key(tenant_id, library_id, asset_x, "photo.jpg")
-    thumb_key = storage.thumbnail_key(tenant_id, library_id, asset_x, "photo.jpg")
-    preview_key = storage.video_preview_key(tenant_id, library_id, asset_y, "video.mp4")
-    scene_key = storage.scene_rep_key(tenant_id, library_id, asset_y, rep_frame_ms)
-    orphan_key = storage.thumbnail_key(tenant_id, library_id, asset_x, "orphan.jpg")
-    # Force the orphan key into a different filename so it's distinct from thumb_key.
-    assert orphan_key != thumb_key
-
-    all_keys = [proxy_key, thumb_key, preview_key, scene_key, orphan_key]
-    _setup_library_dir(tmp_path, tenant_id, library_id, all_keys)
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            # Real assets row shape: (proxy_key, thumbnail_key, video_preview_key)
-            result.fetchall.return_value = [
-                (proxy_key, thumb_key, preview_key),
-            ]
-        elif "FROM video_scenes" in sql:
-            # Real video_scenes row shape after the cleanup fix:
-            # (asset_id, rep_frame_ms, proxy_key, thumbnail_key)
-            # The scene_rep JPG path is NOT in this row — cleanup must
-            # compute it itself via storage.scene_rep_key(...).
-            result.fetchall.return_value = [
-                (asset_y, rep_frame_ms, None, None),
-            ]
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 1, (
-        f"expected exactly 1 orphan but got {result.orphan_files}; "
-        f"scene_rep JPG may have been mis-classified as orphan"
-    )
-    assert not (tmp_path / orphan_key).exists()
-    for k in [proxy_key, thumb_key, preview_key, scene_key]:
-        assert (tmp_path / k).exists(), f"{k} should not have been deleted"
-
-
-@pytest.mark.fast
-def test_cleanup_preserves_scene_rep_jpgs(tmp_path: Path) -> None:
-    """Regression: a scene_rep JPG with a matching video_scenes row must not
-    be flagged as orphaned, even though no DB column stores its path.
-
-    Before the fix to _get_expected_keys_for_library, this test would have
-    failed: cleanup had no awareness of scene_rep JPG paths and would have
-    flagged every one of them. The bug was hidden in production by an
-    unrelated bug in artifacts.py that accidentally stored the scene path in
-    assets.video_preview_key, putting it in the expected-keys set by accident.
-    """
-    from src.server.storage.local import LocalStorage
-
-    tenant_id = "ten_AAAA"
-    library_id = "lib_BBBB"
-    asset_id = "ast_01HZ0000000000000000000003"
-    storage = LocalStorage(str(tmp_path))
-
-    # Three scene_rep JPGs + enough proxies so that *if* the JPGs were
-    # mis-flagged as orphans, the 25% safety cap would not save them
-    # (3 / 20 = 15% < 25%) and they would actually be deleted.
-    rep_frame_msses = [1000, 5000, 9000]
-    scene_keys = [
-        storage.scene_rep_key(tenant_id, library_id, asset_id, ms)
-        for ms in rep_frame_msses
-    ]
-    proxy_keys = [
-        storage.proxy_key(tenant_id, library_id, asset_id, f"x{i}.jpg")
-        for i in range(17)
-    ]
-    _setup_library_dir(tmp_path, tenant_id, library_id, scene_keys + proxy_keys)
-
-    session = MagicMock()
-
-    def execute_side_effect(stmt, params=None):
-        result = MagicMock()
-        sql = str(stmt.text if hasattr(stmt, "text") else stmt)
-        if "FROM libraries" in sql:
-            row = MagicMock()
-            row.__getitem__ = lambda self, i: library_id
-            result.fetchall.return_value = [row]
-        elif "FROM assets" in sql:
-            # All proxy keys are tracked; no preview/thumbnail.
-            result.fetchall.return_value = [(k, None, None) for k in proxy_keys]
-        elif "FROM video_scenes" in sql:
-            result.fetchall.return_value = [
-                (asset_id, ms, None, None) for ms in rep_frame_msses
-            ]
-        else:
-            result.fetchall.return_value = []
-        return result
-
-    session.execute.side_effect = execute_side_effect
-
-    result = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
-
-    assert result.orphan_files == 0, (
-        f"scene_rep JPGs were mis-classified as orphans: got {result.orphan_files}"
-    )
-    # Belt-and-braces: also assert the safety cap did not trip. Without the
-    # cleanup fix this assertion would also fail (the helper would skip the
-    # library because >25% of files would have been deleted).
-    assert result.skipped_libraries == 0, (
-        f"library skipped instead of recognising scene_rep JPGs: {result.errors}"
-    )
-    for k in scene_keys:
-        assert (tmp_path / k).exists(), f"scene_rep JPG was deleted: {k}"
+    assert not (data / "ten_GONE").exists() and kept.exists()

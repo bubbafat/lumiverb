@@ -705,7 +705,8 @@ def test_the_cleanup_job_sweeps_playback_cuts(tmp_path, dry_run):
         return MagicMock(fetchall=lambda: rows)
 
     session = MagicMock(execute=execute)
-    result = run_cleanup_for_tenant(tmp_path, "ten_1", session, dry_run=dry_run)
+    with stored_in(LocalStorage(str(tmp_path))):
+        result = run_cleanup_for_tenant("ten_1", session, dry_run=dry_run)
     assert result.orphan_files == 1
     left = sorted(p.name for p in folder.iterdir())
     assert left == sorted([f"{kept}_preview_1-2_5s.mp4"] + ([f"{gone}_preview_1-2_5s.mp4"] if dry_run else []))

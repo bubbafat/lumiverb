@@ -68,7 +68,7 @@ class SearchSyncResult(BaseModel):
 class OrphanFolder(BaseModel):
     """A library or account folder the database doesn't list."""
     folder_id: str
-    path: str  # under DATA_DIR
+    path: str  # the account, or account/library: never where it is
     bytes: int = 0
     newest_mtime: str | None = None
 
@@ -632,16 +632,12 @@ def remove_orphan_folders(body: RemoveOrphanFoldersRequest, scope: Scope) -> Rem
     from src.server.search import cleanup
 
     require_scope(body.folder_ids is not None, body.all, "folder_ids")
-    data_dir, why_not = cleanup.previews_folder()
-    if data_dir is None:
-        return RemoveOrphanFoldersResult(errors=[why_not], dry_run=body.dry_run)
     ids = None if body.all else body.folder_ids
     if scope.all_tenants:
-        out = cleanup.remove_orphan_folders(data_dir, tenant_id=None, session=None, folder_ids=ids,
-                                            dry_run=body.dry_run)
+        out = cleanup.remove_orphan_folders(tenant_id=None, session=None, folder_ids=ids, dry_run=body.dry_run)
     else:
         with _tenant_session(scope) as session:
-            out = cleanup.remove_orphan_folders(data_dir, tenant_id=scope.tenant_id, session=session,
+            out = cleanup.remove_orphan_folders(tenant_id=scope.tenant_id, session=session,
                                                 folder_ids=ids, dry_run=body.dry_run)
     return RemoveOrphanFoldersResult(
         removed=[OrphanFolder(**f) for f in out.removed], not_found=out.not_found,

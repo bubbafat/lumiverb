@@ -317,13 +317,13 @@ def test_pausing_everything_else_leaves_upkeep_running(env):
 
 
 def test_while_upkeep_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_reports(env, tmp_path):
-    from unittest.mock import MagicMock, patch
-
     from src.server.search.cleanup import run_cleanup_single_tenant
+    from src.server.storage.local import LocalStorage
+    from tests.stored_in import stored_in
     from tests.test_lineage_api import _db
 
-    def run_cleanup_for_tenant(data_dir, tenant_id, session, *, dry_run):
-        with patch("src.server.config.get_settings", return_value=MagicMock(data_dir=str(data_dir))):
+    def run_cleanup_for_tenant(tenant_id, session, *, dry_run):
+        with stored_in(LocalStorage(str(tmp_path))):
             return run_cleanup_single_tenant(tenant_id, session, dry_run=dry_run)
 
     client, headers, *_ = env
@@ -334,15 +334,15 @@ def test_while_upkeep_is_paused_no_files_are_cleaned_up_but_a_dry_run_still_repo
     try:
         assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
         with _db(env) as session:
-            skipped = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False)
+            skipped = run_cleanup_for_tenant(tenant_id, session, dry_run=False)
             assert skipped.orphan_folders == [] and skipped.paused is True
             assert stray.exists()
-            dry = run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=True)
+            dry = run_cleanup_for_tenant(tenant_id, session, dry_run=True)
             assert [f["folder_id"] for f in dry.orphan_folders] == ["lib_gone"] and dry.paused is False
     finally:
         assert client.post("/v1/producers/upkeep/resume", json={"scope": "work"}, headers=headers).status_code == 204
     with _db(env) as session:  # reported, never removed by cleanup
-        assert len(run_cleanup_for_tenant(tmp_path, tenant_id, session, dry_run=False).orphan_folders) == 1
+        assert len(run_cleanup_for_tenant(tenant_id, session, dry_run=False).orphan_folders) == 1
     assert stray.exists()
 
 
