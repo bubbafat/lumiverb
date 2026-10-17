@@ -3,7 +3,8 @@ nginx listens on this machine only (as a new install does: it's set up
 there first), or for other devices too, over HTTPS alone.
 
 This machine's own browser keeps plain HTTP on WEB_PORT, on localhost. Other
-devices get HTTPS on a port of its own (WEB_TLS_PORT, else WEB_PORT + 1),
+devices get HTTPS on a port of its own (WEB_TLS_PORT, else 6443: never one
+of the install's others, which run checks),
 with the certificate tls.py serves (Lumiverb's own authority's, or one an
 admin gave); one that comes to WEB_PORT is sent there. The authority's
 certificate, for a device to trust, is at /lumiverb-ca.crt.
@@ -57,9 +58,25 @@ def set_other_devices(data_dir: Path, on: bool) -> None:
     os.replace(temporary, path)
 
 
-def tls_port(web_port: int, setting: str | int | None = None) -> int:
-    """Where other devices reach it over HTTPS: WEB_TLS_PORT, else WEB_PORT + 1."""
-    return int(setting) if setting not in (None, "", 0, "0") else web_port + 1
+# 6464's HTTPS. Not WEB_PORT + 1: that's a Mac install's API_PORT (init.py).
+DEFAULT_TLS_PORT = 6443
+
+
+def tls_port(setting: str | int | None = None) -> int:
+    """Where other devices reach it over HTTPS: WEB_TLS_PORT, else DEFAULT_TLS_PORT."""
+    return int(setting) if setting not in (None, "", 0, "0") else DEFAULT_TLS_PORT
+
+
+def tls_port_taken(env: dict[str, str], port: int) -> str | None:
+    """Which of the install's other ports the HTTPS one is too, or None:
+    nginx and that one can't both listen there (a Mac lets both bind, and
+    then this machine's own connections reach the other)."""
+    from sqlalchemy import make_url
+
+    others = {"WEB_PORT": env.get("WEB_PORT"), "API_PORT": env.get("API_PORT")}
+    if url := env.get("CONTROL_PLANE_DATABASE_URL"):
+        others["the database's port"] = str(make_url(url).port or "")
+    return next((name for name, value in others.items() if value and value.isdigit() and int(value) == port), None)
 
 
 def listen_lines(port: int, other_devices: bool, *, tls_port: int | None = None, served=None,

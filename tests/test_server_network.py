@@ -63,9 +63,15 @@ def test_this_machine_only_has_no_https_but_offers_the_authority(tmp_path):
     assert "location = /lumiverb-ca.crt" in lines
 
 
-def test_the_tls_port_is_the_setting_else_the_next_one():
-    assert network.tls_port(6464) == network.tls_port(6464, "") == network.tls_port(6464, "0") == 6465
-    assert network.tls_port(6464, "8443") == 8443
+def test_the_tls_port_is_the_setting_else_6443_and_never_another_of_its_ports():
+    assert network.tls_port() == network.tls_port("") == network.tls_port("0") == 6443
+    assert network.tls_port("8443") == 8443
+    mac = {"WEB_PORT": "6464", "API_PORT": "6465",
+           "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://u:p@127.0.0.1:6468/control_plane"}
+    assert network.tls_port_taken(mac, 6443) is None
+    assert network.tls_port_taken(mac, 6465) == "API_PORT", "a Mac's API: WEB_PORT + 1 was"
+    assert network.tls_port_taken(mac, 6464) == "WEB_PORT"
+    assert network.tls_port_taken(mac, 6468) == "the database's port"
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[]", '"yes"'])

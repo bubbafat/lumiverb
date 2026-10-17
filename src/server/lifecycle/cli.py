@@ -444,7 +444,10 @@ def _run(args: argparse.Namespace) -> int:
     # until an admin says other devices may use it.
     web_port = env.get("WEB_PORT", "")
     listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
-    tls_port = network.tls_port(int(web_port), env.get("WEB_TLS_PORT")) if listens else 0
+    tls_port = network.tls_port(env.get("WEB_TLS_PORT")) if listens else 0
+    if listens and (taken := network.tls_port_taken(env, tls_port)):
+        print(f"✗ WEB_TLS_PORT {tls_port} is also {taken}: set another in {named or 'the env file'}", file=sys.stderr)
+        return 1
     if listens:
         try:  # the certificate other devices are served (tls.py): made, or renewed, now
             network.apply(data, int(web_port), tls_port)
