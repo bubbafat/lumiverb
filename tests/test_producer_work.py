@@ -31,26 +31,20 @@ def _jpeg(size: int = 8) -> bytes:
     return buf.getvalue()
 
 
-def _cache(data: bytes | None) -> MagicMock:
-    cache = MagicMock()
-    cache.get.return_value = data
-    return cache
-
-
 # ---- CLIP ------------------------------------------------------------------
 
 
 def test_an_embedding_without_a_proxy_is_nothing() -> None:
     clip = MagicMock(model_id="clip", model_version="1")
-    assert embed(asset_id="a1", rel_path="x.jpg", clip_provider=clip, proxy_cache=_cache(None)) is None
-    assert embed(asset_id="a1", rel_path="x.jpg", clip_provider=clip, proxy_cache=None) is None
+    assert embed(asset_id="a1", rel_path="x.jpg", clip_provider=clip, preview=lambda: None) is None
+    assert embed(asset_id="a1", rel_path="x.jpg", clip_provider=clip, preview=lambda: None) is None
     clip.embed_image.assert_not_called()
 
 
 def test_an_embedding_is_its_proxys_vector() -> None:
     clip = MagicMock(model_id="clip", model_version="1")
     clip.embed_image.return_value = [0.1] * 4
-    assert embed(asset_id="a2", rel_path="hello.jpg", clip_provider=clip, proxy_cache=_cache(_jpeg())) == {
+    assert embed(asset_id="a2", rel_path="hello.jpg", clip_provider=clip, preview=lambda: _jpeg()) == {
         "asset_id": "a2", "model_id": "clip", "model_version": "1", "vector": [0.1] * 4}
 
 
@@ -60,12 +54,12 @@ def test_an_embedding_is_its_proxys_vector() -> None:
 def test_text_is_read_from_the_proxy(tmp_path: Path) -> None:
     ocr = MagicMock()
     ocr.extract_text.return_value = "STOP"
-    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, preview=lambda: _jpeg(4)) == {
         "asset_id": "a", "ocr_text": "STOP"}
 
 
 def test_no_proxy_reads_no_text(tmp_path: Path) -> None:
-    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), proxy_cache=_cache(None)) is None
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), preview=lambda: None) is None
 
 
 def test_an_image_that_cant_be_read_is_nothing_made_but_the_machines_fault_says_so(tmp_path: Path) -> None:
@@ -73,24 +67,25 @@ def test_an_image_that_cant_be_read_is_nothing_made_but_the_machines_fault_says_
 
     ocr = MagicMock()
     ocr.extract_text.side_effect = RuntimeError("model exploded")
-    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) is None
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, preview=lambda: _jpeg(4)) is None
     ocr.extract_text.side_effect = CaptionError("refused", endpoint_fault=True)
     with pytest.raises(CaptionError):
-        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4)))
+        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, preview=lambda: _jpeg(4))
 
 
 def test_this_machines_trouble_reading_text_goes_up(tmp_path: Path) -> None:
     """OSError (the disk) is a crash for the runner, not the guard's to judge."""
-    cache = _cache(_jpeg(4))
-    cache.get.side_effect = OSError(5, "Input/output error")
+    def preview() -> bytes:
+        raise OSError(5, "Input/output error")
+
     with pytest.raises(OSError):
-        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), proxy_cache=cache)
+        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), preview=preview)
 
 
 def test_no_text_is_empty_text(tmp_path: Path) -> None:
     ocr = MagicMock()
     ocr.extract_text.return_value = None
-    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, preview=lambda: _jpeg(4)) == {
         "asset_id": "a", "ocr_text": ""}
 
 

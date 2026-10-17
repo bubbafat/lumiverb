@@ -130,26 +130,29 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
         assert photo not in [i["asset_id"] for i in candidates(session, KINDS["vision"], [lib[2]])]
 
 
-def test_the_scheduler_reads_the_stored_analysis_proxy_where_the_api_keeps_it(env) -> None:
-    # Beside the API, sharing its database and disk: no second copy in its cache.
-    from src.server.scheduler.service import stored_analysis_proxy
+def test_a_job_reads_its_clips_files_from_the_store_by_the_keys_its_rows_carry(env) -> None:
+    """Beside the API (its database and disk): every kind's due clips carry
+    their stored preview's and analysis proxy's keys, and a job's inputs
+    read them from the Store: no lookup of its own, no cache asked, no copy."""
+    from src.server.scheduler.inputs import Inputs
+    from src.server.storage.store import get_store
     from tests.test_analysis_proxy_api import _ingest, _upload
 
-    with_proxy = _ingest(env, "stored/a.mov")
+    video = _ingest(env, "stored/a.mov")
     body = b"\x00\x00\x00\x18ftypmp42 stored here"
-    assert _upload(env, with_proxy, body).status_code == 200
-    without = _ingest(env, "stored/b.mov")
-    find = stored_analysis_proxy(env[4])
-    assert find(with_proxy).read_bytes() == body
-    assert find(without) is None
-
-
-def test_the_scheduler_reads_the_stored_preview_where_the_api_keeps_it(env) -> None:
-    # What CLIP, faces, OCR and descriptions see: the API's own file, no copy.
-    from src.server.scheduler.service import stored_preview
-    from tests.test_analysis_proxy_api import _ingest
-
-    clip = _ingest(env, "stored/c.jpg", media_type="image")
-    found = stored_preview(env[4])(clip)
-    assert found is not None and found.read_bytes()[8:12] == b"WEBP"
-    assert stored_preview(env[4])("ast_nothing_here") is None
+    assert _upload(env, video, body).status_code == 200
+    photo = _ingest(env, "stored/c.jpg", media_type="image")
+    rows: dict[str, dict] = {}
+    with _db(env) as session:
+        for kind in (k for k in KINDS.values() if not k.redo):
+            for row in candidates(session, kind, [env[2]], limit=10_000):
+                assert {"proxy_key", "analysis_proxy_key"} <= set(row), kind.name
+                rows.setdefault(row["asset_id"], row)
+    assert {video, photo} <= set(rows), "each is due for something"
+    acct = MagicMock()
+    inputs = Inputs(acct, get_store())
+    with inputs.analysis_proxy(rows[video]) as path:
+        assert path.read_bytes() == body
+    assert inputs.preview_bytes(rows[photo])[8:12] == b"WEBP"
+    acct.analysis_cache.get.assert_not_called()
+    acct.proxy_cache.assert_not_called()

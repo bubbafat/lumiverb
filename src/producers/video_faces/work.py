@@ -52,56 +52,57 @@ class VideoFaces(Work):
         from src.shared.face_crop import face_crop
 
         asset_id = clip["asset_id"]
-        source = self.acct.analysis_cache.get(asset_id)
-        if source is None or not source.is_file():
-            raise Waits("no analysis proxy")
-        scenes = self.client.get(f"/v1/video/{asset_id}/scenes").json().get("scenes", [])
-        times = frame_times(scenes, round((clip.get("duration_sec") or 0) * 1000), self.detail)
-        out = Found()
-        found: list[tuple[int, dict]] = []
-        unread: list[str] = []
-        with self.scratch_folder() as tmp:
-            frames: dict[int, Path] = {}
-            for ms in times:
-                if self.acct.stopping.is_set():
-                    raise Stopped(asset_id)
-                frame = tmp / f"{ms}.jpg"
-                attempt = extract_video_frame_detailed(source, frame, timestamp=ms / 1000.0)
-                if not attempt.ok or not frame.is_file():
-                    unread.append(f"no frame at {ms} ms")
-                    continue
-                # Asked for each frame: in use, so not let go of as idle on a long video.
-                result = self.acct.models.faces().detect(frame.read_bytes(), self.used)
-                if "error" in result:
-                    if out_of_memory(result["error"]):  # the GPU's trouble, not the video's
-                        raise Waits(result["error"])
-                    unread.append(f"{ms} ms: {result['error']}")
-                    frame.unlink(missing_ok=True)
-                    continue
-                out.frames += 1
-                out.detection_model = result["detection_model"]
-                out.detection_model_version = result["detection_model_version"]
-                out.embedding_model = result["embedding_model"]
-                if result["faces"]:
-                    frames[ms] = frame  # kept for the crops
-                    found += [(ms, face) for face in result["faces"]]
-                else:
-                    frame.unlink(missing_ok=True)
-            if unread:
-                logger.warning("video-faces: %s — %d of %d frames not looked at: %s", clip.get("rel_path"),
-                               len(unread), len(times), unread[0])
-            if not out.frames:
-                raise Failed(f"no frame could be looked at: {unread[0] if unread else 'none chosen'}")
-            for person in appearances(found):
-                with Image.open(frames[person.frame_ms]) as img:
-                    crop = face_crop(img.convert("RGB"), person.face["bounding_box"])
-                if crop is None:  # a box with nothing in it
-                    continue
-                out.faces.append({"bounding_box": person.face["bounding_box"],
-                                  "detection_confidence": person.face["detection_confidence"],
-                                  "embedding": person.embedding, "frame_ms": person.frame_ms,
-                                  "seen_ms": person.seen_ms})
-                out.crops.append(crop)
+        # Held while its frames are read from it.
+        with self.inputs.analysis_proxy(clip) as source:
+            if source is None or not source.is_file():
+                raise Waits("no analysis proxy")
+            scenes = self.client.get(f"/v1/video/{asset_id}/scenes").json().get("scenes", [])
+            times = frame_times(scenes, round((clip.get("duration_sec") or 0) * 1000), self.detail)
+            out = Found()
+            found: list[tuple[int, dict]] = []
+            unread: list[str] = []
+            with self.scratch_folder() as tmp:
+                frames: dict[int, Path] = {}
+                for ms in times:
+                    if self.acct.stopping.is_set():
+                        raise Stopped(asset_id)
+                    frame = tmp / f"{ms}.jpg"
+                    attempt = extract_video_frame_detailed(source, frame, timestamp=ms / 1000.0)
+                    if not attempt.ok or not frame.is_file():
+                        unread.append(f"no frame at {ms} ms")
+                        continue
+                    # Asked for each frame: in use, so not let go of as idle on a long video.
+                    result = self.acct.models.faces().detect(frame.read_bytes(), self.used)
+                    if "error" in result:
+                        if out_of_memory(result["error"]):  # the GPU's trouble, not the video's
+                            raise Waits(result["error"])
+                        unread.append(f"{ms} ms: {result['error']}")
+                        frame.unlink(missing_ok=True)
+                        continue
+                    out.frames += 1
+                    out.detection_model = result["detection_model"]
+                    out.detection_model_version = result["detection_model_version"]
+                    out.embedding_model = result["embedding_model"]
+                    if result["faces"]:
+                        frames[ms] = frame  # kept for the crops
+                        found += [(ms, face) for face in result["faces"]]
+                    else:
+                        frame.unlink(missing_ok=True)
+                if unread:
+                    logger.warning("video-faces: %s — %d of %d frames not looked at: %s", clip.get("rel_path"),
+                                   len(unread), len(times), unread[0])
+                if not out.frames:
+                    raise Failed(f"no frame could be looked at: {unread[0] if unread else 'none chosen'}")
+                for person in appearances(found):
+                    with Image.open(frames[person.frame_ms]) as img:
+                        crop = face_crop(img.convert("RGB"), person.face["bounding_box"])
+                    if crop is None:  # a box with nothing in it
+                        continue
+                    out.faces.append({"bounding_box": person.face["bounding_box"],
+                                      "detection_confidence": person.face["detection_confidence"],
+                                      "embedding": person.embedding, "frame_ms": person.frame_ms,
+                                      "seen_ms": person.seen_ms})
+                    out.crops.append(crop)
         logger.info("video-faces: %s — %d people in %d frames", clip.get("rel_path"), len(out.faces), out.frames)
         return out
 

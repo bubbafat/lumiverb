@@ -4,16 +4,15 @@ Proxies rendered on this machine go straight in (put); others download
 from the server on first use (get). Least recently used files go once the
 cache is over its size, but never the one just added.
 
-Where the server keeps them on this machine's disk (`stored`: the scheduler,
-beside the API, sharing its database and DATA_DIR), they're read there, and
-the cache holds no second copy: on a Mac that was up to its 50 GB again.
+Where the server keeps them on this machine's disk (the scheduler beside the
+API), a job reads them from the Store and this cache isn't asked
+(src/server/scheduler/inputs.py): it held up to its 50 GB again on a Mac.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
 from pathlib import Path
 
 from src.processing.cache_dir import cache_dir, cache_entry
@@ -52,10 +51,7 @@ def clear_leftovers(directory: Path | None = None) -> int:
 
 
 class AnalysisProxyCache:
-    def __init__(self, client: object, *, cache_dir: Path | None = None, max_bytes: int | None = None,
-                 stored: Callable[[str], Path | None] | None = None) -> None:
-        """`stored`: the file the server keeps for a clip, when it's on this
-        machine (None: not here, or none)."""
+    def __init__(self, client: object, *, cache_dir: Path | None = None, max_bytes: int | None = None) -> None:
         if max_bytes is None:
             from src.processing.machine import current
 
@@ -63,29 +59,14 @@ class AnalysisProxyCache:
         self._client = client
         self._dir = cache_dir or default_cache_dir()
         self._max_bytes = max_bytes
-        self._stored = stored
-
-    def _here(self, asset_id: str) -> Path | None:
-        """The server's own file for the clip, on this machine, if it has one."""
-        if self._stored is None:
-            return None
-        try:
-            return self._stored(asset_id)
-        except Exception as exc:  # noqa: BLE001 — it can't say: downloaded as before
-            logger.warning("Couldn't find the stored analysis proxy for %s here: %s", asset_id, exc)
-            return None
 
     def path_for(self, asset_id: str) -> Path:
         return cache_entry(self._dir, asset_id, ".mp4")
 
     def get(self, asset_id: str) -> Path | None:
-        """The proxy as a local file: the server's own when it's on this
-        machine (a copy cached before goes), else the cache's, downloading it
-        if needed. None if the server has none."""
+        """The proxy as a local file: the cache's, downloading it if needed.
+        None if the server has none."""
         path = self.path_for(asset_id)
-        if (here := self._here(asset_id)) is not None:
-            path.unlink(missing_ok=True)
-            return here
         if path.is_file():
             os.utime(path)
             return path
@@ -108,11 +89,7 @@ class AnalysisProxyCache:
 
     def put(self, asset_id: str, rendered: Path) -> Path:
         """Move a proxy rendered on this machine (and saved to the server)
-        into the cache; when the server keeps it on this machine, it's read
-        there, and the rendered copy goes."""
-        if (here := self._here(asset_id)) is not None:
-            rendered.unlink(missing_ok=True)
-            return here
+        into the cache."""
         self._dir.mkdir(parents=True, exist_ok=True)
         path = self.path_for(asset_id)
         try:

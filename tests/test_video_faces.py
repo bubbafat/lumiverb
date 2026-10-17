@@ -21,6 +21,7 @@ from src.producers.runner import Failed, Stopped, Waits
 from src.producers.video_faces.appearances import SAME_PERSON, appearances
 from src.producers.video_faces.frames import APART_MS, EVERY_SEC, frame_times
 from src.producers.video_faces.work import VideoFaces
+from src.server.scheduler.inputs import Inputs
 from src.shared.face_crop import SIZE, face_crop
 
 pytestmark = pytest.mark.fast
@@ -200,6 +201,7 @@ class _Acct:
 
         self.analysis_cache = _Cache()
         self.models = _Models()
+        self.inputs = Inputs(self, None)  # not beside the API's Store: the cache above
 
 
 CLIP = {"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a/b.mp4", "duration_sec": 6.0, "content_hash": "sha256:" + "ab" * 32}

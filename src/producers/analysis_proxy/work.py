@@ -1,5 +1,6 @@
 """Rendering a video's analysis proxy from its original, uploading it, and
-keeping it in this machine's cache (transcripts and scenes read it there)."""
+keeping it in this machine's cache where the API doesn't keep it on this
+disk (transcripts and scenes read it there: src/server/scheduler/inputs.py)."""
 
 from __future__ import annotations
 
@@ -49,7 +50,7 @@ class Render(Work):
             with open(work, "rb") as f:
                 client.post(f"/v1/assets/{clip['asset_id']}/artifacts/analysis_proxy",
                             files={"file": ("analysis.mp4", f, "video/mp4")}, data=data)
-            self.acct.analysis_cache.put(clip["asset_id"], work)
+            self.inputs.rendered(clip, work)
 
     def done(self, clip: dict, work: Path) -> None:
-        work.unlink(missing_ok=True)  # moved into the cache when it was saved
+        work.unlink(missing_ok=True)  # moved into the cache when it was saved, if it was

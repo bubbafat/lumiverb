@@ -18,12 +18,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from src.processing.failure_report import FailureReport
 from src.processing.machine import Machine
 from src.processing.producer_settings import ProducerSettings
 from src.processing.transcript_guard import TranscriptGuard
 from src.processing.video.audio import AudioTrack
 from src.processing.workers.transcripts.base import TranscriptError
+from src.server.scheduler.inputs import Inputs
 from src.shared import producers as P
 from src.shared.vision_endpoint import VisionEndpointError
 from tests.test_transcribers import _Server
@@ -76,6 +78,7 @@ class _Account:
         self.analysis_cache.get.side_effect = lambda asset_id: (proxies / f"{asset_id}.mp4")
         self.machine = Machine()
         self.stopping = threading.Event()
+        self.inputs = Inputs(self, None)  # not beside the API's Store: the cache above
 
     def guard(self, job: str):
         return self.guards[job]

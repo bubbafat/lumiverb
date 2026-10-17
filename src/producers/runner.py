@@ -236,6 +236,13 @@ class Work:
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    @property
+    def inputs(self) -> Any:
+        """What the clips are made from: each one's stored preview and
+        analysis proxy (src/server/scheduler/inputs.py). Where they come from
+        is the job's, never the producer's."""
+        return self.acct.inputs
+
     def end(self) -> None:
         """The job's scratch removed (the runner's, as the job ends)."""
         if self._scratch is not None:

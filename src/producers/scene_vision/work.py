@@ -58,54 +58,55 @@ class SceneVision(Work):
         from src.processing.video.clip_extractor import extract_video_frame_detailed
         from src.processing.workers.captions.base import CaptionError
 
-        source = self.acct.analysis_cache.get(clip["asset_id"])
-        if source is None or not source.is_file():
-            raise Waits("no analysis proxy")
-        # A redo's found scenes while it has them (the last described swaps them in), else the ones shown.
-        scenes = self.client.get(f"/v1/video/{clip['asset_id']}/scenes",
-                                 params={"describing": "true"}).json().get("scenes", [])
-        lineage = self.lineage(clip, used=self.used)
-        # A redo's video with every scene described as this job would: what's
-        # stale is the video's own record (made before its file had a hash,
-        # say), so they're all described again and it's recorded.
-        again = bool(clip.get("redo")) and bool(scenes) and all(described(s, lineage) for s in scenes)
-        errors: list[str] = []
-        tried = 0
-        for scene in scenes:
-            if not again and described(scene, lineage):
-                continue
-            tried += 1
-            # In the job's scratch until it's saved (done lets go of it): one scene's at a time.
-            frame = self.scratch / f"frame-{tried}.jpg"
-            frame.unlink(missing_ok=True)
-            try:
-                attempt = extract_video_frame_detailed(source, frame, timestamp=scene["rep_frame_ms"] / 1000.0)
-                if not attempt.ok or not frame.exists() or frame.stat().st_size == 0:
-                    raise _NoFrame(f"no frame at {scene['rep_frame_ms']} ms")
-                result = self.provider.describe(frame)
-                if not result or not (result.get("description") or "").strip():
-                    raise _NoFrame("the model said nothing")
-            except CaptionError as e:
+        # Held while its scenes are described: a frame's read from it for each.
+        with self.inputs.analysis_proxy(clip) as source:
+            if source is None or not source.is_file():
+                raise Waits("no analysis proxy")
+            # A redo's found scenes while it has them (the last described swaps them in), else the ones shown.
+            scenes = self.client.get(f"/v1/video/{clip['asset_id']}/scenes",
+                                     params={"describing": "true"}).json().get("scenes", [])
+            lineage = self.lineage(clip, used=self.used)
+            # A redo's video with every scene described as this job would: what's
+            # stale is the video's own record (made before its file had a hash,
+            # say), so they're all described again and it's recorded.
+            again = bool(clip.get("redo")) and bool(scenes) and all(described(s, lineage) for s in scenes)
+            errors: list[str] = []
+            tried = 0
+            for scene in scenes:
+                if not again and described(scene, lineage):
+                    continue
+                tried += 1
+                # In the job's scratch until it's saved (done lets go of it): one scene's at a time.
+                frame = self.scratch / f"frame-{tried}.jpg"
                 frame.unlink(missing_ok=True)
-                if e.endpoint_fault:  # the machines': the video stops, its guard decides
-                    raise self.machines_or_clip(e) from e
-                logger.warning("scene-enrich: %s scene %s — the model couldn't describe it: %s",
-                               clip["rel_path"], scene["scene_id"], e)
-                errors.append(str(e))
-                continue
-            except _NoFrame as e:
-                frame.unlink(missing_ok=True)
-                logger.warning("scene-enrich: %s scene %s — %s", clip["rel_path"], scene["scene_id"], e)
-                errors.append(str(e))
-                continue
-            except BaseException:
-                frame.unlink(missing_ok=True)
-                raise
-            yield Scene(scene, frame, (result.get("description") or "").strip(),
-                        [t.strip() for t in (result.get("tags") or []) if isinstance(t, str) and t.strip()])
-        if errors:
-            # Its undescribed scenes are handed out again once its turn comes.
-            raise self.machines_or_clip(f"{len(errors)} of {tried} scenes failed: {errors[0]}")
+                try:
+                    attempt = extract_video_frame_detailed(source, frame, timestamp=scene["rep_frame_ms"] / 1000.0)
+                    if not attempt.ok or not frame.exists() or frame.stat().st_size == 0:
+                        raise _NoFrame(f"no frame at {scene['rep_frame_ms']} ms")
+                    result = self.provider.describe(frame)
+                    if not result or not (result.get("description") or "").strip():
+                        raise _NoFrame("the model said nothing")
+                except CaptionError as e:
+                    frame.unlink(missing_ok=True)
+                    if e.endpoint_fault:  # the machines': the video stops, its guard decides
+                        raise self.machines_or_clip(e) from e
+                    logger.warning("scene-enrich: %s scene %s — the model couldn't describe it: %s",
+                                   clip["rel_path"], scene["scene_id"], e)
+                    errors.append(str(e))
+                    continue
+                except _NoFrame as e:
+                    frame.unlink(missing_ok=True)
+                    logger.warning("scene-enrich: %s scene %s — %s", clip["rel_path"], scene["scene_id"], e)
+                    errors.append(str(e))
+                    continue
+                except BaseException:
+                    frame.unlink(missing_ok=True)
+                    raise
+                yield Scene(scene, frame, (result.get("description") or "").strip(),
+                            [t.strip() for t in (result.get("tags") or []) if isinstance(t, str) and t.strip()])
+            if errors:
+                # Its undescribed scenes are handed out again once its turn comes.
+                raise self.machines_or_clip(f"{len(errors)} of {tried} scenes failed: {errors[0]}")
 
     def save(self, client, made: list[tuple[dict, Scene]]) -> None:
         from src.processing.api import LumiverbAPIError

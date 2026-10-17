@@ -24,6 +24,8 @@ from src.producers import runner
 from src.producers.runner import NOT_TRIED, Crashed, run
 from src.server.scheduler import runners
 from src.server.scheduler.dispatch import Job
+from src.server.scheduler.inputs import Inputs
+from src.server.storage.store import Unavailable
 
 SHA = "sha256:" + "a" * 64
 
@@ -52,6 +54,8 @@ class FakeAccount:
         self.models = MagicMock()
         self.stopping = threading.Event()
         self.gone: list[str] = []
+        # Not beside the API's Store: inputs come from the caches above (inputs.py).
+        self.inputs = Inputs(self, None)
 
     def guard(self, job: str):
         return {"vision": self.vision, "transcripts": self.transcripts}[job]
@@ -896,19 +900,44 @@ def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path,
     assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "content_hash": "sha256:" + "0" * 64}, tmp_path, cache)
 
 
-def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(tmp_path, monkeypatch) -> None:
+def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(acct, monkeypatch) -> None:
     # Where the API keeps the previews on this machine the faces step reads
-    # the clip's there: nothing is made from the original or kept in the
-    # cache, even when the original changed since (changed content is a new clip).
-    from src.producers.faces.work import face_proxy
+    # the clip's there (its inputs): nothing is made from the original or kept
+    # in the cache, even when the original changed since (changed content is a
+    # new clip).
+    def no_face_proxy(*args):
+        raise AssertionError("nothing is made from the original")
 
-    cache = MagicMock()
-    cache.stored_path.return_value = tmp_path / "stored.webp"
-    (tmp_path / "a.jpg").write_bytes(b"photo, changed since")
-    made = []
-    monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: made.append(source))
-    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "content_hash": "sha-then"}, tmp_path, cache)
-    assert made == [] and not cache.put.called
+    detector = _faces(acct, monkeypatch, _face)
+    monkeypatch.setattr("src.producers.faces.work.face_proxy", no_face_proxy)
+    monkeypatch.setattr(acct.inputs, "stored_preview", lambda clip: b"stored " + clip["asset_id"].encode())
+    detector.detect.side_effect = lambda image, settings: _face("ast_1") if image == b"stored ast_1" else {}
+    assert _run(acct, "faces", "ast_1") is None
+    assert [i["asset_id"] for i in _posted(acct)["/v1/assets/batch-faces"]["items"]] == ["ast_1"]
+    acct.cache.get.assert_not_called()
+
+
+class _Away:
+    """The API's Store, beside the scheduler, with its drive unplugged."""
+
+    def read(self, key: str) -> bytes:
+        raise Unavailable("its drive isn't plugged in")
+
+    def local_file(self, key: str):
+        raise Unavailable("its drive isn't plugged in")
+
+
+@pytest.mark.parametrize("kind", ["clip", "ocr", "vision", "faces", "transcript", "scenes", "scene_vision",
+                                  "video_faces"])
+def test_a_clip_whose_stored_files_cant_be_reached_waits_and_isnt_charged(acct, kind) -> None:
+    """Nothing is taken for missing (ADR-020): every producer reading a
+    clip's stored preview or analysis proxy waits until it can be reached."""
+    acct.inputs = Inputs(acct, _Away())
+    keys = {"proxy_key": "t1/lib_1/proxies/00/ast_1_x.webp", "analysis_proxy_key": "t1/lib_1/analysis/00/ast_1_x.mp4"}
+    assert _run(acct, kind, "ast_1", duration_sec=30.0, **keys) == ["ast_1"]
+    acct.failures.add.assert_not_called()
+    acct.cache.get.assert_not_called()
+    acct.analysis_cache.get.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
