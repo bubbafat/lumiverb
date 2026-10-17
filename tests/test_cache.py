@@ -1,7 +1,8 @@
 """A Cache's policy (src/server/storage/cache.py, ADR-020 decision 3): past its
-cap the least recently used entries go, never the one just written; a write
-a dead process left goes too; an untrusted cache is emptied. What it keeps
-and reads is the Store's contract (tests/test_store_contract.py)."""
+cap the least recently used entries go, never the one just written nor one a
+local_file block or a hold holds; a write a dead process left goes too; an
+untrusted cache is emptied. What it keeps and reads is the Store's contract
+(tests/test_store_contract.py)."""
 
 from __future__ import annotations
 
@@ -40,6 +41,35 @@ def test_the_entry_just_written_stays_even_alone_past_the_cap(tmp_path):
     cache.write("old", b"x" * KB)
     cache.write("big", b"x" * 5 * KB)
     assert list(cache.list("")) == ["big"]
+
+
+def test_a_file_a_local_file_block_holds_is_never_evicted(tmp_path):
+    cache = FileCache(lambda: tmp_path, cap_bytes=2 * KB)
+    for name, age in (("a", 300), ("b", 200)):
+        cache.write(name, b"x" * KB)
+        _aged(cache, name, age)
+    with cache.local_file("a") as path:
+        os.utime(path, (time.time() - 300,) * 2)  # still the oldest
+        cache.write("c", b"x" * KB)
+        assert sorted(cache.list("")) == ["a", "c"], "b, the oldest not held, went instead"
+        cache.write("d", b"x" * KB)
+        assert sorted(cache.list("")) == ["a", "d"], "over its cap rather than a"
+    cache.write("e", b"x" * KB)
+    assert sorted(cache.list("")) == ["d", "e"], "let go of: a went"
+
+
+def test_a_hold_keeps_a_file_written_after_it_and_holds_nest(tmp_path):
+    other = FileCache(lambda: tmp_path, cap_bytes=KB)  # another cache on the folder: holds are the process's
+    cache = FileCache(lambda: tmp_path, cap_bytes=KB)
+    with cache.hold("new"):
+        cache.write("new", b"x" * KB)
+        _aged(cache, "new", 1000)
+        with cache.local_file("new"):
+            pass  # a nested hold let go of: the outer one still holds
+        other.write("other", b"x" * KB)
+        assert sorted(cache.list("")) == ["new", "other"]
+    other.write("last", b"x" * KB)
+    assert sorted(cache.list("")) == ["last"]
 
 
 def test_a_write_a_dead_process_left_goes_and_one_under_way_stays(tmp_path):

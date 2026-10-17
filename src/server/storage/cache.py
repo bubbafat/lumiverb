@@ -1,11 +1,14 @@
 """A Cache: a Store with a size cap (ADR-020 decision 3).
 
 What a cache holds is a copy, made again when it's gone: past its cap the
-least recently used entries go (each read or written is used now). Keys are
-paths within its folder. A FileCache is a folder on this machine; where the
-folder is can change (a previews folder moved), so it's asked for each time.
-Unlike the Store's files, nothing here is kept for its own sake: an entry may
-go between one call and the next, and a reader that already has it open
+least recently used entries go (each read or written is used now), but never
+one a local_file block or a hold holds: a tool reading it by its path
+(ffmpeg, ffprobe, then ffmpeg again) has it until the block ends, and the
+cache is over its cap meanwhile rather than the work failing. Keys are paths
+within its folder. A FileCache is a folder on this machine; where the folder
+is can change (a previews folder moved), so it's asked for each time. Unlike
+the Store's files, nothing here is kept for its own sake: an entry not held
+may go between one call and the next, and a reader that already has it open
 reads on (the filesystem keeps an open file until it's closed).
 
 `trusted_at_start`: whether what's there is still good when its owner
@@ -18,6 +21,7 @@ import contextlib
 import os
 import secrets
 import shutil
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import BinaryIO
@@ -27,6 +31,16 @@ from src.server.storage.store import NotFound, Stat, Unavailable, check_key
 
 # A write in progress this old was left by a process that died.
 STALE_PARTIAL_SEC = 600
+
+# The files held in this process (local_file, hold), every cache's: never
+# evicted meanwhile. A count each, as holds nest.
+_held: dict[str, int] = {}
+_held_lock = threading.Lock()
+
+
+def _held_now(path: Path) -> bool:
+    with _held_lock:
+        return os.path.abspath(path) in _held
 
 
 class FileCache:
@@ -78,8 +92,26 @@ class FileCache:
         return self._path(key).is_file()
 
     @contextlib.contextmanager
+    def hold(self, key: str) -> Iterator[None]:
+        """The key's file isn't evicted while the block lasts, whether it's
+        there yet or not: for a caller that fetches it and then reads it."""
+        name = os.path.abspath(self._path(key))
+        with _held_lock:
+            _held[name] = _held.get(name, 0) + 1
+        try:
+            yield
+        finally:
+            with _held_lock:
+                if _held[name] > 1:
+                    _held[name] -= 1
+                else:
+                    del _held[name]
+
+    @contextlib.contextmanager
     def local_file(self, key: str) -> Iterator[Path]:
-        yield self._found(key)
+        """The file, held for the block (never evicted meanwhile)."""
+        with self.hold(key):
+            yield self._found(key)
 
     # -- Writing -------------------------------------------------------------------
 
@@ -123,8 +155,9 @@ class FileCache:
 
     def evict(self, *, keep: Path | None = None, dry_run: bool = False) -> int:
         """The least recently used entries go until what's left fits the cap
-        (never `keep`, the entry just written), and writes in progress a dead
-        process left. How many went (dry_run: would go, nothing removed)."""
+        (never `keep`, the entry just written, nor one held), and writes in
+        progress a dead process left. How many went (dry_run: would go,
+        nothing removed)."""
         root = self._root()
         entries = []
         gone = 0
@@ -146,7 +179,7 @@ class FileCache:
         for _, size, path in sorted(entries):
             if total <= self.cap_bytes:
                 break
-            if path == keep:
+            if path == keep or _held_now(path):
                 continue
             if not dry_run:
                 path.unlink(missing_ok=True)

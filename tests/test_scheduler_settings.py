@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.processing.machine import Machine, default_render_concurrency
-from src.server.scheduler.settings import SchedulerSettings, api_url, read_settings
+from src.server.scheduler.settings import SchedulerSettings, SettingError, api_url, read_settings
 
 pytestmark = pytest.mark.fast
 
@@ -48,6 +48,20 @@ def test_each_library_is_scanned_in_full_every_15_minutes_unless_set(monkeypatch
     assert read_settings().machine().full_scan_every_min == 120
     monkeypatch.setenv("LUMIVERB_FULL_SCAN_EVERY_MIN", "0.5")
     assert read_settings().machine().full_scan_every_min == 0.5
+
+
+def test_the_schedulers_caches_have_caps_and_the_clis_previews_none_yet(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)  # no .env or .env.local of this checkout's
+    for name in ("LUMIVERB_PREVIEW_CACHE_GB", "LUMIVERB_ANALYSIS_CACHE_GB"):
+        monkeypatch.delenv(name, raising=False)
+    here = read_settings().machine()
+    assert (here.preview_cache_gb, here.analysis_cache_gb) == (2.0, 50.0)
+    assert Machine().preview_cache_gb == 0, "the CLI's, which the Mac app browses (ADR-020 phase 5)"
+    monkeypatch.setenv("LUMIVERB_PREVIEW_CACHE_GB", "0.5")
+    assert read_settings().machine().preview_cache_gb == 0.5
+    monkeypatch.setenv("LUMIVERB_PREVIEW_CACHE_GB", "0")
+    with pytest.raises(SettingError, match="LUMIVERB_PREVIEW_CACHE_GB"):
+        read_settings()
 
 
 @pytest.mark.parametrize("bad", ["0", "-15", "soon", "", "inf", "nan"])

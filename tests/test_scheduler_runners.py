@@ -10,6 +10,7 @@ which charges no clip for it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import threading
 from pathlib import Path
@@ -45,8 +46,8 @@ class FakeAccount:
         self.transcripts = MagicMock()
         self.transcripts.model = "small"
         self.transcripts.charges.return_value = True
-        self.analysis_cache = MagicMock()
-        self.analysis_cache.path_for.side_effect = lambda asset_id: tmp_path / "analysis" / f"{asset_id}.mp4"
+        self.analysis_cache = MagicMock()  # held: what get says, as the cache holds it for the block
+        self.analysis_cache.held.side_effect = lambda asset_id: contextlib.nullcontext(self.analysis_cache.get(asset_id))
         self.machine = Machine(analysis_proxy_decoder="cpu", gpu_decodes=0)
         self.roots = {"lib_1": tmp_path}
         self.cache = MagicMock()
@@ -937,7 +938,7 @@ def test_a_clip_whose_stored_files_cant_be_reached_waits_and_isnt_charged(acct, 
     assert _run(acct, kind, "ast_1", duration_sec=30.0, **keys) == ["ast_1"]
     acct.failures.add.assert_not_called()
     acct.cache.get.assert_not_called()
-    acct.analysis_cache.get.assert_not_called()
+    acct.analysis_cache.held.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

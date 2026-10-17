@@ -6,6 +6,7 @@ tests/test_video_faces_ai.py."""
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import shutil
@@ -192,8 +193,8 @@ class _Acct:
         outer = self
 
         class _Cache:
-            def get(self, asset_id):
-                return clip
+            def held(self, asset_id):
+                return contextlib.nullcontext(clip)
 
         class _Models:
             def faces(self):

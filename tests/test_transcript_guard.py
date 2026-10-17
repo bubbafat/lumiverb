@@ -12,6 +12,7 @@ fine. (Each clip a job of the transcript producer's, through the runner.)
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from pathlib import Path
@@ -75,7 +76,7 @@ class _Account:
         self.failures = FailureReport(client)
         self.guards = {"transcripts": TranscriptGuard(client)}
         self.analysis_cache = MagicMock()
-        self.analysis_cache.get.side_effect = lambda asset_id: (proxies / f"{asset_id}.mp4")
+        self.analysis_cache.held.side_effect = lambda asset_id: contextlib.nullcontext(proxies / f"{asset_id}.mp4")
         self.machine = Machine()
         self.stopping = threading.Event()
         self.inputs = Inputs(self, None)  # not beside the API's Store: the cache above

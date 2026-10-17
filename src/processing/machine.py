@@ -56,6 +56,9 @@ class Machine:
     # Analysis proxies rendered at once; 0: one per six cores, at most three.
     render_concurrency: int = 0
     analysis_cache_gb: float = 50.0
+    # The preview cache's cap (src/processing/proxy/proxy_cache.py); 0: none,
+    # the CLI's (shared with the Mac app's browsing until ADR-020 phase 5).
+    preview_cache_gb: float = 0.0
     # Face batches a detection process does before a fresh one takes over
     # (ONNX Runtime leaks: src/producers/faces/detect.py).
     face_batches_per_process: int = 20

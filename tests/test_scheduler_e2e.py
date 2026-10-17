@@ -154,5 +154,5 @@ def test_a_job_reads_its_clips_files_from_the_store_by_the_keys_its_rows_carry(e
     with inputs.analysis_proxy(rows[video]) as path:
         assert path.read_bytes() == body
     assert inputs.preview_bytes(rows[photo])[8:12] == b"WEBP"
-    acct.analysis_cache.get.assert_not_called()
+    acct.analysis_cache.held.assert_not_called()
     acct.proxy_cache.assert_not_called()

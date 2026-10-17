@@ -15,16 +15,20 @@ as needed. The cache is the handoff point between the two phases.
 
 Where the API keeps the previews on this machine (the scheduler beside it),
 a job reads a clip's stored preview from the Store and this cache isn't
-asked (src/server/scheduler/inputs.py).
+asked (src/server/scheduler/inputs.py). The scheduler's has a cap
+(LUMIVERB_PREVIEW_CACHE_GB): past it the least recently used proxies go,
+each with its sidecar; the CLI's has none yet (the Mac app browses it).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from src.processing.cache_dir import cache_dir, cache_entry
@@ -35,6 +39,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_EDGE = 1280
 _BARE = re.compile(r"[0-9a-f]{64}")
 _JPEG_QUALITY = 75
+# Writes between looks at the cap: a look reads every entry's size.
+_LOOK_EVERY = 50
+# A write in progress this old was left by a process that died.
+_STALE_TMP_SEC = 600
 
 
 def fit(image_bytes: bytes, max_edge: int) -> bytes:
@@ -70,13 +78,21 @@ class ProxyCache:
         max_edge: int = _DEFAULT_MAX_EDGE,
         root_path: Path | None = None,
         client: object | None = None,
+        cap_bytes: int | None = None,
     ) -> None:
         """
         Args:
             max_edge: Maximum long edge for cached proxies (for put/get).
             root_path: Library root for local source file generation.
             client: ApiClient for server download fallback.
+            cap_bytes: Its cap (None: this machine's preview_cache_gb; 0: none).
         """
+        if cap_bytes is None:
+            from src.processing.machine import current
+
+            cap_bytes = int(current().preview_cache_gb * 1024**3)
+        self._cap_bytes = cap_bytes
+        self._writes = 0
         self._dir = cache_dir("proxies")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_edge = max_edge
@@ -99,6 +115,7 @@ class ProxyCache:
         """Store proxy bytes, downscaling if needed. Never scales up."""
         image_bytes = self._ensure_size(image_bytes)
         self._atomic_write(self._entry(asset_id), image_bytes)
+        self._wrote(asset_id)
 
     def put_scan(self, asset_id: str, jpeg_bytes: bytes, source_hash: str) -> None:
         """Store a full-resolution 2048px proxy from scan with its hash sidecar.
@@ -109,6 +126,7 @@ class ProxyCache:
         """
         self._atomic_write(self._entry(asset_id), jpeg_bytes)
         self._atomic_write(self.sha_path(asset_id), source_hash.encode())
+        self._wrote(asset_id)
 
     def get_source_hash(self, asset_id: str) -> str | None:
         """The content hash the asset's proxy was made from (its sidecar), or
@@ -125,6 +143,7 @@ class ProxyCache:
         from src.processing.proxy.proxy_gen import generate_proxy_bytes
         image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
         self._atomic_write(self._entry(asset_id), image_bytes)
+        self._wrote(asset_id)
         return image_bytes
 
     def has(self, asset_id: str) -> bool:
@@ -135,7 +154,7 @@ class ProxyCache:
         """Get proxy bytes for an asset.
 
         Resolution order:
-        1. Disk cache (already at correct size)
+        1. Disk cache (sized: a scan's is 2048px)
         2. Generate from local source file (if root_path set and file exists)
         3. Download from server (if client set), downscale, cache
 
@@ -144,7 +163,9 @@ class ProxyCache:
         # 1. Check cache
         p = self._entry(asset_id)
         if p.exists():
-            return p.read_bytes()
+            with contextlib.suppress(OSError):
+                os.utime(p)  # used now: the last to go
+            return self._ensure_size(p.read_bytes())
 
         # 2. Try local source
         if self._root_path is not None and rel_path is not None:
@@ -166,7 +187,8 @@ class ProxyCache:
                 resp = self._client._client.get(self._client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code == 200:
                     image_bytes = self._ensure_size(resp.content)
-                    self._entry(asset_id).write_bytes(image_bytes)
+                    self._atomic_write(self._entry(asset_id), image_bytes)
+                    self._wrote(asset_id)
                     resp.close()
                     return image_bytes
                 resp.close()
@@ -179,6 +201,52 @@ class ProxyCache:
         """Remove a single entry and its SHA sidecar from the cache."""
         self._entry(asset_id).unlink(missing_ok=True)
         self.sha_path(asset_id).unlink(missing_ok=True)
+
+    def _wrote(self, asset_id: str) -> None:
+        """After a write: the cap looked at, on the first and then every _LOOK_EVERY-th."""
+        self._writes += 1
+        if self._cap_bytes and self._writes % _LOOK_EVERY == 1:
+            self.evict(keep=asset_id)
+
+    def evict(self, keep: str | None = None) -> int:
+        """Past its cap, the least recently used proxies go (a read is a use),
+        each with its sidecar, never `keep` (the one just written); and writes
+        a dead process left. How many proxies went. Nothing without a cap."""
+        if not self._cap_bytes:
+            return 0
+        entries: dict[str, tuple[float, int]] = {}  # asset id -> (last used, bytes with its sidecar)
+        try:
+            found = list(os.scandir(self._dir))
+        except OSError:
+            return 0
+        for entry in found:
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                st = entry.stat()
+            except OSError:
+                continue
+            if entry.name.endswith(".tmp"):
+                if st.st_mtime < time.time() - _STALE_TMP_SEC:
+                    Path(entry.path).unlink(missing_ok=True)
+                continue
+            asset_id = entry.name.removesuffix(".sha")
+            used, size = entries.get(asset_id, (0.0, 0))  # a sidecar alone: the first to go
+            entries[asset_id] = (used if entry.name.endswith(".sha") else st.st_mtime, size + st.st_size)
+        total = sum(size for _, size in entries.values())
+        gone = 0
+        for asset_id, (_, size) in sorted(entries.items(), key=lambda item: item[1][0]):
+            if total <= self._cap_bytes:
+                break
+            if asset_id == keep:
+                continue
+            try:
+                self.remove(asset_id)
+            except ValueError:  # not an asset's file: left alone
+                continue
+            total -= size
+            gone += 1
+        return gone
 
     def cleanup(self) -> None:
         """Delete the entire cache directory."""
