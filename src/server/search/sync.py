@@ -291,6 +291,13 @@ def _sync_transcripts(session: Session, after: str) -> tuple[str | None, int]:
     return (batch[-1].asset_id if len(batch) == BATCH else None), marked
 
 
+def reset_synced(session: Session) -> None:
+    """Clears the sync times of every clip and transcript: all are written again (commits)."""
+    for reset in REINDEX_RESETS.values():
+        session.execute(text(reset))
+    session.commit()
+
+
 def run_search_sync_sweep(session: Session) -> dict:
     """Write the rows of every stale clip and the segments of every stale
     transcript, a batch at a time by id for up to SWEEP_SEC (what's left

@@ -279,9 +279,9 @@ class SetupChange(BaseModel):
 def _setup(session: Session) -> SetupProgress:
     import json
 
-    from sqlalchemy import text
+    from src.server.repository.system_metadata import SystemMetadataRepository
 
-    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = :k"), {"k": SETUP_KEY}).scalar()
+    raw = SystemMetadataRepository(session).get_value(SETUP_KEY)
     try:
         kept = json.loads(raw) if raw else {}
     except ValueError:
@@ -302,9 +302,8 @@ def change_setup(body: SetupChange, session: Annotated[Session, Depends(get_tena
     """Steps gone through (the whole list, as the wizard has it), and whether it's put away."""
     import json
 
-    from sqlalchemy import text
-
     from src.server.api.errors import InvalidChoiceError
+    from src.server.repository.system_metadata import SystemMetadataRepository
 
     now = _setup(session)
     done = now.done if body.done is None else body.done
@@ -313,8 +312,5 @@ def change_setup(body: SetupChange, session: Annotated[Session, Depends(get_tena
         raise InvalidChoiceError("unknown_step", f"There's no step {unknown[0]!r}.", {"steps": list(SETUP_STEPS)})
     value = {"done": [s for s in SETUP_STEPS if s in set(done)],
              "dismissed": now.dismissed if body.dismissed is None else body.dismissed}
-    session.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES (:k, :v, now())"
-                         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"),
-                    {"k": SETUP_KEY, "v": json.dumps(value)})
-    session.commit()
+    SystemMetadataRepository(session).set_value(SETUP_KEY, json.dumps(value))  # commits
     return _setup(session)

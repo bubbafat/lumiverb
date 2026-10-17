@@ -139,6 +139,32 @@ class AssetRepository:
                                   .where(Asset.asset_id.in_(asset_ids))).all()  # type: ignore[union-attr]
         return {r[0]: tuple(r[1:]) for r in rows}
 
+    def existing_ids(self, asset_ids: list[str]) -> set[str]:
+        """Which of these clips exist, in sight or not."""
+        if not asset_ids:
+            return set()
+        return set(self._session.execute(text("SELECT asset_id FROM assets WHERE asset_id = ANY(:ids)"),
+                                         {"ids": asset_ids}).scalars())
+
+    def in_sight(self, asset_ids: list[str]) -> set[str]:
+        """Which of these clips are in sight (not trashed or archived)."""
+        if not asset_ids:
+            return set()
+        return set(self._session.execute(text("SELECT asset_id FROM active_assets WHERE asset_id = ANY(:ids)"),
+                                         {"ids": list(asset_ids)}).scalars())
+
+    def unsynced_count(self) -> int:
+        """Clips in sight that search doesn't have as they are now."""
+        return self._session.execute(text(
+            "SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar() or 0
+
+    def video_facets(self, asset_ids: list[str]) -> dict[str, VideoFacetRow]:
+        """Each video's facets (duration, codecs, …): those it has."""
+        if not asset_ids:
+            return {}
+        return {f.asset_id: f for f in self._session.exec(
+            select(VideoFacetRow).where(VideoFacetRow.asset_id.in_(asset_ids))).all()}  # type: ignore[attr-defined]
+
     def get_any(self, asset_id: str) -> Asset | None:
         """The clip in sight or not (trashed, archived): get_by_id leaves those out."""
         return self._session.get(Asset, asset_id)

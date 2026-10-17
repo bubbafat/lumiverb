@@ -249,8 +249,7 @@ def _held(session: Session, scan_id: str, *, planned: bool | None, finished: boo
         raise ConflictError("scan_not_planned", "Its listing isn't complete: send POST /v1/scans/{id}/plan first.")
     if planned is False and scan.planned_at is not None:
         raise ConflictError("scan_planned", "Its listing is complete: nothing more can be added.")
-    scan.expires_at = now + scans.TTL
-    session.add(scan)
+    scans.keep_alive(session, scan, now)
     return scan
 
 

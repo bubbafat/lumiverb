@@ -89,6 +89,11 @@ def get_engine_for_url(url: str) -> Engine:
     return _engines[url]
 
 
+def reachable(session: Session) -> None:
+    """Raises unless the session's database answers."""
+    session.execute(text("SELECT 1"))
+
+
 @contextmanager
 def get_control_session() -> Generator[Session, None, None]:
     """Context manager yielding a SQLModel Session for the control plane."""

@@ -292,6 +292,12 @@ def keep_answer(session: Session, scan: ScanSession, call: str, answer: dict) ->
     session.add(scan)
 
 
+def keep_alive(session: Session, scan: ScanSession, now: datetime) -> None:
+    """A call extends the scan's life (TTL from now; not committed)."""
+    scan.expires_at = now + TTL
+    session.add(scan)
+
+
 def drop(session: Session, scan_id: str) -> bool:
     """Delete a scan and its listing (no commit). False when there's none."""
     return bool(session.execute(text("DELETE FROM scan_sessions WHERE scan_id = :s"), {"s": scan_id}).rowcount)

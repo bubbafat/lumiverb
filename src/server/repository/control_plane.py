@@ -131,6 +131,13 @@ class ApiKeyRepository:
         self._session.refresh(api_key)
         return api_key, plaintext
 
+    def get(self, key_id: str) -> ApiKey | None:
+        return self._session.get(ApiKey, key_id)
+
+    def get_for_tenant(self, key_id: str, tenant_id: str) -> ApiKey | None:
+        """The account's key with this id (revoked or not)."""
+        return self._session.exec(select(ApiKey).where(ApiKey.key_id == key_id, ApiKey.tenant_id == tenant_id)).first()
+
     def get_by_hash(self, key_hash: str) -> ApiKey | None:
         """Return API key by hash, excluding revoked."""
         stmt = (

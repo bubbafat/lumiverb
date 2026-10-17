@@ -35,7 +35,6 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
 from src.server.api.errors import GoneError
 from src.server.api.limits import MAX_IDS, require_scope
@@ -403,11 +402,9 @@ def _recluster_if_changed(session) -> dict:
 
 def _reset_search_synced_at(session) -> None:
     """Clear the sync times of every clip and transcript: all are written again."""
-    from src.server.search.sync import REINDEX_RESETS
+    from src.server.search.sync import reset_synced
 
-    for reset in REINDEX_RESETS.values():
-        session.execute(text(reset))
-    session.commit()
+    reset_synced(session)
 
 
 def _run_sweep_all_tenants(force: bool = False) -> dict:
@@ -586,10 +583,10 @@ def run_cleanup(
         result = run_cleanup_all_tenants(dry_run=dry_run)
     else:
         require_scope(library_id is not None, all_, "library_id")
+        from src.server.repository.libraries import LibraryRepository
+
         with _tenant_session(scope) as session:
-            if library_id is not None and session.execute(
-                text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},
-            ).first() is None:
+            if library_id is not None and LibraryRepository(session).get_by_id(library_id) is None:
                 raise HTTPException(status_code=404, detail="Library not found")
             result = run_cleanup_single_tenant(scope.tenant_id, session, dry_run=dry_run, library_id=library_id)
 
