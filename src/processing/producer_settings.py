@@ -52,6 +52,15 @@ class ProducerSettings:
         self._settings, self._uses = fresh, uses
         return True
 
+    def told(self, made_with: dict[str, dict[str, Any]]) -> None:
+        """What a library's reader is told each one it makes is made with
+        (reader-changes' made_with: GET /v1/producers is no device's)."""
+        fresh = dict(self._settings)
+        for artifact, made in made_with.items():
+            if artifact in fresh and isinstance(made.get("settings"), dict):
+                fresh[artifact] = dict(made["settings"])
+        self._settings = fresh
+
     def settings(self, artifact: str) -> dict[str, Any]:
         return dict(self._settings[artifact])
 

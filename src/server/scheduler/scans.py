@@ -230,10 +230,12 @@ def scan_library(
     scan_fn: Callable,
     console: Console,
     asked: bool = False,
+    cache_previews: bool | None = None,
 ) -> None:
     """Scan what's due in the library: the folder covering its reported
     changes and retries, or all of it when a full scan is due or one was
-    asked for (asked: Scan now)."""
+    asked for (asked: Scan now). cache_previews: run_scan's; None, the
+    scheduler's way (on a machine apart from the API)."""
     library_id = library["library_id"]
     resp = client.get(f"/v1/libraries/{library_id}/changes").json()
     changes: list[dict] = resp.get("changes", [])
@@ -260,10 +262,12 @@ def scan_library(
     waiting = {} if retry is None or retry_due else {p: s for p, s in retry.seen.items() if p in retry.paths}
     # When most of a library looks gone the server asks first (409
     # mass_missing, ADR-016): a person answers, never the scheduler.
-    from src.server.scheduler.service import stores_here
+    if cache_previews is None:
+        from src.server.scheduler.service import stores_here
 
+        cache_previews = not stores_here()
     stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False,
-                    waiting=waiting, cache_previews=not stores_here(), console=console)
+                    waiting=waiting, cache_previews=cache_previews, console=console)
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return
@@ -356,6 +360,7 @@ def scan_pass(
     on_roots: Callable[[dict[str, Originals | None]], None] | None = None,
     scan_now: set[str] | frozenset[str] = frozenset(),
     scanning: Callable[[str | None], None] | None = None,
+    cache_previews: bool | None = None,
 ) -> dict[str, Originals | None]:
     """Scan what's due in each library whose storage is reachable; each
     library's originals on this machine (src/processing/originals.py; None:
@@ -364,7 +369,7 @@ def scan_pass(
     looked at again right before its scan: a share can sleep during another
     library's long scan. scan_now: libraries a scan of which was asked for,
     scanned whole now; scanning hears each library as its scan starts, and
-    None when it ends."""
+    None when it ends. cache_previews: scan_library's (a device keeps none)."""
     if scan_fn is None:
         from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
@@ -393,7 +398,8 @@ def scan_pass(
             scanning(library["library_id"])
         try:
             scan_library(client, library, originals, state, now=now, full_scan_every=full_scan_every,
-                         scan_fn=scan_fn, console=console, asked=library["library_id"] in scan_now)
+                         scan_fn=scan_fn, console=console, asked=library["library_id"] in scan_now,
+                         cache_previews=cache_previews)
         except LumiverbAPIError as exc:
             if exc.code != "scans_paused":
                 _scan_failed(state, library, exc, now)

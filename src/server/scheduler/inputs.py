@@ -34,10 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 class Inputs:
-    def __init__(self, acct: Any, store: Store | None) -> None:
-        """store: the API's, where it's on this machine's disk (None: not here)."""
+    def __init__(self, acct: Any, store: Store | None, *, keep_renders: bool = True) -> None:
+        """store: the API's, where it's on this machine's disk (None: not
+        here). keep_renders: the analysis proxies rendered here are kept in
+        this machine's cache (the scheduler's, for its transcripts and
+        scenes); a device keeps none (it makes nothing from them)."""
         self._acct = acct
         self._store = store
+        self._keep_renders = keep_renders
 
     def stored_preview(self, clip: dict) -> bytes | None:
         """The clip's preview as the API keeps it on this machine, at the size
@@ -87,7 +91,7 @@ class Inputs:
         in this machine's cache for transcripts and scenes, unless the API
         keeps it on this disk (they read it there): then the render goes
         with the job's scratch, and no copy is kept."""
-        if self._store is None:
+        if self._store is None and self._keep_renders:
             self._acct.analysis_cache.put(clip["asset_id"], path)
 
     # -- Originals (storage=True) ---------------------------------------------------

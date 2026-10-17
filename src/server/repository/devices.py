@@ -35,6 +35,16 @@ def reader_of(session: Session, named_by: str, id_: str) -> str | None:
     return session.execute(text(_READER_OF[named_by]), {"id": id_}).scalar()
 
 
+def readers_of_assets(session: Session, asset_ids: list[str]) -> set[str | None]:
+    """The readers of the libraries these clips are in, None among them when
+    one isn't there."""
+    rows = session.execute(text(
+        "SELECT a.asset_id, l.reader FROM assets a JOIN libraries l ON l.library_id = a.library_id"
+        " WHERE a.asset_id = ANY(:ids)"), {"ids": list(asset_ids)}).all()
+    found = {r[0]: r[1] for r in rows}
+    return {found.get(i) for i in asset_ids}
+
+
 class DeviceRepository:
     def __init__(self, session: Session) -> None:
         self._session = session

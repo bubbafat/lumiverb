@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in
+from src.server.api.devices import may_call
 from src.server.repository.libraries import LibraryChangeRepository, LibraryRepository
 
 router = APIRouter(tags=["changes"])
@@ -153,6 +154,7 @@ def _library_or_404(session: Session, library_id: str) -> None:
 
 
 @router.get("/v1/libraries/{library_id}/changes", response_model=PendingChangesResponse)
+@may_call("library")  # its reader's scan reads them, a device's too
 def pending_changes(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -166,6 +168,7 @@ def pending_changes(
 
 
 @router.post("/v1/libraries/{library_id}/changes/ack", response_model=AckResponse)
+@may_call("library")
 def acknowledge_changes(
     library_id: str,
     body: AckRequest,
