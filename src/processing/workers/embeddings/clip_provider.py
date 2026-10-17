@@ -46,7 +46,7 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
             with self._lock:
                 if self._model is None:
                     # Its weights in the models folder (the scheduler sets it as it starts too).
-                    from src.processing.models_dir import use_models_dir
+                    from src.processing.models_dir import clip_repo, from_folder, use_models_dir
 
                     use_models_dir()
 
@@ -56,10 +56,12 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
 
                     self._device = torch_device()
                     cpu_threads_for(self._device)
-                    model, _, preprocess = open_clip.create_model_and_transforms(
-                        self._model_name,
-                        pretrained=self._pretrained,
-                        device=self._device,
+                    # From the models folder alone when the weights are there:
+                    # otherwise open_clip asks huggingface.co about them each load.
+                    model, _, preprocess = from_folder(
+                        lambda: open_clip.create_model_and_transforms(
+                            self._model_name, pretrained=self._pretrained, device=self._device),
+                        clip_repo(self._model_name, self._pretrained),
                     )
                     model.eval()
                     self._preprocess = preprocess

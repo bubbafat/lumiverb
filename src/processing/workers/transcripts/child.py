@@ -52,9 +52,7 @@ def find_speech(wav_in: str, wav_out: str, min_silence_ms: int) -> list[dict]:
 def transcribe(wav: str, model: str, device: str = "auto", compute_type: str = "auto") -> dict:
     """Whisper on the speech alone. Raises _Failed with the stage it failed at."""
     try:
-        from faster_whisper import WhisperModel
-
-        whisper = WhisperModel(model, device=device, compute_type=compute_type)
+        whisper = _whisper(model, device, compute_type)
     except Exception as e:  # noqa: BLE001 — any reason it won't load is the machine's
         raise _Failed(f"Couldn't load {model}: {e}", "load") from e
     try:
@@ -63,6 +61,19 @@ def transcribe(wav: str, model: str, device: str = "auto", compute_type: str = "
     except Exception as e:  # noqa: BLE001
         raise _Failed(str(e) or type(e).__name__, "transcribe") from e
     return {"segments": heard, "language": info.language or ""}
+
+
+def _whisper(model: str, device: str, compute_type: str):
+    """The model from what's downloaded alone when it's there (HF_HOME): asked
+    to load one, faster-whisper would otherwise ask huggingface.co about it
+    each time. One not there yet, or that won't load from what's there (half
+    a download), is downloaded as before."""
+    from faster_whisper import WhisperModel
+
+    try:
+        return WhisperModel(model, device=device, compute_type=compute_type, local_files_only=True)
+    except Exception:  # noqa: BLE001 — loaded again below, the way it always was
+        return WhisperModel(model, device=device, compute_type=compute_type)
 
 
 class _Failed(Exception):
