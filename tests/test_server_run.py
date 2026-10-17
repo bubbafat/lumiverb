@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -305,20 +306,60 @@ def _setup_needed(base: str) -> bool:
         return False
 
 
-def _other_devices_may_use_it(data: Path, web_port: int, out: Path) -> None:
+def _over_https(base: str, ca: Path) -> bool:
+    """/v1/setup over HTTPS, the certificate checked against Lumiverb's
+    authority for the URL's host (as a device that trusts it would)."""
+    import ssl
+
+    context = ssl.create_default_context(cafile=str(ca))
+    context.check_hostname = True
+    try:
+        with urllib.request.urlopen(f"{base}/v1/setup", timeout=5, context=context) as response:
+            return response.status == 200 and b'"needed":true' in response.read()
+    except OSError:
+        return False
+
+
+def _first_answer(url: str) -> tuple[int, str | None]:
+    """The status and Location of a URL's answer, not following a redirect."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    try:
+        with urllib.request.build_opener(NoRedirect).open(url, timeout=5) as response:
+            return response.status, response.headers.get("Location")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Location")
+
+
+def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Path) -> None:
     """Settings › Network's choice, as the API writes it: run rewrites nginx's
-    listen lines and restarts it, and it answers on the network's address too
-    (where this machine has one), not only on this machine's own."""
-    lan = network._lan_address()
+    lines and restarts it. Then other devices reach it over HTTPS alone, with
+    Lumiverb's authority's certificate for this machine's names: on the
+    network's address too (where this machine has one), and plain HTTP from
+    there is sent to HTTPS; this machine's own plain HTTP stays."""
+    lan = network.lan_address()
     if lan:
         assert not _setup_needed(f"http://{lan}:{web_port}"), "this machine only, until an admin says"
+    ca = data / "tls" / "ca.crt"
     network.set_other_devices(data, True)
     deadline = time.monotonic() + 30
-    while "Other devices on the network may use it now: restarting nginx" not in out.read_text() or not all(
-            _setup_needed(f"http://{host}:{web_port}") for host in ["127.0.0.1", *([lan] if lan else [])]):
+    while "other devices may use it, over HTTPS; restarting nginx" not in out.read_text() or not _over_https(
+            f"https://127.0.0.1:{tls_port}", ca):
         assert time.monotonic() < deadline, out.read_text()
         time.sleep(0.5)
-    assert f"listen {web_port} default_server;" in network.listen_file(data).read_text()
+    assert _setup_needed(f"http://127.0.0.1:{web_port}"), "this machine keeps plain HTTP"
+    with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+        assert response.read() == ca.read_bytes(), "the authority's certificate, for a device to trust"
+        assert response.headers["Content-Type"] == "application/x-x509-ca-cert"
+    if lan:
+        assert _over_https(f"https://{lan}:{tls_port}", ca)
+        assert _first_answer(f"http://{lan}:{web_port}/v1/setup") == (301, f"https://{lan}:{tls_port}/v1/setup")
+        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+            assert response.read() == ca.read_bytes(), "a device fetches it before it can trust HTTPS"
+    lines = network.listen_file(data).read_text()
+    assert f"listen {tls_port} ssl default_server;" in lines and "ssl_protocols TLSv1.2 TLSv1.3;" in lines
     assert "nginx restarting" in out.read_text()
 
 
@@ -329,7 +370,7 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
     PostgreSQL, the control database and migrates it, serves the API (through
     its own nginx, where there's one), and stops it all, PostgreSQL last."""
     lumiverb_server = Path(sys.executable).parent / "lumiverb-server"
-    pg_port, api_port, web_port = free_port(), free_port(), free_port()
+    pg_port, api_port, web_port, tls_port = free_port(), free_port(), free_port(), free_port()
     url = f"postgresql+psycopg2://lumiverb:its-own-password@127.0.0.1:{pg_port}"
     lines = [f"CONTROL_PLANE_DATABASE_URL={url}/control_plane", f"TENANT_DATABASE_URL_TEMPLATE={url}/{{tenant_id}}",
              f"DATA_DIR={tmp_path / 'data'}", f"API_PORT={api_port}", "API_LISTEN_HOST=127.0.0.1",
@@ -340,7 +381,7 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
         conf = tmp_path / "nginx.conf"
         conf.write_text(nginx_conf(nginx_site(listen=(network.include_line(tmp_path / "data"),), server_name="_",
                                               root=tmp_path / "web", upstream=f"http://127.0.0.1:{api_port}")))
-        lines += [f"NGINX_BIN={nginx}", f"NGINX_CONFIG={conf}", f"WEB_PORT={web_port}"]
+        lines += [f"NGINX_BIN={nginx}", f"NGINX_CONFIG={conf}", f"WEB_PORT={web_port}", f"WEB_TLS_PORT={tls_port}"]
     env_file = tmp_path / "env"
     env_file.write_text("\n".join(lines) + "\n")
     out = tmp_path / "service.log"
@@ -359,7 +400,7 @@ def test_run_is_the_whole_install_with_its_own_postgres(tmp_path):
             time.sleep(0.5)
         if nginx:
             assert _setup_needed(f"http://127.0.0.1:{web_port}")
-            _other_devices_may_use_it(tmp_path / "data", web_port, out)
+            _other_devices_may_use_it(tmp_path / "data", web_port, tls_port, out)
     finally:
         service.send_signal(signal.SIGTERM)
         try:

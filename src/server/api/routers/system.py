@@ -291,16 +291,34 @@ def _backups_unwritable(data: Path) -> str | None:
     return write_check.why_not(folder)
 
 
+class NetworkCertificate(BaseModel):
+    # What other devices are served over HTTPS (lifecycle/tls.py).
+    source: str  # "lumiverb": its own authority's; "yours": one an admin gave
+    names: list[str]
+    expires_at: datetime
+    ca_url: str | None = None  # Lumiverb's authority's certificate, for a device to trust (source "lumiverb")
+    # Where another device fetches it (plain HTTP: it can't trust HTTPS yet), and
+    # its SHA-256 fingerprint, for a person to compare on the device.
+    ca_addresses: list[str] = []
+    ca_fingerprint: str | None = None
+
+
 class Network(BaseModel):
     # This install's own nginx (lumiverb-server run's): where it listens is
     # changed here. An nginx set up otherwise (a Linux install's) isn't.
     available: bool
-    other_devices: bool  # may use it, or this machine only
+    other_devices: bool  # may use it (over HTTPS), or this machine only
     addresses: list[str]  # where other devices reach it
+    certificate: NetworkCertificate | None = None  # None until run has made one
 
 
 class NetworkChange(BaseModel):
     other_devices: bool
+
+
+class YourCertificate(BaseModel):
+    certificate: str  # PEM, the server's first, then its chain
+    key: str  # PEM, without a passphrase
 
 
 NOT_HERE = "Lumiverb doesn't run this server's web server, so who can reach it is set up where it's installed."
@@ -311,12 +329,22 @@ def _network() -> Network:
     from src.server.config import get_settings
     from src.server.lifecycle import network
 
+    from src.server.lifecycle import tls
+
     settings = get_settings()
     data = Path(settings.data_dir)
     if settings.web_port <= 0 or not network.managed(data, settings.nginx_config):
         return Network(available=False, other_devices=False, addresses=[])
+    served = tls.describe(data)
+    ours = served is not None and served.source == tls.LUMIVERB
+    certificate = None if served is None else NetworkCertificate(
+        source=served.source, names=list(served.names), expires_at=served.not_after,
+        ca_url="/lumiverb-ca.crt" if ours else None,
+        ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(settings.web_port, "http")] if ours else [],
+        ca_fingerprint=tls.ca_fingerprint(data) if ours else None)
     return Network(available=True, other_devices=network.other_devices(data),
-                   addresses=network.addresses(settings.web_port))
+                   addresses=network.addresses(network.tls_port(settings.web_port, settings.web_tls_port)),
+                   certificate=certificate)
 
 
 @router.get("/network", response_model=Network, dependencies=[Depends(require_signed_in)])
@@ -340,6 +368,48 @@ def change_network(body: NetworkChange, request: Request) -> Network:
         raise ApiError(403, "network_elsewhere", ELSEWHERE)
     network.set_other_devices(Path(get_settings().data_dir), body.other_devices)
     logger.info("Other devices on the network %s (an admin's choice)", "may use it" if body.other_devices else "can't use it")
+    return _network()
+
+
+def _here_and_admin(request: Request) -> None:
+    from src.server.api.client_address import on_this_machine
+    from src.server.api.errors import ApiError
+
+    if not _network().available:
+        raise ApiError(409, "network_not_here", NOT_HERE)
+    if not on_this_machine(request):
+        raise ApiError(403, "network_elsewhere", ELSEWHERE)
+
+
+@router.put("/network/certificate", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+def keep_your_certificate(body: YourCertificate, request: Request) -> Network:
+    """An admin's own certificate and key, for other devices instead of
+    Lumiverb's authority's (public hosting): checked first (422
+    certificate_not_usable, saying why: not PEM, a passphrase, not the
+    certificate's key, ended, no names), on the machine itself; run serves
+    it within seconds, restarting nginx."""
+    from src.server.api.errors import ApiError
+    from src.server.config import get_settings
+    from src.server.lifecycle import tls
+
+    _here_and_admin(request)
+    try:
+        tls.keep_yours(Path(get_settings().data_dir), body.certificate, body.key)
+    except tls.TlsError as exc:
+        raise ApiError(422, "certificate_not_usable", str(exc)) from None
+    logger.info("Network: an admin's own certificate is served to other devices")
+    return _network()
+
+
+@router.delete("/network/certificate", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+def forget_your_certificate(request: Request) -> Network:
+    """Back to Lumiverb's authority's certificate, on the machine itself."""
+    from src.server.config import get_settings
+    from src.server.lifecycle import tls
+
+    _here_and_admin(request)
+    tls.forget_yours(Path(get_settings().data_dir))
+    logger.info("Network: Lumiverb's own certificate is served to other devices again")
     return _network()
 
 

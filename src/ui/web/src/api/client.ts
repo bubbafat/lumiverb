@@ -1119,14 +1119,30 @@ export async function getSystemHealth(): Promise<SystemHealth> {
   return apiFetch<SystemHealth>("/system/health");
 }
 
+/** The certificate other devices are served over HTTPS (Settings → Network). */
+export interface NetworkCertificate {
+  /** "lumiverb": its own authority's, which each device trusts once; "yours": one an admin gave. */
+  source: "lumiverb" | "yours";
+  names: string[];
+  expires_at: string;
+  /** Lumiverb's authority's certificate, for a device to trust (source "lumiverb"). */
+  ca_url: string | null;
+  /** Where another device fetches it: plain HTTP, as it can't trust HTTPS yet. */
+  ca_addresses: string[];
+  /** Its SHA-256 fingerprint, to compare on the device (it reached it over plain HTTP). */
+  ca_fingerprint: string | null;
+}
+
 /** Whether other devices on the network may use a Mac's Lumiverb (Settings → Network). */
 export interface NetworkAccess {
   /** Lumiverb runs this machine's web server (a Mac's install), so it's changed here. */
   available: boolean;
-  /** Other devices may use it; otherwise this machine only. */
+  /** Other devices may use it, over HTTPS; otherwise this machine only. */
   other_devices: boolean;
-  /** Where other devices reach it. */
+  /** Where other devices reach it (https). */
   addresses: string[];
+  /** Null until Lumiverb has made one (it does at its start). */
+  certificate: NetworkCertificate | null;
 }
 
 export async function getNetworkAccess(): Promise<NetworkAccess> {
@@ -1178,6 +1194,16 @@ export async function getServiceLog(query: LogQuery = {}): Promise<ServiceLog> {
 /** An admin's choice, on the machine itself (403 network_elsewhere otherwise). */
 export async function setNetworkAccess(otherDevices: boolean): Promise<NetworkAccess> {
   return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: { other_devices: otherDevices } });
+}
+
+/** An admin's own certificate and key (PEM), on the machine itself; 422 certificate_not_usable says why it can't be. */
+export async function keepYourCertificate(certificate: string, key: string): Promise<NetworkAccess> {
+  return apiFetch<NetworkAccess>("/system/network/certificate", { method: "PUT", body: { certificate, key } });
+}
+
+/** Back to Lumiverb's own certificate. */
+export async function forgetYourCertificate(): Promise<NetworkAccess> {
+  return apiFetch<NetworkAccess>("/system/network/certificate", { method: "DELETE" });
 }
 
 /** A backup of every database (Settings → Backups). */
