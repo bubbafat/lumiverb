@@ -31,6 +31,9 @@ class JobGuard:
         self.job = job
         self.label = self.pool.label
         self.error: str | None = None
+        # The account's model for the job has been read (a check got its
+        # settings): until then `model` says nothing, "" included.
+        self.model_read = False
         # When the last check started: a failure after it needs a new one.
         self._checked_at: float | None = None
         # Steps fail items from several threads at once: one check at a time.
@@ -54,6 +57,7 @@ class JobGuard:
             self.error = f"Couldn't read the {self.label.lower()} settings: {e}"
             logger.warning("%s: %s", self.job, self.error)
             return False
+        self.model_read = True
         self.error = self.pool.error
         if self.error:
             logger.warning("%s: %s %s waits until it's fixed.", self.job, self.error, self.label)

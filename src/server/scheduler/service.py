@@ -64,6 +64,10 @@ LOCK_CHECK_SEC = 0.0
 # Each account's new producer versions are looked for this often (and at
 # its first refill, before any redo is listed).
 NEW_VERSIONS_EVERY_SEC = 60.0
+# The AI models no account's settings name go this often (models_dir.prune),
+# the first time this long after the scheduler starts.
+PRUNE_MODELS_EVERY_SEC = 24 * 3600.0
+PRUNE_MODELS_FIRST_SEC = 600.0
 
 # Kinds whose AI job decides whether they're handed out.
 _JOB_OF = {kind: job for job, kinds in AI_JOB_KINDS.items() for kind in kinds}
@@ -114,6 +118,7 @@ class Scheduler:
         crashed: Callable[[str, str, list[str], str], list[str]] | None = None,
         models: Any = None,
         new_versions: Callable[[str], Any] | None = None,
+        prune_models: Callable[[list[Any]], Any] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -162,6 +167,10 @@ class Scheduler:
         self._hold_reads = itertools.count()  # which read of what's paused is newest
         # Each account's kinds whose last listing failed, and the error (its status says).
         self._unlisted: dict[str, dict[str, str]] = {}
+        # The models no account names, removed (prune_unwanted_models: main's; none otherwise).
+        self._prune_models = prune_models
+        self._prune_due = clock() + PRUNE_MODELS_FIRST_SEC
+        self._pruning: Future | None = None
 
     # -- one tick -----------------------------------------------------------
 
@@ -184,6 +193,7 @@ class Scheduler:
         self._share_the_gpu(accounts)
         if self._models is not None:
             self._models.let_go_of_idle()
+        self._prune_models_soon(accounts)
         if self._clock() - self._flushed_at >= FLUSH_EVERY_SEC:
             self._flushed_at = self._clock()
             for acct_id, acct in accounts.items():
@@ -193,6 +203,19 @@ class Scheduler:
                 elif (flushing := self._flushing.get(acct_id)) is None or flushing.done():
                     self._flushing[acct_id] = self._refill_pool.submit(acct.failures.flush)
         return started
+
+    def _prune_models_soon(self, accounts: Mapping[str, Any]) -> None:
+        """Once a day, off this thread, the AI models no account's settings
+        name go; not before every account's settings are read (one not read
+        yet might name any): it's tried at each tick until they are."""
+        if self._prune_models is None or self._clock() < self._prune_due:
+            return
+        if self._pruning is not None and not self._pruning.done():
+            return
+        if not all_models_read(accounts.values()):
+            return
+        self._prune_due = self._clock() + PRUNE_MODELS_EVERY_SEC
+        self._pruning = self._refill_pool.submit(self._prune_models, list(accounts.values()))
 
     def _share_the_gpu(self, accounts: Mapping[str, Any]) -> None:
         """Video work comes first on this machine's GPU (Robert, Oct 9): the
@@ -504,6 +527,54 @@ class Scheduler:
         self._refill_pool.shutdown(wait=False, cancel_futures=True)
         self._hold_pool.shutdown(wait=False, cancel_futures=True)
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def all_models_read(accounts: Any) -> bool:
+    """Every account's settings read, and its transcripts model: what each
+    names is known (no account: nothing is)."""
+    accounts = list(accounts)
+    return bool(accounts) and all(
+        getattr(acct, "settings_ready", False)
+        and getattr(getattr(acct, "guards", {}).get("transcripts"), "model_read", False) for acct in accounts)
+
+
+def models_wanted(accounts: Any) -> set[str] | None:
+    """The models the accounts' settings name now, by repo: each one's CLIP
+    and its transcripts' Whisper (the built-in's, when it's one), and the
+    search's CLIP (the producer's defaults). None until every account's are
+    read (all_models_read)."""
+    from src.processing.models_dir import clip_repo, whisper_repo
+    from src.shared.producers import PRODUCERS
+
+    accounts = list(accounts)
+    if not all_models_read(accounts):
+        return None
+    clips = [(PRODUCERS["clip"].defaults["model"], PRODUCERS["clip"].defaults["pretrained"])]
+    whispers = []
+    for acct in accounts:
+        clip = acct.producers.settings("clip")
+        clips.append((clip["model"], clip["pretrained"]))
+        if model := acct.guards["transcripts"].model:
+            whispers.append(model)
+    return ({repo for model, pretrained in clips if (repo := clip_repo(model, pretrained))}
+            | {repo for model in whispers if (repo := whisper_repo(model))})
+
+
+def prune_unwanted_models(accounts: list[Any]) -> list[str]:
+    """The models no account's settings name, removed from the models
+    folder: only Whisper's and CLIP's, never anything else there
+    (src/processing/models_dir.py prune). What went."""
+    from src.processing import models_dir
+    from src.shared.whisper_models import REPOS
+
+    wanted = models_wanted(accounts)
+    if wanted is None:
+        return []
+    try:
+        return models_dir.prune(wanted, models_dir.clip_repos() | set(REPOS.values()))
+    except Exception:  # noqa: BLE001 — tried again tomorrow; nothing else waits on it
+        logger.exception("scheduler: removing the models no setting names failed")
+        return []
 
 
 def stores_here() -> bool:
@@ -884,6 +955,11 @@ def main() -> int:
     from src.shared import secrets_env
 
     configure_logging()
+    # AI models' weights in the models folder (ADR-020 decision 3), set before
+    # anything reads HF_HOME; the faces and transcripts processes inherit it.
+    from src.processing.models_dir import adopt_old_models, use_models_dir
+
+    use_models_dir()
     set_application_name("lumiverb-scheduler")  # its connections, as PostgreSQL shows them
     try:
         settings = read_settings()
@@ -917,6 +993,7 @@ def main() -> int:
             logger.info("scheduler: removed %d half-made analysis proxies left by an earlier run", removed)
         if removed := empty_scratch():
             logger.info("scheduler: removed the scratch of %d jobs an earlier run left", removed)
+        adopt_old_models()
         state_path = cache_dir(STATE_FILE)
         state = load_state(state_path)
         last = [saved_form(state)]
@@ -931,7 +1008,7 @@ def main() -> int:
         models = Models(face_batches_per_process=here.face_batches_per_process)
         accounts = Accounts(state, models=models)
         scheduler = Scheduler(accounts, capacity=default_capacity(here), gpu_decodes=here.gpu_decodes_here,
-                              models=models)
+                              models=models, prune_models=prune_unwanted_models)
         logger.info("scheduler: started")
         try:
             kept = run(stop=stop, scheduler=scheduler, save=save, accounts=accounts.all,
