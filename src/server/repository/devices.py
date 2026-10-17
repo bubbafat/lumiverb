@@ -86,6 +86,10 @@ class DeviceRepository:
         return bool(self._session.execute(text("DELETE FROM devices WHERE device_id = :d"),
                                           {"d": device_id}).rowcount)
 
+    def names(self) -> dict[str, str]:
+        """Every device's name, by id."""
+        return {r[0]: r[1] for r in self._session.execute(text("SELECT device_id, name FROM devices")).all()}
+
     def libraries_read_by(self, device_id: str) -> list[dict[str, str]]:
         """The libraries the device reads (in the trash too): {library_id, name}, by name."""
         return [dict(r) for r in self._session.execute(text(

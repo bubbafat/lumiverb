@@ -120,6 +120,29 @@ does (`all`, `scans`, `upkeep` or a producer such as `vision`):
 lumiverb-server resume all --env "$(brew --prefix)/etc/lumiverb/env"
 ```
 
+### Libraries on another computer
+
+A library's files can stay on the computer they're on, with Lumiverb running elsewhere. That computer becomes a
+**device**: it scans the library and sends previews and video copies for analysis. The server does everything else:
+search, faces, descriptions, scenes and transcripts. The originals never leave the device.
+
+1. In the web app, Settings › Devices › Register. Copy the key it shows (it's shown once).
+2. On the device, with Lumiverb installed, set where the server is and paste the key when asked. Then leave it reading:
+
+   ```bash
+   lumiverb config set --api-url http://your-server:6464 --api-key -
+   ```
+
+   ```bash
+   lumiverb device run
+   ```
+
+3. In the library's settings, under Who reads it, choose the device and the library's folder as the device sees it.
+   Adding a library can choose it too (Read by).
+
+The device checks in every minute. Settings › Devices says when its key was last used, and the library's Scans
+section says when it last checked in.
+
 ---
 
 ## AI descriptions with Ollama

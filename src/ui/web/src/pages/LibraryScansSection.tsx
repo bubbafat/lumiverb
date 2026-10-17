@@ -36,24 +36,27 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
     onSuccess: refresh,
   });
   const ask = useMutation({ mutationFn: () => scanNow(libraryId), onSuccess: refresh });
-  if (!row) return null;
+  // The scheduler's status lists the libraries this server reads; a device's is said from the library itself.
+  if (!row && !library) return null;
+  const paused = row?.paused ?? Boolean(library?.scans_paused);
+  const reader = row?.reader ?? library?.reader ?? "server";
   const asked = Boolean(library?.scan_requested_at);
   const error = toggle.error ?? ask.error;
   return (
     <div className="space-y-2 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3" aria-label="Scans">
       <h2 className="text-lg font-semibold text-gray-100">Scans</h2>
       <p className="text-sm text-gray-400">
-        {row.reader === "server" ? "This server reads its files." : `${row.reader} reads its files.`}{" "}
-        {row.paused
+        {reader === "server" ? "This server reads its files." : `${library?.reader_name ?? "A device"} reads its files.`}{" "}
+        {paused
           ? "Its scans are paused: no new or changed files are found in it. Everything else goes on."
           : "Its scans find new and changed files."}
       </p>
       {library?.checked_in && <CheckedIn seen={library.checked_in} />}
-      {asked && !row.paused && (
+      {asked && !paused && (
         <p className="text-sm text-gray-400">A scan of the whole library is asked for: it starts within a minute.</p>
       )}
       <div className="flex flex-wrap gap-2">
-        {user && user.role !== "viewer" && !row.paused && (
+        {user && user.role !== "viewer" && !paused && (
           <button
             type="button"
             disabled={ask.isPending || asked}
@@ -67,10 +70,10 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
           <button
             type="button"
             disabled={toggle.isPending}
-            onClick={() => toggle.mutate(!row.paused)}
+            onClick={() => toggle.mutate(!paused)}
             className="rounded-lg border border-gray-700 px-3 py-1 text-sm text-gray-200 hover:border-gray-500 disabled:opacity-50"
           >
-            {row.paused ? "Resume scans" : "Pause scans"}
+            {paused ? "Resume scans" : "Pause scans"}
           </button>
         )}
       </div>

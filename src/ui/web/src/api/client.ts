@@ -209,11 +209,64 @@ export async function listLibraries(
 export async function createLibrary(
   name: string,
   rootPath: string,
+  reader?: string,
 ): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>("/libraries", {
     method: "POST",
-    body: { name, root_path: rootPath },
+    body: { name, root_path: rootPath, ...(reader && reader !== "server" ? { reader } : {}) },
   });
+}
+
+/** Who reads a library's files (admins): "server", this server, or a registered device's id, never both at once.
+ * rootPath: the folder as the new reader sees it (left out, it stays). */
+export async function chooseLibraryReader(libraryId: string, reader: string, rootPath?: string): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}/reader`, {
+    method: "PUT",
+    body: { reader, ...(rootPath !== undefined ? { root_path: rootPath } : {}) },
+  });
+}
+
+/** A computer that reads libraries for this server (ADR-018 decision 8): account admins register them. */
+export interface Device {
+  device_id: string;
+  name: string;
+  registered_at: string;
+  /** Whether it has a key: none once ended, or once the person who made it lost their access. */
+  has_key: boolean;
+  key_last_used_at: string | null;
+  /** The ids of the libraries it reads. */
+  libraries: string[];
+}
+
+/** A device with its key, shown this once. */
+export interface DeviceWithKey extends Device {
+  key: string;
+}
+
+export async function listDevices(): Promise<Device[]> {
+  return (await apiFetch<{ devices: Device[] }>("/devices")).devices;
+}
+
+export async function registerDevice(name: string): Promise<DeviceWithKey> {
+  return apiFetch<DeviceWithKey>("/devices", { method: "POST", body: { name } });
+}
+
+export async function renameDevice(deviceId: string, name: string): Promise<Device> {
+  return apiFetch<Device>(`/devices/${deviceId}`, { method: "PATCH", body: { name } });
+}
+
+/** A new key, shown this once: the old one stops at once. */
+export async function newDeviceKey(deviceId: string): Promise<DeviceWithKey> {
+  return apiFetch<DeviceWithKey>(`/devices/${deviceId}/key`, { method: "POST" });
+}
+
+export async function endDeviceKey(deviceId: string): Promise<void> {
+  return apiFetch<void>(`/devices/${deviceId}/key`, { method: "DELETE" });
+}
+
+/** 409 device_reads_libraries (details.libraries) while a library names it as its reader. */
+export async function removeDevice(deviceId: string): Promise<void> {
+  return apiFetch<void>(`/devices/${deviceId}`, { method: "DELETE" });
 }
 
 /**

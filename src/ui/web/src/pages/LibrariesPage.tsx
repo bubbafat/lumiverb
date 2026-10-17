@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  listDevices,
   listLibraries,
   listLibraryHealth,
   createLibrary,
@@ -40,6 +41,8 @@ export default function LibrariesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [addName, setAddName] = useState("");
   const [addPath, setAddPath] = useState("");
+  // Who reads it: "server", or a registered device (Settings › Devices).
+  const [addReader, setAddReader] = useState("server");
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // A library's share link just copied, or shown to copy by hand when this browser won't copy from here.
@@ -80,11 +83,12 @@ export default function LibrariesPage() {
   );
 
   const createMutation = useMutation({
-    mutationFn: () => createLibrary(addName.trim(), addPath.trim()),
+    mutationFn: () => createLibrary(addName.trim(), addPath.trim(), addReader),
     onSuccess: () => {
       setAddOpen(false);
       setAddName("");
       setAddPath("");
+      setAddReader("server");
       setAddError("");
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
     },
@@ -100,6 +104,8 @@ export default function LibrariesPage() {
   // Choosing a library's folder is an admin's too, so adding a library is.
   const role = useRole();
   const isAdmin = role === "admin";
+  const { data: devices } = useQuery({ queryKey: ["devices"], queryFn: listDevices, enabled: isAdmin && addOpen });
+  const addDevice = devices?.find((d) => d.device_id === addReader);
   // Archived clips aren't deleted on their own, but they go with their library: say how many.
   const { data: archivedInDeleting } = useQuery({
     queryKey: ["archive", deleteConfirmId, null, "all", "count"],
@@ -535,12 +541,30 @@ export default function LibrariesPage() {
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+          {devices && devices.length > 0 && (
+            <div>
+              <label htmlFor="lib-reader" className="mb-1 block text-sm text-gray-400">
+                Read by
+              </label>
+              <select
+                id="lib-reader"
+                value={addReader}
+                onChange={(e) => setAddReader(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100"
+              >
+                <option value="server">This server</option>
+                {devices.map((d) => (
+                  <option key={d.device_id} value={d.device_id}>{d.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label
               htmlFor="lib-path"
               className="mb-1 block text-sm text-gray-400"
             >
-              Root path
+              {addDevice ? `Its folder, as ${addDevice.name} sees it` : "Root path"}
             </label>
             <input
               id="lib-path"
