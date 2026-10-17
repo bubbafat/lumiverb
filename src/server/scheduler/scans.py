@@ -20,7 +20,9 @@ The scheduler looks at each account's libraries every 30 seconds:
    (account.py look_at_storage): pausing scans stops no other work.
 
 Each library is scanned in full every 15 minutes, unless this machine's
-setting says otherwise (LUMIVERB_FULL_SCAN_EVERY_MIN, settings.py): nothing
+setting says otherwise (LUMIVERB_FULL_SCAN_EVERY_MIN, settings.py), and at
+the next pass when a scan of it was asked for (Scan now: the check-in
+before each pass says, ADR-018 phase 4): nothing
 reports changes on a Mac running the server (no file-system watching), so a
 full scan is how its new files are found, and elsewhere it catches a report
 that was missed. Each is a plain full scan (Robert, Oct 13): "modified since
@@ -227,7 +229,11 @@ def scan_library(
     full_scan_every: float,
     scan_fn: Callable,
     console: Console,
+    asked: bool = False,
 ) -> None:
+    """Scan what's due in the library: the folder covering its reported
+    changes and retries, or all of it when a full scan is due or one was
+    asked for (asked: Scan now)."""
     library_id = library["library_id"]
     resp = client.get(f"/v1/libraries/{library_id}/changes").json()
     changes: list[dict] = resp.get("changes", [])
@@ -235,7 +241,7 @@ def scan_library(
     retry_due = retry is not None and now >= retry.due
     if retry is not None and not retry_due:
         changes = [c for c in changes if retry.held.get(c["change_id"]) != c["version"]]
-    full_due = now - state.last_full_scan.get(library_id, float("-inf")) >= full_scan_every
+    full_due = asked or now - state.last_full_scan.get(library_id, float("-inf")) >= full_scan_every
     if not changes and not retry_due and not full_due:
         return
 
@@ -247,7 +253,8 @@ def scan_library(
     logger.info(
         "scheduler: scanning %s%s (%d reported change(s)%s%s)",
         library["name"], f" / {prefix}" if prefix else "", len(changes),
-        ", retrying what failed" if retry_due else "", ", full scan due" if full_due else "",
+        ", retrying what failed" if retry_due else "",
+        ", a scan asked for" if asked else ", full scan due" if full_due else "",
     )
     # Files waiting for a retry that isn't due are left to it, unless they changed.
     waiting = {} if retry is None or retry_due else {p: s for p, s in retry.seen.items() if p in retry.paths}
@@ -347,13 +354,17 @@ def scan_pass(
     scan_fn: Callable | None = None,
     console: Console | None = None,
     on_roots: Callable[[dict[str, Originals | None]], None] | None = None,
+    scan_now: set[str] | frozenset[str] = frozenset(),
+    scanning: Callable[[str | None], None] | None = None,
 ) -> dict[str, Originals | None]:
     """Scan what's due in each library whose storage is reachable; each
     library's originals on this machine (src/processing/originals.py; None:
     not reachable). on_roots hears what every library's look found before
     any scan, then a library's alone whenever it changed. Each library is
     looked at again right before its scan: a share can sleep during another
-    library's long scan."""
+    library's long scan. scan_now: libraries a scan of which was asked for,
+    scanned whole now; scanning hears each library as its scan starts, and
+    None when it ends."""
     if scan_fn is None:
         from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
@@ -378,9 +389,11 @@ def scan_pass(
         failing = state.failing.get(library["library_id"])
         if failing is not None and now < failing.due:
             continue  # its back-off: the scheduler's status says why
+        if scanning is not None:
+            scanning(library["library_id"])
         try:
             scan_library(client, library, originals, state, now=now, full_scan_every=full_scan_every,
-                         scan_fn=scan_fn, console=console)
+                         scan_fn=scan_fn, console=console, asked=library["library_id"] in scan_now)
         except LumiverbAPIError as exc:
             if exc.code != "scans_paused":
                 _scan_failed(state, library, exc, now)
@@ -391,6 +404,9 @@ def scan_pass(
         else:
             if state.failing.pop(library["library_id"], None) is not None:
                 logger.info("scheduler: scanning %s works again", library["name"])
+        finally:
+            if scanning is not None:
+                scanning(None)
     return found
 
 

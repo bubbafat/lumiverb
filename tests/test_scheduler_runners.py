@@ -923,10 +923,23 @@ def test_a_clip_whose_stored_files_cant_be_reached_waits_and_isnt_charged(acct, 
 # ---------------------------------------------------------------------------
 
 
+def _checked_in(acct, libs: list[dict], scan_now: set[str] | None = None) -> list[str]:
+    """The account's check-in as the server would answer it: these libraries (the ones this server reads)."""
+    calls: list[str] = []
+
+    def check_in() -> None:
+        calls.append("check_in")
+        acct.reading = lambda: list(libs)
+        acct.scan_now = set(scan_now or ())
+
+    acct.check_in = check_in
+    acct.reading = lambda: []
+    acct.scan_now = set()
+    return calls
+
+
 def test_a_scan_look_notes_which_libraries_can_be_reached(acct, monkeypatch) -> None:
-    libs = [{"library_id": "lib_1", "name": "Footage"}]
-    acct.client.get.return_value.json.return_value = libs
-    acct.set_libraries = MagicMock()
+    _checked_in(acct, [{"library_id": "lib_1", "name": "Footage"}])
     acct.set_reachable = MagicMock()
     acct.scan_state = MagicMock()
     seen = {}
@@ -938,29 +951,31 @@ def test_a_scan_look_notes_which_libraries_can_be_reached(acct, monkeypatch) -> 
 
     monkeypatch.setattr("src.server.scheduler.scans.scan_pass", scan_pass)
     runners.scan(acct, _job("scan", "scan:t1"), now=123.0)
-    acct.set_libraries.assert_called_once_with(libs)
     assert acct.set_reachable.call_args_list[0].args == ({"lib_1": Path("/mnt/x")},)
     assert isinstance(seen["client"], runner.Saving)  # no NUL in what a scan saves (a file's EXIF)
 
 
-def test_the_scan_pass_leaves_out_libraries_paused_or_read_elsewhere(acct, monkeypatch) -> None:
-    # ADR-018 phase 1: a library's own Scans pause, and its reader (only this
-    # server's libraries are scanned here; a device's scans its own).
+def test_the_scan_pass_checks_in_first_and_leaves_out_paused_libraries(acct, monkeypatch) -> None:
+    # ADR-018: the libraries this server reads are what its check-in hears (phase 4: the server
+    # leaves out a device's); of those, a library's own Scans pause (phase 1) leaves it out.
     libs = [{"library_id": "lib_1", "name": "Footage", "reader": "server", "scans_paused": False},
-            {"library_id": "lib_2", "name": "Paused", "reader": "server", "scans_paused": True},
-            {"library_id": "lib_3", "name": "On a Mac", "reader": "device:dev_1", "scans_paused": False},
-            {"library_id": "lib_4", "name": "From before readers"}]
-    acct.client.get.return_value.json.return_value = libs
-    acct.set_libraries = MagicMock()
+            {"library_id": "lib_2", "name": "Paused", "reader": "server", "scans_paused": True}]
+    calls = _checked_in(acct, libs, scan_now={"lib_1"})
     acct.set_reachable = MagicMock()
     acct.scan_state = MagicMock()
     passed = {}
 
-    def scan_pass(client, libraries, *a, **kw):
+    def scan_pass(client, libraries, *a, scan_now, scanning, **kw):
+        calls.append("scan_pass")
         passed["ids"] = [lib["library_id"] for lib in libraries]
+        passed["scan_now"] = scan_now
+        scanning("lib_1")
+        passed["scanning"] = acct.scanning
+        scanning(None)
         return {}
 
     monkeypatch.setattr("src.server.scheduler.scans.scan_pass", scan_pass)
     runners.scan(acct, _job("scan", "scan:t1"), now=123.0)
-    assert passed["ids"] == ["lib_1", "lib_4"]
-    acct.set_libraries.assert_called_once_with(libs)  # it keeps what's this server's (Account.set_libraries)
+    assert calls == ["check_in", "scan_pass"]
+    assert passed == {"ids": ["lib_1"], "scan_now": {"lib_1"}, "scanning": "lib_1"}
+    assert acct.scanning is None  # what its check-ins say: scanning while it is

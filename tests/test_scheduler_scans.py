@@ -267,12 +267,19 @@ class ScanningAccount:
     """What the scan job reads of an account (Account)."""
 
     def __init__(self, server: FakeServer) -> None:
+        self.server = server
         self.client = server.client()
         self.scan_state = ScanState()
         self.machine = machine.current()
+        self.scan_now: set[str] = set()
+        self.scanning: str | None = None
+        self.asked: set[str] = set()  # what the next check-in says was asked for (Scan now)
 
-    def set_libraries(self, libraries: list[dict]) -> None:
-        pass
+    def check_in(self) -> None:
+        self.scan_now, self.asked = self.asked, set()
+
+    def reading(self) -> list[dict]:
+        return list(self.server.libraries)
 
     def set_reachable(self, roots: dict) -> None:
         pass
@@ -309,6 +316,32 @@ def test_a_library_is_scanned_in_full_again_once_its_interval_has_passed_and_not
             scanned.append(minute)
     assert scanned == full_at
     assert prefixes == [None] * len(full_at)  # each one the whole library
+
+
+@pytest.mark.fast
+def test_a_scan_asked_for_scans_the_whole_library_at_the_next_pass(
+        das: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # ADR-018 phase 4: Scan now reaches the reader in its check-in; its next pass scans all of the library,
+    # whenever its last full scan was, and the one after goes back to its interval.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LUMIVERB_ROOT_MAP", json.dumps({MAC: str(das)}))
+    monkeypatch.delenv("LUMIVERB_FULL_SCAN_EVERY_MIN", raising=False)
+    from src.server.scheduler.settings import read_settings
+
+    machine.use(read_settings().machine())
+    prefixes: list = []
+    monkeypatch.setattr("src.processing.scan.run_scan",
+                        lambda client, library, **kw: (prefixes.append(kw["path_prefix"]), ScanStats())[1])
+    acct = ScanningAccount(FakeServer([LIB]))
+    runners.scan(acct, Job("t1", "scan", 1, ()), now=100 * HOUR)
+    assert prefixes == [None]  # its first full scan
+    runners.scan(acct, Job("t1", "scan", 1, ()), now=100 * HOUR + 2 * MIN)
+    assert prefixes == [None]  # not due again for 15 minutes
+    acct.asked = {LIB["library_id"]}
+    runners.scan(acct, Job("t1", "scan", 1, ()), now=100 * HOUR + 3 * MIN)
+    assert prefixes == [None, None]
+    runners.scan(acct, Job("t1", "scan", 1, ()), now=100 * HOUR + 4 * MIN)
+    assert prefixes == [None, None]
 
 
 @pytest.mark.fast

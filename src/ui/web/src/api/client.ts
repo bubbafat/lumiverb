@@ -1466,6 +1466,12 @@ export async function resumeScans(libraries: string[] | "all"): Promise<void> {
     method: "POST", body: libraries === "all" ? { all: true } : { library_ids: libraries } });
 }
 
+/** Ask the library's reader for a scan of the whole library, at its next check-in (editors). 409 scans_paused
+ * while its scans are paused; asked again before it's done, the first ask stands. */
+export async function scanNow(libraryId: string): Promise<void> {
+  await apiFetch<void>(`/libraries/${encodeURIComponent(libraryId)}/scan-now`, { method: "POST" });
+}
+
 export async function findSimilar(params: {
   assetId: string;
   libraryId: string;

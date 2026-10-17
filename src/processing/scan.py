@@ -66,8 +66,6 @@ from src.processing.ingest import (
     _generate_proxy_bytes,
     _generate_video_preview,
     _jpeg_to_webp,
-    _load_library_filters,
-    _load_tenant_filters,
 )
 from src.processing.originals import Originals, reach, where
 from src.processing.proxy.proxy_cache import ProxyCache
@@ -75,7 +73,7 @@ from src.processing.video.probe import probe_video
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
-from src.shared.path_filter import has_control_character
+from src.shared.path_filter import PathFilter, has_control_character
 from src.shared.producers import effective_settings
 from src.shared.producers import lineage as producer_lineage
 
@@ -186,6 +184,19 @@ def _existing_folder(originals: Originals, rel: str) -> str | None:
             return "/".join(parts)
         parts = parts[:-1]
     return None
+
+
+def _filters(client: ApiClient, library_id: str) -> tuple[list[PathFilter], list[PathFilter]]:
+    """The account's path filters and the library's, as the server tells the
+    library's reader them (GET /v1/libraries/{id}/reader-changes). A scan
+    that can't have them fails: unfiltered, it would send what they leave out."""
+    filters = client.get(f"/v1/libraries/{library_id}/reader-changes").json()["filters"]
+
+    def each(level: dict) -> list[PathFilter]:
+        return ([PathFilter(type="include", pattern=p) for p in level["includes"]]
+                + [PathFilter(type="exclude", pattern=p) for p in level["excludes"]])
+
+    return each(filters["account"]), each(filters["library"])
 
 
 def _made(artifact: str, source_hash: str | None) -> dict:
@@ -924,9 +935,8 @@ def run_scan(
 
     stats = ScanStats()
 
-    # Load path filters
-    tenant_filters = _load_tenant_filters(client)
-    library_filters = _load_library_filters(client, library_id)
+    # Its path filters, as its reader is told them (ADR-018 phase 4).
+    tenant_filters, library_filters = _filters(client, library_id)
     total_filters = len(tenant_filters) + len(library_filters)
     if total_filters:
         console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")

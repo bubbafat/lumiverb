@@ -325,8 +325,7 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
 
     library, here = _mapped_library(home, tmp_path)
     with (
-        patch("src.processing.scan._load_tenant_filters", return_value=[]),
-        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._filters", return_value=([], [])),
         patch.object(Folder, "walk", autospec=True, return_value=[]) as walk,
     ):
         run_scan(FakeScans().client(), library, console=Console(quiet=True))

@@ -61,8 +61,7 @@ def _file(root: Path, rel: str, data: bytes = b"bytes", *, mtime: float = HOUR_A
 def _scan(server: FakeScans, root: Path, **kwargs) -> ScanStats:
     kwargs = {"concurrency": 1, "console": Console(quiet=True), **kwargs}
     with (
-        patch("src.processing.scan._load_tenant_filters", return_value=[]),
-        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._filters", return_value=([], [])),
     ):
         return run_scan(server.client(), {"library_id": "lib_1", "root_path": str(root)}, **kwargs)
 

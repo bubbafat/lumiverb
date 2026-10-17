@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.shared.readers import read_by_server
 from src.producers.runner import Work
 from src.producers.runner import run as run_work
 from src.server.repository.lineage import Pauses
@@ -760,11 +761,14 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
                   runners={**rec.all(), "vision": lambda acct, job: (release.wait(30), vision(acct, job))[1]},
                   scan=MagicMock(), on_hold=lambda t: _pauses(held),
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
+    def vision_running() -> int:  # the scan job (instant here) may be in flight too: it isn't counted
+        return s.dispatcher.status("t1")["running"].get("vision", 0)
+
     deadline = time.monotonic() + 5
-    while s.running == 0 and time.monotonic() < deadline:  # a in hand, b waiting
+    while vision_running() == 0 and time.monotonic() < deadline:  # a in hand, b waiting
         s.tick()
         time.sleep(0.02)
-    assert s.running == 1
+    assert vision_running() == 1
     deadline = time.monotonic() + 10
     slow.clear()
     refreshing = threading.Event()
@@ -1381,9 +1385,14 @@ class Api:
         body = self.libraries if path == "/v1/libraries" else {"producers": []}
         return SimpleNamespace(json=lambda: body)
 
-    def post(self, path: str, **kw) -> None:
+    def post(self, path: str, **kw):
         if path.startswith("/made/"):
             self.events.append(("made", path.removeprefix("/made/")))
+        if path == "/v1/readers/check-in":  # the libraries this server reads, as the API answers
+            return SimpleNamespace(json=lambda: {"libraries": [{"mark": 0, "scan_now": False, **lib}
+                                                               for lib in self.libraries if read_by_server(lib)],
+                                                 "gone": [], "check_in_every_sec": 60})
+        return None
 
     def close(self) -> None:
         pass

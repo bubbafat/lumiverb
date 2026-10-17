@@ -218,3 +218,52 @@ def test_a_redo_made_with_settings_newer_than_those_read_reads_them_again(acct) 
     acct.clock.now += account_mod.RETRY_SEC
     acct.follow_settings("transcript", "another")
     assert acct.client.get.call_count == calls + 1
+
+
+def test_it_checks_in_as_the_reader_of_its_libraries(acct, tmp_path: Path) -> None:
+    # ADR-018 phase 4: how each library is, and its last full scan; the answer is what it reads now.
+    answers = [
+        {"libraries": [{"library_id": "lib_1", "name": "A", "root_path": "/a", "reader": "server",
+                        "scans_paused": False, "mark": 3, "scan_now": False},
+                       {"library_id": "lib_2", "name": "B", "root_path": "/b", "reader": "server",
+                        "scans_paused": True, "mark": 1, "scan_now": True}],
+         "gone": [], "check_in_every_sec": 60},
+    ]
+    posted: list[dict] = []
+
+    def post(path, *, json, retry):
+        assert path == "/v1/readers/check-in" and retry
+        posted.append(json)
+        return MagicMock(json=lambda: answers[-1])
+
+    acct.client.post.side_effect = post
+    acct.check_in()
+    assert posted[0]["libraries"] == [] and posted[0]["reader"] == "server" and posted[0]["protocol"] >= 1
+    assert sorted(acct.libraries) == ["lib_1", "lib_2"] and acct.scan_now == {"lib_2"}
+    assert acct.marks == {"lib_1": 3, "lib_2": 1}
+
+    acct.set_reachable({"lib_1": None})  # its storage away at the last look
+    acct.scan_state.last_full_scan["lib_1"] = datetime(2026, 10, 9, 11, 0, tzinfo=UTC).timestamp()
+    acct.check_in()
+    said = {s["library_id"]: s for s in posted[1]["libraries"]}
+    assert said["lib_1"] == {"library_id": "lib_1", "state": "away", "mark": 3,
+                             "last_full_scan_at": "2026-10-09T11:00:00+00:00"}
+    assert said["lib_2"]["state"] == "paused" and said["lib_2"]["last_full_scan_at"] is None
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1")})
+    acct.scanning = "lib_1"
+    acct.check_in()
+    assert {s["library_id"]: s["state"] for s in posted[2]["libraries"]} == {"lib_1": "scanning", "lib_2": "paused"}
+
+
+def test_a_mark_that_moved_has_the_settings_read_again_at_the_next_refresh(acct) -> None:
+    lib = {"library_id": "lib_1", "name": "A", "root_path": "/a", "reader": "server", "scans_paused": False,
+           "scan_now": False}
+    answer = {"libraries": [{**lib, "mark": 1}], "gone": [], "check_in_every_sec": 60}
+    acct.client.post.side_effect = lambda path, **kw: MagicMock(json=lambda: answer)
+    acct.refresh()
+    first = acct._refreshed_at
+    acct.check_in()  # the same mark: the minute stands
+    assert acct._refreshed_at == first
+    answer = {"libraries": [{**lib, "mark": 2}], "gone": [], "check_in_every_sec": 60}
+    acct.check_in()
+    assert acct._refreshed_at is None and acct.marks == {"lib_1": 2}

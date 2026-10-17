@@ -62,6 +62,18 @@ class LibraryResponse(BaseModel):
     reader: str = SERVER
 
 
+class CheckedIn(BaseModel):
+    """A library reader's latest check-in (ADR-018 phase 4, src/server/check_ins.py)."""
+
+    client: str  # "this server", a device's name
+    version: str
+    state: str  # scanning | idle | paused | away (its storage can't be reached from the reader)
+    waiting_files: int
+    waiting_bytes: int
+    last_full_scan_at: str | None
+    checked_in_at: str
+
+
 class LibraryListItem(BaseModel):
     library_id: str
     name: str
@@ -81,6 +93,20 @@ class LibraryListItem(BaseModel):
     # found in it. Pause all isn't said here (GET /v1/producers/queue says
     # each library's with it, and who paused it).
     scans_paused: bool = False
+    # A scan of the whole library asked for (Scan now), until one started after it finishes.
+    scan_requested_at: str | None = None
+    # Its reader's latest check-in, none before the first.
+    checked_in: CheckedIn | None = None
+
+
+def _checked_in(row: dict | None) -> CheckedIn | None:
+    if row is None:
+        return None
+    full = row["last_full_scan_at"]
+    return CheckedIn(client=row["client"], version=row["version"], state=row["state"],
+                     waiting_files=row["waiting_files"], waiting_bytes=row["waiting_bytes"],
+                     last_full_scan_at=full.isoformat() if full else None,
+                     checked_in_at=row["checked_in_at"].isoformat())
 
 
 class ScansPauseRequest(BaseModel):
@@ -153,8 +179,11 @@ def list_libraries(
     include_trashed: Annotated[bool, Query(description="Include libraries with status=trashed")] = False,
 ) -> list[LibraryListItem]:
     """Return all libraries for the tenant."""
+    from src.server import check_ins
+
     repo = LibraryRepository(session)
     libraries = repo.list_all(include_trashed=include_trashed)
+    seen = check_ins.latest(session)
     return [
         LibraryListItem(
             library_id=lib.library_id,
@@ -168,6 +197,8 @@ def list_libraries(
             revision=lib.revision,
             reader=lib.reader,
             scans_paused=lib.scans_paused_at is not None,
+            scan_requested_at=lib.scan_requested_at.isoformat() if lib.scan_requested_at else None,
+            checked_in=_checked_in(seen.get(lib.library_id)),
         )
         for lib in libraries
     ]

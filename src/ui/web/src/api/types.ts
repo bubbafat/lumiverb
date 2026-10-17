@@ -13,6 +13,22 @@ export interface LibraryListItem {
   reader?: string;
   /** Its own Scans pause (Pause all isn't said here). Older servers leave it out. */
   scans_paused?: boolean;
+  /** A scan of the whole library asked for (Scan now), until one started after it finishes. */
+  scan_requested_at?: string | null;
+  /** Its reader's latest check-in (ADR-018 phase 4); none before the first, and older servers leave it out. */
+  checked_in?: ReaderCheckIn | null;
+}
+
+export interface ReaderCheckIn {
+  /** "this server", or a device's name. */
+  client: string;
+  version: string;
+  /** "away": its storage can't be reached from the reader. */
+  state: "scanning" | "idle" | "paused" | "away";
+  waiting_files: number;
+  waiting_bytes: number;
+  last_full_scan_at: string | null;
+  checked_in_at: string;
 }
 
 export interface DirectoryNode {
