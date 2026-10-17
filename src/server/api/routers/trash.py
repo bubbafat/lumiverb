@@ -7,7 +7,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.after_commit import AfterCommit
@@ -16,7 +15,6 @@ from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cur
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.shared.utils import utcnow
-from src.server.models.tenant import Asset
 from src.server.repository.assets import AssetRepository
 from src.server.repository.libraries import LibraryRepository
 from src.server.storage import store as stored
@@ -150,7 +148,7 @@ def hand_over_to_copies(session: Session, request: Request, archived_ids: list[s
     after = AfterCommit() if after is None else after
     # A handover gives way to a person within 200 ms (_hand_over); the rest
     # of the transaction waits as long as it ever did.
-    lock_timeout = session.execute(text("SELECT current_setting('lock_timeout')")).scalar_one()
+    lock_timeout = AssetRepository(session).lock_timeout()
     moved: list[str] = []
     libraries: set[str] = set()
     for asset_id in archived_ids:
@@ -172,7 +170,7 @@ def hand_over_to_copies(session: Session, request: Request, archived_ids: list[s
         after.extend(steps)
         moved.append(asset_id)
         libraries.add(library_id)
-    session.execute(text("SELECT set_config('lock_timeout', :v, true)"), {"v": lock_timeout})
+    AssetRepository(session).set_lock_timeout(lock_timeout)
     for library_id in libraries:  # open grids drop the copies' tiles
         after.add(f"Bumping library {library_id}'s revision after a handover",
                   partial(LibraryRepository(session).bump_revision, library_id))
@@ -192,7 +190,7 @@ def _hand_over(session: Session, request: Request, asset_id: str, after: AfterCo
     its library when it moved; None when there's nothing to move to (the
     caller rolls its savepoint back)."""
     repo = AssetRepository(session)
-    archived = session.get(Asset, asset_id)  # get_by_id leaves out deleted assets
+    archived = repo.get_any(asset_id)  # get_by_id leaves out deleted assets
     if (archived is None or not repo.lock_for_restore(archived, archived.rel_path)
             or archived.deleted_at is None or archived.deleted_reason != "missing"):
         return None
@@ -200,28 +198,12 @@ def _hand_over(session: Session, request: Request, asset_id: str, after: AfterCo
     # anything else a person does on the copy that locks in another order:
     # give way within 200 ms, before Postgres would call it a deadlock and
     # fail their request.
-    session.execute(text("SET LOCAL lock_timeout = '200ms'"))
+    repo.set_lock_timeout("200ms")
     copy = repo.find_empty_newer_copy(archived)
     if copy is None:
         return None
     path, copy_id, library_id = copy.rel_path, copy.asset_id, archived.library_id
-    # Out of the way first: one clip in sight holds a path.
-    copy.rel_path = f".lumiverb-handed-over/{copy_id}"
-    copy.deleted_at = utcnow()
-    copy.deleted_reason = "handed_over"
-    session.add(copy)
-    session.flush()
-    archived.rel_path = path
-    archived.file_size = copy.file_size
-    archived.file_mtime = copy.file_mtime
-    archived.updated_at = utcnow()
-    repo.clear_trash(archived)
-    session.add(archived)
-    # A cover someone set to the copy follows the asset.
-    for table in ("libraries", "projects"):
-        session.execute(text(f"UPDATE {table} SET cover_asset_id = :a WHERE cover_asset_id = :c"),
-                        {"a": asset_id, "c": copy_id})
-    session.flush()
+    repo.move_onto_copy(archived, copy)  # a cover someone set to the copy follows the asset
     # Deletes the copy for good, committed with the move; its files go after.
     tenant_id = getattr(request.state, "tenant_id", None)
     if purge_assets(session, tenant_id, [copy], "", remove_from_projects=True, reason="handed_over",
@@ -291,14 +273,14 @@ def _files_of(session: Session, tenant_id: str | None, clips: list) -> list[str]
                                        getattr(a, "analysis_proxy_key", None)) if k]
     ids = [a.asset_id for a in clips]
     library_of = {a.asset_id: a.library_id for a in clips}
-    for asset_id, rep_frame_ms, proxy_key, thumbnail_key in session.execute(text(
-        "SELECT asset_id, rep_frame_ms, proxy_key, thumbnail_key FROM video_scenes WHERE asset_id = ANY(:ids)"
-    ), {"ids": ids}).all():
+    from src.server.repository.faces import FaceRepository
+    from src.server.repository.video import VideoSceneRepository
+
+    for asset_id, rep_frame_ms, proxy_key, thumbnail_key in VideoSceneRepository(session).files_of(ids):
         keys += [k for k in (proxy_key, thumbnail_key) if k]
         if tenant_id:
             keys.append(stored.scene_rep_key(tenant_id, library_of[asset_id], asset_id, rep_frame_ms))
-    for asset_id, face_id, crop_key in session.execute(text(
-        "SELECT asset_id, face_id, crop_key FROM faces WHERE asset_id = ANY(:ids)"), {"ids": ids}).all():
+    for asset_id, face_id, crop_key in FaceRepository(session).crops_of(ids):
         keys += [k for k in (crop_key, tenant_id and stored.face_crop_key_of(tenant_id, library_of[asset_id], face_id))
                  if k]
     return list(dict.fromkeys(keys))

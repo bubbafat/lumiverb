@@ -11,18 +11,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import (
-    LOCATION_JOIN,
-    LibraryScope,
-    SearchTerm,
-    has_location_sql,
-    location_params,
-)
+from src.server.models.query_filter import LibraryScope
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +54,6 @@ def get_facets(
     public_cap_ms = guard_public_spec(request, session, spec)
     guard_project_filters(request, session, spec)
 
-    conditions: list[str] = []
-    params: dict[str, object] = {}
-    counter = [0]
-
     # --- Candidate set from text search ---
     candidate_ids: list[str] | None = None
     if spec.search_terms:
@@ -83,63 +72,9 @@ def get_facets(
             return _empty_facets()
         candidate_ids = list(scores.keys())
 
-    if candidate_ids is not None:
-        conditions.append("a.asset_id = ANY(:candidate_ids)")
-        params["candidate_ids"] = candidate_ids
+    from src.server.repository.browse import UnifiedBrowseRepository
 
-    # --- Structured filter SQL conditions ---
-    joins: list[str] = []
-    needs_rating = False
-    needs_metadata = False
-
-    for leaf in spec.leaves:
-        if isinstance(leaf, SearchTerm):
-            continue  # handled via candidate set above
-        sql_frag = leaf.to_sql(params, counter)
-        conditions.append(sql_frag)
-        if leaf.needs_rating_join:
-            needs_rating = True
-        if leaf.needs_metadata_join:
-            needs_metadata = True
-
-    # Build FROM clause with necessary JOINs
-    from_clause = "active_assets a"
-    joins.append(LOCATION_JOIN)  # the location counts read the effective location
-    location_params(params)
-    if needs_rating:
-        joins.append(
-            "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id"
-        )
-    if needs_metadata:
-        from src.server.repository.corrections import TAGS_JOIN
-
-        joins.append(TAGS_JOIN)  # the tags a person sees
-
-    where_sql = " AND ".join(conditions) if conditions else "TRUE"
-    join_sql = " ".join(joins)
-
-    sql = f"""
-        SELECT
-            array_agg(DISTINCT a.camera_make) FILTER (WHERE a.camera_make IS NOT NULL) AS camera_makes,
-            array_agg(DISTINCT a.camera_model) FILTER (WHERE a.camera_model IS NOT NULL) AS camera_models,
-            array_agg(DISTINCT a.lens_model) FILTER (WHERE a.lens_model IS NOT NULL) AS lens_models,
-            MIN(a.iso) AS iso_min,
-            MAX(a.iso) AS iso_max,
-            MIN(a.aperture) AS aperture_min,
-            MAX(a.aperture) AS aperture_max,
-            MIN(a.focal_length) AS fl_min,
-            MAX(a.focal_length) AS fl_max,
-            bool_or(a.media_type = 'image') AS has_images,
-            bool_or(a.media_type = 'video') AS has_videos,
-            COUNT(*) FILTER (WHERE {has_location_sql()}) AS gps_count,
-            COUNT(*) FILTER (WHERE loc.status = 'applied' AND loc.source <> 'person') AS guess_count,
-            COUNT(*) FILTER (WHERE a.face_count > 0) AS face_count
-        FROM {from_clause}
-        {join_sql}
-        WHERE {where_sql}
-    """
-
-    row = session.execute(text(sql).bindparams(**params)).one()
+    row = UnifiedBrowseRepository(session).facets(spec, candidate_ids)
 
     media_types: list[str] = []
     if row.has_images:

@@ -16,7 +16,6 @@ from src.server.api.errors import ApiError
 from src.server.repository.lineage import record as record_lineage
 
 from src.server.api.dependencies import get_tenant_session, require_editor
-from src.server.models.tenant import Asset
 from src.server.repository.assets import AssetRepository
 from src.server.storage import store as keys
 from src.server.storage.store import NotFound, Store, get_store
@@ -291,7 +290,7 @@ def download_artifact(
         )
 
     public = getattr(request.state, "is_public_request", False)
-    asset = session.get(Asset, asset_id)  # out of sight too: signed in, those show
+    asset = AssetRepository(session).get_any(asset_id)  # out of sight too: signed in, those show
     if asset is None or (asset.deleted_at is not None and public):
         raise HTTPException(status_code=404, detail="Asset not found")
     if public:

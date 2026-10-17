@@ -24,7 +24,6 @@ from src.shared.producers import CLIP_MODEL_ID
 from src.shared.producers import PERSON as P_PERSON
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
-from src.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -146,19 +145,7 @@ def _ask_about_mass_missing(session: Session, asset_ids: list[str], confirmed: i
     send a scan's missing clips in one request, so the rule sees them all.
     answer: what to send to go ahead, when it isn't confirm_missing (a
     scan's finish, routers/scans.py)."""
-    from sqlalchemy import text as sa_text
-
-    rows = session.execute(sa_text(
-        """
-        SELECT a.library_id,
-               COUNT(*) FILTER (WHERE a.asset_id = ANY(:ids))::int AS going,
-               COUNT(*)::int AS in_sight
-        FROM assets a
-        WHERE a.deleted_at IS NULL
-          AND a.library_id IN (SELECT library_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL)
-        GROUP BY a.library_id
-        """
-    ), {"ids": asset_ids}).all()
+    rows = AssetRepository(session).missing_share(asset_ids)
     going = sum(r.going for r in rows)
     tripped = [r for r in rows
                if r.going > MASS_MISSING_MIN_FILES and r.going > MASS_MISSING_MIN_FRACTION * r.in_sight]
@@ -248,17 +235,6 @@ RepairSummary = create_model("RepairSummary", total_assets=(int, 0), missing_pro
                              waiting_failures=(int, 0))
 
 
-def _waiting_failures_sql() -> str:
-    """Clip-steps the missing_* counts leave out because their last try
-    failed and their turn hasn't come."""
-    from src.server.repository import lineage
-    from src.shared.producers import MISSING_FLAGS
-
-    # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
-    return " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
-                      for a in MISSING_FLAGS.values())
-
-
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
 def repair_summary(
     request: Request,
@@ -266,31 +242,12 @@ def repair_summary(
     library_id: str,
 ) -> RepairSummary:
     """Count assets missing various pipeline outputs for a library."""
-    from sqlalchemy import text
     lib = LibraryRepository(session).get_by_id(library_id)
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
-    from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
-
-    flags = list(MISSING_CONDITIONS)
-    counts = ",\n".join(f"COUNT(*) FILTER (WHERE {MISSING_CONDITIONS[f]}) AS {f}" for f in flags)
-    row = session.execute(
-        text(f"""
-            SELECT
-                COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
-                COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
-                {counts},
-                COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
-                {_waiting_failures_sql()} AS waiting_failures
-            FROM active_assets a
-            {lineage.LINEAGE_JOIN}
-            WHERE library_id = :library_id
-        """),
-        {"library_id": library_id},
-    ).mappings().one()
+    row = AssetRepository(session).repair_counts(library_id)
     return RepairSummary(total_assets=row["total"], missing_proxy=row["missing_proxy"],
-                         missing_exif=row["missing_exif"], **{f: row[f] for f in flags},
+                         missing_exif=row["missing_exif"], **{f: row[f] for f in MISSING_CONDITIONS},
                          waiting_failures=row["waiting_failures"], stale_search_sync=row["stale_search_sync"])
 
 
@@ -933,8 +890,7 @@ def correct_asset(
 
     # Stale until search has it: undoing every correction leaves no row
     # whose time says so, and search may be down.
-    asset.search_synced_at = None
-    session.add(asset)
+    AssetRepository(session).mark_unsynced(asset)
     session.commit()
     try_sync_asset(session, asset, meta)
     LibraryRepository(session).bump_revision(asset.library_id)
@@ -969,24 +925,17 @@ def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
 def _lock_transcript(session: Session, asset: Asset) -> None:
     """One write of a clip's transcript at a time (a person's and the
     machine's never cross), with the clip as it is now."""
-    from sqlalchemy import text as sa_text
-
-    session.execute(sa_text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset.asset_id})
-    session.refresh(asset)
+    AssetRepository(session).lock_for_update(asset)
 
 
 def _persons_transcript(session: Session, asset: Asset) -> bool:
     """The clip's transcript is a person's call: theirs is shown, or they
     removed the machine's for good (none shown, a person's lineage)."""
-    from sqlalchemy import text as sa_text
-
     if asset.transcript_source == "manual":
         return True
     if _shown_transcript(asset) is not None:
         return False
-    return session.execute(sa_text(
-        "SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'transcript'"
-    ), {"a": asset.asset_id}).scalar() == P_PERSON
+    return lineage.producer_of(session, asset.asset_id, "transcript") == P_PERSON
 
 
 def _shown_transcript(asset: Asset) -> str | None:
@@ -1024,14 +973,8 @@ def submit_transcript(
 
     # Empty SRT = "checked, no speech" (e.g., silent video processed by Whisper)
     if not body.srt or not body.srt.strip():
-        asset.transcript_srt = None
-        asset.transcript_text = None
-        asset.transcript_language = body.language
-        asset.transcript_source = body.source
-        asset.transcribed_at = utcnow()
-        asset.has_transcript = False
-        asset.updated_at = utcnow()
-        session.add(asset)
+        asset_repo.set_transcript(asset, srt=None, text=None, language=body.language, source=body.source,
+                                  has_transcript=False)
         session.commit()
         lineage.record(session, asset_id, "transcript", **made, outcome="empty")
         _transcript_searched(session, request, asset)
@@ -1042,14 +985,8 @@ def submit_transcript(
 
     plain_text = parse_srt_to_text(body.srt)
 
-    asset.transcript_srt = body.srt
-    asset.transcript_text = plain_text
-    asset.transcript_language = body.language
-    asset.transcript_source = body.source
-    asset.transcribed_at = utcnow()
-    asset.has_transcript = bool(plain_text.strip())
-    asset.updated_at = utcnow()
-    session.add(asset)
+    asset_repo.set_transcript(asset, srt=body.srt, text=plain_text, language=body.language, source=body.source,
+                              has_transcript=bool(plain_text.strip()))
     session.commit()
     lineage.record(session, asset_id, "transcript", **made, outcome="ok" if asset.has_transcript else "empty")
     _transcript_searched(session, request, asset)
@@ -1061,8 +998,7 @@ def _transcript_searched(session: Session, request: Request, asset: Asset) -> No
     from src.server.search.sync import index_transcript_segments, try_sync_asset
 
     # Stale until search has it (search may be down: the sweep catches up).
-    asset.search_synced_at = None
-    session.add(asset)
+    AssetRepository(session).mark_unsynced(asset)
     session.commit()
     meta = AssetMetadataRepository(session).get_latest(asset_id=asset.asset_id)
     try_sync_asset(session, asset, meta)
@@ -1105,19 +1041,11 @@ def delete_transcript(
             {"shown": shown},
         )
 
-    asset.transcript_srt = None
-    asset.transcript_text = None
-    asset.transcript_language = None
-    asset.transcript_source = None
-    asset.transcribed_at = None
-    asset.updated_at = utcnow()
     if shown == "manual":
-        asset.has_transcript = None  # missing again: the machine makes one
-        session.add(asset)
+        AssetRepository(session).clear_transcript(asset, has_transcript=None)  # missing again: the machine makes one
         lineage.forget(session, [asset_id], "transcript", commit=False)
     else:
-        asset.has_transcript = False
-        session.add(asset)
+        AssetRepository(session).clear_transcript(asset, has_transcript=False)
         # A person removed the machine's: their choice stands, nothing makes it again.
         lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty", commit=False)
     session.commit()
@@ -1150,19 +1078,8 @@ def update_note(
         raise HTTPException(status_code=404, detail="Asset not found")
 
     text = body.text.strip() if body.text else ""
-    if text:
-        # Resolve email for display
-        email = getattr(request.state, "email", None) or user_id
-        asset.note = text
-        asset.note_author = email
-        asset.note_updated_at = utcnow()
-    else:
-        asset.note = None
-        asset.note_author = None
-        asset.note_updated_at = None
-
-    asset.updated_at = utcnow()
-    session.add(asset)
+    # The author by email, for display.
+    asset_repo.set_note(asset, text or None, getattr(request.state, "email", None) or user_id)
     session.commit()
 
     # Sync to search (works with or without vision metadata)
@@ -1192,11 +1109,7 @@ def delete_note(
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    asset.note = None
-    asset.note_author = None
-    asset.note_updated_at = None
-    asset.updated_at = utcnow()
-    session.add(asset)
+    asset_repo.set_note(asset, None, None)
     session.commit()
 
     from src.server.search.sync import try_sync_asset
@@ -1393,11 +1306,9 @@ def _generate_face_crops(
                 store.write(crop_key, crop_bytes)
 
                 # Update face record
-                from sqlalchemy import text as sa_text
-                session.execute(  # type: ignore[union-attr]
-                    sa_text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"),
-                    {"key": crop_key, "fid": face_id},
-                )
+                from src.server.repository.faces import FaceRepository
+
+                FaceRepository(session).set_crop_key(face_id, crop_key)  # type: ignore[arg-type]
             except Exception:
                 logger.warning("Failed to generate crop for face %s", face_id, exc_info=True)
 

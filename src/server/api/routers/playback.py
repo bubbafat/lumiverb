@@ -33,7 +33,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from src.processing.video import ffmpeg_run
 from src.server.api.dependencies import get_tenant_session
@@ -161,16 +161,13 @@ def _check_public(session: Session, asset: Asset, library_id: str | None, projec
         if lib is None or not lib.is_public:
             raise HTTPException(status_code=404, detail="Not found")
     elif project_id:
-        from src.server.models.tenant import ProjectAsset
         from src.server.repository.projects import ProjectRepository
 
-        project = ProjectRepository(session).get_by_id(project_id)
+        projects = ProjectRepository(session)
+        project = projects.get_by_id(project_id)
         if project is None or project.visibility != "public":
             raise HTTPException(status_code=404, detail="Not found")
-        member = session.exec(
-            select(ProjectAsset).where(ProjectAsset.project_id == project_id, ProjectAsset.asset_id == asset.asset_id)
-        ).first()
-        if member is None:
+        if not projects.has_asset(project_id, asset.asset_id):
             raise HTTPException(status_code=403, detail="Asset not in project")
     else:
         raise HTTPException(status_code=403, detail="Public access requires library or project context")

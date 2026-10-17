@@ -28,21 +28,13 @@ SESSION_CALLS = {"exec", "execute", "query", "scalar", "scalars", "get", "add", 
 
 NOT_YET = {
     "routers/admin.py",
-    "routers/artifacts.py",
-    "routers/assets.py",
-    "routers/facets.py",
-    "routers/ingest.py",
     "routers/keys.py",
     "routers/libraries.py",
-    "routers/playback.py",
     "routers/producers.py",
     "routers/projects.py",
-    "routers/query.py",
     "routers/scans.py",
-    "routers/similarity.py",
     "routers/system.py",
     "routers/tenant.py",
-    "routers/trash.py",
     "routers/upkeep.py",
 }
 

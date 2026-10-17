@@ -180,6 +180,11 @@ class ProjectRepository:
         self._session.commit()
         return True
 
+    def has_asset(self, project_id: str, asset_id: str) -> bool:
+        """Whether the clip is in the project."""
+        return self._session.exec(select(ProjectAsset).where(
+            ProjectAsset.project_id == project_id, ProjectAsset.asset_id == asset_id)).first() is not None
+
     # ---- Asset count (no denormalized column) ----
 
     def asset_count(self, project_id: str) -> int:

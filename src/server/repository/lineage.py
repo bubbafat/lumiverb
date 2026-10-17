@@ -630,6 +630,12 @@ def forget(session: Session, asset_ids: list[str], artifact: str, *, commit: boo
             session.commit()
 
 
+def producer_of(session: Session, asset_id: str, artifact: str) -> str | None:
+    """Whose the clip's artifact is: its producer's name (a person's: PERSON), or None when it has none."""
+    return session.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = :t"),
+                           {"a": asset_id, "t": artifact}).scalar()
+
+
 def made_from(artifact: str) -> tuple[str, ...]:
     """The artifact and what goes with it when it's made again: its producer's
     redo_also, and theirs (src/producers/<artifact>/), in that order."""

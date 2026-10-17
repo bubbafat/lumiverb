@@ -194,14 +194,9 @@ _CAMERA_FILTERS = (CameraMake, CameraModel, LensModel, IsoRange, ApertureRange, 
 def require_public_folder(session: Session, library_ids, path: str) -> None:
     """A visitor may narrow to a folder (folders are public, /directories
     lists them) but not to a file: probing names would find them."""
-    from sqlalchemy import text
+    from src.server.repository.assets import AssetRepository
 
-    found = session.execute(
-        text("SELECT 1 FROM active_assets WHERE library_id = ANY(:libs)"
-             " AND starts_with(rel_path, :dir) LIMIT 1"),
-        {"libs": list(library_ids), "dir": path.strip("/") + "/"},
-    ).first()
-    if found is None:
+    if not AssetRepository(session).folder_has_clips(list(library_ids), path):
         raise HTTPException(status_code=403, detail="Not a folder")
 
 

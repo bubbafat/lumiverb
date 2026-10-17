@@ -236,22 +236,11 @@ def find_similar(
 
     # Person-based rerank: boost candidates that share a named person with source
     if scores:
-        from sqlalchemy import text as _sa_text
-        source_pids = set(
-            session.execute(
-                _sa_text("SELECT DISTINCT person_id FROM faces WHERE asset_id = :aid AND person_id IS NOT NULL"),
-                {"aid": asset_id},
-            ).scalars().all()
-        )
-        if source_pids:
-            cand_aids = list(scores.keys())
-            matching_aids = set(
-                session.execute(
-                    _sa_text("SELECT DISTINCT asset_id FROM faces WHERE asset_id = ANY(:aids) AND person_id = ANY(:pids)"),
-                    {"aids": cand_aids, "pids": list(source_pids)},
-                ).scalars().all()
-            )
-            for aid in matching_aids:
+        from src.server.repository.faces import FaceRepository
+
+        faces = FaceRepository(session)
+        if source_pids := faces.people_in(asset_id):
+            for aid in faces.clips_with(list(scores.keys()), list(source_pids)):
                 if aid in scores:
                     scores[aid] *= 0.85  # lower distance = more similar
 
