@@ -678,9 +678,6 @@ fi
 ROOT_MAP_ARGS=()
 for map in "${ROOT_MAPS[@]}"; do ROOT_MAP_ARGS+=(--root-map "$map"); done
 python3 "${APP_DIR}/scripts/scheduler-env.py" "$ENV_FILE" --from-cli-config "$CLI_CONFIG" "${ROOT_MAP_ARGS[@]}"
-# Caches, and the scheduler's lock and state, on the data disk for commands
-# run as the service user too, so they find the service's.
-sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
 for map in "${ROOT_MAPS[@]}"; do
   sudo -u "${SVC_USER}" -H "${APP_DIR}/.venv/bin/lumiverb" config map-root "${map%%=*}" "${map#*=}"
 done

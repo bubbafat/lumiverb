@@ -186,10 +186,9 @@ DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
 if [[ -n "$DATA_DIR" ]]; then
   mkdir -p "$DATA_DIR"/tmp "$DATA_DIR"/worker-tmp
   chown -R "$SVC_USER":"$SVC_USER" "$DATA_DIR"
-  # Caches, and the scheduler's lock and state, on the data disk for manual
-  # runs as the service user too, so one never runs beside the service.
+  # The scheduler's caches, lock and state on the data disk. The CLI keeps
+  # no caches (ADR-020 decision 7), so nothing of the service user's points here.
   grep -q '^XDG_CACHE_HOME=' "$ENV_FILE" || env_append "XDG_CACHE_HOME=${DATA_DIR}/cache"
-  sudo -u "$SVC_USER" -H "$APP_DIR/.venv/bin/lumiverb" config set --cache-home "${DATA_DIR}/cache" >/dev/null
   ok "Data dir: $DATA_DIR"
 fi
 

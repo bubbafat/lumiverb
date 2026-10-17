@@ -350,13 +350,14 @@ def test_a_fresh_install_starts_the_scheduler_not_the_worker():
         "systemctl disable --now lumiverb-worker")
 
 
-def test_a_command_run_as_the_service_user_finds_the_service_s_lock():
-    # `sudo -u lumiverb -H lumiverb ...` gets neither the unit's
-    # XDG_CACHE_HOME nor the env file (root only); the CLI config carries it.
+def test_the_scheduler_s_caches_are_on_the_data_disk_and_the_cli_keeps_none():
+    # The scheduler's caches, lock and state follow XDG_CACHE_HOME (its env
+    # file). The service user's CLI isn't pointed at them: a client keeps
+    # no caches (ADR-020 decision 7), so it never shares the scheduler's.
     text = DEPLOY_API.read_text()
     env_block = text.split('cat > "$ENV_FILE" <<ENVEOF', 1)[1].split("ENVEOF", 1)[0]
     assert "\nXDG_CACHE_HOME=${DATA_DIR}/cache\n" in env_block
-    assert 'lumiverb" config set --cache-home "${DATA_DIR}/cache"' in text
+    assert "--cache-home" not in text
 
 
 def _env_append() -> str:
@@ -385,12 +386,12 @@ def _update_data_dir(tmp_path: Path, env_text: str) -> tuple[str, list[str]]:
     return env.read_text(), calls.read_text().splitlines()
 
 
-def test_update_points_caches_and_the_scheduler_lock_at_the_data_disk(tmp_path):
+def test_update_points_the_scheduler_s_caches_at_the_data_disk(tmp_path):
     data = tmp_path / "data"
     _update_data_dir(tmp_path, f"DATA_DIR={data}\nAPI_PORT=8100\n")
     env, calls = _update_data_dir(tmp_path, (tmp_path / "env").read_text())  # reruns add nothing
     assert env.splitlines().count(f"XDG_CACHE_HOME={data}/cache") == 1
-    assert f"-u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb config set --cache-home {data}/cache" in calls
+    assert calls == [], "the service user's CLI isn't pointed at them: it keeps no caches"
 
 
 def test_update_without_a_data_dir_leaves_caches_alone(tmp_path):

@@ -1,7 +1,7 @@
-"""Where Lumiverb's local caches live: ~/.cache/lumiverb, or $XDG_CACHE_HOME/lumiverb.
+"""Where the scheduler's caches live: ~/.cache/lumiverb, or $XDG_CACHE_HOME/lumiverb.
 
-A Linux install's scheduler sets XDG_CACHE_HOME to its data disk, so proxy
-caches don't fill the root disk during the first ingest.
+An install sets XDG_CACHE_HOME to its data disk, so caches don't fill the
+root disk during the first ingest. A client keeps none (ADR-020 decision 7).
 """
 
 from __future__ import annotations
@@ -10,19 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from src.server.scheduler.scans import STATE_FILE, ServiceLock
+from src.processing.cache_dir import cache_dir
 from src.processing.proxy.analysis_cache import AnalysisProxyCache
 from src.processing.proxy.proxy_cache import ProxyCache
+from src.server.scheduler.scans import STATE_FILE, ServiceLock
 
 pytestmark = pytest.mark.fast
-
-
-def _as_the_cli() -> None:
-    """This machine's settings from the CLI's config, as the CLI reads them."""
-    from src.client.cli.config import machine_settings
-    from src.processing import machine
-
-    machine.use(machine_settings)
 
 
 def test_caches_follow_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,6 +23,7 @@ def test_caches_follow_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.Monkey
     assert ProxyCache().path == tmp_path / "xdg" / "lumiverb" / "proxies"
     assert AnalysisProxyCache(object(), max_bytes=1).path_for("a").parent == tmp_path / "xdg" / "lumiverb" / "analysis"
     assert ServiceLock()._path == tmp_path / "xdg" / "lumiverb" / "worker.lock"
+    assert cache_dir(STATE_FILE) == tmp_path / "xdg" / "lumiverb" / "worker-state.json"
 
 
 def test_caches_default_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,92 +33,32 @@ def test_caches_default_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert AnalysisProxyCache(object(), max_bytes=1).path_for("a").parent == tmp_path / ".cache" / "lumiverb" / "analysis"
 
 
-def test_caches_follow_the_cli_config_without_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A command run as the service's user without XDG_CACHE_HOME must still
-    # find the service's lock, so two schedulers never run at once.
-    from src.client.cli.config import CLIConfig, save_config
-
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
-    _as_the_cli()
-    assert ServiceLock()._path == tmp_path / "data" / "cache" / "lumiverb" / "worker.lock"
-    assert ProxyCache().path == tmp_path / "data" / "cache" / "lumiverb" / "proxies"
-
-
-def test_xdg_cache_home_wins_over_the_cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cli.config import CLIConfig, save_config
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
-    _as_the_cli()
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    assert ServiceLock()._path == tmp_path / "xdg" / "lumiverb" / "worker.lock"
-
-
-def test_scan_state_lives_beside_the_configured_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.processing.cache_dir import cache_dir
-    from src.client.cli.config import CLIConfig, save_config
-
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    save_config(CLIConfig(cache_home=str(tmp_path / "data" / "cache")))
-    _as_the_cli()
-    assert cache_dir(STATE_FILE) == tmp_path / "data" / "cache" / "lumiverb" / "worker-state.json"
-
-
-def test_config_set_takes_the_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_cli_has_no_cache_folder_of_its_own_to_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client keeps no caches (ADR-020 decision 7): the CLI's --cache-home,
+    which pointed a Linux install's CLI at the scheduler's, is gone."""
     from typer.testing import CliRunner
 
-    from src.client.cli.config import load_config
     from src.client.cli.main import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     result = CliRunner().invoke(app, ["config", "set", "--cache-home", "/mnt/ssd2/lumiverb/cache"])
-    assert result.exit_code == 0, result.output
-    assert load_config().cache_home == "/mnt/ssd2/lumiverb/cache"
+    assert result.exit_code != 0 and "No such option" in result.output
 
 
-def _config_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *args: str):
-    from typer.testing import CliRunner
+def test_an_older_config_naming_a_cache_folder_still_loads_and_loses_it_when_saved(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
 
-    from src.client.cli.main import app
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    return CliRunner().invoke(app, ["config", "set", *args])
-
-
-def test_config_set_expands_a_cache_home_under_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cli.config import load_config
-
-    result = _config_set(tmp_path, monkeypatch, "--cache-home", "~/data/cache/")
-    assert result.exit_code == 0, result.output
-    assert load_config().cache_home == str(tmp_path / "data" / "cache")
-
-
-@pytest.mark.parametrize("given", ["cache", "./data/cache", "~nosuchuser_lumiverb/cache"])
-def test_config_set_refuses_a_relative_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, given: str) -> None:
-    # Relative to wherever the command ran: the scheduler would look elsewhere.
-    from src.client.cli.config import CLIConfig, load_config, save_config
+    from src.client.cli.config import load_config, save_config
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    save_config(CLIConfig(cache_home="/mnt/ssd2/lumiverb/cache"))
-    result = _config_set(tmp_path, monkeypatch, "--cache-home", given, "--api-url", "http://elsewhere:9999")
-    assert result.exit_code != 0
-    assert "absolute" in result.output and given in result.output
+    (tmp_path / ".lumiverb").mkdir()
+    (tmp_path / ".lumiverb" / "config.json").write_text(json.dumps(
+        {"api_url": "http://server:8000", "api_key": "k", "cache_home": "/data/cache", "root_map": {"/a": "/b"}}))
     cfg = load_config()
-    assert (cfg.cache_home, cfg.api_url) == ("/mnt/ssd2/lumiverb/cache", CLIConfig().api_url)
-
-
-def test_config_set_clears_the_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.client.cli.config import CLIConfig, load_config, save_config
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    save_config(CLIConfig(cache_home="/mnt/ssd2/lumiverb/cache"))
-    result = _config_set(tmp_path, monkeypatch, "--cache-home", "")
-    assert result.exit_code == 0, result.output
-    assert load_config().cache_home == ""
+    assert (cfg.api_url, cfg.root_map) == ("http://server:8000", {"/a": "/b"})
+    save_config(cfg)
+    assert "cache_home" not in json.loads((tmp_path / ".lumiverb" / "config.json").read_text())
 
 
 _BAD_IDS = ["../evil", "a/b", "..", ".", "", "a.b", "/etc/passwd", "a\\b", "a\nb", "a b"]

@@ -1,25 +1,26 @@
-"""Proxy-aware disk cache for downstream image processing tasks.
+"""The scheduler's preview cache, for a scheduler on a machine apart from
+the API (docs/proxy-cache-protocol.md). Its producers (faces, vision, OCR,
+CLIP) get correctly sized JPEG previews without thinking about resolution.
+The cache handles:
 
-All consumers (faces, vision, OCR, embeddings) get correctly-sized
-JPEG proxies without thinking about resolution. The cache handles:
-
-- Storing full-resolution 2048px proxies from scan (put_scan)
-- Downscaling oversized images on put() for legacy callers
-- Downloading the server's preview when it has none (get)
-- Persistent storage across runs in ~/.cache/lumiverb/proxies/
-- a sidecar per proxy with its source's content hash, for change detection
+- the 2048px previews its scans make (put_scan), and the unchanged clips'
+  downloaded during a scan;
+- downscaling an oversized image on put();
+- downloading the server's preview when it has none (get);
+- keeping them across runs in its cache folder ($XDG_CACHE_HOME/lumiverb/
+  proxies: on an install, the data disk's);
+- a sidecar per proxy with its source's content hash, so a preview of other
+  content is never handed out.
 
 It never reads an original: a producer that doesn't read the storage uses
 the preview (ADR-020 decision 4).
 
-Scan writes 2048px proxies + hash sidecars. Enrich reads and resizes
-as needed. The cache is the handoff point between the two phases.
-
 Where the API keeps the previews on this machine (the scheduler beside it),
 a job reads a clip's stored preview from the Store and this cache isn't
-asked (src/server/scheduler/inputs.py). The scheduler's has a cap
+asked (src/server/scheduler/inputs.py). It has a cap
 (LUMIVERB_PREVIEW_CACHE_GB): past it the least recently used proxies go,
-each with its sidecar; the CLI's has none yet (the Mac app browses it).
+each with its sidecar. A client keeps none of these (ADR-020 decision 7):
+the CLI's scan caches nothing, and the Mac app keeps its own.
 """
 
 from __future__ import annotations

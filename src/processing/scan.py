@@ -1,8 +1,9 @@
 """Scan phase: walk a library, say what's there, upload what the server asks for.
 
-Scan is the only operation that touches source files. It produces three
-outputs per file: a server-side asset record, a server-side 2048px proxy,
-and a local proxy cache entry with its hash sidecar.
+Scan is the only operation that touches source files. It produces a
+server-side asset record and a server-side 2048px proxy per file; for a
+scheduler on a machine apart from the API, a copy of the proxy in its
+preview cache too, with its hash sidecar (cache_previews).
 
 The client says what it found; the server decides (ADR-018 decision 12,
 src/server/scans.py). A scan is a session on the server: started before the
@@ -873,7 +874,7 @@ def run_scan(
     allow_mass_delete: bool = False,
     force_add: bool = False,
     waiting: Mapping[str, tuple[int, str | None]] | None = None,
-    cache_previews: bool = True,
+    cache_previews: bool = False,
     explain: bool = False,
     include_trash: bool = False,
     console: Console,
@@ -901,9 +902,11 @@ def run_scan(
     it's neither read nor uploaded (ScanStats.waiting_paths); one that
     changed (replaced, say) is tried now.
     cache_previews: keep each preview made, and every unchanged clip's, in
-    this machine's proxy cache (the CLI's: the Mac app browses it). The
-    scheduler beside the API keeps none: it reads the stored previews where
-    they are (src/server/scheduler/inputs.py), and unchanged files are only counted.
+    this machine's preview cache: the scheduler's, on a machine apart from
+    the API (its producers read them there). A client keeps none (ADR-020
+    decision 7: the CLI's scan asks for nothing), and beside the API the
+    scheduler reads the stored previews where they are
+    (src/server/scheduler/inputs.py): unchanged files are only counted.
     """
     library_id = library["library_id"]
     originals = reach(library)
