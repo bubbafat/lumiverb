@@ -43,6 +43,7 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _library
 from tests.test_scheduler_service import FakeAccount
+from tests.derived import saved
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_REASONS = ROOT / "src" / "ui" / "web" / "src" / "lib" / "waits.ts"
@@ -287,7 +288,7 @@ def _stale_vision(lib) -> str:
     client, headers, *_ = lib
     sha = _sha()
     clip = _ingest_with(lib, "stale.jpg", sha)
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "old words",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
                                                         "lineage": {**_want(lib, "vision", sha), "settings_hash": "older"}},
                     headers=headers)
     assert r.status_code == 200, r.text

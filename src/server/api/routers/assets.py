@@ -231,20 +231,6 @@ class BatchTrashResponse(BaseModel):
     handed_over: list[str] = []
 
 
-class VisionSubmitRequest(BaseModel):
-    model_id: str
-    model_version: str = "1"
-    description: str
-    tags: list[str] = []
-    client_proxy_sha256: str | None = None
-    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
-
-
-class VisionSubmitResponse(BaseModel):
-    asset_id: str
-    status: str
-
-
 @router.get("/page")
 def page_assets() -> None:
     """Retired (410 gone): GET /v1/query lists a library's clips, and the
@@ -789,87 +775,25 @@ def unarchive_assets(
     return UnarchiveResponse(unarchived=back, skipped=skipped)
 
 
-@router.post("/{asset_id}/vision", response_model=VisionSubmitResponse, dependencies=[Depends(require_editor)])
-def submit_vision(
-    asset_id: str,
-    body: VisionSubmitRequest,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> VisionSubmitResponse:
-    """Submit AI vision results for an asset with optional proxy hash validation.
-
-    If client_proxy_sha256 is provided and the server has a stored hash, they must
-    match — otherwise 409. If the server hash is null (pre-Phase 1 or no proxy yet),
-    the check is skipped for backwards compatibility.
-    """
-    made = require_lineage(body.lineage, "vision")  # before anything is saved
-    asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-
-    if body.client_proxy_sha256 is not None and asset.proxy_sha256 is not None:
-        if body.client_proxy_sha256 != asset.proxy_sha256:
-            raise ConflictError(
-                "proxy_hash_mismatch",
-                "Client proxy does not match server proxy. Re-download the proxy and retry.",
-            )
-
-    AssetMetadataRepository(session).upsert(
-        asset_id=asset_id,
-        model_id=body.model_id,
-        model_version=body.model_version,
-        data={"description": body.description, "tags": body.tags},
-    )
-    AssetRepository(session).set_status(asset_id, asset_status.DESCRIBED)
-    lineage.record(session, asset_id, "vision", made)
-
-    # Inline search sync (best-effort)
-    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    if meta:
-        from src.server.search.sync import try_sync_asset
-        try_sync_asset(session, asset, meta)
-
-    # Bump library revision for UI polling
-    LibraryRepository(session).bump_revision(asset.library_id)
-
-    return VisionSubmitResponse(asset_id=asset_id, status="described")
+# A producer's results are saved a batch at a time (each producer: its
+# work.py), so the per-clip routes they replaced answer 410, naming the batch
+# route. Each keeps its role, so a viewer is still refused first.
+def _batch_instead(kind: str) -> GoneError:
+    return GoneError(f"POST /v1/assets/{{asset_id}}/{kind} is retired: save results with "
+                     f"POST /v1/assets/batch-{kind} (one item or many, as the producers do).",
+                     [f"POST /v1/assets/batch-{kind}"])
 
 
-class OcrSubmitRequest(BaseModel):
-    ocr_text: str
-    # The vision model that read it.
-    model_id: str = Field(default="", max_length=200)
-    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
+@router.post("/{asset_id}/vision", dependencies=[Depends(require_editor)])
+def submit_vision(asset_id: str) -> None:
+    """Retired (410 gone): POST /v1/assets/batch-vision."""
+    raise _batch_instead("vision")
 
 
-@router.post("/{asset_id}/ocr", status_code=200, dependencies=[Depends(require_editor)])
-def submit_ocr(
-    asset_id: str,
-    body: OcrSubmitRequest,
-    request: Request,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Submit the text read in an asset's image ("" when there's none). Kept
-    apart from its description: no description needed, and describing it
-    again leaves this alone."""
-    made = require_lineage(body.lineage, "ocr")  # before anything is saved
-    asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None or asset.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-
-    AssetOcrRepository(session).upsert(asset_id, body.ocr_text, body.model_id, commit=False)
-    lineage.record(session, asset_id, "ocr", made, outcome="ok" if body.ocr_text else "empty",
-                   commit=False)
-    session.commit()  # the text and how it was made, together
-
-    # Re-sync search
-    meta = AssetMetadataRepository(session).get_latest(asset_id=asset_id)
-    from src.server.search.sync import try_sync_asset
-    try_sync_asset(session, asset, meta)
-
-    LibraryRepository(session).bump_revision(asset.library_id)
-
-    return {"asset_id": asset_id, "ocr_text": body.ocr_text}
+@router.post("/{asset_id}/ocr", dependencies=[Depends(require_editor)])
+def submit_ocr(asset_id: str) -> None:
+    """Retired (410 gone): POST /v1/assets/batch-ocr."""
+    raise _batch_instead("ocr")
 
 
 class BatchOcrItem(BaseModel):
@@ -1287,36 +1211,10 @@ def delete_note(
     LibraryRepository(session).bump_revision(asset.library_id)
 
 
-class EmbeddingSubmitRequest(BaseModel):
-    model_id: str
-    model_version: str
-    vector: list[float]
-    lineage: Any = None  # how it was made (LineageIn): require_lineage judges it
-
-
-@router.post("/{asset_id}/embeddings", status_code=201, dependencies=[Depends(require_editor)])
-def submit_embedding(
-    asset_id: str,
-    body: EmbeddingSubmitRequest,
-    session: Annotated[Session, Depends(get_tenant_session)],
-) -> dict:
-    """Submit an embedding vector for an asset. CLIP's (the producer's
-    artifact) must say how it was made (lineage)."""
-    from src.server.repository.tenant import AssetEmbeddingRepository
-    made = require_lineage(body.lineage, "clip") if body.model_id == CLIP_MODEL_ID else None
-    asset = AssetRepository(session).get_by_id(asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    emb_repo = AssetEmbeddingRepository(session)
-    emb_repo.upsert(
-        asset_id=asset_id,
-        model_id=body.model_id,
-        model_version=body.model_version,
-        vector=[float(x) for x in body.vector],
-    )
-    if body.model_id == CLIP_MODEL_ID:  # another model's vectors aren't the CLIP producer's artifact
-        lineage.record(session, asset_id, "clip", made)
-    return {"ok": True}
+@router.post("/{asset_id}/embeddings", dependencies=[Depends(require_editor)])
+def submit_embedding(asset_id: str) -> None:
+    """Retired (410 gone): POST /v1/assets/batch-embeddings."""
+    raise _batch_instead("embeddings")
 
 
 class BatchEmbeddingItem(BaseModel):

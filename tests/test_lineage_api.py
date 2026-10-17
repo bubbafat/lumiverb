@@ -22,6 +22,7 @@ from sqlmodel import Session
 
 from src.shared import producers as P
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
+from tests.derived import saved
 
 
 def _sha() -> str:
@@ -186,7 +187,7 @@ def test_another_kinds_producer_cant_make_this_one(env):
     clip = _ingest_with(env, "lin/wrongkind.jpg", sha)
     before = _everything(env, clip)
     client, headers, *_ = env
-    _refused(client.post(f"/v1/assets/{clip}/vision", json={
+    _refused(saved(client, "vision", clip, json={
         "model_id": "m", "description": "d", "lineage": _want(env, "ocr", sha)}, headers=headers),
         "lineage_wrong_producer")
     assert _everything(env, clip) == before
@@ -278,11 +279,11 @@ def test_each_kind_of_write_records_its_artifact(env):
     vid = _ingest_with(env, "lin/all.mov", sha, None, media_type="video")
     vec = [0.0] * 512
     writes = [
-        ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
+        ("vision", img, lambda: saved(client, "vision", img, json={
             "model_id": "m", "description": "d", "lineage": _want(env, "vision", sha)}, headers=headers)),
-        ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={
+        ("ocr", img, lambda: saved(client, "ocr", img, json={
             "ocr_text": "EXIT", "lineage": _want(env, "ocr", sha)}, headers=headers)),
-        ("clip", img, lambda: client.post(f"/v1/assets/{img}/embeddings", json={
+        ("clip", img, lambda: saved(client, "embeddings", img, json={
             "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": vec,
             "lineage": _want(env, "clip", sha)}, headers=headers)),
         ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
@@ -382,7 +383,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
     sha = _sha()
     img = _ingest_with(env, "lin/claims-person.jpg", sha, None)
     before = _everything(env, img)
-    r = client.post(f"/v1/assets/{img}/vision", json={
+    r = saved(client, "vision", img, json={
         "model_id": "m", "description": "d",
         "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x", "source_hash": sha}}, headers=headers)
     _refused(r, "lineage_wrong_producer")
@@ -406,10 +407,10 @@ def test_another_models_vectors_leave_clips_lineage_alone(env):
     client, headers, *_ = env
     sha = _sha()
     img = _ingest_with(env, "lin/featureprint.jpg", sha, None)
-    r = client.post(f"/v1/assets/{img}/embeddings", json={
+    r = saved(client, "embeddings", img, json={
         "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
         "lineage": _want(env, "clip", sha)}, headers=headers)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 200, r.text
     r = client.post("/v1/assets/batch-embeddings", json={"items": [{
         "asset_id": img, "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}]}, headers=headers)
     assert r.status_code == 200, r.text
@@ -511,14 +512,14 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     writes = [
         ("probe", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0},
                                           headers=headers)),
-        ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
+        ("vision", img, lambda: saved(client, "vision", img, json={
             "model_id": "m", "description": "d"}, headers=headers)),
         ("vision", img, lambda: client.post("/v1/assets/batch-vision", json={
             "items": [{"asset_id": img, "model_id": "m", "description": "d"}]}, headers=headers)),
-        ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={"ocr_text": "EXIT"}, headers=headers)),
+        ("ocr", img, lambda: saved(client, "ocr", img, json={"ocr_text": "EXIT"}, headers=headers)),
         ("ocr", img, lambda: client.post("/v1/assets/batch-ocr", json={
             "items": [{"asset_id": img, "ocr_text": "EXIT"}]}, headers=headers)),
-        ("clip", img, lambda: client.post(f"/v1/assets/{img}/embeddings", json={
+        ("clip", img, lambda: saved(client, "embeddings", img, json={
             "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}, headers=headers)),
         ("clip", img, lambda: client.post("/v1/assets/batch-embeddings", json={"items": [{
             "asset_id": img, "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}]},
@@ -562,9 +563,9 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
                                            headers=headers)),
         # Lineage that can't be read is no lineage, in the same envelope on every route.
-        ("vision", img, lambda: client.post(f"/v1/assets/{img}/vision", json={
+        ("vision", img, lambda: saved(client, "vision", img, json={
             "model_id": "m", "description": "d", "lineage": {"producer": "vision"}}, headers=headers)),
-        ("ocr", img, lambda: client.post(f"/v1/assets/{img}/ocr", json={
+        ("ocr", img, lambda: saved(client, "ocr", img, json={
             "ocr_text": "EXIT", "lineage": "not lineage"}, headers=headers)),
         ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
             "items": [{"asset_id": img, "faces": [face]}], "lineage": {
@@ -578,7 +579,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
         assert _everything(env, clip) == before, artifact
 
     # Another kind's producer is named in what it says.
-    r = client.post(f"/v1/assets/{img}/vision", json={"model_id": "m", "description": "d",
+    r = saved(client, "vision", img, json={"model_id": "m", "description": "d",
                                                       "lineage": _want(env, "faces", sha)}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["details"] == {
         "artifact": "vision", "sent": "insightface", "expected": "vision"}, r.text
@@ -596,9 +597,9 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
                      headers=headers)
     assert r.status_code == 200, r.text
     # Another model's vectors aren't the CLIP producer's artifact: nothing to say.
-    r = client.post(f"/v1/assets/{img}/embeddings", json={
+    r = saved(client, "embeddings", img, json={
         "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}, headers=headers)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 200 and r.json()["updated"] == 1, r.text
 
 
 @pytest.mark.slow

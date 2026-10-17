@@ -1,4 +1,6 @@
-"""Tests for POST /v1/assets/{asset_id}/vision (Phase 5).
+"""A clip's description saved as the vision producer saves it (POST
+/v1/assets/batch-vision, one item: tests/derived.py), and the per-clip route
+it replaced answering 410.
 
 All tests are slow (testcontainers Postgres). A single module-scoped fixture
 spins up two Postgres containers and provisions a tenant + library + assets.
@@ -20,6 +22,7 @@ from src.server.database import _engines
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
+from tests.derived import saved
 
 
 # ---------------------------------------------------------------------------
@@ -31,8 +34,7 @@ from tests.machine_lineage import made
 def vision_env(tmp_path_factory):
     """
     Two Postgres containers (control + tenant), one tenant, one library, three assets:
-      - active_id:  active, proxy_sha256 = "a" * 64
-      - nosha_id:   active, proxy_sha256 is NULL
+      - active_id, nosha_id: active
       - deleted_id: soft-deleted
 
     Yields:
@@ -101,18 +103,6 @@ def vision_env(tmp_path_factory):
                 nosha_id = make_clip(tenant_url, library_id, "nosha.jpg")
                 deleted_id = make_clip(tenant_url, library_id, "deleted.jpg")
 
-                # Set proxy_sha256 directly on the active asset via the DB
-                from src.server.database import get_engine_for_url
-                from sqlmodel import Session as SMSession
-                from src.server.models.tenant import Asset
-
-                tenant_engine = get_engine_for_url(tenant_url)
-                with SMSession(tenant_engine) as db:
-                    asset = db.get(Asset, active_id)
-                    asset.proxy_sha256 = "a" * 64
-                    db.add(asset)
-                    db.commit()
-
                 # Soft-delete the deleted asset
                 r_del = raw_client.delete(
                     f"/v1/assets/{deleted_id}",
@@ -134,7 +124,7 @@ def _post(auth: _AuthClient, asset_id: str, **kwargs):
     body = {"model_id": "test-vision-model", "description": "a sunset", "tags": ["landscape"],
             "lineage": made("vision")}
     body.update(kwargs)
-    return auth.post(f"/v1/assets/{asset_id}/vision", json=body)
+    return saved(auth, "vision", asset_id, json=body)
 
 
 # ---------------------------------------------------------------------------
@@ -143,38 +133,21 @@ def _post(auth: _AuthClient, asset_id: str, **kwargs):
 
 
 @pytest.mark.slow
-def test_happy_path_no_hash(vision_env) -> None:
+def test_happy_path(vision_env) -> None:
     auth, _, _, active_id, _, _, _ = vision_env
     r = _post(auth, active_id)
     assert r.status_code == 200
-    body = r.json()
-    assert body["asset_id"] == active_id
-    assert body["status"] == "described"
+    assert r.json() == {"updated": 1, "skipped": 0}
 
 
 @pytest.mark.slow
-def test_happy_path_hash_matches(vision_env) -> None:
+@pytest.mark.parametrize("kind", ["vision", "ocr", "embeddings"])
+def test_the_per_clip_route_is_gone_naming_the_batch_one(vision_env, kind) -> None:
     auth, _, _, active_id, _, _, _ = vision_env
-    r = _post(auth, active_id, client_proxy_sha256="a" * 64)
-    assert r.status_code == 200
-    assert r.json()["status"] == "described"
-
-
-@pytest.mark.slow
-def test_hash_mismatch_returns_409(vision_env) -> None:
-    auth, _, _, active_id, _, _, _ = vision_env
-    r = _post(auth, active_id, client_proxy_sha256="0" * 64)
-    assert r.status_code == 409
-    err = r.json()["error"]
-    assert err["code"] == "proxy_hash_mismatch"
-
-
-@pytest.mark.slow
-def test_skip_check_when_server_hash_null(vision_env) -> None:
-    """client_proxy_sha256 provided but server has no hash — check is skipped."""
-    auth, _, _, _, nosha_id, _, _ = vision_env
-    r = _post(auth, nosha_id, client_proxy_sha256="b" * 64)
-    assert r.status_code == 200
+    r = auth.post(f"/v1/assets/{active_id}/{kind}", json={"description": "a sunset", "lineage": made("vision")})
+    assert r.status_code == 410, r.text
+    error = r.json()["error"]
+    assert error["code"] == "gone" and error["details"]["replaced_by"] == [f"POST /v1/assets/batch-{kind}"]
 
 
 @pytest.mark.slow
@@ -242,24 +215,21 @@ def test_vision_submit_triggers_search_sync(vision_env) -> None:
 
 
 @pytest.mark.slow
-def test_unknown_asset_returns_404(vision_env) -> None:
-    auth, _, _, _, _, _, _ = vision_env
-    r = _post(auth, "ast_doesnotexist")
-    assert r.status_code == 404
+def test_a_clip_that_isnt_there_or_is_in_the_trash_is_skipped(vision_env) -> None:
+    auth, _, _, _, _, deleted_id, tenant_url = vision_env
+    for clip in ("ast_doesnotexist", deleted_id):
+        r = _post(auth, clip)
+        assert r.status_code == 200 and r.json() == {"updated": 0, "skipped": 1}
+    from src.server.database import get_engine_for_url
 
-
-@pytest.mark.slow
-def test_soft_deleted_asset_returns_404(vision_env) -> None:
-    auth, _, _, _, _, deleted_id, _ = vision_env
-    r = _post(auth, deleted_id)
-    assert r.status_code == 404
+    with get_engine_for_url(tenant_url).connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM asset_metadata WHERE asset_id = :a"),
+                            {"a": deleted_id}).scalar_one() == 0, "nothing saved"
 
 
 @pytest.mark.slow
 def test_missing_auth_returns_401(vision_env) -> None:
     _, raw_client, _, active_id, _, _, _ = vision_env
-    r = raw_client.post(
-        f"/v1/assets/{active_id}/vision",
-        json={"model_id": "test-vision-model", "description": "test", "tags": []},
+    r = saved(raw_client, "vision", active_id, json={"model_id": "test-vision-model", "description": "test", "tags": []},
     )
     assert r.status_code == 401

@@ -16,11 +16,12 @@ from sqlalchemy import text
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _counts, _describe, _due, _library, _summary
+from tests.derived import saved
 
 
 def _ocr(env, clip: str, words: str, sha: str | None = None):
     client, headers, *_ = env
-    r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": words, "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": words, "lineage": _want(env, "ocr", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     return r
@@ -54,7 +55,7 @@ def test_describing_again_leaves_ocr_alone(env):
     _ocr(lib, clip, "NO PARKING", sha)
     _describe(lib, clip, sha)
     # Another model's description, and the same model's again.
-    client.post(f"/v1/assets/{clip}/vision", json={"model_id": "other", "description": "a sign"}, headers=headers)
+    saved(client, "vision", clip, json={"model_id": "other", "description": "a sign"}, headers=headers)
     _describe(lib, clip, sha)
     assert _detail(env, clip)["ocr_text"] == "NO PARKING"
     assert _due(lib, "ocr") == []
@@ -167,7 +168,7 @@ def test_describing_again_keeps_the_ocr_in_its_search_document(env):
     lib = _library(env, "OcrDocKept")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     _ocr(lib, clip, "NO ENTRY", None)
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a door",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "a door",
                                                         "lineage": _want(env, "vision", None)}, headers=headers)
     assert r.status_code == 200, r.text
     row = _search_row(env, clip)

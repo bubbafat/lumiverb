@@ -17,6 +17,7 @@ from sqlalchemy import text
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _library
+from tests.derived import saved
 
 pytestmark = pytest.mark.slow
 
@@ -44,7 +45,7 @@ def _ok(r) -> None:
 
 def _describe(lib, clip: str, description: str, tags: list[str]) -> None:
     client, headers, *_ = lib
-    _ok(client.post(f"/v1/assets/{clip}/vision", headers=headers, json={
+    _ok(saved(client, "vision", clip, headers=headers, json={
         "model_id": "m", "description": description, "tags": tags, "lineage": _want(lib, "vision", None)}))
 
 
@@ -85,7 +86,7 @@ def test_a_clip_is_found_by_every_word_a_person_sees(env):
     _describe(lib, clip, "a lighthouse on a rocky point", ["lighthouse", "coast"])
     # A person rewrote the description: search finds their words, not the machine's.
     _correct(lib, clip, description="a quoddy lighthouse in fog")
-    _ok(client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "WELCOME TO MARBLEHEAD",
+    _ok(saved(client, "ocr", clip, json={"ocr_text": "WELCOME TO MARBLEHEAD",
                                                     "lineage": _want(lib, "ocr", None)}, headers=headers))
     _ok(client.put(f"/v1/assets/{clip}/note", json={"text": "ask about the zephyrine print"}, headers=headers))
 

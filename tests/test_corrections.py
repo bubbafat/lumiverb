@@ -17,6 +17,7 @@ from src.shared import producers as P
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _row, _sha, _want
 from tests.test_reconciler import _analysis_proxy_made, _due, _library
+from tests.derived import saved
 
 SRT_MACHINE = "1\n00:00:00,000 --> 00:00:02,000\nhello from whisper\n"
 SRT_MACHINE_2 = "1\n00:00:00,000 --> 00:00:02,000\nhello again from whisper\n"
@@ -215,7 +216,7 @@ def _image(env, name: str) -> tuple[tuple, str, str]:
 
 def _describe_as(env, clip: str, description: str, tags: list[str], model: str = "qwen3-vl:8b"):
     client, headers, *_ = env
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": model, "description": description, "tags": tags,
+    r = saved(client, "vision", clip, json={"model_id": model, "description": description, "tags": tags,
                                                         "lineage": _want(env, "vision", None)}, headers=headers)
     assert r.status_code == 200, r.text
 
@@ -326,11 +327,11 @@ def test_undoing_every_edit_while_search_is_down_still_reaches_search(env, monke
 def test_a_persons_ocr_is_the_one_copy(env):
     client, headers, *_ = env
     lib, clip, sha = _image(env, "CorrOcr")
-    r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATFORN 9", "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": "PLATFORN 9", "lineage": _want(env, "ocr", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     _correct(env, clip, ocr_text="PLATFORM 9")
-    r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "PLATF0RM 9", "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": "PLATF0RM 9", "lineage": _want(env, "ocr", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     d = _detail(env, clip)

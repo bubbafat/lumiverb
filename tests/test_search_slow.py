@@ -22,6 +22,7 @@ from tests.conftest import (
     _run_control_migrations,
 )
 from tests.machine_lineage import made
+from tests.derived import saved
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +103,7 @@ def _described(auth_client: _AuthClient, tenant_url: str, library_id: str, descr
 
 
 def _describe(auth_client: _AuthClient, asset_id: str, description: str, tag: str, model_id: str) -> None:
-    r = auth_client.post(f"/v1/assets/{asset_id}/vision", json={
+    r = saved(auth_client, "vision", asset_id, json={
         "model_id": model_id, "model_version": "2", "description": description, "tags": [tag],
         "lineage": made("vision")})
     assert r.status_code == 200, r.text

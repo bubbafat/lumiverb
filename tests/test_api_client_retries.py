@@ -169,7 +169,7 @@ def test_a_producers_saves_are_never_sent_twice(slept):
     script = Script(_reset(), _reset())
     saving = Saving(_client(script))
     with pytest.raises(httpx.ReadError):
-        saving.post("/v1/assets/a/vision", json={"description": "x"})
+        saving.post("/v1/assets/batch-vision", json={"items": [{"asset_id": "a", "description": "x"}]})
     assert script.tries == 1
     assert saving.get("/v1/producers").json() == OK  # a read is tried again
     assert script.tries == 3
