@@ -24,11 +24,6 @@ class CLIConfig(BaseModel):
     # Library roots as stored on the server -> where they are on this
     # machine, by path prefix (src/processing/roots.py).
     root_map: dict[str, str] = {}
-    # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set
-    # (src/processing/cache_dir.py). A Linux install sets it to the data
-    # disk, so a command run by hand as the lumiverb user finds the
-    # scheduler's caches and lock.
-    cache_home: str = ""
 
 
 def _config_path() -> Path:
@@ -90,9 +85,9 @@ def get_admin_key() -> str:
 
 
 def machine_settings():
-    """This machine's processing settings, as the CLI's config has them
-    (src/processing/machine.py): where library roots are, and caches."""
+    """This machine's settings, as the CLI's config has them
+    (src/processing/machine.py): where library roots are. The CLI keeps no
+    caches (ADR-020 decision 7)."""
     from src.processing.machine import Machine
 
-    cfg = load_config()
-    return Machine(root_map=dict(cfg.root_map), cache_home=cfg.cache_home)
+    return Machine(root_map=dict(load_config().root_map))

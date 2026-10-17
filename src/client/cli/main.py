@@ -88,7 +88,6 @@ def config_set(
     api_url: Annotated[str | None, typer.Option("--api-url")] = None,
     api_key: Annotated[str | None, typer.Option("--api-key", help="The key, or - to paste it (not shown; Enter ends it) or pipe it in.")] = None,
     admin_key: Annotated[str | None, typer.Option("--admin-key", help="The key, or - to paste it (not shown; Enter ends it) or pipe it in.")] = None,
-    cache_home: Annotated[str | None, typer.Option("--cache-home", help="Where caches and the scheduler's lock go instead of ~/.cache, unless XDG_CACHE_HOME is set ('' to undo).")] = None,
 ) -> None:
     """Set API URL, API key, and/or admin key in ~/.lumiverb/config.json.
 
@@ -107,15 +106,6 @@ def config_set(
         else:
             admin_key = key
     cfg = load_config()
-    if cache_home:
-        # Relative to wherever this ran, the scheduler would look somewhere else.
-        expanded = os.path.expanduser(cache_home)
-        if not os.path.isabs(expanded):
-            console.print(f"[red]--cache-home must be an absolute path (or '' to undo), not {escape(cache_home)}[/red]")
-            raise typer.Exit(1)
-        cache_home = os.path.normpath(expanded)
-    if cache_home is not None:
-        cfg.cache_home = cache_home
     if api_url is not None:
         cfg.api_url = api_url.rstrip("/")
     if api_key is not None:
@@ -136,7 +126,6 @@ def config_show() -> None:
     table.add_row("api_url", cfg.api_url)
     table.add_row("api_key", escape("[set]") if cfg.api_key else escape("[not set]"))
     table.add_row("admin_key", escape("[set]") if cfg.admin_key else escape("[not set]"))
-    table.add_row("cache_home", cfg.cache_home or escape("[not set — ~/.cache unless XDG_CACHE_HOME]"))
     console.print(table)
     if cfg.root_map:
         console.print("Library roots on this machine (server → here):")

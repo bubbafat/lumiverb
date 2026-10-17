@@ -42,8 +42,6 @@ class Machine:
     # The server's data folder (the scheduler's): where its previews are is
     # read from it (src/shared/previews_location.py), as they may move.
     data_dir: str = ""
-    # Where caches go instead of ~/.cache, when XDG_CACHE_HOME isn't set.
-    cache_home: str = ""
     # How analysis proxies are rendered here (src/processing/video/analysis_proxy.py):
     # the encoder, where originals are decoded ("auto": the GPU through
     # Vulkan when it works, else a Mac's media engine through VideoToolbox,
@@ -56,8 +54,8 @@ class Machine:
     # Analysis proxies rendered at once; 0: one per six cores, at most three.
     render_concurrency: int = 0
     analysis_cache_gb: float = 50.0
-    # The preview cache's cap (src/processing/proxy/proxy_cache.py); 0: none,
-    # the CLI's (shared with the Mac app's browsing until ADR-020 phase 5).
+    # The preview cache's cap (src/processing/proxy/proxy_cache.py), the
+    # scheduler's (LUMIVERB_PREVIEW_CACHE_GB); 0: none. A client keeps none.
     preview_cache_gb: float = 0.0
     # Face batches a detection process does before a fresh one takes over
     # (ONNX Runtime leaks: src/producers/faces/detect.py).

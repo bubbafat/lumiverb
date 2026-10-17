@@ -1,46 +1,44 @@
-# Proxy Cache Protocol
+# Preview cache
 
-Shared disk cache protocol for proxy images. Lumiverb's Python side (the CLI's scan and the scheduler) and the macOS app use the same format and location so proxies are reusable across them. Only the Python side writes proxies during a scan: the macOS app scans nothing (the server's scheduler scans every library), and only reads the cache and keeps the proxies it downloads for browsing.
+The scheduler's own disk cache of clips' previews (`src/processing/proxy/proxy_cache.py`), for a scheduler on a machine apart from the API. Nothing else writes it: a client keeps no copy of the scheduler's (ADR-020 decision 7). The CLI's `lumiverb scan` caches nothing, and the Mac app keeps its own browse cache (below).
 
-**The scheduler beside the API keeps no copies.** Where the API stores the previews on the same machine (`STORAGE_PROVIDER=local`, as on a Mac's install), a job reads each clip's stored preview from the Store, by the key its queue row carries (`src/server/scheduler/inputs.py` `Inputs.preview_bytes`), sized to the cache's edge for CLIP, faces, OCR and descriptions; this cache isn't asked. Its scans write nothing here and don't list unchanged files (`run_scan(cache_previews=False)`), and at its start it removes the copies an earlier scheduler kept, when its cache is inside the server's data folder (`forget_preview_copies`). The cache is still used for a clip whose stored preview isn't on this machine (none yet, a drive unplugged), and by the CLI's scan for the Mac app's browsing.
+**Beside the API there's none.** Where the API keeps the previews on the same machine (`STORAGE_PROVIDER=local`, as on a Mac's install), a job reads each clip's stored preview from the Store, by the key its queue row carries (`src/server/scheduler/inputs.py` `Inputs.preview_bytes`), sized for CLIP, faces, OCR and descriptions; this cache isn't asked. Its scans write nothing here and don't list unchanged files (`run_scan`, `cache_previews` false), and at its start it removes the copies an earlier scheduler kept when its cache is inside the server's data folder (`forget_preview_copies`).
+
+**Apart from the API** (`cache_previews` true, `src/server/scheduler/scans.py`), its scans keep each preview they make and download the unchanged clips', and its jobs read them here, downloading one it lacks (`GET /v1/assets/{asset_id}/artifacts/proxy`).
 
 ## Location
 
 ```
-~/.cache/lumiverb/proxies/
+$XDG_CACHE_HOME/lumiverb/proxies/
 ```
 
-## File Layout
+An install sets `XDG_CACHE_HOME` to its data disk (`DATA_DIR/cache`); without it, `~/.cache`. The scheduler's lock and state are beside it (`src/processing/cache_dir.py`).
+
+## Cap
+
+At most `LUMIVERB_PREVIEW_CACHE_GB` (2 by default): past it the least recently used proxies go, each with its sidecar, checked on the first write and every 50th after. A sidecar's size counts toward it.
+
+## File layout
 
 For each asset:
 
 | File | Contents | Purpose |
 |------|----------|---------|
 | `{asset_id}` | JPEG image bytes (no extension) | 2048px max long edge proxy image |
-| `{asset_id}.sha` | The source file's content hash (UTF-8, no newline): `sha256:` and 64 hex, or `fp1:` and 64 for a file over 64 MiB (a bare 64 hex, written before hashes named their scheme, is read as `sha256:`) | The source's content hash at time of proxy generation (`src/shared/content_hash.py`) |
+| `{asset_id}.sha` | The source file's content hash (UTF-8, no newline): `sha256:` and 64 hex, or `fp1:` and 64 for a file over 64 MiB (a bare 64 hex, written before hashes named their scheme, is read as `sha256:`) | The source's content hash when the proxy was made (`src/shared/content_hash.py`) |
 
 ## Operations
 
-### Write (during scan)
+### Write (a scan's, or a download)
 
-1. Generate 2048px JPEG proxy from source file
-2. Compute the source file's content hash (`src/shared/content_hash.py`)
-3. Atomic write proxy: write to temp file in same directory, then `rename()` to `{asset_id}`
-4. Atomic write sidecar: write to temp file, then `rename()` to `{asset_id}.sha`
-5. Sidecar written **after** proxy — a reader that sees a `.sha` file can trust the proxy is complete
+1. Make the 2048px JPEG proxy from the source (a scan), or download the server's.
+2. Write the proxy atomically: a temp file in the same folder, renamed to `{asset_id}`.
+3. Write the sidecar the same way, **after** the proxy: a reader that sees a `.sha` can trust the proxy is whole.
 
-### Read (during scan — skip check)
+### Read (a job's)
 
-1. Read `{asset_id}.sha` → cached SHA
-2. Compare cached SHA with current source file SHA
-3. If match → proxy is valid, skip regeneration
-4. If mismatch or missing → regenerate proxy and update both files
-
-### Read (during browse — display)
-
-1. Check if `{asset_id}` exists in cache
-2. If yes → load from disk (fast, no network)
-3. If no → download from server via `GET /v1/assets/{asset_id}/artifacts/proxy`, cache for next time
+1. Read `{asset_id}`, sized to the job's edge.
+2. A sidecar naming other content than the clip's (`content_hash`) isn't handed out: the server's copy is downloaded and kept, with its hash.
 
 ### Delete
 
@@ -48,13 +46,11 @@ Remove both `{asset_id}` and `{asset_id}.sha`.
 
 ## Constraints
 
-- Proxy images are JPEG format (not WebP) for local consumption. The server receives WebP via the ingest endpoint and generates its own proxy/thumbnail.
-- Maximum long edge: 2048px (matches server proxy size)
-- JPEG quality: 75
-- No subdirectories — all files flat in the proxies directory
-- Asset IDs are UUIDs, safe for filenames on all platforms
-- Atomic writes prevent partial reads from concurrent access (Python CLI + macOS app can run simultaneously)
+- JPEG, not WebP, for local use; the server keeps its own WebP preview and makes its own thumbnail.
+- At most 2048px on the long edge (the server's preview size); JPEG quality 75.
+- No subfolders: every file flat in the folder.
+- Asset ids are checked as plain names before they're used in a path (`cache_dir.cache_entry`).
 
-## Compatibility
+## The Mac app's browse cache
 
-The Python side (`src/processing/proxy/proxy_cache.py`) implements the whole protocol. The Swift macOS app (`MacProxyDiskCache`) implements the browse read, its own atomic write of a downloaded proxy (no sidecar), and the delete. Files written by either are readable by the other.
+The Mac app keeps the proxies it downloads for browsing in `MacProxyDiskCache` (`clients/lumiverb-app/.../MacProxyDiskCache.swift`): its own cache, read before the server. It's still at `~/.cache/lumiverb/proxies`, where the CLI's scan used to write before ADR-020 phase 5, and has no cap. Phase 5 gives it its own folder and a cap, as iOS's have.

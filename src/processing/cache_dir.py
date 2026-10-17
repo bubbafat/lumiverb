@@ -1,9 +1,7 @@
-"""Where Lumiverb keeps local caches: $XDG_CACHE_HOME/lumiverb, else this
-machine's cache_home (src/processing/machine.py), else ~/.cache/lumiverb.
-
-A Linux install sets XDG_CACHE_HOME to its data disk for the scheduler
-(deploy-api.sh), and the lumiverb user's CLI config the same, so a command
-run by hand finds the scheduler's caches and lock.
+"""Where the scheduler keeps its caches, lock and state: $XDG_CACHE_HOME/
+lumiverb, else ~/.cache/lumiverb. An install sets XDG_CACHE_HOME to its data
+disk (deploy-api.sh; a Mac's env file). A client keeps none of the
+scheduler's: the CLI caches nothing (ADR-020 decision 7).
 """
 
 from __future__ import annotations
@@ -14,9 +12,7 @@ from pathlib import Path
 
 
 def cache_dir(*parts: str) -> Path:
-    from src.processing.machine import current
-
-    base = os.environ.get("XDG_CACHE_HOME") or current().cache_home or Path.home() / ".cache"
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     return Path(base, "lumiverb", *parts)
 
 

@@ -72,6 +72,32 @@ def _sha(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# A client's scan keeps nothing (ADR-020 decision 7)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("planned", [("upload", "new", None), ("unchanged", None, "ast_x")])
+def test_a_client_s_scan_keeps_no_previews(root: Path, tmp_path: Path, planned: tuple) -> None:
+    """`lumiverb scan` (run_scan as the CLI calls it) uploads what it makes
+    and keeps no copy, nor downloads the unchanged clips' previews: it's a
+    client of the API, which has them."""
+    _photo(root, "a.jpg")
+    server = FakeScans(default=planned)
+    _scan(server, root)
+    assert not (tmp_path / "cache" / "lumiverb" / "proxies").exists()
+    assert not any(c.startswith("GET /v1/assets/") for c in server.calls())
+
+
+def test_the_scheduler_apart_from_the_api_keeps_its_scans_previews(root: Path, tmp_path: Path) -> None:
+    """Its producers read them there (cache_previews, as scheduler/scans.py
+    asks when the API isn't on this machine)."""
+    _photo(root, "a.jpg")
+    _scan(FakeScans(), root, cache_previews=True)
+    kept = tmp_path / "cache" / "lumiverb" / "proxies"
+    assert sorted(p.suffix for p in kept.iterdir() if not p.name.startswith(".")) == ["", ".sha"]
+
+
+# ---------------------------------------------------------------------------
 # What's sent
 # ---------------------------------------------------------------------------
 
@@ -131,7 +157,7 @@ def test_a_long_listing_goes_a_thousand_files_a_call_and_the_whole_plan_is_read(
         _file(root, f"f{n:04}.jpg", b"x")
     server = FakeScans(default=("unchanged", None, "ast_x"))
 
-    stats = _scan(server, root)
+    stats = _scan(server, root, cache_previews=True)  # the unchanged listed too: the scheduler apart from the API
 
     assert [len(r.body["files"]) for r in server.sent("POST", f"/v1/scans/{SCAN_ID}/found")] == [1000, 1000, 500]
     pages = server.sent("GET", f"/v1/scans/{SCAN_ID}/plan")
@@ -286,20 +312,22 @@ def test_another_clip_just_put_at_a_moves_path_sends_the_hashes_again(root: Path
     assert stats.unchanged == 1
 
 
-def test_the_unchanged_files_fill_the_proxy_cache(root: Path) -> None:
+def test_the_unchanged_files_fill_the_schedulers_preview_cache(root: Path) -> None:
+    # On a machine apart from the API (cache_previews): its producers read them there.
     _photo(root, "a.jpg")
     _photo(root, "b.jpg")
     server = FakeScans(default=("unchanged", None, None),
                        plan={"a.jpg": ("unchanged", None, "ast_a"), "b.jpg": ("hash", "changed", "ast_b")},
                        decide=lambda rel, sha: {"decision": "unchanged", "asset_id": "ast_b"})
-    _scan(server, root)
+    _scan(server, root, cache_previews=True)
     assert [r.path for r in server.requests if r.path.endswith("/artifacts/proxy")] == [
         "/v1/assets/ast_a/artifacts/proxy", "/v1/assets/ast_b/artifacts/proxy"]
 
 
 def test_where_previews_are_read_in_place_a_scan_keeps_no_copies(root: Path, tmp_path: Path) -> None:
-    # The scheduler beside the API (cache_previews=False): nothing cached,
-    # nothing downloaded, and the unchanged only counted, never listed.
+    # The scheduler beside the API, as every client (cache_previews=False,
+    # the default): nothing cached, nothing downloaded, and the unchanged
+    # only counted, never listed.
     _photo(root, "a.jpg")
     _photo(root, "b.jpg", shade=9)
     server = FakeScans(default=("upload", "new", None), plan={"a.jpg": ("unchanged", None, "ast_a")})
