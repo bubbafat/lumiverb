@@ -13,20 +13,31 @@ same disk: nothing is downloaded again.
 
 An operator's HF_HOME or INSIGHTFACE_HOME is theirs: used as it is, and
 nothing in it is moved or pruned.
+
+A model whose weights are here loads from here alone (from_folder): asked
+to load one, Hugging Face's library would otherwise ask huggingface.co about
+it every time (what changed since: a request off this machine for each CLIP
+and Whisper load). Only one that isn't here yet, or won't load from what's
+here (half a download), is downloaded, as before.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from typing import TypeVar
 
 from src.shared.whisper_models import REPOS
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 HF = "huggingface"
 FACES = "insightface"
@@ -68,6 +79,54 @@ def _ours(env: str, folder: Path) -> bool:
 
 def _hub_name(repo: str) -> str:
     return "models--" + repo.strip("/").replace("/", "--")
+
+
+# -- Loading from here alone ---------------------------------------------------------
+
+
+def downloaded(repo: str | None) -> bool:
+    """Whether the repo's weights are in the Hugging Face folder this process
+    uses (the models folder's, or an operator's HF_HOME): a snapshot with a
+    file in it."""
+    if not repo:
+        return False
+    hub = Path(os.environ.get("HF_HOME") or hf_home()) / "hub"
+    try:
+        return any(any(f.is_file() for f in snap.rglob("*")) for snap in (hub / _hub_name(repo) / "snapshots").iterdir())
+    except OSError:
+        return False
+
+
+# Hugging Face's offline switch is the process's: one load at a time sets it.
+_offline = threading.Lock()
+
+
+@contextlib.contextmanager
+def _hub_offline() -> Iterator[None]:
+    """Hugging Face's library asks nothing of huggingface.co for the block
+    (its offline mode, read at each request: huggingface_hub.constants)."""
+    from huggingface_hub import constants
+
+    with _offline:
+        was = constants.HF_HUB_OFFLINE
+        constants.HF_HUB_OFFLINE = True
+        try:
+            yield
+        finally:
+            constants.HF_HUB_OFFLINE = was
+
+
+def from_folder(load: Callable[[], T], repo: str | None) -> T:
+    """load(), from the models folder alone when the repo's weights are in it;
+    when they aren't, or what's there doesn't load, as before (downloading
+    what's missing)."""
+    if downloaded(repo):
+        try:
+            with _hub_offline():
+                return load()
+        except Exception as exc:  # noqa: BLE001 — loaded again below, the way it always was
+            logger.info("models: %s didn't load from the models folder alone (%s); asking Hugging Face", repo, exc)
+    return load()
 
 
 # -- Moving in what's there ----------------------------------------------------------
