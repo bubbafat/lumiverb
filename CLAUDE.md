@@ -142,6 +142,6 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 ## Key docs
 
 - `docs/adr/016-operating-model.md` — **direction**. Wins over other docs on conflict.
-- `docs/cursor-api.md` — **authoritative** API reference. Do not relitigate.
+- `docs/cursor-api.md` — **authoritative** API reference. Do not relitigate. It's a client's whole contract (ADR-020 decision 9): "Writing a client: a library's reader" says what any scanner sends and in what formats, held to the code by `tests/test_client_contract_doc.py` (change both together).
 - `docs/architecture.md` — full system design.
 - Everything else: `ls docs/` and `ls docs/adr/`.

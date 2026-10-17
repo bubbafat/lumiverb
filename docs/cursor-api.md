@@ -9,7 +9,7 @@
 - FastAPI + SQLModel + Alembic
 - PostgreSQL 18 (per-tenant database model)
 - PostgreSQL full-text search, in each account's database (ADR-019)
-- Object storage via abstraction layer (GCS / S3 / B2 / MinIO)
+- What Lumiverb keeps behind one interface, the Store (ADR-020): a filesystem provider, the only one
 
 ## Non-Negotiables
 
@@ -18,7 +18,7 @@
 - Tenant context is always derived from the token (JWT claims or API key lookup) — never passed as a URL param or body field
 - Pagination is cursor-based, never offset-based
 - File uploads are multipart form data
-- File serving uses signed URLs (cloud) or direct proxy (self-hosted) — never expose raw object storage URLs
+- The API serves what it keeps itself (`GET /v1/assets/{id}/artifacts/...`; signed playback links for a `<video>`, which can't send a header): never a storage path, and never an original
 - Error responses always use this envelope: `{"error": {"code": "...", "message": "...", "details": {...}}}`, every one of them (`api/errors.py`). A route raises `ApiError(status, code, message, details)` for its own code, or a plain `HTTPException(status, "message")`, whose code its status names: `bad_request` (400), `unauthorized` (401), `forbidden` (403), `not_found` (404, an unknown route too), `method_not_allowed` (405), `conflict` (409), `gone` (410), `too_large` (413), `invalid_request` (422), `upstream_error` (502), `unavailable` (503). A request that fails validation is a 422 `invalid_request`: `message` names the first field, `details.errors` lists them all. An unhandled error is a 500 `internal_error`. Nothing nests the envelope inside `detail`.
 - A retired route stays defined, behind the role it always needed (401 without a token, 403 for a role it never let in), and answers 410 `gone`, saying what replaced it in `message` and `details.replaced_by` (`api/errors.py` `GoneError`): a client still calling it learns why, not a bare 404.
 - Bounds are the same everywhere (`api/limits.py`), and out of range is a 422, never a silent clamp: a page of clips holds at most 500 (`limit`), a request body at most 10,000 ids in any `*_ids` list.
@@ -298,6 +298,57 @@ The client says what it found; the server decides what's new, changed, moved, sk
 - **POST /v1/scans/{scan_id}/finish** — Body: `{ "allow_mass_missing": false }`. Archives the gone clips (less those moved, or skipped as moves) as missing, as `DELETE /v1/assets` with `"reason": "missing"` does: the same 409 `mass_missing` (see Decisions), answered with `"allow_mass_missing": true` (the scan stays open until then), and when the account follows moves a clip with an empty newer copy of its file moves there instead. Held back, nothing archived, when folders couldn't be listed (`unlisted`), moves are skipped (`skip_moves`), or a whole library's scan found no file of its media type (`nothing_found`: more likely an unmounted volume than an empty library; not with `force`). 409 `moved_files` (see Decisions) while moves wait for an answer. A dry run archives nothing and asks nothing. Returns `{ "archived", "moved", "handed_over", "unchanged", "skipped", "held_back", "held_back_reason", "dry_run" }` (`moved` includes `handed_over`; a dry run's are what would be). All or nothing: the clips archived, those handed over to their copies, the scan's close and its answer commit together, so an API that dies halfway leaves the scan to be finished again; the copies' files and search documents go once it has. Its listing is deleted; the scan is kept, finished, with its answer, until it expires: sent again, the finish returns that answer.
 - **DELETE /v1/scans/{scan_id}** — Drop a scan and its listing, finished or not; nothing else changes (an aborted scan, or a `mass_missing` the person said no to). 204; 404 if unknown.
 
+## Writing a client: a library's reader
+
+This reference is a client's whole contract with the server (ADR-020 decision 9): nothing depends on a client being Lumiverb's own code. A client may share none of it, or simulate a library with no files at all. What arrives is a claim, checked where it can be, and the server never assumes an original exists. `lumiverb scan` and the scheduler's scans are one such client (`src/processing/scan.py` `run_scan`). Whatever reads a library's files does this:
+
+1. **Its key.** An editor's or an admin's API key (API Keys), sent as `Authorization: Bearer <key>`: scans, ingest and uploads are editors' writes (Roles).
+2. **What it reads.** The library (`GET /v1/libraries`): its `root_path` is the folder as the server keeps it, and where that is on the client's machine is the client's own business. Then its filters: `GET /v1/tenant/filter-defaults` and `GET /v1/libraries/{id}/filters`, merged as Merged filter evaluation says (ingest refuses a path they leave out). A library's media are its files with one of these extensions, compared lowercase:
+   - Images: `.arw` `.bmp` `.cr2` `.cr3` `.crw` `.dng` `.jpeg` `.jpg` `.nef` `.nrw` `.orf` `.png` `.raf` `.raw` `.rw2` `.rwl` `.sr2` `.srf` `.tif` `.tiff` `.webp`
+   - Videos: `.mkv` `.mov` `.mp4`
+
+   Hidden files count. Links aren't followed. A name with a control character, or a path that breaks the `rel_path` rule (Assets API), is never sent: the server refuses it.
+3. **The scan** (Scans API).
+   1. Start the scan.
+   2. Send `found`: every media file in scope, with its size and modified time (ISO 8601 with its zone). Mark `settling` a file modified in the last 30 seconds: it may still be copying. A modified time minutes ahead is a camera's clock, not a copy.
+   3. Ask for the `plan`, naming the folders it couldn't list in `unlisted`.
+   4. Hash the files planned `hash` (Content hashes; `previous_hash` too when the plan says `legacy`) and send them to `hashes`.
+   5. Answer `moves` if they were asked about.
+   6. Before answering moves or finishing, check the library's storage is still there: an unmounted share is an empty folder, and the server can't tell.
+   7. `finish`.
+
+   Every call but the start is safe to send again.
+4. **Uploads**, after the finish: one `POST /v1/ingest` for each file planned or decided `upload`, and each in the `upload` that `moves` answered (Ingest API).
+   - `proxy`: its preview (below). With it: `library_id`, `rel_path`, `file_size`, `file_mtime`, `media_type` (`image` or `video`, as its extension says), and `width` and `height`, the original's.
+   - `exif`, a JSON object. Every field is optional, but send `content_hash`: without it the server can't tell the same file from a changed one at that path.
+     - `content_hash`, the file's (Content hashes), and `previous_hash`, the whole file's `sha256:` when the plan said `legacy`;
+     - `exif`: the file's tags, as read;
+     - `camera_make`, `camera_model`, `lens_model`;
+     - `taken_at`: the camera's wall clock, ISO 8601 with no zone (ADR-017), and `taken_at_offset_min`, its zone when the file says (minutes east of UTC);
+     - `gps_lat`, `gps_lon` ((0, 0) is no fix) and `gps_accuracy_m`;
+     - `duration_sec`, `iso`, `exposure_time_us`, `aperture`, `focal_length`, `focal_length_35mm`, `flash_fired`, `orientation`.
+   - `lineage`, a JSON object by artifact, each `{ "producer", "version", "settings_hash", "source_hash" }` as `GET /v1/producers` gives them (Producers API), `source_hash` the file's content hash. `proxy` always. `capture` when the capture facts in `exif` were read as the capture producer reads them: without it they're stored, but the capture producer counts them as not made. `probe` with a `video_facet`.
+   - A video: `video_facet`, its probe (the shape `PUT /v1/assets/{id}/video-facet` takes), then its preview: `POST /v1/assets/{id}/artifacts/video_preview`, with its lineage.
+5. **What only the reader can make.** That is: analysis proxies, probe and capture facts, and previews again after a producer's settings change. For a library this server reads, its scheduler makes them. For a device, the list of that work comes through the API with ADR-018 phases 3 and 7.
+
+### What the server takes
+
+- **Pictures.** A preview (`proxy` at ingest; the `proxy`, `thumbnail` and `scene_rep` uploads) and a search's image:
+  - JPEG, PNG or WebP, of at most 120 megapixels: nothing else is read (`src/server/images.py`). At most 10 MB at ingest.
+  - Every one is re-encoded (`src/server/preview_image.py`): its rotation applied to the pixels, its colour profile kept, every other tag dropped.
+  - A proxy is kept as WebP, at most 2,048 px on its long edge: send it at 2,048 px (one smaller stays smaller). The server makes the thumbnail from it, WebP at 512 px. A scene frame is kept as JPEG.
+  - A video's proxy is one frame of it; Lumiverb's scan uses the first.
+- **Videos** (`video_preview`, `analysis_proxy`), sent as `video/*`: the web player streams them as they are, so they're what every browser plays (ADR-018 decision 11, `tests/test_browser_playable_video.py`).
+  - H.264, 8-bit 4:2:0 (`yuv420p`), at most High profile.
+  - AAC-LC, at most two channels a track.
+  - MP4 with its index (`moov`) before the media (`+faststart`), video and audio tracks only.
+  - No metadata: a phone's video says where it was taken.
+  - A video preview is its start, made with the account's `video_preview` settings (by default its first 10 seconds, at most 720 px high).
+  - An analysis proxy is the whole video, made with the account's `analysis_proxy` settings (`GET /v1/producers`: by default at most 960 px on its long edge and 30 frames a second). Its keyframes are at 0 and every 2 seconds after, and nowhere else: scenes are found from its keyframes alone. Every audio track is kept, after a stereo mix of them all when there are several.
+  - Up to 100 MB an upload; an analysis proxy up to 64 GiB.
+  - The server checks only the content type of what arrives for now. Checking and rewriting a device's videos is ADR-018 phase 5.
+- **Hashes:** Content hashes. **Paths:** the `rel_path` rule (Assets API), in Unicode NFC.
+
 ## Libraries API
 
 All under `/v1/libraries`; require tenant auth (middleware). Renaming and trashing are an editor's. Choosing a library's folder (`root_path`) and making a library public (`is_public`) are a tenant admin's (Robert, Oct 10), at creation as on PATCH: a library is made with its folder, so creating one is an admin's, and a PATCH from an editor whose body has either is a 403.
@@ -318,7 +369,7 @@ All under `/v1/libraries`; require tenant auth (middleware). Renaming and trashi
 
 ## Library path filters API
 
-All under `/v1/libraries/{library_id}/filters`; require tenant auth and **admin** API key. Path filters control which files are included or excluded during library ingest (scanner). Patterns use `**`-style globs (case-insensitive); `**` matches across path segments. Validation rejects patterns containing `..` or null bytes.
+All under `/v1/libraries/{library_id}/filters`; require tenant auth and the **editor** role. Path filters control which files are included or excluded during library ingest (scanner). Patterns use `**`-style globs (case-insensitive); `**` matches across path segments. Validation rejects patterns containing `..` or null bytes.
 
 - **GET /v1/libraries/{library_id}/filters** — Returns `{ "includes": [{ "filter_id", "pattern", "created_at" }], "excludes": [...] }`. 404 if library not found.
 - **POST /v1/libraries/{library_id}/filters** — Body: `{ "type": "include"|"exclude", "pattern": "...", "trash_matching": false, "remove_from_projects": false }`. Creates filter. When `trash_matching` is `true` and type is `exclude`, also moves every active asset matching the pattern to the trash (deleted for good after the trash days); 409 `in_projects` first when projects use them, and nothing is added until `remove_from_projects` is true. Returns 201 with `{ "filter_id", "type", "pattern", "created_at", "trashed_count" }`. 400 if pattern invalid, 404 if library not found.
@@ -416,7 +467,7 @@ People are tenant-scoped — a person named in one library is recognized across 
 
 ## Ingest API
 
-Atomic ingest: create + populate assets in one request. The server normalizes the proxy (WebP, 2048px max), generates a thumbnail (WebP, 512px), and stores all provided metadata atomically. If the client sends a WebP proxy already within size limits, the server stores it as-is (no re-encoding).
+Atomic ingest: create + populate assets in one request. The server re-encodes the proxy (WebP, 2048px max; every one, a WebP within the size too: What the server takes), generates a thumbnail (WebP, 512px), and stores all provided metadata atomically.
 
 - **POST /v1/ingest** — Multipart form. Creates asset record AND ingests proxy + metadata atomically. The asset only appears on the server once fully populated. If the clip in sight at the same `(library_id, rel_path)` has the same content (or either content isn't known: no `exif.content_hash`, the file's content hash; 400 for one the server doesn't take, see Content hashes), it is updated (idempotent). An fp1 in `exif.content_hash` may come with the whole file's `sha256:` hash in `exif.previous_hash` (its scan's plan said `legacy`; 400 for anything else there): the hashes made before fp1 it takes the place of are swapped first, as `POST /v1/scans/{id}/hashes` does. A different file at the path is a new clip (Robert, Oct 9: nothing carries over), and the old one is archived as missing where it was (its projects too), back if its content is; it goes even when the new file is refused (its file isn't there any more), and when an empty copy of its content is elsewhere it moves there, as a copy-then-delete does. A file whose own clip is archived or trashed at that path is that clip: back if it went missing, refused if a person trashed or archived it; so a path holds one clip in sight and may hold archived ones. Restoring or unarchiving a clip onto a path another clip in sight holds skips it. Required fields: `proxy` (file), `library_id`, `rel_path`, `file_size`. Optional: `file_mtime` (ISO8601), `media_type` (default `image/jpeg`), `width`/`height` (source dimensions), `exif` (JSON), `vision` (JSON), `embeddings` (JSON array), `video_facet` (JSON, video only; same shape as `PUT /v1/assets/{id}/video-facet`; 400 if not a video; an invalid facet is logged and ignored so it never blocks ingest). The `proxy` (a JPEG, PNG or WebP of at most 120 megapixels, as artifact uploads; anything else is a 400) is stored re-encoded as WebP, at most 2048 px, with nothing of the original's metadata (as artifact uploads). Returns `{ "asset_id", "proxy_key", "proxy_sha256", "thumbnail_key", "thumbnail_sha256", "status", "width", "height", "created" }`. 400 unless `rel_path`'s extension is a supported one of its `media_type` (`src/shared/file_extensions.py`). Enforces library path filters: 422 if `rel_path` is excluded. 409 if the library is in the trash, if a person trashed or archived the asset (`deleted_reason` `"user"` or `"archived"`) or emptied that file from the trash (another file at that path is its own clip; a scan started with `force_add` brings such a file back first); an asset the scanner marked missing is restored instead and goes back in search (asset and scenes re-queued, transcript re-indexed). **The archive model** (when the account follows moves): a `rel_path` the library doesn't know, whose `exif.content_hash` matches an asset in the same library whose file is missing (never a person's trash or archive), restores that asset at the new path with everything it had (ratings, notes, projects, faces, transcript); with several matches, the most recently archived. Two ingests at once can't both claim one archived asset: the other gets an asset of its own. A new clip whose content went missing elsewhere while it was made (a copy and the overwritten original ingested at once) takes that clip, as copy-then-delete: the response gives the clip's `asset_id` with `created` false. 409 when another ingest just put a clip at this path ("scan again"): one clip in sight holds a path.
 - **POST /v1/assets/{asset_id}/ingest** — Ingest into an existing asset record. Same proxy + metadata fields minus `library_id`/`rel_path`/`file_size`. A `content_hash` in `exif` that isn't the clip's is 409 `different_file` (details `asset_content_hash`, `content_hash`): a different file is a new clip, made by `POST /v1/ingest`.
@@ -541,13 +592,6 @@ Two hashes name the same content only when scheme and value are both equal; hash
 
 Any other way of hashing is another scheme. A reader that isn't this server's own (a client with its own scanner) can say which scheme it hashes with only once the API takes others; until then it hashes as these say. A clip over 64 MiB hashed before fp1 has its whole file's `sha256:` hash until a scan finds it unchanged and swaps it for its fp1 (with its lineage's: nothing is stale); until then a file of its size is hashed whole too (`legacy`), so it's compared with what was. A clip's content hash changes only that way (another file is another clip), so lineage given the whole file's hash of a clip known by its fp1 since (work handed out before the swap) is recorded as made from its fp1.
 
-## Ingest deduplication
-
-When an asset is submitted via POST /v1/ingest:
-1. Check if `(library_id, rel_path)` already exists in tenant DB
-2. If yes — update existing asset record with new metadata
-3. If no — create new asset record, store proxy/thumbnail/metadata atomically
-
 ## Search
 
 Search is PostgreSQL's full-text search in the account's database (ADR-019), and only `src/server/search/text_search.py` knows the engine: a clip's own words (`asset_search`: its description and tags as a person sees them, text read in it, note, transcript and path), its scenes' (`video_scenes.words`) and its transcript's segments (`transcript_segments`), each searched among the clips in sight. Words are English and stemmed ("dogs" finds "dog"), a path's too, as typed words are read the same way. Descriptions, tags and notes weigh most, then text read in a picture and transcripts, then paths.
@@ -564,8 +608,8 @@ Text search runs through `GET /v1/query` with an `f=query:...` filter (see Unifi
 
 ## File Serving
 
-- Thumbnails: fast, served from signed URLs, used in grid views
-- Proxies: larger, used for AI inference and detail views, signed URLs
+- Thumbnails (grids) and proxies (detail views): `GET /v1/assets/{id}/artifacts/{type}`, with the bearer token (Assets API)
+- Videos: the same route, or a signed playback link for a `<video>` (`GET /v1/assets/{id}/playback`)
 - Source files: NEVER served via the API under any circumstances
 
 ## Migrations
