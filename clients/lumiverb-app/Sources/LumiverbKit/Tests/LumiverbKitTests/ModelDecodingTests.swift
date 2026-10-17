@@ -637,8 +637,8 @@ final class MacProxyDiskCacheTests: XCTestCase {
     }
 
     func testRemove() throws {
-        // A proxy the Python CLI's scan wrote, with its `.sha` sidecar
-        // (docs/proxy-cache-protocol.md): remove takes both.
+        // A proxy with a `.sha` sidecar, as the old shared folder had them
+        // (the Python CLI's scan wrote them there): remove takes both.
         cache.put(assetId: "ast_007", data: Data("image".utf8))
         let sidecar = tempDir.appendingPathComponent("ast_007.sha")
         try Data("sha".utf8).write(to: sidecar)

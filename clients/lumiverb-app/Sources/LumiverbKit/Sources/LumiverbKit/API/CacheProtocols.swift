@@ -3,9 +3,9 @@ import Foundation
 /// Persistent (or in-memory) cache for full-resolution proxy JPEGs.
 ///
 /// **Per-platform behavior:**
-/// - macOS uses `MacProxyDiskCache` — unbounded disk cache at
-///   `~/.cache/lumiverb/proxies/`, shared with the Python CLI (whose scan
-///   writes proxies there with SHA sidecars).
+/// - macOS uses `MacProxyDiskCache` — the app's own disk cache at
+///   `~/Library/Caches/io.lumiverb.app/proxies/`, capped at 1 GB, least
+///   recently used first (`BoundedDiskCache`).
 /// - iOS uses `MemoryImageCache` (proxy slot) — in-memory NSCache only,
 ///   ~150 MB budget, no disk fallback.
 public protocol ProxyCache: Sendable {
@@ -22,11 +22,11 @@ public protocol ProxyCache: Sendable {
 /// Persistent (or in-memory) cache for thumbnail JPEGs.
 ///
 /// **Per-platform behavior:**
-/// - macOS uses `MacThumbnailDiskCache` — unbounded disk cache at
-///   `~/.cache/lumiverb/thumbnails/`. No sidecars (thumbnails are macOS-app-
-///   local, not shared with the CLI).
+/// - macOS uses `MacThumbnailDiskCache` — disk cache at
+///   `~/Library/Caches/io.lumiverb.app/thumbnails/`, capped at 500 MB.
 /// - iOS uses `IOSThumbnailDiskCache` — disk cache in `.cachesDirectory`
-///   capped at ~200 MB with approximate-LRU (oldest-by-mtime) eviction.
+///   capped at ~200 MB.
+/// Both are a `BoundedDiskCache`: least recently used (oldest by mtime) first.
 public protocol ThumbnailCache: Sendable {
     func get(assetId: String) -> Data?
     func put(assetId: String, data: Data)
