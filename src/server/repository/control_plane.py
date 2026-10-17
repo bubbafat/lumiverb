@@ -6,6 +6,7 @@ import hashlib
 import secrets
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from src.shared.utils import utcnow
@@ -52,6 +53,19 @@ class TenantRepository:
         """Return tenant by id or None."""
         stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
         return self._session.exec(stmt).first()
+
+    def key_idle_days(self, tenant_id: str) -> int | None:
+        """Days a key a person made may go unused before it ends; None while that's off."""
+        tenant = self.get_by_id(tenant_id)
+        return tenant.key_idle_days if tenant is not None else None
+
+    def set_key_idle_days(self, tenant_id: str, days: int | None) -> None:
+        tenant = self.get_by_id(tenant_id)
+        if tenant is None:
+            raise ValueError(f"Tenant not found: {tenant_id}")
+        tenant.key_idle_days = days
+        self._session.add(tenant)
+        self._session.commit()
 
     def list_all(self) -> list[Tenant]:
         """Return all tenants."""
@@ -270,6 +284,50 @@ class ApiKeyRepository:
             .where(ApiKey.role == "admin")
         )
         return len(list(self._session.exec(stmt).all()))
+
+    @staticmethod
+    def ends_unused(api_key: ApiKey) -> bool:
+        """Whether the account's key-idle days end this key: one a person made.
+        Never one nobody made (the scheduler's, the server admin's API's: the
+        install's own) or a device's (the Devices API's to end)."""
+        return api_key.created_by_user_id is not None and api_key.device_id is None
+
+    def unused_since(self, tenant_id: str, since: datetime, *, lock: bool = False) -> list[ApiKey]:
+        """The account's live keys a person made that nobody has used since
+        `since` (made before it, if never used), longest unused first, but
+        for the account's last admin key: it's kept (DELETE /v1/keys keeps
+        it too)."""
+        stmt = (
+            select(ApiKey)
+            .where(ApiKey.tenant_id == tenant_id)
+            .where(ApiKey.revoked_at.is_(None))
+            .where(ApiKey.created_by_user_id.is_not(None))
+            .where(ApiKey.device_id.is_(None))
+            .where(func.coalesce(ApiKey.last_used_at, ApiKey.created_at) < since)
+            .order_by(func.coalesce(ApiKey.last_used_at, ApiKey.created_at), ApiKey.key_id)
+        )
+        if lock:
+            stmt = stmt.with_for_update()
+        idle = list(self._session.exec(stmt).all())
+        admins_left = self.count_admin_keys(tenant_id)
+        ending = []
+        for api_key in idle:
+            if api_key.role == "admin":
+                if admins_left <= 1:
+                    continue
+                admins_left -= 1
+            ending.append(api_key)
+        return ending
+
+    def end_unused(self, tenant_id: str, since: datetime) -> int:
+        """End the keys unused_since names, and commit. Returns how many."""
+        ending = self.unused_since(tenant_id, since, lock=True)
+        now = utcnow()
+        for api_key in ending:
+            api_key.revoked_at = now
+            self._session.add(api_key)
+        self._session.commit()
+        return len(ending)
 
     def delete_by_tenant_id(self, tenant_id: str) -> None:
         """Delete all API keys for a tenant (for cleanup on provisioning failure)."""

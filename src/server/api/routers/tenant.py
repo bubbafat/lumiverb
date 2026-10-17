@@ -50,6 +50,9 @@ class TenantSettingsResponse(BaseModel):
     # Days clips, libraries and projects stay in the trash before they're
     # deleted for good; None when that's off (the trash is emptied by hand).
     trash_days: int | None = 30
+    # Days a key a person made may go unused before upkeep ends it; None (the
+    # default) when keys end only when someone revokes them.
+    key_idle_days: int | None = None
 
 
 class TenantSettingsUpdate(BaseModel):
@@ -62,6 +65,10 @@ class TenantSettingsUpdate(BaseModel):
     # Fewer trash days (or turning them back on) deletes for good, on the next
     # upkeep, what's already been in the trash longer: say yes to that.
     confirm_purge: StrictBool = False
+    key_idle_days: _Days | None = None
+    # Fewer key-idle days (or turning them on) ends, on the next upkeep, the
+    # keys already unused for longer: say yes to that.
+    confirm_end_keys: StrictBool = False
 
 
 class TenantFilterDefaultItem(BaseModel):
@@ -89,18 +96,28 @@ class CreateTenantFilterDefaultRequest(BaseModel):
 
 @router.get("/settings", response_model=TenantSettingsResponse)
 def get_tenant_settings(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> TenantSettingsResponse:
     """Account-wide settings. Anyone signed in can read them."""
-    return _settings(session)
+    return _settings(session, request.state.tenant_id)
 
 
-def _settings(session: Session) -> TenantSettingsResponse:
+def _key_idle_days(tenant_id: str) -> int | None:
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository
+
+    with get_control_session() as ctrl:
+        return TenantRepository(ctrl).key_idle_days(tenant_id)
+
+
+def _settings(session: Session, tenant_id: str) -> TenantSettingsResponse:
     return TenantSettingsResponse(
         video_preview_max_seconds=get_video_preview_max_seconds(session),
         public_video_preview_max_seconds=get_public_video_preview_max_seconds(session),
         follow_moves=get_follow_moves(session),
         trash_days=get_trash_days(session),
+        key_idle_days=_key_idle_days(tenant_id),
     )
 
 
@@ -117,10 +134,13 @@ def update_tenant_settings(
     """Change account-wide settings (admins only). A new cap drops the cuts made for the old one."""
     from src.server.api.routers.playback import clear_cuts
 
-    before = _settings(session)
+    before = _settings(session, request.state.tenant_id)
     # Asked before anything is saved: a 409 changes nothing.
     if "trash_days" in body.model_fields_set:
         _ask_before_shortening(session, before.trash_days, body.trash_days, body.confirm_purge)
+    if "key_idle_days" in body.model_fields_set:
+        _ask_before_ending_keys(request.state.tenant_id, before.key_idle_days, body.key_idle_days,
+                                body.confirm_end_keys)
     if "video_preview_max_seconds" in body.model_fields_set:
         set_video_preview_max_seconds(session, body.video_preview_max_seconds)
     if "public_video_preview_max_seconds" in body.model_fields_set:
@@ -129,7 +149,13 @@ def update_tenant_settings(
         set_follow_moves(session, body.follow_moves)
     if "trash_days" in body.model_fields_set:
         set_trash_days(session, body.trash_days)
-    after = _settings(session)
+    if "key_idle_days" in body.model_fields_set:
+        from src.server.database import get_control_session
+        from src.server.repository.control_plane import TenantRepository
+
+        with get_control_session() as ctrl:
+            TenantRepository(ctrl).set_key_idle_days(request.state.tenant_id, body.key_idle_days)
+    after = _settings(session, request.state.tenant_id)
     caps = ("video_preview_max_seconds", "public_video_preview_max_seconds")
     if any(getattr(after, c) != getattr(before, c) for c in caps):
         clear_cuts(request.state.tenant_id)
@@ -157,6 +183,31 @@ def _ask_before_shortening(session: Session, old: int | None, new: int | None, c
             f"{'once upkeep is resumed' if lineage.upkeep_paused(session) else 'within minutes'}. "
             "Send confirm_purge: true to go ahead.",
             {"trash_days": new, **counts},
+        )
+
+
+def _ask_before_ending_keys(tenant_id: str, old: int | None, new: int | None, confirmed: bool) -> None:
+    """409 keys_would_end when the new key-idle days would end keys on the
+    next upkeep that the old ones kept (fewer days, or turned on), naming
+    them (details.keys: key_id, label, role, last_used_at)."""
+    if new is None or (old is not None and new >= old) or confirmed:
+        return
+    from datetime import timedelta
+
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository
+    from src.shared.utils import utcnow
+
+    with get_control_session() as ctrl:
+        ending = ApiKeyRepository(ctrl).unused_since(tenant_id, utcnow() - timedelta(days=new))
+        keys = [{"key_id": k.key_id, "label": k.label, "role": k.role,
+                 "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None} for k in ending]
+    if keys:
+        raise DecisionRequiredError(
+            "keys_would_end",
+            f"With {new} days, {len(keys)} {'key' if len(keys) == 1 else 'keys'} unused for longer would stop "
+            "working within minutes. Send confirm_end_keys: true to go ahead.",
+            {"key_idle_days": new, "keys": keys},
         )
 
 

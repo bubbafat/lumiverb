@@ -47,6 +47,11 @@ def show() -> None:
     console.print(f"On public pages: {_describe(public)}")
     console.print(f"Follow moves and renames: {_on_off(settings.get('follow_moves', True))}")
     console.print(f"Trash: {_trash(settings.get('trash_days', 30))}")
+    console.print(f"Unused keys: {_idle(settings.get('key_idle_days'))}")
+
+
+def _idle(days: int | None) -> str:
+    return "kept until revoked" if days is None else f"ended after {days} {'day' if days == 1 else 'days'} unused"
 
 
 def _trash(days: int | None) -> str:
@@ -129,3 +134,40 @@ def trash_days(
         console.print(f"[red]Couldn't change the trash days: {r.text}[/red]")
         raise typer.Exit(1)
     console.print(f"Trash: {_trash(r.json().get('trash_days'))}")
+
+
+@settings_app.command("key-idle-days")
+def key_idle_days(
+    days: Annotated[str, typer.Argument(help="Days, or 'off' to keep keys until someone revokes them")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask; end the keys fewer days would.")] = False,
+) -> None:
+    """End keys people made once nobody has used them for this many days: off
+    until set (admins only). Lumiverb's own keys and devices' aren't ended,
+    nor the account's last admin key. Fewer days asks first when keys would
+    stop working at once."""
+    text = days.strip().lower()
+    if text == "off":
+        value = None
+    elif re.fullmatch(r"[0-9]+", text) and 1 <= int(text) <= MAX_TRASH_DAYS:
+        value = int(text)
+    else:
+        console.print(f"[red]Give 'off' or a whole number of days from 1 to {MAX_TRASH_DAYS:,}.[/red]")
+        raise typer.Exit(2)
+    client = LumiverbClient()
+    body: dict = {"key_idle_days": value, "confirm_end_keys": yes}
+    r = client.raw("PATCH", "/v1/tenant/settings", json=body)
+    if r.status_code == 409:
+        error = (r.json() or {}).get("error") or {}
+        if error.get("code") == "keys_would_end":
+            keys = (error.get("details") or {}).get("keys") or []
+            names = ", ".join(k.get("label") or k.get("key_id", "") for k in keys)
+            console.print(f"[yellow]With {value} days, {len(keys)} {'key' if len(keys) == 1 else 'keys'} unused for "
+                          f"longer would stop working within minutes: {names}.[/yellow]")
+            if not typer.confirm("Go ahead?", default=False):
+                console.print("Aborted.")
+                raise typer.Exit(0)
+            r = client.raw("PATCH", "/v1/tenant/settings", json={**body, "confirm_end_keys": True})
+    if r.status_code >= 400:
+        console.print(f"[red]Couldn't change the key-idle days: {r.text}[/red]")
+        raise typer.Exit(1)
+    console.print(f"Unused keys: {_idle(r.json().get('key_idle_days'))}")
