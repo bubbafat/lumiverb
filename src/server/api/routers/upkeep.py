@@ -143,6 +143,14 @@ class ExpiredUploadsResult(BaseModel):
     deleted: int = 0
 
 
+class IdleKeysResult(BaseModel):
+    """Keys a person made that went unused past the account's key-idle days,
+    ended (tenant settings' key_idle_days; ApiKeyRepository.end_unused). Not
+    paused with Upkeep: a pause is about the machine's work, and this is who
+    gets in."""
+    ended: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
@@ -152,6 +160,7 @@ class UpkeepResult(BaseModel):
     face_clusters: FaceClustersResult = FaceClustersResult()
     expired_scans: ExpiredScansResult = ExpiredScansResult()
     expired_uploads: ExpiredUploadsResult = ExpiredUploadsResult()
+    idle_keys: IdleKeysResult = IdleKeysResult()
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
@@ -401,6 +410,24 @@ def _delete_expired_uploads(session, tenant_id: str) -> dict:
     return {"deleted": deleted}
 
 
+def _end_idle_keys(_session, tenant_id: str) -> dict:
+    """End the account's keys unused past its key-idle days (none while they're off)."""
+    from datetime import timedelta
+
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository, TenantRepository
+    from src.shared.utils import utcnow
+
+    with get_control_session() as ctrl:
+        days = TenantRepository(ctrl).key_idle_days(tenant_id)
+        if days is None:
+            return {"ended": 0}
+        ended = ApiKeyRepository(ctrl).end_unused(tenant_id, utcnow() - timedelta(days=days))
+    if ended:
+        logger.info("Upkeep: ended %d key(s) of %s unused for %d days", ended, tenant_id, days)
+    return {"ended": ended}
+
+
 def _recluster_if_changed(session) -> dict:
     """Compute the face clusters again when faces changed since they were."""
     from src.server.api.routers.people import cached_clusters, clusters_current, store_clusters
@@ -488,8 +515,9 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     deleting for good what has been in the trash past the trash days,
     repairing artifact files reported missing, deleting empty dismissed
     people, computing the face clusters again when faces changed since they
-    were, and deleting scans expired a day after their last call (a client
-    killed mid-scan) and uploads a day after their last chunk.
+    were, deleting scans expired a day after their last call (a client
+    killed mid-scan) and uploads a day after their last chunk, and ending
+    keys unused past the account's key-idle days.
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, old revoked tokens are dropped, and the nightly backup
@@ -513,6 +541,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     expired = _each_account(scope, "Expired scans aren't deleted", _delete_expired_scans, pausable=False)
     expired_uploads = _each_account(scope, "Expired uploads aren't deleted", _delete_expired_uploads,
                                     pausable=False, with_account=True)
+    idle_keys = _each_account(scope, "Unused keys aren't ended", _end_idle_keys, pausable=False, with_account=True)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -522,6 +551,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         face_clusters=FaceClustersResult(**clusters),
         expired_scans=ExpiredScansResult(**expired),
         expired_uploads=ExpiredUploadsResult(**expired_uploads),
+        idle_keys=IdleKeysResult(**idle_keys),
         backup=backup,
         previews_move=previews_move,
     )

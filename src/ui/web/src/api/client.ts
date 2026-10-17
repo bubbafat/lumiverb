@@ -771,6 +771,8 @@ export interface TenantSettings {
   follow_moves?: boolean;
   /** Days things stay in the trash before they're deleted for good; null when that's off. 30 unless changed. */
   trash_days?: number | null;
+  /** Days a key a person made may go unused before it ends; null (the default) when keys end only when revoked. */
+  key_idle_days?: number | null;
 }
 
 export async function getTenantSettings(): Promise<TenantSettings> {
@@ -779,9 +781,10 @@ export async function getTenantSettings(): Promise<TenantSettings> {
 
 /** Change account settings (admins). Fewer trash_days answers 409
  * trash_days_shortened (with counts) when it would delete things at once,
- * until confirm_purge says yes. */
+ * until confirm_purge says yes; fewer key_idle_days 409 keys_would_end
+ * (naming them) when keys would end at once, until confirm_end_keys does. */
 export async function updateTenantSettings(
-  update: Partial<TenantSettings> & { confirm_purge?: boolean },
+  update: Partial<TenantSettings> & { confirm_purge?: boolean; confirm_end_keys?: boolean },
 ): Promise<TenantSettings> {
   return apiFetch<TenantSettings>("/tenant/settings", { method: "PATCH", body: update });
 }

@@ -22,6 +22,9 @@ class Tenant(SQLModel, table=True):
     # the model its producers declare (src/producers AiJob.default_model).
     # Assign a new dict to change it (JSONB isn't watched in place).
     ai_job_models: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+    # Days a key a person made may go unused before upkeep ends it; None keeps
+    # keys until someone revokes them (ApiKeyRepository.end_unused).
+    key_idle_days: int | None = Field(default=None, nullable=True)
     created_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

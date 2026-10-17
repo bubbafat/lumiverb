@@ -266,6 +266,8 @@ export interface ApiKeyItem {
   role: string;
   last_used_at: string | null;
   created_at: string;
+  /** When it ends unless used by then (the account's key-idle days); null when they're off, or for Lumiverb's own keys. */
+  ends_at?: string | null;
 }
 
 export interface ApiKeyCreateResponse extends ApiKeyItem {

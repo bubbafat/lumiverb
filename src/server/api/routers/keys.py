@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -7,8 +7,7 @@ from pydantic import BaseModel
 from src.server.api.dependencies import require_editor
 from src.server.api.middleware import _error_response
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository
-
+from src.server.repository.control_plane import ApiKeyRepository, TenantRepository
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"])
 
@@ -19,6 +18,11 @@ class KeyItem(BaseModel):
     role: str
     last_used_at: str | None
     created_at: str
+    # When upkeep ends it unless it's used before then (the account's key-idle
+    # days after it was last used, or made): None when they're off, or for a
+    # key they don't end (one nobody made: the install's own). The account's
+    # last admin key is kept even past it.
+    ends_at: str | None = None
 
 
 class KeyListResponse(BaseModel):
@@ -72,9 +76,15 @@ def list_keys(
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
         keys = [k for k in repo.list_by_tenant(tenant_id) if _is_own(request, session, k)]
+        idle_days = TenantRepository(session).key_idle_days(tenant_id)
 
     def _iso(dt: datetime | None) -> str | None:
         return dt.isoformat() if dt is not None else None
+
+    def _ends(k) -> str | None:
+        if idle_days is None or not ApiKeyRepository.ends_unused(k):
+            return None
+        return _iso((k.last_used_at or k.created_at) + timedelta(days=idle_days))
 
     return KeyListResponse(
         keys=[
@@ -84,6 +94,7 @@ def list_keys(
                 role=getattr(k, "role", "viewer"),
                 last_used_at=_iso(k.last_used_at),
                 created_at=_iso(k.created_at) or "",
+                ends_at=_ends(k),
             )
             for k in keys
         ]
