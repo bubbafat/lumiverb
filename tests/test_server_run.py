@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -333,31 +334,51 @@ def _first_answer(url: str) -> tuple[int, str | None]:
         return exc.code, exc.headers.get("Location")
 
 
-def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Path) -> None:
+def _chosen(data: Path, chosen: network.Choice, out: Path, ready: Callable[[], bool]) -> None:
     """Settings › Network's choice, as the API writes it: run rewrites nginx's
-    lines and restarts it. Then other devices reach it over HTTPS alone, with
-    Lumiverb's authority's certificate for this machine's names: on the
-    network's address too (where this machine has one), and plain HTTP from
-    there is sent to HTTPS; this machine's own plain HTTP stays."""
+    lines and restarts it."""
+    network.set_choice(data, chosen)
+    deadline = time.monotonic() + 30
+    while f"Network: {chosen.said()}; restarting nginx" not in out.read_text() or not ready():
+        assert time.monotonic() < deadline, out.read_text()
+        time.sleep(0.5)
+
+
+def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Path) -> None:
+    """Other devices reach it over plain HTTP once an admin says so; HTTPS
+    beside it once they add it, with Lumiverb's authority's certificate for
+    this machine's names (on the network's address too, where this machine
+    has one), a device using it noted; then HTTPS alone, plain HTTP from the
+    network sent there. This machine's own plain HTTP stays throughout."""
     lan = network.lan_address()
     if lan:
         assert not _setup_needed(f"http://{lan}:{web_port}"), "this machine only, until an admin says"
+    _chosen(data, network.Choice(other_devices=True), out,
+            lambda: _setup_needed(f"http://{lan or '127.0.0.1'}:{web_port}"))
+    assert not (data / "tls").exists(), "no certificate until HTTPS is chosen"
+
     ca = data / "tls" / "ca.crt"
-    network.set_other_devices(data, True)
-    deadline = time.monotonic() + 30
-    while "other devices may use it, over HTTPS; restarting nginx" not in out.read_text() or not _over_https(
-            f"https://127.0.0.1:{tls_port}", ca):
-        assert time.monotonic() < deadline, out.read_text()
-        time.sleep(0.5)
-    assert _setup_needed(f"http://127.0.0.1:{web_port}"), "this machine keeps plain HTTP"
+    _chosen(data, network.Choice(other_devices=True, https=True), out,
+            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca))
     with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/lumiverb-ca.crt", timeout=5) as response:
         assert response.read() == ca.read_bytes(), "the authority's certificate, for a device to trust"
         assert response.headers["Content-Type"] == "application/x-x509-ca-cert"
     if lan:
+        assert _setup_needed(f"http://{lan}:{web_port}"), "plain HTTP stays beside HTTPS"
+        assert network.https_seen(data) is None
+        assert _over_https(f"https://{lan}:{tls_port}", ca)
+        assert network.https_seen(data).address == lan, "a device using HTTPS, as nginx passed it on"
+        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+            assert response.read() == ca.read_bytes(), "a device fetches it before it can trust HTTPS"
+
+    _chosen(data, network.Choice(other_devices=True, https=True, plain_http=False), out,
+            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca))
+    assert _setup_needed(f"http://127.0.0.1:{web_port}"), "this machine keeps plain HTTP"
+    if lan:
         assert _over_https(f"https://{lan}:{tls_port}", ca)
         assert _first_answer(f"http://{lan}:{web_port}/v1/setup") == (301, f"https://{lan}:{tls_port}/v1/setup")
         with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=5) as response:
-            assert response.read() == ca.read_bytes(), "a device fetches it before it can trust HTTPS"
+            assert response.read() == ca.read_bytes(), "still: a new device needs it first"
     lines = network.listen_file(data).read_text()
     assert f"listen {tls_port} ssl default_server;" in lines and "ssl_protocols TLSv1.2 TLSv1.3;" in lines
     assert "nginx restarting" in out.read_text()

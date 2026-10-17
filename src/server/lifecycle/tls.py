@@ -1,9 +1,10 @@
 """The certificate a Mac's Lumiverb serves other devices on its network with
 (Robert, 2026-10-15: "Own CA + your certificate"; Tailscale never needed).
 
-Other devices reach it over HTTPS only (network.py: its own port, WEB_PORT
-+ 1 unless WEB_TLS_PORT says); this machine's own browser keeps plain HTTP
-on localhost. The certificate is one of two, in DATA_DIR/tls:
+Other devices reach it over plain HTTP, and over HTTPS too once an admin
+adds it (network.py: its own port, WEB_TLS_PORT else 6443; nothing is made
+here until then); this machine's own browser keeps plain HTTP on localhost.
+The certificate is one of two, in DATA_DIR/tls:
 
 - **Lumiverb's own** (the default): a certificate authority of this install,
   made once (`ca.crt`, its key `ca.key`), issues the server's (`server.crt`)

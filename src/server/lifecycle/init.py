@@ -313,4 +313,4 @@ def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Ca
                           root=web_root, upstream=f"http://127.0.0.1:{_port(env, 'API_PORT', env_file)}")
         say(f"✓ {path}" if write_new(path, nginx_conf(site), 0o644) else f"· {path} kept")
         if not network.listen_file(data).exists():
-            network.write_listen_file(data, web_port, False)
+            network.write_listen_file(data, web_port, network.Choice())

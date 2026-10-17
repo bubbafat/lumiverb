@@ -1,10 +1,10 @@
 """Settings › Network's API (GET/PUT /v1/system/network, routers/system.py):
-whether other devices on the network may use a Mac's Lumiverb, where they
-reach it (over HTTPS) and the certificate they're served (an admin's own,
-PUT/DELETE /v1/system/network/certificate). Anyone signed in sees it; an
-admin changes it, on the Mac itself, and only where Lumiverb runs the web
-server (lumiverb-server run's own nginx). run applies it
-(tests/test_server_run.py)."""
+whether other devices on the network may use a Mac's Lumiverb (over plain
+HTTP, HTTPS too, or HTTPS alone once a device has used it), where they reach
+it, and the certificate HTTPS serves (an admin's own, PUT/DELETE
+/v1/system/network/certificate). Anyone signed in sees it; an admin changes
+it, on the Mac itself, and only where Lumiverb runs the web server
+(lumiverb-server run's own nginx). run applies it (tests/test_server_run.py)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.server.lifecycle import network
 from src.server.lifecycle.init import nginx_conf, nginx_site
+from src.server.lifecycle.network import Choice
 from src.server.repository.control_plane import UserRepository
 from src.server.setup import create_first_admin
 from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
@@ -30,7 +31,10 @@ from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
 
 pytestmark = pytest.mark.slow
 
-ADDRESSES = ["https://macstudio.local:6443", "https://192.168.86.55:6443"]
+HTTP = ["http://macstudio.local:6464", "http://192.168.86.55:6464"]
+HTTPS = ["https://macstudio.local:6443", "https://192.168.86.55:6443"]
+# A device's request as nginx passes it on: from this machine, saying what it saw.
+THROUGH_NGINX_OVER_HTTPS = {"X-Forwarded-For": LAN[0], "X-Forwarded-Proto": "https"}
 
 
 @pytest.fixture
@@ -42,8 +46,8 @@ def mac(control, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("NGINX_CONFIG", str(conf))
     monkeypatch.setenv("WEB_PORT", "6464")
-    monkeypatch.setattr(network, "addresses", lambda port, scheme="https": [
-        a.replace("6443", str(port)).replace("https", scheme) for a in ADDRESSES])
+    monkeypatch.setattr(network, "addresses", lambda port, scheme: [
+        f"{scheme}://macstudio.local:{port}", f"{scheme}://192.168.86.55:{port}"])
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
     get_settings.cache_clear()
     yield tmp_path
@@ -62,30 +66,95 @@ def _signed_in(client: TestClient, role: str = "admin") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_a_mac_starts_as_this_machine_only_and_an_admin_there_opens_it(mac):
+def test_a_mac_starts_as_this_machine_only_and_an_admin_there_opens_it_over_plain_http(mac):
     with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
-            "available": True, "other_devices": False, "addresses": ADDRESSES, "certificate": None}
+            "available": True, "other_devices": False, "https": False, "plain_http": True,
+            "addresses": HTTP, "https_addresses": HTTPS, "https_seen": None, "certificate": None}
         opened = client.put("/v1/system/network", json={"other_devices": True}, headers=auth)
         assert opened.status_code == 200, opened.text
-        assert opened.json()["other_devices"] is True
-        assert network.other_devices(mac), "written for run to apply"
-        assert client.get("/v1/system/network", headers=auth).json()["other_devices"] is True
+        assert (opened.json()["other_devices"], opened.json()["https"], opened.json()["plain_http"]) == (True, False, True)
+        assert network.choice(mac) == Choice(other_devices=True), "written for run to apply"
         closed = client.put("/v1/system/network", json={"other_devices": False}, headers=auth)
-        assert closed.json()["other_devices"] is False and not network.other_devices(mac)
+        assert closed.json()["other_devices"] is False and network.choice(mac) == Choice()
+
+
+def test_https_is_added_beside_plain_http_and_what_isn_t_said_stays(mac):
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        client.put("/v1/system/network", json={"other_devices": True}, headers=auth)
+        added = client.put("/v1/system/network", json={"https": True}, headers=auth)
+        assert added.status_code == 200, added.text
+    assert network.choice(mac) == Choice(other_devices=True, https=True, plain_http=True)
+
+
+def test_plain_http_is_turned_off_only_once_a_device_has_used_https(mac):
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        client.put("/v1/system/network", json={"other_devices": True, "https": True}, headers=auth)
+        refused = client.put("/v1/system/network", json={"plain_http": False}, headers=auth)
+        assert refused.status_code == 409 and refused.json()["error"]["code"] == "https_not_seen"
+        assert network.choice(mac).plain_http, "unchanged"
+
+        assert client.get("/health", headers=THROUGH_NGINX_OVER_HTTPS).status_code == 200
+        seen = client.get("/v1/system/network", headers=auth).json()["https_seen"]
+        assert seen["address"] == LAN[0] and seen["at"]
+
+        off = client.put("/v1/system/network", json={"plain_http": False}, headers=auth)
+        assert off.status_code == 200, off.text
+        assert network.choice(mac) == Choice(other_devices=True, https=True, plain_http=False)
+
+        # HTTPS off: plain HTTP is all other devices have, and a device must use HTTPS again.
+        back = client.put("/v1/system/network", json={"https": False}, headers=auth)
+        assert (back.json()["https"], back.json()["plain_http"], back.json()["https_seen"]) == (False, True, None)
+        assert network.https_seen(mac) is None
+
+
+def test_turning_on_https_and_off_plain_http_at_once_is_refused(mac):
+    network.saw_https(mac, LAN[0])  # from before: HTTPS is new again
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        refused = client.put("/v1/system/network", json={"other_devices": True, "https": True, "plain_http": False},
+                             headers=auth)
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "https_not_seen"
+    assert network.choice(mac) == Choice()
+
+
+@pytest.mark.parametrize(("client_at", "headers"), [
+    (LAN, {"X-Forwarded-Proto": "https"}),  # not through nginx: it says what it likes
+    (HERE, {"X-Forwarded-For": "127.0.0.1", "X-Forwarded-Proto": "https"}),  # this machine's own
+    (HERE, {"X-Forwarded-For": LAN[0], "X-Forwarded-Proto": "http"}),  # plain HTTP
+])
+def test_only_a_device_s_request_over_https_through_nginx_counts(mac, client_at, headers):
+    network.set_choice(mac, Choice(other_devices=True, https=True))
+    with TestClient(app, client=client_at) as client:
+        client.get("/health", headers=headers)
+    assert network.https_seen(mac) is None
+
+
+def test_another_certificate_must_be_used_again(mac):
+    from tests.test_server_tls import _theirs
+
+    network.set_choice(mac, Choice(other_devices=True, https=True))
+    network.saw_https(mac, LAN[0])
+    pem, key, _ = _theirs()
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        assert client.put("/v1/system/network/certificate", json={"certificate": pem, "key": key},
+                          headers=auth).json()["https_seen"] is None
 
 
 def test_from_another_device_it_isn_t_changed(mac):
     """The Mac's owner decides how it's reached, as for a library's folder."""
     with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
         auth = _signed_in(here)
-    network.set_other_devices(mac, True)
+    network.set_choice(mac, Choice(other_devices=True))
     with TestClient(app, client=LAN) as client:
         assert client.get("/v1/system/network", headers=auth).json()["other_devices"] is True
         refused = client.put("/v1/system/network", json={"other_devices": False}, headers=auth)
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "network_elsewhere"
-    assert network.other_devices(mac), "unchanged"
+    assert network.choice(mac).other_devices, "unchanged"
 
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
@@ -94,7 +163,7 @@ def test_others_see_it_but_only_admins_change_it(mac, role):
         auth = _signed_in(client, role)
         assert client.get("/v1/system/network", headers=auth).json()["available"] is True
         assert client.put("/v1/system/network", json={"other_devices": True}, headers=auth).status_code == 403
-    assert not network.other_devices(mac)
+    assert network.choice(mac) == Choice()
 
 
 def test_signed_out_it_isn_t_said(mac):
@@ -110,22 +179,27 @@ def test_where_lumiverb_doesn_t_run_the_web_server_it_isn_t_changed_here(control
     with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
-            "available": False, "other_devices": False, "addresses": [], "certificate": None}
+            "available": False, "other_devices": False, "https": False, "plain_http": True, "addresses": [],
+            "https_addresses": [], "https_seen": None, "certificate": None}
         refused = client.put("/v1/system/network", json={"other_devices": True}, headers=auth)
+        client.get("/health", headers=THROUGH_NGINX_OVER_HTTPS)
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "network_not_here"
     assert not (tmp_path / network.NETWORK_FILE).exists()
+    assert not (tmp_path / network.HTTPS_SEEN_FILE).exists(), "nothing noted for an nginx that isn't run's"
 
 
-def test_it_says_which_certificate_other_devices_are_served(mac):
+def test_it_says_which_certificate_https_serves(mac):
     from src.server.lifecycle import tls
 
     served = tls.served(mac, ("macstudio.local", "localhost", "127.0.0.1"))
     with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)
+        assert client.get("/v1/system/network", headers=auth).json()["certificate"] is None, "HTTPS is off"
+        network.set_choice(mac, Choice(other_devices=True, https=True))
         said = client.get("/v1/system/network", headers=auth).json()["certificate"]
     assert said["source"] == "lumiverb" and said["ca_url"] == "/lumiverb-ca.crt"
     assert said["names"] == list(served.names)
-    # Plain HTTP for it alone (a device can't trust HTTPS yet), and its fingerprint to compare there.
+    # Plain HTTP for it (a device can't trust HTTPS yet), and its fingerprint to compare there.
     assert said["ca_addresses"] == ["http://macstudio.local:6464/lumiverb-ca.crt", "http://192.168.86.55:6464/lumiverb-ca.crt"]
     assert said["ca_fingerprint"] == tls.ca_fingerprint(mac) and len(said["ca_fingerprint"].split(":")) == 32
     assert said["expires_at"].startswith(served.not_after.strftime("%Y-%m-%dT%H:%M"))
@@ -134,6 +208,7 @@ def test_it_says_which_certificate_other_devices_are_served(mac):
 def test_an_admin_s_own_certificate_is_kept_there_and_taken_away_again(mac):
     from tests.test_server_tls import _theirs
 
+    network.set_choice(mac, Choice(other_devices=True, https=True))
     pem, key, _ = _theirs()
     with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
         auth = _signed_in(client)

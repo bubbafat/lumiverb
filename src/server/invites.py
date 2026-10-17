@@ -42,10 +42,16 @@ def unusable_password_hash() -> str:
 
 
 def where_people_open_it() -> list[str]:
+    """Plain HTTP while other devices have it (any device opens it at once),
+    else HTTPS."""
     settings = get_settings()
     data = Path(settings.data_dir)
-    if settings.web_port > 0 and network.managed(data, settings.nginx_config) and network.other_devices(data):
-        return network.addresses(network.tls_port(settings.web_tls_port))
+    if settings.web_port > 0 and network.managed(data, settings.nginx_config):
+        chosen = network.choice(data)
+        if chosen.http_for_others:
+            return network.addresses(settings.web_port, "http")
+        if chosen.https_for_others:
+            return network.addresses(network.tls_port(settings.web_tls_port), "https")
     return [settings.app_host.rstrip("/")]
 
 

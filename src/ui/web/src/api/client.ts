@@ -1137,12 +1137,32 @@ export interface NetworkCertificate {
 export interface NetworkAccess {
   /** Lumiverb runs this machine's web server (a Mac's install), so it's changed here. */
   available: boolean;
-  /** Other devices may use it, over HTTPS; otherwise this machine only. */
+  /** Other devices may use it; otherwise this machine only. */
   other_devices: boolean;
-  /** Where other devices reach it (https). */
+  /** Other devices over HTTPS too (each trusts the certificate once). */
+  https: boolean;
+  /** Other devices over plain HTTP too: off only beside HTTPS, once a device has used it. */
+  plain_http: boolean;
+  /** Where other devices reach it over plain HTTP. */
   addresses: string[];
-  /** Null until Lumiverb has made one (it does at its start). */
+  /** And over HTTPS. */
+  https_addresses: string[];
+  /** The first device seen using HTTPS since it last changed; until one is, plain HTTP stays on. */
+  https_seen: { at: string; address: string } | null;
+  /** HTTPS's; null while it's off, and until Lumiverb has made one. */
   certificate: NetworkCertificate | null;
+}
+
+/** What an admin changes in Settings → Network; each left out stays as it is. */
+export interface NetworkChange {
+  other_devices?: boolean;
+  https?: boolean;
+  plain_http?: boolean;
+}
+
+/** Whether other devices get plain HTTP: theirs unless HTTPS is on and an admin turned it off. */
+export function httpForOthers(network: NetworkAccess): boolean {
+  return network.other_devices && (network.plain_http || !network.https);
 }
 
 export async function getNetworkAccess(): Promise<NetworkAccess> {
@@ -1191,9 +1211,10 @@ export async function getServiceLog(query: LogQuery = {}): Promise<ServiceLog> {
   return apiFetch<ServiceLog>(`/system/logs${s ? `?${s}` : ""}`);
 }
 
-/** An admin's choice, on the machine itself (403 network_elsewhere otherwise). */
-export async function setNetworkAccess(otherDevices: boolean): Promise<NetworkAccess> {
-  return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: { other_devices: otherDevices } });
+/** An admin's choice, on the machine itself (403 network_elsewhere otherwise; 409 https_not_seen
+ * for plain HTTP off before a device has used HTTPS). */
+export async function setNetworkAccess(change: NetworkChange): Promise<NetworkAccess> {
+  return apiFetch<NetworkAccess>("/system/network", { method: "PUT", body: change });
 }
 
 /** An admin's own certificate and key (PEM), on the machine itself; 422 certificate_not_usable says why it can't be. */

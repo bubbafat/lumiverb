@@ -23,6 +23,7 @@ from src.server.api.errors import (
     validation_error_handler,
 )
 from src.server.storage.store import Unavailable
+from src.server.api.https_seen import NoteHttps
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
 
@@ -154,6 +155,7 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
     return envelope(503, "database_unavailable", "The database is unavailable; try again shortly.")
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(TenantResolutionMiddleware)
+app.add_middleware(NoteHttps)  # whether a device has used HTTPS yet (Settings › Network)
 app.include_router(auth_router)
 app.include_router(setup_router)
 app.include_router(users_router)
