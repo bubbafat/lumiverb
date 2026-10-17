@@ -96,8 +96,7 @@ def _scan(server: FakeScans, root: Path, *, local: list[dict] | None = None, wal
     """run_scan as the scheduler runs it (moves applied), over real files
     under root unless the walk's answer is given."""
     patches = [
-        patch("src.processing.scan._load_tenant_filters", return_value=[]),
-        patch("src.processing.scan._load_library_filters", return_value=library_filters or []),
+        patch("src.processing.scan._filters", return_value=([], library_filters or [])),
     ]
     if local is not None or walk is not None:
         patches.append(patch.object(Folder, "walk", side_effect=walk or (lambda *a, **k: local)))
@@ -486,8 +485,7 @@ def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
     client = MagicMock()
     with (
         patch("src.processing.roots.reachable_root", return_value=tmp_path / "gone"),
-        patch("src.processing.scan._load_tenant_filters", return_value=[]),
-        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._filters", return_value=([], [])),
     ):
         stats = run_scan(client, {"library_id": "lib_1", "root_path": "/x"}, path_prefix="Day 1",
                          console=Console(quiet=True))

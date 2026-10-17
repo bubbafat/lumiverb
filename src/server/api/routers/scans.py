@@ -40,7 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server import reader_work, scans
+from src.server import check_ins, reader_work, scans
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
@@ -562,6 +562,9 @@ def finish_scan(
     if archiving and not scan.dry_run and not body.allow_mass_missing:
         _ask_about_mass_missing(session, archiving, None, answer="allow_mass_missing: true")
     scans.close(session, scan)
+    # A scan of the whole library answers a Scan now asked before it started (src/server/check_ins.py).
+    check_ins.scan_finished(session, library_id=scan.library_id, scope=scan.scope, media_type=scan.media_type,
+                            dry_run=scan.dry_run, started_at=scan.started_at)
     archived, handed_over = len(archiving), []
     after = AfterCommit()
     if archiving and not scan.dry_run:

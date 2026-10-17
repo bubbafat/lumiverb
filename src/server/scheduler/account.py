@@ -8,8 +8,9 @@ models (CLIP, face detection: src/server/scheduler/models.py), which every
 account shares.
 
 Settings and machines are read again every minute, off the scheduler's
-dispatching thread; machines that can't be used are looked at again as
-often. No job of the account's is handed out until its settings were read
+dispatching thread, and it checks in as the reader of the account's
+libraries (check_in: ADR-018 phase 4; the answer is the libraries it
+reads); machines that can't be used are looked at again as often. No job of the account's is handed out until its settings were read
 once. Each library's storage is looked at by the scheduler itself, every
 30 seconds and at once for a library not looked at since this start
 (look_at_storage, off the dispatching thread), whatever is paused but
@@ -102,6 +103,11 @@ class Account:
         self._job_checked_at: dict[str, float] = {}
         self._followed_at: float | None = None
         self.ready = {job: False for job in self.guards}
+        # What its check-ins heard (check_in): each library's mark, and those a scan of which was asked for;
+        # and the library being scanned now (the scan pass says), which they say.
+        self.marks: dict[str, int] = {}
+        self.scan_now: set[str] = set()
+        self.scanning: str | None = None
 
     def guard(self, job: str) -> Any:
         """The AI job's machines (src/processing/job_guard.py)."""
@@ -135,9 +141,9 @@ class Account:
             if self.producers.refresh():
                 self.settings_ready = True
             try:
-                self.set_libraries(self.client.get("/v1/libraries").json())
+                self.check_in()
             except Exception:  # noqa: BLE001 — tried again at the next refresh
-                logger.exception("scheduler: couldn't read %s's libraries", self.tenant_id)
+                logger.exception("scheduler: couldn't check in as %s's reader", self.tenant_id)
             self._job_checked_at.clear()
         for job, guard in self.guards.items():
             checked = self._job_checked_at.get(job)
@@ -150,6 +156,52 @@ class Account:
                     self.ready[job] = False
             elif guard.down:
                 self.ready[job] = False
+
+    def check_in(self) -> None:
+        """Check in as the reader of the account's libraries (ADR-018
+        decision 4, src/server/check_ins.py): how each is (scanning, idle,
+        paused, or away when its storage wasn't reachable at the last look)
+        and its last full scan. The answer is which libraries it reads, each
+        with its mark and whether a scan of it was asked for. A mark that
+        moved since has the settings read again at the next refresh, not
+        within the minute. The scan pass checks in first too."""
+        from datetime import UTC
+
+        from src.server.check_ins import PROTOCOL
+        from src.server.version import running
+
+        with self._lock:
+            said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),
+                     "last_full_scan_at": (datetime.fromtimestamp(full, UTC).isoformat()
+                                           if (full := self.scan_state.last_full_scan.get(i)) is not None else None)}
+                    for i, lib in self.libraries.items()]
+        answer = self.client.post("/v1/readers/check-in", json={
+            "reader": "server", "client": "this server", "version": running(), "protocol": PROTOCOL,
+            "libraries": said}, retry=True).json()
+        libraries = answer["libraries"]
+        moved = any(self.marks.get(lib["library_id"], lib["mark"]) != lib["mark"] for lib in libraries)
+        self.set_libraries(libraries)
+        with self._lock:
+            self.marks = {lib["library_id"]: lib["mark"] for lib in libraries}
+            self.scan_now = {lib["library_id"] for lib in libraries if lib.get("scan_now")}
+        if moved:
+            self._refreshed_at = None
+
+    def _state(self, library: dict) -> str:
+        """What a check-in says of the library (under the lock)."""
+        library_id = library["library_id"]
+        if self.scanning == library_id:
+            return "scanning"
+        if library.get("scans_paused"):
+            return "paused"
+        if library_id in self._checked and self.reached.get(library_id) is None:
+            return "away"
+        return "idle"
+
+    def reading(self) -> list[dict]:
+        """The libraries it reads, as its latest check-in heard them."""
+        with self._lock:
+            return list(self.libraries.values())
 
     def set_libraries(self, libraries: list[dict]) -> None:
         """The account's libraries this server reads (src/shared/readers.py):

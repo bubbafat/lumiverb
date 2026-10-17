@@ -32,8 +32,7 @@ def test_run_scan_with_an_unsafe_prefix_removes_nothing(tmp_path: Path) -> None:
     (root / "f.jpg").touch()
     client = MagicMock()
     with (
-        patch("src.processing.scan._load_tenant_filters", return_value=[]),
-        patch("src.processing.scan._load_library_filters", return_value=[]),
+        patch("src.processing.scan._filters", return_value=([], [])),
     ):
         stats = run_scan(client, {"library_id": "lib_1", "root_path": str(root)}, path_prefix="../x",
                          console=Console(quiet=True), allow_moves=True)

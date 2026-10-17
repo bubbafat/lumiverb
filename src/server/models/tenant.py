@@ -53,6 +53,13 @@ class Library(SQLModel, table=True):
     )
     # Who reads its files (src/shared/readers.py): "server", this server.
     reader: str = Field(default="server", sa_column_kwargs={"server_default": "server"}, nullable=False)
+    # Moves when something its reader acts on changes (src/server/check_ins.py; the database's triggers move it).
+    reader_mark: int = Field(default=0, sa_column_kwargs={"server_default": "0"}, nullable=False)
+    # A whole-library scan asked for (Scan now), until one started after it finishes.
+    scan_requested_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
     # Its Scans pause (ADR-018 phase 1): no new or changed files found in it
     # while set; other work goes on. Pause all pauses every library's too.
     scans_paused_at: datetime | None = Field(

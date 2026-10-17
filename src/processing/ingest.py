@@ -9,8 +9,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from src.processing.api import ApiClient
-from src.shared.path_filter import PathFilter
 from src.shared.content_hash import content_hash as hash_of
 from src.shared.content_hash import sampled, whole_file_sha256
 from src.processing.workers.exif_extract import (
@@ -198,35 +196,3 @@ def _generate_video_preview(source_path: Path) -> bytes:
         raise RuntimeError(f"ffmpeg made no preview of {source_path}: {said}")
     finally:
         preview_path.unlink(missing_ok=True)
-
-
-def _load_tenant_filters(client: ApiClient) -> list[PathFilter]:
-    """Load tenant-level default filters from the API."""
-    try:
-        resp = client.get("/v1/tenant/filter-defaults")
-        data = resp.json()
-        filters: list[PathFilter] = []
-        for item in data.get("includes", []):
-            filters.append(PathFilter(type="include", pattern=item["pattern"]))
-        for item in data.get("excludes", []):
-            filters.append(PathFilter(type="exclude", pattern=item["pattern"]))
-        return filters
-    except Exception:
-        logger.warning("Failed to load tenant filter defaults")
-        return []
-
-
-def _load_library_filters(client: ApiClient, library_id: str) -> list[PathFilter]:
-    """Load library-level filters from the API."""
-    try:
-        resp = client.get(f"/v1/libraries/{library_id}/filters")
-        data = resp.json()
-        filters: list[PathFilter] = []
-        for item in data.get("includes", []):
-            filters.append(PathFilter(type="include", pattern=item["pattern"]))
-        for item in data.get("excludes", []):
-            filters.append(PathFilter(type="exclude", pattern=item["pattern"]))
-        return filters
-    except Exception:
-        logger.warning("Failed to load library filters for %s", library_id)
-        return []
