@@ -996,7 +996,7 @@ def download(
     resolved_asset_id = _resolve_asset_id(client, library_id, asset_id, path)
 
     # Stream the response so we don't buffer the whole file in memory
-    with client.stream(f"/v1/assets/{resolved_asset_id}/{size}") as resp:
+    with client.stream(f"/v1/assets/{resolved_asset_id}/artifacts/{size}") as resp:
         if resp.status_code == 404:
             console.print(f"[red]No {size} available for asset {resolved_asset_id}[/red]")
             raise typer.Exit(1)
