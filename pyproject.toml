@@ -60,7 +60,8 @@ cli = [
 # upload an arbitrary image and have the server embed it. Workers
 # (which already need torch + open-clip for indexing) inherit it.
 embeddings = [
-    "torch>=2.10.0",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",  # named so it comes from torch's index too (tool.uv.sources)
     "open-clip-torch>=3.3.0",
 ]
 # Face recognition: server-side InsightFace (detection + ArcFace
@@ -74,9 +75,10 @@ embeddings = [
 # module, so exactly one is selected per platform (here and in workers).
 # The GPU build still ships the CPU provider, so CPU-only Linux hosts
 # keep working — InsightFaceProvider only requests CUDA when a GPU is
-# actually present. <1.27 because 1.27+ links CUDA 13, while torch's
-# default PyPI wheels ship the CUDA 12 libs that ORT loads at runtime;
-# raise the cap only together with a torch CUDA 13 build.
+# actually present. <1.27 because 1.27+ links CUDA 13, while the torch
+# Linux x86_64 installs (PyTorch's CUDA 12.6 builds: tool.uv.sources) ships
+# the CUDA 12 libs that ORT loads at runtime; raise the cap only together
+# with a torch CUDA 13 build.
 face_recognition = [
     "insightface>=0.7.3",
     "onnxruntime>=1.17.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
@@ -130,6 +132,19 @@ include = ["src*"]
 override-dependencies = [
     "onnxruntime>=1.17.0; sys_platform != 'linux' or platform_machine != 'x86_64'",
 ]
+
+# torch on Linux x86_64 comes from PyTorch's CUDA 12.6 builds: PyPI's are
+# CUDA 13 since 2.13, while onnxruntime-gpu (<1.27, above) and Whisper's
+# CTranslate2 load CUDA 12's libraries, which torch's wheels bring. Move all
+# three to CUDA 13 together, on a host whose NVIDIA driver runs it (580+).
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
+torchvision = [{ index = "pytorch-cu126", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }]
 
 # =============================================================================
 # pytest
