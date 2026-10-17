@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from src.producers.runner import Work
@@ -11,19 +12,21 @@ from src.producers.runner import Work
 logger = logging.getLogger(__name__)
 
 
-def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache, work_dir: Path) -> dict | None:
-    """{"asset_id", "ocr_text"}, or None when there's no proxy or the image
-    can't be prepared (in work_dir: the job's scratch). The model's failure
-    raises CaptionError (saying whether the machine was at fault); this
-    machine's (OSError: a disk error) goes up as it is, a crash."""
+def read_text(*, asset_id: str, rel_path: str, ocr_provider, preview: Callable[[], bytes | None],
+              work_dir: Path) -> dict | None:
+    """{"asset_id", "ocr_text"}, or None when there's no proxy (preview() gets
+    it) or the image can't be prepared (in work_dir: the job's scratch). The
+    model's failure raises CaptionError (saying whether the machine was at
+    fault); this machine's (OSError: a disk error) goes up as it is, a crash;
+    and so does getting the preview's (its storage away: a wait)."""
     from src.processing.workers.captions.base import CaptionError
 
+    t0 = time.perf_counter()
+    image_bytes = preview()
+    t_proxy = time.perf_counter() - t0
+    if image_bytes is None:
+        return None
     try:
-        t0 = time.perf_counter()
-        image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
-        t_proxy = time.perf_counter() - t0
-        if image_bytes is None:
-            return None
         tmp_path = work_dir / "ocr.jpg"
         tmp_path.write_bytes(image_bytes)
         del image_bytes
@@ -54,7 +57,7 @@ class Ocr(Work):
 
     def make(self, clip: dict) -> dict:
         result = read_text(asset_id=clip["asset_id"], rel_path=clip["rel_path"], ocr_provider=self.provider,
-                           proxy_cache=self.acct.proxy_cache(clip["library_id"]), work_dir=self.scratch)
+                           preview=lambda: self.inputs.preview_bytes(clip), work_dir=self.scratch)
         if result is None:
             raise self.machines_or_clip("no OCR result (no proxy, or the image couldn't be read: see the log)")
         return result

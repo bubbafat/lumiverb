@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import logging
 import time
+from collections.abc import Callable
 
 from src.producers.clip import PROXY_CACHE_EDGE
 from src.producers.runner import Failed, Work
@@ -13,12 +14,12 @@ from src.producers.runner import Failed, Work
 logger = logging.getLogger(__name__)
 
 
-def embed(*, asset_id: str, rel_path: str, clip_provider, proxy_cache) -> dict | None:
-    """The clip's CLIP vector, from its proxy; None when there's no proxy."""
+def embed(*, asset_id: str, rel_path: str, clip_provider, preview: Callable[[], bytes | None]) -> dict | None:
+    """The clip's CLIP vector, from its proxy (preview() gets it); None when there's no proxy."""
     from PIL import Image as PILImage
 
     t0 = time.perf_counter()
-    image_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+    image_bytes = preview()
     t_proxy = time.perf_counter() - t0
     if image_bytes is None:
         logger.warning("No proxy for %s", rel_path)
@@ -51,7 +52,7 @@ class Clip(Work):
 
     def make(self, clip: dict) -> dict:
         item = embed(asset_id=clip["asset_id"], rel_path=clip["rel_path"], clip_provider=self.provider,
-                     proxy_cache=self.acct.proxy_cache(clip["library_id"]))
+                     preview=lambda: self.inputs.preview_bytes(clip))
         if item is None:
             raise Failed("no embedding (no proxy)")
         return item

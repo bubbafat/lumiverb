@@ -49,16 +49,16 @@ LOOK_EVERY_SEC = SCAN_EVERY_SEC
 class Account:
     def __init__(self, tenant_id: str, client: Any, scan_state: ScanState, *, models: Any = None,
                  clock: Callable[[], float] = time.monotonic, wall: Callable[[], datetime] | None = None,
-                 stored: Callable[[str], Path | None] | None = None,
-                 stored_preview: Callable[[str], Path | None] | None = None) -> None:
-        """`stored`: the analysis proxy the API keeps for a clip, read on this
-        machine's disk (stored_analysis_proxy), so the cache holds no copy;
-        `stored_preview` its preview, the same way (stored_preview)."""
+                 store: Any = None) -> None:
+        """`store`: the API's Store, when it's on this machine's disk
+        (service.stores_here): jobs read clips' previews and analysis proxies
+        there, by key, and the caches hold no copies (inputs.py)."""
         from src.processing.failure_report import FailureReport
         from src.processing.machine import current
         from src.processing.producer_settings import ProducerSettings
         from src.processing.proxy.analysis_cache import AnalysisProxyCache
         from src.producers import load
+        from src.server.scheduler.inputs import Inputs
         from src.shared.ai_jobs import AI_JOBS
 
         self.tenant_id = tenant_id
@@ -75,8 +75,9 @@ class Account:
         self.producers = ProducerSettings(client, fetch=False)  # read by refresh()
         # Each AI job's machines (Settings → AI), checked and called by its guard.
         self.guards: dict[str, Any] = {name: load(job.guard)(client) for name, job in AI_JOBS.items()}
-        self.analysis_cache = AnalysisProxyCache(client, stored=stored)
-        self._stored_preview = stored_preview
+        self.analysis_cache = AnalysisProxyCache(client)
+        # What jobs' work is made from (Work.inputs).
+        self.inputs = Inputs(self, store)
         # Set when the scheduler stops: jobs in hand save nothing more.
         self.stopping = threading.Event()
         # The server's settings were read at least once: its jobs can go.
@@ -265,9 +266,9 @@ class Account:
     # -- caches and models --------------------------------------------------
 
     def proxy_cache(self, library_id: str) -> Any:
-        """The images CLIP, faces and vision see, for clips of one library:
-        the preview the API keeps on this machine, else made from the
-        original while its storage is reachable."""
+        """The images CLIP, faces and vision see, for clips of one library,
+        where the API doesn't keep them on this machine (inputs.py): made from
+        the original while its storage is reachable, else downloaded."""
         from src.processing.proxy.proxy_cache import ProxyCache
         from src.producers.clip import PROXY_CACHE_EDGE
 
@@ -275,8 +276,7 @@ class Account:
         with self._lock:
             cache = self._proxy_caches.get(library_id)
             if cache is None or cache._root_path != root:
-                cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root, client=self.client,
-                                   stored=self._stored_preview)
+                cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root, client=self.client)
                 self._proxy_caches[library_id] = cache
             return cache
 

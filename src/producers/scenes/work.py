@@ -120,20 +120,20 @@ class Scenes(Work):
     def make(self, clip: dict) -> None:
         if not clip.get("duration_sec"):
             raise Waits("no duration yet")
-        source = self.acct.analysis_cache.get(clip["asset_id"])
-        if source is None or not source.is_file():
-            raise Waits("no analysis proxy")
-        from src.shared.producers import level_of
+        with self.inputs.analysis_proxy(clip) as source:
+            if source is None or not source.is_file():
+                raise Waits("no analysis proxy")
+            from src.shared.producers import level_of
 
-        level = level_of(self.artifact, {"detail": self.detail})
-        try:
-            result = index_video_scenes(client=self.client, source_path=source, asset_id=clip["asset_id"],
-                                        duration_sec=clip["duration_sec"], rel_path=clip["rel_path"],
-                                        lineage={**self.lineage(clip, used=self.used), "level": level},
-                                        detail=name_of(level), redo=bool(clip.get("redo")),
-                                        stopping=self.acct.stopping)
-        except ChunkFailed as e:
-            raise Failed(e) from e
+            level = level_of(self.artifact, {"detail": self.detail})
+            try:
+                result = index_video_scenes(client=self.client, source_path=source, asset_id=clip["asset_id"],
+                                            duration_sec=clip["duration_sec"], rel_path=clip["rel_path"],
+                                            lineage={**self.lineage(clip, used=self.used), "level": level},
+                                            detail=name_of(level), redo=bool(clip.get("redo")),
+                                            stopping=self.acct.stopping)
+            except ChunkFailed as e:
+                raise Failed(e) from e
         logger.info("video-index: %s — %d scenes in %d chunks (%.1fs)", clip["rel_path"], result["scenes"],
                     result["chunks"], result["elapsed"])
         return None  # saved chunk by chunk

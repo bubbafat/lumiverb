@@ -95,11 +95,10 @@ class Transcript(Work):
     def make(self, clip: dict) -> tuple[str, str]:
         from src.processing.workers.transcripts.base import TranscriptError
 
-        source = self.acct.analysis_cache.get(clip["asset_id"])
-        if source is None:
-            raise Failed("its analysis proxy couldn't be read")
         try:
-            with self.scratch_folder() as work_dir:
+            with self.inputs.analysis_proxy(clip) as source, self.scratch_folder() as work_dir:
+                if source is None:
+                    raise Failed("its analysis proxy couldn't be read")
                 result = transcribe(source, self.transcriber, self.vad_ms, work_dir=work_dir)
         except TranscriptError as e:
             # The machines' trouble stops transcription, charging no clip;

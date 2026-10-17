@@ -13,10 +13,10 @@ import pytest
 
 @pytest.mark.fast
 class TestVisionProxyCache:
-    """Test that vision backfill uses proxy cache instead of server download."""
+    """Vision describes the preview its job gives it, the server's only when there's none."""
 
     def test_backfill_one_uses_proxy_cache(self, tmp_path):
-        """_backfill_one reads from proxy cache, not server."""
+        """_backfill_one describes the preview it's given, not the server's."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
@@ -37,17 +37,17 @@ class TestVisionProxyCache:
                 rel_path="photo.jpg",
                 model="test",
                 provider=mock_provider,
-                proxy_cache=mock_cache,
+                preview=mock_cache.get,
                 work_dir=tmp_path,
             )
 
         assert result is not None
         assert result["asset_id"] == "ast_1"
         assert result["description"] == "a cat"
-        mock_cache.get.assert_called_once_with("ast_1", "photo.jpg")
+        mock_cache.get.assert_called_once_with()  # its preview, asked for once
 
     def test_backfill_one_falls_back_to_server(self, tmp_path):
-        """Falls back to server download when proxy cache misses."""
+        """Falls back to server download when there's no preview."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
@@ -69,7 +69,7 @@ class TestVisionProxyCache:
                 rel_path="photo.jpg",
                 model="test",
                 provider=MagicMock(),
-                proxy_cache=mock_cache,
+                preview=mock_cache.get,
                 work_dir=tmp_path,
                 client=mock_client,
             )
@@ -78,7 +78,7 @@ class TestVisionProxyCache:
         mock_client.get.assert_called_once()
 
     def test_backfill_one_returns_none_on_no_proxy(self, tmp_path):
-        """Returns None when proxy cache misses and no client fallback."""
+        """Returns None when there's no preview and no client fallback."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
         mock_cache = MagicMock()
@@ -89,7 +89,7 @@ class TestVisionProxyCache:
             rel_path="photo.jpg",
             model="test",
             provider=MagicMock(),
-            proxy_cache=mock_cache,
+            preview=mock_cache.get,
             work_dir=tmp_path,
         )
 
@@ -110,7 +110,7 @@ class TestVisionProxyCache:
                 rel_path="photo.jpg",
                 model="test",
                 provider=MagicMock(),
-                proxy_cache=mock_cache,
+                preview=mock_cache.get,
                 work_dir=tmp_path,
             )
 
@@ -144,7 +144,7 @@ class TestEmbedReturnResult:
             asset_id="ast_1",
             rel_path="photo.jpg",
             clip_provider=mock_clip,
-            proxy_cache=mock_cache,
+            preview=mock_cache.get,
         )
 
         assert result is not None
@@ -163,7 +163,7 @@ class TestEmbedReturnResult:
             asset_id="ast_1",
             rel_path="photo.jpg",
             clip_provider=MagicMock(),
-            proxy_cache=mock_cache,
+            preview=mock_cache.get,
         )
 
         assert result is None

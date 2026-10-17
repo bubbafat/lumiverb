@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from src.producers.runner import Work
@@ -30,12 +31,12 @@ def describe(proxy_bytes: bytes, model: str, provider, work_dir: Path) -> dict |
     }
 
 
-def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, proxy_cache, work_dir: Path,
-                  client=None) -> dict | None:
-    """The clip's description from its proxy (the cache's, else the server's);
-    None when there's no proxy or the model said nothing."""
+def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, preview: Callable[[], bytes | None],
+                  work_dir: Path, client=None) -> dict | None:
+    """The clip's description from its proxy (preview() gets it, else the
+    server's); None when there's no proxy or the model said nothing."""
     t0 = time.perf_counter()
-    proxy_bytes = proxy_cache.get(asset_id, rel_path) if proxy_cache else None
+    proxy_bytes = preview()
     if proxy_bytes is None and client is not None:
         from src.processing.api import LumiverbAPIError
 
@@ -65,7 +66,7 @@ class Vision(Work):
 
     def make(self, clip: dict) -> dict:
         result = describe_clip(asset_id=clip["asset_id"], rel_path=clip["rel_path"], model=self.model,
-                               provider=self.provider, proxy_cache=self.acct.proxy_cache(clip["library_id"]),
+                               provider=self.provider, preview=lambda: self.inputs.preview_bytes(clip),
                                work_dir=self.scratch, client=self.acct.client)
         if result is None:
             raise self.machines_or_clip("no description (no proxy, or the model returned nothing)")

@@ -515,10 +515,18 @@ def stores_here() -> bool:
     return settings.storage_provider == "local" and bool(settings.data_dir)
 
 
+def here_store() -> Any:
+    """The API's Store, when it's on this machine's disk (stores_here): jobs
+    read clips' previews and analysis proxies there by key (inputs.py)."""
+    from src.server.storage.store import get_store
+
+    return get_store() if stores_here() else None
+
+
 def forget_preview_copies() -> tuple[int, int] | None:
     """Where the API keeps the previews on this machine, the copies an
     earlier scheduler kept in its proxy cache (scans' and the faces step's)
-    go: each clip's stored preview is read where it is (stored_preview).
+    go: each clip's stored preview is read from the Store (inputs.py).
     Only a cache inside the server's data folder (lumiverb-server run puts
     the scheduler's there): never a folder a CLI or the Mac app shares.
     Returns (files, bytes) removed, or None when there was nothing to do."""
@@ -540,54 +548,6 @@ def forget_preview_copies() -> tuple[int, int] | None:
             continue
     shutil.rmtree(folder, ignore_errors=True)
     return files, sizes
-
-
-def stored_analysis_proxy(tenant_id: str) -> Callable[[str], Any]:
-    """The account's clip's analysis proxy as the API stored it, read from
-    the Store on this disk (during a move, either folder): the scheduler's
-    cache then holds no second copy. None when the clip has none, or its
-    file isn't there or can't be reached (a drive unplugged): the cache
-    downloads it then, as before. Only used where stores_here()."""
-    return _stored_file(tenant_id, "analysis_proxy_key")
-
-
-def stored_preview(tenant_id: str) -> Callable[[str], Any]:
-    """The account's clip's preview (its proxy) as the API stored it, read
-    from the Store on this disk, as stored_analysis_proxy: what CLIP, faces,
-    OCR and descriptions see (src/processing/proxy/proxy_cache.py), with no
-    copy in the scheduler's cache."""
-    return _stored_file(tenant_id, "proxy_key")
-
-
-# The assets columns a stored file's key is read from.
-_STORED_KEYS = {"analysis_proxy_key", "proxy_key"}
-
-
-def _stored_file(tenant_id: str, column: str) -> Callable[[str], Any]:
-    from sqlalchemy import text
-
-    from src.server.database import get_tenant_session
-    from src.server.storage.store import NotFound, Unavailable, get_store
-
-    if column not in _STORED_KEYS:
-        raise ValueError(column)
-
-    def find(asset_id: str):
-        with get_tenant_session(tenant_id) as session:
-            key = session.execute(text(f"SELECT {column} FROM assets WHERE asset_id = :a"),  # noqa: S608 — a known column
-                                  {"a": asset_id}).scalar()
-        if not key:
-            return None
-        try:
-            # The filesystem provider's local file is the stored file itself, there
-            # after the block (stores_here gates this). The runner will hold the
-            # block open for the job instead (ADR-020 phase 3, Inputs).
-            with get_store().local_file(key) as path:
-                return path
-        except (NotFound, Unavailable):
-            return None
-
-    return find
 
 
 def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict] | None:
@@ -796,10 +756,8 @@ class Accounts:
                 continue
             try:
                 client = scheduler_client(self._url, scheduler_key(tenant_id))
-                here = stores_here()
                 self._accounts[tenant_id] = Account(tenant_id, client, self._scan_state, models=self._models,
-                                                    stored=stored_analysis_proxy(tenant_id) if here else None,
-                                                    stored_preview=stored_preview(tenant_id) if here else None)
+                                                    store=here_store())
                 logger.info("scheduler: working for %s", tenant_id)
             except Exception:  # noqa: BLE001 — tried again at the next listing
                 logger.exception("scheduler: couldn't start work for %s", tenant_id)

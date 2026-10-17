@@ -5,7 +5,8 @@ missing, or made from a file whose content has since changed, less failures
 waiting their turn; and for a redo kind, made with another producer,
 version or settings than now. Here each kind's due clips are listed oldest
 first (in the order they were added), across the libraries asked about,
-with what the job needs to know about each.
+with what the job needs to know about each: the keys of its stored preview
+and analysis proxy among them, which its work reads by (inputs.py).
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         condition = f"({MISSING_CONDITIONS[kind.flag]} OR {lineage.rechecking(kind.artifact)})"
     rows = session.execute(text(
         "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.content_hash, a.duration_sec,"
-        " a.created_at, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
+        " a.created_at, a.proxy_key, a.analysis_proxy_key, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
         f" WHERE a.library_id = ANY(:libs) AND ({condition}) AND ({kind.extra})"
         "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"

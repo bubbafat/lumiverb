@@ -334,7 +334,7 @@ def test_ocr_one_success(tmp_path):
         asset_id="ast_123",
         rel_path="test.jpg",
         ocr_provider=mock_provider,
-        proxy_cache=mock_cache,
+        preview=mock_cache.get,
         work_dir=tmp_path,
     )
 
@@ -352,7 +352,7 @@ def test_ocr_one_no_proxy(tmp_path):
         asset_id="ast_123",
         rel_path="test.jpg",
         ocr_provider=MagicMock(),
-        proxy_cache=mock_cache,
+        preview=mock_cache.get,
         work_dir=tmp_path,
     )
 
@@ -371,7 +371,7 @@ def test_ocr_one_no_text_found(tmp_path):
         asset_id="ast_123",
         rel_path="test.jpg",
         ocr_provider=mock_provider,
-        proxy_cache=mock_cache,
+        preview=mock_cache.get,
         work_dir=tmp_path,
     )
 
@@ -391,7 +391,7 @@ def test_ocr_one_provider_exception(tmp_path):
         asset_id="ast_123",
         rel_path="test.jpg",
         ocr_provider=mock_provider,
-        proxy_cache=mock_cache,
+        preview=mock_cache.get,
         work_dir=tmp_path,
     )
 
