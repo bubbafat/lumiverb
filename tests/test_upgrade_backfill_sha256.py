@@ -263,10 +263,28 @@ def _insert_library(conn, *, library_id: str) -> None:
     )
 
 
-def _make_ctx(engine, metadata_repo=None) -> UpgradeContext:
+# Sessions a test opened, closed when it ends (_closed): one left open sits
+# idle in a transaction until the module's database is dropped under it.
+_opened: list = []
+
+
+@pytest.fixture(autouse=True)
+def _closed():
+    yield
+    while _opened:
+        _opened.pop().close()
+
+
+def _session(engine):
     from sqlmodel import Session
 
     session = Session(engine)
+    _opened.append(session)
+    return session
+
+
+def _make_ctx(engine, metadata_repo=None) -> UpgradeContext:
+    session = _session(engine)
     if metadata_repo is None:
         from src.server.repository.system_metadata import SystemMetadataRepository
         metadata_repo = SystemMetadataRepository(session)
@@ -453,9 +471,8 @@ def test_runner_marks_all_three_steps_completed(backfill_db, tmp_path: Path) -> 
     # backfill_db may already have rows from prior tests, but needs_work() only cares
     # about NULL sha columns — prior tests wrote real hashes. Add no new rows here.
     from src.server.repository.system_metadata import SystemMetadataRepository
-    from sqlmodel import Session
 
-    session = Session(backfill_db)
+    session = _session(backfill_db)
     meta = SystemMetadataRepository(session)
     ctx = UpgradeContext(session=session, metadata=meta, tenant_id="test_tenant")
 
