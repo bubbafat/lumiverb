@@ -51,6 +51,11 @@ def test_a_library_handed_to_a_device_is_its_alone_and_comes_back(env):
 
     handed = _ok(_reader(env, library_id, device_id, root_path="/Users/robert/Pictures/Trips"))
     assert (handed["reader"], handed["root_path"]) == (device_id, "/Users/robert/Pictures/Trips")
+    assert handed["reader_name"] == "Handover Mac", "for people: who reads it"
+    listed = next(lib for lib in _ok(env.client.get("/v1/libraries", headers=env.viewer))
+                  if lib["library_id"] == library_id)
+    assert (listed["reader"], listed["reader_name"]) == (device_id, "Handover Mac")
+    assert _ok(env.client.get(f"/v1/libraries/{library_id}", headers=env.viewer))["reader_name"] == "Handover Mac"
     server = _ok(_check_in(env, env.admin, library_id, reader="server"))
     assert library_id not in _listed(server) and server["gone"] == [library_id], "this server reads it no more"
     assert library_id in _listed(_ok(_check_in(env, device, library_id)))
@@ -59,7 +64,7 @@ def test_a_library_handed_to_a_device_is_its_alone_and_comes_back(env):
     assert run.finish is not None and set(run.uploaded) == {"a.jpg"}
 
     back = _ok(_reader(env, library_id, "server", root_path="/Volumes/Trips"))
-    assert (back["reader"], back["root_path"]) == ("server", "/Volumes/Trips")
+    assert (back["reader"], back["root_path"], back["reader_name"]) == ("server", "/Volumes/Trips", None)
     assert library_id in _listed(_ok(_check_in(env, env.admin, library_id, reader="server")))
     assert _check_in(env, device, library_id).json()["gone"] == [library_id]
     assert env.client.post(f"/v1/libraries/{library_id}/scans", json={}, headers=device).status_code == 404

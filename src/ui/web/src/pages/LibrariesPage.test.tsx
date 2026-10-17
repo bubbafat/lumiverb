@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   listLibraryHealth: vi.fn(),
   getCurrentUser: vi.fn(),
   listArchive: vi.fn(),
+  listDevices: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -40,6 +41,7 @@ beforeEach(() => {
   api.listLibraryHealth.mockResolvedValue([]);
   api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin" });
   api.listArchive.mockResolvedValue({ items: [], next_cursor: null, total: 0 });
+  api.listDevices.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -235,7 +237,21 @@ describe("LibrariesPage adding a library", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Footage" } });
     fireEvent.change(screen.getByLabelText("Root path"), { target: { value: "/Volumes/Footage" } });
     fireEvent.click(screen.getByRole("button", { name: "Create library" }));
-    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Footage", "/Volumes/Footage"));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Footage", "/Volumes/Footage", "server"));
+    expect(screen.queryByLabelText("Read by")).toBeNull();
+  });
+
+  it("lets an admin make one a device reads, with its folder as the device sees it", async () => {
+    api.listDevices.mockResolvedValue([{ device_id: "dev_1", name: "Studio Mac", registered_at: "2026-10-17T12:00:00Z",
+                                         has_key: true, key_last_used_at: null, libraries: [] }]);
+    api.createLibrary.mockResolvedValue({ library_id: "lib_9", name: "Trips", root_path: "/Users/robert/Trips" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Trips" } });
+    fireEvent.change(await screen.findByLabelText("Read by"), { target: { value: "dev_1" } });
+    fireEvent.change(screen.getByLabelText("Its folder, as Studio Mac sees it"), { target: { value: "/Users/robert/Trips" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create library" }));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Trips", "/Users/robert/Trips", "dev_1"));
   });
 
   for (const [who, role] of [["an editor", "editor"], ["a viewer", "viewer"]]) {

@@ -70,6 +70,8 @@ class LibraryResponse(BaseModel):
     cover_asset_id: str | None = None
     # Who reads its files (src/shared/readers.py): "server", this server, or a device's id.
     reader: str = SERVER
+    # The device's name (Devices API), for people; None for this server.
+    reader_name: str | None = None
 
 
 class CheckedIn(BaseModel):
@@ -99,6 +101,8 @@ class LibraryListItem(BaseModel):
     revision: int = 0
     # Who reads its files (src/shared/readers.py): "server", this server, or a device's id.
     reader: str = SERVER
+    # The device's name (Devices API), for people; None for this server.
+    reader_name: str | None = None
     # Its own Scans pause (ADR-018 phase 1): no new or changed files are
     # found in it. Pause all isn't said here (GET /v1/producers/queue says
     # each library's with it, and who paused it).
@@ -185,6 +189,7 @@ def create_library(
         root_path=library.root_path,
         is_public=library.is_public,
         reader=library.reader,
+        reader_name=_reader_name(session, library.reader),
     )
 
 
@@ -196,9 +201,12 @@ def list_libraries(
     """Return all libraries for the tenant."""
     from src.server import check_ins
 
+    from src.server.repository.devices import DeviceRepository
+
     repo = LibraryRepository(session)
     libraries = repo.list_all(include_trashed=include_trashed)
     seen = check_ins.latest(session)
+    names = DeviceRepository(session).names()
     return [
         LibraryListItem(
             library_id=lib.library_id,
@@ -211,6 +219,7 @@ def list_libraries(
             trashed_at=lib.trashed_at.isoformat() if lib.trashed_at else None,
             revision=lib.revision,
             reader=lib.reader,
+            reader_name=names.get(lib.reader),
             scans_paused=lib.scans_paused_at is not None,
             scan_requested_at=lib.scan_requested_at.isoformat() if lib.scan_requested_at else None,
             checked_in=_checked_in(seen.get(lib.library_id)),
@@ -388,6 +397,7 @@ def get_library(
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
         reader=library.reader,
+        reader_name=_reader_name(session, library.reader),
     )
 
 
@@ -430,7 +440,18 @@ def update_library(
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
         reader=library.reader,
+        reader_name=_reader_name(session, library.reader),
     )
+
+
+def _reader_name(session: Session, reader: str) -> str | None:
+    """A device's name, for people; None for this server (or a device gone since)."""
+    from src.server.repository.devices import DeviceRepository
+
+    if reader == SERVER:
+        return None
+    device = DeviceRepository(session).get(reader)
+    return device["name"] if device is not None else None
 
 
 def _known_reader(session: Session, reader: str) -> None:
@@ -476,6 +497,7 @@ def choose_reader(
         is_public=library.is_public,
         cover_asset_id=repo.resolve_cover(library),
         reader=library.reader,
+        reader_name=_reader_name(session, library.reader),
     )
 
 
@@ -555,7 +577,8 @@ def restore_library(
         raise ConflictError("not_trashed", "This library isn't in the trash.") from e
     repo.bump_revision(library_id)
     return LibraryResponse(library_id=library.library_id, name=library.name,
-                           root_path=library.root_path, is_public=library.is_public, reader=library.reader)
+                           root_path=library.root_path, is_public=library.is_public, reader=library.reader,
+                           reader_name=_reader_name(session, library.reader))
 
 
 @router.get("/{library_id}/ignored-paths", dependencies=[Depends(require_signed_in)])

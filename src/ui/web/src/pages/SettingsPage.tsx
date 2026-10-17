@@ -9,6 +9,8 @@ interface NavItem {
   to: string;
   label: string;
   requireEditor?: boolean;
+  /** An account admin's. */
+  requireAdmin?: boolean;
   /** The install's, not an account's (where previews live, backups). */
   requireServerAdmin?: boolean;
 }
@@ -23,6 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/network", label: "Network" },
   { to: "/settings/backups", label: "Backups", requireServerAdmin: true },
   { to: "/settings/storage", label: "Storage", requireServerAdmin: true },
+  { to: "/settings/devices", label: "Devices", requireAdmin: true },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];
@@ -54,6 +57,7 @@ export default function SettingsPage() {
           {NAV_ITEMS.map((item) => {
             if (item.requireEditor && !isEditorOrAbove) return null;
             if (item.requireServerAdmin && !isPending && !isServerAdmin) return null;
+            if (item.requireAdmin && !isPending && user?.role !== "admin") return null;
             return (
               <NavLink
                 key={item.to}
