@@ -174,7 +174,8 @@ def _generate_video_preview(source_path: Path) -> bytes:
             *ffmpeg_run.input_args(),
             "-ss", "0", "-i", str(source_path),
             "-t", str(PREVIEW_DURATION_SEC),
-            "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)',format=yuv420p",
+            # Limited range, as players expect: a full-range source (DJI's 1080p) is converted.
+            "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)':out_range=tv,format=yuv420p",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
             *(["-c:a", "aac", "-ac", "2", "-b:a", "128k"] if audio else ["-an"]),
             # No metadata: phones and drones write where they were (GPS) into the file.
