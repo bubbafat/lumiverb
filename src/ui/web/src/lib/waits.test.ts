@@ -9,6 +9,8 @@ const DETAILS: Record<string, Partial<ProducerWait>> = {
   needs: { artifact: "scenes", paused: false },
   storage: { library_id: "lib_1", library_name: "Empty Besters", checked: true, away_since: "2026-10-12T18:20:00Z",
              seen_at: "2026-10-12T17:55:00Z" },
+  device: { library_id: "lib_2", library_name: "Footage", device_id: "dev_1", device_name: "Robert's Mac Studio",
+            checked_in_at: "2026-10-17T18:00:00Z" },
   scan: { paused: false },
   scan_failing: { library_id: "lib_1", library_name: "Empty Besters", message: "[unknown]: the API said 500",
                   since: "2026-10-13T13:50:00Z", next_try: "2026-10-13T14:20:00Z" },
@@ -63,6 +65,14 @@ describe("Why work waits", () => {
       + " (last seen <2026-10-12T17:55:00Z>).");
     expect(waitSentence({ reason: "storage", clips: 40, library_name: "Empty Besters", checked: false }, say)).toBe(
       "40 videos in Empty Besters wait for its drive: it hasn't been looked at since the scheduler started.");
+  });
+
+  it("says which device makes them, and when it last checked in", () => {
+    expect(waitSentence({ reason: "device", clips: 12, ...DETAILS.device }, say)).toBe(
+      "12 videos in Footage wait for Robert's Mac Studio, which reads it (last checked in <2026-10-17T18:00:00Z>).");
+    expect(waitSentence({ reason: "device", clips: 1, ...DETAILS.device, checked_in_at: null }, say)).toBe(
+      "1 video in Footage waits for Robert's Mac Studio, which reads it (not checked in yet).");
+    expect(waitIsLoud({ reason: "device", clips: 1 })).toBe(false);
   });
 
   it("says a new version is ready and waits for an admin, apart from an admin's stop", () => {

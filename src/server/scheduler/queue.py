@@ -8,6 +8,11 @@ given too, src/server/reader_work.py). Here each kind's due clips are listed old
 first (in the order they were added), across the libraries asked about,
 with what the job needs to know about each: the keys of its stored preview
 and analysis proxy among them, which its work reads by (inputs.py).
+
+Work on the originals is listed only in the libraries this server reads
+(and can reach now); work from what's stored (previews, analysis proxies) in
+every active library, a device's too (ADR-018 decision 2): the scheduler
+asks for those with no library list.
 """
 
 from __future__ import annotations
@@ -22,16 +27,19 @@ from src.server.scheduler.kinds import Kind
 BUFFER = 200  # due clips listed per kind at a time
 
 
-def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int = BUFFER,
+def candidates(session: Session, kind: Kind, library_ids: list[str] | None, limit: int = BUFFER,
                skip: list[str] | None = None, want: dict[str, Any] | None = None) -> list[dict]:
-    """The kind's due clips in these libraries, oldest first, at most limit,
-    less skip (clips in hand or just tried: they mustn't fill the answer).
-    A redo kind needs want: what its producer makes now (lineage.desired)."""
+    """The kind's due clips in these libraries (None: every active library,
+    whoever reads it), oldest first, at most limit, less skip (clips in
+    hand or just tried: they mustn't fill the answer). A redo kind needs
+    want: what its producer makes now (lineage.desired)."""
     from src.server.repository import lineage
     from src.server.repository.lineage import LINEAGE_JOIN
 
-    if not kind.flag or not library_ids:
+    if not kind.flag or library_ids == []:
         return []
+    if kind.storage and library_ids is None:
+        raise ValueError(f"{kind.name} reads the originals: only the libraries this server reads")
     params: dict[str, Any] = {"libs": library_ids, "n": limit, "skip": list(skip or [])}
     if kind.redo:
         if want is None:
@@ -43,7 +51,10 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
         "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.content_hash, a.duration_sec,"
         " a.created_at, a.proxy_key, a.analysis_proxy_key, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
-        f" WHERE a.library_id = ANY(:libs) AND {condition}"
+        " WHERE (CASE WHEN CAST(:libs AS text[]) IS NULL"
+        "             THEN a.library_id IN (SELECT library_id FROM libraries WHERE status = 'active')"
+        "             ELSE a.library_id = ANY(CAST(:libs AS text[])) END)"
+        f"   AND {condition}"
         "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"
         " ORDER BY a.created_at, a.asset_id LIMIT :n"
     ), params).mappings().all()

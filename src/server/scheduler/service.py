@@ -369,8 +369,11 @@ class Scheduler:
                 continue
             if not self.dispatcher.wanted(tenant_id, kind.name):
                 continue
-            libraries = acct.library_ids(storage=kind.storage)
-            if not libraries:  # nothing to ask yet (no storage reachable): not an empty answer to wait on
+            # Work on the originals: the libraries this server reads and can
+            # reach now. Work from what's stored: every active library, a
+            # device's too (None; ADR-018 decision 2).
+            libraries = acct.library_ids(storage=True) if kind.storage else None
+            if libraries == []:  # nothing to ask yet (no storage reachable): not an empty answer to wait on
                 unlisted.pop(kind.name, None)
                 self.dispatcher.clear(tenant_id, kind.name)
                 continue
@@ -621,8 +624,9 @@ def forget_preview_copies() -> tuple[int, int] | None:
     return files, sizes
 
 
-def _from_database(tenant_id: str, kind: Any, libraries: list[str], skip: list[str] | None = None) -> list[dict] | None:
-    """The kind's due clips, oldest first; None when it was paused (or its
+def _from_database(tenant_id: str, kind: Any, libraries: list[str] | None,
+                   skip: list[str] | None = None) -> list[dict] | None:
+    """The kind's due clips, oldest first (libraries None: every active one); None when it was paused (or its
     redo stopped) since the scheduler last looked."""
     from src.server.database import get_tenant_session
     from src.server.repository import lineage

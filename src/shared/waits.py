@@ -28,6 +28,9 @@ NEEDS = "needs"
 # It reads the originals, and a library's drive can't be reached, or hasn't
 # been looked at since the scheduler started.
 STORAGE = "storage"
+# It reads the originals, and a device reads the library (ADR-018 decision
+# 1): the device makes it, from its next check-in.
+DEVICE = "device"
 # A new version of the producer stopped its redo: what an older version
 # made is made again once an admin resumes it.
 NEW_VERSION = "new_version"
@@ -55,6 +58,7 @@ REASONS: dict[str, str] = {
     AI_MACHINES: "its AI job has no machine the scheduler can use",
     NEEDS: "what it's made from isn't made yet",
     STORAGE: "a library's drive can't be reached, or hasn't been looked at since the scheduler started",
+    DEVICE: "a device reads the library: the device makes it from its originals",
     NEW_VERSION: "a new version of it waits for an admin to resume its redo",
     REDO_STOPPED: "an admin stopped its redo",
     SCAN: "its file wasn't on its storage, or changed: a scan comes first",

@@ -55,6 +55,7 @@ from src.server.repository.assets import AssetRepository
 from src.server.repository.libraries import LibraryRepository
 from src.server.tenant_settings import get_follow_moves
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
+from src.shared.readers import SERVER
 from src.shared.utils import utcnow
 
 router = APIRouter(tags=["scans"], dependencies=[Depends(require_editor)])
@@ -277,6 +278,18 @@ def _held(session: Session, scan_id: str, *, planned: bool | None, finished: boo
     return scan
 
 
+def _the_reader(request: Request, library) -> None:
+    """Only a library's reader scans it, never two at once (ADR-018 decision
+    1): 409 not_the_reader for anyone else, so a scan this server started
+    before the library was handed to a device changes nothing of it (a
+    device is turned away before this, by the gate)."""
+    caller = getattr(request.state, "device_id", None) or SERVER
+    if library is not None and library.reader != caller:
+        raise ConflictError("not_the_reader", "A device reads this library now: only it scans it."
+                            if caller == SERVER else "This server reads this library now: only it scans it.",
+                            {"reader": library.reader})
+
+
 def _rel_paths(raw: list[str]) -> list[str]:
     """Each as stored (NFC); 400 for one that would leave the library."""
     return [checked_rel_path(p) for p in raw]
@@ -291,17 +304,20 @@ def _utc(when: datetime | None) -> datetime | None:
 def start_scan(
     library_id: str,
     body: StartScanRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> StartScanResponse:
     """Start a scan of a library, or of a folder in it, before walking it:
     a clip made or changed after this is never taken for gone by it. 409
     scans_paused while the library's scans are paused (its own pause, or
-    Pause all): whoever reads it, nothing new is found in it then."""
+    Pause all): whoever reads it, nothing new is found in it then. 409
+    not_the_reader unless the caller reads it (this server, a device)."""
     library = LibraryRepository(session).get_by_id(library_id)
     if library is None:
         raise HTTPException(status_code=404, detail="Library not found")
     if library.status == "trashed":
         raise ConflictError("library_trashed", "The library is in the trash.")
+    _the_reader(request, library)
     if lineage.pauses(session).scans_paused(library_id):
         raise ConflictError("scans_paused", f"Scans of {library.name} are paused: resume them to scan it.",
                             {"library_id": library_id})
@@ -503,13 +519,16 @@ def add_hashes(
 def answer_moves(
     scan_id: str,
     body: MovesRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> MovesResponse:
     """A person's say on the moves the scan asked about: apply them, or skip
     them (the moved files take no part: not uploaded, their clips not archived).
     The same say sent again with none waiting (its answer lost) gets the
-    answer the first got."""
+    answer the first got. 409 not_the_reader once the library has another
+    reader."""
     scan = _held(session, scan_id, planned=True)
+    _the_reader(request, LibraryRepository(session).get_by_id(scan.library_id))
     earlier = scans.answered(scan, "moves")
     if earlier is not None and earlier["apply"] == body.apply and not scans.move_candidates(session, scan.scan_id, 1):
         session.commit()  # its expiry, pushed back
@@ -544,7 +563,8 @@ def finish_scan(
     """Archive what's gone as missing, as DELETE /v1/assets does (its guard
     against taking most of a library, and the handover to an empty newer copy
     of a file), and close the scan, in one transaction. A dry run archives
-    nothing. Sent again (its answer lost), the answer the first one got."""
+    nothing. Sent again (its answer lost), the answer the first one got.
+    409 not_the_reader once the library has another reader: nothing changes."""
     scan = _held(session, scan_id, planned=True, finished=True)
     if scan.finished_at is not None:
         kept = scans.answered(scan, "finish")
@@ -552,6 +572,7 @@ def finish_scan(
             raise _finished()
         session.commit()  # its expiry, pushed back
         return FinishResponse(**kept)
+    _the_reader(request, LibraryRepository(session).get_by_id(scan.library_id))
     if not scan.dry_run and (waiting := scans.move_candidates(session, scan.scan_id)):
         shown = waiting[:MOVES_SHOWN]
         raise DecisionRequiredError(

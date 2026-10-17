@@ -982,12 +982,16 @@ export interface ProducerWait {
   artifact?: string;
   /** needs: what makes that is paused (a library's scans, for what scans make); scan: its library's scans are paused. */
   paused?: boolean;
-  /** storage: the library, and what the scheduler's looks at its drive found. */
+  /** storage, device: the library; storage: what the scheduler's looks at its drive found. */
   library_id?: string;
   library_name?: string;
   seen_at?: string;
   away_since?: string;
   checked?: boolean;
+  /** device: the device that reads the library, and when it last checked in for it. */
+  device_id?: string;
+  device_name?: string;
+  checked_in_at?: string | null;
   /** ai_machines: the job. */
   job?: string;
   /** ai_machines: "off" | "no_machine" | "offline" | "unusable"; scheduler: "not_running" | "starting" | "cant_list". */

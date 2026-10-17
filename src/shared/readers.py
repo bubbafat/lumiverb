@@ -1,11 +1,13 @@
-"""Who reads a library's files (ADR-018 decision 1): this server, or (from
-phase 6) a registered device, never both at once.
+"""Who reads a library's files (ADR-018 decision 1): this server, or a
+registered device (its id, `dev_…`), never both at once.
 
 The reader is the one that scans the library, looks at its storage, makes
 what needs its originals (probing, capture, analysis proxies) and is where
 its folder is chosen. Every caller that does any of that asks
-read_by_server, so a library a device reads is left alone everywhere at
-once when devices come. Until then every library is read by this server.
+read_by_server, so a library a device reads is left alone by this server
+everywhere at once. What's made from its previews and analysis proxies
+(search, faces, descriptions, scenes, transcripts) is this server's either
+way.
 """
 
 from __future__ import annotations
@@ -14,7 +16,6 @@ from collections.abc import Mapping
 from typing import Any
 
 SERVER = "server"
-READERS = (SERVER,)
 
 
 def read_by_server(library: Mapping[str, Any] | Any) -> bool:

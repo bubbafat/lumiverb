@@ -212,7 +212,9 @@ class Harness:
         def candidates(tenant_id, kind, libraries, skip=None):
             if kind.artifact in self.unlistable:
                 raise RuntimeError("column a.nothing does not exist")
-            return _from_database(tenant_id, kind, libraries, skip)
+            # Its own library: the module's account holds every case's (work
+            # from what's stored is asked for in every active library, None).
+            return _from_database(tenant_id, kind, [library_id] if libraries is None else libraries, skip)
 
         self.scheduler = Scheduler(
             lambda: {tenant_id: self.acct}, capacity={p.name: SHARED_SLOTS for p in pools().values() if not p.per_account},
@@ -348,6 +350,25 @@ def _lift_storage(case: Case) -> None:
                                             "checked": True}}
 
 
+def _hold_device(case: Case) -> None:
+    """A device reads the library (ADR-018 decision 1): what needs its
+    originals is the device's, and the scheduler no longer reads it (its
+    check-in leaves the library out)."""
+    client, headers, library_id, *_ = case.lib
+    device = client.post("/v1/devices", json={"name": f"Studio Mac {library_id[-6:]}"}, headers=headers)
+    assert device.status_code == 200, device.text
+    r = client.put(f"/v1/libraries/{library_id}/reader", json={"reader": device.json()["device_id"]}, headers=headers)
+    assert r.status_code == 200, r.text
+    case.h.acct.libraries = case.h.acct.reachable = ()
+
+
+def _lift_device(case: Case) -> None:
+    client, headers, library_id, *_ = case.lib
+    r = client.put(f"/v1/libraries/{library_id}/reader", json={"reader": "server"}, headers=headers)
+    assert r.status_code == 200, r.text
+    case.h.acct.libraries = case.h.acct.reachable = (case.h.library_id,)
+
+
 def _prime(case: Case) -> None:
     """The clip is tried once, and waits."""
     case.h.run()
@@ -455,6 +476,7 @@ GATES: dict[str, Gate] = {
                         undo=lambda case: _set_vision(case.lib, "", machine=False), clips=False),
     "needs": Gate("vision", lambda case: _set_proxy(case, None), lambda case: _set_proxy(case, case.saved["proxy_key"])),
     "storage": Gate("capture", _hold_storage, _lift_storage),
+    "device": Gate("capture", _hold_device, _lift_device),
     "new_version": Gate("vision", lambda case: None, _post("/v1/producers/{artifact}/resume", REDO),
                         clip=_older_version_vision, undo=_post("/v1/producers/{artifact}/resume", REDO)),
     "redo_stopped": Gate("vision", _post("/v1/producers/{artifact}/pause", REDO),

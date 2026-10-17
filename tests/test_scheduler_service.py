@@ -57,11 +57,14 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class FakeAccount:
     def __init__(self, tenant_id: str = "t1", *, vision: int = 2, transcripts: int = 1,
-                 libraries: tuple[str, ...] = ("lib_1",), reachable: tuple[str, ...] = ("lib_1",)) -> None:
+                 libraries: tuple[str, ...] = ("lib_1",), reachable: tuple[str, ...] = ("lib_1",),
+                 devices_read: tuple[str, ...] = ()) -> None:
         self.tenant_id = tenant_id
         self.slots = {"vision": vision, "transcripts": transcripts}
-        self.libraries = libraries
+        self.libraries = libraries  # those this server reads
         self.reachable = reachable
+        # Active libraries a device reads: the database lists their work from what's stored too.
+        self.devices_read = devices_read
         self.failures = MagicMock()
         self.refreshed = 0
         self.settings_ready = True
@@ -131,7 +134,10 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
                held: set | None = None) -> Scheduler:
     def candidates(tenant_id, kind, libraries, skip=()):
         if asked is not None:
-            asked.append((tenant_id, kind.name, tuple(libraries)))
+            asked.append((tenant_id, kind.name, None if libraries is None else tuple(libraries)))
+        if libraries is None:  # every active library, whoever reads it (queue.candidates)
+            acct = accounts[tenant_id]
+            libraries = (*acct.libraries, *acct.devices_read)
         return [i for i in due.get(kind.name, []) if i["library_id"] in libraries and i["asset_id"] not in skip]
 
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
@@ -225,7 +231,25 @@ def test_storage_work_only_in_libraries_reachable_at_the_last_look() -> None:
     s.tick()
     libs = {kind: libs for _, kind, libs in asked}
     assert libs["probe"] == ("lib_2",) and libs["render"] == ("lib_2",)
-    assert libs["vision"] == ("lib_1", "lib_2")
+    assert libs["vision"] is None, "what's made from what's stored: every active library (queue.candidates)"
+
+
+@pytest.mark.fast
+def test_a_library_a_device_reads_gets_the_work_from_what_s_stored_and_none_on_its_originals() -> None:
+    """ADR-018 decision 2: the device makes what needs its originals; this
+    server makes the rest from the previews and analysis proxies it sent."""
+    rec = Recorder()
+    device_clip = {**_item("dev-clip"), "library_id": "lib_dev"}
+    due = {"vision": [device_clip], "probe": [device_clip], "render": [device_clip], "clip": [device_clip]}
+    acct = FakeAccount(libraries=("lib_1",), reachable=("lib_1",), devices_read=("lib_dev",), vision=1)
+    s = _scheduler({"t1": acct}, due, rec)
+    s.tick()
+    _settle(s)
+    s.tick()
+    _settle(s)
+    ran = {kind for _, kind, ids in rec.ran if ids == ("dev-clip",)}
+    assert {"vision", "clip"} <= ran
+    assert not ran & {"probe", "render"}, "never on a device's originals"
 
 
 @pytest.mark.fast
@@ -1476,7 +1500,8 @@ class Fresh:
         due = {k.name: [_item(f"{k.name}-clip")] for k in QUEUED}
 
         def candidates(tenant_id, kind, libraries, skip=()):
-            return [i for i in due[kind.name] if i["library_id"] in libraries and i["asset_id"] not in skip]
+            among = (LIBRARY["library_id"],) if libraries is None else libraries  # None: every active library
+            return [i for i in due[kind.name] if i["library_id"] in among and i["asset_id"] not in skip]
 
         def makes(acct, job) -> None:
             acct.client.post(f"/made/{job.kind}")
