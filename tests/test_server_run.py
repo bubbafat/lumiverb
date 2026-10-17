@@ -334,12 +334,16 @@ def _first_answer(url: str) -> tuple[int, str | None]:
         return exc.code, exc.headers.get("Location")
 
 
-def _chosen(data: Path, chosen: network.Choice, out: Path, ready: Callable[[], bool]) -> None:
+def _chosen(data: Path, chosen: network.Choice, out: Path, ready: Callable[[], bool],
+            defaults: network.Ports, ports: network.Ports | None = None) -> None:
     """Settings › Network's choice, as the API writes it: run rewrites nginx's
     lines and restarts it."""
     network.set_choice(data, chosen)
+    if ports is not None:
+        network.set_ports(data, ports)
+    at = network.ports(data, defaults)
     deadline = time.monotonic() + 30
-    while f"Network: {chosen.said()}; restarting nginx" not in out.read_text() or not ready():
+    while f"Network: {network.said_with_ports(chosen, at)}; restarting nginx" not in out.read_text() or not ready():
         assert time.monotonic() < deadline, out.read_text()
         time.sleep(0.5)
 
@@ -353,13 +357,14 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
     lan = network.lan_address()
     if lan:
         assert not _setup_needed(f"http://{lan}:{web_port}"), "this machine only, until an admin says"
+    defaults = network.Ports(web_port, tls_port)
     _chosen(data, network.Choice(other_devices=True), out,
-            lambda: _setup_needed(f"http://{lan or '127.0.0.1'}:{web_port}"))
+            lambda: _setup_needed(f"http://{lan or '127.0.0.1'}:{web_port}"), defaults)
     assert not (data / "tls").exists(), "no certificate until HTTPS is chosen"
 
     ca = data / "tls" / "ca.crt"
     _chosen(data, network.Choice(other_devices=True, https=True), out,
-            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca))
+            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca), defaults)
     with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/lumiverb-ca.crt", timeout=5) as response:
         assert response.read() == ca.read_bytes(), "the authority's certificate, for a device to trust"
         assert response.headers["Content-Type"] == "application/x-x509-ca-cert"
@@ -372,7 +377,7 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
             assert response.read() == ca.read_bytes(), "a device fetches it before it can trust HTTPS"
 
     _chosen(data, network.Choice(other_devices=True, https=True, plain_http=False), out,
-            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca))
+            lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca), defaults)
     assert _setup_needed(f"http://127.0.0.1:{web_port}"), "this machine keeps plain HTTP"
     if lan:
         assert _over_https(f"https://{lan}:{tls_port}", ca)
@@ -382,6 +387,15 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
     lines = network.listen_file(data).read_text()
     assert f"listen {tls_port} ssl default_server;" in lines and "ssl_protocols TLSv1.2 TLSv1.3;" in lines
     assert "nginx restarting" in out.read_text()
+
+    # Ports an admin chose (Settings › Network): the web and the API on each, this machine's own too.
+    http, https = free_port(), free_port()
+    _chosen(data, network.Choice(other_devices=True, https=True), out,
+            lambda: _setup_needed(f"http://127.0.0.1:{http}") and _over_https(f"https://127.0.0.1:{https}", ca),
+            defaults, network.Ports(http, https))
+    assert not _setup_needed(f"http://127.0.0.1:{web_port}"), "the old port is let go"
+    if lan:
+        assert _setup_needed(f"http://{lan}:{http}") and _over_https(f"https://{lan}:{https}", ca)
 
 
 @pytest.mark.slow

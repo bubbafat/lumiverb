@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import shutil
 import threading
 import time
@@ -321,6 +322,10 @@ class Network(BaseModel):
     # plain HTTP isn't turned off (409 https_not_seen).
     https_seen: HttpsSeen | None = None
     certificate: NetworkCertificate | None = None  # HTTPS's; None until run has made one
+    # Where nginx listens, the web and the API together: plain HTTP (this
+    # machine's own too) and HTTPS. None where it isn't available.
+    http_port: int | None = None
+    https_port: int | None = None
 
 
 class NetworkChange(BaseModel):
@@ -328,6 +333,8 @@ class NetworkChange(BaseModel):
     other_devices: bool | None = None
     https: bool | None = None
     plain_http: bool | None = None
+    http_port: int | None = None
+    https_port: int | None = None
 
 
 class YourCertificate(BaseModel):
@@ -337,6 +344,16 @@ class YourCertificate(BaseModel):
 
 NOT_HERE = "Lumiverb doesn't run this server's web server, so who can reach it is set up where it's installed."
 ELSEWHERE = "Change this on the computer Lumiverb is installed on."
+
+
+def _ports():
+    """The install's default ports (its env file's) and those nginx listens on."""
+    from src.server.config import get_settings
+    from src.server.lifecycle import network
+
+    settings = get_settings()
+    defaults = network.default_ports(settings.web_port, settings.web_tls_port)
+    return defaults, network.ports(Path(settings.data_dir), defaults)
 
 
 def _network() -> Network:
@@ -349,20 +366,21 @@ def _network() -> Network:
     data = Path(settings.data_dir)
     if settings.web_port <= 0 or not network.managed(data, settings.nginx_config):
         return Network(available=False, other_devices=False, addresses=[])
+    _, at = _ports()
     chosen = network.choice(data)
     served = tls.describe(data) if chosen.https else None
     ours = served is not None and served.source == tls.LUMIVERB
     certificate = None if served is None else NetworkCertificate(
         source=served.source, names=list(served.names), expires_at=served.not_after,
         ca_url="/lumiverb-ca.crt" if ours else None,
-        ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(settings.web_port, "http")] if ours else [],
+        ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(at.http, "http")] if ours else [],
         ca_fingerprint=tls.ca_fingerprint(data) if ours else None)
     seen = network.https_seen(data) if chosen.https else None
     return Network(available=True, other_devices=chosen.other_devices, https=chosen.https,
-                   plain_http=chosen.plain_http, addresses=network.addresses(settings.web_port, "http"),
-                   https_addresses=network.addresses(network.tls_port(settings.web_tls_port), "https"),
+                   plain_http=chosen.plain_http, addresses=network.addresses(at.http, "http"),
+                   https_addresses=network.addresses(at.https, "https"),
                    https_seen=None if seen is None else HttpsSeen(at=seen.at, address=seen.address),
-                   certificate=certificate)
+                   certificate=certificate, http_port=at.http, https_port=at.https)
 
 
 @router.get("/network", response_model=Network, dependencies=[Depends(require_signed_in)])
@@ -380,7 +398,9 @@ def change_network(body: NetworkChange, request: Request) -> Network:
     """An admin's choice, on the machine itself (as for choosing a library's
     folder): run applies it in a few seconds, restarting nginx. Other devices
     keep plain HTTP unless HTTPS is on and a device has used it (409
-    https_not_seen); HTTPS off brings plain HTTP back."""
+    https_not_seen); HTTPS off brings plain HTTP back. Ports nginx can't
+    listen on are refused, saying why (422 port_not_usable: the same twice,
+    another of the install's, one something else on this machine uses)."""
     import dataclasses
 
     from src.server.api.errors import ApiError
@@ -388,18 +408,32 @@ def change_network(body: NetworkChange, request: Request) -> Network:
     from src.server.lifecycle import network
 
     _here_and_admin(request)
-    data = Path(get_settings().data_dir)
+    settings = get_settings()
+    data = Path(settings.data_dir)
     was = network.choice(data)
-    chosen = network.Choice(**{name: getattr(was, name) if value is None else value
-                               for name, value in body.model_dump().items()})
+    said = body.model_dump()
+    chosen = network.Choice(**{field.name: getattr(was, field.name) if said[field.name] is None else said[field.name]
+                               for field in dataclasses.fields(network.Choice)})
     if not chosen.https:
         chosen = dataclasses.replace(chosen, plain_http=True)  # all other devices have then
+    _, at = _ports()
+    wanted = network.Ports(body.http_port or at.http, body.https_port or at.https)
+    for port in (body.http_port, body.https_port):
+        if port is not None and not 1 <= port <= 65535:
+            raise ApiError(422, "port_not_usable", f"{port} isn't a port: choose one from 1 to 65535")
+    if wanted != at or (chosen.https_for_others and not was.https_for_others):
+        install = {"API_PORT": os.environ.get("API_PORT", ""),
+                   "CONTROL_PLANE_DATABASE_URL": settings.control_plane_database_url}
+        if why := network.port_problem(install, wanted, held=network.listened(was, at)):
+            raise ApiError(422, "port_not_usable", why)
     if chosen.https != was.https:
         network.forget_https_seen(data)
     if not chosen.plain_http and was.plain_http and network.https_seen(data) is None:
         raise ApiError(409, "https_not_seen", NOT_SEEN)
     network.set_choice(data, chosen)
-    logger.info("Network: %s (an admin's choice)", chosen.said())
+    if wanted != at:
+        network.set_ports(data, wanted)
+    logger.info("Network: %s (an admin's choice)", network.said_with_ports(chosen, wanted))
     return _network()
 
 

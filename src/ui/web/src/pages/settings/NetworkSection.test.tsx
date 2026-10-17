@@ -5,7 +5,7 @@ import NetworkSection from "./NetworkSection";
 
 const fetchMock = vi.fn();
 const ADDRESSES = ["http://macstudio.local:6464", "http://192.168.86.55:6464"];
-const HTTPS_ADDRESSES = ["https://macstudio.local:6443", "https://192.168.86.55:6443"];
+const HTTPS_ADDRESSES = ["https://macstudio.local:6465", "https://192.168.86.55:6465"];
 const CA_ADDRESSES = ["http://macstudio.local:6464/lumiverb-ca.crt", "http://192.168.86.55:6464/lumiverb-ca.crt"];
 const FINGERPRINT = "AB:CD:EF:01";
 const OURS = {
@@ -25,6 +25,9 @@ let plainHttp = true;
 let seen: typeof SEEN | null = null;
 let certificate: typeof OURS | typeof YOURS = OURS;
 let refuse: { code: string; message: string } | null = null;
+let refusePort: { code: string; message: string } | null = null;
+let httpPort = 6464;
+let httpsPort = 6465;
 let refuseCertificate: { code: string; message: string } | null = null;
 
 function error(status: number, refused: { code: string; message: string }) {
@@ -42,6 +45,7 @@ beforeEach(() => {
           available, other_devices: available && otherDevices, https, plain_http: plainHttp,
           addresses: available ? ADDRESSES : [], https_addresses: available ? HTTPS_ADDRESSES : [],
           https_seen: https ? seen : null, certificate: available && https ? certificate : null,
+          http_port: available ? httpPort : null, https_port: available ? httpsPort : null,
         }),
         { status: 200 },
       );
@@ -58,6 +62,9 @@ beforeEach(() => {
       if (init?.method === "PUT") {
         if (refuse) return error(403, refuse);
         const body = JSON.parse(String(init.body));
+        if (body.http_port !== undefined && refusePort) return error(422, refusePort);
+        httpPort = body.http_port ?? httpPort;
+        httpsPort = body.https_port ?? httpsPort;
         if (body.plain_http === false && !seen) {
           return error(409, { code: "https_not_seen", message: "No device has opened Lumiverb over HTTPS yet." });
         }
@@ -83,6 +90,9 @@ afterEach(() => {
   seen = null;
   certificate = OURS;
   refuse = null;
+  refusePort = null;
+  httpPort = 6464;
+  httpsPort = 6465;
   refuseCertificate = null;
 });
 
@@ -243,6 +253,35 @@ describe("NetworkSection", () => {
     expect(screen.getByText("Other devices can use an encrypted connection (HTTPS) too.")).toBeTruthy();
     expect(screen.queryByText("Use your own certificate")).toBeNull();
     expect(screen.queryByLabelText(PLAIN)).toBeNull();
+  });
+
+  it("lets an admin choose its ports, and says where this Mac opens it next", async () => {
+    renderSection();
+    const http = (await screen.findByLabelText("HTTP")) as HTMLInputElement;
+    expect(http.value).toBe("6464");
+    expect((screen.getByLabelText("HTTPS") as HTMLInputElement).value).toBe("6465");
+    expect((screen.getByText("Change ports") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(http, { target: { value: "8080" } });
+    fireEvent.click(screen.getByText("Change ports"));
+    await waitFor(() => expect(puts()).toEqual([{ http_port: 8080, https_port: 6465 }]));
+    const link = await screen.findByText(/:8080\//);
+    expect(link.getAttribute("href")).toMatch(/^http:\/\/localhost:8080\//);
+  });
+
+  it("says why a port can't be used", async () => {
+    refusePort = { code: "port_not_usable", message: "Something else on this Mac is using port 8080: choose another for HTTP" };
+    renderSection();
+    fireEvent.change(await screen.findByLabelText("HTTP"), { target: { value: "8080" } });
+    fireEvent.click(screen.getByText("Change ports"));
+    expect(await screen.findByText(/Something else on this Mac is using port 8080/)).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows ports to admins only", async () => {
+    role = "viewer";
+    renderSection();
+    await screen.findByText("Only the Mac Lumiverb is installed on can use it.");
+    expect(screen.queryByLabelText("HTTP")).toBeNull();
   });
 
   it("says nothing of HTTPS while it's this Mac only", async () => {

@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     # Settings › Network's (src/server/lifecycle/network.py)
     nginx_config: str = ""
     web_port: int = 0
-    # Where other devices reach it over HTTPS (lifecycle/network.py); 0: 6443.
+    # Where other devices reach it over HTTPS, by default (lifecycle/network.py:
+    # Settings › Network changes it); 0: 6465.
     web_tls_port: int = 0
 
     @field_validator("storage_provider")

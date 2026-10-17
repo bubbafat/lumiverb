@@ -32,7 +32,7 @@ from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
 pytestmark = pytest.mark.slow
 
 HTTP = ["http://macstudio.local:6464", "http://192.168.86.55:6464"]
-HTTPS = ["https://macstudio.local:6443", "https://192.168.86.55:6443"]
+HTTPS = ["https://macstudio.local:6465", "https://192.168.86.55:6465"]
 # A device's request as nginx passes it on: from this machine, saying what it saw.
 THROUGH_NGINX_OVER_HTTPS = {"X-Forwarded-For": LAN[0], "X-Forwarded-Proto": "https"}
 
@@ -46,9 +46,13 @@ def mac(control, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("NGINX_CONFIG", str(conf))
     monkeypatch.setenv("WEB_PORT", "6464")
+    monkeypatch.setenv("API_PORT", "6364")
     monkeypatch.setattr(network, "addresses", lambda port, scheme: [
         f"{scheme}://macstudio.local:{port}", f"{scheme}://192.168.86.55:{port}"])
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
+    # Its own ports are this pretend Mac's (the machine running the tests may use them); others, as they are.
+    free = network.free
+    monkeypatch.setattr(network, "free", lambda port: port in (6464, 6465) or free(port))
     get_settings.cache_clear()
     yield tmp_path
     get_settings.cache_clear()
@@ -71,7 +75,8 @@ def test_a_mac_starts_as_this_machine_only_and_an_admin_there_opens_it_over_plai
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
             "available": True, "other_devices": False, "https": False, "plain_http": True,
-            "addresses": HTTP, "https_addresses": HTTPS, "https_seen": None, "certificate": None}
+            "addresses": HTTP, "https_addresses": HTTPS, "https_seen": None, "certificate": None,
+            "http_port": 6464, "https_port": 6465}
         opened = client.put("/v1/system/network", json={"other_devices": True}, headers=auth)
         assert opened.status_code == 200, opened.text
         assert (opened.json()["other_devices"], opened.json()["https"], opened.json()["plain_http"]) == (True, False, True)
@@ -180,7 +185,7 @@ def test_where_lumiverb_doesn_t_run_the_web_server_it_isn_t_changed_here(control
         auth = _signed_in(client)
         assert client.get("/v1/system/network", headers=auth).json() == {
             "available": False, "other_devices": False, "https": False, "plain_http": True, "addresses": [],
-            "https_addresses": [], "https_seen": None, "certificate": None}
+            "https_addresses": [], "https_seen": None, "certificate": None, "http_port": None, "https_port": None}
         refused = client.put("/v1/system/network", json={"other_devices": True}, headers=auth)
         client.get("/health", headers=THROUGH_NGINX_OVER_HTTPS)
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "network_not_here"
@@ -234,3 +239,73 @@ def test_an_admin_s_certificate_isn_t_taken_from_another_device_or_by_an_editor(
         refused = client.put("/v1/system/network/certificate", json={"certificate": pem, "key": key}, headers=auth)
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "network_elsewhere"
     assert not (mac / "tls" / "yours.crt").exists()
+
+
+def test_an_admin_there_chooses_its_ports(mac):
+    from tests.test_server_postgres import free_port
+
+    http, https = free_port(), free_port()
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        moved = client.put("/v1/system/network", json={"other_devices": True, "http_port": http, "https_port": https},
+                           headers=auth)
+        assert moved.status_code == 200, moved.text
+        said = moved.json()
+    assert (said["http_port"], said["https_port"]) == (http, https)
+    assert said["addresses"] == [f"http://macstudio.local:{http}", f"http://192.168.86.55:{http}"]
+    assert said["https_addresses"][0] == f"https://macstudio.local:{https}"
+    assert network.ports(mac, network.Ports()) == network.Ports(http, https), "written for run to apply"
+    assert network.choice(mac) == Choice(other_devices=True)
+
+
+def _refused(mac, change: dict) -> str:
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+        auth = _signed_in(client)
+        refused = client.put("/v1/system/network", json=change, headers=auth)
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "port_not_usable", refused.text
+    assert network.ports(mac, network.Ports()) == network.Ports() and network.choice(mac) == Choice(), "unchanged"
+    return refused.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(("change", "says"), [
+    ({"http_port": 6465}, "HTTP and HTTPS can't share port 6465"),
+    ({"https_port": 6364}, "HTTPS's port 6364 is the API's port"),
+    ({"http_port": 70000}, "70000 isn't a port"),
+    ({"other_devices": True, "https": True, "https_port": 6364}, "the API's port"),
+])
+def test_a_port_nginx_can_t_listen_on_is_refused_saying_why(mac, change, says):
+    assert says in _refused(mac, change)
+
+
+def test_a_port_something_else_on_the_mac_uses_is_refused(mac):
+    import socket
+
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        taken = other.getsockname()[1]
+        assert f"Something else on this Mac is using port {taken}" in _refused(mac, {"http_port": taken})
+
+
+def test_https_on_a_port_something_else_uses_is_refused(mac):
+    """Not nginx's while HTTPS is off: asked about when it's turned on."""
+    import socket
+
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        taken = other.getsockname()[1]
+        network.set_ports(mac, network.Ports(6464, taken))
+        with TestClient(app, client=HERE, base_url=LOCALHOST) as client:
+            auth = _signed_in(client)
+            refused = client.put("/v1/system/network", json={"other_devices": True, "https": True}, headers=auth)
+    assert refused.status_code == 422 and f"using port {taken}" in refused.json()["error"]["message"]
+    assert network.choice(mac) == Choice()
+
+
+def test_ports_aren_t_chosen_from_another_device(mac):
+    with TestClient(app, client=HERE, base_url=LOCALHOST) as here:
+        auth = _signed_in(here)
+    with TestClient(app, client=LAN) as client:
+        refused = client.put("/v1/system/network", json={"http_port": 18080}, headers=auth)
+    assert refused.status_code == 403 and network.ports(mac, network.Ports()) == network.Ports()

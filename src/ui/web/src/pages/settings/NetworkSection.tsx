@@ -115,6 +115,8 @@ export default function NetworkSection() {
                    onSaved={saved} />
           )}
 
+          {isAdmin && <Ports network={network} onSaved={saved} />}
+
           {isAdmin && (
             <p className="text-xs text-gray-500">
               Changing this restarts Lumiverb's web server: pages may not load for a few seconds.
@@ -123,6 +125,73 @@ export default function NetworkSection() {
         </>
       )}
     </div>
+  );
+}
+
+/** This Mac's address on another port: the page moves there once nginx listens on it. */
+function movedTo(port: number): string {
+  const here = new URL(window.location.href);
+  here.port = String(port);
+  return here.toString();
+}
+
+/** Where it listens, the web and the API together: 6464 and 6465 unless an
+ * admin chooses others (one something else on this Mac uses, say). The server
+ * refuses one nginx can't listen on, saying why. */
+function Ports({ network, onSaved }: { network: NetworkAccess; onSaved: (next: NetworkAccess) => void }) {
+  const [http, setHttp] = useState(String(network.http_port ?? ""));
+  const [https, setHttps] = useState(String(network.https_port ?? ""));
+  const [moved, setMoved] = useState<string | null>(null);
+  const change = useMutation({
+    mutationFn: () => setNetworkAccess({ http_port: Number(http), https_port: Number(https) }),
+    onSuccess: (next) => {
+      if (next.http_port !== network.http_port && next.http_port) setMoved(movedTo(next.http_port));
+      onSaved(next);
+    },
+  });
+  const changed = Number(http) !== network.http_port || Number(https) !== network.https_port;
+  const field = "mt-1 block w-28 rounded border border-gray-700 bg-gray-950 px-2 py-1 font-mono text-sm text-gray-200";
+
+  return (
+    <form
+      className="space-y-2 border-t border-gray-700/50 pt-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        change.mutate();
+      }}
+    >
+      <p className="text-sm text-gray-200">Ports</p>
+      <p className="text-xs text-gray-500">
+        Web pages and apps use the same port. Change one only if something else on this Mac needs it.
+      </p>
+      <div className="flex flex-wrap items-end gap-4">
+        <label className="text-xs text-gray-300">
+          HTTP
+          <input type="number" min={1} max={65535} className={field} value={http}
+                 onChange={(e) => setHttp(e.target.value)} />
+        </label>
+        <label className="text-xs text-gray-300">
+          HTTPS
+          <input type="number" min={1} max={65535} className={field} value={https}
+                 onChange={(e) => setHttps(e.target.value)} />
+        </label>
+        <button
+          type="submit"
+          className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
+          disabled={!changed || change.isPending || !http || !https}
+        >
+          Change ports
+        </button>
+      </div>
+      {change.isError && <p className="text-sm text-red-300">{said(change.error, "Couldn't change them. Try again.")}</p>}
+      {moved && (
+        <p className="text-sm text-gray-200" role="status">
+          In a few seconds this Mac opens Lumiverb at{" "}
+          <a href={moved} className="font-mono text-indigo-300 underline">{moved}</a>
+          {" "}(sign in again there). Apps on this Mac need the new address too.
+        </p>
+      )}
+    </form>
   );
 }
 

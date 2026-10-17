@@ -43,15 +43,19 @@ def unusable_password_hash() -> str:
 
 def where_people_open_it() -> list[str]:
     """Plain HTTP while other devices have it (any device opens it at once),
-    else HTTPS."""
+    else HTTPS; this Mac only, its own address, on the port Settings ›
+    Network says."""
     settings = get_settings()
     data = Path(settings.data_dir)
     if settings.web_port > 0 and network.managed(data, settings.nginx_config):
         chosen = network.choice(data)
+        at = network.ports(data, network.default_ports(settings.web_port, settings.web_tls_port))
         if chosen.http_for_others:
-            return network.addresses(settings.web_port, "http")
+            return network.addresses(at.http, "http")
         if chosen.https_for_others:
-            return network.addresses(network.tls_port(settings.web_tls_port), "https")
+            return network.addresses(at.https, "https")
+        if settings.app_host.rstrip("/") == f"http://localhost:{settings.web_port}":  # init's
+            return [f"http://localhost:{at.http}"]
     return [settings.app_host.rstrip("/")]
 
 

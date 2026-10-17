@@ -9,6 +9,7 @@ test_server_run.py."""
 from __future__ import annotations
 
 import datetime as dt
+import socket
 import threading
 import time
 
@@ -23,6 +24,9 @@ pytestmark = pytest.mark.fast
 OTHERS = Choice(other_devices=True)
 WITH_HTTPS = Choice(other_devices=True, https=True)
 HTTPS_ALONE = Choice(other_devices=True, https=True, plain_http=False)
+DEFAULTS = network.Ports()
+MAC = {"WEB_PORT": "6464", "API_PORT": "6364",
+       "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://u:p@127.0.0.1:6468/control_plane"}
 
 
 def test_a_new_install_is_this_machine_only(tmp_path):
@@ -99,17 +103,17 @@ def test_no_certificate_is_made_until_https_is_chosen(tmp_path, monkeypatch):
 
     monkeypatch.setattr(tls, "names_here", lambda: ("macstudio.local", "localhost", "127.0.0.1"))
     network.set_choice(tmp_path, OTHERS)
-    network.apply(tmp_path, 6464, 6465)
+    network.apply(tmp_path, DEFAULTS)
     assert not (tmp_path / "tls").exists() and tls.describe(tmp_path) is None
     network.set_choice(tmp_path, WITH_HTTPS)
-    assert network.apply(tmp_path, 6464, 6465) is True
+    assert network.apply(tmp_path, DEFAULTS) is True
     assert tls.describe(tmp_path).source == tls.LUMIVERB
 
 
 def test_without_https_other_devices_keep_plain_http(tmp_path):
     """run, when the certificate can't be made: the watch tries again."""
     network.set_choice(tmp_path, HTTPS_ALONE)
-    network.without_https(tmp_path, 6464)
+    network.without_https(tmp_path, DEFAULTS)
     lines = network.listen_file(tmp_path).read_text()
     assert "listen 6464 default_server;" in lines and "ssl" not in lines and "301" not in lines
     assert network.choice(tmp_path) == HTTPS_ALONE, "the choice kept"
@@ -127,15 +131,134 @@ def test_the_first_device_seen_using_https_is_kept_until_https_changes(tmp_path)
     network.forget_https_seen(tmp_path)  # none to forget
 
 
-def test_the_tls_port_is_the_setting_else_6443_and_never_another_of_its_ports():
-    assert network.tls_port() == network.tls_port("") == network.tls_port("0") == 6443
-    assert network.tls_port("8443") == 8443
-    mac = {"WEB_PORT": "6464", "API_PORT": "6465",
-           "CONTROL_PLANE_DATABASE_URL": "postgresql+psycopg2://u:p@127.0.0.1:6468/control_plane"}
-    assert network.tls_port_taken(mac, 6443) is None
-    assert network.tls_port_taken(mac, 6465) == "API_PORT", "a Mac's API: WEB_PORT + 1 was"
-    assert network.tls_port_taken(mac, 6464) == "WEB_PORT"
-    assert network.tls_port_taken(mac, 6468) == "the database's port"
+def test_the_ports_are_6464_and_6465_unless_the_env_file_or_an_admin_says_otherwise(tmp_path):
+    assert network.default_ports() == network.default_ports("", "0") == network.Ports(6464, 6465)
+    assert network.default_ports("8080", "8443") == network.Ports(8080, 8443)
+    assert network.ports(tmp_path, network.Ports(8080, 8443)) == network.Ports(8080, 8443), "none chosen"
+    network.set_choice(tmp_path, OTHERS)
+    network.set_ports(tmp_path, network.Ports(80, 443))
+    assert network.ports(tmp_path, DEFAULTS) == network.Ports(80, 443)
+    assert network.choice(tmp_path) == OTHERS, "one file: each kept as the other changes"
+    network.set_choice(tmp_path, WITH_HTTPS)
+    assert network.ports(tmp_path, DEFAULTS) == network.Ports(80, 443)
+
+
+@pytest.mark.parametrize("said", ['{"http_port": "x", "https_port": 70000}', '{"http_port": true, "https_port": 0}'])
+def test_ports_it_cant_read_are_the_install_s(tmp_path, said):
+    (tmp_path / network.NETWORK_FILE).write_text(said)
+    assert network.ports(tmp_path, DEFAULTS) == DEFAULTS
+
+
+def test_a_port_is_never_another_of_the_install_s():
+    assert network.port_taken(MAC, 6465) is None
+    assert network.port_taken(MAC, 6364) == "the API's port (API_PORT)"
+    assert network.port_taken(MAC, 6468) == "the database's port"
+    assert network.port_problem(MAC, network.Ports(6364, 6465)) == "HTTP's port 6364 is the API's port (API_PORT)"
+    assert network.port_problem(MAC, network.Ports(6464, 6464)) == "HTTP and HTTPS can't share port 6464"
+
+
+def test_a_port_something_else_listens_on_is_refused_but_its_own_aren_t():
+    from tests.test_server_postgres import free_port
+
+    https = free_port()
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))  # this machine's own address only, as some programs do
+        other.listen()
+        taken = other.getsockname()[1]
+        assert not network.free(taken)
+        why = network.port_problem(MAC, network.Ports(taken, https))
+        assert why == f"Something else on this Mac is using port {taken}: choose another for HTTP"
+        assert network.port_problem(MAC, network.Ports(taken, https), held=frozenset({taken})) is None, \
+            "nginx's own, now"
+    assert network.free(taken)
+
+
+@pytest.mark.parametrize("listen_on", ["0.0.0.0", "127.0.0.1"])
+def test_a_port_something_listens_on_anywhere_isn_t_free(listen_on):
+    with socket.socket() as other:
+        other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        other.bind((listen_on, 0))
+        other.listen()
+        assert not network.free(other.getsockname()[1])
+
+
+def test_a_port_whose_connections_just_closed_is_free():
+    """Its last connections wait out TIME_WAIT a while: nginx binds anyway, so may we."""
+    with socket.socket() as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+        client = socket.create_connection(("127.0.0.1", port))
+        accepted, _ = server.accept()
+        accepted.close()  # the server's end closes first: TIME_WAIT on its port
+        client.close()
+    assert network.free(port)
+
+
+def test_a_port_nginx_doesn_t_start_listening_on_goes_back_to_the_one_before(tmp_path, monkeypatch):
+    """Something took it between the admin's choice and nginx's restart:
+    this machine can still open Settings."""
+    network.set_choice(tmp_path, OTHERS)
+    network.apply(tmp_path, DEFAULTS)
+    stop, restarts, asked = threading.Event(), [], []
+
+    def answers(port, _stop):
+        asked.append(port)
+        return port != 8080
+
+    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
+                               kwargs={"every": 0.02, "answers": answers})
+    watcher.start()
+    try:
+        network.set_ports(tmp_path, network.Ports(8080, 6465))
+        deadline = time.monotonic() + 5
+        while len(restarts) < 2:
+            assert time.monotonic() < deadline, restarts
+            time.sleep(0.02)
+        time.sleep(0.1)
+        assert network.ports(tmp_path, DEFAULTS) == DEFAULTS, "back"
+        assert "listen 6464 default_server;" in network.listen_file(tmp_path).read_text()
+        assert asked == [8080], "6465 isn't listened on (no HTTPS): nothing to ask; 6464 was before"
+        network.set_ports(tmp_path, network.Ports(8081, 6465))
+        while len(restarts) < 3:
+            assert time.monotonic() < deadline, restarts
+            time.sleep(0.02)
+        time.sleep(0.1)
+        assert network.ports(tmp_path, DEFAULTS) == network.Ports(8081, 6465), "it answers: kept"
+    finally:
+        stop.set()
+        watcher.join(5)
+
+
+def test_https_nginx_doesn_t_start_listening_on_is_turned_off_again(tmp_path, monkeypatch):
+    from src.server.lifecycle import tls
+
+    monkeypatch.setattr(tls, "names_here", lambda: ("macstudio.local", "localhost", "127.0.0.1"))
+    network.set_choice(tmp_path, OTHERS)
+    network.apply(tmp_path, DEFAULTS)
+    stop, restarts, asked = threading.Event(), [], []
+
+    def answers(port, _stop):
+        asked.append(port)
+        return False
+
+    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
+                               kwargs={"every": 0.02, "answers": answers})
+    watcher.start()
+    try:
+        network.set_choice(tmp_path, WITH_HTTPS)
+        deadline = time.monotonic() + 5
+        while len(restarts) < 2:
+            assert time.monotonic() < deadline, restarts
+            time.sleep(0.02)
+        time.sleep(0.1)
+    finally:
+        stop.set()
+        watcher.join(5)
+    assert asked == [6465], "HTTPS's port, new: 6464 was listened on before"
+    assert network.choice(tmp_path) == OTHERS, "back as it was"
+    assert "ssl" not in network.listen_file(tmp_path).read_text()
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[]", '"yes"'])
@@ -168,9 +291,9 @@ def test_a_change_rewrites_the_lines_and_restarts_nginx_once(tmp_path, monkeypat
     from src.server.lifecycle import tls
 
     monkeypatch.setattr(tls, "names_here", lambda: ("macstudio.local", "localhost", "127.0.0.1"))
-    network.apply(tmp_path, 6464, 6465)
+    network.apply(tmp_path, DEFAULTS)
     stop, restarts = threading.Event(), []
-    watcher = threading.Thread(target=network.watch, args=(tmp_path, 6464, 6465, stop, lambda: restarts.append(1)),
+    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
                                kwargs={"every": 0.02})
     watcher.start()
     try:
@@ -196,10 +319,10 @@ def test_a_new_address_from_the_router_issues_the_certificate_again_and_restarts
     names = ["192.168.86.55"]
     monkeypatch.setattr(tls, "names_here", lambda: ("macstudio.local", names[0], "localhost"))
     network.set_choice(tmp_path, WITH_HTTPS)
-    assert network.apply(tmp_path, 6464, 6465) is True
-    assert network.apply(tmp_path, 6464, 6465) is False, "nothing changed"
+    assert network.apply(tmp_path, DEFAULTS) is True
+    assert network.apply(tmp_path, DEFAULTS) is False, "nothing changed"
     names[0] = "192.168.86.77"
-    assert network.apply(tmp_path, 6464, 6465) is True
+    assert network.apply(tmp_path, DEFAULTS) is True
     assert "192.168.86.77" in tls.describe(tmp_path).names
 
 
