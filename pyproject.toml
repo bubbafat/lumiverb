@@ -38,6 +38,7 @@ dependencies = [
     # Image normalization (proxy → WebP, thumbnail generation)
     "pillow>=12.3.0",
     "scikit-learn>=1.3",
+    "cryptography>=50.0.2",
 ]
 
 [project.scripts]

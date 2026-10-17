@@ -444,11 +444,17 @@ def _run(args: argparse.Namespace) -> int:
     # until an admin says other devices may use it.
     web_port = env.get("WEB_PORT", "")
     listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
+    tls_port = network.tls_port(int(web_port), env.get("WEB_TLS_PORT")) if listens else 0
     if listens:
-        network.write_listen_file(data, int(web_port), network.other_devices(data))
+        try:  # the certificate other devices are served (tls.py): made, or renewed, now
+            network.apply(data, int(web_port), tls_port)
+        except Exception:  # noqa: BLE001 — this machine is still served; the watch tries again
+            logger.exception("Network: couldn't apply the choice or the certificate")
+            network.write_listen_file(data, int(web_port), False)
     supervisor = Supervisor(children, relay=log.relay)
     if listens:
-        threading.Thread(target=network.watch, args=(data, int(web_port), stop, lambda: supervisor.restart_soon("nginx")),
+        threading.Thread(target=network.watch, args=(data, int(web_port), tls_port, stop,
+                                                     lambda: supervisor.restart_soon("nginx")),
                          name="network-watch", daemon=True).start()
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()

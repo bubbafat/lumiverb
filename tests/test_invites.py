@@ -98,14 +98,15 @@ def test_on_a_mac_open_to_other_devices_the_link_is_its_network_address(admin, t
     monkeypatch.setenv("APP_HOST", "http://localhost:6464")
     monkeypatch.setenv("NGINX_CONFIG", str(conf))
     monkeypatch.setenv("WEB_PORT", "6464")
-    monkeypatch.setattr(network, "addresses", lambda port: [f"http://macstudio.local:{port}", f"http://192.168.86.55:{port}"])
+    monkeypatch.setattr(network, "addresses", lambda port, scheme="https": [f"{scheme}://macstudio.local:{port}",
+                                                                          f"{scheme}://192.168.86.55:{port}"])
     get_settings.cache_clear()
 
     assert _invite(admin, "mac-only@example.com")["invite_urls"][0].startswith(
         "http://localhost:6464/join?token="), "this Mac only: its own address, until Settings › Network says"
     network.set_other_devices(tmp_path, True)
     first, by_address = _invite(admin)["invite_urls"]
-    assert first.startswith("http://macstudio.local:6464/join?token="), "its name first: Apple devices"
+    assert first.startswith("https://macstudio.local:6465/join?token="), "its name first (Apple devices), over HTTPS"
     assert by_address == first.replace("macstudio.local", "192.168.86.55"), "the same link by address: any device"
 
 
