@@ -18,7 +18,8 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
-from src.server.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetEmbeddingRepository, AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.test_server_images import NOT_READ, OVERSIZED, READ, sample, sparse_png
 from tests.test_server_images import no_decoding, other_readers  # noqa: F401 — fixtures
@@ -673,7 +674,7 @@ def test_search_by_vector_hybrid_face_match_promotes(
     from PIL import Image as PILImage
 
     from src.processing.workers.faces.insightface_provider import FaceDetection
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     auth_client, library_id, tenant_url = similarity_client
 
@@ -881,7 +882,7 @@ def test_search_by_image_also_finds_the_people_in_it(
     looks for faces in it, then fuses the two (iOS's photo search, the
     CLI's `similar image`)."""
     from src.processing.workers.faces.insightface_provider import FaceDetection
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     auth_client, library_id, tenant_url = similarity_client
     face_vec = [0.0] * 512

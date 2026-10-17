@@ -23,7 +23,7 @@ import logging
 
 from sqlalchemy import text
 
-from src.server.repository.tenant import PersonRepository
+from src.server.repository.people import PersonRepository
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.step import UpgradeStepInfo
 

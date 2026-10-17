@@ -195,7 +195,7 @@ class TestMissingOcrCondition:
     """missing_ocr is about OCR's own table, not the description's row."""
 
     def test_missing_ocr_checks_the_ocr_table(self):
-        from src.server.repository.tenant import MISSING_CONDITIONS
+        from src.server.repository.assets import MISSING_CONDITIONS
         cond = MISSING_CONDITIONS["missing_ocr"]
         assert "asset_ocr" in cond
         assert "asset_metadata" not in cond

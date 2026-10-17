@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in
-from src.server.repository.tenant import LibraryChangeRepository, LibraryRepository
+from src.server.repository.libraries import LibraryChangeRepository, LibraryRepository
 
 router = APIRouter(tags=["changes"])
 

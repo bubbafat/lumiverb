@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from sqlmodel import Session
 
 from src.server.database import get_engine_for_url
-from src.server.repository.tenant import AssetRepository
+from src.server.repository.assets import AssetRepository
 
 # The time most tests give their clips' files.
 MTIME = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)

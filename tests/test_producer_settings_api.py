@@ -321,7 +321,7 @@ def _clusters_current(env) -> bool:
 def _merge_epsilon(env) -> float:
     from sqlmodel import Session, create_engine
 
-    from src.server.repository.tenant import face_merge_epsilon
+    from src.server.repository.faces import face_merge_epsilon
 
     engine = create_engine(env[5])
     try:

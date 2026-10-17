@@ -60,9 +60,9 @@ def test_faces_are_named_only_in_the_accounts_not_paused(caplog):
         done.append(repo.session.tenant_id)
         return {"assigned": 1, "scanned": 2}
 
-    with _accounts(), patch("src.server.repository.tenant.FaceRepository.__init__",
+    with _accounts(), patch("src.server.repository.faces.FaceRepository.__init__",
                             lambda self, session: setattr(self, "session", session)), \
-            patch("src.server.repository.tenant.FaceRepository.propagate_assignments", propagate), \
+            patch("src.server.repository.faces.FaceRepository.propagate_assignments", propagate), \
             caplog.at_level("INFO", logger="src.server.api.routers.upkeep"):
         assert _propagate_faces_all_tenants() == {"assigned": 1, "scanned": 2, "paused": True,
                                                   "paused_tenants": [PAUSED]}

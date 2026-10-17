@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
-from src.server.repository.tenant import AssetRepository
+from src.server.repository.assets import AssetRepository
 from tests.machine_lineage import ingest_made
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 

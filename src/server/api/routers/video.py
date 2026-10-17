@@ -18,15 +18,10 @@ from src.server.api.errors import ApiError, ConflictError, GoneError
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.repository.lineage import record as record_lineage
 from src.server.models.tenant import VideoIndexChunk
-from src.server.repository.tenant import (
-    AssetMetadataRepository,
-    ChunksBusy,
-    AssetRepository,
-    FaceRepository,
-    LibraryRepository,
-    VideoIndexChunkRepository,
-    VideoSceneRepository,
-)
+from src.server.repository.assets import AssetMetadataRepository, AssetRepository
+from src.server.repository.faces import FaceRepository
+from src.server.repository.libraries import LibraryRepository
+from src.server.repository.video import ChunksBusy, VideoIndexChunkRepository, VideoSceneRepository
 from src.server.storage import store as stored
 from src.server.storage.store import get_store
 

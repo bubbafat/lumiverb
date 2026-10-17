@@ -474,7 +474,7 @@ def test_user_deletion_cleans_ratings(ratings_env):
 
     # Verify the rating exists
     with Session(engine) as tsession:
-        from src.server.repository.tenant import RatingRepository
+        from src.server.repository.ratings import RatingRepository
         rr = RatingRepository(tsession)
         assert rr.get_for_asset(user_id, asset_id) is not None
 

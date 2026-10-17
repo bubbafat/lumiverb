@@ -274,7 +274,7 @@ def test_while_upkeep_is_paused_it_deletes_and_changes_nothing_but_search_stays_
         s.commit()
     try:
         assert client.post("/v1/producers/upkeep/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        with patch("src.server.repository.tenant.FaceRepository.propagate_assignments") as propagate:
+        with patch("src.server.repository.faces.FaceRepository.propagate_assignments") as propagate:
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200, r.text
             assert not propagate.called  # names aren't spread to faces meanwhile
@@ -289,7 +289,7 @@ def test_while_upkeep_is_paused_it_deletes_and_changes_nothing_but_search_stays_
                              {"a": fresh}).scalar() is not None
     finally:
         assert client.post("/v1/producers/upkeep/resume", json={"scope": "work"}, headers=headers).status_code == 204
-    with patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
+    with patch("src.server.repository.faces.FaceRepository.propagate_assignments",
                return_value={"assigned": 0, "scanned": 0}) as propagate:
         r = client.post("/v1/upkeep", headers=headers)
         assert r.status_code == 200 and propagate.called
@@ -308,7 +308,7 @@ def test_pausing_everything_else_leaves_upkeep_running(env):
             if target != "upkeep":
                 assert client.post(f"/v1/producers/{target}/pause", json={"scope": "work"}, headers=headers).status_code == 204
         assert _queue(env)["state"] == "partly"
-        with patch("src.server.repository.tenant.FaceRepository.propagate_assignments",
+        with patch("src.server.repository.faces.FaceRepository.propagate_assignments",
                    return_value={"assigned": 0, "scanned": 0}) as propagate:
             r = client.post("/v1/upkeep", headers=headers)
             assert r.status_code == 200 and propagate.called and r.json()["trash_purge"]["paused"] is False

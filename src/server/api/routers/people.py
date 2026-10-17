@@ -15,7 +15,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
-from src.server.repository.tenant import current_face_model
+from src.server.repository.faces import current_face_model
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,8 @@ def list_people(
     q: str | None = None,
 ) -> PersonListResponse:
     """List people sorted by face count descending. Optional q param for name search."""
-    from src.server.repository.tenant import PersonRepository, FaceRepository
+    from src.server.repository.faces import FaceRepository
+    from src.server.repository.people import PersonRepository
 
 
     repo = PersonRepository(session)
@@ -172,7 +173,7 @@ def create_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Create a new named person. Optionally assign face_ids."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
@@ -217,7 +218,7 @@ def list_dismissed_people(
     limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonListResponse:
     """List dismissed people sorted by face count descending."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
 
     repo = PersonRepository(session)
@@ -285,7 +286,7 @@ def nearest_people_for_person(
     """Return named people sorted by cosine distance to this person's centroid."""
     import numpy as np
     from sqlalchemy import text as sa_text
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
 
     repo = PersonRepository(session)
@@ -344,7 +345,8 @@ def undismiss_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Restore a dismissed person and give them a name."""
-    from src.server.repository.tenant import PersonRepository, _mark_clusters_dirty
+    from src.server.repository.faces import _mark_clusters_dirty
+    from src.server.repository.people import PersonRepository
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
@@ -397,7 +399,7 @@ def get_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Get a person by ID."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
@@ -430,7 +432,7 @@ def update_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Update a person's display name."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
@@ -457,7 +459,7 @@ def delete_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
     """Delete a person and all their face matches."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     repo = PersonRepository(session)
     if not repo.delete(person_id):
@@ -472,7 +474,7 @@ def list_person_faces(
     limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonFacesResponse:
     """List faces matched to a person, cursor-paginated."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
 
     repo = PersonRepository(session)
@@ -525,7 +527,7 @@ def merge_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Merge source person into target (person_id). Source is deleted."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     if body.source_person_id == person_id:
         raise HTTPException(status_code=400, detail="Cannot merge a person into themselves")
@@ -579,7 +581,7 @@ def name_cluster(
     409 cluster_changed when no cluster has this id any more, or some of its
     faces were named or dismissed since: load the clusters again.
     """
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     has_name = body.display_name is not None and body.display_name.strip() != ""
     if not has_name and not body.person_id:
@@ -603,7 +605,7 @@ def name_cluster(
         if new_face_ids:
             person_repo._assign_faces(body.person_id, new_face_ids)
             person_repo._recompute_centroid(body.person_id)
-            from src.server.repository.tenant import _mark_clusters_dirty
+            from src.server.repository.faces import _mark_clusters_dirty
             _mark_clusters_dirty(session)
             session.commit()
     else:
@@ -647,7 +649,8 @@ def dismiss_cluster(
     cluster from reforming. Returns the person_id for undo support.
     409 cluster_changed as for naming.
     """
-    from src.server.repository.tenant import PersonRepository, _mark_clusters_dirty
+    from src.server.repository.faces import _mark_clusters_dirty
+    from src.server.repository.people import PersonRepository
 
     face_ids = _unassigned_cluster_faces(session, cluster_id)
     person_repo = PersonRepository(session)
@@ -883,7 +886,7 @@ def get_face_crop(
         tenant_id = getattr(request.state, "tenant_id", None)
         if not tenant_id:
             raise HTTPException(status_code=404, detail="No crop available")
-        from src.server.repository.tenant import AssetRepository
+        from src.server.repository.assets import AssetRepository
         asset = AssetRepository(session).get_by_id(face.asset_id)
         if not asset or not asset.proxy_key:
             raise HTTPException(status_code=404, detail="No proxy available to generate crop")
@@ -912,7 +915,7 @@ def assign_face(
     Provide either person_id (existing) or new_person_name (creates new person).
     Returns 409 if face is already assigned.
     """
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
     from src.server.models.tenant import Face
 
     if not body.person_id and not body.new_person_name:
@@ -953,7 +956,7 @@ def unassign_face(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
     """Remove a face from its assigned person."""
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     repo = PersonRepository(session)
     if not repo.unassign_face(face_id):
@@ -998,7 +1001,7 @@ def store_clusters(session: Session) -> dict:
     Run by upkeep (POST /v1/upkeep when the cache is old, and
     /v1/upkeep/recluster), never by a request that reads them."""
     from src.server.repository.system_metadata import SystemMetadataRepository
-    from src.server.repository.tenant import FaceRepository, face_clusters_version
+    from src.server.repository.faces import FaceRepository, face_clusters_version
 
     version = face_clusters_version(session)
     data = {**FaceRepository(session).cluster_cache(), "version": version}
@@ -1022,7 +1025,7 @@ def cached_clusters(session: Session) -> dict | None:
 
 def clusters_current(session: Session, data: dict | None) -> bool:
     """Nothing changed which faces are clustered since the cache was computed."""
-    from src.server.repository.tenant import face_clusters_version
+    from src.server.repository.faces import face_clusters_version
 
     return data is not None and data.get("version") == face_clusters_version(session)
 

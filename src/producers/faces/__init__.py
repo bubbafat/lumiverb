@@ -39,6 +39,6 @@ PRODUCER = ProducerSpec(
     uniform=True, needs=("proxy",),
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
-    regroup="src.server.repository.tenant:regroup_faces",
+    regroup="src.server.repository.faces:regroup_faces",
     kind="faces", flag="missing_faces", run="src.producers.faces.work:Faces", pool=GPU, batch=25,
 )

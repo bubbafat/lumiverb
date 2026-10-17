@@ -17,10 +17,7 @@ import numpy as np
 import pytest
 
 from src.producers import registry
-from src.server.repository.tenant import (
-    LARGE_INPUT_THRESHOLD,
-    _cluster_face_embeddings,
-)
+from src.server.repository.faces import LARGE_INPUT_THRESHOLD, _cluster_face_embeddings
 
 DEFAULT_MERGE_DISTANCE = registry()["faces"].setting("merge_distance").default
 

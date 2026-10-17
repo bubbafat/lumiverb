@@ -10,7 +10,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.limits import MAX_PAGE
-from src.server.repository.tenant import ProjectRepository
+from src.server.repository.projects import ProjectRepository
 
 # Mounted at /v1/public/projects. See main.py.
 router = APIRouter()

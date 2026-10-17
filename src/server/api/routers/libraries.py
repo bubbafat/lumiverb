@@ -22,7 +22,8 @@ from src.server.api.limits import MAX_IDS, require_scope
 from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
-from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository, PathFilterRepository
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.readers import SERVER, read_by_server
 from src.shared.utils import utcnow
@@ -234,7 +235,7 @@ def list_library_health(
     from sqlalchemy import text
 
     from src.server.repository.lineage import LINEAGE_JOIN
-    from src.server.repository.tenant import OUTSTANDING_CONDITIONS
+    from src.server.repository.assets import OUTSTANDING_CONDITIONS
 
     # Failures waiting their turn are pending too: not healthy.
     pending_clause = " OR ".join(

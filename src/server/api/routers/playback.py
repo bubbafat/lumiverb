@@ -40,7 +40,8 @@ from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.config import get_settings
 from src.server.models.tenant import Asset
-from src.server.repository.tenant import AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from src.server.storage.cache import FileCache, playback_cuts
 from src.server.storage.store import NotFound, Store, Unavailable, get_store
 from src.server.tenant_settings import playback_cap
@@ -161,7 +162,7 @@ def _check_public(session: Session, asset: Asset, library_id: str | None, projec
             raise HTTPException(status_code=404, detail="Not found")
     elif project_id:
         from src.server.models.tenant import ProjectAsset
-        from src.server.repository.tenant import ProjectRepository
+        from src.server.repository.projects import ProjectRepository
 
         project = ProjectRepository(session).get_by_id(project_id)
         if project is None or project.visibility != "public":

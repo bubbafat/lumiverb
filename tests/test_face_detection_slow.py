@@ -20,7 +20,8 @@ from src.server.config import get_settings
 from sqlalchemy import create_engine, text
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
-from src.server.repository.tenant import AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.faces import face_count, plant_faces
@@ -466,7 +467,7 @@ def test_cleanup_empty_dismissed(face_client: Tuple[_AuthClient, str, str]) -> N
     confirmed and survive), so the person is emptied by un-assigning.
     """
     import numpy as np
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     auth_client, library_id, tenant_url = face_client
     asset_id = _create_asset(tenant_url, library_id, "face_cleanup_dismissed")

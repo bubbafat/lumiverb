@@ -13,7 +13,8 @@ import pytest
 from sqlalchemy import text
 
 from src.server.models.tenant import FacePersonMatch, Person
-from src.server.repository.tenant import FaceRepository, PersonRepository
+from src.server.repository.faces import FaceRepository
+from src.server.repository.people import PersonRepository
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha
 from tests.test_reconciler import _library

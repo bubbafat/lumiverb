@@ -79,7 +79,7 @@ def _save(other, write: str, clip: str) -> None:
     """A write as the API saves it: a vision or OCR save whose inline sync
     failed (the real repositories, so their own clock and locking), or a
     note (PUT /note clears the sync time)."""
-    from src.server.repository.tenant import AssetMetadataRepository, AssetOcrRepository
+    from src.server.repository.assets import AssetMetadataRepository, AssetOcrRepository
 
     if write == "description":
         AssetMetadataRepository(other).upsert(clip, "m", "1", {"description": f"a {WORD}", "tags": []})
@@ -130,16 +130,16 @@ def test_a_save_timed_before_the_sweep_began_and_committed_after_it_read_stays_s
     it. Its time can't say it's newer; its row can (it's no longer as the
     sweep read it). The save's clock is put a minute back to open the gap,
     whatever the machine's speed or clocks."""
-    from src.server.repository import tenant
+    from src.server.repository import assets
 
     lib = _library(env, f"SweepGap-{write}")
     clip = _ingest_with(lib, f"gap-{write}.jpg", _sha(), None)
-    real_utcnow = tenant.utcnow
+    real_utcnow = assets.utcnow
     with _db(env) as s:
         _only_this_clip_stale(s, clip)
 
         def save_timed_earlier(other):
-            with patch.object(tenant, "utcnow", lambda: real_utcnow() - timedelta(minutes=1)):
+            with patch.object(assets, "utcnow", lambda: real_utcnow() - timedelta(minutes=1)):
                 _save(other, write, clip)
 
         written = _sweep_while(env, s, save_timed_earlier)
@@ -153,7 +153,7 @@ def test_a_save_timed_before_the_sweep_began_and_committed_after_it_read_stays_s
 @pytest.mark.slow
 def test_a_scene_described_again_is_found_by_its_new_words_at_once(env):
     """No sync to wait for, and none to miss: a scene's words are its row's."""
-    from src.server.repository.tenant import VideoSceneRepository
+    from src.server.repository.video import VideoSceneRepository
 
     lib = _library(env, "SceneRedo")
     vid = _ingest_with(lib, "w.mov", _sha(), None, media_type="video")

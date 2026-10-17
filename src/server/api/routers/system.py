@@ -124,7 +124,7 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
     seen = {i: r.model_dump() for i, r in status.storage.items()} if status else {}
 
     def storage() -> h.Row:
-        from src.server.repository.tenant import LibraryRepository
+        from src.server.repository.libraries import LibraryRepository
 
         libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all())
         return h.storage_row(libraries=libraries, storage=seen, stopped=stopped, at=at, now=now)
@@ -667,7 +667,7 @@ def _storage(request: Request, session: Session) -> Storage:
     from src.server import write_check
     from src.server.api.client_address import on_this_machine
     from src.server.config import get_settings
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
     from src.server.storage import move
     from src.shared import previews_location
 

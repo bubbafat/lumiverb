@@ -341,7 +341,7 @@ def test_a_copy_and_the_overwrite_ingested_at_once_keep_the_clip(env):
     from fastapi.testclient import TestClient
 
     from src.server.api.main import app
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, *_ = env
     sha = _sha()
@@ -400,7 +400,7 @@ def _someone_else_takes(env, rel_path: str):
     from unittest.mock import patch
 
     from src.server.models.tenant import Asset
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
     from tests.test_archive_by_hand import _db
 
     real = AssetRepository.is_ignored
@@ -465,7 +465,7 @@ def test_a_clip_back_in_sight_after_the_overwrite_keeps_its_transcript_in_search
     from fastapi.testclient import TestClient
 
     from src.server.api.main import app
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, *_ = env
     sha = _sha()
@@ -497,7 +497,7 @@ def test_the_copy_handed_over_to_by_the_other_ingest_answers_with_the_clip_there
     from fastapi.testclient import TestClient
 
     from src.server.api.main import app
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, headers, *_ = env
     sha = _sha()
@@ -529,7 +529,7 @@ def test_a_video_copy_handed_over_to_before_its_facet_is_stored_is_not_a_500(env
     from PIL import Image
 
     from src.server.api.main import app
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
     from tests.machine_lineage import ingest_made
 
     client, headers, library_id, *_ = env
@@ -568,7 +568,7 @@ def test_one_missing_clip_moves_onto_a_new_copy(env):
     from sqlalchemy import text
 
     from src.server.api.main import app
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
     from tests.test_archive_by_hand import _db
 
     client, headers, *_ = env

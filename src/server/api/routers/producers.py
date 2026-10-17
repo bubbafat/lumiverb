@@ -454,7 +454,7 @@ def set_settings(
 def _project_clips(request: Request, session: Session, user_id: str, project_id: str) -> list[str]:
     """Every clip in a project the caller can see; 404 otherwise."""
     from src.server.api.routers.projects import _all_project_assets, _can_view
-    from src.server.repository.tenant import ProjectRepository
+    from src.server.repository.projects import ProjectRepository
 
     project = ProjectRepository(session).get_by_id(project_id)
     if project is None or getattr(project, "deleted_at", None) is not None or not _can_view(project, user_id):
@@ -894,7 +894,7 @@ def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(g
     paused waits (each producer says). library_ids, or all: true; neither
     or both is a 400 scope_required."""
     from src.server.api.limits import require_scope
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
 
     require_scope(body.library_ids is not None, body.all, "library_ids")
     libraries: list[str | None] = [None] if body.all else list(dict.fromkeys(body.library_ids or []))

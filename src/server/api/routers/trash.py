@@ -17,7 +17,8 @@ from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.shared.utils import utcnow
 from src.server.models.tenant import Asset
-from src.server.repository.tenant import AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from src.server.storage import store as stored
 from src.server.storage.store import Unavailable, get_store
 
@@ -335,7 +336,7 @@ def purge_expired_trash(session: Session, tenant_id: str, *, limit: int = 500) -
 
     from src.server.api.routers.libraries import delete_libraries_for_good
     from src.server.api.routers.projects import delete_projects_for_good
-    from src.server.repository.tenant import ProjectRepository
+    from src.server.repository.projects import ProjectRepository
     from src.server.tenant_settings import get_trash_days
 
     days = get_trash_days(session)

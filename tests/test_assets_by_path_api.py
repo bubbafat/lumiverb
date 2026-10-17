@@ -105,7 +105,7 @@ def test_stream_proxy_happy_path(assets_client: tuple[TestClient, str, str], tmp
     """Create library + asset + proxy file; GET /v1/assets/{asset_id}/artifacts/proxy streams JPEG bytes."""
     from src.server.config import get_settings
     from src.server.database import get_tenant_session
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
     from src.server.storage.local import get_storage
 
     client, api_key, tenant_url = assets_client

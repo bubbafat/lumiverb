@@ -23,7 +23,7 @@ from src.server.tenant_settings import (
     set_video_preview_max_seconds,
 )
 from src.shared.path_filter import validate_pattern
-from src.server.repository.tenant import PathFilterRepository
+from src.server.repository.libraries import PathFilterRepository
 
 router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
@@ -144,7 +144,7 @@ def _ask_before_shortening(session: Session, old: int | None, new: int | None, c
     from datetime import timedelta
 
     from src.server.repository import lineage
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
     from src.shared.utils import utcnow
 
     counts = AssetRepository(session).count_expiring(utcnow() - timedelta(days=new))

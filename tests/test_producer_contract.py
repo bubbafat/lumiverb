@@ -138,7 +138,7 @@ def test_a_producer_is_one_folder(tmp_path):
         from src.server.api.routers.assets import RepairSummary
         from src.server.models.control_plane import Tenant
         from src.server.repository import ai_machines, lineage
-        from src.server.repository.tenant import MISSING_CONDITIONS
+        from src.server.repository.assets import MISSING_CONDITIONS
         from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS
         from src.server.scheduler.runners import runners
         from src.server.scheduler.service import Scheduler, default_capacity, gpu_holds

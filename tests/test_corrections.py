@@ -409,7 +409,7 @@ def test_a_correction_is_human_data_and_a_public_page_shows_only_the_result(env)
     _correct(env, clip, description="Mittens")
     visitor = _project_visitor_view(AssetResponse(**_detail(env, clip)))
     assert visitor.ai_description == "Mittens" and visitor.corrected == []
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     with _db(env) as s:
         assert AssetRepository(s).has_human_data(clip)

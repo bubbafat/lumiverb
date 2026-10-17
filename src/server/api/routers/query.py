@@ -38,7 +38,8 @@ from src.server.models.query_filter import (
     PersonFilter,
     SearchTerm,
 )
-from src.server.repository.tenant import LibraryRepository, UnifiedBrowseRepository
+from src.server.repository.browse import UnifiedBrowseRepository
+from src.server.repository.libraries import LibraryRepository
 
 logger = logging.getLogger(__name__)
 

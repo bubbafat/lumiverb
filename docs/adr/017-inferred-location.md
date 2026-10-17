@@ -194,7 +194,7 @@ Other UI:
 | Area | File | Notes |
 |------|------|-------|
 | EXIF parsing | `src/client/workers/exif_extract.py` | `parse_gps`, `parse_taken_at` |
-| Scan writes GPS | `src/server/repository/tenant.py` `update_exif` | Overwrites file GPS on each scan |
+| Scan writes GPS | `src/server/repository/assets.py` `update_exif` | Overwrites file GPS on each scan |
 | Filters | `src/server/models/query_filter.py` | `HasGps`, `NearLocation` |
 | Facets | `src/server/api/routers/facets.py` | `gps_count` |
 | Public guards | `src/server/api/routers/query.py` `guard_public_spec`, `assets.py` | |
