@@ -33,6 +33,7 @@ from src.shared.content_hash import FULL_UP_TO, content_hash, sampled, whole_fil
 from tests.machine_lineage import ingest_made, made
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_archive_by_hand import _db
+from tests.derived import saved
 from tests.test_scan_outcomes import (  # noqa: F401 — fixtures
     HOUR,
     Lib,
@@ -323,8 +324,8 @@ def test_work_handed_out_before_the_swap_is_of_this_content(env, api, lib):
     whole_hash = _hashed_before_fp1(env, clip["asset_id"], path)
     _scan(api, lib)  # swapped
 
-    r = client.post(f"/v1/assets/{clip['asset_id']}/ocr",
-                    json={"ocr_text": "", "lineage": made("ocr", whole_hash)}, headers=headers)
+    r = saved(client, "ocr", clip["asset_id"], json={"ocr_text": "", "lineage": made("ocr", whole_hash)},
+              headers=headers)
     assert r.status_code == 200, r.text
     assert _sources(env, clip["asset_id"]) == {content_hash(path)}
 
@@ -332,8 +333,8 @@ def test_work_handed_out_before_the_swap_is_of_this_content(env, api, lib):
     small = _image(lib, "small.png", 3)
     _scan(api, lib)
     other = _in_sight(env, lib)["small.png"]
-    r = client.post(f"/v1/assets/{other['asset_id']}/ocr",
-                    json={"ocr_text": "", "lineage": made("ocr", whole_hash)}, headers=headers)
+    r = saved(client, "ocr", other["asset_id"], json={"ocr_text": "", "lineage": made("ocr", whole_hash)},
+              headers=headers)
     assert r.status_code == 200, r.text
     with _db(env) as session:
         source = session.execute(text("SELECT source_hash FROM artifact_lineage WHERE asset_id = :a"

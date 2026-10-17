@@ -23,6 +23,7 @@ from src.server.scheduler.service import _crashed_in_database, _from_database
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _library
+from tests.derived import saved
 
 pytestmark = pytest.mark.slow
 
@@ -53,7 +54,7 @@ def test_a_success_or_a_charged_failure_starts_the_count_over(env):
     tenant_id = env[4]
     _crashed_in_database(tenant_id, "vision", [clip], "boom")
     _crashed_in_database(tenant_id, "ocr", [clip], "boom")
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a dog",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "a dog",
                                                         "lineage": _want(lib, "vision", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     assert _crashes(lib, clip, "vision") is None
@@ -67,7 +68,7 @@ def _made_by_an_older_version(lib, name: str) -> str:
     client, headers, *_ = lib
     sha = _sha()
     clip = _ingest_with(lib, name, sha)
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "old words",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
                                                         "lineage": _want(lib, "vision", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(lib) as s:  # as if vision's version went up since

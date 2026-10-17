@@ -24,6 +24,7 @@ from src.server.scheduler.service import _job_models
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _counts, _library
+from tests.derived import saved
 
 pytestmark = pytest.mark.slow
 
@@ -55,10 +56,10 @@ def _made_old(env, clip: str, sha: str, artifact: str = "vision") -> None:
     client, headers, *_ = env
     old = {"producer": artifact, "version": "1", "settings_hash": OLD, "source_hash": sha}
     if artifact == "vision":
-        r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "old words",
+        r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
                                                             "lineage": old}, headers=headers)
     else:
-        r = client.post(f"/v1/assets/{clip}/ocr", json={"ocr_text": "OLD SIGN", "lineage": old}, headers=headers)
+        r = saved(client, "ocr", clip, json={"ocr_text": "OLD SIGN", "lineage": old}, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -105,7 +106,7 @@ def test_a_clip_made_again_with_todays_settings_is_done(env):
     lib = _library(env, "RedoDone")
     client, headers, *_ = lib
     clip, sha = _stale_clip(lib, "a.jpg")
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "new words",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "new words",
                                                         "lineage": _want(lib, "vision", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     assert _due(lib, "redo_vision") == []
@@ -134,7 +135,7 @@ def test_a_description_nobody_said_how_was_made_isnt_kept_so_its_made_not_redone
     lib = _library(env, "RedoUnknown")
     client, headers, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "from the Mac"},
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "from the Mac"},
                     headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", r.text
     with _db(lib) as s:

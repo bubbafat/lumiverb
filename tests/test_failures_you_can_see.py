@@ -17,6 +17,7 @@ from src.server.repository import lineage
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _counts, _fail, _library
+from tests.derived import saved
 
 pytestmark = pytest.mark.slow
 
@@ -92,7 +93,7 @@ def test_a_clip_made_at_last_leaves_the_list(env):
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
     _fail(lib, [{"asset_id": clip, "artifact": "vision", "error": "no"}])
-    r = client.post(f"/v1/assets/{clip}/vision", json={"model_id": "m", "description": "a dog",
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "a dog",
                                                         "lineage": _want(lib, "vision", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     assert _failures(lib, library_id=lib[2])["items"] == []

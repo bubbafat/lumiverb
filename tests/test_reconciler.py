@@ -24,6 +24,7 @@ from src.shared import producers as P
 from tests.producer_fakes import due
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
+from tests.derived import saved
 
 
 def _library(env, name: str) -> tuple:
@@ -74,7 +75,7 @@ def _pending(env) -> int:
 def _describe(env, clip: str, sha: str | None):
     client, headers, *_ = env
     body = {"model_id": "m", "description": "a dog on a beach", "lineage": _want(env, "vision", sha)}
-    r = client.post(f"/v1/assets/{clip}/vision", json=body, headers=headers)
+    r = saved(client, "vision", clip, json=body, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -167,10 +168,10 @@ def test_a_changed_file_is_a_new_clip_made_from_scratch(env):
     old, new = _sha(), _sha()
     clip = _ingest_with(lib, "a.jpg", old, None)
     _describe(lib, clip, old)
-    r = client.post(f"/v1/assets/{clip}/embeddings", json={
+    r = saved(client, "embeddings", clip, json={
         "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
         "lineage": _want(env, "clip", old)}, headers=headers)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 200, r.text
     assert _due(lib, "vision") == [] and _due(lib, "clip") == []
 
     replaced = _ingest_with(lib, "a.jpg", new, None)

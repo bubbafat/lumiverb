@@ -17,6 +17,7 @@ import pytest
 from tests.machine_lineage import made
 from tests.scenes import Scene, described_scenes
 from tests.test_public_library_middleware import _ingest, public_lib_client  # noqa: F401
+from tests.derived import saved
 
 # What public pages play until an admin says otherwise (tenant_settings.PUBLIC_DEFAULT_SECONDS).
 CAP_MS = 10_000
@@ -42,7 +43,7 @@ def _transcribe(env, asset_id: str, srt: str) -> None:
 
 def _describe(env, asset_id: str, description: str) -> None:
     client, api_key, *_ = env
-    r = client.post(f"/v1/assets/{asset_id}/vision", headers=_auth(api_key), json={
+    r = saved(client, "vision", asset_id, headers=_auth(api_key), json={
         "model_id": "test-vision", "model_version": "1", "description": description, "tags": [],
         "lineage": made("vision")})
     assert r.status_code == 200, r.text

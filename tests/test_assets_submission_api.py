@@ -30,6 +30,7 @@ from src.server.database import _engines
 from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made
+from tests.derived import saved
 
 
 # ---- fixture --------------------------------------------------------------
@@ -106,7 +107,7 @@ def submission_client() -> Iterator[tuple[TestClient, dict[str, str], str, list[
         _engines.clear()
 
 
-# ---- vision (single) ------------------------------------------------------
+# ---- one clip (as a producer saves it: tests/derived.py) ------------------
 
 
 @pytest.mark.slow
@@ -114,9 +115,7 @@ def test_submit_vision_happy_path(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
     asset_id = image_asset_ids[0]
 
-    r = client.post(
-        f"/v1/assets/{asset_id}/vision",
-        json={
+    r = saved(client, "vision", asset_id, json={
             "model_id": "moondream2",
             "model_version": "2024-08-26",
             "description": "A red barn at sunset",
@@ -126,21 +125,9 @@ def test_submit_vision_happy_path(submission_client) -> None:
         headers=auth,
     )
     assert r.status_code == 200, r.text
-    assert r.json()["status"] == "described"
-
-
-@pytest.mark.slow
-def test_submit_vision_404(submission_client) -> None:
-    client, auth, _, _, _ = submission_client
-    r = client.post(
-        "/v1/assets/ast_doesnotexist0000000000000/vision",
-        json={"model_id": "moondream2", "description": "x", "lineage": made("vision")},
-        headers=auth,
-    )
-    assert r.status_code == 404
-
-
-# ---- ocr (single) ---------------------------------------------------------
+    assert r.json() == {"updated": 1, "skipped": 0}
+    said = client.get(f"/v1/assets/{asset_id}", headers=auth).json()
+    assert (said["status"], said["ai_description"]) == ("described", "A red barn at sunset")
 
 
 @pytest.mark.slow
@@ -150,9 +137,7 @@ def test_submit_ocr_needs_no_description_first(submission_client) -> None:
     # sub_b has not had vision submitted
     asset_id = image_asset_ids[1]
 
-    r = client.post(
-        f"/v1/assets/{asset_id}/ocr",
-        json={"ocr_text": "hello", "lineage": made("ocr")},
+    r = saved(client, "ocr", asset_id, json={"ocr_text": "hello", "lineage": made("ocr")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -164,24 +149,11 @@ def test_submit_ocr_after_vision(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
     asset_id = image_asset_ids[0]  # already has vision metadata from above
 
-    r = client.post(
-        f"/v1/assets/{asset_id}/ocr",
-        json={"ocr_text": "STOP SIGN", "lineage": made("ocr")},
+    r = saved(client, "ocr", asset_id, json={"ocr_text": "STOP SIGN", "lineage": made("ocr")},
         headers=auth,
     )
     assert r.status_code == 200
-    assert r.json()["ocr_text"] == "STOP SIGN"
-
-
-@pytest.mark.slow
-def test_submit_ocr_404(submission_client) -> None:
-    client, auth, _, _, _ = submission_client
-    r = client.post(
-        "/v1/assets/ast_doesnotexist0000000000000/ocr",
-        json={"ocr_text": "x", "lineage": made("ocr")},
-        headers=auth,
-    )
-    assert r.status_code == 404
+    assert client.get(f"/v1/assets/{asset_id}", headers=auth).json()["ocr_text"] == "STOP SIGN"
 
 
 # ---- batch ocr ------------------------------------------------------------
@@ -193,9 +165,7 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
 
     # Make sure sub_c has vision metadata so we can update it
-    r = client.post(
-        f"/v1/assets/{image_asset_ids[2]}/vision",
-        json={"model_id": "moondream2", "description": "a stop sign", "lineage": made("vision")},
+    r = saved(client, "vision", image_asset_ids[2], json={"model_id": "moondream2", "description": "a stop sign", "lineage": made("vision")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -277,17 +247,6 @@ def test_batch_embeddings_updates_and_skips(submission_client) -> None:
     body = r.json()
     assert body["updated"] == 1
     assert body["skipped"] == 1
-
-
-@pytest.mark.slow
-def test_submit_embedding_single_404(submission_client) -> None:
-    client, auth, _, _, _ = submission_client
-    r = client.post(
-        "/v1/assets/ast_doesnotexist0000000000000/embeddings",
-        json={"model_id": "clip", "model_version": "1", "vector": [0.1] * 512, "lineage": made("clip")},
-        headers=auth,
-    )
-    assert r.status_code == 404
 
 
 # ---- batch faces ----------------------------------------------------------
