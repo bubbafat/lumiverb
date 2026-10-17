@@ -17,6 +17,7 @@ import type {
   LibraryListItem,
   LibraryResponse,
   LibraryRevision,
+  ReaderCheckIn,
   SimilarityResponse,
   UserItem,
   RatingResponse,
@@ -1123,8 +1124,12 @@ export interface PauseSwitch {
 export interface LibraryScans {
   library_id: string;
   name: string;
-  /** "server": this server reads its files. */
+  /** "server": this server reads its files; else a device's id. */
   reader: string;
+  /** The reader device's name; null for this server. */
+  reader_name?: string | null;
+  /** Its reader's latest check-in for it; none before the first. */
+  checked_in?: ReaderCheckIn | null;
   paused: boolean;
   /** Admins only. */
   paused_by: string | null;

@@ -26,6 +26,7 @@ import {
   type SettingField,
 } from "../../api/client";
 import { WAIT_SENTENCES, waitIsLoud, waitSentence, type WaitContext } from "../../lib/waits";
+import { readerLine } from "../../lib/readers";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const inputClass =
@@ -546,8 +547,6 @@ function Switch({ name, target, state, admin, pause, resume }: {
   );
 }
 
-const readerWords = (reader: string) => (reader === "server" ? "Read by this server" : `Read by ${reader}`);
-
 /** Scans (ADR-018 phase 1): each library's own pause, who reads its files, and why its scans wait. Admins pause or
  * resume one library, or every library at once: that sets each library's own pause (there's no other). */
 function ScansRow({ libraries, admin }: { libraries: LibraryScans[]; admin: boolean }) {
@@ -595,7 +594,7 @@ function ScansRow({ libraries, admin }: { libraries: LibraryScans[]; admin: bool
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
                 <span className="text-sm text-gray-200">
                   {lib.name}
-                  <span className="ml-2 text-xs text-gray-500">{readerWords(lib.reader)}</span>
+                  <ReaderWords lib={lib} />
                 </span>
                 <Switch name={`Scans of ${lib.name}`} target={lib.library_id} state={lib.paused ? "paused" : "running"}
                   admin={admin} pause={() => pauseScans([lib.library_id])} resume={() => resumeScans([lib.library_id])} />
@@ -615,6 +614,12 @@ function ScansRow({ libraries, admin }: { libraries: LibraryScans[]; admin: bool
       )}
     </li>
   );
+}
+
+/** Who reads the library (ADR-018 decision 1): amber when a device isn't heard from, or can't reach its folder. */
+function ReaderWords({ lib }: { lib: LibraryScans }) {
+  const line = readerLine(lib);
+  return <span className={`ml-2 text-xs ${line.attention ? "text-amber-300" : "text-gray-500"}`}>{line.text}</span>;
 }
 
 function NowBox({ status }: { status: SchedulerStatus }) {

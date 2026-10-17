@@ -18,6 +18,8 @@ let paused = new Set<string>();
 // Why a library's scans wait, as the queue says it on the library's row (each names its library_id).
 let scanWaits: { library_id: string }[] = [];
 const LIBS = [{ library_id: "lib_1", name: "Footage" }, { library_id: "lib_2", name: "Stills" }];
+// A library a device reads, when a test adds one (its reader and latest check-in, as the queue says them).
+let deviceLibs: Record<string, unknown>[] = [];
 
 /** As the server: each switch, each library's scans, and the state they make (running, partly, paused). */
 function switches() {
@@ -25,11 +27,11 @@ function switches() {
                 ...producers.filter((p) => p.scheduled).map((p) => ({ target: p.artifact, title: p.title }))]
     .map((r) => ({ ...r, paused: paused.has(r.target), paused_at: paused.has(r.target) ? "2026-10-09T10:00:00Z" : null,
                    paused_by: null, waits: [] }));
-  const libraries = LIBS.map((l) => {
+  const libraries = [...LIBS.map((l) => {
     const on = paused.has(`scans:${l.library_id}`);
     return { ...l, reader: "server", paused: on, paused_at: on ? "2026-10-09T10:00:00Z" : null, paused_by: null,
              waits: scanWaits.filter((w) => w.library_id === l.library_id) };
-  });
+  }), ...deviceLibs];
   const n = rows.filter((r) => r.paused).length + libraries.filter((l) => l.paused).length;
   const total = rows.length + libraries.length;
   return { switches: rows, libraries, state: n === 0 ? "running" : n === total ? "paused" : "partly" };
@@ -292,6 +294,23 @@ describe("ProcessingSection", () => {
     expect(screen.queryByRole("switch", { name: "Proxies and thumbnails" })).toBeNull();  // a library's scans pause it
     const scans = screen.getByRole("list", { name: "Each library's scans" });
     expect(within(scans).getAllByText("Read by this server")).toHaveLength(2);
+  });
+
+  it("says which device reads a library, and when it's not heard from", async () => {
+    producers = [producer({})];
+    deviceLibs = [{
+      library_id: "lib_3", name: "Trips", reader: "dev_1", reader_name: "Studio Mac", paused: false, paused_at: null,
+      paused_by: null, waits: [], checked_in: { client: "studio.local", version: "0.1.68", state: "scanning",
+        waiting_files: 3, waiting_bytes: 0, last_full_scan_at: null,
+        checked_in_at: new Date(Date.now() - 2 * 3600_000).toISOString() } }];
+    try {
+      renderSection();
+      const scans = await screen.findByRole("list", { name: "Each library's scans" });
+      const line = within(scans).getByText("Read by Studio Mac · not heard from in 2 hours");
+      expect(line.className).toContain("text-amber-300");
+    } finally {
+      deviceLibs = [];
+    }
   });
 
   it("pauses or resumes every library's scans at once: each library's own (admins)", async () => {

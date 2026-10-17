@@ -59,6 +59,11 @@ def test_a_library_handed_to_a_device_is_its_alone_and_comes_back(env):
     server = _ok(_check_in(env, env.admin, library_id, reader="server"))
     assert library_id not in _listed(server) and server["gone"] == [library_id], "this server reads it no more"
     assert library_id in _listed(_ok(_check_in(env, device, library_id)))
+    # Processing says who reads it and when it last checked in (ADR-018 decision 1).
+    row = next(lib for lib in _ok(env.client.get("/v1/producers/queue", headers=env.viewer))["libraries"]
+               if lib["library_id"] == library_id)
+    assert (row["reader"], row["reader_name"]) == (device_id, "Handover Mac")
+    assert row["checked_in"]["client"] == "Robert's Mac Studio" and row["checked_in"]["state"] == "idle"
     _error(env.client.post(f"/v1/libraries/{library_id}/scans", json={}, headers=env.editor), 409, "not_the_reader")
     run = _scan(env, library_id, [File("a.jpg", "a")], headers=device)
     assert run.finish is not None and set(run.uploaded) == {"a.jpg"}
