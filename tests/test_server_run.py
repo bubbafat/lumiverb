@@ -342,10 +342,18 @@ def _chosen(data: Path, chosen: network.Choice, out: Path, ready: Callable[[], b
     if ports is not None:
         network.set_ports(data, ports)
     at = network.ports(data, defaults)
+    said = f"Network: {network.said_with_ports(chosen, at)}; restarting nginx"
     deadline = time.monotonic() + 30
-    while f"Network: {network.said_with_ports(chosen, at)}; restarting nginx" not in out.read_text() or not ready():
+    while not _restarted(out.read_text(), said) or not ready():
         assert time.monotonic() < deadline, out.read_text()
         time.sleep(0.5)
+
+
+def _restarted(log: str, said: str) -> bool:
+    """nginx started again since run said why: until then the one before may
+    still answer (HTTPS on this machine, already on before), and stop any moment."""
+    at = log.rfind(said)
+    return at >= 0 and "nginx started (pid" in log[at:]
 
 
 def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Path) -> None:
