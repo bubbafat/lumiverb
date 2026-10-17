@@ -77,6 +77,10 @@ class TenantRepository:
             self._session.commit()
 
 
+# A device's key's role: no person's (admin, editor, viewer), so no check that asks for one lets it by.
+DEVICE_ROLE = "device"
+
+
 class ApiKeyRepository:
     """Repository for api_keys table."""
 
@@ -135,8 +139,9 @@ class ApiKeyRepository:
         return self._session.get(ApiKey, key_id)
 
     def get_for_tenant(self, key_id: str, tenant_id: str) -> ApiKey | None:
-        """The account's key with this id (revoked or not)."""
-        return self._session.exec(select(ApiKey).where(ApiKey.key_id == key_id, ApiKey.tenant_id == tenant_id)).first()
+        """The account's key with this id (revoked or not); never a device's (device_keys)."""
+        return self._session.exec(select(ApiKey).where(ApiKey.key_id == key_id, ApiKey.tenant_id == tenant_id,
+                                                       ApiKey.device_id.is_(None))).first()
 
     def get_by_hash(self, key_hash: str) -> ApiKey | None:
         """Return API key by hash, excluding revoked."""
@@ -187,6 +192,42 @@ class ApiKeyRepository:
             self._session.add(api_key)
         return len(keys)
 
+    def new_device_key(self, tenant_id: str, device_id: str, created_by_user_id: str | None) -> tuple[ApiKey, str]:
+        """A new key for the device, and its old one (if any) revoked in the
+        same commit: a device has one key. Its role is "device", which is no
+        person's (src/server/api/devices.py). Like any key a user minted, a
+        new password of theirs ends it. Returns (record, plaintext); the
+        plaintext once, never stored."""
+        now = utcnow()
+        for old in self._session.exec(select(ApiKey).where(
+                ApiKey.tenant_id == tenant_id, ApiKey.device_id == device_id, ApiKey.revoked_at.is_(None))).all():
+            old.revoked_at = now
+            self._session.add(old)
+        self._session.flush()
+        plaintext = self._generate_plaintext()
+        api_key = ApiKey(key_id="key_" + str(ULID()), key_hash=self._hash_key(plaintext), tenant_id=tenant_id,
+                         name="device", label=None, scopes=["scan"], role=DEVICE_ROLE,
+                         created_by_user_id=created_by_user_id, device_id=device_id)
+        self._session.add(api_key)
+        self._session.commit()
+        self._session.refresh(api_key)
+        return api_key, plaintext
+
+    def device_keys(self, tenant_id: str) -> dict[str, ApiKey]:
+        """Each of the account's devices' live key, by device."""
+        return {k.device_id: k for k in self._session.exec(select(ApiKey).where(
+            ApiKey.tenant_id == tenant_id, ApiKey.device_id.is_not(None), ApiKey.revoked_at.is_(None))).all()}
+
+    def end_device_key(self, tenant_id: str, device_id: str) -> bool:
+        """Revoke the device's key. False when it has none."""
+        keys = self._session.exec(select(ApiKey).where(
+            ApiKey.tenant_id == tenant_id, ApiKey.device_id == device_id, ApiKey.revoked_at.is_(None))).all()
+        for api_key in keys:
+            api_key.revoked_at = utcnow()
+            self._session.add(api_key)
+        self._session.commit()
+        return bool(keys)
+
     def touch_last_used(self, key_id: str) -> None:
         """Update last_used_at. Best-effort; do not raise on failure."""
         stmt = select(ApiKey).where(ApiKey.key_id == key_id)
@@ -201,7 +242,8 @@ class ApiKeyRepository:
 
     def list_by_tenant(self, tenant_id: str) -> list[ApiKey]:
         """
-        List all non-revoked API keys for a tenant, ordered by created_at ASC.
+        List all non-revoked API keys for a tenant, ordered by created_at ASC:
+        people's and the account's, never a device's (device_keys).
 
         Plaintext is never returned; only metadata.
         """
@@ -209,6 +251,7 @@ class ApiKeyRepository:
             select(ApiKey)
             .where(ApiKey.tenant_id == tenant_id)
             .where(ApiKey.revoked_at.is_(None))
+            .where(ApiKey.device_id.is_(None))
             .order_by(ApiKey.created_at.asc())
         )
         return list(self._session.exec(stmt).all())

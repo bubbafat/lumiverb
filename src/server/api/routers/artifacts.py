@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -12,11 +12,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.errors import ApiError
-from src.server.repository.lineage import record as record_lineage
-
 from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.devices import may_call
+from src.server.api.errors import ApiError
 from src.server.repository.assets import AssetRepository
+from src.server.repository.lineage import record as record_lineage
 from src.server.storage import store as keys
 from src.server.storage.store import NotFound, Store, get_store
 
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/assets", tags=["artifacts"])
 
 ALLOWED_ARTIFACT_TYPES = {"proxy", "thumbnail", "video_preview", "scene_rep", "analysis_proxy"}
+# What a library's reader makes from the originals and sends: a device sends only these.
+READER_ARTIFACTS = ("proxy", "thumbnail", "video_preview", "analysis_proxy")
 
 # Target limits (not yet enforced per type): proxy ≈ 1 MB, video_preview ≈ 20 MB.
 # TODO: enforce per-type limits once remote worker uploads are in place.
@@ -140,6 +142,7 @@ class ArtifactUploadResponse(BaseModel):
 
 
 @router.post("/{asset_id}/artifacts/{artifact_type}", response_model=ArtifactUploadResponse, dependencies=[Depends(require_editor)])
+@may_call("asset", artifacts=READER_ARTIFACTS)
 async def upload_artifact(
     asset_id: str,
     artifact_type: str,

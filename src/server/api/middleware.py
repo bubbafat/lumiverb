@@ -157,6 +157,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 request.state.user_id = None
                 request.state.key_id = api_key.key_id
                 request.state.role = getattr(api_key, "role", "admin")
+                # A device's key: it scans the libraries it reads and nothing else (src/server/api/devices.py).
+                request.state.device_id = api_key.device_id
                 request.state.is_public_request = False
             return await call_next(request)
 

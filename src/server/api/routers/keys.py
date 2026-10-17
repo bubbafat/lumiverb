@@ -28,7 +28,7 @@ class KeyListResponse(BaseModel):
 _ROLE_RANK = {"admin": 2, "editor": 1, "viewer": 0}
 
 
-def _caller_user_id(request: Request, session) -> str | None:
+def caller_user_id(request: Request, session) -> str | None:
     """The user behind the request: the signed-in one, or the one who minted the calling key."""
     user_id = getattr(request.state, "user_id", None)
     key_id = getattr(request.state, "key_id", None)
@@ -42,7 +42,7 @@ def _is_own(request: Request, session, key) -> bool:
     """Admins manage every key; anyone else only the keys they minted."""
     if getattr(request.state, "role", None) == "admin":
         return True
-    owner = _caller_user_id(request, session)
+    owner = caller_user_id(request, session)
     return owner is not None and key.created_by_user_id == owner
 
 
@@ -115,7 +115,7 @@ def create_key(
             tenant_id=tenant_id,
             label=body.label,
             role=requested_role,
-            created_by_user_id=_caller_user_id(request, session),
+            created_by_user_id=caller_user_id(request, session),
         )
 
     created_at = api_key.created_at.isoformat()

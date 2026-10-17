@@ -44,6 +44,7 @@ from src.server import check_ins, reader_work, scans
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
+from src.server.api.devices import may_call
 from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.api.routers.assets import _ask_about_mass_missing
@@ -286,6 +287,7 @@ def _utc(when: datetime | None) -> datetime | None:
 
 
 @router.post("/v1/libraries/{library_id}/scans", response_model=StartScanResponse)
+@may_call("library")
 def start_scan(
     library_id: str,
     body: StartScanRequest,
@@ -313,6 +315,7 @@ def start_scan(
 
 
 @router.get("/v1/libraries/{library_id}/reader-work", response_model=ReaderWorkPage)
+@may_call("library")
 def reader_work_page(
     library_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -335,6 +338,7 @@ def reader_work_page(
 
 
 @router.post("/v1/scans/{scan_id}/found", response_model=FoundResponse)
+@may_call("scan")
 def add_found(
     scan_id: str,
     body: FoundRequest,
@@ -373,6 +377,7 @@ def _page(session: Session, scan_id: str, actions: tuple[str, ...], after: str |
 
 
 @router.post("/v1/scans/{scan_id}/plan", response_model=PlanResponse)
+@may_call("scan")
 def plan_scan(
     scan_id: str,
     body: PlanRequest,
@@ -403,6 +408,7 @@ def plan_scan(
 
 
 @router.get("/v1/scans/{scan_id}/plan", response_model=PlanPage)
+@may_call("scan")
 def plan_page(
     scan_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -421,6 +427,7 @@ def plan_page(
 
 
 @router.get("/v1/scans/{scan_id}/skipped", response_model=SkippedPage)
+@may_call("scan")
 def skipped_page(
     scan_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -440,6 +447,7 @@ def skipped_page(
 
 
 @router.get("/v1/scans/{scan_id}/gone", response_model=GonePage)
+@may_call("scan")
 def gone_page(
     scan_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -463,6 +471,7 @@ def _bump(session: Session, library_id: str, changed: bool) -> None:
 
 
 @router.post("/v1/scans/{scan_id}/hashes", response_model=HashesResponse)
+@may_call("scan")
 def add_hashes(
     scan_id: str,
     body: HashesRequest,
@@ -490,6 +499,7 @@ def add_hashes(
 
 
 @router.post("/v1/scans/{scan_id}/moves", response_model=MovesResponse)
+@may_call("scan")
 def answer_moves(
     scan_id: str,
     body: MovesRequest,
@@ -524,6 +534,7 @@ def answer_moves(
 
 
 @router.post("/v1/scans/{scan_id}/finish", response_model=FinishResponse)
+@may_call("scan")
 def finish_scan(
     scan_id: str,
     body: FinishRequest,
@@ -588,6 +599,7 @@ def finish_scan(
 
 
 @router.delete("/v1/scans/{scan_id}", status_code=204)
+@may_call("scan")
 def abandon_scan(
     scan_id: str,
     session: Annotated[Session, Depends(get_tenant_session)],

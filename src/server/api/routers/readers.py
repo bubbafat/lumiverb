@@ -4,10 +4,11 @@ it (ADR-018 decision 4, phase 4). The rules are in src/server/check_ins.py.
 Every reader checks in every minute or so (POST /v1/readers/check-in); the
 answer lists the libraries it reads with each one's mark, and when a mark
 moved it fetches what changed (GET /v1/libraries/{id}/reader-changes). This
-server's scheduler is the reader of every library until devices come
-(src/shared/readers.py): checking in as it takes an admin's key, as the
-scheduler's is. An editor can ask a library's reader for a scan of the
-whole library (POST /v1/libraries/{id}/scan-now).
+server's scheduler reads every library no device reads
+(src/shared/readers.py), checking in with an admin's key, as the
+scheduler's is; a device checks in with its own key
+(src/server/api/devices.py). An editor can ask a library's reader for a
+scan of the whole library (POST /v1/libraries/{id}/scan-now).
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from src.server import check_ins
-from src.server.api.dependencies import get_tenant_session, require_editor, require_tenant_admin
+from src.server.api.dependencies import get_tenant_session, require_editor, require_reader
+from src.server.api.devices import may_call
 from src.server.api.errors import ApiError, ConflictError
 from src.server.api.limits import MAX_IDS
 from src.server.repository.libraries import LibraryRepository
@@ -42,7 +44,7 @@ class LibrarySaid(BaseModel):
 
 
 class CheckInRequest(BaseModel):
-    # Who reads: "server", this server's scheduler (devices from ADR-018 phase 6).
+    # Who reads: "server", this server's scheduler. A device needn't say: its key says which it is.
     reader: Literal["server"] = SERVER
     # What it is, for people: "this server", "Robert's Mac Studio"; and its version.
     client: str = Field(min_length=1, max_length=200)
@@ -117,19 +119,23 @@ class ReaderChanges(BaseModel):
     paused: Paused
 
 
-@router.post("/v1/readers/check-in", response_model=CheckInResponse, dependencies=[Depends(require_tenant_admin)])
-def check_in(body: CheckInRequest, session: Annotated[Session, Depends(get_tenant_session)]) -> CheckInResponse:
+@router.post("/v1/readers/check-in", response_model=CheckInResponse, dependencies=[Depends(require_reader)])
+@may_call("own")
+def check_in(body: CheckInRequest, request: Request,
+             session: Annotated[Session, Depends(get_tenant_session)]) -> CheckInResponse:
     """A reader says how each library it reads is, and hears which it reads
     now: each one's root, scans pause, mark, and whether a scan of it was
-    asked for. Every minute or so (check_in_every_sec). An admin's key, as
-    the scheduler's is (this server's reader). 426 reader_too_old for a
-    protocol the server no longer speaks."""
+    asked for. Every minute or so (check_in_every_sec). This server's
+    reader with an admin's key, as the scheduler's is; a device with its
+    own, which reads the libraries naming it (src/server/api/devices.py).
+    426 reader_too_old for a protocol the server no longer speaks."""
     if body.protocol < check_ins.OLDEST_PROTOCOL:
         raise ApiError(426, "reader_too_old", "This reader is too old for this server: update it.",
                        {"oldest_protocol": check_ins.OLDEST_PROTOCOL, "protocol": check_ins.PROTOCOL})
     said = [check_ins.Said(s.library_id, s.state, s.waiting_files, s.waiting_bytes, _utc(s.last_full_scan_at), s.mark)
             for s in body.libraries]
-    libraries, gone = check_ins.check_in(session, reader=body.reader, client=body.client, version=body.version,
+    reader = getattr(request.state, "device_id", None) or body.reader
+    libraries, gone = check_ins.check_in(session, reader=reader, client=body.client, version=body.version,
                                          said=said, now=utcnow())
     session.commit()
     return CheckInResponse(libraries=[LibraryToRead(**lib) for lib in libraries], gone=gone,
@@ -138,6 +144,7 @@ def check_in(body: CheckInRequest, session: Annotated[Session, Depends(get_tenan
 
 @router.get("/v1/libraries/{library_id}/reader-changes", response_model=ReaderChanges,
             dependencies=[Depends(require_editor)])
+@may_call("library")
 def reader_changes(
     library_id: str,
     request: Request,

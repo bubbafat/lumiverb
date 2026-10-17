@@ -62,9 +62,24 @@ def require_tenant_admin(request: Request) -> None:
 
 
 def require_editor(request: Request) -> None:
-    """Raise 403 unless the caller is Admin or Editor. Blocks Viewer and unauthenticated public requests."""
-    if getattr(request.state, "role", None) not in ("admin", "editor"):
+    """Raise 403 unless the caller is Admin or Editor, or a device on a
+    route the device gate let it by (src/server/api/devices.py). Blocks
+    Viewer and unauthenticated public requests."""
+    if getattr(request.state, "role", None) not in ("admin", "editor") and not _device_allowed(request):
         raise HTTPException(status_code=403, detail="Editor access required")
+
+
+def require_reader(request: Request) -> None:
+    """A library's reader: this server's scheduler (an admin's key, as its
+    is), or a device on a route the device gate let it by, for a library
+    it reads. 403 otherwise."""
+    if getattr(request.state, "role", None) != "admin" and not _device_allowed(request):
+        raise HTTPException(status_code=403, detail="Admin API key required")
+
+
+def _device_allowed(request: Request) -> bool:
+    return (getattr(request.state, "device_id", None) is not None
+            and getattr(request.state, "device_allowed", False) is True)
 
 
 def require_signed_in(request: Request) -> None:
