@@ -7,6 +7,8 @@ import type { BackupItem, Backups } from "../../api/client";
 
 const fetchMock = vi.fn();
 let role = "admin";
+// The install's admin too (the server's /v1/me): an account admin may not be.
+let serverAdmin = true;
 let state: Backups;
 const sent: { method: string; url: string; body: unknown }[] = [];
 
@@ -43,7 +45,7 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     sent.push({ method, url, body });
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
-    if (path === "/me") return json({ email: "a@b.c", role });
+    if (path === "/me") return json({ email: "a@b.c", role, server_admin: role === "admin" && serverAdmin });
     if (path === "/system/backups" && method === "GET") return json(state);
     if (path === "/system/backups" && method === "POST") {
       state = { ...state, running: { kind: "now", started_at: null, done: 0, of: 2 } };
@@ -71,6 +73,7 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
   role = "admin";
+  serverAdmin = true;
   sent.length = 0;
 });
 
@@ -165,7 +168,14 @@ describe("BackupsSection", () => {
   it("isn't shown to someone who isn't an admin", async () => {
     role = "editor";
     renderSection();
-    expect(await screen.findByText("Only admins see backups.")).toBeTruthy();
+    expect(await screen.findByText("Only a server admin sees backups.")).toBeTruthy();
+    expect(sent.some((s) => s.url.includes("/system/backups"))).toBe(false);
+  });
+
+  it("isn't shown to an account's admin who isn't the server's", async () => {
+    serverAdmin = false;
+    renderSection();
+    expect(await screen.findByText("Only a server admin sees backups.")).toBeTruthy();
     expect(sent.some((s) => s.url.includes("/system/backups"))).toBe(false);
   });
 });

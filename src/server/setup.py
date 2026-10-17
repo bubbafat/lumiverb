@@ -2,7 +2,8 @@
 
 Open while nobody can log in yet: no user on this server. It makes the first
 admin in the account the installer made (deploy-api.sh makes one on Linux),
-or, with none (a Mac), in a new one. Then it's closed for good.
+or, with none (a Mac), in a new one, and the install's server admin. Then
+it's closed for good.
 
 Two doors, one rule: the web app's setup page (POST /v1/setup, which only
 answers the machine Lumiverb runs on) and `lumiverb-server setup` (which
@@ -70,6 +71,8 @@ def create_first_admin(email: str, password: str, *, account_name: str | None = 
                                      "Add its admin with `lumiverb user create`.")
                 tenant_id = accounts[0].tenant_id if accounts else create_account(
                     session, (account_name or "").strip() or DEFAULT_ACCOUNT_NAME)
-                return UserRepository(session).create(tenant_id, email, password_hash, role="admin")
+                # Who sets up the install is its server admin too (ADR-018 decision 8).
+                return UserRepository(session).create(tenant_id, email, password_hash, role="admin",
+                                                      server_admin=True)
         finally:
             lock.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SETUP_LOCK})

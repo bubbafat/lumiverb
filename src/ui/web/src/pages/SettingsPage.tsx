@@ -9,7 +9,8 @@ interface NavItem {
   to: string;
   label: string;
   requireEditor?: boolean;
-  requireAdmin?: boolean;
+  /** The install's, not an account's (where previews live, backups). */
+  requireServerAdmin?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -20,8 +21,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/processing", label: "Processing" },
   { to: "/settings/files", label: "Files" },
   { to: "/settings/network", label: "Network" },
-  { to: "/settings/backups", label: "Backups", requireAdmin: true },
-  { to: "/settings/storage", label: "Storage", requireAdmin: true },
+  { to: "/settings/backups", label: "Backups", requireServerAdmin: true },
+  { to: "/settings/storage", label: "Storage", requireServerAdmin: true },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];
@@ -35,10 +36,10 @@ export default function SettingsPage() {
   // The worker couldn't use the vision model: flag the AI page until it's fixed.
   const { data: ai } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings });
   const aiProblem = aiHasProblem(ai);
-  const isAdmin = user?.role === "admin";
-  const { data: backups } = useQuery({ queryKey: BACKUPS_QUERY_KEY, queryFn: getBackups, enabled: isAdmin });
+  const isServerAdmin = user?.server_admin === true;
+  const { data: backups } = useQuery({ queryKey: BACKUPS_QUERY_KEY, queryFn: getBackups, enabled: isServerAdmin });
   const backupsProblem = backupsHaveProblem(backups);
-  const { data: storage } = useQuery({ queryKey: STORAGE_QUERY_KEY, queryFn: getStorageInfo, enabled: isAdmin });
+  const { data: storage } = useQuery({ queryKey: STORAGE_QUERY_KEY, queryFn: getStorageInfo, enabled: isServerAdmin });
   const storageProblem = storageHasProblem(storage);
 
   // Don't hide editor-only items until we know the role (avoids flicker)
@@ -52,7 +53,7 @@ export default function SettingsPage() {
         <nav className="flex shrink-0 flex-row flex-wrap gap-1 sm:w-48 sm:flex-col sm:flex-nowrap">
           {NAV_ITEMS.map((item) => {
             if (item.requireEditor && !isEditorOrAbove) return null;
-            if (item.requireAdmin && !isPending && !isAdmin) return null;
+            if (item.requireServerAdmin && !isPending && !isServerAdmin) return null;
             return (
               <NavLink
                 key={item.to}

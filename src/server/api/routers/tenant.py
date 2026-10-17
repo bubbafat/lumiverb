@@ -259,14 +259,16 @@ def delete_filter_default(
 # the first library. Each is a Settings section; the wizard only remembers
 # which ones the admin went through, so it can be left and picked up again.
 SETUP_STEPS = ("storage", "network", "find", "ai", "people", "library")
+# The install's, not the account's: a server admin's steps only (ADR-018 decision 8).
+SERVER_STEPS = ("storage", "network")
 SETUP_KEY = "setup.wizard"
 
 
 class SetupProgress(BaseModel):
-    steps: list[str]
+    steps: list[str]  # the caller's: the install's own two only for a server admin
     done: list[str]  # gone through (changed, or kept as they were): in step order
     dismissed: bool  # an admin said they'd rather not: the Admin page stops offering it
-    finished: bool  # every step done
+    finished: bool  # every one of the caller's steps done
 
 
 class SetupChange(BaseModel):
@@ -276,7 +278,7 @@ class SetupChange(BaseModel):
     dismissed: StrictBool | None = None
 
 
-def _setup(session: Session) -> SetupProgress:
+def _setup(session: Session, request: Request) -> SetupProgress:
     import json
 
     from src.server.repository.system_metadata import SystemMetadataRepository
@@ -287,25 +289,28 @@ def _setup(session: Session) -> SetupProgress:
     except ValueError:
         kept = {}
     done = [s for s in SETUP_STEPS if s in set(kept.get("done") or [])]
-    return SetupProgress(steps=list(SETUP_STEPS), done=done, dismissed=bool(kept.get("dismissed")),
-                         finished=len(done) == len(SETUP_STEPS))
+    server_admin = getattr(request.state, "server_admin", False) is True
+    steps = [s for s in SETUP_STEPS if server_admin or s not in SERVER_STEPS]
+    return SetupProgress(steps=steps, done=done, dismissed=bool(kept.get("dismissed")),
+                         finished=all(s in done for s in steps))
 
 
 @router.get("/setup", response_model=SetupProgress, dependencies=[Depends(require_tenant_admin)])
-def get_setup(session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
+def get_setup(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
     """How far the account's admins got through setting it up (the wizard)."""
-    return _setup(session)
+    return _setup(session, request)
 
 
 @router.put("/setup", response_model=SetupProgress, dependencies=[Depends(require_tenant_admin)])
-def change_setup(body: SetupChange, session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
+def change_setup(body: SetupChange, request: Request,
+                 session: Annotated[Session, Depends(get_tenant_session)]) -> SetupProgress:
     """Steps gone through (the whole list, as the wizard has it), and whether it's put away."""
     import json
 
     from src.server.api.errors import InvalidChoiceError
     from src.server.repository.system_metadata import SystemMetadataRepository
 
-    now = _setup(session)
+    now = _setup(session, request)
     done = now.done if body.done is None else body.done
     unknown = sorted(set(done) - set(SETUP_STEPS))
     if unknown:
@@ -313,4 +318,4 @@ def change_setup(body: SetupChange, session: Annotated[Session, Depends(get_tena
     value = {"done": [s for s in SETUP_STEPS if s in set(done)],
              "dismissed": now.dismissed if body.dismissed is None else body.dismissed}
     SystemMetadataRepository(session).set_value(SETUP_KEY, json.dumps(value))  # commits
-    return _setup(session)
+    return _setup(session, request)

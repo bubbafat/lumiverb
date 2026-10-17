@@ -64,11 +64,11 @@ function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Couldn't reach the server. Try again.";
 }
 
-/** Backups of every database: when, where they go, and how to put one back. Admins only. */
+/** Backups of every database: when, where they go, and how to put one back. Server admins only. */
 export default function BackupsSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
-  const admin = user?.role === "admin";
+  const admin = user?.server_admin === true;
   const { data, isLoading, error } = useQuery({
     queryKey: BACKUPS_QUERY_KEY,
     queryFn: getBackups,
@@ -83,7 +83,7 @@ export default function BackupsSection() {
   if (user && !admin) {
     return (
       <Frame>
-        <p className="text-sm text-gray-400">Only admins see backups.</p>
+        <p className="text-sm text-gray-400">Only a server admin sees backups.</p>
       </Frame>
     );
   }

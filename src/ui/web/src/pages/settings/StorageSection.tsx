@@ -49,7 +49,7 @@ export function storageHasProblem(s: StorageInfo | undefined): boolean {
 export default function StorageSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
-  const admin = user?.role === "admin";
+  const admin = user?.server_admin === true;
   const { data, isLoading, error } = useQuery({
     queryKey: STORAGE_QUERY_KEY,
     queryFn: getStorageInfo,
@@ -60,7 +60,7 @@ export default function StorageSection() {
   if (user && !admin) {
     return (
       <Frame>
-        <p className="text-sm text-gray-400">Only admins see where Lumiverb keeps its files.</p>
+        <p className="text-sm text-gray-400">Only a server admin sees where Lumiverb keeps its files.</p>
       </Frame>
     );
   }

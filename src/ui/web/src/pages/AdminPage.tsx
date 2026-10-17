@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
+  getCurrentUser,
   getSetupProgress,
   listLibraries,
   setSetupProgress,
@@ -98,6 +99,7 @@ function LibraryRow({ lib, reach: seen }: { lib: LibraryListItem; reach: Reach }
 
 export default function AdminPage() {
   const health = useSystemHealth(POLL_INTERVAL);
+  const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: libraries, isLoading: libsLoading } = useQuery({
     queryKey: ["admin", "libraries"],
     queryFn: () => listLibraries(false),
@@ -157,9 +159,11 @@ export default function AdminPage() {
           <Link to="/admin/users" className="text-sm text-indigo-400 hover:text-indigo-300">
             Manage users →
           </Link>
-          <Link to="/admin/logs" className="text-sm text-indigo-400 hover:text-indigo-300">
-            Logs →
-          </Link>
+          {user?.server_admin && (
+            <Link to="/admin/logs" className="text-sm text-indigo-400 hover:text-indigo-300">
+              Logs →
+            </Link>
+          )}
         </div>
       </div>
 

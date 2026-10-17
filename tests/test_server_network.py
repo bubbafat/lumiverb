@@ -196,6 +196,26 @@ def test_a_port_whose_connections_just_closed_is_free():
     assert network.free(port)
 
 
+def _watching(tmp_path, monkeypatch, stop: threading.Event, restarts: list, **kwargs) -> threading.Thread:
+    """network.watch in a thread, once it has read what it starts from: a
+    change made before that (a slow start on a busy machine) would be where
+    it started, with nothing to put back."""
+    started, read = threading.Event(), network.ports
+
+    def ports(*args, **kw):
+        found = read(*args, **kw)
+        if threading.current_thread() is watcher:
+            started.set()
+        return found
+
+    monkeypatch.setattr(network, "ports", ports)
+    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
+                               kwargs=kwargs)
+    watcher.start()
+    assert started.wait(5), "the watcher read where it starts from"
+    return watcher
+
+
 def test_a_port_nginx_doesn_t_start_listening_on_goes_back_to_the_one_before(tmp_path, monkeypatch):
     """Something took it between the admin's choice and nginx's restart:
     this machine can still open Settings."""
@@ -207,9 +227,7 @@ def test_a_port_nginx_doesn_t_start_listening_on_goes_back_to_the_one_before(tmp
         asked.append(port)
         return port != 8080
 
-    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
-                               kwargs={"every": 0.02, "answers": answers})
-    watcher.start()
+    watcher = _watching(tmp_path, monkeypatch, stop, restarts, every=0.02, answers=answers)
     try:
         network.set_ports(tmp_path, network.Ports(8080, 6465))
         deadline = time.monotonic() + 5
@@ -243,9 +261,7 @@ def test_https_nginx_doesn_t_start_listening_on_is_turned_off_again(tmp_path, mo
         asked.append(port)
         return False
 
-    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
-                               kwargs={"every": 0.02, "answers": answers})
-    watcher.start()
+    watcher = _watching(tmp_path, monkeypatch, stop, restarts, every=0.02, answers=answers)
     try:
         network.set_choice(tmp_path, WITH_HTTPS)
         deadline = time.monotonic() + 5
@@ -293,9 +309,7 @@ def test_a_change_rewrites_the_lines_and_restarts_nginx_once(tmp_path, monkeypat
     monkeypatch.setattr(tls, "names_here", lambda: ("macstudio.local", "localhost", "127.0.0.1"))
     network.apply(tmp_path, DEFAULTS)
     stop, restarts = threading.Event(), []
-    watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
-                               kwargs={"every": 0.02})
-    watcher.start()
+    watcher = _watching(tmp_path, monkeypatch, stop, restarts, every=0.02)
     try:
         time.sleep(0.1)
         assert restarts == [], "nothing changed"

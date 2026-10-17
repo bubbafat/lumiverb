@@ -563,6 +563,49 @@ def _reset_password(args: argparse.Namespace) -> int:
     return 0
 
 
+def _server_admins(args: argparse.Namespace) -> int:
+    """server-admins [add|remove EMAIL]: who looks after the install, its
+    accounts and what they share (ADR-018 decision 8), then who does. On the
+    machine itself, so it's the way to name one where there's none, and it
+    may take away the last."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.server.config import get_settings
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantRepository, UserRepository
+
+    if args.action is not None and not args.email:
+        print(f"✗ {args.action.capitalize()} whom? Their email, as they sign in", file=sys.stderr)
+        return 2
+    env, _ = _env_and_url(args)
+    os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
+    get_settings.cache_clear()
+    try:
+        with get_control_session() as session:
+            users = UserRepository(session)
+            if args.action is not None:
+                user = users.get_by_email(args.email.strip())
+                if user is None:
+                    print("✗ Nobody signs in here with that email", file=sys.stderr)
+                    return 1
+                users.set_server_admin(user.user_id, args.action == "add")
+                print(f"✓ {user.email} is a server admin" if args.action == "add"
+                      else f"✓ {user.email} is no longer a server admin")
+            names = {t.tenant_id: t.name for t in TenantRepository(session).list_all()}
+            admins = [(u.email, names.get(u.tenant_id, "")) for u in users.server_admins()]
+    except SQLAlchemyError as exc:
+        first = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+        print(f"✗ Can't reach the control database: {first}", file=sys.stderr)
+        return 1
+    if not admins:
+        print("This Lumiverb has no server admin: name one with `lumiverb-server server-admins add EMAIL`")
+    else:
+        print("Server admins:")
+        for email, account in admins:
+            print(f"  {email} ({account})")
+    return 0
+
+
 def _size(n: int) -> str:
     for unit in ("bytes", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -784,6 +827,11 @@ def main(argv: list[str] | None = None) -> int:
         help="set someone's new password, signing them out everywhere and revoking their API keys (no email needed)")
     _env_option(reset_command, argparse.SUPPRESS)
     reset_command.add_argument("--email", help="theirs (asked if not given)")
+    admins_command = commands.add_parser(
+        "server-admins", help="who looks after this install (its accounts, network, backups, logs); add or remove one")
+    _env_option(admins_command, argparse.SUPPRESS)
+    admins_command.add_argument("action", nargs="?", choices=("add", "remove"), help="add or remove one")
+    admins_command.add_argument("email", nargs="?", help="theirs, as they sign in")
     backup_command = commands.add_parser("backup", help="back up every database now, into the backups folder")
     _env_option(backup_command, argparse.SUPPRESS)
     backup_command.add_argument("--before-upgrade", action="store_true",
@@ -804,7 +852,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
-                "reset-password": _reset_password, "backup": _backup, "restore": _restore,
+                "reset-password": _reset_password, "server-admins": _server_admins, "backup": _backup,
+                "restore": _restore,
                 "pause": _pausing, "resume": _pausing}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)

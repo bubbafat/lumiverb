@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   getApiKey: vi.fn(() => "key"),
   getSetupProgress: vi.fn(),
   setSetupProgress: vi.fn(),
+  getCurrentUser: vi.fn(),
 }));
 vi.mock("../api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/client")>()),
@@ -45,6 +46,7 @@ function health(over: Partial<SystemHealth> = {}): SystemHealth {
 const STEPS = ["storage", "network", "find", "ai", "people", "library"];
 
 beforeEach(() => {
+  api.getCurrentUser.mockResolvedValue({ user_id: "usr_1", email: "a@b.c", role: "admin", server_admin: true });
   api.getSetupProgress.mockResolvedValue({ steps: STEPS, done: STEPS, dismissed: false, finished: true });
   api.getSystemHealth.mockResolvedValue(health());
   api.listLibraries.mockResolvedValue([
@@ -158,6 +160,14 @@ describe("AdminPage", () => {
   it("links to the service's log", async () => {
     renderPage();
     expect((await screen.findByRole("link", { name: /Logs/ })).getAttribute("href")).toBe("/admin/logs");
+  });
+
+  it("links the log, the install's, only for a server admin", async () => {
+    api.getCurrentUser.mockResolvedValue({ user_id: "usr_2", email: "b@b.c", role: "admin", server_admin: false });
+    renderPage();
+    await screen.findByRole("link", { name: /Manage users/ });
+    await screen.findByText("Photos");
+    expect(screen.queryByRole("link", { name: /Logs/ })).toBeNull();
   });
 });
 

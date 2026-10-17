@@ -256,6 +256,8 @@ export interface CurrentUser {
   user_id: string | null;
   email: string | null;
   role: string;
+  /** The install's admin too: where previews live, the network, backups, logs (only when signed in). */
+  server_admin: boolean;
 }
 
 export interface ApiKeyItem {

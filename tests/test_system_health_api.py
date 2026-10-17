@@ -2,7 +2,9 @@
 """GET /v1/system/health: the Admin page's seven rows, gathered from the
 scheduler's status, the AI machines, the clips not searchable yet, the
 libraries, the data disk and the backups (the rules alone:
-tests/test_system_health.py)."""
+tests/test_system_health.py). The disk and the backups are the install's, so
+a server admin sees them (signed in, as the Admin page is) and an account's
+admin key doesn't."""
 
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ from collections import namedtuple
 from datetime import timedelta
 from unittest.mock import patch
 
+import bcrypt
 import pytest
 from sqlalchemy import text
 
@@ -22,6 +25,25 @@ from tests.test_lineage_api import _db, _ingest_with, _sha
 pytestmark = pytest.mark.slow
 
 KEYS = ["website", "processing", "ai", "search", "storage", "disk", "backups"]
+_signed_in: dict[str, dict[str, str]] = {}
+
+
+def _server_admin(env) -> dict[str, str]:
+    """The install's admin in the account, signed in (once a module)."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import UserRepository
+
+    client, _, _, _, tenant_id, _ = env
+    if tenant_id not in _signed_in:
+        password = "correct horse battery"
+        with get_control_session() as session:
+            UserRepository(session).create(tenant_id, "server-admin@example.com",
+                                           bcrypt.hashpw(password.encode(), bcrypt.gensalt(4)).decode(),
+                                           role="admin", server_admin=True)
+        r = client.post("/v1/auth/login", json={"email": "server-admin@example.com", "password": password})
+        assert r.status_code == 200, r.text
+        _signed_in[tenant_id] = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return _signed_in[tenant_id]
 
 
 @pytest.fixture(autouse=True)
@@ -35,8 +57,8 @@ def _fresh():
 
 
 def _health(env) -> dict:
-    client, headers, *_ = env
-    r = client.get("/v1/system/health", headers=headers)
+    client, *_ = env
+    r = client.get("/v1/system/health", headers=_server_admin(env))
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -62,6 +84,9 @@ def _forget(env, *keys: str) -> None:
 def test_seven_rows_in_order_with_the_worst_overall(env):
     body = _health(env)
     assert [r["key"] for r in body["rows"]] == KEYS
+    client, headers, *_ = env
+    keyed = client.get("/v1/system/health", headers=headers).json()["rows"]
+    assert [r["key"] for r in keyed] == KEYS[:5], "an account admin's key: the account's rows"
     assert all(r["state"] in ("green", "yellow", "red") and r["reason"] for r in body["rows"])
     order = {"green": 0, "yellow": 1, "red": 2}
     assert body["state"] == max((r["state"] for r in body["rows"]), key=order.__getitem__)

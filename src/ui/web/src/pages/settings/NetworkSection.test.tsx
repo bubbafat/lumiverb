@@ -18,6 +18,8 @@ const YOURS = {
 };
 const SEEN = { at: "2026-10-17T14:02:00Z", address: "192.168.86.20" };
 let role = "admin";
+// The install's admin too (the server's /v1/me): an account admin may not be.
+let serverAdmin = true;
 let available = true;
 let otherDevices = false;
 let https = false;
@@ -37,7 +39,10 @@ function error(status: number, refused: { code: string; message: string }) {
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-    if (url.endsWith("/v1/me")) return new Response(JSON.stringify({ email: "a@b.c", role }), { status: 200 });
+    if (url.endsWith("/v1/me")) {
+      return new Response(JSON.stringify({ email: "a@b.c", role, server_admin: role === "admin" && serverAdmin }),
+                          { status: 200 });
+    }
     // The server's rules (routers/system.py): HTTPS off brings plain HTTP back; plain HTTP off only once seen.
     const answer = () =>
       new Response(
@@ -83,6 +88,7 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
   role = "admin";
+  serverAdmin = true;
   available = true;
   otherDevices = false;
   https = false;
@@ -208,7 +214,7 @@ describe("NetworkSection", () => {
     otherDevices = true;
     renderSection();
     expect(await screen.findByText("Other devices on your network can use Lumiverb.")).toBeTruthy();
-    expect(screen.getByText("Only admins can change this.")).toBeTruthy();
+    expect(screen.getByText("Only a server admin can change this.")).toBeTruthy();
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.getByText(ADDRESSES[1])).toBeTruthy();
     expect(screen.queryByText(/encrypted connection/)).toBeNull(); // HTTPS is off: nothing said of it
@@ -282,6 +288,18 @@ describe("NetworkSection", () => {
     renderSection();
     await screen.findByText("Only the Mac Lumiverb is installed on can use it.");
     expect(screen.queryByLabelText("HTTP")).toBeNull();
+  });
+
+  it("is the server admin's to change, not an account admin's", async () => {
+    serverAdmin = false;
+    otherDevices = true;
+    https = true;
+    renderSection();
+    expect(await screen.findByText("Other devices on your network can use Lumiverb.")).toBeTruthy();
+    expect(screen.getByText("Only a server admin can change this.")).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByLabelText("HTTP")).toBeNull();
+    expect(screen.queryByText("Use your own certificate")).toBeNull();
   });
 
   it("says nothing of HTTPS while it's this Mac only", async () => {

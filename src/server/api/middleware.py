@@ -8,6 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from src.server.api.dependencies import is_install_key
 from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, UserRepository
@@ -21,8 +22,6 @@ _API_KEY_PREFIX = "lv_"  # ApiKeyRepository._generate_plaintext
 def _skip_tenant_middleware(path: str) -> bool:
     """Return True if path should not run tenant resolution."""
     if path == "/health":
-        return True
-    if path.startswith("/v1/admin/"):
         return True
     if path.startswith("/v1/auth/"):
         return True
@@ -79,7 +78,9 @@ def _routed(session, pub) -> str | None:
 
 class TenantResolutionMiddleware(BaseHTTPMiddleware):
     """
-    Run before every request except /health and /v1/admin/*.
+    Run before every request except those _skip_tenant_middleware names.
+    On /v1/admin/* the install's own key (ADMIN_KEY) is let through as such
+    (request.state.install_key), with no account.
 
     Authenticated path: resolves Authorization: Bearer <token> to tenant_id and
     connection_string, stores them in request.state.
@@ -102,6 +103,11 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
             token = auth[7:].strip()
             if not token:
                 return _error_response(401, "unauthorized", "Missing or invalid Authorization header")
+
+            # The install's own key, for its accounts (dependencies.require_server_admin): no account's.
+            if request.url.path.startswith("/v1/admin/") and is_install_key(token):
+                request.state.install_key = True
+                return await call_next(request)
 
             # Try JWT first; fall through to API key lookup on failure.
             # API keys (lv_ prefix) go straight to the key lookup.
@@ -139,6 +145,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     request.state.email = claims.get("email", "")
                     request.state.key_id = None
                     request.state.role = role
+                    # As they are now, like the role: taking it away takes effect at once.
+                    request.state.server_admin = bool(user.server_admin)
                     request.state.is_public_request = False
                     return await call_next(request)
 
@@ -159,6 +167,7 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 request.state.role = getattr(api_key, "role", "admin")
                 # A device's key: it scans the libraries it reads and nothing else (src/server/api/devices.py).
                 request.state.device_id = api_key.device_id
+                request.state.server_admin = False  # a person signed in, never a key, whoever made it
                 request.state.is_public_request = False
             return await call_next(request)
 
