@@ -43,6 +43,12 @@ class VideoSceneRepository:
     def get_by_id(self, scene_id: str) -> VideoScene | None:
         return self._session.get(VideoScene, scene_id)
 
+    def files_of(self, asset_ids: list[str]) -> list[tuple[str, int, str | None, str | None]]:
+        """Every scene of these clips: (asset_id, rep_frame_ms, proxy_key, thumbnail_key)."""
+        return [tuple(r) for r in self._session.execute(text(
+            "SELECT asset_id, rep_frame_ms, proxy_key, thumbnail_key FROM video_scenes WHERE asset_id = ANY(:ids)"),
+            {"ids": asset_ids}).all()]
+
     def update_vision(
         self,
         scene_id: str,

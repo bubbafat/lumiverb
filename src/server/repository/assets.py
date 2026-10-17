@@ -139,6 +139,140 @@ class AssetRepository:
                                   .where(Asset.asset_id.in_(asset_ids))).all()  # type: ignore[union-attr]
         return {r[0]: tuple(r[1:]) for r in rows}
 
+    def get_any(self, asset_id: str) -> Asset | None:
+        """The clip in sight or not (trashed, archived): get_by_id leaves those out."""
+        return self._session.get(Asset, asset_id)
+
+    def lock_for_update(self, asset: Asset) -> None:
+        """One write of the clip at a time, with it as it is now (read again under the lock)."""
+        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset.asset_id})
+        self._session.refresh(asset)
+
+    def missing_share(self, asset_ids: list[str]) -> list:
+        """For each library these clips (in sight) are in: how many of them
+        (going) and how many clips it has in sight."""
+        return self._session.execute(text("""
+            SELECT a.library_id,
+                   COUNT(*) FILTER (WHERE a.asset_id = ANY(:ids))::int AS going,
+                   COUNT(*)::int AS in_sight
+            FROM assets a
+            WHERE a.deleted_at IS NULL
+              AND a.library_id IN (SELECT library_id FROM assets WHERE asset_id = ANY(:ids) AND deleted_at IS NULL)
+            GROUP BY a.library_id
+        """), {"ids": asset_ids}).all()
+
+    def repair_counts(self, library_id: str) -> dict:
+        """A library's clips, what scans left out (proxies, EXIF), what each
+        producer still needs (MISSING_CONDITIONS, by its missing_* flag),
+        stale search entries, and clip-steps left out of those because their
+        last try failed and their turn hasn't come (waiting_failures)."""
+        from src.server.repository import lineage
+        from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
+        from src.shared.producers import MISSING_FLAGS
+
+        counts = ",\n".join(f"COUNT(*) FILTER (WHERE {MISSING_CONDITIONS[f]}) AS {f}" for f in MISSING_CONDITIONS)
+        # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
+        waiting = " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
+                             for a in MISSING_FLAGS.values())
+        return dict(self._session.execute(text(f"""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
+                COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
+                {counts},
+                COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
+                {waiting} AS waiting_failures
+            FROM active_assets a
+            {lineage.LINEAGE_JOIN}
+            WHERE library_id = :library_id
+        """), {"library_id": library_id}).mappings().one())
+
+    def mark_unsynced(self, asset: Asset) -> None:
+        """Stale until search has the clip as it is now (not committed)."""
+        asset.search_synced_at = None
+        self._session.add(asset)
+
+    def set_transcript(self, asset: Asset, *, srt: str | None, text: str | None, language: str | None,
+                       source: str, has_transcript: bool) -> None:
+        """The clip's transcript, replacing any (not committed)."""
+        asset.transcript_srt = srt
+        asset.transcript_text = text
+        asset.transcript_language = language
+        asset.transcript_source = source
+        asset.transcribed_at = utcnow()
+        asset.has_transcript = has_transcript
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+
+    def clear_transcript(self, asset: Asset, *, has_transcript: bool | None) -> None:
+        """No transcript shown: has_transcript None, missing again (made
+        again); False, none to make (not committed)."""
+        asset.transcript_srt = None
+        asset.transcript_text = None
+        asset.transcript_language = None
+        asset.transcript_source = None
+        asset.transcribed_at = None
+        asset.has_transcript = has_transcript
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+
+    def set_note(self, asset: Asset, note: str | None, author: str | None) -> None:
+        """A person's note on the clip, or none (not committed)."""
+        asset.note = note
+        asset.note_author = author if note else None
+        asset.note_updated_at = utcnow() if note else None
+        asset.updated_at = utcnow()
+        self._session.add(asset)
+
+    def file_seen_again(self, asset: Asset, *, file_size: int, file_mtime: datetime | None, media_type: str) -> None:
+        """Its file as ingest found it now; one marked missing that came back
+        is in sight again (search finds it again: its words were kept). Not
+        committed."""
+        asset.file_size = file_size
+        if file_mtime is not None:
+            asset.file_mtime = file_mtime
+        asset.media_type = media_type
+        if asset.deleted_at is not None:
+            self.clear_trash(asset)
+        self._session.add(asset)
+
+    def folder_has_clips(self, library_ids: list[str], folder: str) -> bool:
+        """Clips in sight under this folder of these libraries."""
+        return self._session.execute(text(
+            "SELECT 1 FROM active_assets WHERE library_id = ANY(:libs) AND starts_with(rel_path, :dir) LIMIT 1"),
+            {"libs": list(library_ids), "dir": folder.strip("/") + "/"}).first() is not None
+
+    # -- A handover: an archived clip moved onto its empty copy (routers/trash.py) ----------
+
+    def lock_timeout(self) -> str:
+        return self._session.execute(text("SELECT current_setting('lock_timeout')")).scalar_one()
+
+    def set_lock_timeout(self, value: str) -> None:
+        """For the rest of the transaction."""
+        self._session.execute(text("SELECT set_config('lock_timeout', :v, true)"), {"v": value})
+
+    def move_onto_copy(self, archived: Asset, copy: Asset) -> None:
+        """The archived clip takes its copy's path and file, in sight again; the
+        copy moved out of the way first (one clip in sight holds a path) and
+        marked handed over; a cover someone set to the copy follows the clip.
+        Flushed, not committed."""
+        path = copy.rel_path
+        copy.rel_path = f".lumiverb-handed-over/{copy.asset_id}"
+        copy.deleted_at = utcnow()
+        copy.deleted_reason = "handed_over"
+        self._session.add(copy)
+        self._session.flush()
+        archived.rel_path = path
+        archived.file_size = copy.file_size
+        archived.file_mtime = copy.file_mtime
+        archived.updated_at = utcnow()
+        self.clear_trash(archived)
+        self._session.add(archived)
+        for table in ("libraries", "projects"):
+            self._session.execute(text(f"UPDATE {table} SET cover_asset_id = :a WHERE cover_asset_id = :c"),
+                                  {"a": archived.asset_id, "c": copy.asset_id})
+        self._session.flush()
+
     def list_pending_by_library(self, library_id: str) -> list[Asset]:
         """Return all active (non-trashed) assets in library with status='pending'."""
         stmt = (

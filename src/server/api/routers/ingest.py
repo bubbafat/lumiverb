@@ -507,18 +507,12 @@ async def create_and_ingest(
         created = True
     else:
         asset_id = existing.asset_id
-        # Update file metadata if changed
-        existing.file_size = file_size
-        if file_mtime_dt is not None:
-            existing.file_mtime = file_mtime_dt
-        existing.media_type = media_type
-        # A file the scanner marked missing has reappeared: restore it (search
-        # finds it again: its words were kept). Without this, the asset stays
-        # invisible (active_assets filters deleted_at) and the scanner
-        # re-discovers it every cycle.
-        if existing.deleted_at is not None:
-            AssetRepository(session).clear_trash(existing)
-        session.add(existing)
+        # Its file as found now; one the scanner marked missing has reappeared
+        # and is restored. Without that, the asset stays invisible
+        # (active_assets filters deleted_at) and the scanner re-discovers it
+        # every cycle.
+        AssetRepository(session).file_seen_again(existing, file_size=file_size, file_mtime=file_mtime_dt,
+                                                 media_type=media_type)
 
     from sqlalchemy.exc import IntegrityError
 

@@ -908,6 +908,23 @@ class FaceRepository:
         """Where the face's crop is stored (not committed)."""
         self._session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
 
+    def crops_of(self, asset_ids: list[str]) -> list[tuple[str, str, str | None]]:
+        """Every face of these clips: (asset_id, face_id, crop_key)."""
+        return [tuple(r) for r in self._session.execute(text(
+            "SELECT asset_id, face_id, crop_key FROM faces WHERE asset_id = ANY(:ids)"), {"ids": asset_ids}).all()]
+
+    def people_in(self, asset_id: str) -> set[str]:
+        """The people whose faces are in the clip."""
+        return set(self._session.execute(text(
+            "SELECT DISTINCT person_id FROM faces WHERE asset_id = :aid AND person_id IS NOT NULL"),
+            {"aid": asset_id}).scalars().all())
+
+    def clips_with(self, asset_ids: list[str], person_ids: list[str]) -> set[str]:
+        """Which of these clips have a face of one of these people."""
+        return set(self._session.execute(text(
+            "SELECT DISTINCT asset_id FROM faces WHERE asset_id = ANY(:aids) AND person_id = ANY(:pids)"),
+            {"aids": asset_ids, "pids": person_ids}).scalars().all())
+
     def crop_key_of(self, face_id: str) -> str | None:
         """Where the face's crop is stored, as the database says now."""
         return self._session.execute(text("SELECT crop_key FROM faces WHERE face_id = :f"), {"f": face_id}).scalar()

@@ -309,3 +309,71 @@ class UnifiedBrowseRepository:
         )
         assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
         return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
+
+    def facets(self, spec: "QuerySpec", candidate_ids: list[str] | None = None):
+        """Facets' row (routers/facets.py): the filter values among the clips
+        the spec finds (its text search's candidates, candidate_ids, already
+        found), each kind in one column."""
+        from src.server.models.query_filter import LOCATION_JOIN, SearchTerm, has_location_sql, location_params
+
+        conditions: list[str] = []
+        params: dict[str, object] = {}
+        counter = [0]
+
+        if candidate_ids is not None:
+            conditions.append("a.asset_id = ANY(:candidate_ids)")
+            params["candidate_ids"] = candidate_ids
+
+        # --- Structured filter SQL conditions ---
+        joins: list[str] = []
+        needs_rating = False
+        needs_metadata = False
+
+        for leaf in spec.leaves:
+            if isinstance(leaf, SearchTerm):
+                continue  # handled via candidate set above
+            sql_frag = leaf.to_sql(params, counter)
+            conditions.append(sql_frag)
+            if leaf.needs_rating_join:
+                needs_rating = True
+            if leaf.needs_metadata_join:
+                needs_metadata = True
+
+        # Build FROM clause with necessary JOINs
+        from_clause = "active_assets a"
+        joins.append(LOCATION_JOIN)  # the location counts read the effective location
+        location_params(params)
+        if needs_rating:
+            joins.append(
+                "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id"
+            )
+        if needs_metadata:
+            from src.server.repository.corrections import TAGS_JOIN
+
+            joins.append(TAGS_JOIN)  # the tags a person sees
+
+        where_sql = " AND ".join(conditions) if conditions else "TRUE"
+        join_sql = " ".join(joins)
+
+        sql = f"""
+            SELECT
+                array_agg(DISTINCT a.camera_make) FILTER (WHERE a.camera_make IS NOT NULL) AS camera_makes,
+                array_agg(DISTINCT a.camera_model) FILTER (WHERE a.camera_model IS NOT NULL) AS camera_models,
+                array_agg(DISTINCT a.lens_model) FILTER (WHERE a.lens_model IS NOT NULL) AS lens_models,
+                MIN(a.iso) AS iso_min,
+                MAX(a.iso) AS iso_max,
+                MIN(a.aperture) AS aperture_min,
+                MAX(a.aperture) AS aperture_max,
+                MIN(a.focal_length) AS fl_min,
+                MAX(a.focal_length) AS fl_max,
+                bool_or(a.media_type = 'image') AS has_images,
+                bool_or(a.media_type = 'video') AS has_videos,
+                COUNT(*) FILTER (WHERE {has_location_sql()}) AS gps_count,
+                COUNT(*) FILTER (WHERE loc.status = 'applied' AND loc.source <> 'person') AS guess_count,
+                COUNT(*) FILTER (WHERE a.face_count > 0) AS face_count
+            FROM {from_clause}
+            {join_sql}
+            WHERE {where_sql}
+        """
+
+        return self._session.execute(text(sql).bindparams(**params)).one()
