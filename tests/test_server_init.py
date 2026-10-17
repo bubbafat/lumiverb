@@ -81,7 +81,8 @@ def test_a_new_install_gets_both_and_they_agree(tmp_path):
     assert env["TENANT_DATABASE_URL_TEMPLATE"] == "postgresql+psycopg2://lumiverb:secret-4@127.0.0.1:6468/{tenant_id}"
     assert [env["ADMIN_KEY"], env["API_SECRET_KEY"], env["JWT_SECRET"]] == ["secret-1", "secret-2", "secret-3"]
     assert env["DATA_DIR"] == str(tmp_path / "var")
-    assert (env["WEB_PORT"], env["API_PORT"]) == ("6464", "6465")
+    # Devices: 6464, and 6465 for HTTPS (Settings › Network changes them); the API on this machine alone, 6364.
+    assert (env["WEB_PORT"], env["WEB_TLS_PORT"], env["API_PORT"]) == ("6464", "6465", "6364")
     assert env["APP_HOST"] == "http://localhost:6464"
     # What run starts besides the API and the scheduler: no search service (ADR-019).
     assert {key: env[key] for key in ("PG_BIN", "NGINX_BIN", "NGINX_CONFIG")} == {
@@ -107,7 +108,7 @@ def test_a_new_install_gets_both_and_they_agree(tmp_path):
     listen = (tmp_path / "var" / "nginx" / "listen.conf").read_text()
     assert "listen 127.0.0.1:6464 default_server;\nlisten [::1]:6464 default_server;\n" in listen
     assert "listen 6464" not in listen, "not on every address"
-    assert "proxy_pass http://127.0.0.1:6465;" in conf
+    assert "proxy_pass http://127.0.0.1:6364;" in conf
     assert f"root {tmp_path / 'web'};" in conf
 
     for folder in ("cache", "tmp", "worker-tmp", "nginx"):
@@ -174,7 +175,7 @@ def test_what_it_doesnt_name_isnt_written(tmp_path):
 def test_a_choice_the_env_file_disagrees_with_is_refused_and_nothing_written(tmp_path):
     paths = _install(tmp_path)
     paths["nginx"].unlink()
-    with pytest.raises(InitError, match=r"says API_PORT='6465' \(you said '7000'\).*edit it, or move it away"):
+    with pytest.raises(InitError, match=r"says API_PORT='6364' \(you said '7000'\).*edit it, or move it away"):
         _install(tmp_path, Choices(data_dir=tmp_path / "var", api_port=7000))
     with pytest.raises(InitError, match=r"says NGINX_BIN="):
         _install(tmp_path, Choices(nginx_bin=Path("/elsewhere/nginx")))

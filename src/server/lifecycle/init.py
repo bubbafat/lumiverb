@@ -25,10 +25,13 @@ from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
 
 # A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000).
-# 6466 and 6467 were Quickwit's (ADR-019: search is in PostgreSQL).
-WEB_PORT = 6464
-API_PORT = 6465
-TLS_PORT = 6443  # HTTPS, for other devices (network.py), once Settings › Network lets them in
+# 6466 and 6467 were Quickwit's (ADR-019: search is in PostgreSQL). What
+# devices use, the web and the API together: 6464, and 6465 for HTTPS
+# (network.py; Settings › Network changes them). The API itself, on this
+# machine alone: 6364 (an install from before moves there: api_port.py).
+WEB_PORT = network.DEFAULT_HTTP_PORT
+TLS_PORT = network.DEFAULT_TLS_PORT
+API_PORT = 6364
 PG_PORT = 6468  # Lumiverb's own PostgreSQL (not Homebrew's, on 5432)
 PG_ROLE = "lumiverb"
 # The scheduler reads every library folder where it is: this machine has the files.
@@ -117,11 +120,12 @@ STORAGE_PROVIDER=local
 DATA_DIR={data}
 XDG_CACHE_HOME={data / 'cache'}
 
-# API (the web reaches it through nginx on WEB_PORT)
+# API, on this machine alone: devices reach it through nginx, with the web
 API_LISTEN_HOST=127.0.0.1
 API_PORT={api_port}
 
-# What this install uses (WEB_TLS_PORT: HTTPS for other devices, Settings › Network)
+# Where devices open it: plain HTTP, and HTTPS once Settings › Network adds
+# it. These are the defaults: Settings › Network changes them.
 WEB_PORT={web_port}
 WEB_TLS_PORT={TLS_PORT}
 

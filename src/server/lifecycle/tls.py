@@ -2,7 +2,7 @@
 (Robert, 2026-10-15: "Own CA + your certificate"; Tailscale never needed).
 
 Other devices reach it over plain HTTP, and over HTTPS too once an admin
-adds it (network.py: its own port, WEB_TLS_PORT else 6443; nothing is made
+adds it (network.py: its own port, 6465 unless they choose another; nothing is made
 here until then); this machine's own browser keeps plain HTTP on localhost.
 The certificate is one of two, in DATA_DIR/tls:
 

@@ -110,7 +110,11 @@ def test_on_a_mac_open_to_other_devices_the_link_is_its_network_address(admin, t
     assert by_address == first.replace("macstudio.local", "192.168.86.55"), "the same link by address: any device"
     network.set_choice(tmp_path, network.Choice(other_devices=True, https=True, plain_http=False))
     assert _invite(admin, "https@example.com")["invite_urls"][0].startswith(
-        "https://macstudio.local:6443/join?token="), "HTTPS alone"
+        "https://macstudio.local:6465/join?token="), "HTTPS alone"
+    network.set_choice(tmp_path, network.Choice())
+    network.set_ports(tmp_path, network.Ports(18080, 6465))
+    assert _invite(admin, "moved@example.com")["invite_urls"][0].startswith(
+        "http://localhost:18080/join?token="), "this Mac only, on the port Settings › Network chose"
 
 
 def test_a_new_link_voids_the_old_one(admin):

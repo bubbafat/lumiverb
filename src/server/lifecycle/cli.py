@@ -75,7 +75,7 @@ from getpass import getpass
 from pathlib import Path
 
 from src.server import backups
-from src.server.lifecycle import log, network, private, upkeep
+from src.server.lifecycle import api_port, log, network, private, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -415,6 +415,9 @@ def _run(args: argparse.Namespace) -> int:
     named = _named_env_file(args.env)
     before = env.get(roles.SUPERUSER_URL)
     env = as_app_role(env, named)  # before the children are built: they connect as its role
+    ports_moved = None
+    if named is not None:  # the API off 6465, HTTPS's now (api_port.py), before anything starts on either
+        env, ports_moved = api_port.moved(named, env)
     url = env["CONTROL_PLANE_DATABASE_URL"]
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
@@ -426,6 +429,8 @@ def _run(args: argparse.Namespace) -> int:
     if env.get(roles.SUPERUSER_URL) and not before:
         logger.info("Database: %s now connects as %s, the superuser's URL kept as %s (the old file beside it)",
                     named, roles.APP_ROLE, roles.SUPERUSER_URL)
+    if ports_moved:
+        logger.info("Ports: %s", ports_moved)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     forget_quickwit(env, data)
     stop = threading.Event()
@@ -441,23 +446,30 @@ def _run(args: argparse.Namespace) -> int:
     if env.get("NGINX_BIN"):
         (data / "nginx").mkdir(parents=True, exist_ok=True)
     # Its own nginx listens where Settings › Network says: on this machine only
-    # until an admin says other devices may use it (over HTTP, and HTTPS if they add it).
+    # until an admin says other devices may use it (over HTTP, and HTTPS if they
+    # add it), on its ports (the env file's WEB_PORT and WEB_TLS_PORT unless an
+    # admin chose others).
     web_port = env.get("WEB_PORT", "")
     listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
-    tls_port = network.tls_port(env.get("WEB_TLS_PORT")) if listens else 0
-    if listens and (taken := network.tls_port_taken(env, tls_port)):
-        print(f"✗ WEB_TLS_PORT {tls_port} is also {taken}: set another in {named or 'the env file'}", file=sys.stderr)
-        return 1
+    defaults = network.default_ports(web_port, env.get("WEB_TLS_PORT"))
     if listens:
+        if (at := network.ports(data, defaults)) != defaults and (why := network.port_problem(env, at)):
+            logger.warning("Network: %s: back to ports %d and %d", why, defaults.http, defaults.https)
+            network.set_ports(data, defaults)
+            at = defaults
+        https = network.choice(data).https_for_others
+        for name, port in (("WEB_PORT", at.http), *((("WEB_TLS_PORT", at.https),) if https else ())):
+            if taken := network.port_taken(env, port):
+                print(f"✗ {name} {port} is also {taken}: set another in {named or 'the env file'}", file=sys.stderr)
+                return 1
         try:  # the certificate other devices are served over HTTPS (tls.py): made, or renewed, now
-            network.apply(data, int(web_port), tls_port)
+            network.apply(data, defaults)
         except Exception:  # noqa: BLE001 — served over plain HTTP meanwhile; the watch tries again
             logger.exception("Network: couldn't apply the choice or the certificate")
-            network.without_https(data, int(web_port))
+            network.without_https(data, defaults)
     supervisor = Supervisor(children, relay=log.relay)
     if listens:
-        threading.Thread(target=network.watch, args=(data, int(web_port), tls_port, stop,
-                                                     lambda: supervisor.restart_soon("nginx")),
+        threading.Thread(target=network.watch, args=(data, defaults, stop, lambda: supervisor.restart_soon("nginx")),
                          name="network-watch", daemon=True).start()
     threading.Thread(target=_then_migrated, args=(env, url, stop, migrated), name="migrate-then-upkeep",
                      daemon=True).start()

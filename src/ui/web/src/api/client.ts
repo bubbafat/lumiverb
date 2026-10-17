@@ -1151,6 +1151,9 @@ export interface NetworkAccess {
   https_seen: { at: string; address: string } | null;
   /** HTTPS's; null while it's off, and until Lumiverb has made one. */
   certificate: NetworkCertificate | null;
+  /** Where it listens, the web and the API together (this Mac's own address too); null where it isn't available. */
+  http_port: number | null;
+  https_port: number | null;
 }
 
 /** What an admin changes in Settings → Network; each left out stays as it is. */
@@ -1158,6 +1161,9 @@ export interface NetworkChange {
   other_devices?: boolean;
   https?: boolean;
   plain_http?: boolean;
+  /** 422 port_not_usable says why one can't be: the same twice, another of the install's, one in use. */
+  http_port?: number;
+  https_port?: number;
 }
 
 /** Whether other devices get plain HTTP: theirs unless HTTPS is on and an admin turned it off. */
