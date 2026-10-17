@@ -722,20 +722,26 @@ def _url(asset_id: str) -> str:
     return f"/v1/assets/{asset_id}/artifacts/analysis_proxy"
 
 
+def _cached(cache: AnalysisProxyCache, asset_id: str) -> Path | None:
+    """Where the cache has it, as a job holds it (and lets go)."""
+    with cache.held(asset_id) as path:
+        return path
+
+
 @pytest.mark.fast
 def test_cache_downloads_once_then_reads_locally(tmp_path: Path) -> None:
     client = _Client({"ast_1": _Resp(200, b"proxy bytes")})
     cache = AnalysisProxyCache(client, cache_dir=tmp_path)
-    first = cache.get("ast_1")
-    assert first is not None and first.read_bytes() == b"proxy bytes"
-    assert cache.get("ast_1") == first
+    with cache.held("ast_1") as first:
+        assert first is not None and first.read_bytes() == b"proxy bytes"
+    assert _cached(cache, "ast_1") == first
     assert client.calls == [_url("ast_1")]
 
 
 @pytest.mark.fast
 def test_cache_returns_none_when_the_server_has_none(tmp_path: Path) -> None:
     cache = AnalysisProxyCache(_Client({"ast_1": _Resp(404)}), cache_dir=tmp_path)
-    assert cache.get("ast_1") is None
+    assert _cached(cache, "ast_1") is None
     assert list(tmp_path.iterdir()) == []
 
 
@@ -743,7 +749,7 @@ def test_cache_returns_none_when_the_server_has_none(tmp_path: Path) -> None:
 def test_a_dropped_download_leaves_no_partial_file(tmp_path: Path) -> None:
     client = _Client({"ast_1": _Resp(200, b"0123456789abcdef", fail_after=8)})
     cache = AnalysisProxyCache(client, cache_dir=tmp_path)
-    assert cache.get("ast_1") is None
+    assert _cached(cache, "ast_1") is None
     assert list(tmp_path.iterdir()) == []
 
 
@@ -756,32 +762,66 @@ def test_put_moves_a_rendered_file_in(tmp_path: Path) -> None:
     path = cache.put("ast_1", rendered)
     assert path.read_bytes() == b"fresh"
     assert not rendered.exists()
-    assert cache.get("ast_1") == path
+    assert _cached(cache, "ast_1") == path
+
+
+def _put(cache: AnalysisProxyCache, tmp_path: Path, asset_id: str, size: int, age: float = 0.0) -> Path:
+    src = tmp_path / f"{asset_id}.render"
+    src.write_bytes(b"x" * size)
+    path = cache.put(asset_id, src)
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+    return path
 
 
 @pytest.mark.fast
 def test_cache_evicts_least_recently_used_beyond_its_size(tmp_path: Path) -> None:
     cache = AnalysisProxyCache(_Client({}), cache_dir=tmp_path / "cache", max_bytes=25)
-    paths = {}
-    for n, name in enumerate(["ast_a", "ast_b", "ast_c"]):
-        src = tmp_path / f"{name}.mp4"
-        src.write_bytes(b"x" * 10)
-        paths[name] = cache.put(name, src)
-        stamp = time.time() - 100 + n
-        os.utime(paths[name], (stamp, stamp))
+    a, b = _put(cache, tmp_path, "ast_a", 10, age=100), _put(cache, tmp_path, "ast_b", 10, age=99)
+    c = _put(cache, tmp_path, "ast_c", 10)
     # 30 bytes in a 25-byte cache: the oldest goes, the newest stays.
-    cache.evict()
-    assert not paths["ast_a"].exists()
-    assert paths["ast_b"].exists() and paths["ast_c"].exists()
+    assert not a.exists()
+    assert b.exists() and c.exists()
 
 
 @pytest.mark.fast
 def test_the_newest_file_survives_even_when_alone_too_big(tmp_path: Path) -> None:
     cache = AnalysisProxyCache(_Client({}), cache_dir=tmp_path / "cache", max_bytes=5)
-    src = tmp_path / "big.mp4"
-    src.write_bytes(b"x" * 50)
-    path = cache.put("ast_big", src)
-    assert path.exists()
+    assert _put(cache, tmp_path, "ast_big", 50).exists()
+
+
+@pytest.mark.fast
+def test_a_proxy_a_job_holds_is_never_evicted_the_next_oldest_goes_instead(tmp_path: Path) -> None:
+    """A transcript reads it by path more than once (ffprobe, then ffmpeg)."""
+    cache = AnalysisProxyCache(_Client({}), cache_dir=tmp_path / "cache", max_bytes=25)
+    a = _put(cache, tmp_path, "ast_a", 10, age=100)
+    with cache.held("ast_a") as held:
+        b, c = _put(cache, tmp_path, "ast_b", 10, age=50), _put(cache, tmp_path, "ast_c", 10)
+        assert held == a and a.exists()
+        assert not b.exists() and c.exists()
+
+
+@pytest.mark.fast
+def test_with_nothing_else_to_go_the_cache_is_over_its_cap_until_let_go(tmp_path: Path) -> None:
+    cache = AnalysisProxyCache(_Client({}), cache_dir=tmp_path / "cache", max_bytes=15)
+    a = _put(cache, tmp_path, "ast_a", 10, age=100)
+    with cache.held("ast_a"):
+        c = _put(cache, tmp_path, "ast_c", 10)
+        assert a.exists() and c.exists(), "20 bytes in a 15-byte cache, rather than the work failing"
+    d = _put(cache, tmp_path, "ast_d", 1)
+    assert not a.exists() and c.exists() and d.exists(), "let go of: it goes at the next write"
+
+
+@pytest.mark.fast
+def test_a_download_is_held_from_before_it_starts(tmp_path: Path) -> None:
+    """Fetched and then read: nothing evicts it in between."""
+    cache = AnalysisProxyCache(_Client({"ast_new": _Resp(200, b"y" * 20)}), cache_dir=tmp_path / "cache",
+                               max_bytes=25)
+    _put(cache, tmp_path, "ast_old", 10, age=10)
+    with cache.held("ast_new") as path:
+        os.utime(path, (time.time() - 1000,) * 2)  # older than anything: first to go, were it not held
+        _put(cache, tmp_path, "ast_other", 10)
+        assert path.read_bytes() == b"y" * 20
 
 
 # ---------------------------------------------------------------------------

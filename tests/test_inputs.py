@@ -11,6 +11,7 @@ Over a real filesystem Store; the database end to end: test_scheduler_e2e.py.
 
 from __future__ import annotations
 
+import contextlib
 import io
 from contextlib import contextmanager
 from pathlib import Path
@@ -101,7 +102,7 @@ def test_an_analysis_proxy_is_the_stored_file_held_for_the_block(placed):
     acct = MagicMock()
     with Inputs(acct, store).analysis_proxy(_video()) as path:
         assert path == drive / ANALYSIS and path.read_bytes() == MP4
-    acct.analysis_cache.get.assert_not_called()
+    acct.analysis_cache.held.assert_not_called()
 
 
 def test_a_render_saved_beside_the_api_isn_t_kept_twice(placed, tmp_path):
@@ -132,10 +133,10 @@ def test_a_preview_with_no_stored_file_is_the_caches(placed, key):
 def test_an_analysis_proxy_with_no_stored_file_is_the_caches(placed, tmp_path, key):
     store, *_ = placed
     acct = MagicMock()
-    acct.analysis_cache.get.return_value = tmp_path / "cached.mp4"
+    acct.analysis_cache.held.return_value = contextlib.nullcontext(tmp_path / "cached.mp4")
     with Inputs(acct, store).analysis_proxy(_video(analysis_proxy_key=key)) as path:
         assert path == tmp_path / "cached.mp4"
-    acct.analysis_cache.get.assert_called_once_with("ast_2")
+    acct.analysis_cache.held.assert_called_once_with("ast_2")
 
 
 def test_what_the_work_raises_in_the_block_is_the_work_s(placed):
@@ -144,7 +145,7 @@ def test_what_the_work_raises_in_the_block_is_the_work_s(placed):
     acct = MagicMock()
     with pytest.raises(NotFound, match="the work's"), Inputs(acct, store).analysis_proxy(_video()):
         raise NotFound("the work's")
-    acct.analysis_cache.get.assert_not_called()
+    acct.analysis_cache.held.assert_not_called()
 
 
 # -- A drive that isn't plugged in ------------------------------------------------------
@@ -160,7 +161,7 @@ def test_files_on_a_drive_not_plugged_in_wait_and_aren_t_taken_for_missing(place
     with pytest.raises(Waits, match="can't be reached"), inputs.analysis_proxy(_video()):
         pass
     acct.proxy_cache.assert_not_called()
-    acct.analysis_cache.get.assert_not_called()
+    acct.analysis_cache.held.assert_not_called()
     assert inputs.preview_bytes(_photo()) is not None, "what can be reached still is"
 
 

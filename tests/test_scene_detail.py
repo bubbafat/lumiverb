@@ -6,6 +6,7 @@ video time (VideoScanner.scan's contract); the scenarios hash real pictures."""
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -28,6 +29,7 @@ from src.producers.scenes.detail import (
     scene_length,
     window_sec,
 )
+from src.server.scheduler.inputs import Inputs
 
 pytestmark = pytest.mark.fast
 
@@ -340,7 +342,8 @@ def test_the_scheduler_hands_the_indexer_the_accounts_detail_and_records_its_lev
     acct.producers.lineage.side_effect = lambda artifact, sha, used=None: lineage(artifact, used, sha)
     proxy = tmp_path / "v.mp4"
     proxy.write_bytes(b"x")
-    acct.analysis_cache.get.return_value = proxy
+    acct.analysis_cache.held.return_value = contextlib.nullcontext(proxy)
+    acct.inputs = Inputs(acct, None)  # not beside the API's Store: the cache above
     job = Job("t1", "scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "content_hash": "s1",
                                    "redo": True},))
     with patch("src.producers.scenes.work.index_video_scenes") as index:

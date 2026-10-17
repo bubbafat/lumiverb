@@ -17,6 +17,8 @@
     LUMIVERB_RENDER_CONCURRENCY    analysis proxies rendered at once (0: one per six cores, at most three)
     LUMIVERB_ANALYSIS_CACHE_GB     the analysis proxies kept here (50): only those the API doesn't
                                    keep on this disk (they're read where it stores them)
+    LUMIVERB_PREVIEW_CACHE_GB      the previews kept here (2), the same way: past it the least
+                                   recently used go, made again or downloaded when next needed
     LUMIVERB_FACE_BATCHES_PER_PROCESS  face batches before a fresh detection process (20)
     LUMIVERB_FULL_SCAN_EVERY_MIN   each library scanned in full this often, in minutes (15): where nothing
                                    reports changes (a Mac running the server), how new files are found;
@@ -47,6 +49,7 @@ class SchedulerSettings(BaseSettings):
     gpu_decodes: int = Field(default=1, ge=0)
     render_concurrency: int = Field(default=0, ge=0)
     analysis_cache_gb: float = Field(default=50.0, gt=0)
+    preview_cache_gb: float = Field(default=2.0, gt=0)
     face_batches_per_process: int = Field(default=20, ge=1)
     # Minutes; never infinite ("inf" would mean no full scan after the first).
     full_scan_every_min: float = Field(default=FULL_SCAN_EVERY_MIN, gt=0, allow_inf_nan=False)
@@ -66,6 +69,7 @@ class SchedulerSettings(BaseSettings):
                        analysis_proxy_encoder=self.analysis_proxy_encoder,
                        analysis_proxy_decoder=self.analysis_proxy_decoder, gpu_decodes=self.gpu_decodes,
                        render_concurrency=self.render_concurrency, analysis_cache_gb=self.analysis_cache_gb,
+                       preview_cache_gb=self.preview_cache_gb,
                        face_batches_per_process=self.face_batches_per_process,
                        full_scan_every_min=self.full_scan_every_min)
 

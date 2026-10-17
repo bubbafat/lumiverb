@@ -74,7 +74,7 @@ class Inputs:
                 pass  # gone since the queue listed it: the cache's way, as for any other
             except Unavailable as exc:
                 raise Waits(f"its analysis proxy can't be reached now: {exc}") from exc
-        return self._acct.analysis_cache.get(clip["asset_id"])
+        return held.enter_context(self._acct.analysis_cache.held(clip["asset_id"]))
 
     def rendered(self, clip: dict, path: Path) -> None:
         """An analysis proxy this machine rendered, saved to the server: kept
