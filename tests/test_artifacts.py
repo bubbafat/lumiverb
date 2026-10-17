@@ -554,6 +554,32 @@ def test_download_thumbnail_returns_bytes(artifact_env) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("size", ["proxy", "thumbnail"])
+def test_lumiverb_download_saves_the_stored_file(artifact_env, tmp_path, size) -> None:
+    """The CLI's `download --size`, against the API: what it stored, byte for byte."""
+    from typer.testing import CliRunner
+
+    from src.client.cli.client import LumiverbClient
+    from src.client.cli.main import app as cli
+
+    auth, raw_client, library_id, asset_id, _, _, api_key = artifact_env
+    up = auth.post(f"/v1/assets/{asset_id}/artifacts/{size}", files={"file": ("p.jpg", _make_jpeg(80), "image/jpeg")},
+                   data={"lineage": made_json("proxy")})
+    assert up.status_code == 200, up.text
+    library = auth.get("/v1/libraries").json()
+    name = next(lib["name"] for lib in library if lib["library_id"] == library_id)
+
+    client = LumiverbClient(base_url="http://testserver", token=api_key)
+    client._client = TestClient(app, headers={"Authorization": f"Bearer {api_key}"})
+    out = tmp_path / f"{size}.webp"
+    with patch("src.client.cli.main.LumiverbClient", return_value=client):
+        result = CliRunner().invoke(cli, ["download", "--library", name, "--asset-id", asset_id, "--size", size,
+                                          "--output", str(out)])
+    assert result.exit_code == 0, result.output
+    assert _sha256(out.read_bytes()) == up.json()["sha256"]
+
+
+@pytest.mark.slow
 def test_download_video_preview_returns_bytes(artifact_env) -> None:
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
 
