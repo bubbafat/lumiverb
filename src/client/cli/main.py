@@ -15,6 +15,7 @@ from rich.table import Table
 from src.client.cli.client import LumiverbAPIError, LumiverbClient
 from src.client.cli.config import ConfigError, get_admin_key, load_config, save_config
 from src.client.cli.commands.archive import archive_app
+from src.client.cli.commands.device import device_app
 from src.client.cli.commands.producers import producers_app
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
@@ -43,6 +44,7 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(archive_app, name="archive")
 app.add_typer(trash_app, name="trash")
 app.add_typer(producers_app, name="producers")
+app.add_typer(device_app, name="device")
 
 from src.client.cli.commands.enrich import register as _register_enrich  # noqa: E402
 from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402

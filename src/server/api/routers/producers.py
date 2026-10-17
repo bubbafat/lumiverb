@@ -35,11 +35,14 @@ from src.server.api.dependencies import (
     get_current_user_id,
     get_tenant_session,
     require_editor,
+    require_reader,
     require_signed_in,
     require_tenant_admin,
 )
+from src.server.api.devices import may_call
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
+from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
 from src.shared.producers import (
     PAUSE_ALL,
@@ -548,13 +551,15 @@ class FailuresIn(BaseModel):
     items: list[Failure] = Field(max_length=500)
 
 
-@router.post("/failures", dependencies=[Depends(require_tenant_admin)])  # the scheduler's
+@router.post("/failures", dependencies=[Depends(require_reader)])
+@may_call("items", artifacts=FROM_ORIGINALS)
 def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
-    """The scheduler couldn't make these: each is kept with its error and not
-    handed out again for 5 minutes, then 10, 20 and so on up to a day, and
-    given up after 10 tries until someone asks for it to be tried again. An
-    artifact made earlier stays what it was. Clips that don't exist are
-    left out. Returns {"recorded"}."""
+    """The scheduler couldn't make these, or a device what it makes from its
+    originals (for the libraries it reads): each is kept with its error and
+    not handed out (nor listed in reader-work) again for 5 minutes, then 10,
+    20 and so on up to a day, and given up after 10 tries until someone asks
+    for it to be tried again. An artifact made earlier stays what it was.
+    Clips that don't exist are left out. Returns {"recorded"}."""
     from src.server.repository.assets import AssetRepository
 
     known = AssetRepository(session).existing_ids(list({f.asset_id for f in body.items}))
