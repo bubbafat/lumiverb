@@ -29,10 +29,9 @@ class Render(Work):
         from src.processing.video.analysis_proxy import RenderError, render_analysis_proxy
 
         source = self.original(clip)
-        # Rendered beside the cache (same filesystem, so put() is a rename),
-        # under a name eviction ignores.
-        work = self.acct.analysis_cache.path_for(clip["asset_id"]).with_suffix(".rendering")
-        work.parent.mkdir(parents=True, exist_ok=True)
+        # Rendered in the job's scratch (an install's is on the data disk, as
+        # the cache is: put() is a rename); saved, then let go of in done.
+        work = self.scratch / "analysis.mp4"
         try:
             render_analysis_proxy(source, work, self.settings)
         except RenderError as e:

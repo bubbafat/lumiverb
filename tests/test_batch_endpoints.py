@@ -15,7 +15,7 @@ import pytest
 class TestVisionProxyCache:
     """Test that vision backfill uses proxy cache instead of server download."""
 
-    def test_backfill_one_uses_proxy_cache(self):
+    def test_backfill_one_uses_proxy_cache(self, tmp_path):
         """_backfill_one reads from proxy cache, not server."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
@@ -38,6 +38,7 @@ class TestVisionProxyCache:
                 model="test",
                 provider=mock_provider,
                 proxy_cache=mock_cache,
+                work_dir=tmp_path,
             )
 
         assert result is not None
@@ -45,7 +46,7 @@ class TestVisionProxyCache:
         assert result["description"] == "a cat"
         mock_cache.get.assert_called_once_with("ast_1", "photo.jpg")
 
-    def test_backfill_one_falls_back_to_server(self):
+    def test_backfill_one_falls_back_to_server(self, tmp_path):
         """Falls back to server download when proxy cache misses."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
@@ -69,13 +70,14 @@ class TestVisionProxyCache:
                 model="test",
                 provider=MagicMock(),
                 proxy_cache=mock_cache,
+                work_dir=tmp_path,
                 client=mock_client,
             )
 
         assert result is not None
         mock_client.get.assert_called_once()
 
-    def test_backfill_one_returns_none_on_no_proxy(self):
+    def test_backfill_one_returns_none_on_no_proxy(self, tmp_path):
         """Returns None when proxy cache misses and no client fallback."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
@@ -88,11 +90,12 @@ class TestVisionProxyCache:
             model="test",
             provider=MagicMock(),
             proxy_cache=mock_cache,
+            work_dir=tmp_path,
         )
 
         assert result is None
 
-    def test_backfill_one_returns_none_on_vision_failure(self):
+    def test_backfill_one_returns_none_on_vision_failure(self, tmp_path):
         """Returns None when vision AI returns no result."""
         from src.producers.vision.work import describe_clip as _backfill_one
 
@@ -108,6 +111,7 @@ class TestVisionProxyCache:
                 model="test",
                 provider=MagicMock(),
                 proxy_cache=mock_cache,
+                work_dir=tmp_path,
             )
 
         assert result is None

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,12 +60,12 @@ class VideoFaces(Work):
         out = Found()
         found: list[tuple[int, dict]] = []
         unread: list[str] = []
-        with tempfile.TemporaryDirectory(prefix="lumiverb-video-faces-") as tmp:
+        with self.scratch_folder() as tmp:
             frames: dict[int, Path] = {}
             for ms in times:
                 if self.acct.stopping.is_set():
                     raise Stopped(asset_id)
-                frame = Path(tmp) / f"{ms}.jpg"
+                frame = tmp / f"{ms}.jpg"
                 attempt = extract_video_frame_detailed(source, frame, timestamp=ms / 1000.0)
                 if not attempt.ok or not frame.is_file():
                     unread.append(f"no frame at {ms} ms")

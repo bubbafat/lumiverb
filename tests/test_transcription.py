@@ -257,8 +257,8 @@ def test_audio_that_couldnt_be_read_is_tried_again_not_saved_as_silence(tmp_path
     monkeypatch.setattr("src.processing.video.audio.audio_tracks", lambda p: [AudioTrack(0, 2, "aac")])
     killed = subprocess.CompletedProcess(args=[], returncode=-15, stdout=b"", stderr=b"Exiting normally, received signal 15.")
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: killed)
-    assert transcribe(source, MagicMock()) is None
+    assert transcribe(source, MagicMock(), work_dir=tmp_path) is None
     no_audio = subprocess.CompletedProcess(args=[], returncode=1, stdout=b"",
                                            stderr=b"Output file #0 does not contain any stream")
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: no_audio)
-    assert transcribe(source, MagicMock()) == ("", "")
+    assert transcribe(source, MagicMock(), work_dir=tmp_path) == ("", "")

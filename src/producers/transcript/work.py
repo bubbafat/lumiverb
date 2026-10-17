@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import tempfile
 from pathlib import Path
 
 from src.producers.runner import Failed, Work
@@ -16,10 +15,12 @@ logger = logging.getLogger(__name__)
 COULDNT = "transcription failed (see the log)"
 
 
-def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500) -> tuple[str, str] | None:
+def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500, *,
+               work_dir: Path) -> tuple[str, str] | None:
     """Every audio track mixed into a 16 kHz mono WAV, its speech found here
     with the producer's VAD setting, and only the speech heard by
-    transcriber. Times come back onto the clip.
+    transcriber. Times come back onto the clip. The WAVs are made in
+    work_dir (a folder of the job's scratch), and left there.
 
     Returns (srt_text, language); srt_text is "" when nothing is said. None
     when it couldn't be tried this time (the audio tracks couldn't be read,
@@ -39,39 +40,38 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500) ->
         logger.info("No audio track in %s", source_path)
         return ("", "")
 
-    with tempfile.TemporaryDirectory(prefix="lumiverb-speech-") as tmp:
-        # Every audio track mixed: a lav may be on any track.
-        wav, speech = Path(tmp) / "audio.wav", Path(tmp) / "speech.wav"
-        try:
-            result = subprocess.run(speech_wav_command(source_path, wav, tracks), capture_output=True, timeout=1800)
-        except subprocess.TimeoutExpired as e:
-            logger.warning("Reading the audio of %s failed; trying again later: %s", source_path, e)
-            return None
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="replace") if result.stderr else ""
-            if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
-                logger.info("No audio track in %s", source_path)
-                return ("", "")  # deterministic: no audio
-            # Anything else isn't known to be silence: ffmpeg killed by a stop
-            # (an update, a reboot), the analysis proxy evicted from the cache
-            # mid-read, a stream it couldn't decode. Saving "" would say the
-            # clip has no speech, for good; it's tried again later instead
-            # (and given up on, if it keeps failing).
-            logger.warning("Reading the audio of %s failed (ffmpeg exit %s); trying again later: %s",
-                           source_path, result.returncode, stderr[:500])
-            return None
-        if not wav.exists() or wav.stat().st_size < 1000:  # < 1KB = essentially empty
-            logger.info("Audio track too short/empty for %s", source_path)
-            return ("", "")
-        try:
-            chunks = find_speech(wav, speech, vad_min_silence_ms)
-        except SpeechError as e:
-            logger.warning("Couldn't find the speech in %s; trying again later: %s", source_path, e)
-            return None
-        if not chunks:
-            logger.info("No speech detected in %s", source_path.name)
-            return ("", "")
-        heard = transcriber.transcribe(speech)
+    # Every audio track mixed: a lav may be on any track.
+    wav, speech = work_dir / "audio.wav", work_dir / "speech.wav"
+    try:
+        result = subprocess.run(speech_wav_command(source_path, wav, tracks), capture_output=True, timeout=1800)
+    except subprocess.TimeoutExpired as e:
+        logger.warning("Reading the audio of %s failed; trying again later: %s", source_path, e)
+        return None
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace") if result.stderr else ""
+        if "does not contain any stream" in stderr or "Output file #0 does not contain" in stderr:
+            logger.info("No audio track in %s", source_path)
+            return ("", "")  # deterministic: no audio
+        # Anything else isn't known to be silence: ffmpeg killed by a stop
+        # (an update, a reboot), the analysis proxy evicted from the cache
+        # mid-read, a stream it couldn't decode. Saving "" would say the
+        # clip has no speech, for good; it's tried again later instead
+        # (and given up on, if it keeps failing).
+        logger.warning("Reading the audio of %s failed (ffmpeg exit %s); trying again later: %s",
+                       source_path, result.returncode, stderr[:500])
+        return None
+    if not wav.exists() or wav.stat().st_size < 1000:  # < 1KB = essentially empty
+        logger.info("Audio track too short/empty for %s", source_path)
+        return ("", "")
+    try:
+        chunks = find_speech(wav, speech, vad_min_silence_ms)
+    except SpeechError as e:
+        logger.warning("Couldn't find the speech in %s; trying again later: %s", source_path, e)
+        return None
+    if not chunks:
+        logger.info("No speech detected in %s", source_path.name)
+        return ("", "")
+    heard = transcriber.transcribe(speech)
 
     srt_text = to_srt(restore(heard.segments, chunks))
     language = language_code(heard.language)
@@ -99,7 +99,8 @@ class Transcript(Work):
         if source is None:
             raise Failed("its analysis proxy couldn't be read")
         try:
-            result = transcribe(source, self.transcriber, self.vad_ms)
+            with self.scratch_folder() as work_dir:
+                result = transcribe(source, self.transcriber, self.vad_ms, work_dir=work_dir)
         except TranscriptError as e:
             # The machines' trouble stops transcription, charging no clip;
             # the clip's is charged once a check finds the machine fine.

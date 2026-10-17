@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 import time
 from pathlib import Path
 
@@ -12,11 +11,11 @@ from src.producers.runner import Work
 logger = logging.getLogger(__name__)
 
 
-def describe(proxy_bytes: bytes, model: str, provider) -> dict | None:
-    """The model's description and tags of an image; None when it said nothing."""
-    with tempfile.NamedTemporaryFile(suffix=".img", delete=False) as tmp:
-        tmp.write(proxy_bytes)
-        tmp_path = Path(tmp.name)
+def describe(proxy_bytes: bytes, model: str, provider, work_dir: Path) -> dict | None:
+    """The model's description and tags of an image (put in work_dir: the
+    job's scratch); None when it said nothing."""
+    tmp_path = work_dir / "vision.img"
+    tmp_path.write_bytes(proxy_bytes)
     try:
         result = provider.describe(tmp_path)
     finally:
@@ -31,7 +30,8 @@ def describe(proxy_bytes: bytes, model: str, provider) -> dict | None:
     }
 
 
-def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, proxy_cache, client=None) -> dict | None:
+def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, proxy_cache, work_dir: Path,
+                  client=None) -> dict | None:
     """The clip's description from its proxy (the cache's, else the server's);
     None when there's no proxy or the model said nothing."""
     t0 = time.perf_counter()
@@ -49,7 +49,7 @@ def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, proxy_c
     if proxy_bytes is None:
         return None
     t1 = time.perf_counter()
-    result = describe(proxy_bytes, model, provider)
+    result = describe(proxy_bytes, model, provider, work_dir)
     logger.info("vision timings: %s — proxy=%.1fms vision=%.1fms", rel_path, t_proxy * 1000,
                 (time.perf_counter() - t1) * 1000)
     return None if result is None else {"asset_id": asset_id, **result}
@@ -66,7 +66,7 @@ class Vision(Work):
     def make(self, clip: dict) -> dict:
         result = describe_clip(asset_id=clip["asset_id"], rel_path=clip["rel_path"], model=self.model,
                                provider=self.provider, proxy_cache=self.acct.proxy_cache(clip["library_id"]),
-                               client=self.acct.client)
+                               work_dir=self.scratch, client=self.acct.client)
         if result is None:
             raise self.machines_or_clip("no description (no proxy, or the model returned nothing)")
         return result

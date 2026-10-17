@@ -27,8 +27,9 @@ def default_cache_dir() -> Path:
     return cache_dir("analysis")
 
 
-# What a render (repair._render_one) or a download leaves behind when the
-# process is killed. Eviction counts only finished proxies.
+# What a download leaves behind when the process is killed, and what a render
+# left before renders moved to the job's scratch (src/producers/runner.py).
+# Eviction counts only finished proxies.
 _LEFTOVERS = ("*.rendering", "*.rendering.part", "*.mp4.part")
 
 

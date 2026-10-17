@@ -12,7 +12,6 @@ found again) is skipped.
 from __future__ import annotations
 
 import logging
-import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,8 +75,9 @@ class SceneVision(Work):
             if not again and described(scene, lineage):
                 continue
             tried += 1
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                frame = Path(tmp.name)
+            # In the job's scratch until it's saved (done lets go of it): one scene's at a time.
+            frame = self.scratch / f"frame-{tried}.jpg"
+            frame.unlink(missing_ok=True)
             try:
                 attempt = extract_video_frame_detailed(source, frame, timestamp=scene["rep_frame_ms"] / 1000.0)
                 if not attempt.ok or not frame.exists() or frame.stat().st_size == 0:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
 import time
 from pathlib import Path
 
@@ -12,11 +11,11 @@ from src.producers.runner import Work
 logger = logging.getLogger(__name__)
 
 
-def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache) -> dict | None:
+def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache, work_dir: Path) -> dict | None:
     """{"asset_id", "ocr_text"}, or None when there's no proxy or the image
-    can't be prepared. The model's failure raises CaptionError (saying
-    whether the machine was at fault); this machine's (OSError: a disk
-    error) goes up as it is, a crash."""
+    can't be prepared (in work_dir: the job's scratch). The model's failure
+    raises CaptionError (saying whether the machine was at fault); this
+    machine's (OSError: a disk error) goes up as it is, a crash."""
     from src.processing.workers.captions.base import CaptionError
 
     try:
@@ -25,9 +24,8 @@ def read_text(*, asset_id: str, rel_path: str, ocr_provider, proxy_cache) -> dic
         t_proxy = time.perf_counter() - t0
         if image_bytes is None:
             return None
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(image_bytes)
-            tmp_path = Path(tmp.name)
+        tmp_path = work_dir / "ocr.jpg"
+        tmp_path.write_bytes(image_bytes)
         del image_bytes
         t1 = time.perf_counter()
         try:
@@ -56,7 +54,7 @@ class Ocr(Work):
 
     def make(self, clip: dict) -> dict:
         result = read_text(asset_id=clip["asset_id"], rel_path=clip["rel_path"], ocr_provider=self.provider,
-                           proxy_cache=self.acct.proxy_cache(clip["library_id"]))
+                           proxy_cache=self.acct.proxy_cache(clip["library_id"]), work_dir=self.scratch)
         if result is None:
             raise self.machines_or_clip("no OCR result (no proxy, or the image couldn't be read: see the log)")
         return result

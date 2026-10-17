@@ -25,6 +25,11 @@ subclass that makes one clip's artifact (make) and saves what was made
   Crashed). Two clips crashing in a row is the machine's trouble: the rest
   of the job waits.
 
+- Scratch. A job's work files (frames, audio, a render in progress) go in
+  a folder of its own (Work.scratch), removed when the job ends, however it
+  ends, and at the scheduler's start (empty_scratch): a producer makes no
+  temporary file of its own (ADR-020 decision 4).
+
 What a job says (dispatch.Outcome): NOT_TRIED, None (each clip saved or
 charged) or the clips that wait without either (a Waiting: each with why,
 src/shared/waits.py, which Settings → Processing says).
@@ -32,9 +37,13 @@ src/shared/waits.py, which Settings → Processing says).
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
+import shutil
+import tempfile
 from collections.abc import Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.shared.waits import HELD, SCAN, Waiting, reasons_of
@@ -51,6 +60,30 @@ REFUSED = frozenset({400, 413, 422})
 # Not the clip's: who asked, the API or its database busy or away. Nothing
 # is charged. (A 404 or 409 that keeps coming is counted, as a crash.)
 NOT_THE_CLIPS = frozenset({401, 403, 408, 429, 502, 503, 504})
+
+# Jobs' scratch, in the scheduler's temp folder (TMPDIR: an install's
+# DATA_DIR/worker-tmp, on its data disk, emptied as the scheduler starts).
+SCRATCH = "lumiverb-jobs"
+
+
+def scratch_root() -> Path:
+    return Path(tempfile.gettempdir()) / SCRATCH
+
+
+def empty_scratch() -> int:
+    """The scratch a killed scheduler's jobs left: removed at the scheduler's
+    start, holding its lock (no job runs yet). How many jobs' it was."""
+    root = scratch_root()
+    try:
+        left = list(root.iterdir())
+    except OSError:
+        return 0
+    for path in left:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    return len(left)
 
 
 class Stopped(Exception):
@@ -179,6 +212,35 @@ class Work:
         self.job = job
         # Where make writes, for a producer that saves as it makes (scenes' chunks).
         self.client = Saving(acct.client, acct.stopping)
+        self._scratch: Path | None = None
+
+    @property
+    def scratch(self) -> Path:
+        """The job's own folder for its work files, made when first asked
+        for: gone when the job ends, however it ends (and at the scheduler's
+        start). A file in it that outlives one clip's make (a frame saved
+        after, a render) is let go of in done."""
+        if self._scratch is None:
+            root = scratch_root()
+            root.mkdir(parents=True, exist_ok=True)
+            self._scratch = Path(tempfile.mkdtemp(prefix=f"{self.artifact or 'job'}-", dir=root))
+        return self._scratch
+
+    @contextlib.contextmanager
+    def scratch_folder(self) -> Iterator[Path]:
+        """A folder of its own in the job's scratch, for one clip's work files:
+        gone when the block ends."""
+        folder = Path(tempfile.mkdtemp(dir=self.scratch))
+        try:
+            yield folder
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def end(self) -> None:
+        """The job's scratch removed (the runner's, as the job ends)."""
+        if self._scratch is not None:
+            shutil.rmtree(self._scratch, ignore_errors=True)
+            self._scratch = None
 
     def make(self, clip: dict) -> Any:
         """The clip's artifact as save takes it, or None when nothing is left
@@ -418,4 +480,7 @@ def run(work_class: type[Work], acct: Any, job: Job) -> Any:
         work = work_class(acct, job)
     except (Stopped, NotTried):
         return NOT_TRIED
-    return _Job(work, acct, job).run()
+    try:
+        return _Job(work, acct, job).run()
+    finally:
+        work.end()
