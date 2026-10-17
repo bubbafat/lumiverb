@@ -93,6 +93,7 @@ from src.server.lifecycle.postgres import (
     up_while,
 )
 from src.server.lifecycle.supervise import Child, Supervisor
+from src.server.lifecycle import roles
 from src.shared.secrets_env import without_secrets
 from src.shared.stop_signals import set_on_signals
 
@@ -188,8 +189,9 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
     The API is told which env file is the install's (env_file), to say how to
     restore a backup, and where the service's log is (log_file: launchd's, for
     Admin › Logs). Each gets only the secrets it needs (secrets_env): the API
-    all of them, the scheduler the control database's URL, the rest none."""
-    base = {**env, "PYTHONUNBUFFERED": "1"}
+    all of them but the database superuser's (run's alone: roles.py), the
+    scheduler the control database's URL, the rest none."""
+    base = {**{k: v for k, v in env.items() if k != roles.SUPERUSER_URL}, "PYTHONUNBUFFERED": "1"}
     no_secrets = without_secrets(base)
     data = data_dir(env)
     started_first: list[Child] = []
@@ -335,9 +337,14 @@ def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | 
 
 
 def _created_and_migrated(url: str, env: dict[str, str] | None = None) -> int:
-    """Its control database made if missing, backed up if an upgrade's
-    migrations are waiting, then migrated. Said through the log: print()'s
-    lines wait in a buffer when the log is a file (launchd's)."""
+    """Lumiverb's own PostgreSQL's databases handed to its ordinary role
+    (roles.py, as the superuser: every start, nothing done when nothing
+    needs it), then, as that role, its control database made if missing,
+    backed up if an upgrade's migrations are waiting, then migrated. Said
+    through the log: print()'s lines wait in a buffer when the log is a
+    file (launchd's)."""
+    if env is not None and env.get(roles.SUPERUSER_URL):
+        roles.ensure_app_role(env[roles.SUPERUSER_URL], url)
     if create_database_if_missing(url):
         logger.info("Created the control database")
     if env is not None:
@@ -394,16 +401,31 @@ def _launched_as() -> Path:
     return Path(shutil.which(sys.argv[0]) or sys.argv[0]).absolute()
 
 
+def as_app_role(env: dict[str, str], env_file: Path | None) -> dict[str, str]:
+    """The env, its databases as Lumiverb's ordinary role's (roles.py), for
+    an install whose PostgreSQL is run's own (PG_BIN, a Mac's): the env file
+    moved over once. A Linux install's role is already one (deploy-api.sh)."""
+    if not env.get("PG_BIN") or env_file is None:
+        return env
+    return roles.with_app_role(env_file, env)
+
+
 def _run(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args, server=True)
+    named = _named_env_file(args.env)
+    before = env.get(roles.SUPERUSER_URL)
+    env = as_app_role(env, named)  # before the children are built: they connect as its role
+    url = env["CONTROL_PLANE_DATABASE_URL"]
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
-    named = _named_env_file(args.env)
     log_file = log.file_of(2)
     # Built first: a setting it can't use stops it before anything starts.
     children = server_children(env, migrated=migrated, config_dir=named.absolute().parent if named else None,
                                env_file=named.absolute() if named else None, log_file=log_file)
     log.configure()  # launchd's file, rotated, each child's lines named (log.py)
+    if env.get(roles.SUPERUSER_URL) and not before:
+        logger.info("Database: %s now connects as %s, the superuser's URL kept as %s (the old file beside it)",
+                    named, roles.APP_ROLE, roles.SUPERUSER_URL)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     forget_quickwit(env, data)
     stop = threading.Event()
@@ -411,7 +433,7 @@ def _run(args: argparse.Namespace) -> int:
 
     if env.get("PG_BIN"):
         try:
-            if make_cluster_if_missing(Path(env["PG_BIN"]), data, url):
+            if make_cluster_if_missing(Path(env["PG_BIN"]), data, env.get(roles.SUPERUSER_URL) or url):
                 logger.info("Made Lumiverb's database in %s", data / "postgres")
         except PostgresError as exc:
             print(f"✗ {exc}", file=sys.stderr)
