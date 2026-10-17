@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from src.processing.ingest import _walk_library
+from src.processing.originals import Folder
 from src.processing.scan import ScanStats, run_scan
 from src.shared.io_utils import resolve_source_path
 from src.shared.path_filter import PathFilter
@@ -54,7 +54,7 @@ def _write(root: Path, rel: str, data: bytes = b"jpeg") -> Path:
 def test_walk_library_stores_nfc_rel_path(tmp_path: Path) -> None:
     _write(tmp_path, NFD)
 
-    [entry] = _walk_library(tmp_path)
+    [entry] = Folder(tmp_path).walk()
 
     assert entry["rel_path"] == NFC
     assert entry["rel_path"] != NFD
@@ -100,7 +100,7 @@ def _scan(server: FakeScans, root: Path, *, local: list[dict] | None = None, wal
         patch("src.processing.scan._load_library_filters", return_value=library_filters or []),
     ]
     if local is not None or walk is not None:
-        patches.append(patch("src.processing.scan._walk_library", side_effect=walk or (lambda *a, **k: local)))
+        patches.append(patch.object(Folder, "walk", side_effect=walk or (lambda *a, **k: local)))
     for p in patches:
         p.start()
     try:
@@ -131,19 +131,19 @@ def test_a_mount_gone_when_files_look_missing_stops_the_scan(tmp_path: Path) -> 
     archives nothing (Robert's rule, Oct 8). The worker keeps the changes."""
     root, local = _library(tmp_path)
     server = FakeScans(default=("unchanged", None, "ast_1"), gone=90)
-    with patch("src.processing.scan.reachable_root", side_effect=[root, None]) as probe:
+    with patch("src.processing.roots.reachable_root", side_effect=[root, None]) as probe:
         stats = _scan(server, root, local=local, allow_mass_delete=True)
 
     assert server.finishes() == [] and server.abandoned()
     assert stats.root_unreachable
-    assert probe.call_args_list[1].kwargs == {"require_entries": True}
+    assert probe.call_args_list[1].kwargs["require_entries"] is True
 
 
 @pytest.mark.fast
 def test_files_missing_from_a_mount_still_there_are_archived(tmp_path: Path) -> None:
     root, local = _library(tmp_path)
     server = FakeScans(default=("unchanged", None, "ast_1"), gone=90)
-    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.roots.reachable_root", side_effect=[root, root]):
         stats = _scan(server, root, local=local, allow_mass_delete=True)
 
     assert server.finishes() == [{"allow_mass_missing": True}]
@@ -154,7 +154,7 @@ def test_files_missing_from_a_mount_still_there_are_archived(tmp_path: Path) -> 
 def test_a_scan_with_nothing_missing_doesnt_check_the_mount_again(tmp_path: Path) -> None:
     root, local = _library(tmp_path, on_disk=100)
     server = FakeScans(default=("unchanged", None, "ast_1"), gone=0)
-    with patch("src.processing.scan.reachable_root", return_value=root) as probe:
+    with patch("src.processing.roots.reachable_root", return_value=root) as probe:
         _scan(server, root, local=local)
 
     assert probe.call_count == 1
@@ -169,7 +169,7 @@ def test_a_mount_gone_before_a_move_is_made_moves_nothing(tmp_path: Path) -> Non
     _write(root, "moved/f1.jpg")
     local.append(_local("moved/f1.jpg", 600))
     server = FakeScans(plan={"moved/f1.jpg": ("hash", "move", None)}, default=("unchanged", None, "ast_0"), gone=1)
-    with patch("src.processing.scan.reachable_root", side_effect=[root, None]):
+    with patch("src.processing.roots.reachable_root", side_effect=[root, None]):
         stats = _scan(server, root, local=local)
 
     assert server.hashed() == [] and server.finishes() == [] and server.abandoned()
@@ -210,7 +210,7 @@ def test_a_share_gone_before_the_walk_found_anything_keeps_the_changes(tmp_path:
     change reports for when it's back)."""
     root, _ = _library(tmp_path)
     server = FakeScans(gone=100)
-    with patch("src.processing.scan.reachable_root", side_effect=[root, None]):
+    with patch("src.processing.roots.reachable_root", side_effect=[root, None]):
         stats = _scan(server, root, local=[], allow_mass_delete=True)
     assert server.finishes() == []
     assert stats.root_unreachable
@@ -222,7 +222,7 @@ def test_a_library_with_no_media_on_a_present_share_is_just_empty(tmp_path: Path
     # nothing (tests/test_scans_api.py); the scan just says what it found.
     root, _ = _library(tmp_path)
     server = FakeScans(gone=0)
-    with patch("src.processing.scan.reachable_root", side_effect=[root, root]):
+    with patch("src.processing.roots.reachable_root", side_effect=[root, root]):
         stats = _scan(server, root, local=[])
     assert not stats.root_unreachable
     assert server.found() == [] and len(server.finishes()) == 1
@@ -305,7 +305,7 @@ ZURICH = unicodedata.normalize("NFC", "Zürich")
 @pytest.mark.fast
 def test_walk_finds_a_folder_named_in_nfd(tmp_path: Path) -> None:
     _write(tmp_path, unicodedata.normalize("NFD", ZURICH) + "/A001.jpg")
-    [entry] = _walk_library(tmp_path, ZURICH)
+    [entry] = Folder(tmp_path).walk(ZURICH)
     assert entry["rel_path"] == f"{ZURICH}/A001.jpg"
 
 
@@ -355,7 +355,7 @@ def test_walk_lists_hidden_files_but_no_symlinks(tmp_path: Path) -> None:
     (root / "linked").symlink_to(tmp_path / "other")
     (root / "link.jpg").symlink_to(tmp_path / "other" / "o.jpg")
     (root / "broken.jpg").symlink_to(tmp_path / "nowhere.jpg")
-    assert [f["rel_path"] for f in _walk_library(root)] == [".h.jpg", ".hid/g.jpg", "a/f.jpg"]
+    assert [f["rel_path"] for f in Folder(root).walk()] == [".h.jpg", ".hid/g.jpg", "a/f.jpg"]
 
 
 @pytest.mark.fast
@@ -365,7 +365,7 @@ def test_walk_of_a_symlinked_prefix_lists_nothing_and_deletes_nothing(tmp_path: 
     _write(tmp_path, "other/o.jpg")
     (root / "linked").symlink_to(tmp_path / "other")
     unlisted: list[str] = []
-    assert _walk_library(root, "linked", unlisted=unlisted) == []
+    assert Folder(root).walk("linked", unlisted=unlisted) == []
     assert unlisted == ["linked"]
 
 
@@ -422,7 +422,7 @@ def test_a_clip_already_at_a_name_with_a_control_character_is_archived_as_missin
 def test_the_walk_never_lists_a_name_with_a_control_character(tmp_path: Path) -> None:
     for rel in ("a.jpg", "a\rb.jpg", "Day\x7f/c.jpg", "Day/d.jpg", "Deep/e\x01/f.jpg"):
         _write(tmp_path, rel)
-    assert [f["rel_path"] for f in _walk_library(tmp_path)] == ["Day/d.jpg", "a.jpg"]
+    assert [f["rel_path"] for f in Folder(tmp_path).walk()] == ["Day/d.jpg", "a.jpg"]
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ def locked(tmp_path: Path):
 @needs_permissions
 def test_walk_reports_folders_it_could_not_list(locked: Path) -> None:
     unlisted: list[str] = []
-    files = _walk_library(locked, unlisted=unlisted)
+    files = Folder(locked).walk(unlisted=unlisted)
     assert [f["rel_path"] for f in files] == ["open/a.jpg"]
     assert unlisted == ["Locked"]
 
@@ -485,7 +485,7 @@ def test_a_root_gone_mid_scan_is_reported_unreachable(tmp_path: Path) -> None:
     # must keep the reports.
     client = MagicMock()
     with (
-        patch("src.processing.scan.reachable_root", return_value=tmp_path / "gone"),
+        patch("src.processing.roots.reachable_root", return_value=tmp_path / "gone"),
         patch("src.processing.scan._load_tenant_filters", return_value=[]),
         patch("src.processing.scan._load_library_filters", return_value=[]),
     ):
@@ -526,7 +526,7 @@ def flaky(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.Fixtu
 @pytest.mark.parametrize("flaky", UNCHECKABLE, indirect=True)
 def test_walk_reports_a_folder_whose_files_cannot_be_checked(flaky: Path) -> None:
     unlisted: list[str] = []
-    files = _walk_library(flaky, unlisted=unlisted)
+    files = Folder(flaky).walk(unlisted=unlisted)
     assert [f["rel_path"] for f in files] == ["open/a.jpg"]
     assert unlisted == ["Flaky"]
 
@@ -554,7 +554,7 @@ def test_a_file_gone_between_listing_and_stat_is_just_gone(tmp_path: Path, monke
 
     monkeypatch.setattr(os, "stat", stat)
     unlisted: list[str] = []
-    assert [f["rel_path"] for f in _walk_library(root, unlisted=unlisted)] == ["Day/a.jpg"]
+    assert [f["rel_path"] for f in Folder(root).walk(unlisted=unlisted)] == ["Day/a.jpg"]
     assert unlisted == []
 
 
@@ -607,7 +607,7 @@ def test_files_the_scan_would_skip_are_never_checked(junk: Path) -> None:
     # A .DS_Store that can't be stat'ed made its folder "unlisted", which
     # blocked every deletion in the library on every scan.
     unlisted: list[str] = []
-    files = _walk_library(junk, library_filters=EXPORTS, unlisted=unlisted)
+    files = Folder(junk).walk(library_filters=EXPORTS, unlisted=unlisted)
     assert [f["rel_path"] for f in files] == ["Day/a.jpg"]
     assert unlisted == []
 

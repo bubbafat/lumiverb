@@ -929,7 +929,7 @@ def test_an_emptied_library_is_archived_when_the_scan_is_forced(env, api, lib):
 def test_the_storage_going_away_during_the_scan_archives_and_moves_nothing(env, api, lib, tmp_path, monkeypatch):
     # A clean unmount leaves an empty folder. Here it goes right after the
     # walk, before the scan has changed anything on the server.
-    from src.processing import scan as scan_module
+    from src.processing.originals import Folder
 
     for n, rel in enumerate(["a.png", "b.png", "c.png"]):
         _image(lib, rel, n)
@@ -939,17 +939,17 @@ def test_the_storage_going_away_during_the_scan_archives_and_moves_nothing(env, 
     _image(lib, "new.png", 7)
     before = _rows(env, lib)
 
-    walk = scan_module._walk_library
+    walk = Folder.walk
     unmounted = tmp_path / "unmounted"
 
-    def walk_then_unmount(*args, **kwargs):
-        found = walk(*args, **kwargs)
+    def walk_then_unmount(self, *args, **kwargs):
+        found = walk(self, *args, **kwargs)
         unmounted.mkdir(exist_ok=True)
         for child in list(lib.root.iterdir()):
             shutil.move(str(child), str(unmounted / child.name))
         return found
 
-    monkeypatch.setattr(scan_module, "_walk_library", walk_then_unmount)
+    monkeypatch.setattr(Folder, "walk", walk_then_unmount)
     _scan(api, lib)
     assert _rows(env, lib) == before
 

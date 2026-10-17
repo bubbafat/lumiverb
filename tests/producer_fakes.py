@@ -48,8 +48,12 @@ class FakeAccount:
         self.away: list[str] = []
         self.inputs = Inputs(self, None)  # the originals at roots; no Store on this disk
 
-    def root(self, library_id: str) -> Path | None:
-        return self.roots.get(library_id)
+    def originals(self, library_id: str) -> Any:
+        """The library's originals in its folder in roots (the latest look)."""
+        from src.processing.originals import Folder
+
+        root = self.roots.get(library_id)
+        return None if root is None else Folder(root, library_id)
 
     def unreachable(self, library_id: str) -> None:
         self.away.append(library_id)

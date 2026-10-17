@@ -46,7 +46,6 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from stat import S_ISDIR
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
@@ -54,8 +53,8 @@ from rich.console import Console
 from src.processing.api import LumiverbAPIError
 from src.processing.cache_dir import cache_dir
 from src.processing.machine import FULL_SCAN_EVERY_MIN
-from src.processing.roots import reachable_root
-from src.shared.io_utils import UnsafeRelPathError, is_within, resolve_source_path, stat_if_present
+from src.processing.originals import Originals, reach
+from src.shared.io_utils import UnsafeRelPathError, is_within
 
 if TYPE_CHECKING:
     from src.processing.scan import ScanStats
@@ -209,19 +208,19 @@ class ServiceLock:
             self._fd = None
 
 
-def _is_dir(root: Path, rel: str) -> bool:
+def _is_dir(originals: Originals, rel: str) -> bool:
     """False when it can't be checked: its parent's scan covers it either way."""
     try:
-        st = stat_if_present(resolve_source_path(root, rel))
-    except (OSError, UnsafeRelPathError):  # a path that leaves the root is no folder of it
+        st = originals.stat(rel)
+    except (OSError, UnsafeRelPathError):  # a path that leaves the library is no folder of it
         return False
-    return st is not None and S_ISDIR(st.st_mode)
+    return st is not None and st.folder
 
 
 def scan_library(
     client: Any,
     library: dict,
-    root: Path,
+    originals: Originals,
     state: ScanState,
     *,
     now: float,
@@ -244,7 +243,7 @@ def scan_library(
         prefix = None
     else:
         paths = [c["rel_path"] for c in changes] + (sorted(retry.paths) if retry_due else [])
-        prefix = scan_scope(paths, lambda rel: _is_dir(root, rel))
+        prefix = scan_scope(paths, lambda rel: _is_dir(originals, rel))
     logger.info(
         "scheduler: scanning %s%s (%d reported change(s)%s%s)",
         library["name"], f" / {prefix}" if prefix else "", len(changes),
@@ -347,31 +346,32 @@ def scan_pass(
     full_scan_every: float = DEFAULT_FULL_SCAN_EVERY_SEC,
     scan_fn: Callable | None = None,
     console: Console | None = None,
-    on_roots: Callable[[dict[str, Path | None]], None] | None = None,
-) -> dict[str, Path | None]:
+    on_roots: Callable[[dict[str, Originals | None]], None] | None = None,
+) -> dict[str, Originals | None]:
     """Scan what's due in each library whose storage is reachable; each
-    library's storage on this machine (None: not reachable). on_roots hears
-    where every library's storage is before any scan, then a library's
-    alone whenever it changed. Each library is looked at again right before
-    its scan: a share can sleep during another library's long scan."""
+    library's originals on this machine (src/processing/originals.py; None:
+    not reachable). on_roots hears what every library's look found before
+    any scan, then a library's alone whenever it changed. Each library is
+    looked at again right before its scan: a share can sleep during another
+    library's long scan."""
     if scan_fn is None:
         from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
     # require_entries: an unmounted mount point is an empty folder, and
     # scanning it would mark every file missing.
-    roots: dict[str, Path | None] = {
-        library["library_id"]: reachable_root(library, require_entries=True) for library in libraries}
+    found: dict[str, Originals | None] = {
+        library["library_id"]: reach(library, require_entries=True) for library in libraries}
     if on_roots is not None:
-        on_roots(dict(roots))
+        on_roots(dict(found))
     for i, library in enumerate(libraries):
-        root = roots[library["library_id"]]
-        if i > 0 and root is not None:  # the first was looked at just now
-            root = reachable_root(library, require_entries=True)
-            if root != roots[library["library_id"]]:
-                roots[library["library_id"]] = root
+        originals = found[library["library_id"]]
+        if i > 0 and originals is not None:  # the first was looked at just now
+            originals = reach(library, require_entries=True)
+            if originals != found[library["library_id"]]:
+                found[library["library_id"]] = originals
                 if on_roots is not None:  # the others' looks may be older than the scheduler's since
-                    on_roots({library["library_id"]: root})
-        if root is None:
+                    on_roots({library["library_id"]: originals})
+        if originals is None:
             logger.info("scheduler: %s isn't reachable from here; not scanning it", library["name"])
             _warn_if_no_root_map()
             continue
@@ -379,7 +379,7 @@ def scan_pass(
         if failing is not None and now < failing.due:
             continue  # its back-off: the scheduler's status says why
         try:
-            scan_library(client, library, root, state, now=now, full_scan_every=full_scan_every,
+            scan_library(client, library, originals, state, now=now, full_scan_every=full_scan_every,
                          scan_fn=scan_fn, console=console)
         except LumiverbAPIError as exc:
             if exc.code != "scans_paused":
@@ -391,7 +391,7 @@ def scan_pass(
         else:
             if state.failing.pop(library["library_id"], None) is not None:
                 logger.info("scheduler: scanning %s works again", library["name"])
-    return roots
+    return found
 
 
 def _scan_failed(state: ScanState, library: dict, exc: Exception, now: float) -> None:

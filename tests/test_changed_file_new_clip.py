@@ -133,6 +133,7 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
 
     from rich.console import Console
 
+    from src.processing.originals import Folder
     from src.processing.scan import run_scan
 
     _, _, library_id, *_ = env
@@ -144,8 +145,8 @@ def _scan(env, tmp_path, rel_paths: list[str], prefix: str):
     local = [{"rel_path": rp, "file_size": 1000, "file_mtime": hour_ago, "media_type": "image", "ext": ".jpg"}
              for rp in rel_paths]
     with (
-        patch("src.processing.scan.reachable_root", return_value=root),
-        patch("src.processing.scan._walk_library", return_value=local),
+        patch("src.processing.roots.reachable_root", return_value=root),
+        patch.object(Folder, "walk", return_value=local),
         patch("src.processing.scan._scan_one"),
         patch("src.processing.scan.ProxyCache", MagicMock()),
         patch("src.processing.scan._populate_cache_for_unchanged"),
@@ -395,6 +396,7 @@ def test_a_handed_over_clip_keeps_its_transcript_in_search(env):
 
 
 def _someone_else_takes(env, rel_path: str):
+    import os
     from unittest.mock import patch
 
     from src.server.models.tenant import Asset
@@ -405,7 +407,7 @@ def _someone_else_takes(env, rel_path: str):
 
     def is_ignored(self, library_id, path, sha=None):
         with _db(env) as s:  # another ingest commits a clip at this path meanwhile
-            s.add(Asset(asset_id="ast_other_" + _sha()[:8], library_id=library_id, rel_path=path, file_size=1,
+            s.add(Asset(asset_id="ast_other_" + os.urandom(8).hex(), library_id=library_id, rel_path=path, file_size=1,
                         media_type="image", status="pending", availability="online"))
             s.commit()
         return real(self, library_id, path, sha)

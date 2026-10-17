@@ -43,9 +43,10 @@ def test_run_scan_with_an_unsafe_prefix_removes_nothing(tmp_path: Path) -> None:
 
 
 def test_scheduler_is_dir_says_no_for_a_path_outside_the_root(tmp_path: Path) -> None:
+    from src.processing.originals import Folder
     from src.server.scheduler.scans import _is_dir
 
     (tmp_path / "lib").mkdir()
     (tmp_path / "outside").mkdir()
-    assert _is_dir(tmp_path / "lib", "../outside") is False
-    assert _is_dir(tmp_path, "lib") is True
+    assert _is_dir(Folder(tmp_path / "lib"), "../outside") is False
+    assert _is_dir(Folder(tmp_path), "lib") is True

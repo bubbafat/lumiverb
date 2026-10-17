@@ -92,8 +92,10 @@ class Account(FakeAccount):
         self.scan_state = ScanState()
         self.inputs = Inputs(self, None)  # the originals at root: no Store on this disk
 
-    def root(self, library_id: str) -> Path | None:
-        return self._root if library_id in self.reachable else None
+    def originals(self, library_id: str) -> Any:
+        from src.processing.originals import Folder
+
+        return Folder(self._root, library_id) if library_id in self.reachable else None
 
     def storage_gone(self, library_id: str) -> bool:
         return library_id not in self.reachable

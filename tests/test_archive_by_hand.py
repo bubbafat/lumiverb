@@ -297,7 +297,7 @@ def test_archiving_needs_an_editor(env, viewer_headers):
 @pytest.mark.slow
 def test_trashing_an_archived_clip_starts_its_trash_clock_then(env):
     for archive in (lambda c: _archive(env, asset_ids=[c]), lambda c: _missing(env, c)):
-        clip = _ingest(env, f"clock/{_sha()[:8]}.mov", sha=_sha())
+        clip = _ingest(env, f"clock/{os.urandom(8).hex()}.mov", sha=_sha())
         archive(clip)
         archived_at = _row(env, clip)[0]
         time.sleep(0.05)

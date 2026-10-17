@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from rich.console import Console
 
-from src.processing.ingest import _walk_library
+from src.processing.originals import Folder
 from src.processing.scan import ScanStats, _listed, run_scan
 from src.shared.path_filter import PathFilter
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
@@ -194,7 +194,7 @@ def test_the_walk_names_what_it_leaves_out_when_asked(tmp_path):
         path.write_bytes(b"x")
     filtered: list[str] = []
     refused: list[str] = []
-    walked = _walk_library(tmp_path, library_filters=[PathFilter(type="exclude", pattern="drafts/**")],
+    walked = Folder(tmp_path).walk(library_filters=[PathFilter(type="exclude", pattern="drafts/**")],
                            filtered=filtered, refused_names=refused)
     assert [f["rel_path"] for f in walked] == ["Day/d.mov", "a.jpg"]
     assert filtered == ["drafts/b.jpg"]

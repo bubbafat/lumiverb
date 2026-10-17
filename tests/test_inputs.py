@@ -12,6 +12,7 @@ Over a real filesystem Store; the database end to end: test_scheduler_e2e.py.
 from __future__ import annotations
 
 import contextlib
+import errno
 import io
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,12 +23,13 @@ from PIL import Image
 
 from src.processing.proxy.analysis_cache import AnalysisProxyCache
 from src.processing.proxy.proxy_cache import ProxyCache
-from src.producers.runner import Waits
+from src.producers.runner import NotTried, Waits
 from src.server.scheduler.inputs import Inputs
 from src.server.storage.files import FileStore
 from src.server.storage.local import LocalStorage
 from src.server.storage.store import NotFound
 from src.shared import previews_location
+from src.shared.waits import SCAN
 
 pytestmark = pytest.mark.fast
 
@@ -218,6 +220,69 @@ def test_elsewhere_a_preview_is_the_cache_s(tmp_path):
     inputs = Inputs(acct, None)
     assert inputs.preview_bytes(_photo()) == b"cached"
     assert inputs.stored_preview(_photo()) is None
+
+
+# -- Originals, for a producer that reads the storage (src/processing/originals.py) --------
+
+
+class _Library:
+    """The account as a clip's original sees it: its library's originals at
+    the last look, and whether its storage is gone when a job looks again."""
+
+    def __init__(self, originals, gone: bool = False) -> None:
+        self._originals, self.gone, self.away = originals, gone, []
+
+    def originals(self, library_id: str):
+        return self._originals
+
+    def storage_gone(self, library_id: str) -> bool:
+        return self.gone
+
+    def unreachable(self, library_id: str) -> None:
+        self.away.append(library_id)
+
+
+class _Unreadable:
+    """Originals whose files can't be read: no permission, say."""
+
+    def local_file(self, rel_path: str):
+        raise PermissionError(errno.EACCES, "Permission denied", rel_path)
+
+
+def _clip(rel_path: str = "a.jpg") -> dict:
+    return {"asset_id": "ast_1", "library_id": "lib_1", "rel_path": rel_path}
+
+
+def test_an_original_is_its_file_for_the_block(tmp_path):
+    from src.processing.originals import Folder
+
+    (tmp_path / "a.jpg").write_bytes(b"original")
+    with Inputs(_Library(Folder(tmp_path, "lib_1")), None).original(_clip()) as source:
+        assert source.read_bytes() == b"original"
+
+
+def test_an_original_missing_from_storage_that_s_there_waits_for_its_scan(tmp_path):
+    from src.processing.originals import Folder
+
+    acct = _Library(Folder(tmp_path, "lib_1"))
+    with pytest.raises(Waits) as waits, Inputs(acct, None).original(_clip("gone.jpg")):
+        pass
+    assert waits.value.reason == SCAN and acct.away == []
+
+
+def test_an_original_that_can_t_be_read_is_the_clip_s_saying_why():
+    """Never taken for gone: before, it waited for a scan, which can't read it either."""
+    with pytest.raises(PermissionError, match="Permission denied"), Inputs(_Library(_Unreadable()), None).original(_clip()):
+        pass
+
+
+def test_one_that_can_t_be_read_because_the_storage_went_is_not_tried():
+    acct = _Library(_Unreadable(), gone=True)
+    with pytest.raises(NotTried), Inputs(acct, None).original(_clip()):
+        pass
+    assert acct.away == ["lib_1"]
+    with Inputs(acct, None).originals([_clip()]) as found:
+        assert found == {}, "quietly left out: each clip's own original() says why"
 
 
 # -- Where the account's Store comes from ------------------------------------------------

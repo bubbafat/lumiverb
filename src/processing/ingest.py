@@ -1,22 +1,16 @@
 """What a scan makes of a file (src/processing/scan.py): its proxy and
-thumbnail, EXIF, a video's poster and preview; and which files a library
-has (its filters). The rest is the scheduler's (src/producers/).
+thumbnail, EXIF, a video's poster and preview; and a library's filters.
+Which files a library has is its originals' walk (src/processing/originals.py).
+The rest is the scheduler's (src/producers/).
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import unicodedata
-from datetime import datetime, timezone
 from pathlib import Path
-from stat import S_ISREG
-
 
 from src.processing.api import ApiClient
-from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
-from src.shared.path_filter import PathFilter, has_control_character, is_path_included_merged
-from src.shared.io_utils import UnsafeRelPathError, resolve_source_path, stat_if_present
+from src.shared.path_filter import PathFilter
 from src.shared.content_hash import content_hash as hash_of
 from src.shared.content_hash import sampled, whole_file_sha256
 from src.processing.workers.exif_extract import (
@@ -37,7 +31,6 @@ logger = logging.getLogger(__name__)
 from src.processing.proxy.proxy_gen import KEEP, PROXY_JPEG, PROXY_LONG_EDGE
 
 PROXY_WEBP_QUALITY = 80
-SUPPORTED_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 
 def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
@@ -97,13 +90,6 @@ def _build_exif_payload(source_path: Path, media_type: str, *, content_hash: str
         "flash_fired": parse_flash_fired(exif_data),
         "orientation": parse_orientation(exif_data),
     }
-
-
-def _detect_media_type(ext: str) -> str:
-    """Return a simple media type string based on file extension."""
-    if ext in VIDEO_EXTENSIONS:
-        return "video"
-    return "image"
 
 
 def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
@@ -211,138 +197,6 @@ def _generate_video_preview(source_path: Path) -> bytes:
         raise RuntimeError(f"ffmpeg made no preview of {source_path}: {said}")
     finally:
         preview_path.unlink(missing_ok=True)
-
-
-def _refused_folders() -> dict[str, set[tuple[int, int]]]:
-    """The folders a library walk never goes into (the server's data and its
-    previews, which may be on a library's drive, even inside its folder), as
-    {lowercased name: {(device, inode)}}: matched by what they are, whatever
-    the path's spelling (a case-insensitive disk) or the links to them."""
-    from src.processing.machine import current
-
-    out: dict[str, set[tuple[int, int]]] = {}
-    for folder in current().refused_here():
-        try:
-            st = os.stat(folder)
-        except OSError:
-            continue
-        out.setdefault(Path(folder).name.lower(), set()).add((st.st_dev, st.st_ino))
-    return out
-
-
-def _is_refused(path: Path, refused: dict[str, set[tuple[int, int]]]) -> bool:
-    same_name = refused.get(path.name.lower())
-    if not same_name:
-        return False
-    try:
-        st = os.stat(path, follow_symlinks=False)
-    except OSError:
-        return False
-    return (st.st_dev, st.st_ino) in same_name
-
-
-def _control_named(root_path: Path, path: Path, refused: list[str] | None = None, *, folder: bool = False) -> bool:
-    """A file or folder whose name has a control character (a newline, a
-    tab): never scanned, nor anything in a folder so named. Said once, as a
-    warning (repr: the name made printable); it isn't a failure to try again.
-    Its rel path goes in `refused` when given (a folder's ends in "/")."""
-    if not has_control_character(path.name):
-        return False
-    rel = unicodedata.normalize("NFC", str(path.relative_to(root_path)))
-    logger.warning("Not scanning %r: its name has a control character", rel)
-    if refused is not None:
-        refused.append(rel + "/" if folder else rel)
-    return True
-
-
-def _walk_library(
-    root_path: Path,
-    path_prefix: str | None = None,
-    tenant_filters: list[PathFilter] | None = None,
-    library_filters: list[PathFilter] | None = None,
-    unlisted: list[str] | None = None,
-    filtered: list[str] | None = None,
-    refused_names: list[str] | None = None,
-) -> list[dict]:
-    """Walk the library root and return a list of file descriptors.
-
-    Each entry: {rel_path, file_size, file_mtime, media_type, ext}.
-    Media files that don't pass the merged tenant + library filters are
-    skipped, silently: in `filtered` as rel paths when it's given (what a
-    scan's --explain lists). Hidden files are listed; symlinks aren't
-    followed. A media file or a folder whose name has a control character is
-    skipped with a warning (in `refused_names` when given; a folder's path
-    ends in "/"). Folders that can't be listed, or that hold a media file
-    that can't be checked, go in `unlisted` as rel paths ("" is the library
-    root), so the caller doesn't take their files for deleted.
-    """
-    walk_root = root_path
-    if path_prefix:
-        try:
-            walk_root = resolve_source_path(root_path, path_prefix)
-        except UnsafeRelPathError:
-            logger.warning("Not scanning %s: it leaves the library", path_prefix)
-            if unlisted is not None:
-                unlisted.append(path_prefix)  # its files aren't taken for deleted
-            return []
-
-    def _unreadable(exc: OSError, folder: str | None = None) -> None:
-        folder = folder or exc.filename or str(walk_root)
-        logger.warning("Can't list %s: %s", folder, exc)
-        if unlisted is not None:
-            rel = os.path.relpath(folder, root_path)
-            rel = "" if rel == "." else unicodedata.normalize("NFC", rel)
-            if rel not in unlisted:
-                unlisted.append(rel)
-
-    has_filters = bool(tenant_filters or library_filters)
-    t_filters = tenant_filters or []
-    l_filters = library_filters or []
-
-    refused = _refused_folders()
-    found: list[Path] = []
-    for folder, dirs, names in os.walk(walk_root, onerror=_unreadable):
-        if refused:
-            dirs[:] = [d for d in dirs if not _is_refused(Path(folder, d), refused)]
-        dirs[:] = [d for d in dirs if not _control_named(root_path, Path(folder, d), refused_names, folder=True)]
-        found.extend(Path(folder, name) for name in names)
-
-    results = []
-    for p in sorted(found):
-        # Only files the scan would take are stat'ed: one that can't be
-        # checked holds back deletions in its folder.
-        ext = p.suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS or _control_named(root_path, p, refused_names):
-            continue
-
-        # NFC, as the macOS app's scan stored it (before the server scanned
-        # every library): one identity per file whichever machine scans it. Disk access goes through resolve_source_path.
-        rel_path = unicodedata.normalize("NFC", str(p.relative_to(root_path)))
-
-        if has_filters and not is_path_included_merged(rel_path, t_filters, l_filters):
-            if filtered is not None:
-                filtered.append(rel_path)
-            continue
-
-        try:
-            stat = stat_if_present(p, follow_symlinks=False)  # a symlink isn't S_ISREG
-        except OSError as exc:
-            _unreadable(exc, str(p.parent))
-            continue
-        if stat is None or not S_ISREG(stat.st_mode):
-            continue
-
-        file_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-
-        results.append({
-            "rel_path": rel_path,
-            "file_size": stat.st_size,
-            "file_mtime": file_mtime,
-            "media_type": _detect_media_type(ext),
-            "ext": ext,
-        })
-
-    return results
 
 
 def _load_tenant_filters(client: ApiClient) -> list[PathFilter]:

@@ -14,12 +14,14 @@ asked about first), skipped. The finish archives as missing the clips whose
 files weren't found, and the client then makes and uploads previews for
 what's new or changed (POST /v1/ingest, as before).
 
-What stays here: the walk (filters, hidden files, no symlinks, control
-characters, refused folders, names in NFC, folders it couldn't list),
-files still being written, a scope folder that's gone, whether the storage
-is still there before anything is moved or archived, reading the files
-(hashes, previews, EXIF), the proxy cache, the CLI's question about moves,
-and --explain's listing of every difference between the disk and Lumiverb.
+What stays here: files still being written, a scope folder that's gone,
+whether the storage is still there before anything is moved or archived,
+what's read of the files (hashes, previews, EXIF), the proxy cache, the
+CLI's question about moves, and --explain's listing of every difference
+between the disk and Lumiverb. The library's files are its originals'
+(src/processing/originals.py): the walk (filters, hidden files, no
+symlinks, control characters, refused folders, names in NFC, folders it
+couldn't list) and each file read, for the block that reads it.
 
 A dropped connection, or the API restarting, doesn't end a scan: every call
 of the conversation but its start is safe to send twice (the server answers
@@ -43,8 +45,7 @@ from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
-from stat import S_ISDIR
+from pathlib import PurePosixPath
 
 from rich.console import Console
 from rich.markup import escape
@@ -60,25 +61,19 @@ from rich.progress import (
 from src.processing.api import ApiClient
 from src.processing.ingest import (
     _build_exif_payload,
-    _detect_media_type,
     _extract_video_poster,
     _generate_proxy_bytes,
     _generate_video_preview,
     _jpeg_to_webp,
     _load_library_filters,
     _load_tenant_filters,
-    _walk_library,
 )
+from src.processing.originals import Originals, reach, where
 from src.processing.proxy.proxy_cache import ProxyCache
-from src.processing.roots import local_library_root, reachable_root
 from src.processing.video.probe import probe_video
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
-from src.shared.io_utils import (
-    UnsafeRelPathError,
-    check_rel_path,
-    resolve_source_path,
-    stat_if_present,
-)
+from src.shared.file_extensions import media_type_of
+from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 from src.shared.path_filter import has_control_character
 from src.shared.producers import effective_settings
 from src.shared.producers import lineage as producer_lineage
@@ -179,14 +174,14 @@ class _Differences:
     missing: list[str] = field(default_factory=list)
 
 
-def _existing_folder(root: Path, rel: str) -> str | None:
-    """The deepest folder on the way to rel that's on disk, its name in either
-    Unicode form. None is the library root. Raises OSError when a folder
-    can't be checked: it may well be there."""
+def _existing_folder(originals: Originals, rel: str) -> str | None:
+    """The deepest folder on the way to rel that's in the library, its name
+    in either Unicode form. None is the library root. Raises OSError when a
+    folder can't be checked: it may well be there."""
     parts = PurePosixPath(rel).parts
     while parts:
-        st = stat_if_present(resolve_source_path(root, "/".join(parts)))
-        if st is not None and S_ISDIR(st.st_mode):
+        st = originals.stat("/".join(parts))
+        if st is not None and st.folder:
             return "/".join(parts)
         parts = parts[:-1]
     return None
@@ -210,7 +205,7 @@ def _scan_one(
     *,
     client: ApiClient,
     library_id: str,
-    root_path: Path,
+    originals: Originals,
     f: dict,
     proxy_cache: ProxyCache | None,
     stats: ScanStats,
@@ -224,57 +219,55 @@ def _scan_one(
     """
     rel_path = f["rel_path"]
     try:
-        source_path = resolve_source_path(root_path, rel_path).resolve()
+        with originals.local_file(rel_path) as source_path:
+            # 1. Generate 2048px JPEG proxy
+            jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
+
+            # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
+            exif_payload = _build_exif_payload(source_path, f["media_type"], **_hashes(f))
+
+            # 3. Convert to WebP for server upload
+            webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+            # 4. POST /v1/ingest — create or update asset
+            upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            del webp_bytes
+            data: dict[str, str] = {
+                "library_id": library_id,
+                "rel_path": rel_path,
+                "file_size": str(f["file_size"]),
+                "media_type": f["media_type"],
+                "width": str(width_orig),
+                "height": str(height_orig),
+                "exif": json.dumps(exif_payload),
+            }
+            if f.get("file_mtime") is not None:
+                data["file_mtime"] = f["file_mtime"].isoformat()
+            # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
+            data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("content_hash")),
+                                          "capture": _made("capture", f.get("content_hash"))})
+
+            resp = client.post("/v1/ingest", files=upload, data=data)
+            result = resp.json()
+            asset_id = result.get("asset_id")
+
+            # 5. Cache the 2048px proxy + hash sidecar
+            if proxy_cache is not None and asset_id:
+                proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
+            del jpeg_bytes
+
+            with stats.lock:
+                setattr(stats, counter_field, getattr(stats, counter_field) + 1)
+                if asset_id:
+                    stats.scanned_asset_ids.append(asset_id)
+            progress.advance(task_id)
+
     except UnsafeRelPathError:
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        return
-
-    try:
-        # 1. Generate 2048px JPEG proxy
-        jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
-
-        # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
-        exif_payload = _build_exif_payload(source_path, f["media_type"], **_hashes(f))
-
-        # 3. Convert to WebP for server upload
-        webp_bytes = _jpeg_to_webp(jpeg_bytes)
-
-        # 4. POST /v1/ingest — create or update asset
-        files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
-        del webp_bytes
-        data: dict[str, str] = {
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": str(f["file_size"]),
-            "media_type": f["media_type"],
-            "width": str(width_orig),
-            "height": str(height_orig),
-            "exif": json.dumps(exif_payload),
-        }
-        if f.get("file_mtime") is not None:
-            data["file_mtime"] = f["file_mtime"].isoformat()
-        # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
-        data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("content_hash")),
-                                      "capture": _made("capture", f.get("content_hash"))})
-
-        resp = client.post("/v1/ingest", files=files, data=data)
-        result = resp.json()
-        asset_id = result.get("asset_id")
-
-        # 5. Cache the 2048px proxy + hash sidecar
-        if proxy_cache is not None and asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
-        del jpeg_bytes
-
-        with stats.lock:
-            setattr(stats, counter_field, getattr(stats, counter_field) + 1)
-            if asset_id:
-                stats.scanned_asset_ids.append(asset_id)
         progress.advance(task_id)
-
     except Exception as e:
         logger.exception("Failed to scan %s: %s", rel_path, e)
         with stats.lock:
@@ -288,7 +281,7 @@ def _scan_one_video(
     *,
     client: ApiClient,
     library_id: str,
-    root_path: Path,
+    originals: Originals,
     f: dict,
     proxy_cache: ProxyCache,
     stats: ScanStats,
@@ -299,75 +292,73 @@ def _scan_one_video(
     """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
     rel_path = f["rel_path"]
     try:
-        source_path = resolve_source_path(root_path, rel_path).resolve()
+        with originals.local_file(rel_path) as source_path:
+            # 1. Extract poster frame as JPEG proxy
+            jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
+
+            # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
+            exif_payload = _build_exif_payload(source_path, "video", **_hashes(f))
+
+            # 3. Generate 10-second preview
+            preview_bytes = _generate_video_preview(source_path)
+
+            # 4. Convert poster to WebP for upload
+            webp_bytes = _jpeg_to_webp(jpeg_bytes)
+
+            # 5. POST /v1/ingest — create asset with poster frame as proxy
+            upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            del webp_bytes
+            data: dict[str, str] = {
+                "library_id": library_id,
+                "rel_path": rel_path,
+                "file_size": str(f["file_size"]),
+                "media_type": "video",
+                "width": str(width_orig),
+                "height": str(height_orig),
+                "exif": json.dumps(exif_payload),
+            }
+            if f.get("file_mtime") is not None:
+                data["file_mtime"] = f["file_mtime"].isoformat()
+            # Frame rate, timecode, audio layout for editor exports. A failed
+            # probe doesn't block ingest; `lumiverb enrich --job-type probe`
+            # backfills it.
+            made = {"proxy": _made("proxy", f.get("content_hash")), "capture": _made("capture", f.get("content_hash"))}
+            try:
+                data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
+                made["probe"] = _made("probe", f.get("content_hash"))
+            except Exception as exc:  # noqa: BLE001 — any ffprobe failure
+                logger.warning("Probe failed for %s: %s", rel_path, exc)
+            data["lineage"] = json.dumps(made)
+
+            resp = client.post("/v1/ingest", files=upload, data=data)
+            asset_id = resp.json().get("asset_id")
+
+            # 6. Upload video preview
+            if asset_id and preview_bytes:
+                client.post(
+                    f"/v1/assets/{asset_id}/artifacts/video_preview",
+                    files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
+                    data={"lineage": json.dumps(_made("video_preview", f.get("content_hash")))},
+                )
+            del preview_bytes
+
+            # 7. Cache the poster proxy + hash sidecar
+            if proxy_cache is not None and asset_id:
+                proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
+            del jpeg_bytes
+
+            with stats.lock:
+                setattr(stats, counter_field, getattr(stats, counter_field) + 1)
+                if asset_id:
+                    stats.scanned_asset_ids.append(asset_id)
+            progress.advance(task_id)
+
     except UnsafeRelPathError:
         logger.warning("Skipping %s: escapes library root", rel_path)
         with stats.lock:
             stats.failed += 1
             stats.failed_paths.append(rel_path)
-        return
-
-    try:
-        # 1. Extract poster frame as JPEG proxy
-        jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
-
-        # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
-        exif_payload = _build_exif_payload(source_path, "video", **_hashes(f))
-
-        # 3. Generate 10-second preview
-        preview_bytes = _generate_video_preview(source_path)
-
-        # 4. Convert poster to WebP for upload
-        webp_bytes = _jpeg_to_webp(jpeg_bytes)
-
-        # 5. POST /v1/ingest — create asset with poster frame as proxy
-        files = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
-        del webp_bytes
-        data: dict[str, str] = {
-            "library_id": library_id,
-            "rel_path": rel_path,
-            "file_size": str(f["file_size"]),
-            "media_type": "video",
-            "width": str(width_orig),
-            "height": str(height_orig),
-            "exif": json.dumps(exif_payload),
-        }
-        if f.get("file_mtime") is not None:
-            data["file_mtime"] = f["file_mtime"].isoformat()
-        # Frame rate, timecode, audio layout for editor exports. A failed
-        # probe doesn't block ingest; `lumiverb enrich --job-type probe`
-        # backfills it.
-        made = {"proxy": _made("proxy", f.get("content_hash")), "capture": _made("capture", f.get("content_hash"))}
-        try:
-            data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
-            made["probe"] = _made("probe", f.get("content_hash"))
-        except Exception as exc:  # noqa: BLE001 — any ffprobe failure
-            logger.warning("Probe failed for %s: %s", rel_path, exc)
-        data["lineage"] = json.dumps(made)
-
-        resp = client.post("/v1/ingest", files=files, data=data)
-        asset_id = resp.json().get("asset_id")
-
-        # 6. Upload video preview
-        if asset_id and preview_bytes:
-            client.post(
-                f"/v1/assets/{asset_id}/artifacts/video_preview",
-                files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
-                data={"lineage": json.dumps(_made("video_preview", f.get("content_hash")))},
-            )
-        del preview_bytes
-
-        # 7. Cache the poster proxy + hash sidecar
-        if proxy_cache is not None and asset_id:
-            proxy_cache.put_scan(asset_id, jpeg_bytes, f.get("content_hash") or "")
-        del jpeg_bytes
-
-        with stats.lock:
-            setattr(stats, counter_field, getattr(stats, counter_field) + 1)
-            if asset_id:
-                stats.scanned_asset_ids.append(asset_id)
         progress.advance(task_id)
-
     except Exception as e:
         logger.exception("Failed to scan video %s: %s", rel_path, e)
         with stats.lock:
@@ -588,20 +579,20 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
     return counts, plan
 
 
-def _hashes_of(root_path: Path, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
+def _hashes_of(originals: Originals, rel_path: str, whole_too: bool = False) -> tuple[str, str | None] | None:
     """The file's content hash, and the whole file's "sha256" when asked for
     and that isn't it (a file over 64 MiB, its plan's legacy), or None when
     it can't be read."""
     try:
-        path = resolve_source_path(root_path, rel_path)
-        found = content_hash(path)
-        return found, whole_file_sha256(path) if whole_too and sampled(found) else None
+        with originals.local_file(rel_path) as path:
+            found = content_hash(path)
+            return found, whole_file_sha256(path) if whole_too and sampled(found) else None
     except (OSError, UnsafeRelPathError) as exc:
         logger.warning("Can't read %s: %s", rel_path, exc)
         return None
 
 
-def _hashed(root_path: Path, files: list[dict], concurrency: int
+def _hashed(originals: Originals, files: list[dict], concurrency: int
             ) -> Iterator[tuple[dict, tuple[str, str | None] | None]]:
     """Each file with its hashes (_hashes_of; None: it couldn't be read), in the
     order given, read `concurrency` at a time and never more than
@@ -609,7 +600,7 @@ def _hashed(root_path: Path, files: list[dict], concurrency: int
     with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="hash") as pool:
         waiting: deque[tuple[dict, Future]] = deque()
         for f in files:
-            waiting.append((f, pool.submit(_hashes_of, root_path, f["rel_path"],
+            waiting.append((f, pool.submit(_hashes_of, originals, f["rel_path"],
                                            bool(f.get("_plan", {}).get("legacy")))))
             if len(waiting) >= concurrency * 2:
                 done, fut = waiting.popleft()
@@ -663,15 +654,24 @@ def _take(f: dict, d: dict, work: _Work, stats: ScanStats) -> None:
     # move_skipped: a person said to skip it; it takes no part.
 
 
+def _still_a_folder(originals: Originals) -> bool:
+    """The library's folder is still there (False too when it can't be checked)."""
+    try:
+        st = originals.stat("")
+    except OSError:
+        return False
+    return st is not None and st.folder
+
+
 def _storage_gone(library: dict) -> bool:
     """Files that look missing or moved may only be the storage going away
     mid-scan (a clean unmount leaves an empty folder): it's looked at again
     before anything is moved or archived (Robert's call, Oct 8)."""
-    return reachable_root(library, require_entries=True) is None
+    return reach(library, require_entries=True) is None
 
 
 def _hash_and_decide(
-    client: ApiClient, scan_id: str, library: dict, root_path: Path, to_hash: list[dict], work: _Work,
+    client: ApiClient, scan_id: str, library: dict, originals: Originals, to_hash: list[dict], work: _Work,
     stats: ScanStats, *, moves_now: bool, concurrency: int, console: Console,
 ) -> bool:
     """Read the files the plan asks about, in walk order, and send their
@@ -695,7 +695,7 @@ def _hash_and_decide(
 
     batch: list[dict] = []
     progress = _progress(console, "Hashing")
-    with progress, contextlib.closing(_hashed(root_path, to_hash, concurrency)) as hashes:
+    with progress, contextlib.closing(_hashed(originals, to_hash, concurrency)) as hashes:
         tid = progress.add_task("Hashing", total=len(to_hash))
         for f, hashed in hashes:
             progress.advance(tid)
@@ -712,7 +712,7 @@ def _hash_and_decide(
 
 
 def _upload(
-    client: ApiClient, library_id: str, root_path: Path, work: _Work, proxy_cache: ProxyCache | None, stats: ScanStats,
+    client: ApiClient, library_id: str, originals: Originals, work: _Work, proxy_cache: ProxyCache | None, stats: ScanStats,
     *, concurrency: int, console: Console,
 ) -> None:
     """Make and upload the previews of what's new, then what changed,
@@ -728,7 +728,7 @@ def _upload(
             for f in files:
                 handler = _scan_one_video if f["media_type"] == "video" else _scan_one
                 inflight.add(pool.submit(
-                    handler, client=client, library_id=library_id, root_path=root_path, f=f,
+                    handler, client=client, library_id=library_id, originals=originals, f=f,
                     proxy_cache=proxy_cache, stats=stats, progress=progress, task_id=tid, counter_field=kind,
                 ))
                 if len(inflight) >= concurrency * 2:
@@ -792,7 +792,7 @@ def _missing_archived(client: ApiClient, library_id: str, scope: str | None, med
 def _of_media_type(rel_path: str, media_type: str) -> bool:
     """A file of the scan's media type, by its extension; a folder (its path ends in "/") always."""
     return (media_type == "all" or rel_path.endswith("/")
-            or _detect_media_type(PurePosixPath(rel_path).suffix.lower()) == media_type)
+            or media_type_of(PurePosixPath(rel_path).suffix.lower()) == media_type)
 
 
 def _group(console: Console, title: str, paths: list[str], note: str = "") -> None:
@@ -906,11 +906,11 @@ def run_scan(
     they are (src/server/scheduler/inputs.py), and unchanged files are only counted.
     """
     library_id = library["library_id"]
-    root_path = reachable_root(library)
+    originals = reach(library)
     dry_run = dry_run or explain
 
-    if root_path is None:
-        here = local_library_root(library)
+    if originals is None:
+        here = where(library)
         console.print(f"[red]Library root not accessible: {here}[/red]")
         if here is not None and str(here) == library.get("root_path"):
             console.print("Is the volume mounted? If it's mounted elsewhere on this machine, "
@@ -933,7 +933,7 @@ def run_scan(
     path_prefix = path_prefix.rstrip("/") if path_prefix else None
     if path_prefix:
         try:
-            found = _existing_folder(root_path, path_prefix)
+            found = _existing_folder(originals, path_prefix)
         except UnsafeRelPathError:
             console.print(f"[red]Invalid path prefix {path_prefix}: it must be a folder inside the library[/red]")
             stats.unlisted.append(path_prefix)  # nothing is removed
@@ -945,8 +945,8 @@ def run_scan(
         if found != path_prefix:
             console.print(f"{path_prefix} isn't on disk; scanning {found or 'the whole library'}")
             path_prefix = found
-    if not path_prefix and not root_path.is_dir():
-        console.print(f"[red]Library root went away: {root_path}[/red]")
+    if not path_prefix and not _still_a_folder(originals):
+        console.print(f"[red]Library root went away: {originals.where}[/red]")
         return ScanStats(root_unreachable=True)
 
     # Started before the walk: a clip made or changed after this is never
@@ -958,7 +958,7 @@ def run_scan(
     }).json()
     scan_id = scan["scan_id"]
     try:
-        return _run(client, library, root_path, scan_id, stats, path_prefix=path_prefix,
+        return _run(client, library, originals, scan_id, stats, path_prefix=path_prefix,
                     follow_moves=scan.get("follow_moves", True), moves=moves, force=force,
                     media_type_filter=media_type_filter, dry_run=dry_run, allow_mass_delete=allow_mass_delete,
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
@@ -971,7 +971,7 @@ def run_scan(
 
 
 def _run(
-    client: ApiClient, library: dict, root_path: Path, scan_id: str, stats: ScanStats, *,
+    client: ApiClient, library: dict, originals: Originals, scan_id: str, stats: ScanStats, *,
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
     waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, differences: _Differences | None,
@@ -986,9 +986,9 @@ def _run(
         console.print("[dim]This account doesn't follow moves and renames: files at new paths are new assets.[/dim]")
 
     console.print("[bold]Discovering files...[/bold]")
-    walked = _walk_library(root_path, path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
-                           unlisted=stats.unlisted, filtered=d.filtered if d is not None else None,
-                           refused_names=d.refused if d is not None else None)
+    walked = originals.walk(path_prefix, tenant_filters=tenant_filters, library_filters=library_filters,
+                        unlisted=stats.unlisted, filtered=d.filtered if d is not None else None,
+                        refused_names=d.refused if d is not None else None)
     if stats.unlisted:
         console.print(f"[yellow]Couldn't list {len(stats.unlisted):,} folder(s), so this scan "
                       "doesn't remove anything: {}[/yellow]".format(", ".join(stats.unlisted[:5]) or "/"))
@@ -1060,7 +1060,7 @@ def _run(
     # when the account follows moves, unless the scan forces or skips them,
     # and makes them as the hashes arrive when the scan applies them.
     moves_now = moves == "apply" and follow_moves and not force and not dry_run and counts["gone"] > 0
-    if not _hash_and_decide(client, scan_id, library, root_path, to_hash, work, stats, moves_now=moves_now,
+    if not _hash_and_decide(client, scan_id, library, originals, to_hash, work, stats, moves_now=moves_now,
                             concurrency=concurrency, console=console):
         console.print("[red]The library's storage went away during the scan, so nothing was archived or moved. "
                       "It's scanned again once it's back.[/red]")
@@ -1119,7 +1119,7 @@ def _run(
             f"{finished['archived']:,} deleted, "
             f"{finished['moved']:,} moved"
         )
-        console.print(f"\n[bold]Root path:[/bold]  {root_path}")
+        console.print(f"\n[bold]Root path:[/bold]  {originals.where}")
         return stats
     stats.moved += work.moved
 
@@ -1170,7 +1170,7 @@ def _run(
     # After the finish: a file whose content was just archived as missing
     # comes back at its new path.
     proxy_cache = ProxyCache(client=client) if cache_previews else None
-    _upload(client, library_id, root_path, work, proxy_cache, stats, concurrency=concurrency, console=console)
+    _upload(client, library_id, originals, work, proxy_cache, stats, concurrency=concurrency, console=console)
     stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
     if proxy_cache is not None:
         _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)

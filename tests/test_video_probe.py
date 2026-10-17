@@ -164,6 +164,7 @@ def _scan_video(tmp_path: Path, probe) -> dict:
     from unittest.mock import MagicMock, patch
 
     from src.processing import scan
+    from src.processing.originals import Folder
 
     (tmp_path / "clip.mov").write_bytes(b"not really a movie")
     client = MagicMock()
@@ -177,7 +178,7 @@ def _scan_video(tmp_path: Path, probe) -> dict:
         patch.object(scan, "probe_video", side_effect=probe),
     ):
         scan._scan_one_video(
-            client=client, library_id="lib_1", root_path=tmp_path,
+            client=client, library_id="lib_1", originals=Folder(tmp_path),
             f={"rel_path": "clip.mov", "file_size": 18, "file_mtime": None},
             proxy_cache=MagicMock(), stats=stats, progress=MagicMock(), task_id=None,
             counter_field="new",

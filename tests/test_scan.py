@@ -19,6 +19,7 @@ import pytest
 from PIL import Image
 from rich.console import Console
 
+from src.processing.originals import Folder
 from src.processing.scan import ScanStats, _hashed, _populate_cache_for_unchanged, run_scan
 from tests.scan_fakes import SCAN_ID, FakeScans, answer, finished, mass_missing
 
@@ -84,13 +85,15 @@ def test_a_scan_starts_before_the_walk_with_its_options(root: Path, options: dic
     _photo(root, "a.jpg")
     server = FakeScans()
     started_before: list[bool] = []
-    from src.processing import ingest
+    from src.processing.originals import Folder
 
-    def walk(*args, **kwargs):
+    real_walk = Folder.walk
+
+    def walk(self, *args, **kwargs):
         started_before.append(any(r.path == "/v1/libraries/lib_1/scans" for r in server.requests))
-        return ingest._walk_library(*args, **kwargs)
+        return real_walk(self, *args, **kwargs)
 
-    with patch("src.processing.scan._walk_library", side_effect=walk):
+    with patch.object(Folder, "walk", walk):
         _scan(server, root, thorough=True, **options)
 
     assert started_before == [True]  # a clip made after the start is never taken for gone
@@ -207,7 +210,7 @@ def test_hashing_keeps_at_most_twice_its_concurrency_waiting(tmp_path: Path) -> 
     for f in files:
         (tmp_path / f["rel_path"]).write_bytes(b"x")
     with patch("src.processing.scan.content_hash", side_effect=slow):
-        hashes = _hashed(tmp_path, files, 2)
+        hashes = _hashed(Folder(tmp_path), files, 2)
         threading.Timer(0.2, release.set).start()
         first = next(hashes)
         assert len(started) <= 4  # never every file submitted at once

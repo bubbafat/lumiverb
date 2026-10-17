@@ -60,8 +60,12 @@ class FakeAccount:
     def guard(self, job: str):
         return {"vision": self.vision, "transcripts": self.transcripts}[job]
 
-    def root(self, library_id: str):
-        return self.roots.get(library_id)
+    def originals(self, library_id: str):
+        """The library's originals in its folder in roots (the latest look)."""
+        from src.processing.originals import Folder
+
+        root = self.roots.get(library_id)
+        return None if root is None else Folder(root, library_id)
 
     def unreachable(self, library_id: str) -> None:
         self.gone.append(library_id)

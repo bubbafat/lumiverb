@@ -468,7 +468,7 @@ def test_a_file_moving_between_its_folders_as_it_s_looked_for_is_found(install, 
 def test_a_library_walk_never_goes_into_the_data_or_previews_folder(tmp_path):
     """Previews moved onto a library's drive, even inside its folder."""
     from src.processing import machine
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     library = tmp_path / "Media"
     (library / "Trips").mkdir(parents=True)
@@ -483,7 +483,7 @@ def test_a_library_walk_never_goes_into_the_data_or_previews_folder(tmp_path):
     previews_location.write(data, previews, None)
     machine.use(machine.Machine(refused_roots=(str(data),), data_dir=str(data)))
     try:
-        found = [f["rel_path"] for f in _walk_library(library)]
+        found = [f["rel_path"] for f in Folder(library).walk()]
     finally:
         machine.use(None)
     assert found == ["Trips/beach.jpg"]
@@ -596,7 +596,7 @@ def test_a_library_can_t_move_where_it_is(install):
 
 def test_a_library_walk_never_goes_into_a_library_s_previews_folder(tmp_path):
     from src.processing import machine
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     library = tmp_path / "Media"
     (library / "a.jpg").parent.mkdir(parents=True)
@@ -608,7 +608,7 @@ def test_a_library_walk_never_goes_into_a_library_s_previews_folder(tmp_path):
     previews_location.write(data, data, None, libraries={"lib_2": own})
     machine.use(machine.Machine(data_dir=str(data)))
     try:
-        assert [f["rel_path"] for f in _walk_library(library)] == ["a.jpg"]
+        assert [f["rel_path"] for f in Folder(library).walk()] == ["a.jpg"]
     finally:
         machine.use(None)
 

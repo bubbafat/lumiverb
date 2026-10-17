@@ -120,7 +120,9 @@ def _scan_args(tmp_path, media_type: str) -> dict:
     (tmp_path / "a.file").write_bytes(b"x")
     client = MagicMock()
     client.post.return_value.json.return_value = {"asset_id": "ast_a"}
-    return dict(client=client, library_id="lib_1", root_path=tmp_path,
+    from src.processing.originals import Folder
+
+    return dict(client=client, library_id="lib_1", originals=Folder(tmp_path),
                 f={"rel_path": "a.file", "file_size": 1, "media_type": media_type, "content_hash": SHA},
                 proxy_cache=MagicMock(), stats=ScanStats(), progress=MagicMock(), task_id=1, counter_field="new")
 

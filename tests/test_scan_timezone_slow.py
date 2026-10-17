@@ -20,7 +20,7 @@ import pytest
 from rich.console import Console
 from sqlalchemy import create_engine, text
 
-from src.processing.ingest import _walk_library
+from src.processing.originals import Folder
 from src.processing.scan import run_scan
 from src.server.database import get_engine_for_url
 from tests.machine_lineage import ingest_made
@@ -86,7 +86,7 @@ def test_a_second_scan_doesnt_hash_an_unchanged_file(env, tmp_path: Path) -> Non
     clip = tmp_path / "tz" / "clip.jpg"
     clip.write_bytes(_image())
     os.utime(clip, ns=(1_718_452_800_123_456_789,) * 2)
-    [f] = _walk_library(tmp_path)
+    [f] = Folder(tmp_path).walk()
     _ingest(env, tmp_path, f)
     api, seen = _scanner(env)
 
@@ -104,7 +104,7 @@ def test_a_touched_file_is_hashed_once_then_matches_again(env, tmp_path: Path) -
     clip = tmp_path / "touched" / "clip.jpg"
     clip.write_bytes(_image())
     os.utime(clip, ns=(1_700_000_000_000_000_000,) * 2)
-    [before] = _walk_library(tmp_path)
+    [before] = Folder(tmp_path).walk()
     _ingest(env, tmp_path, before)
 
     os.utime(clip, ns=(1_720_000_000_987_654_321,) * 2)  # touched

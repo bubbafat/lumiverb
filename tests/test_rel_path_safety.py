@@ -82,6 +82,7 @@ def test_resolve_source_path_follows_a_symlink_inside_the_root(tmp_path: Path) -
 def test_a_jobs_inputs_never_read_through_a_symlink_out_of_the_root(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
+    from src.processing.originals import Folder
     from src.producers.runner import Failed
     from src.server.scheduler.inputs import Inputs
 
@@ -89,7 +90,7 @@ def test_a_jobs_inputs_never_read_through_a_symlink_out_of_the_root(tmp_path: Pa
     root.mkdir()
     (tmp_path / "x.jpg").write_bytes(b"outside")
     (root / "link.jpg").symlink_to(tmp_path / "x.jpg")
-    inputs = Inputs(SimpleNamespace(root=lambda _library_id: root), None)
+    inputs = Inputs(SimpleNamespace(originals=lambda library_id: Folder(root, library_id)), None)
     with pytest.raises(Failed), inputs.original({"library_id": "lib_1", "rel_path": "link.jpg"}):
         pass
     with inputs.originals([{"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "link.jpg"}]) as found:
