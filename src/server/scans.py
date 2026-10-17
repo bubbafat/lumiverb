@@ -13,7 +13,8 @@ gone_page: what `lumiverb scan --explain` shows).
 The rules are today's scanner's (src/processing/scan.py), each moved here:
 - unchanged when size and modified time match the clip at the path; hashed
   when they don't, or for --thorough; uploaded for --force, and when a
-  video's preview never arrived (_split_files, _preview_missing);
+  preview the scan makes is missing: never arrived, or lost (its reader's
+  work, src/server/reader_work.py);
 - content is known by its content hash (src/shared/content_hash.py): a file
   over 64 MiB by an fp1 of 3 MiB of it. A clip whose hash was made before
   fp1 (the whole file's) is hashed again when it's unchanged, and its hash
@@ -57,6 +58,7 @@ from sqlmodel import Session, select
 from ulid import ULID
 
 from src.server.models.tenant import ScanSession
+from src.server.reader_work import previews_missing
 from src.server.repository.assets import AssetRepository
 from src.shared.content_hash import FULL_UP_TO, SHA256, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
@@ -195,7 +197,7 @@ _PLAN = f"""
                         OR (CAST(:media_type AS text) <> 'all' AND f.media_type <> CAST(:media_type AS text))
                        THEN NULL
                    WHEN a.asset_id IS NOT NULL THEN CASE
-                       WHEN a.media_type = 'video' AND a.video_preview_key IS NULL THEN 'upload/preview_missing'
+                       WHEN {previews_missing()} THEN 'upload/preview_missing'
                        WHEN :force THEN 'upload/force'
                        WHEN :thorough THEN 'hash/thorough'
                        WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime
@@ -231,7 +233,7 @@ _POSTED = f"""
            f.file_size, f.file_mtime,
            a.asset_id, a.content_hash AS asset_hash,
            COALESCE(a.file_size <> f.file_size OR a.file_mtime IS DISTINCT FROM f.file_mtime, false) AS stat_differs,
-           COALESCE(a.media_type = 'video' AND a.video_preview_key IS NULL, false) AS preview_missing,
+           COALESCE({previews_missing()}, false) AS preview_missing,
            -- A person removed this content here, or a file here whose content was never known.
            p.rel_path IN (SELECT r.rel_path FROM ({REMOVED}) r
                           JOIN posted q ON q.rel_path = r.rel_path
@@ -370,7 +372,7 @@ def decide(session: Session, scan: ScanSession, posted: list[Hashed], *,
     """Decide each file from its content, in the order sent (no commit):
 
     - at a path a clip holds: uploaded when its content differs (or the scan
-      forces, or the video's preview never arrived), else unchanged, and its
+      forces, or a preview the scan makes is missing), else unchanged, and its
       new size and time are recorded so the next scan's check matches;
     - at a new path: skipped when a person removed this content here, unless
       the scan adds them anyway (force_add): then restored, its clip in the

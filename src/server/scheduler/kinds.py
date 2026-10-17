@@ -34,7 +34,6 @@ class Kind:
     name: str
     spec: KindSpec
     flag: str = ""  # its missing_* condition (repository/assets.py MISSING_CONDITIONS)
-    extra: str = "true"  # what else a clip needs first (SQL on active_assets a)
     # Reads the originals, so only libraries whose storage is reachable now.
     storage: bool = False
     # Makes again what was made with another model or settings (tier 4).
@@ -50,19 +49,12 @@ class Kind:
         return self.spec.same_as or self.name
 
 
-def _made_first(needs: tuple[str, ...]) -> str:
-    """What a clip needs first: the artifacts the producer is made from."""
-    from src.server.repository.lineage import MADE
-
-    return " AND ".join(f"({MADE[n]})" for n in needs) or "true"
-
-
 # A kind per producer the scheduler runs (src/producers/<artifact>/), and the scan.
 _FIRST: dict[str, Kind] = {k.name: k for k in (
     Kind("scan", KindSpec(SEE, SCANS.name, retake_after=SCAN_EVERY_SEC)),
     *(Kind(p.kind, KindSpec(p.tier, p.pool.name, batch=p.batch, per_account=p.pool.per_account,
                             by_seconds=p.unit == "second"),
-           p.flag, _made_first(p.needs), storage=p.storage)
+           p.flag, storage=p.storage)
       for p in PRODUCERS.values() if p.scheduled),
 )}
 

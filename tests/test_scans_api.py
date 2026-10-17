@@ -363,6 +363,39 @@ def test_a_video_whose_preview_never_arrived_is_uploaded_again(env):
     assert run.uploaded == {"v1.mov": asset}
 
 
+def _lose_preview(env, asset_id: str) -> None:
+    """The clip's preview file goes; a GET finds it gone and upkeep's
+    missing-file repair clears its key (src/server/missing_artifacts.py)."""
+    from src.server import missing_artifacts
+    from src.server.storage.store import get_store
+
+    with env.db.connect() as conn:
+        key = conn.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
+    get_store().delete(key)
+    _error(env.client.get(f"/v1/assets/{asset_id}/artifacts/proxy", headers=env.editor), 404, "artifact_missing")
+    with Session(env.db) as session:
+        assert missing_artifacts.repair(session)["cleared"] == 1
+
+
+@pytest.mark.slow
+def test_a_photo_whose_preview_was_lost_is_uploaded_again(env):
+    # Its reader makes it again (src/server/reader_work.py): before, only a video's preview was.
+    lib = _library(env)
+    lost, kept, touched = File("a.jpg", "a"), File("b.jpg", "b"), File("c.jpg", "c")
+    asset, _, changed = _ingest(env, lib, lost), _ingest(env, lib, kept), _ingest(env, lib, touched)
+    _lose_preview(env, asset)
+    _lose_preview(env, changed)
+    run = _scan(env, lib, [lost, kept, touched.touched()])
+    assert run.plan["a.jpg"] == {"rel_path": "a.jpg", "action": "upload", "reason": "preview_missing",
+                                 "asset_id": asset, "legacy": False}
+    assert _planned(run)["c.jpg"] == ("upload", "preview_missing")  # touched too: read once, not hashed first
+    assert run.counts["unchanged"] == 1
+    assert run.uploaded == {"a.jpg": asset, "c.jpg": changed}
+    for clip in (asset, changed):
+        assert env.client.get(f"/v1/assets/{clip}/artifacts/proxy", headers=env.editor).status_code == 200
+    assert _scan(env, lib, [lost, kept, touched.touched()]).plan == {}  # made: nothing more to do
+
+
 @pytest.mark.slow
 def test_thorough_hashes_every_known_file(env):
     lib = _library(env)
@@ -1567,6 +1600,7 @@ def _library_of(env, n: int) -> tuple[str, list[File]]:
     with Session(env.db) as session:
         session.add_all([Asset(asset_id=f"ast_{lib}_{i:05}", library_id=lib, rel_path=f.rel_path, content_hash=f.sha,
                                file_size=f.file_size, file_mtime=f.mtime, media_type="image", status="proxy_ready",
+                               proxy_key=f"{lib}/proxy/{i:05}.webp", thumbnail_key=f"{lib}/thumbnail/{i:05}.webp",
                                created_at=T0, updated_at=T0) for i, f in enumerate(files)])
         session.commit()
     return lib, files
