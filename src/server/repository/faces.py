@@ -908,6 +908,37 @@ class FaceRepository:
         """Where the face's crop is stored (not committed)."""
         self._session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
 
+    def crop_key_of(self, face_id: str) -> str | None:
+        """Where the face's crop is stored, as the database says now."""
+        return self._session.execute(text("SELECT crop_key FROM faces WHERE face_id = :f"), {"f": face_id}).scalar()
+
+    def get(self, face_id: str) -> Face | None:
+        return self._session.get(Face, face_id)
+
+    def get_many(self, face_ids: list[str]) -> dict[str, Face]:
+        return {f.face_id: f for f in self._session.exec(select(Face).where(Face.face_id.in_(face_ids))).all()}  # type: ignore[union-attr]
+
+    def embeddings(self, face_ids: list[str], model: str) -> list[list[float]]:
+        """The faces' embeddings in `model`'s space (those that have one)."""
+        rows = self._session.execute(text(
+            "SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"
+            " AND embedding_model = :model"), {"fids": face_ids, "model": model}).all()
+        return [[float(x) for x in r[0].strip("[]").split(",")] for r in rows]
+
+    def assigned_among(self, face_ids: list[str]) -> dict[str, str]:
+        """Which of the faces are someone's (named or dismissed): face_id → person_id."""
+        rows = self._session.execute(text("SELECT face_id, person_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
+                                     {"fids": face_ids}).all()
+        return {r[0]: r[1] for r in rows}
+
+    def lock_counting_assigned(self, face_ids: list[str]) -> int:
+        """Locks the faces (in order: of two requests for them the second
+        waits), then counts those someone's had since (named or dismissed)."""
+        self._session.execute(text("SELECT 1 FROM faces WHERE face_id = ANY(:fids) ORDER BY face_id FOR UPDATE"),
+                              {"fids": face_ids})
+        return self._session.execute(text("SELECT count(*) FROM face_person_matches WHERE face_id = ANY(:fids)"),
+                                     {"fids": face_ids}).scalar() or 0
+
     def get_by_asset_id(self, asset_id: str) -> list[Face]:
         """Return all faces for an asset, ordered by confidence desc."""
         stmt = (

@@ -262,6 +262,68 @@ class PersonRepository:
         self._session.commit()
         return len(empty_ids)
 
+    def best_face(self, person_id: str) -> str | None:
+        """The person's most confidently detected face: a representative for one without."""
+        return self._session.execute(text(
+            "SELECT f.face_id FROM faces f "
+            "JOIN face_person_matches m ON m.face_id = f.face_id "
+            "WHERE m.person_id = :pid "
+            "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"), {"pid": person_id}).scalar()
+
+    def ensure_representative(self, person: Person) -> None:
+        """Gives a person without a representative face their best one, and
+        commits: one orphaned by re-detection (submit_faces deletes an asset's
+        old face rows and inserts new ones with new ids) before submit_faces
+        picked another."""
+        if person.representative_face_id:
+            return
+        if face_id := self.best_face(person.person_id):
+            person.representative_face_id = face_id
+            self._session.add(person)
+            self._session.commit()
+
+    def representative_asset_id(self, person: Person) -> str | None:
+        """The clip the person's representative face is in (their thumbnail's)."""
+        if not person.representative_face_id:
+            return None
+        face = self._session.get(Face, person.representative_face_id)
+        return face.asset_id if face else None
+
+    def undismiss(self, person: Person, display_name: str) -> None:
+        """A dismissed person named and shown again (with a representative face
+        if they had none); commits."""
+        person.dismissed = False
+        person.display_name = display_name
+        if not person.representative_face_id and (face_id := self.best_face(person.person_id)):
+            person.representative_face_id = face_id
+        self._session.add(person)
+        _mark_clusters_dirty(self._session)
+        self._session.commit()
+        self._session.refresh(person)
+
+    def assign_to(self, person_id: str, face_ids: list[str]) -> None:
+        """Faces a person named (a cluster's) given to someone already named,
+        their centroid made again; commits."""
+        self._assign_faces(person_id, face_ids)
+        self._recompute_centroid(person_id)
+        _mark_clusters_dirty(self._session)
+        self._session.commit()
+
+    def named_centroids(self, model: str, exclude_id: str | None = None) -> list[tuple[str, str, list[float], int]]:
+        """Every named (not dismissed) person with a centroid in `model`'s
+        space: (person_id, display_name, centroid, face_count)."""
+        rows = self._session.execute(text("""
+            SELECT p.person_id, p.display_name, p.centroid_vector::text,
+                   COUNT(m.match_id)::int AS face_count
+            FROM people p
+            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
+                  AND p.centroid_model = :model
+                  AND p.person_id IS DISTINCT FROM CAST(:exclude_id AS text)
+            GROUP BY p.person_id
+        """), {"model": model, "exclude_id": exclude_id}).all()
+        return [(r[0], r[1], [float(x) for x in r[2].strip("[]").split(",")], r[3]) for r in rows]
+
     def get_face_count(self, person_id: str) -> int:
         """Return the number of *visible* faces matched to a person.
 

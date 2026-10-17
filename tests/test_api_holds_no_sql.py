@@ -34,7 +34,6 @@ NOT_YET = {
     "routers/ingest.py",
     "routers/keys.py",
     "routers/libraries.py",
-    "routers/people.py",
     "routers/playback.py",
     "routers/producers.py",
     "routers/projects.py",

@@ -131,6 +131,14 @@ class AssetRepository:
         stmt = select(Asset).where(Asset.asset_id == asset_id).where(Asset.deleted_at.is_(None))
         return self._session.exec(stmt).first()
 
+    def path_date_media(self, asset_ids: list[str]) -> dict[str, tuple]:
+        """Each clip's (rel_path, taken_at, media_type), trashed or not: what a face list shows of it."""
+        if not asset_ids:
+            return {}
+        rows = self._session.exec(select(Asset.asset_id, Asset.rel_path, Asset.taken_at, Asset.media_type)
+                                  .where(Asset.asset_id.in_(asset_ids))).all()  # type: ignore[union-attr]
+        return {r[0]: tuple(r[1:]) for r in rows}
+
     def list_pending_by_library(self, library_id: str) -> list[Asset]:
         """Return all active (non-trashed) assets in library with status='pending'."""
         stmt = (

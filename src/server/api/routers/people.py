@@ -123,38 +123,9 @@ def list_people(
         # forward; this lazy path covers people who were orphaned
         # before that fix shipped, so the user doesn't see a grid full
         # of blank tiles. Mirrors list_dismissed_people.
-        if not person.representative_face_id and face_count > 0:
-            from sqlalchemy import text as sa_text
-            rep = session.execute(
-                sa_text(
-                    "SELECT f.face_id FROM faces f "
-                    "JOIN face_person_matches m ON m.face_id = f.face_id "
-                    "WHERE m.person_id = :pid "
-                    "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
-                ),
-                {"pid": person.person_id},
-            ).scalar()
-            if rep:
-                person.representative_face_id = rep
-                session.add(person)
-                session.commit()
-
-        # Get representative face's asset_id for thumbnail
-        rep_asset_id = None
-        if person.representative_face_id:
-            from src.server.models.tenant import Face
-            rep_face = session.get(Face, person.representative_face_id)
-            if rep_face:
-                rep_asset_id = rep_face.asset_id
-
-        items.append(PersonItem(
-            person_id=person.person_id,
-            display_name=person.display_name,
-            face_count=face_count,
-            representative_face_id=person.representative_face_id,
-            representative_asset_id=rep_asset_id,
-            confirmation_count=person.confirmation_count,
-        ))
+        if face_count > 0:
+            repo.ensure_representative(person)
+        items.append(_person_item(repo, person, face_count))
 
     next_cursor: str | None = None
     if items and len(items) == limit:
@@ -182,33 +153,14 @@ def create_person(
 
     # Check if any face_ids are already assigned
     if body.face_ids:
-        from sqlalchemy import text
-        already = session.execute(
-            text("SELECT face_id, person_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
-            {"fids": body.face_ids},
-        ).all()
-        if already:
-            conflicts = [{"face_id": r[0], "person_id": r[1]} for r in already]
+        from src.server.repository.faces import FaceRepository
+
+        if already := FaceRepository(session).assigned_among(body.face_ids):
+            conflicts = [{"face_id": face_id, "person_id": person_id} for face_id, person_id in already.items()]
             raise ConflictError("faces_assigned", "Faces already assigned", {"conflicts": conflicts})
 
     person = repo.create(body.display_name.strip(), face_ids=body.face_ids)
-    face_count = repo.get_face_count(person.person_id)
-
-    rep_asset_id = None
-    if person.representative_face_id:
-        from src.server.models.tenant import Face
-        rep_face = session.get(Face, person.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=person.confirmation_count,
-    )
+    return _person_item(repo, person, repo.get_face_count(person.person_id))
 
 
 @router.get("/dismissed", response_model=PersonListResponse)
@@ -227,37 +179,9 @@ def list_dismissed_people(
     items = []
     for person, face_count in rows:
         # Backfill representative face if missing (for dismissed people created before the fix)
-        if not person.representative_face_id and face_count > 0:
-            from sqlalchemy import text as sa_text
-            rep = session.execute(
-                sa_text(
-                    "SELECT f.face_id FROM faces f "
-                    "JOIN face_person_matches m ON m.face_id = f.face_id "
-                    "WHERE m.person_id = :pid "
-                    "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
-                ),
-                {"pid": person.person_id},
-            ).scalar()
-            if rep:
-                person.representative_face_id = rep
-                session.add(person)
-                session.commit()
-
-        rep_asset_id = None
-        if person.representative_face_id:
-            from src.server.models.tenant import Face
-            rep_face = session.get(Face, person.representative_face_id)
-            if rep_face:
-                rep_asset_id = rep_face.asset_id
-
-        items.append(PersonItem(
-            person_id=person.person_id,
-            display_name=person.display_name,
-            face_count=face_count,
-            representative_face_id=person.representative_face_id,
-            representative_asset_id=rep_asset_id,
-            confirmation_count=person.confirmation_count,
-        ))
+        if face_count > 0:
+            repo.ensure_representative(person)
+        items.append(_person_item(repo, person, face_count))
 
     next_cursor: str | None = None
     if items and len(items) == limit:
@@ -277,6 +201,42 @@ class NearestPersonItem(BaseModel):
     distance: float
 
 
+def _person_item(repo, person, face_count: int) -> PersonItem:
+    """A person as the API shows them, with their representative face's clip (their thumbnail)."""
+    return PersonItem(
+        person_id=person.person_id,
+        display_name=person.display_name,
+        face_count=face_count,
+        representative_face_id=person.representative_face_id,
+        representative_asset_id=repo.representative_asset_id(person),
+        confirmation_count=person.confirmation_count,
+    )
+
+
+def _nearest(session: Session, vector, limit: int, *, exclude_id: str | None = None) -> list[NearestPersonItem]:
+    """Named people by cosine distance (1 − similarity) from `vector` to their
+    centroids in the account's face model, nearest first."""
+    import numpy as np
+
+    from src.server.repository.people import PersonRepository
+
+    src = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(src))
+    if norm > 0:
+        src = src / norm
+    results = []
+    for person_id, display_name, centroid, face_count in PersonRepository(session).named_centroids(
+            current_face_model(session), exclude_id=exclude_id):
+        pvec = np.array(centroid, dtype=np.float32)
+        pnorm = float(np.linalg.norm(pvec))
+        if pnorm > 0:
+            pvec = pvec / pnorm
+        results.append(NearestPersonItem(person_id=person_id, display_name=display_name, face_count=face_count,
+                                         distance=round(float(1.0 - np.dot(src, pvec)), 4)))
+    results.sort(key=lambda x: x.distance)
+    return results[:limit]
+
+
 @router.get("/{person_id}/nearest", response_model=list[NearestPersonItem])
 def nearest_people_for_person(
     person_id: str,
@@ -284,54 +244,13 @@ def nearest_people_for_person(
     limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
     """Return named people sorted by cosine distance to this person's centroid."""
-    import numpy as np
-    from sqlalchemy import text as sa_text
     from src.server.repository.people import PersonRepository
-
 
     repo = PersonRepository(session)
     person = repo.get_by_id(person_id)
     if person is None or person.centroid_vector is None or person.centroid_model != current_face_model(session):
         return []
-
-    centroid = np.array(person.centroid_vector, dtype=np.float32)
-    norm = np.linalg.norm(centroid)
-    if norm > 0:
-        centroid = centroid / norm
-
-    people_rows = session.execute(
-        sa_text("""
-            SELECT p.person_id, p.display_name, p.centroid_vector::text,
-                   COUNT(m.match_id)::int AS face_count
-            FROM people p
-            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
-            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
-                  AND p.centroid_model = :model
-                  AND p.person_id != :exclude_id
-            GROUP BY p.person_id
-        """),
-        {"exclude_id": person_id, "model": current_face_model(session)},
-    ).all()
-
-    if not people_rows:
-        return []
-
-    results = []
-    for row in people_rows:
-        pvec = np.array([float(x) for x in row[2].strip("[]").split(",")], dtype=np.float32)
-        pnorm = np.linalg.norm(pvec)
-        if pnorm > 0:
-            pvec = pvec / pnorm
-        dist = float(1.0 - np.dot(centroid, pvec))
-        results.append(NearestPersonItem(
-            person_id=row[0],
-            display_name=row[1],
-            face_count=row[3],
-            distance=round(dist, 4),
-        ))
-
-    results.sort(key=lambda x: x.distance)
-    return results[:limit]
+    return _nearest(session, person.centroid_vector, limit, exclude_id=person_id)
 
 
 class UndismissRequest(BaseModel):
@@ -345,7 +264,6 @@ def undismiss_person(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Restore a dismissed person and give them a name."""
-    from src.server.repository.faces import _mark_clusters_dirty
     from src.server.repository.people import PersonRepository
 
     repo = PersonRepository(session)
@@ -353,44 +271,8 @@ def undismiss_person(
     if person is None or not person.dismissed:
         raise HTTPException(status_code=404, detail="Dismissed person not found")
 
-    person.dismissed = False
-    person.display_name = body.display_name.strip()
-    session.add(person)
-
-    if not person.representative_face_id:
-        from sqlalchemy import text as sa_text
-        rep = session.execute(
-            sa_text(
-                "SELECT f.face_id FROM faces f "
-                "JOIN face_person_matches m ON m.face_id = f.face_id "
-                "WHERE m.person_id = :pid "
-                "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"
-            ),
-            {"pid": person_id},
-        ).scalar()
-        if rep:
-            person.representative_face_id = rep
-
-    _mark_clusters_dirty(session)
-    session.commit()
-    session.refresh(person)
-
-    face_count = repo.get_face_count(person_id)
-    rep_asset_id = None
-    if person.representative_face_id:
-        from src.server.models.tenant import Face
-        rep_face = session.get(Face, person.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=person.confirmation_count,
-    )
+    repo.undismiss(person, body.display_name.strip())
+    return _person_item(repo, person, repo.get_face_count(person_id))
 
 
 @router.get("/{person_id}", response_model=PersonItem)
@@ -406,23 +288,7 @@ def get_person(
     if person is None:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    face_count = repo.get_face_count(person_id)
-
-    rep_asset_id = None
-    if person.representative_face_id:
-        from src.server.models.tenant import Face
-        rep_face = session.get(Face, person.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=person.confirmation_count,
-    )
+    return _person_item(repo, person, repo.get_face_count(person_id))
 
 
 @router.patch("/{person_id}", response_model=PersonItem, dependencies=[Depends(require_editor)])
@@ -493,16 +359,9 @@ def list_person_faces(
 
 def _face_items(session: Session, faces: list) -> list[PersonFaceItem]:
     """Faces as a person's or a cluster's list shows them, with their clips' path, date and media."""
-    from sqlmodel import select
+    from src.server.repository.assets import AssetRepository
 
-    from src.server.models.tenant import Asset
-
-    asset_ids = list({f.asset_id for f in faces})
-    clips: dict[str, tuple] = {}
-    if asset_ids:
-        clips = {r[0]: r[1:] for r in session.exec(
-            select(Asset.asset_id, Asset.rel_path, Asset.taken_at, Asset.media_type)
-            .where(Asset.asset_id.in_(asset_ids))).all()}
+    clips = AssetRepository(session).path_date_media(list({f.asset_id for f in faces}))
     items = []
     for f in faces:
         rel, taken, media = clips.get(f.asset_id) or (None, None, None)
@@ -537,23 +396,7 @@ def merge_person(
     if target is None:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    face_count = repo.get_face_count(person_id)
-
-    rep_asset_id = None
-    if target.representative_face_id:
-        from src.server.models.tenant import Face
-        rep_face = session.get(Face, target.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=target.person_id,
-        display_name=target.display_name,
-        face_count=face_count,
-        representative_face_id=target.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=target.confirmation_count,
-    )
+    return _person_item(repo, target, repo.get_face_count(person_id))
 
 
 # ---------- Clusters endpoint (on /v1/faces prefix) ----------
@@ -596,41 +439,18 @@ def name_cluster(
         if person is None:
             raise HTTPException(status_code=404, detail="Person not found")
         # Assign each face (skip already-assigned)
-        from sqlalchemy import text as sa_text
-        already = {r[0] for r in session.execute(
-            sa_text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"),
-            {"fids": face_ids},
-        ).all()}
-        new_face_ids = [fid for fid in face_ids if fid not in already]
-        if new_face_ids:
-            person_repo._assign_faces(body.person_id, new_face_ids)
-            person_repo._recompute_centroid(body.person_id)
-            from src.server.repository.faces import _mark_clusters_dirty
-            _mark_clusters_dirty(session)
-            session.commit()
+        from src.server.repository.faces import FaceRepository
+
+        already = FaceRepository(session).assigned_among(face_ids)
+        if new_face_ids := [fid for fid in face_ids if fid not in already]:
+            person_repo.assign_to(body.person_id, new_face_ids)
     else:
         # Create new person with all cluster faces. has_name guarantees
         # display_name is non-None and non-empty here.
         assert body.display_name is not None
         person = person_repo.create(body.display_name.strip(), face_ids=face_ids)
 
-    face_count = person_repo.get_face_count(person.person_id)
-
-    rep_asset_id = None
-    if person.representative_face_id:
-        from src.server.models.tenant import Face
-        rep_face = session.get(Face, person.representative_face_id)
-        if rep_face:
-            rep_asset_id = rep_face.asset_id
-
-    return PersonItem(
-        person_id=person.person_id,
-        display_name=person.display_name,
-        face_count=face_count,
-        representative_face_id=person.representative_face_id,
-        representative_asset_id=rep_asset_id,
-        confirmation_count=person.confirmation_count,
-    )
+    return _person_item(person_repo, person, person_repo.get_face_count(person.person_id))
 
 
 class DismissResult(BaseModel):
@@ -672,7 +492,8 @@ def nearest_people_for_cluster(
     non-dismissed people by distance to that centroid.
     """
     import numpy as np
-    from sqlalchemy import text as sa_text
+
+    from src.server.repository.faces import FaceRepository
 
     face_ids = find_cluster(session, cluster_id).get("face_ids", [])
     if not face_ids:
@@ -680,57 +501,10 @@ def nearest_people_for_cluster(
 
     # --- Compute cluster centroid ---
     # Sample up to 100 faces for centroid computation
-    sample_ids = face_ids[:100]
-    rows = session.execute(
-        sa_text("SELECT embedding_vector::text FROM faces WHERE face_id = ANY(:fids) AND embedding_vector IS NOT NULL"
-                " AND embedding_model = :model"),
-        {"fids": sample_ids, "model": current_face_model(session)},
-    ).all()
-    if not rows:
+    vectors = FaceRepository(session).embeddings(face_ids[:100], current_face_model(session))
+    if not vectors:
         return []
-
-    vectors = np.array(
-        [[float(x) for x in r[0].strip("[]").split(",")] for r in rows],
-        dtype=np.float32,
-    )
-    centroid = vectors.mean(axis=0)
-    norm = np.linalg.norm(centroid)
-    if norm > 0:
-        centroid = centroid / norm
-
-    # --- Rank people by distance to cluster centroid ---
-    people_rows = session.execute(
-        sa_text("""
-            SELECT p.person_id, p.display_name, p.centroid_vector::text,
-                   COUNT(m.match_id)::int AS face_count
-            FROM people p
-            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
-            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
-                  AND p.centroid_model = :model
-            GROUP BY p.person_id
-        """),
-        {"model": current_face_model(session)},
-    ).all()
-
-    if not people_rows:
-        return []
-
-    results = []
-    for row in people_rows:
-        pvec = np.array([float(x) for x in row[2].strip("[]").split(",")], dtype=np.float32)
-        pnorm = np.linalg.norm(pvec)
-        if pnorm > 0:
-            pvec = pvec / pnorm
-        dist = float(1.0 - np.dot(centroid, pvec))
-        results.append(NearestPersonItem(
-            person_id=row[0],
-            display_name=row[1],
-            face_count=row[3],
-            distance=round(dist, 4),
-        ))
-
-    results.sort(key=lambda x: x.distance)
-    return results[:limit]
+    return _nearest(session, np.array(vectors, dtype=np.float32).mean(axis=0), limit)
 
 
 @faces_router.get("/{face_id}/nearest-people", response_model=list[NearestPersonItem])
@@ -754,65 +528,17 @@ def nearest_people_for_face(
     switch: another space than the people's centroids), so the popover
     can still show the alphabetical fallback list without an error path.
     """
-    import numpy as np
-    from sqlalchemy import text as sa_text
-    from src.server.models.tenant import Face
+    from src.server.repository.faces import FaceRepository
 
-
-    face = session.get(Face, face_id)
+    face = FaceRepository(session).get(face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
     model = current_face_model(session)
     if face.embedding_vector is None or face.embedding_model != model:
         return []
 
-    # The pgvector adapter returns the column as a numpy array via the
-    # ORM, so feed it directly into np.asarray. (The cluster endpoint
-    # uses ::text + .strip("[]").split(",") because it pulls a raw row
-    # rather than going through the ORM.)
-    src = np.asarray(face.embedding_vector, dtype=np.float32)
-    src_norm = float(np.linalg.norm(src))
-    if src_norm > 0:
-        src = src / src_norm
-
-    people_rows = session.execute(
-        sa_text("""
-            SELECT p.person_id, p.display_name, p.centroid_vector::text,
-                   COUNT(m.match_id)::int AS face_count
-            FROM people p
-            LEFT JOIN face_person_matches m ON m.person_id = p.person_id
-            LEFT JOIN faces f ON f.face_id = m.face_id
-            LEFT JOIN assets a
-                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
-            WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
-                  AND p.centroid_model = :model
-            GROUP BY p.person_id
-        """),
-        {"model": model},
-    ).all()
-
-    if not people_rows:
-        return []
-
-    results = []
-    for row in people_rows:
-        pvec = np.array(
-            [float(x) for x in row[2].strip("[]").split(",")],
-            dtype=np.float32,
-        )
-        pnorm = float(np.linalg.norm(pvec))
-        if pnorm > 0:
-            pvec = pvec / pnorm
-        dist = float(1.0 - np.dot(src, pvec))
-        results.append(NearestPersonItem(
-            person_id=row[0],
-            display_name=row[1],
-            face_count=row[3],
-            distance=round(dist, 4),
-        ))
-
-    results.sort(key=lambda x: x.distance)
-    return results[:limit]
+    # The pgvector adapter returns the column as a numpy array via the ORM.
+    return _nearest(session, face.embedding_vector, limit)
 
 
 class ClusterFacesResponse(BaseModel):
@@ -830,8 +556,7 @@ def list_cluster_faces(
 ) -> ClusterFacesResponse:
     """List all faces in a cluster, cursor-paginated. 409 cluster_changed
     when no cluster has this id any more."""
-    from src.server.models.tenant import Face
-    from sqlmodel import select
+    from src.server.repository.faces import FaceRepository
 
     all_face_ids = find_cluster(session, cluster_id).get("face_ids", [])
     total = len(all_face_ids)
@@ -850,8 +575,7 @@ def list_cluster_faces(
         return ClusterFacesResponse(items=[], total=total, next_cursor=None)
 
     # Load face + asset data
-    stmt = select(Face).where(Face.face_id.in_(page_ids))
-    faces_by_id = {f.face_id: f for f in session.exec(stmt).all()}
+    faces_by_id = FaceRepository(session).get_many(page_ids)
     items = _face_items(session, [faces_by_id[fid] for fid in page_ids if fid in faces_by_id])
 
     next_cursor = page_ids[-1] if len(page_ids) == limit and start + limit < total else None
@@ -868,17 +592,19 @@ def get_face_crop(
     """Serve the 128x128 face crop thumbnail. Generates on demand if missing."""
     from fastapi.responses import Response
 
-    from src.server.models.tenant import Face
+    from src.server.repository.faces import FaceRepository
     from src.server.storage.store import NotFound, get_store
 
-    face = session.get(Face, face_id)
+    faces = FaceRepository(session)
+    face = faces.get(face_id)
     if face is None:
         raise HTTPException(status_code=404, detail="Face not found")
+    crop_key = face.crop_key
 
     store = get_store()
 
     # Generate crop on demand if missing
-    if not face.crop_key or not store.exists(face.crop_key):
+    if not crop_key or not store.exists(crop_key):
         if face.frame_ms is not None:  # a video's: cut from its frame when found, never from the poster
             raise HTTPException(status_code=404, detail="No crop for this face")
         if not face.bounding_box_json:
@@ -892,12 +618,12 @@ def get_face_crop(
             raise HTTPException(status_code=404, detail="No proxy available to generate crop")
         from src.server.api.routers.assets import _generate_face_crops
         _generate_face_crops(tenant_id, asset, [face_id], [{"bounding_box": face.bounding_box_json}], session)
-        session.refresh(face)
-        if not face.crop_key:
+        crop_key = faces.crop_key_of(face_id)  # as it was saved
+        if not crop_key:
             raise HTTPException(status_code=404, detail="Crop generation failed")
 
     try:
-        crop = store.read(face.crop_key)  # a 128 x 128 WebP: read whole
+        crop = store.read(crop_key)  # a 128 x 128 WebP: read whole
     except NotFound:
         raise HTTPException(status_code=404, detail="Crop file missing") from None
 
@@ -915,8 +641,8 @@ def assign_face(
     Provide either person_id (existing) or new_person_name (creates new person).
     Returns 409 if face is already assigned.
     """
+    from src.server.repository.faces import FaceRepository
     from src.server.repository.people import PersonRepository
-    from src.server.models.tenant import Face
 
     if not body.person_id and not body.new_person_name:
         raise HTTPException(status_code=400, detail="Provide person_id or new_person_name")
@@ -924,19 +650,14 @@ def assign_face(
         raise HTTPException(status_code=400, detail="Provide person_id or new_person_name, not both")
 
     # Verify face exists
-    face = session.get(Face, face_id)
-    if face is None:
+    faces = FaceRepository(session)
+    if faces.get(face_id) is None:
         raise HTTPException(status_code=404, detail="Face not found")
 
     repo = PersonRepository(session)
 
     # Check if already assigned
-    from sqlalchemy import text as sa_text
-    existing = session.execute(
-        sa_text("SELECT person_id FROM face_person_matches WHERE face_id = :fid"),
-        {"fid": face_id},
-    ).scalar()
-    if existing:
+    if existing := faces.assigned_among([face_id]).get(face_id):
         raise ConflictError("face_assigned", "Face already assigned", {"current_person_id": existing})
 
     if body.new_person_name:
@@ -1042,14 +763,10 @@ def _unassigned_cluster_faces(session: Session, cluster_id: str) -> list[str]:
     """The cluster's face ids, none named or dismissed since it was computed;
     409 cluster_changed otherwise. The faces are locked first, so of two
     requests for one cluster the second waits and then gets the 409."""
-    from sqlalchemy import text as sa_text
+    from src.server.repository.faces import FaceRepository
 
     face_ids = find_cluster(session, cluster_id).get("face_ids") or []
-    session.execute(sa_text("SELECT 1 FROM faces WHERE face_id = ANY(:fids) ORDER BY face_id FOR UPDATE"),
-                    {"fids": face_ids})
-    taken = session.execute(
-        sa_text("SELECT count(*) FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": face_ids},
-    ).scalar()
+    taken = FaceRepository(session).lock_counting_assigned(face_ids)
     if not face_ids or taken:
         raise ConflictError("cluster_changed", "This group changed. Reload the groups.", {"cluster_id": cluster_id})
     return face_ids
@@ -1059,13 +776,12 @@ def _without_assigned(session: Session, clusters: list[dict]) -> list[dict]:
     """The clusters none of whose faces were named or dismissed since they
     were computed: a cluster just named doesn't show before upkeep computes
     them again, and one whose dismissal was undone shows again."""
-    from sqlalchemy import text as sa_text
+    from src.server.repository.faces import FaceRepository
 
     ids = [fid for c in clusters for fid in (c.get("face_ids") or [])]
     if not ids:
         return clusters
-    taken = set(session.execute(
-        sa_text("SELECT face_id FROM face_person_matches WHERE face_id = ANY(:fids)"), {"fids": ids}).scalars())
+    taken = set(FaceRepository(session).assigned_among(ids))
     if not taken:
         return clusters
     return [c for c in clusters if not taken.intersection(c.get("face_ids") or [])]
