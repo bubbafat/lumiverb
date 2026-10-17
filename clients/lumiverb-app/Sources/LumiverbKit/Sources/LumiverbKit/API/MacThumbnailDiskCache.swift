@@ -1,25 +1,20 @@
 #if os(macOS)
 import Foundation
 
-/// Persistent disk cache for asset thumbnails on macOS. This is the
-/// macOS implementation of `ThumbnailCache`.
+/// Persistent disk cache for asset thumbnails on macOS: the macOS
+/// implementation of `ThumbnailCache`.
 ///
-/// Distinct from `MacProxyDiskCache` because proxies follow a
-/// Python-CLI-compatible protocol (SHA sidecars, shared cache dir under
-/// `~/.cache/lumiverb/proxies/`), while thumbnails are macOS-app-local
-/// and don't need that ceremony:
+/// Its own (ADR-020 decision 7): `~/Library/Caches/io.lumiverb.app/thumbnails/`,
+/// at most `defaultCapBytes`, the least recently used going first
+/// (`BoundedDiskCache`). What was in `~/.cache/lumiverb/thumbnails/`
+/// (before ADR-020 phase 5, unbounded) is moved in once.
 ///
-/// - No SHA sidecar — thumbnails are cached by asset id only. The server
+/// - No sidecar: thumbnails are cached by asset id only. The server
 ///   regenerates thumbnails when an asset changes and gives them a new
 ///   asset id only when the file identity changes, so staleness on long-
 ///   lived assets is acceptable. Call `removeAll()` for a manual flush.
-/// - No eviction policy — cache grows unbounded. Thumbnails are tiny
-///   (~10-30 KB). 20 000 assets ≈ 400 MB, which is reasonable for a
-///   media management app. Eviction can come later if it matters.
-///
-/// The cache dir is `~/.cache/lumiverb/thumbnails/`. Files are named by
-/// raw asset id; writes are atomic (temp + rename) so concurrent readers
-/// never see partial files.
+/// - Files are named by raw asset id; writes are atomic (temp + rename) so
+///   concurrent readers never see partial files.
 ///
 /// Without this cache, every library switch re-fetches every visible
 /// thumbnail from the server — a latent UX trap against remote servers
@@ -32,79 +27,41 @@ import Foundation
 public final class MacThumbnailDiskCache: @unchecked Sendable {
     public static let shared = MacThumbnailDiskCache()
 
-    private let cacheDir: URL
+    /// About 25,000 thumbnails (20 KB each): a big library's grid.
+    public static let defaultCapBytes = 500 * 1024 * 1024
 
-    public init(cacheDir: URL? = nil) {
-        if let cacheDir {
-            self.cacheDir = cacheDir
-        } else {
-            self.cacheDir = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".cache/lumiverb/thumbnails")
+    private let files: BoundedDiskCache
+
+    /// `cacheDir`: a folder of its own (tests); without it, the app's, with
+    /// the old folder's thumbnails moved in.
+    public init(cacheDir: URL? = nil, capBytes: Int = MacThumbnailDiskCache.defaultCapBytes) {
+        files = BoundedDiskCache(directory: cacheDir ?? BoundedDiskCache.macDirectory("thumbnails"),
+                                 highWatermarkBytes: capBytes)
+        if cacheDir == nil {
+            BoundedDiskCache.adopt(
+                old: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cache/lumiverb/thumbnails"),
+                into: files)
         }
-        try? FileManager.default.createDirectory(
-            at: self.cacheDir,
-            withIntermediateDirectories: true
-        )
     }
 
-    // MARK: - Browse operations
+    public var directory: URL { files.directory }
 
-    /// Get cached thumbnail bytes. Returns nil if not cached.
-    public func get(assetId: String) -> Data? {
-        guard let url = thumbnailURL(assetId) else { return nil }
-        return try? Data(contentsOf: url)
-    }
+    /// Cached thumbnail bytes, or nil.
+    public func get(assetId: String) -> Data? { files.get(assetId) }
 
-    /// Cache thumbnail bytes downloaded from the server.
-    public func put(assetId: String, data: Data) {
-        guard let url = thumbnailURL(assetId) else { return }
-        atomicWrite(data: data, to: url)
-    }
+    /// Keep thumbnail bytes downloaded from the server.
+    public func put(assetId: String, data: Data) { files.put(assetId, data: data) }
 
-    /// Check if a thumbnail exists in the cache.
-    public func has(assetId: String) -> Bool {
-        thumbnailURL(assetId).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-    }
+    public func has(assetId: String) -> Bool { files.has(assetId) }
 
-    // MARK: - Maintenance
-
-    /// Remove a single entry.
-    public func remove(assetId: String) {
-        guard let url = thumbnailURL(assetId) else { return }
-        try? FileManager.default.removeItem(at: url)
-    }
+    public func remove(assetId: String) { files.remove(assetId) }
 
     /// Remove every cached thumbnail. Useful after a server-side change
     /// that invalidates thumbnails (e.g. changing the thumbnail endpoint's
     /// target size).
-    public func removeAll() {
-        try? FileManager.default.removeItem(at: cacheDir)
-        try? FileManager.default.createDirectory(
-            at: cacheDir,
-            withIntermediateDirectories: true
-        )
-    }
+    public func removeAll() { files.removeAll() }
 
-    // MARK: - Paths
-
-    private func thumbnailURL(_ assetId: String) -> URL? {
-        cacheEntryURL(cacheDir, assetId)
-    }
-
-    // MARK: - Atomic write
-
-    private func atomicWrite(data: Data, to destination: URL) {
-        let tempURL = cacheDir.appendingPathComponent(UUID().uuidString + ".tmp")
-        do {
-            try data.write(to: tempURL, options: .atomic)
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
-            }
-            try FileManager.default.moveItem(at: tempURL, to: destination)
-        } catch {
-            try? FileManager.default.removeItem(at: tempURL)
-        }
-    }
+    func settle() { files.settle() }
 }
 
 extension MacThumbnailDiskCache: ThumbnailCache {

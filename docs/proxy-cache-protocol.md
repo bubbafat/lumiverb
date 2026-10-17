@@ -51,6 +51,14 @@ Remove both `{asset_id}` and `{asset_id}.sha`.
 - No subfolders: every file flat in the folder.
 - Asset ids are checked as plain names before they're used in a path (`cache_dir.cache_entry`).
 
-## The Mac app's browse cache
+## The apps' caches
 
-The Mac app keeps the proxies it downloads for browsing in `MacProxyDiskCache` (`clients/lumiverb-app/.../MacProxyDiskCache.swift`): its own cache, read before the server. It's still at `~/.cache/lumiverb/proxies`, where the CLI's scan used to write before ADR-020 phase 5, and has no cap. Phase 5 gives it its own folder and a cap, as iOS's have.
+Each app keeps its own, bounded (`BoundedDiskCache` in LumiverbKit: past its cap the least recently used go, a read counting as a use):
+
+| Cache | Where | Cap |
+|---|---|---|
+| Mac proxies (`MacProxyDiskCache`) | `~/Library/Caches/io.lumiverb.app/proxies/` | 1 GB |
+| Mac thumbnails (`MacThumbnailDiskCache`) | `~/Library/Caches/io.lumiverb.app/thumbnails/` | 500 MB |
+| iOS thumbnails (`IOSThumbnailDiskCache`) | the app's caches folder, `lumiverb/thumbnails/` | 200 MB |
+
+iOS keeps its proxies in memory only. The Mac app's caches were in `~/.cache/lumiverb/` before ADR-020 phase 5, the proxies beside what the CLI's scan wrote, with no cap; at its first start after, what was there is moved in (renamed, not copied), without the CLI's `.sha` sidecars, and trimmed to the cap.
