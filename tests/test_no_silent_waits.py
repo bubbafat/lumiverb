@@ -36,6 +36,7 @@ from sqlalchemy import text
 
 from src.producers.runner import Work
 from src.producers.runner import run as run_work
+from src.server.scheduler.inputs import Inputs
 from src.shared.producers import PRODUCERS
 from src.shared.waits import HELD, REASONS, SCAN, Waiting
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
@@ -89,6 +90,7 @@ class Account(FakeAccount):
         self._root = root
         self.out_of_memory = False
         self.scan_state = ScanState()
+        self.inputs = Inputs(self, None)  # the originals at root: no Store on this disk
 
     def root(self, library_id: str) -> Path | None:
         return self._root if library_id in self.reachable else None
@@ -105,13 +107,14 @@ class Account(FakeAccount):
 
 class Reads(Work):
     """Reads each clip's original, as every producer working on the
-    originals does (Work.original): a file missing from storage that's
+    originals does (Work.inputs.original): a file missing from storage that's
     there waits for the scan. The GPU running out of memory is no clip's."""
 
     artifact = "capture"
 
     def make(self, clip: dict) -> None:
-        self.original(clip)
+        with self.inputs.original(clip):
+            pass
         if self.acct.out_of_memory:
             raise RuntimeError("CUDA out of memory")
         return None  # made (nothing to save here)

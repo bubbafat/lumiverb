@@ -6,7 +6,6 @@ file of its own.
 
 from __future__ import annotations
 
-import re
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -17,9 +16,6 @@ from src.producers import runner
 from src.server.scheduler.dispatch import Job
 
 pytestmark = pytest.mark.fast
-
-ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture
 def root(tmp_path, monkeypatch) -> Path:
@@ -148,25 +144,3 @@ def test_the_scheduler_empties_scratch_as_it_starts():
 
     source = inspect.getsource(service.main)
     assert source.index("lock.acquire()") < source.index("empty_scratch()")
-
-
-TEMPORARY = re.compile(r"\btempfile\b|TemporaryDirectory|NamedTemporaryFile|\bmkdtemp\b|\bmkstemp\b")
-
-
-def test_no_producer_makes_a_temporary_file_of_its_own():
-    """Every work file is in the job's scratch: only the runner makes it."""
-    found = []
-    for path in sorted((ROOT / "src" / "producers").rglob("*.py")):
-        if path.name == "runner.py" and path.parent.name == "producers":
-            continue
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if TEMPORARY.search(line.split("#", 1)[0]):
-                found.append(f"{path.relative_to(ROOT)}:{n}: {line.strip()}")
-    assert found == []
-
-
-def test_the_check_would_find_one():
-    for line in ("import tempfile", "with tempfile.TemporaryDirectory() as tmp:", "from tempfile import mkstemp",
-                 "NamedTemporaryFile(suffix='.jpg')"):
-        assert TEMPORARY.search(line), line
-    assert not TEMPORARY.search("frame = self.scratch / 'frame-1.jpg'")

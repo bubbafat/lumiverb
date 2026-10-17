@@ -29,27 +29,26 @@ class Render(Work):
     def make(self, clip: dict) -> Path:
         from src.processing.video.analysis_proxy import RenderError, render_analysis_proxy
 
-        source = self.original(clip)
         # Rendered in the job's scratch (an install's is on the data disk, as
         # the cache is: put() is a rename); saved, then let go of in done.
         work = self.scratch / "analysis.mp4"
-        try:
-            render_analysis_proxy(source, work, self.settings)
-        except RenderError as e:
-            work.unlink(missing_ok=True)
-            logger.warning("Rendering the analysis proxy for %s failed: %s", clip["rel_path"], e)
-            raise Failed(e) from e
-        except BaseException:
-            work.unlink(missing_ok=True)
-            raise
+        with self.inputs.original(clip) as source:
+            try:
+                render_analysis_proxy(source, work, self.settings)
+            except RenderError as e:
+                work.unlink(missing_ok=True)
+                logger.warning("Rendering the analysis proxy for %s failed: %s", clip["rel_path"], e)
+                raise Failed(e) from e
+            except BaseException:
+                work.unlink(missing_ok=True)
+                raise
         return work
 
     def save(self, client, made: list[tuple[dict, Path]]) -> None:
         for clip, work in made:
             data = {"lineage": json.dumps(self.lineage(clip, used=self.settings.output()))}
-            with open(work, "rb") as f:
-                client.post(f"/v1/assets/{clip['asset_id']}/artifacts/analysis_proxy",
-                            files={"file": ("analysis.mp4", f, "video/mp4")}, data=data)
+            client.post(f"/v1/assets/{clip['asset_id']}/artifacts/analysis_proxy",
+                        files={"file": ("analysis.mp4", work, "video/mp4")}, data=data)
             self.inputs.rendered(clip, work)
 
     def done(self, clip: dict, work: Path) -> None:

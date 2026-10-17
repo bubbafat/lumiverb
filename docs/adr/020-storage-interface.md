@@ -11,7 +11,7 @@ Accepted (2026-10-16, Robert).
 | 0 | Leaks fixed now: face crops and scene frames go with their clip; a deleted library's folder goes with it | Done (v0.1.32) |
 | 1 | The `Store` interface and its filesystem provider; contract tests | Done (v0.1.35) |
 | 2 | The API's own code through the `Store` (no paths outside the provider) | Done (v0.1.36–v0.1.39). The daily sweep lists and deletes by key, a library at a time; folders the database doesn't list, and writes a crash left, are the filesystem provider's (`storage/folders.py`) |
-| 3 | Producers get inputs and scratch from the runner; caches with caps | In progress: scratch from the runner (v0.1.40); inputs by key from the queue's rows, the Store held for the job beside the API (v0.1.41); the scheduler's caches capped, a file a job holds never evicted (v0.1.42); model weights in one folder, pruned of those no setting names (v0.1.43); originals left |
+| 3 | Producers get inputs and scratch from the runner; caches with caps | Done (v0.1.40–v0.1.44): scratch from the runner; inputs by key from the queue's rows, the Store held for the job beside the API; the scheduler's caches capped, a file a job holds never evicted; model weights in one folder, pruned of those no setting names; originals only through `inputs.original` for `storage=True` producers (faces and the preview cache read none), and `tests/test_producers_hold_no_files.py` |
 | 4 | The server's originals behind its read-only `Originals` interface; the API documented as a client's whole contract | Not started |
 | 5 | Clients keep only bounded caches of their own | Not started |
 

@@ -421,9 +421,9 @@ def test_proxy_cache_ensure_size_small_image(tmp_path):
 
 
 def test_proxy_cache_get_returns_none_without_sources(tmp_path):
-    """get() returns None when no cache, no root_path, no client."""
+    """get() returns None when neither the cache nor a client has one."""
     cache = _isolated_cache(tmp_path, max_edge=1280)
-    result = cache.get("nonexistent_asset", "nonexistent.jpg")
+    result = cache.get("nonexistent_asset")
     assert result is None
 
 
@@ -432,22 +432,3 @@ def test_proxy_cache_put_and_get(tmp_path):
     cache = _isolated_cache(tmp_path, max_edge=1280)
     cache.put("ast_1", b"jpeg-data")
     assert cache.get("ast_1") == b"jpeg-data"
-
-
-def test_proxy_cache_put_from_path(tmp_path):
-    """put_from_path generates proxy and caches it."""
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
-    cache = _isolated_cache(cache_dir, max_edge=1280)
-
-    from PIL import Image
-    img = Image.new("RGB", (100, 100), "red")
-    img_path = tmp_path / "test.jpg"
-    img.save(img_path, format="JPEG")
-
-    result = cache.put_from_path("ast_1", img_path)
-    assert isinstance(result, bytes)
-    assert len(result) > 0
-
-    cached = cache.get("ast_1")
-    assert cached == result

@@ -154,12 +154,14 @@ def test_records_of_libraries_that_are_gone_are_let_go(acct, tmp_path: Path) -> 
     assert list(acct.storage_seen()) == ["lib_1"]
 
 
-def test_a_proxy_cache_follows_its_librarys_storage(acct, tmp_path: Path) -> None:
+def test_the_preview_cache_is_the_accounts_one_and_never_reads_an_original(acct, tmp_path: Path) -> None:
+    """Its previews come from the API, whether the library's storage is
+    reachable or not (ADR-020 decision 4)."""
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}])
     first = acct.proxy_cache("lib_1")
-    assert first._root_path is None  # not reachable at first: proxies come from the server
     acct.set_reachable({"lib_1": tmp_path})
-    assert acct.proxy_cache("lib_1")._root_path == tmp_path  # made from the originals now
+    assert acct.proxy_cache("lib_1") is first and acct.proxy_cache("lib_2") is first
+    assert not hasattr(first, "_root_path")
 
 
 def test_nothing_is_ready_until_the_servers_settings_were_read(acct) -> None:

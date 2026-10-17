@@ -11,7 +11,6 @@ which charges no clip for it.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -800,9 +799,8 @@ def test_a_scene_with_no_frame_or_no_description_is_the_videos_once_the_rest_are
 
 
 def _faces(acct, monkeypatch, found) -> MagicMock:
-    """The face work with its proxies in hand; found(asset_id) is what the process says."""
-    monkeypatch.setattr("src.producers.faces.work.face_proxy", lambda item, root, cache: True)
-    acct.cache.get.side_effect = lambda asset_id, rel_path=None: asset_id.encode()
+    """The face work with its previews in hand; found(asset_id) is what the process says."""
+    acct.cache.get.side_effect = lambda asset_id, content_hash=None: asset_id.encode()
     detector = MagicMock()
     detector.detect.side_effect = lambda image, settings: found(image.decode())
     acct.models.faces.return_value = detector
@@ -829,20 +827,18 @@ def test_a_jobs_faces_are_saved_together_and_the_clips_that_failed_charged(acct,
 
 
 def test_faces_say_which_clips_wait(acct, monkeypatch) -> None:
-    # A clip whose file changed since it was hashed waits for its scan; the
-    # GPU running out of memory charges no clip.
+    # The GPU running out of memory charges no clip.
     _faces(acct, monkeypatch, lambda a: {
         "ast_2": {"error": "[ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION : CUDA failure 2: out of memory"},
         "ast_3": {"error": "Failed to allocate memory for requested buffer of size 1048576"},
         "ast_4": {"error": "bad image"}}.get(a) or _face(a))
-    monkeypatch.setattr("src.producers.faces.work.face_proxy", lambda item, root, cache: item["asset_id"] != "ast_1")
-    assert _run(acct, "faces", "ast_1", "ast_2", "ast_3", "ast_4", "ast_5") == ["ast_1", "ast_2", "ast_3"]
+    assert _run(acct, "faces", "ast_2", "ast_3", "ast_4", "ast_5") == ["ast_2", "ast_3"]
     assert _charged(acct) == [("faces", "ast_4")]
 
 
 def test_a_face_photo_with_no_proxy_is_the_clips(acct, monkeypatch) -> None:
     detector = _faces(acct, monkeypatch, _face)
-    acct.cache.get.side_effect = lambda asset_id, rel_path=None: None
+    acct.cache.get.side_effect = lambda asset_id, content_hash=None: None
     assert _run(acct, "faces", "ast_1") is None
     assert acct.failures.add.call_args.args == ("faces", "ast_1", "no proxy")
     detector.detect.assert_not_called()
@@ -883,34 +879,11 @@ def test_a_face_process_let_go_of_meanwhile_isnt_tried(acct, monkeypatch) -> Non
     acct.client.post.assert_not_called()
 
 
-def test_a_face_proxy_is_made_from_the_original_while_its_hash_matches(tmp_path, monkeypatch) -> None:
-    from src.producers.faces.work import face_proxy
-
-    cache = MagicMock()
-    cache.path = tmp_path / "proxies"
-    cache.path.mkdir()
-    cache.sha_path.side_effect = lambda asset_id: cache.path / f"{asset_id}.sha"
-    cache.has.return_value = False
-    cache.stored_path.return_value = None  # no preview the API keeps on this machine
-    (tmp_path / "a.jpg").write_bytes(b"photo")
-    now = "sha256:" + hashlib.sha256(b"photo").hexdigest()
-    monkeypatch.setattr("src.processing.proxy.proxy_gen.generate_face_proxy", lambda source: b"proxy")
-    assert face_proxy({"asset_id": "ast_1", "rel_path": "a.jpg", "content_hash": now}, tmp_path, cache)
-    cache.put.assert_called_once_with("ast_1", b"proxy")
-    assert (cache.path / "ast_1.sha").read_text() == now
-    assert not face_proxy({"asset_id": "ast_2", "rel_path": "a.jpg", "content_hash": "sha256:" + "0" * 64}, tmp_path, cache)
-
-
-def test_a_stored_preview_is_the_clip_as_hashed_so_no_face_proxy_is_made(acct, monkeypatch) -> None:
+def test_a_stored_preview_is_the_clip_as_hashed_so_faces_read_it_and_nothing_else(acct, monkeypatch) -> None:
     # Where the API keeps the previews on this machine the faces step reads
-    # the clip's there (its inputs): nothing is made from the original or kept
-    # in the cache, even when the original changed since (changed content is a
-    # new clip).
-    def no_face_proxy(*args):
-        raise AssertionError("nothing is made from the original")
-
+    # the clip's there (its inputs): nothing is read from the original (the
+    # producer doesn't read the storage) or kept in the cache.
     detector = _faces(acct, monkeypatch, _face)
-    monkeypatch.setattr("src.producers.faces.work.face_proxy", no_face_proxy)
     monkeypatch.setattr(acct.inputs, "stored_preview", lambda clip: b"stored " + clip["asset_id"].encode())
     detector.detect.side_effect = lambda image, settings: _face("ast_1") if image == b"stored ast_1" else {}
     assert _run(acct, "faces", "ast_1") is None

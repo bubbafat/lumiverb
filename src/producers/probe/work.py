@@ -17,14 +17,14 @@ class Probe(Work):
 
         from src.processing.video.probe import probe_video
 
-        source = self.original(clip)
-        try:
-            return probe_video(source).to_dict()
-        # ffprobe refusing the file, or output that can't be read, is the clip's.
-        # Anything else (OSError: no ffprobe, the mount's EIO) is a crash: counted, not charged.
-        except (subprocess.CalledProcessError, ValueError, TypeError, AttributeError) as e:
-            logger.warning("Probe failed for %s: %s", clip["rel_path"], e)
-            raise Failed(e) from e
+        with self.inputs.original(clip) as source:
+            try:
+                return probe_video(source).to_dict()
+            # ffprobe refusing the file, or output that can't be read, is the clip's.
+            # Anything else (OSError: no ffprobe, the mount's EIO) is a crash: counted, not charged.
+            except (subprocess.CalledProcessError, ValueError, TypeError, AttributeError) as e:
+                logger.warning("Probe failed for %s: %s", clip["rel_path"], e)
+                raise Failed(e) from e
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
         for clip, facet in made:

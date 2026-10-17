@@ -5,10 +5,12 @@ JPEG proxies without thinking about resolution. The cache handles:
 
 - Storing full-resolution 2048px proxies from scan (put_scan)
 - Downscaling oversized images on put() for legacy callers
-- Generating proxies from source files on demand via get()
-- Falling back to server download when local source isn't available
+- Downloading the server's preview when it has none (get)
 - Persistent storage across runs in ~/.cache/lumiverb/proxies/
 - a sidecar per proxy with its source's content hash, for change detection
+
+It never reads an original: a producer that doesn't read the storage uses
+the preview (ADR-020 decision 4).
 
 Scan writes 2048px proxies + hash sidecars. Enrich reads and resizes
 as needed. The cache is the handoff point between the two phases.
@@ -76,14 +78,12 @@ class ProxyCache:
     def __init__(
         self,
         max_edge: int = _DEFAULT_MAX_EDGE,
-        root_path: Path | None = None,
         client: object | None = None,
         cap_bytes: int | None = None,
     ) -> None:
         """
         Args:
             max_edge: Maximum long edge for cached proxies (for put/get).
-            root_path: Library root for local source file generation.
             client: ApiClient for server download fallback.
             cap_bytes: Its cap (None: this machine's preview_cache_gb; 0: none).
         """
@@ -96,7 +96,6 @@ class ProxyCache:
         self._dir = cache_dir("proxies")
         self._dir.mkdir(parents=True, exist_ok=True)
         self._max_edge = max_edge
-        self._root_path = root_path
         self._client = client
 
     @property
@@ -138,63 +137,37 @@ class ProxyCache:
             return None
         return SHA256 + value if _BARE.fullmatch(value) else value
 
-    def put_from_path(self, asset_id: str, source_path: Path) -> bytes:
-        """Generate proxy from a source file and cache it. Returns the bytes."""
-        from src.processing.proxy.proxy_gen import generate_proxy_bytes
-        image_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=self._max_edge)
-        self._atomic_write(self._entry(asset_id), image_bytes)
-        self._wrote(asset_id)
-        return image_bytes
-
     def has(self, asset_id: str) -> bool:
         """Check if a proxy exists in the cache without reading it."""
         return self._entry(asset_id).exists()
 
-    def get(self, asset_id: str, rel_path: str | None = None) -> bytes | None:
-        """Get proxy bytes for an asset.
-
-        Resolution order:
-        1. Disk cache (sized: a scan's is 2048px)
-        2. Generate from local source file (if root_path set and file exists)
-        3. Download from server (if client set), downscale, cache
-
-        Returns None only if all sources fail.
-        """
-        # 1. Check cache
+    def get(self, asset_id: str, content_hash: str | None = None) -> bytes | None:
+        """The asset's proxy, sized (a scan's is 2048px): the cache's, else the
+        server's, downloaded and kept. One cached for other content than
+        content_hash (its sidecar says) isn't the clip's: it goes, and the
+        server's is downloaded. None when neither has one."""
         p = self._entry(asset_id)
+        made_from = self.get_source_hash(asset_id)
+        if content_hash and made_from and made_from != content_hash:
+            self.remove(asset_id)
         if p.exists():
             with contextlib.suppress(OSError):
                 os.utime(p)  # used now: the last to go
             return self._ensure_size(p.read_bytes())
-
-        # 2. Try local source
-        if self._root_path is not None and rel_path is not None:
-            from src.shared.io_utils import UnsafeRelPathError, check_rel_path
-
-            try:  # a rel_path from the server never reads outside the library
-                source = (self._root_path / check_rel_path(rel_path)).resolve()
-            except UnsafeRelPathError:
-                source = None
-            if source is not None and source.is_file():
-                try:
-                    return self.put_from_path(asset_id, source)
-                except Exception:
-                    pass  # fall through to server
-
-        # 3. Try server download
         if self._client is not None:
             try:
                 resp = self._client._client.get(self._client._url(f"/v1/assets/{asset_id}/artifacts/proxy"))
                 if resp.status_code == 200:
                     image_bytes = self._ensure_size(resp.content)
-                    self._atomic_write(self._entry(asset_id), image_bytes)
+                    self._atomic_write(p, image_bytes)
+                    if content_hash:
+                        self._atomic_write(self.sha_path(asset_id), content_hash.encode())
                     self._wrote(asset_id)
                     resp.close()
                     return image_bytes
                 resp.close()
             except Exception:
                 pass
-
         return None
 
     def remove(self, asset_id: str) -> None:
