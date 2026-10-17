@@ -9,6 +9,7 @@ filter bring the video.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -288,6 +289,7 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
     from src.processing.producer_settings import ProducerSettings
     from src.producers.faces.detect import FaceDetector
     from src.producers.video_faces.work import VideoFaces
+    from src.server.scheduler.inputs import Inputs
 
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg isn't installed")
@@ -317,8 +319,9 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
 
         class analysis_cache:  # noqa: N801 — the account's cache, holding this clip
             @staticmethod
-            def get(_asset_id):
-                return clip
+            @contextlib.contextmanager
+            def held(_asset_id):
+                yield clip
 
         class models:  # noqa: N801
             @staticmethod
@@ -326,6 +329,7 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
                 return detector
 
     _Acct.client = server
+    _Acct.inputs = Inputs(_Acct, None)  # the scheduler's, the API's storage not on this machine
     try:
         work = VideoFaces(_Acct, None)
         item = {"asset_id": asset_id, "library_id": library_id, "rel_path": "faces/two_shots.mp4", "duration_sec": 6.0}
