@@ -1,5 +1,7 @@
 """A Mac install's own PostgreSQL: a cluster of its own in DATA_DIR/postgres,
-on this machine only, its role and password the control database URL's.
+on this machine only, its superuser and password DATABASE_SUPERUSER_URL's
+(before run moved the env file over, the control database URL's; the
+databases are an ordinary role's: roles.py).
 `lumiverb-server run` makes it on first start (initdb), then runs it as a
 child, so nothing is shared with another PostgreSQL on the Mac (Homebrew's
 on 5432, a dev checkout's)."""

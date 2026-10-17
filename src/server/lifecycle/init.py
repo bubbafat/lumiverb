@@ -100,7 +100,9 @@ LUMIVERB_RESET_ON_THIS_MACHINE=true
 # init never rewrites it (move it away and run init again to start over).
 
 # Database: Lumiverb's own PostgreSQL (its data in DATA_DIR/postgres, on
-# this machine only), as its role, with this password
+# this machine only), as its superuser, with this password. lumiverb-server
+# run's first start hands the databases to an ordinary role and moves these
+# lines over to it (src/server/lifecycle/roles.py).
 CONTROL_PLANE_DATABASE_URL={db}/control_plane
 TENANT_DATABASE_URL_TEMPLATE={db}/{{tenant_id}}
 
