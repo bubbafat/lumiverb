@@ -339,7 +339,7 @@ This reference is a client's whole contract with the server (ADR-020 decision 9)
   - A proxy is kept as WebP, at most 2,048 px on its long edge: send it at 2,048 px (one smaller stays smaller). The server makes the thumbnail from it, WebP at 512 px. A scene frame is kept as JPEG.
   - A video's proxy is one frame of it; Lumiverb's scan uses the first.
 - **Videos** (`video_preview`, `analysis_proxy`), sent as `video/*`: the web player streams them as they are, so they're what every browser plays (ADR-018 decision 11, `tests/test_browser_playable_video.py`).
-  - H.264, 8-bit 4:2:0 (`yuv420p`), at most High profile.
+  - H.264, 8-bit 4:2:0 (`yuv420p`), limited range, at most High profile. A full-range source (some drones') is converted, not just relabelled.
   - AAC-LC, at most two channels a track.
   - MP4 with its index (`moov`) before the media (`+faststart`), video and audio tracks only.
   - No metadata: a phone's video says where it was taken.

@@ -9,7 +9,8 @@ and Linux browsers don't play it, Chrome only where the hardware decodes it.
 
 These render real originals of the kinds that aren't playable themselves
 (10-bit HEVC as phones and drones record it, 10-bit 4:2:2 ProRes as cameras
-do) through the real preview and proxy, and read what came out.
+do, full-range H.264 as some drones do) through the real preview and proxy,
+and read what came out.
 """
 
 from __future__ import annotations
@@ -39,6 +40,10 @@ ORIGINALS = {
                        "-x265-params", "log-level=error", "-c:a", "aac", "-ac", "6"],
     "prores-422-10bit.mov": ["-c:v", "prores_ks", "-profile:v", "2", "-pix_fmt", "yuv422p10le",
                              "-c:a", "pcm_s16le"],
+    # Full range, as DJI's 1080p clips are (the player expects limited range,
+    # as every other video is: the colours would shift otherwise).
+    "h264-full-range.mp4": ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuvj420p",
+                            "-color_range", "pc", "-c:a", "aac"],
 }
 
 
@@ -79,6 +84,7 @@ def _assert_a_browser_plays(path: Path) -> None:
     assert {s["codec_type"] for s in streams} <= {"video", "audio"}  # no timecode or data tracks
     [video] = [s for s in streams if s["codec_type"] == "video"]
     assert (video["codec_name"], video["pix_fmt"]) == ("h264", "yuv420p")
+    assert video.get("color_range") != "pc", "limited range, as every browser expects"
     assert video["profile"] in PLAYABLE_PROFILES
     audio = [s for s in streams if s["codec_type"] == "audio"]
     assert audio, "the original's sound is kept"

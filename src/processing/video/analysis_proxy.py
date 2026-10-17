@@ -209,6 +209,7 @@ def build_command(
     scale = (
         f"scale=w='min(iw,{edge})':h='min(ih,{edge})'"
         f":force_original_aspect_ratio=decrease:force_divisible_by=2"
+        ":out_range=tv"  # limited range, as players expect: a full-range source (DJI's 1080p) is converted
     )
     if hwaccel and pix_fmt:
         scale = f"format={pix_fmt},{scale}"
