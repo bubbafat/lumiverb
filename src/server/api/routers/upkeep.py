@@ -135,6 +135,13 @@ class ExpiredScansResult(BaseModel):
     deleted: int = 0
 
 
+class ExpiredUploadsResult(BaseModel):
+    """Uploads expired a day after their last chunk (src/server/uploads.py),
+    deleted with their bytes, and bytes no upload claims a day on. Not
+    paused with Upkeep: the upload protocol's own housekeeping."""
+    deleted: int = 0
+
+
 class UpkeepResult(BaseModel):
     search_sync: SearchSyncResult
     face_propagate: FacePropagateResult = FacePropagateResult()
@@ -143,6 +150,7 @@ class UpkeepResult(BaseModel):
     dismissed_people: DismissedPeopleResult = DismissedPeopleResult()
     face_clusters: FaceClustersResult = FaceClustersResult()
     expired_scans: ExpiredScansResult = ExpiredScansResult()
+    expired_uploads: ExpiredUploadsResult = ExpiredUploadsResult()
     # The admin key with tenants=all: the nightly backup "started", "running" or
     # "not due" (src/server/backups.py); None for one account.
     backup: str | None = None
@@ -350,9 +358,10 @@ def _purge_expired_trash_single_tenant(scope: UpkeepScope) -> dict:
         return {}
 
 
-def _each_account(scope: UpkeepScope, what: str, work, *, pausable: bool) -> dict:
+def _each_account(scope: UpkeepScope, what: str, work, *, pausable: bool, with_account: bool = False) -> dict:
     """Run work(session) -> dict of counts for each account of the scope and
-    add them up. pausable: an account whose Upkeep switch is paused is skipped."""
+    add them up (work(session, tenant_id) with_account). pausable: an account
+    whose Upkeep switch is paused is skipped."""
     from src.server.database import get_tenant_session
 
     totals: dict[str, int] = {}
@@ -363,7 +372,7 @@ def _each_account(scope: UpkeepScope, what: str, work, *, pausable: bool) -> dic
                 if pausable and _upkeep_paused(session, tenant_id):
                     _skipped(what, tenant_id, paused)
                     continue
-                for key, n in work(session).items():
+                for key, n in (work(session, tenant_id) if with_account else work(session)).items():
                     totals[key] = totals.get(key, 0) + n
         except Exception as exc:
             logger.warning("%s failed for tenant %s: %s", what, tenant_id, exc)
@@ -386,6 +395,15 @@ def _delete_expired_scans(session) -> dict:
     from src.server import scans
 
     deleted = scans.delete_expired(session)
+    session.commit()
+    return {"deleted": deleted}
+
+
+def _delete_expired_uploads(session, tenant_id: str) -> dict:
+    from src.server import uploads
+    from src.shared.utils import utcnow
+
+    deleted = uploads.delete_expired(session, tenant_id, utcnow())
     session.commit()
     return {"deleted": deleted}
 
@@ -478,7 +496,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     repairing artifact files reported missing, deleting empty dismissed
     people, computing the face clusters again when faces changed since they
     were, and deleting scans expired a day after their last call (a client
-    killed mid-scan).
+    killed mid-scan) and uploads a day after their last chunk.
 
     An account admin's key: that account. The admin key with tenants=all:
     every account, old revoked tokens are dropped, and the nightly backup
@@ -500,6 +518,8 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     dismissed = _each_account(scope, "Empty dismissed people aren't deleted", _cleanup_dismissed, pausable=True)
     clusters = _each_account(scope, "Face clusters", _recluster_if_changed, pausable=False)
     expired = _each_account(scope, "Expired scans aren't deleted", _delete_expired_scans, pausable=False)
+    expired_uploads = _each_account(scope, "Expired uploads aren't deleted", _delete_expired_uploads,
+                                    pausable=False, with_account=True)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -508,6 +528,7 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         dismissed_people=DismissedPeopleResult(**dismissed),
         face_clusters=FaceClustersResult(**clusters),
         expired_scans=ExpiredScansResult(**expired),
+        expired_uploads=ExpiredUploadsResult(**expired_uploads),
         backup=backup,
         previews_move=previews_move,
     )

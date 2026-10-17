@@ -308,14 +308,28 @@ def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, mon
         dest.write_bytes(b"mp4")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
+    sent = _sends(monkeypatch)
     assert _run(acct, "render", "ast_1") is None
     [settings] = used
     assert settings.decoder == "cpu" and settings.gpu_decodes == 0
     assert settings.max_edge == acct.producers.settings("analysis_proxy")["max_edge"]
-    route = acct.client.post.call_args.args[0]
-    assert route == "/v1/assets/ast_1/artifacts/analysis_proxy"
-    assert '"producer": "analysis-proxy"' in acct.client.post.call_args.kwargs["data"]["lineage"]
+    # Sent in chunks (ADR-018 decision 9), the render as a path from the job's scratch.
+    [(asset_id, artifact, body, lineage)] = sent
+    assert (asset_id, artifact, body) == ("ast_1", "analysis_proxy", b"mp4")
+    assert lineage["producer"] == "analysis-proxy"
     acct.analysis_cache.put.assert_called_once()
+
+
+def _sends(monkeypatch) -> list[tuple]:
+    """What's sent in chunks (src/processing/uploads.py send): each clip, artifact, file's bytes and lineage."""
+    sent: list[tuple] = []
+
+    def send(client, asset_id, artifact, path, lineage, **kw):
+        sent.append((asset_id, artifact, path.read_bytes(), lineage))
+        return {"key": "k", "sha256": "s", "duration_sec": 1.0}
+
+    monkeypatch.setattr("src.processing.uploads.send", send)
+    return sent
 
 
 def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, tmp_path) -> None:
@@ -363,18 +377,17 @@ def test_an_upload_that_fails_leaves_nothing_in_the_cache(acct, monkeypatch, tmp
 
 
 def test_an_analysis_proxys_lineage_leaves_out_this_machines_way_of_rendering(acct, monkeypatch, tmp_path) -> None:
-    import json
-
     from src.processing.video.analysis_proxy import AnalysisProxySettings
 
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     _renders(monkeypatch)
+    sent = _sends(monkeypatch)
     hashes = []
     for encoder, decoder, gpus in (("libx264", "cpu", 0), ("h264_nvenc", "cuda", 2)):
         acct.machine = Machine(analysis_proxy_encoder=encoder, analysis_proxy_decoder=decoder, gpu_decodes=gpus)
-        acct.client.post.reset_mock()
+        sent.clear()
         _run(acct, "render", "ast_1")
-        hashes.append(json.loads(acct.client.post.call_args.kwargs["data"]["lineage"])["settings_hash"])
+        hashes.append(sent[-1][3]["settings_hash"])
     settings = AnalysisProxySettings.for_producer(acct.producers.settings("analysis_proxy"), "libx264")
     assert hashes == [acct.producers.lineage("analysis_proxy", SHA, used=settings.output())["settings_hash"]] * 2
 

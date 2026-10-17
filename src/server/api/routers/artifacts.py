@@ -104,6 +104,35 @@ async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type
             raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
 
 
+def artifact_key(tenant_id: str, asset, artifact_type: str) -> str:
+    """Where a clip's proxy, thumbnail, video preview or analysis proxy is kept (scene frames go by their time)."""
+    if artifact_type == "proxy":
+        return keys.proxy_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
+    if artifact_type == "thumbnail":
+        return keys.thumbnail_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
+    if artifact_type == "video_preview":
+        return keys.video_preview_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
+    if artifact_type == "analysis_proxy":
+        return keys.analysis_proxy_key(tenant_id, asset.library_id, asset.asset_id, asset.rel_path)
+    raise ValueError(artifact_type)
+
+
+def record_kept(session: Session, asset_id: str, artifact_type: str, key: str, sha256: str, made: dict | None,
+                width: int | None = None, height: int | None = None) -> None:
+    """A kept artifact on its clip, with how it was made (a proxy, video preview or analysis proxy)."""
+    asset_repo = AssetRepository(session)
+    if artifact_type == "proxy":
+        asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
+    elif artifact_type == "thumbnail":
+        asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
+    elif artifact_type == "video_preview":
+        asset_repo.set_video_preview(asset_id, video_preview_key=key)
+    elif artifact_type == "analysis_proxy":
+        asset_repo.set_analysis_proxy(asset_id, key, sha256)
+    if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
+        record_lineage(session, asset_id, artifact_type, made)
+
+
 class ArtifactUploadResponse(BaseModel):
     key: str
     sha256: str  # of what's kept: a video's rewrite, an image's re-encoding
@@ -157,15 +186,9 @@ async def upload_artifact(
         raise HTTPException(status_code=400, detail="Analysis proxies are for videos only")
 
     tenant_id: str = request.state.tenant_id
-    if artifact_type == "proxy":
-        key = keys.proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-    elif artifact_type == "thumbnail":
-        key = keys.thumbnail_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-    elif artifact_type == "video_preview":
-        key = keys.video_preview_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-    elif artifact_type == "analysis_proxy":
-        key = keys.analysis_proxy_key(tenant_id, asset.library_id, asset_id, asset.rel_path)
-    else:  # scene_rep
+    if artifact_type != "scene_rep":
+        key = artifact_key(tenant_id, asset, artifact_type)
+    else:
         if rep_frame_ms is None:
             raise HTTPException(
                 status_code=400, detail="rep_frame_ms is required for scene_rep artifacts"
@@ -173,17 +196,7 @@ async def upload_artifact(
         key = keys.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
     sha256, duration_sec = await _save_upload(get_store(), key, file, artifact_type)
-
-    if artifact_type == "proxy":
-        asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
-    elif artifact_type == "thumbnail":
-        asset_repo.set_thumbnail_artifact(asset_id, key, sha256)
-    elif artifact_type == "video_preview":
-        asset_repo.set_video_preview(asset_id, video_preview_key=key)
-    elif artifact_type == "analysis_proxy":
-        asset_repo.set_analysis_proxy(asset_id, key, sha256)
-    if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
-        record_lineage(session, asset_id, artifact_type, made)
+    record_kept(session, asset_id, artifact_type, key, sha256, made, width, height)
     # scene_rep: no asset-level column to update. The on-disk path is derived
     # from (tenant_id, library_id, asset_id, rep_frame_ms) on download via
     # storage.scene_rep_key(), so the file is fully addressable from
