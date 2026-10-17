@@ -910,6 +910,7 @@ def main() -> int:
     from src.processing.cache_dir import cache_dir
     from src.processing import machine
     from src.processing.proxy.analysis_cache import clear_leftovers
+    from src.producers.runner import empty_scratch
     from src.server.scheduler.scans import (
         STATE_FILE,
         ServiceLock,
@@ -956,6 +957,8 @@ def main() -> int:
     try:
         if removed := clear_leftovers():
             logger.info("scheduler: removed %d half-made analysis proxies left by an earlier run", removed)
+        if removed := empty_scratch():
+            logger.info("scheduler: removed the scratch of %d jobs an earlier run left", removed)
         state_path = cache_dir(STATE_FILE)
         state = load_state(state_path)
         last = [saved_form(state)]

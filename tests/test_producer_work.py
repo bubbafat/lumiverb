@@ -57,40 +57,40 @@ def test_an_embedding_is_its_proxys_vector() -> None:
 # ---- OCR -------------------------------------------------------------------
 
 
-def test_text_is_read_from_the_proxy() -> None:
+def test_text_is_read_from_the_proxy(tmp_path: Path) -> None:
     ocr = MagicMock()
     ocr.extract_text.return_value = "STOP"
-    assert read_text(asset_id="a", rel_path="x.jpg", ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
         "asset_id": "a", "ocr_text": "STOP"}
 
 
-def test_no_proxy_reads_no_text() -> None:
-    assert read_text(asset_id="a", rel_path="x.jpg", ocr_provider=MagicMock(), proxy_cache=_cache(None)) is None
+def test_no_proxy_reads_no_text(tmp_path: Path) -> None:
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), proxy_cache=_cache(None)) is None
 
 
-def test_an_image_that_cant_be_read_is_nothing_made_but_the_machines_fault_says_so() -> None:
+def test_an_image_that_cant_be_read_is_nothing_made_but_the_machines_fault_says_so(tmp_path: Path) -> None:
     from src.processing.workers.captions.base import CaptionError
 
     ocr = MagicMock()
     ocr.extract_text.side_effect = RuntimeError("model exploded")
-    assert read_text(asset_id="a", rel_path="x.jpg", ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) is None
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) is None
     ocr.extract_text.side_effect = CaptionError("refused", endpoint_fault=True)
     with pytest.raises(CaptionError):
-        read_text(asset_id="a", rel_path="x.jpg", ocr_provider=ocr, proxy_cache=_cache(_jpeg(4)))
+        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4)))
 
 
-def test_this_machines_trouble_reading_text_goes_up() -> None:
+def test_this_machines_trouble_reading_text_goes_up(tmp_path: Path) -> None:
     """OSError (the disk) is a crash for the runner, not the guard's to judge."""
     cache = _cache(_jpeg(4))
     cache.get.side_effect = OSError(5, "Input/output error")
     with pytest.raises(OSError):
-        read_text(asset_id="a", rel_path="x.jpg", ocr_provider=MagicMock(), proxy_cache=cache)
+        read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=MagicMock(), proxy_cache=cache)
 
 
-def test_no_text_is_empty_text() -> None:
+def test_no_text_is_empty_text(tmp_path: Path) -> None:
     ocr = MagicMock()
     ocr.extract_text.return_value = None
-    assert read_text(asset_id="a", rel_path="x.jpg", ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
+    assert read_text(asset_id="a", rel_path="x.jpg", work_dir=tmp_path, ocr_provider=ocr, proxy_cache=_cache(_jpeg(4))) == {
         "asset_id": "a", "ocr_text": ""}
 
 
@@ -129,7 +129,7 @@ def src(tmp_path: Path) -> Path:
 def test_no_audio_track_is_no_speech(src: Path) -> None:
     transcriber = _hears(Heard())
     with patch(TRACKS, return_value=[]), patch("subprocess.run") as run:
-        assert transcribe(src, transcriber) == ("", "")
+        assert transcribe(src, transcriber, work_dir=src.parent) == ("", "")
     run.assert_not_called()
     transcriber.transcribe.assert_not_called()
 
@@ -138,7 +138,7 @@ def test_every_audio_track_is_heard(src: Path) -> None:
     """A lav on its own track is mixed in, not dropped."""
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac"), AudioTrack(1, 1, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()) as run, patch(FIND, return_value=[]):
-        assert transcribe(src, _hears(Heard())) == ("", "")
+        assert transcribe(src, _hears(Heard()), work_dir=src.parent) == ("", "")
     assert "amix=inputs=2" in " ".join(run.call_args_list[0].args[0])
 
 
@@ -147,23 +147,23 @@ def test_audio_that_cant_be_read_is_tried_again_later(src: Path) -> None:
     import subprocess
 
     with patch(TRACKS, side_effect=subprocess.CalledProcessError(1, "ffprobe")):
-        assert transcribe(src, _hears(Heard())) is None
+        assert transcribe(src, _hears(Heard()), work_dir=src.parent) is None
 
 
 def test_this_machines_trouble_reading_audio_goes_up(src: Path) -> None:
     """No ffprobe or ffmpeg, or a disk error: OSError goes up (the runner's
     crash, uncharged), never the clip's 'tried again later'."""
     with patch(TRACKS, side_effect=FileNotFoundError(2, "ffprobe")), pytest.raises(FileNotFoundError):
-        transcribe(src, _hears(Heard()))
+        transcribe(src, _hears(Heard()), work_dir=src.parent)
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=OSError(5, "Input/output error")), pytest.raises(OSError):
-        transcribe(src, _hears(Heard()))
+        transcribe(src, _hears(Heard()), work_dir=src.parent)
 
 
 def test_ffmpeg_failing_isnt_silence(src: Path) -> None:
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes(returncode=1, stderr=b"killed")):
-        assert transcribe(src, _hears(Heard())) is None
+        assert transcribe(src, _hears(Heard()), work_dir=src.parent) is None
 
 
 def test_the_speech_is_found_here_and_a_machine_hears_only_it(src: Path) -> None:
@@ -180,7 +180,7 @@ def test_the_speech_is_found_here_and_a_machine_hears_only_it(src: Path) -> None
     transcriber = _hears(Heard([Segment(0.0, 0.8, " hi there")], "english"))
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), patch(FIND, side_effect=find_speech):
-        out = transcribe(src, transcriber, 700)
+        out = transcribe(src, transcriber, 700, work_dir=src.parent)
     assert found == [("audio.wav", "speech.wav", 700)]
     assert transcriber.transcribe.call_args.args[0].name == "speech.wav"
     assert out == ("1\n00:00:02,000 --> 00:00:02,800\nhi there\n", "en")
@@ -190,25 +190,25 @@ def test_nothing_said_needs_no_machine(src: Path) -> None:
     transcriber = _hears(Heard())
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), patch(FIND, return_value=[]):
-        assert transcribe(src, transcriber) == ("", "")
+        assert transcribe(src, transcriber, work_dir=src.parent) == ("", "")
     transcriber.transcribe.assert_not_called()
 
 
 def test_speech_that_cant_be_found_is_tried_again_later(src: Path) -> None:
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), patch(FIND, side_effect=SpeechError("boom")):
-        assert transcribe(src, _hears(Heard())) is None
+        assert transcribe(src, _hears(Heard()), work_dir=src.parent) is None
 
 
 def test_a_machines_failure_says_whose_it_is(src: Path) -> None:
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes()), \
          patch(FIND, return_value=[{"start": 0, "end": 16_000}]), pytest.raises(TranscriptError) as e:
-        transcribe(src, _hears(TranscriptError("refused", endpoint_fault=True)))
+        transcribe(src, _hears(TranscriptError("refused", endpoint_fault=True)), work_dir=src.parent)
     assert e.value.endpoint_fault
 
 
 def test_a_wav_too_short_to_hold_speech_is_empty(src: Path) -> None:
     with patch(TRACKS, return_value=[AudioTrack(0, 2, "aac")]), \
          patch("subprocess.run", side_effect=_ffmpeg_writes(size=10)):
-        assert transcribe(src, _hears(Heard())) == ("", "")
+        assert transcribe(src, _hears(Heard()), work_dir=src.parent) == ("", "")

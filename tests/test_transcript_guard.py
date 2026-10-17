@@ -176,7 +176,7 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
                 busy[k] -= 1
         return Heard()
 
-    def transcribe_one(source, transcriber, vad_ms):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
         with lock:
             preparing[0] += 1
         return ("", "") if transcriber.transcribe(source) == Heard() else None
@@ -196,7 +196,7 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
     client = _client([BUILT_IN])
     calls = []
 
-    def transcribe_one(source, transcriber, vad_ms):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
         calls.append(source.name)
         raise TranscriptError("No machine doing transcripts is online (Built in: Couldn't load small).",
                               endpoint_fault=True)
@@ -211,7 +211,7 @@ def test_no_machine_left_stops_transcription_without_charging_a_clip(library):
 def test_a_surprise_on_one_clip_charges_it_and_the_rest_go_on(library):
     client = _client([BUILT_IN])
 
-    def transcribe_one(source, transcriber, vad_ms):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
         if source.name == "ast_a.mp4":
             raise ValueError("unexpected")
         if source.name == "ast_b.mp4":
@@ -235,7 +235,7 @@ def test_without_faster_whisper_here_settings_says_so(library):
 def test_a_clip_the_machine_couldnt_make_sense_of_is_charged_once_the_machine_checks_out(library):
     client = _client([BUILT_IN])
 
-    def transcribe_one(source, transcriber, vad_ms):
+    def transcribe_one(source, transcriber, vad_ms, *, work_dir):
         if source.name == "ast_a.mp4":
             raise TranscriptError("Invalid data found when processing input", endpoint_fault=False)
         return ("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "en")

@@ -315,32 +315,43 @@ def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, 
 
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
 
+    dests = []
+
     def render(source, dest, settings):
+        dests.append(dest)
         dest.write_bytes(b"half")
         raise RenderError("ffmpeg exit 1")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
     assert _run(acct, "render", "ast_1") is None
     assert _charged(acct) == [("analysis_proxy", "ast_1")]
-    assert not list((tmp_path / "analysis").glob("*"))
+    [dest] = dests
+    assert dest.parent.parent == runner.scratch_root(), "rendered in the job's scratch"
+    assert not dest.parent.exists()
     acct.client.post.assert_not_called()
 
 
-def _renders(monkeypatch) -> None:
+def _renders(monkeypatch) -> list[Path]:
+    """Renders that write their file; the files they were told to write."""
+    dests: list[Path] = []
+
     def render(source, dest, settings):
+        dests.append(dest)
         dest.write_bytes(b"mp4")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
+    return dests
 
 
 def test_an_upload_that_fails_leaves_nothing_in_the_cache(acct, monkeypatch, tmp_path) -> None:
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
-    _renders(monkeypatch)
+    dests = _renders(monkeypatch)
     acct.client.post.side_effect = LumiverbAPIError("bad", "refused", 422)
     assert _run(acct, "render", "ast_1") is None
     assert _charged(acct) == [("analysis_proxy", "ast_1")]
     acct.analysis_cache.put.assert_not_called()
-    assert not list((tmp_path / "analysis").glob("*"))  # the .rendering file is gone
+    [dest] = dests
+    assert not dest.exists() and not dest.parent.exists(), "the render went with the job's scratch"
 
 
 def test_an_analysis_proxys_lineage_leaves_out_this_machines_way_of_rendering(acct, monkeypatch, tmp_path) -> None:
@@ -366,6 +377,9 @@ def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> 
     monkeypatch.setattr("src.producers.transcript.work.transcribe", heard)
     assert _run(acct, "transcript", "ast_1") is None
     assert heard.call_args.args == (tmp_path / "a.mp4", "transcriber", 500)
+    work_dir = heard.call_args.kwargs["work_dir"]
+    assert work_dir.parent.parent == runner.scratch_root(), "its WAVs in the job's scratch"
+    assert not work_dir.parent.exists()
     body = _posted(acct)["/v1/assets/ast_1/transcript"]
     assert body["language"] == "es" and body["source"] == "whisper"
     assert body["lineage"]["producer"] == "whisper"
@@ -373,7 +387,7 @@ def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> 
 
 def test_a_transcripts_lineage_says_its_model(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
-    monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a: ("", ""))
+    monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a, **kw: ("", ""))
     _run(acct, "transcript", "ast_1")
     lineage = _posted(acct)["/v1/assets/ast_1/transcript"]["lineage"]
     assert lineage == acct.producers.lineage("transcript", SHA, used=acct.producers.with_model("transcript", "small"))
@@ -404,7 +418,7 @@ def test_the_machines_trouble_with_a_transcript_charges_no_clip(acct, monkeypatc
 
 def test_a_transcript_that_could_not_be_tried_is_a_failure(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
-    monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a: None)
+    monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a, **kw: None)
     _run(acct, "transcript", "ast_1")
     assert acct.failures.add.call_args.args == ("transcript", "ast_1", "transcription failed (see the log)")
 
@@ -746,17 +760,7 @@ def _no_frame_at(ms: int, how: str):
 @pytest.mark.parametrize("case", ["not ok", "empty", "nothing said", "empty description"])
 def test_a_scene_with_no_frame_or_no_description_is_the_videos_once_the_rest_are_saved(
         acct, monkeypatch, tmp_path, case) -> None:
-    import tempfile
-
-    frames: list[Path] = []
-    real = tempfile.NamedTemporaryFile
-
-    def named(*a, **kw):  # every frame file the job makes
-        f = real(*a, **kw)
-        frames.append(Path(f.name))
-        return f
-
-    monkeypatch.setattr(tempfile, "NamedTemporaryFile", named)
+    frames: list[Path] = []  # every frame file the job makes
     order: list[str] = []
     acct.failures.add.side_effect = lambda *a: order.append("charged")
 
@@ -764,18 +768,25 @@ def test_a_scene_with_no_frame_or_no_description_is_the_videos_once_the_rest_are
         order.append(path)
 
     describe = None
-    extract = None
+    extract = _no_frame_at(-1, "")  # a frame at every scene's time
     if case in ("not ok", "empty"):
         extract = _no_frame_at(1000, "empty" if case == "empty" else "not ok")
     else:
         said = None if case == "nothing said" else {"description": "  ", "tags": ["sea"]}
         describe = lambda path: said if path == frames[0] else {"description": "a beach", "tags": []}  # noqa: E731
+
+    def extracted(source, dest, timestamp):
+        frames.append(dest)
+        return extract(source, dest, timestamp)
+
     assert _described(acct, monkeypatch, tmp_path, [_scene("s1", 1000), _scene("s2", 5000)], describe=describe,
-                      patch=patched, extract=extract) is None
+                      patch=patched, extract=extracted) is None
     assert order == ["/v1/video/scenes/s2", "charged"]
     assert _charged(acct) == [("scene_vision", "ast_1")]
     assert "1 of 2 scenes failed" in str(acct.failures.add.call_args.args[2])
     assert len(frames) == 2 and not any(f.exists() for f in frames)
+    assert all(f.parent.parent == runner.scratch_root() for f in frames), "in the job's scratch"
+    assert not frames[0].parent.exists(), "the job's scratch goes with the job"
 
 
 # ---------------------------------------------------------------------------

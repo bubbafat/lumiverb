@@ -322,7 +322,7 @@ def test_extract_text_missing_file(mock_chat, provider):
 from src.producers.ocr.work import read_text as _ocr_one  # noqa: E402
 
 
-def test_ocr_one_success():
+def test_ocr_one_success(tmp_path):
     """Returns result dict with asset_id and ocr_text."""
     mock_provider = MagicMock()
     mock_provider.extract_text.return_value = "HELLO WORLD"
@@ -335,6 +335,7 @@ def test_ocr_one_success():
         rel_path="test.jpg",
         ocr_provider=mock_provider,
         proxy_cache=mock_cache,
+        work_dir=tmp_path,
     )
 
     assert result is not None
@@ -342,7 +343,7 @@ def test_ocr_one_success():
     assert result["ocr_text"] == "HELLO WORLD"
 
 
-def test_ocr_one_no_proxy():
+def test_ocr_one_no_proxy(tmp_path):
     """Returns None when proxy is not available."""
     mock_cache = MagicMock()
     mock_cache.get.return_value = None
@@ -352,12 +353,13 @@ def test_ocr_one_no_proxy():
         rel_path="test.jpg",
         ocr_provider=MagicMock(),
         proxy_cache=mock_cache,
+        work_dir=tmp_path,
     )
 
     assert result is None
 
 
-def test_ocr_one_no_text_found():
+def test_ocr_one_no_text_found(tmp_path):
     """Returns empty ocr_text when model finds no text."""
     mock_provider = MagicMock()
     mock_provider.extract_text.return_value = ""
@@ -370,13 +372,14 @@ def test_ocr_one_no_text_found():
         rel_path="test.jpg",
         ocr_provider=mock_provider,
         proxy_cache=mock_cache,
+        work_dir=tmp_path,
     )
 
     assert result is not None
     assert result["ocr_text"] == ""
 
 
-def test_ocr_one_provider_exception():
+def test_ocr_one_provider_exception(tmp_path):
     """Returns None when OCR provider throws."""
     mock_provider = MagicMock()
     mock_provider.extract_text.side_effect = RuntimeError("model crashed")
@@ -389,6 +392,7 @@ def test_ocr_one_provider_exception():
         rel_path="test.jpg",
         ocr_provider=mock_provider,
         proxy_cache=mock_cache,
+        work_dir=tmp_path,
     )
 
     assert result is None
