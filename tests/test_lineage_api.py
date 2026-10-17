@@ -23,6 +23,7 @@ from sqlmodel import Session
 from src.shared import producers as P
 from tests.test_analysis_proxy_api import _ingest, env  # noqa: F401 — the shared server fixture
 from tests.derived import saved
+from tests.videos import playable
 
 
 def _sha() -> str:
@@ -292,11 +293,11 @@ def test_each_kind_of_write_records_its_artifact(env):
             "duration_sec": 12.0, "lineage": _want(env, "probe", sha)}, headers=headers)),
         ("analysis_proxy", vid, lambda: client.post(
             f"/v1/assets/{vid}/artifacts/analysis_proxy",
-            files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+            files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": json.dumps(_want(env, "analysis_proxy", sha))}, headers=headers)),
         ("video_preview", vid, lambda: client.post(
             f"/v1/assets/{vid}/artifacts/video_preview",
-            files={"file": ("p.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+            files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": json.dumps(_want(env, "video_preview", sha))}, headers=headers)),
     ]
     for artifact, clip, write in writes:
@@ -443,12 +444,12 @@ def test_a_form_fields_lineage_is_checked(env):
                       ({**source, "source_hash": 12}, "content_hash_not_valid"),
                       ({**source, "source_hash": sha.removeprefix("sha256:")}, "content_hash_not_valid")):
         r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
-                        files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+                        files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                         data={"lineage": json.dumps(bad)}, headers=headers)
         _refused(r, code)
         assert _everything(env, vid) == before and _row(env, vid, "analysis_proxy") is None
     r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
-                    files={"file": ("a.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")},
+                    files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                     data={"lineage": "not json"}, headers=headers)
     _refused(r)
     assert _everything(env, vid) == before
@@ -499,7 +500,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     chunk = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
 
     def mp4() -> tuple:
-        return ("v.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 x"), "video/mp4")
+        return ("v.mp4", io.BytesIO(playable()), "video/mp4")
 
     def jpeg() -> tuple:
         buf = io.BytesIO()

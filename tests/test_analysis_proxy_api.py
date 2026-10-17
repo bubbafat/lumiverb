@@ -30,6 +30,7 @@ from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
 from tests.stored_in import stored_in
+from tests.videos import playable
 
 
 
@@ -106,11 +107,11 @@ def _ingest(env, rel_path: str, media_type: str = "video", sha: str | None = Non
     return r.json()["asset_id"]
 
 
-def _upload(env, asset_id: str, body: bytes = b"\x00\x00\x00\x18ftypmp42 analysis", content_type="video/mp4"):
+def _upload(env, asset_id: str, body: bytes | None = None, content_type="video/mp4"):
     client, headers, *_ = env
     return client.post(
         f"/v1/assets/{asset_id}/artifacts/analysis_proxy",
-        files={"file": ("analysis.mp4", io.BytesIO(body), content_type)},
+        files={"file": ("analysis.mp4", io.BytesIO(playable() if body is None else body), content_type)},
         data={"lineage": made_json("analysis_proxy")},
         headers=headers,
     )
@@ -149,14 +150,13 @@ def _analysis_proxy_key(env, asset_id: str) -> str | None:
 @pytest.mark.slow
 def test_upload_stores_the_proxy_and_marks_the_asset(env) -> None:
     asset_id = _ingest(env, "up/a.mov")
-    body = b"\x00\x00\x00\x18ftypmp42" + b"x" * 1000
-    r = _upload(env, asset_id, body)
+    r = _upload(env, asset_id, playable(2.0))
     assert r.status_code == 200, r.text
     assert "/analysis/" in r.json()["key"]
-    assert r.json()["sha256"] == hashlib.sha256(body).hexdigest()
+    assert r.json()["duration_sec"] == pytest.approx(2.0, abs=0.1)  # the server's measure
 
-    storage = env[3]
-    assert storage.abs_path(r.json()["key"]).read_bytes() == body
+    storage = env[3]  # what's kept is the server's rewrite (src/server/uploaded_video.py)
+    assert r.json()["sha256"] == hashlib.sha256(storage.abs_path(r.json()["key"]).read_bytes()).hexdigest()
     assert _analysis_proxy_key(env, asset_id) == r.json()["key"]
 
 
@@ -164,12 +164,12 @@ def test_upload_stores_the_proxy_and_marks_the_asset(env) -> None:
 def test_download_returns_the_file_with_ranges_and_an_etag(env) -> None:
     client, headers, *_ = env
     asset_id = _ingest(env, "dl/a.mov")
-    body = bytes(range(256)) * 4
-    sha = _upload(env, asset_id, body).json()["sha256"]
+    sha = _upload(env, asset_id).json()["sha256"]
 
     r = client.get(f"/v1/assets/{asset_id}/artifacts/analysis_proxy", headers=headers)
     assert r.status_code == 200
-    assert r.content == body
+    body = r.content
+    assert hashlib.sha256(body).hexdigest() == sha
     assert r.headers["content-type"] == "video/mp4"
     assert r.headers["etag"] == f'"{sha}"'
     assert r.headers["accept-ranges"] == "bytes"
@@ -211,16 +211,16 @@ def test_analysis_proxies_have_their_own_size_ceiling(env) -> None:
     client, headers, *_ = env
     asset_id = _ingest(env, "size/a.mov")
     with patch("src.server.api.routers.artifacts.MAX_UPLOAD_BYTES", 10):
-        assert _upload(env, asset_id, b"y" * 50).status_code == 200
+        assert _upload(env, asset_id).status_code == 200
         r = client.post(
             f"/v1/assets/{asset_id}/artifacts/video_preview",
-            files={"file": ("p.mp4", io.BytesIO(b"y" * 50), "video/mp4")},
+            files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
             data={"lineage": made_json("video_preview")},
             headers=headers,
         )
         assert r.status_code == 413
     with patch.dict("src.server.api.routers.artifacts.MAX_UPLOAD_BYTES_BY_TYPE", {"analysis_proxy": 10}):
-        assert _upload(env, asset_id, b"y" * 50).status_code == 413
+        assert _upload(env, asset_id).status_code == 413
 
 
 @pytest.mark.slow

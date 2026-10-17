@@ -9,6 +9,7 @@ a key it makes itself at start, revoking the one before.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -137,10 +138,11 @@ def test_a_job_reads_its_clips_files_from_the_store_by_the_keys_its_rows_carry(e
     from src.server.scheduler.inputs import Inputs
     from src.server.storage.store import get_store
     from tests.test_analysis_proxy_api import _ingest, _upload
+    from tests.videos import playable
 
     video = _ingest(env, "stored/a.mov")
-    body = b"\x00\x00\x00\x18ftypmp42 stored here"
-    assert _upload(env, video, body).status_code == 200
+    up = _upload(env, video, playable())
+    assert up.status_code == 200, up.text
     photo = _ingest(env, "stored/c.jpg", media_type="image")
     rows: dict[str, dict] = {}
     with _db(env) as session:
@@ -152,7 +154,7 @@ def test_a_job_reads_its_clips_files_from_the_store_by_the_keys_its_rows_carry(e
     acct = MagicMock()
     inputs = Inputs(acct, get_store())
     with inputs.analysis_proxy(rows[video]) as path:
-        assert path.read_bytes() == body
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == up.json()["sha256"]  # what was kept
     assert inputs.preview_bytes(rows[photo])[8:12] == b"WEBP"
     acct.analysis_cache.held.assert_not_called()
     acct.proxy_cache.assert_not_called()

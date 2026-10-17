@@ -39,6 +39,7 @@ from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import ingest_made, made_json
 from tests.stored_in import stored_in
+from tests.videos import playable
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 T1 = T0 + timedelta(hours=1)
@@ -173,7 +174,7 @@ def _ingest(env, library_id: str, f: File, *, preview: bool = True) -> str:
     asset_id = r.json()["asset_id"]
     if video and preview:
         r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=env.editor,
-                            files={"file": ("p.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 preview"), "video/mp4")},
+                            files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
                             data={"lineage": made_json("video_preview", f.sha)})
         assert r.status_code == 200, r.text
     return asset_id
