@@ -30,6 +30,7 @@ from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
 from src.shared.waits import (
     AI_MACHINES,
+    DEVICE,
     GIVEN_UP,
     HELD,
     NEEDS,
@@ -111,6 +112,13 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
             add(STORAGE, due_in.get(i, 0), library_id=i, library_name=names.get(i, ""),
                 seen_at=getattr(seen, "seen_at", None), away_since=getattr(seen, "away_since", None),
                 checked=bool(getattr(seen, "checked", False)))
+    if p.storage:
+        # A device reads these libraries: what needs their originals is its (ADR-018 decision 1).
+        devices = _read_by_devices(session, library_id)
+        due_in = lineage.due_by_library(session, artifact, want, list(devices), redo=redo_runs, asset_ids=asset_ids)
+        for i, lib in devices.items():
+            add(DEVICE, due_in.get(i, 0), library_id=i, library_name=lib["name"], device_id=lib["reader"],
+                device_name=lib["device_name"] or "", checked_in_at=lib["checked_in_at"])
     if redoable and artifact in paused.redo:
         # A new version stops its redo by no one (lineage.hold_new_version); an admin, by name.
         add(NEW_VERSION if paused.redo[artifact]["paused_by"] is None else REDO_STOPPED, c["due_redo"])
@@ -140,6 +148,19 @@ def scan_waits(session: Session, status: Any) -> list[dict[str, Any]]:
     return [{"reason": SCAN_FAILING, "clips": 0, "library_id": f.library_id,
              "library_name": names.get(f.library_id, ""), "message": f.error, "since": f.since,
              "next_try": f.next_try} for f in status.scans_failing]
+
+
+def _read_by_devices(session: Session, library_id: str | None) -> dict[str, dict[str, Any]]:
+    """The active libraries a device reads (that one, when given), each
+    with its name, its device's id and name, and when that device last
+    checked in for it."""
+    rows = session.execute(text(
+        "SELECT l.library_id, l.name, l.reader, d.name AS device_name, c.checked_in_at"
+        " FROM libraries l LEFT JOIN devices d ON d.device_id = l.reader"
+        " LEFT JOIN reader_check_ins c ON c.library_id = l.library_id AND c.reader = l.reader"
+        " WHERE l.status = 'active' AND l.reader <> 'server'"
+        "   AND (CAST(:lib AS text) IS NULL OR l.library_id = :lib)"), {"lib": library_id}).mappings().all()
+    return {r["library_id"]: dict(r) for r in rows}
 
 
 def _library_names(session: Session, library_ids: list[str]) -> dict[str, str]:

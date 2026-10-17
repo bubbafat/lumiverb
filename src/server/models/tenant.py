@@ -51,7 +51,7 @@ class Library(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
-    # Who reads its files (src/shared/readers.py): "server", this server.
+    # Who reads its files (src/shared/readers.py): "server", this server, or a device's id.
     reader: str = Field(default="server", sa_column_kwargs={"server_default": "server"}, nullable=False)
     # Moves when something its reader acts on changes (src/server/check_ins.py; the database's triggers move it).
     reader_mark: int = Field(default=0, sa_column_kwargs={"server_default": "0"}, nullable=False)

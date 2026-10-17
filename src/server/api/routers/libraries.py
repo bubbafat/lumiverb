@@ -34,8 +34,18 @@ router = APIRouter(prefix="/v1/libraries", tags=["libraries"])
 
 class CreateLibraryRequest(BaseModel):
     name: str
+    # As its reader sees it.
     root_path: str
     is_public: bool | None = None
+    # Who reads its files: "server" (this server), or a registered device's id (/v1/devices).
+    reader: str = SERVER
+
+
+class ReaderChoice(BaseModel):
+    # "server" (this server), or a registered device's id (/v1/devices).
+    reader: str
+    # The folder as the new reader sees it; left out, the root stays as it is.
+    root_path: str | None = None
 
 
 def require_admin_for(request: Request, body: BaseModel, fields: set[str]) -> None:
@@ -58,7 +68,7 @@ class LibraryResponse(BaseModel):
     root_path: str
     is_public: bool = False
     cover_asset_id: str | None = None
-    # Who reads its files (src/shared/readers.py): "server", this server.
+    # Who reads its files (src/shared/readers.py): "server", this server, or a device's id.
     reader: str = SERVER
 
 
@@ -87,7 +97,7 @@ class LibraryListItem(BaseModel):
     # The counter GET /{library_id}/revision reports: bumped whenever the
     # library's clips change, so a page across libraries can follow them all.
     revision: int = 0
-    # Who reads its files (src/shared/readers.py): "server", this server.
+    # Who reads its files (src/shared/readers.py): "server", this server, or a device's id.
     reader: str = SERVER
     # Its own Scans pause (ADR-018 phase 1): no new or changed files are
     # found in it. Pause all isn't said here (GET /v1/producers/queue says
@@ -148,14 +158,19 @@ def create_library(
     Name must be unique for this tenant.
     Returns 409 if a library with the same name already exists.
     New libraries inherit tenant path filter defaults at creation time.
+    Read by this server unless reader names a device (404 device_not_found
+    for one that isn't registered): its folder is then the device's, and
+    chosen anywhere (it's never read here).
     """
     root_path = checked_root_path(body.root_path)
-    require_folder_chosen_here(request)
+    _known_reader(session, body.reader)
+    if body.reader == SERVER:
+        require_folder_chosen_here(request)
     repo = LibraryRepository(session)
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=root_path)
+    library = repo.create(name=body.name, root_path=root_path, reader=body.reader)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -408,6 +423,52 @@ def update_library(
             else:
                 pub_repo.delete(library_id)
 
+    return LibraryResponse(
+        library_id=library.library_id,
+        name=library.name,
+        root_path=library.root_path,
+        is_public=library.is_public,
+        cover_asset_id=repo.resolve_cover(library),
+        reader=library.reader,
+    )
+
+
+def _known_reader(session: Session, reader: str) -> None:
+    """404 device_not_found unless the reader is this server or a registered device."""
+    from src.server.api.errors import ApiError
+    from src.server.repository.devices import DeviceRepository
+
+    if reader != SERVER and DeviceRepository(session).get(reader) is None:
+        raise ApiError(404, "device_not_found", "There's no such device: register it first (/v1/devices).")
+
+
+@router.put("/{library_id}/reader", response_model=LibraryResponse, dependencies=[Depends(require_tenant_admin)])
+def choose_reader(
+    library_id: str,
+    request: Request,
+    body: ReaderChoice,
+    session: Annotated[Session, Depends(get_tenant_session)],
+) -> LibraryResponse:
+    """Who reads the library's files (ADR-018 decision 1; admins): this
+    server or a registered device, never both at once. The new reader scans
+    it and makes what needs its originals from its next check-in; the old
+    one's scans of it are refused from now (409 not_the_reader). With
+    root_path, the folder as the new reader sees it. Handed to this server,
+    its folder is chosen here as on creating a library
+    (require_folder_chosen_here): this server reads it from now. 404 for no
+    such library, 404 device_not_found for a device that isn't registered,
+    409 library_trashed."""
+    root_path = checked_root_path(body.root_path) if body.root_path is not None else None
+    repo = LibraryRepository(session)
+    library = repo.get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if library.status == "trashed":
+        raise ConflictError("library_trashed", "The library is in the trash.")
+    _known_reader(session, body.reader)
+    if body.reader == SERVER and (root_path is not None or library.reader != SERVER):
+        require_folder_chosen_here(request)
+    repo.update(library, root_path=root_path, reader=body.reader)
     return LibraryResponse(
         library_id=library.library_id,
         name=library.name,

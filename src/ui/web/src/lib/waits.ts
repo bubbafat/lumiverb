@@ -9,6 +9,7 @@ export const WAIT_REASONS = [
   "ai_machines",
   "needs",
   "storage",
+  "device",
   "new_version",
   "redo_stopped",
   "scan",
@@ -78,6 +79,13 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
       ? `it can't be reached${w.away_since ? ` since ${c.when(w.away_since)}` : ""}`
       : "it hasn't been looked at since the scheduler started";
     return `${s.count} in ${where} ${s.wait} for its drive: ${state}${w.seen_at ? ` (last seen ${c.when(w.seen_at)})` : ""}.`;
+  },
+  // A device reads the library: it makes these from its originals, and says when it last checked in.
+  device: (w, c) => {
+    const s = some(w, c);
+    const who = w.device_name || "its device";
+    const heard = w.checked_in_at ? `last checked in ${c.when(w.checked_in_at)}` : "not checked in yet";
+    return `${s.count} in ${w.library_name || "a library"} ${s.wait} for ${who}, which reads it (${heard}).`;
   },
   new_version: (w, c) => {
     const s = some(w, c);

@@ -136,8 +136,11 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
 
     def storage() -> h.Row:
         from src.server.repository.libraries import LibraryRepository
+        from src.shared.readers import read_by_server
 
-        libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all())
+        # A device's library is its device's to reach, never this server's (ADR-018 decision 1).
+        libraries.extend((lib.library_id, lib.name) for lib in LibraryRepository(session).list_all()
+                         if read_by_server(lib))
         return h.storage_row(libraries=libraries, storage=seen, stopped=stopped, at=at, now=now)
 
     rows.append(_row("storage", "Storage", storage, db_error, session))
