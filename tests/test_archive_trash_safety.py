@@ -136,7 +136,7 @@ def _waiting(fn, *args):
 @pytest.mark.slow
 def test_a_library_restored_since_it_was_listed_is_never_deleted(env):
     from src.server.api.routers.libraries import delete_libraries_for_good
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
 
     client, headers, *_ = env
     lib_env = _library(env, "PurgeRace")
@@ -154,7 +154,7 @@ def test_a_library_restored_since_it_was_listed_is_never_deleted(env):
 
 @pytest.mark.slow
 def test_restoring_a_library_waits_for_a_purge_in_progress(env):
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
 
     client, headers, *_ = env
     lib_env = _library(env, "PurgeWait")
@@ -169,7 +169,7 @@ def test_restoring_a_library_waits_for_a_purge_in_progress(env):
 @pytest.mark.slow
 def test_a_project_restored_since_it_was_listed_is_never_deleted(env):
     from src.server.api.routers.projects import delete_projects_for_good
-    from src.server.repository.tenant import ProjectRepository
+    from src.server.repository.projects import ProjectRepository
 
     client, headers, *_ = env
     project_id = client.post("/v1/projects", json={"name": "Purge race project"}, headers=headers).json()["project_id"]
@@ -188,7 +188,7 @@ def test_a_project_restored_since_it_was_listed_is_never_deleted(env):
 @pytest.mark.slow
 def test_a_clip_restored_and_archived_since_it_was_listed_is_never_deleted(env):
     from src.server.api.routers.trash import purge_assets
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, headers, *_ = env
     clip = _ingest(env, "race/clip.mov", sha=_sha())
@@ -207,7 +207,7 @@ def test_a_clip_restored_and_archived_since_it_was_listed_is_never_deleted(env):
 @pytest.mark.slow
 def test_a_clip_trashed_again_today_isnt_deleted_on_its_old_clock(env):
     from src.server.api.routers.trash import purge_assets
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, headers, *_ = env
     clip = _ingest(env, "race/again.mov", sha=_sha())

@@ -31,7 +31,7 @@ from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
 from src.server.repository.system_metadata import SystemMetadataRepository
-from src.server.repository.tenant import AssetRepository
+from src.server.repository.assets import AssetRepository
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.steps.cleanup_orphan_asset_children import (
     CleanupOrphanAssetChildrenStep,

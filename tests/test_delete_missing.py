@@ -149,7 +149,7 @@ def test_a_clip_back_and_missing_again_while_deleting_isnt_deleted(env, monkeypa
     # been missing since before the admin looked.
     from sqlalchemy import text
 
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     client, headers, library_id, *_ = env
     clip = _ingest(env, "dm-again/a.jpg", media_type="image", sha=_sha())

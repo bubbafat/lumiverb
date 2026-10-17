@@ -17,7 +17,7 @@ from src.server.repository.lineage import record as record_lineage
 
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.models.tenant import Asset
-from src.server.repository.tenant import AssetRepository
+from src.server.repository.assets import AssetRepository
 from src.server.storage import store as keys
 from src.server.storage.store import NotFound, Store, get_store
 

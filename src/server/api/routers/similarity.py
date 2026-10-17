@@ -14,7 +14,8 @@ from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
 from src.server.models.similarity import CameraSpec, DateRange, SimilarityScope
-from src.server.repository.tenant import AssetEmbeddingRepository, AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetEmbeddingRepository, AssetRepository
+from src.server.repository.libraries import LibraryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -461,7 +462,7 @@ def _search_by_vector(
     if image_bytes:
         try:
             from src.server.faces.server_face_provider import detect_faces_in_image
-            from src.server.repository.tenant import FaceRepository
+            from src.server.repository.faces import FaceRepository
 
             detections = detect_faces_in_image(image_bytes)
             face_repo = FaceRepository(session)

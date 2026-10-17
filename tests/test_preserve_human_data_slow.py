@@ -26,7 +26,8 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
-from src.server.repository.tenant import FaceRepository, PersonRepository
+from src.server.repository.faces import FaceRepository
+from src.server.repository.people import PersonRepository
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.faces import face_count, plant_faces

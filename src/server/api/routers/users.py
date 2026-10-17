@@ -17,7 +17,8 @@ from src.server.database import get_control_session, get_engine_for_url
 from src.server.api.routers.auth import MAX_PASSWORD_BYTES
 from src.server.api.routers.keys import _ROLE_RANK as ROLE_RANK
 from src.server.repository.control_plane import ApiKeyRepository, UserRepository
-from src.server.repository.tenant import RatingRepository, SavedViewRepository
+from src.server.repository.ratings import RatingRepository
+from src.server.repository.views import SavedViewRepository
 from src.server.invites import Invite, new_invite, unusable_password_hash
 
 router = APIRouter(prefix="/v1/users", tags=["users"])

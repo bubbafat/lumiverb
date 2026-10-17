@@ -27,13 +27,8 @@ from src.shared import asset_status
 from src.shared.content_hash import sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.path_filter import PathFilter, is_path_included_merged
-from src.server.repository.tenant import (
-    AssetEmbeddingRepository,
-    AssetMetadataRepository,
-    AssetRepository,
-    LibraryRepository,
-    PathFilterRepository,
-)
+from src.server.repository.assets import AssetEmbeddingRepository, AssetMetadataRepository, AssetRepository
+from src.server.repository.libraries import LibraryRepository, PathFilterRepository
 from src.server.storage import store as keys
 from src.server.storage.store import get_store
 

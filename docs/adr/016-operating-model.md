@@ -153,14 +153,14 @@ Phase 0 targets, read from the repo on 2026-10-07:
 
 | Area | File | Notes |
 |---|---|---|
-| Face re-detect wipes confirmations | `src/server/repository/tenant.py` `submit_faces` | Deletes all faces and their `face_person_matches`, confirmed or not |
-| Un-assign leaves no record | `src/server/repository/tenant.py` `unassign_face` | Upkeep's propagation re-assigns within 5 minutes |
-| Dismissals lost after re-detect | `src/server/repository/tenant.py` `cleanup_empty_dismissed`; `POST /v1/upkeep/cleanup-dismissed` (`lumiverb maintenance cleanup-dismissed`; a faces redo no longer calls it) | Dismissed people with zero matches are deleted |
+| Face re-detect wipes confirmations | `src/server/repository/faces.py` `submit_faces` | Deletes all faces and their `face_person_matches`, confirmed or not |
+| Un-assign leaves no record | `src/server/repository/people.py` `unassign_face` | Upkeep's propagation re-assigns within 5 minutes |
+| Dismissals lost after re-detect | `src/server/repository/people.py` `cleanup_empty_dismissed`; `POST /v1/upkeep/cleanup-dismissed` (`lumiverb maintenance cleanup-dismissed`; a faces redo no longer calls it) | Dismissed people with zero matches are deleted |
 | Rescan un-trashes | `src/server/api/routers/ingest.py` (`existing.deleted_at = None`) | Scanner soft-deletes missing files with the same `deleted_at` as user trash (`src/processing/scan.py` `_detect_deletions`) |
 | Manual transcripts overwritten | `src/server/api/routers/assets.py` `submit_transcript` | `source` is accepted but never stored |
 | No mass-deletion guard in Python | `src/processing/scan.py` `run_scan` | macOS had one in its scan (5% / 50 files). Resolved: one rule on the server (409 `mass_missing`, Oct 9), and the macOS app's scan is gone (Oct 14) |
 | No NFC normalization in Python | `src/processing/ingest.py` (file discovery, `rel_path`) | macOS normalized in its scan. Resolved: `rel_path` is NFC everywhere, and the macOS app's scan is gone (Oct 14) |
-| What runs today | `src/server/repository/tenant.py` `MISSING_CONDITIONS` | Replaced by the reconciler in phase 3 |
+| What runs today | `src/server/repository/assets.py` `MISSING_CONDITIONS` | Replaced by the reconciler in phase 3 |
 | Closest model for reconciliation | `src/server/upgrade/` | Upgrade-step registry |
 | Projects (formerly "collections") | `src/server/api/routers/projects.py` | Smart evaluation caps at 1,000 assets with no `next_cursor` |
 

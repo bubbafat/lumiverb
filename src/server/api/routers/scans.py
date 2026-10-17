@@ -45,7 +45,8 @@ from src.server.api.routers.assets import _ask_about_mass_missing
 from src.server.api.routers.trash import hand_over_to_copies
 from src.server.models.tenant import ScanSession
 from src.server.repository import lineage
-from src.server.repository.tenant import AssetRepository, LibraryRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from src.server.tenant_settings import get_follow_moves
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 from src.shared.utils import utcnow

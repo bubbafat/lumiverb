@@ -281,7 +281,7 @@ def _propagate_faces_all_tenants() -> dict:
     """Run face propagation across all tenants."""
     from src.server.database import get_control_session, get_tenant_session
     from src.server.repository.control_plane import TenantRepository
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     totals = {"assigned": 0, "scanned": 0}
     paused: list[str] = []
@@ -306,7 +306,7 @@ def _propagate_faces_all_tenants() -> dict:
 
 def _propagate_faces_single_tenant(scope: UpkeepScope) -> dict:
     """Run face propagation for one account."""
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     with _tenant_session(scope) as session:
         if _upkeep_paused(session, scope.tenant_id):
@@ -378,7 +378,7 @@ def _repair_missing_files(session) -> dict:
 
 
 def _cleanup_dismissed(session) -> dict:
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     return {"deleted": PersonRepository(session).cleanup_empty_dismissed()}
 
@@ -674,7 +674,7 @@ def run_cleanup_dismissed(scope: Scope) -> CleanupDismissedResult:
     """Delete dismissed people that have zero face matches, for one account
     or (tenants=all) every account."""
     from src.server.database import get_tenant_session
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     total_deleted = 0
 

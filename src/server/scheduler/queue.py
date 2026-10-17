@@ -28,7 +28,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
     A redo kind needs want: what its producer makes now (lineage.desired)."""
     from src.server.repository import lineage
     from src.server.repository.lineage import LINEAGE_JOIN
-    from src.server.repository.tenant import MISSING_CONDITIONS
+    from src.server.repository.assets import MISSING_CONDITIONS
 
     if not kind.flag or not library_ids:
         return []

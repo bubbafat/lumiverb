@@ -385,7 +385,7 @@ def test_hard_delete_public_library_removes_control_plane_row(libraries_client: 
     from sqlmodel import Session as SqlSession
 
     from src.server.database import get_control_session, get_engine_for_url
-    from src.server.repository.tenant import LibraryRepository as TenantLibraryRepo
+    from src.server.repository.libraries import LibraryRepository as TenantLibraryRepo
     with get_control_session() as ctrl_session:
         from src.server.repository.control_plane import TenantDbRoutingRepository
         routing = TenantDbRoutingRepository(ctrl_session).get_by_tenant_id(

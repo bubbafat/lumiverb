@@ -423,7 +423,7 @@ def _confirm(conn, face_id: str, person_id: str) -> None:
 
 @pytest.mark.slow
 def test_a_person_confirmed_on_the_copy_just_before_the_lock_keeps_it(env, monkeypatch):
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     sha = _sha()
     original = _ingest(env, "race/Q001.mov", sha=sha)
@@ -454,7 +454,7 @@ def test_a_rating_in_flight_on_the_copy_keeps_it(env, monkeypatch):
     import threading
     import time
 
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     sha = _sha()
     original = _ingest(env, "race/R001.mov", sha=sha)
@@ -495,7 +495,7 @@ def test_a_person_confirmed_on_the_copy_during_the_handover_isnt_lost_silently(e
     handover, then fails (its face is gone): it never commits and vanishes."""
     import threading
 
-    from src.server.repository.tenant import AssetRepository
+    from src.server.repository.assets import AssetRepository
 
     sha = _sha()
     original = _ingest(env, "race/S001.mov", sha=sha)
@@ -550,7 +550,8 @@ def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch
     import threading
     import time
 
-    from src.server.repository.tenant import AssetRepository, PersonRepository
+    from src.server.repository.assets import AssetRepository
+    from src.server.repository.people import PersonRepository
 
     sha = _sha()
     original = _ingest(env, f"lockorder/{action}/A.mov", sha=sha)
@@ -605,7 +606,7 @@ def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch
 def test_a_failure_after_the_move_committed_still_counts_as_moved(env):
     from unittest.mock import patch
 
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
 
     client, headers, *_ = env
     sha = _sha()

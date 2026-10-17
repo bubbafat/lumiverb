@@ -118,7 +118,7 @@ def test_upkeep_for_every_account_reaches_each_account(account):
     its routing says: here, an empty dismissed person is cleaned up."""
     from sqlmodel import Session
 
-    from src.server.repository.tenant import PersonRepository
+    from src.server.repository.people import PersonRepository
 
     client, _, _, tenant_url = account
     engine = create_engine(tenant_url)
@@ -165,7 +165,7 @@ def test_a_public_link_reaches_the_account_where_its_routing_says(account, kind)
     from sqlmodel import Session
 
     from src.server.models.tenant import Project
-    from src.server.repository.tenant import LibraryRepository
+    from src.server.repository.libraries import LibraryRepository
 
     client, headers, *_ = account
     r = client.post("/v1/libraries", json={"name": f"Shared {kind}", "root_path": f"/shared-{kind}",

@@ -20,7 +20,9 @@ from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
-from src.server.repository.tenant import AssetRepository, LibraryRepository, ProjectRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
+from src.server.repository.projects import ProjectRepository
 
 # Mounted at /v1/projects. See main.py.
 router = APIRouter()
@@ -409,7 +411,7 @@ def update_project(
 
     old_visibility = col.visibility
 
-    from src.server.repository.tenant import _SENTINEL
+    from src.server.repository.projects import _SENTINEL
 
     kwargs: dict = {}
     if body.name is not None:
@@ -596,7 +598,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
     )
     from src.server.models.filter_registry import from_json
     from src.server.models.query_filter import LibraryScope
-    from src.server.repository.tenant import UnifiedBrowseRepository
+    from src.server.repository.browse import UnifiedBrowseRepository
 
     try:
         spec = from_json(saved)

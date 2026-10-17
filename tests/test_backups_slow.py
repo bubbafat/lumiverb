@@ -136,7 +136,8 @@ def _worker() -> str:
 
 def _a_searchable_clip(tenant_url: str) -> str:
     """A clip with a note, its search row written by the search sync's own write."""
-    from src.server.repository.tenant import AssetRepository, LibraryRepository
+    from src.server.repository.assets import AssetRepository
+    from src.server.repository.libraries import LibraryRepository
     from src.server.search.sync import try_sync_asset
 
     engine = create_engine(tenant_url)

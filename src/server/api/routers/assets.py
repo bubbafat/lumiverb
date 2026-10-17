@@ -17,13 +17,8 @@ from src.server.api.dependencies import require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS
 from src.shared import asset_status
-from src.server.repository.tenant import (
-    MISSING_CONDITIONS,
-    AssetMetadataRepository,
-    AssetOcrRepository,
-    AssetRepository,
-    LibraryRepository,
-)
+from src.server.repository.assets import MISSING_CONDITIONS, AssetMetadataRepository, AssetOcrRepository, AssetRepository
+from src.server.repository.libraries import LibraryRepository
 from src.server.repository import lineage
 from src.shared.producers import CLIP_MODEL_ID
 from src.shared.producers import PERSON as P_PERSON
@@ -490,7 +485,7 @@ def project_usage_summary(
 ) -> ProjectUsageResponse:
     """See project_usage. Also what a permanent delete refuses with until
     the request says remove_from_projects."""
-    from src.server.repository.tenant import ProjectRepository
+    from src.server.repository.projects import ProjectRepository
 
     rows, in_any = ProjectRepository(session).usage(list(asset_ids), list(library_ids))
     visible: list[ProjectUsageItem] = []
@@ -1238,7 +1233,7 @@ def submit_batch_embeddings(
 ) -> dict:
     """Submit embedding vectors for multiple assets in one request. CLIP's
     (the producer's artifact) must say how they were made (lineage)."""
-    from src.server.repository.tenant import AssetEmbeddingRepository
+    from src.server.repository.assets import AssetEmbeddingRepository
     made = require_lineage(body.lineage, "clip") if any(i.model_id == CLIP_MODEL_ID for i in body.items) else None
     asset_repo = AssetRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
@@ -1434,7 +1429,7 @@ def submit_batch_faces(
 ) -> dict:
     """Submit face detections for multiple assets in one request."""
     made = require_lineage(body.lineage, "faces")  # before anything is saved
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     asset_repo = AssetRepository(session)
     face_repo = FaceRepository(session)
@@ -1501,7 +1496,7 @@ def list_faces(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> FaceListResponse:
     """List all detected faces for an asset."""
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None:

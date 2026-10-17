@@ -68,7 +68,7 @@ class _Load:
         from sqlmodel import Session
 
         from src.server.api.routers.upkeep import _recluster_if_changed
-        from src.server.repository.tenant import FaceRepository
+        from src.server.repository.faces import FaceRepository
 
         real = FaceRepository.cluster_cache
 
@@ -242,7 +242,7 @@ def test_writes_that_leave_faces_as_they_are_keep_the_cache(env):
 
 def test_reading_never_computes_and_says_pending(env):
     """GET /v1/faces/clusters serves the last result: computed_at and pending say how old."""
-    from src.server.repository.tenant import FaceRepository
+    from src.server.repository.faces import FaceRepository
 
     lib = _library(env, "CachePending")
     client, headers, *_ = lib

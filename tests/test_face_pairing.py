@@ -10,7 +10,7 @@ from collections import namedtuple
 
 import pytest
 
-from src.server.repository.tenant import FaceRepository
+from src.server.repository.faces import FaceRepository
 
 pytestmark = pytest.mark.fast
 

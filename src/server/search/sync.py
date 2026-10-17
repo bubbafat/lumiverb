@@ -151,7 +151,7 @@ def try_sync_asset(session: Session, asset: Asset, meta: AssetMetadata | None = 
     success; on failure, logs a warning and never raises (the sweep does it
     later). Commits."""
     from src.server.repository.corrections import CorrectionsRepository
-    from src.server.repository.tenant import AssetOcrRepository
+    from src.server.repository.assets import AssetOcrRepository
 
     try:
         row = search_row(asset, meta, AssetOcrRepository(session).text_for(asset.asset_id),
@@ -202,13 +202,13 @@ def _write_clips(session: Session, which: str, params: dict) -> tuple[list, int]
     in id order, written and marked synced together. Returns the clips
     looked at and how many were marked (one written as something wrote it
     isn't: the sweep writes it again)."""
-    from src.server.repository.tenant import AssetMetadataRepository
+    from src.server.repository.assets import AssetMetadataRepository
 
     # Synced as of when this began: a description, OCR, correction or note
     # saved meanwhile is newer, and goes in next time. And only a clip
     # nothing wrote meanwhile (its xmin) is marked: a write that cleared its
     # sync time (a note, a move; every description and OCR saved, whose
-    # time is taken before it commits: repository/tenant.py _unsynced) stays cleared.
+    # time is taken before it commits: repository/assets.py _unsynced) stays cleared.
     started = utcnow()
     batch = session.execute(text(f"""
         SELECT a.asset_id, COALESCE(o.text, '') AS ocr_text,

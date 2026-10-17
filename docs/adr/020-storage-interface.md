@@ -235,7 +235,7 @@ Three parts of that contract:
 | Producers' files | `src/producers/*/work.py` (ocr, vision, scene_vision, transcript, video_faces, analysis_proxy, faces), `src/producers/runner.py` (`Work.original`) | Phase 3 |
 | Model caches | `workers/faces/insightface_provider.py`, `server/embeddings/clip_provider.py`, `workers/embeddings/clip_provider.py`, `workers/transcripts/child.py` | Phase 3 |
 | Originals | `src/processing/roots.py`, `src/shared/io_utils.py` (`resolve_source_path`), `src/processing/ingest.py` (`_walk_library`), `src/shared/readers.py` | Phase 4 |
-| Leaks | `routers/trash.py` (`purge_assets`), `search/cleanup.py` (`_ARTIFACT_SUBDIRS`), `repository/tenant.py` (`submit_faces`), `routers/libraries.py` (`delete_libraries_for_good`) | Phase 0 |
+| Leaks | `routers/trash.py` (`purge_assets`), `search/cleanup.py` (`_ARTIFACT_SUBDIRS`), `repository/faces.py` (`submit_faces`), `routers/libraries.py` (`delete_libraries_for_good`) | Phase 0 |
 | Clients | `src/processing/scan.py` (`cache_previews`), `src/processing/cache_dir.py`, the Mac app's `MacProxyDiskCache` / `MacThumbnailDiskCache` | Phase 5 |
 
 ## Doc References

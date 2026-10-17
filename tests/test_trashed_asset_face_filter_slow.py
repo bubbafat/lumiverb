@@ -36,10 +36,8 @@ from sqlalchemy import create_engine, text
 from sqlmodel import Session
 
 from src.server.repository.system_metadata import SystemMetadataRepository
-from src.server.repository.tenant import (
-    FaceRepository,
-    PersonRepository,
-)
+from src.server.repository.faces import FaceRepository
+from src.server.repository.people import PersonRepository
 from src.server.upgrade.context import UpgradeContext
 from src.server.upgrade.steps.recompute_centroids_for_trash_filter import (
     RecomputeCentroidsForTrashFilterStep,

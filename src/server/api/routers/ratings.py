@@ -11,7 +11,10 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.models.tenant import VALID_COLORS
-from src.server.repository.tenant import AssetRepository, LibraryRepository, RatingRepository, _SENTINEL
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository
+from src.server.repository.projects import _SENTINEL
+from src.server.repository.ratings import RatingRepository
 
 router = APIRouter(prefix="/v1/assets", tags=["ratings"])
 

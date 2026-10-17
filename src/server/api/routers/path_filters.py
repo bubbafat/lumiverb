@@ -10,7 +10,8 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.shared.path_filter import validate_pattern
-from src.server.repository.tenant import AssetRepository, LibraryRepository, PathFilterRepository
+from src.server.repository.assets import AssetRepository
+from src.server.repository.libraries import LibraryRepository, PathFilterRepository
 
 router = APIRouter(prefix="/v1/libraries", tags=["path_filters"])
 

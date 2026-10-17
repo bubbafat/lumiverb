@@ -57,7 +57,7 @@ from sqlmodel import Session, select
 from ulid import ULID
 
 from src.server.models.tenant import ScanSession
-from src.server.repository.tenant import AssetRepository
+from src.server.repository.assets import AssetRepository
 from src.shared.content_hash import FULL_UP_TO, SHA256, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.utils import utcnow

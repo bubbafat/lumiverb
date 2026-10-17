@@ -33,7 +33,7 @@ SCAN_EVERY_SEC = 30.0
 class Kind:
     name: str
     spec: KindSpec
-    flag: str = ""  # its missing_* condition (repository/tenant.py MISSING_CONDITIONS)
+    flag: str = ""  # its missing_* condition (repository/assets.py MISSING_CONDITIONS)
     extra: str = "true"  # what else a clip needs first (SQL on active_assets a)
     # Reads the originals, so only libraries whose storage is reachable now.
     storage: bool = False

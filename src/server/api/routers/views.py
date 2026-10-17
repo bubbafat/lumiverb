@@ -8,7 +8,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
 from src.server.api.limits import MAX_IDS
-from src.server.repository.tenant import SavedViewRepository
+from src.server.repository.views import SavedViewRepository
 
 router = APIRouter(prefix="/v1/views", tags=["views"])
 
