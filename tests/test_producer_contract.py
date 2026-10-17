@@ -49,11 +49,13 @@ def test_every_producer_declares_what_the_rest_needs():
 
 
 def test_the_scheduler_waits_for_what_a_producer_is_made_from():
-    from src.server.scheduler.kinds import KINDS
+    from src.server.repository.lineage import made_first, queued
 
-    assert KINDS["clip"].extra == "(a.proxy_key IS NOT NULL)"
-    assert KINDS["transcript"].extra == "(a.analysis_proxy_key IS NOT NULL)"
-    assert KINDS["probe"].extra == "true"
+    assert made_first("clip") == "(a.proxy_key IS NOT NULL)"
+    assert made_first("transcript") == "(a.analysis_proxy_key IS NOT NULL)"
+    assert made_first("probe") == "true"
+    assert queued("transcript").endswith(" AND ((a.analysis_proxy_key IS NOT NULL)))")
+    assert queued("transcript", redo=True).endswith(" AND ((a.analysis_proxy_key IS NOT NULL)))")
 
 
 _EXAMPLE = """
@@ -174,7 +176,7 @@ def test_a_producer_is_one_folder(tmp_path):
             "missing": "missing_example" in MISSING_CONDITIONS,
             "summary": "missing_example" in RepairSummary.model_fields,
             "kind": [KINDS["example"].spec.tier, KINDS["example"].spec.pool, KINDS["example"].spec.per_account,
-                     KINDS["example"].extra],
+                     lineage.made_first("example")],
             "redo_kind": KINDS["redo_example"].spec.tier,
             "runner": outcome,
             "saved": acct.client.post.call_args.args[0],

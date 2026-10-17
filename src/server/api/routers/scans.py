@@ -8,6 +8,11 @@ with the same guard as DELETE /v1/assets. Before it finishes it can list
 what it skips because a person removed it, and what's gone (GET /skipped,
 /gone: `lumiverb scan --explain`). The rules are in src/server/scans.py.
 
+Beside its scans, a library's reader can ask what else it has to make from
+the originals (GET /v1/libraries/{id}/reader-work, src/server/reader_work.py):
+the list a device will work from; on this server, the scan's plan takes the
+missing previews from it and the scheduler's producers the rest.
+
 The client still reads and uploads (POST /v1/ingest, as today), after the
 finish: today's scanner archives before it ingests, so a file whose content
 was just archived as missing comes back at its new path. Before moves are
@@ -35,7 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.server import scans
+from src.server import reader_work, scans
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
@@ -226,6 +231,24 @@ class FinishResponse(BaseModel):
     dry_run: bool
 
 
+class ReaderClip(BaseModel):
+    asset_id: str
+    rel_path: str
+    media_type: str
+    file_size: int | None = None
+    content_hash: str | None = None
+    # What its reader has to make from its original (src/server/reader_work.py WORK, in that order):
+    # "previews" (made by a scan), "probe", "capture", "analysis_proxy".
+    work: list[str]
+    # Made another way than now (another version or settings): made again after everything else.
+    remakes: list[str]
+
+
+class ReaderWorkPage(BaseModel):
+    clips: list[ReaderClip]
+    next_cursor: str | None = None
+
+
 def _finished() -> ConflictError:
     return ConflictError("scan_finished", "This scan is finished: start another.")
 
@@ -287,6 +310,28 @@ def start_scan(
     scan = scans.start(session, library_id, scope=scope, media_type=body.media_type, thorough=body.thorough,
                        force=body.force, moves=body.moves, dry_run=body.dry_run, force_add=body.force_add)
     return StartScanResponse(scan_id=scan.scan_id, follow_moves=get_follow_moves(session), expires_at=scan.expires_at)
+
+
+@router.get("/v1/libraries/{library_id}/reader-work", response_model=ReaderWorkPage)
+def reader_work_page(
+    library_id: str,
+    session: Annotated[Session, Depends(get_tenant_session)],
+    after: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=MAX_PAGE, ge=1, le=MAX_PAGE),
+) -> ReaderWorkPage:
+    """What the library's reader has to make from its originals, a page of
+    its clips at a time, oldest first (ADR-018 decision 3): computed now from
+    how each clip's artifacts were made, never kept as jobs, so what's made
+    leaves it by itself. What's paused isn't listed. 404 unknown library,
+    409 library_trashed."""
+    library = LibraryRepository(session).get_by_id(library_id)
+    if library is None:
+        raise HTTPException(status_code=404, detail="Library not found")
+    if library.status == "trashed":
+        raise ConflictError("library_trashed", "The library is in the trash.")
+    rows = reader_work.page(session, library_id, after=after, limit=limit)
+    return ReaderWorkPage(clips=[ReaderClip(**r) for r in rows],
+                          next_cursor=rows[-1]["asset_id"] if len(rows) == limit else None)
 
 
 @router.post("/v1/scans/{scan_id}/found", response_model=FoundResponse)

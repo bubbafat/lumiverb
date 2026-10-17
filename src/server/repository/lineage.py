@@ -194,6 +194,21 @@ def handed_out(artifact: str) -> str:
     return f"({due(artifact)} OR {rechecking(artifact)})"
 
 
+def made_first(artifact: str) -> str:
+    """Its clip has what the producer is made from (its needs): "true" for one made from the original alone."""
+    return " AND ".join(f"({MADE[n]})" for n in PRODUCERS[artifact].needs) or "true"
+
+
+def queued(artifact: str, *, redo: bool = False) -> str:
+    """The one rule for a producer's work: what the scheduler's queue lists
+    (scheduler/queue.py), and for one that reads the originals what a
+    library's reader is given (src/server/reader_work.py). Due or rechecking
+    (handed_out), or for its redo made another way than now (redo_due, with
+    redo_params); either only once what it's made from is (made_first). On
+    active_assets a, after LINEAGE_JOIN."""
+    return f"(({redo_due(artifact) if redo else handed_out(artifact)}) AND ({made_first(artifact)}))"
+
+
 def _scope_sql() -> str:
     """Clips in one library and/or among some ids, when given (:lib, :ids)."""
     return ("(CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
@@ -531,9 +546,7 @@ def hold_new_version(session: Session, artifact: str) -> bool:
     key = _VERSION_SEEN.format(artifact)
     if _meta(session, key) == p.version:
         return False
-    older = session.execute(text(
-        "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
-    ), {"a": artifact, "p": p.producer, "v": p.version}).first() is not None
+    older = _made_by_older_version(session, artifact)
     if older:
         pause(session, artifact, REDO, by=None)
     session.execute(text(
@@ -541,6 +554,20 @@ def hold_new_version(session: Session, artifact: str) -> bool:
         " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"), {"k": key, "v": p.version})
     session.commit()
     return older
+
+
+def new_version_unseen(session: Session, artifact: str) -> bool:
+    """hold_new_version would stop the producer's redo now: its version not
+    seen yet, with clips made by an older one. Only reads (a GET's own)."""
+    p = PRODUCERS[artifact]
+    return _meta(session, _VERSION_SEEN.format(artifact)) != p.version and _made_by_older_version(session, artifact)
+
+
+def _made_by_older_version(session: Session, artifact: str) -> bool:
+    p = PRODUCERS[artifact]
+    return session.execute(text(
+        "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
+    ), {"a": artifact, "p": p.producer, "v": p.version}).first() is not None
 
 
 def upkeep_paused(session: Session) -> bool:

@@ -3,7 +3,8 @@
 The reconciler (repository/lineage.py) says what each clip still needs:
 missing, or made from a file whose content has since changed, less failures
 waiting their turn; and for a redo kind, made with another producer,
-version or settings than now. Here each kind's due clips are listed oldest
+version or settings than now (lineage.queued, the rule a library's reader is
+given too, src/server/reader_work.py). Here each kind's due clips are listed oldest
 first (in the order they were added), across the libraries asked about,
 with what the job needs to know about each: the keys of its stored preview
 and analysis proxy among them, which its work reads by (inputs.py).
@@ -28,7 +29,6 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
     A redo kind needs want: what its producer makes now (lineage.desired)."""
     from src.server.repository import lineage
     from src.server.repository.lineage import LINEAGE_JOIN
-    from src.server.repository.assets import MISSING_CONDITIONS
 
     if not kind.flag or not library_ids:
         return []
@@ -36,16 +36,14 @@ def candidates(session: Session, kind: Kind, library_ids: list[str], limit: int 
     if kind.redo:
         if want is None:
             raise ValueError(f"{kind.name}: what its producer makes now is needed")
-        condition = lineage.redo_due(kind.artifact)
         params |= lineage.redo_params(kind.artifact, want)
-    else:
-        # What's missing, and what's made but due to be checked again.
-        condition = f"({MISSING_CONDITIONS[kind.flag]} OR {lineage.rechecking(kind.artifact)})"
+    # The one rule: for a producer that reads the originals, the list any reader gets (src/server/reader_work.py).
+    condition = lineage.queued(kind.artifact, redo=kind.redo)
     rows = session.execute(text(
         "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.content_hash, a.duration_sec,"
         " a.created_at, a.proxy_key, a.analysis_proxy_key, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
         f" FROM active_assets a {LINEAGE_JOIN}"
-        f" WHERE a.library_id = ANY(:libs) AND ({condition}) AND ({kind.extra})"
+        f" WHERE a.library_id = ANY(:libs) AND {condition}"
         "   AND a.asset_id <> ALL(CAST(:skip AS text[]))"
         " ORDER BY a.created_at, a.asset_id LIMIT :n"
     ), params).mappings().all()

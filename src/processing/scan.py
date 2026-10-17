@@ -1034,7 +1034,7 @@ def _run(
             stats.waiting_paths.append(f["rel_path"])  # unchanged since it failed: its retry tries it
             continue
         f["_plan"] = planned
-        if action == "upload" and planned["asset_id"]:  # a video's preview never arrived, or --force
+        if action == "upload" and planned["asset_id"]:  # a preview of its clip is missing, or --force
             f["asset_id"] = planned["asset_id"]
             work.changed.append(f)
         elif action == "upload":
