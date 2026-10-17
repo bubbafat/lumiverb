@@ -45,7 +45,7 @@ def where_people_open_it() -> list[str]:
     settings = get_settings()
     data = Path(settings.data_dir)
     if settings.web_port > 0 and network.managed(data, settings.nginx_config) and network.other_devices(data):
-        return network.addresses(network.tls_port(settings.web_port, settings.web_tls_port))
+        return network.addresses(network.tls_port(settings.web_tls_port))
     return [settings.app_host.rstrip("/")]
 
 

@@ -133,6 +133,18 @@ def test_every_upgrade_keeps_what_is_there(tmp_path):
     assert said == [f"· {paths['env']} kept", f"· {paths['nginx']} kept"]
 
 
+def test_an_upgrade_leaves_run_s_listen_lines_alone(tmp_path):
+    """Homebrew runs init after an upgrade's link, as the new run starts:
+    the lines are run's (with the certificate other devices are served),
+    and init only makes them for a new install."""
+    _install(tmp_path)
+    lines = tmp_path / "var" / "nginx" / "listen.conf"
+    run_s = "listen 6464 default_server;\nlisten 6443 ssl default_server;\nssl_certificate /x;\n"
+    lines.write_text(run_s)
+    _install(tmp_path)  # Homebrew's post_install, again
+    assert lines.read_text() == run_s
+
+
 def test_the_others_follow_an_env_file_edited_by_hand(tmp_path):
     paths = _paths(tmp_path)
     # An older install's: it still names Quickwit, which nothing writes for now.
@@ -217,7 +229,7 @@ def test_the_env_file_names_every_setting_linux_s_does(tmp_path):
     # Its Postgres cluster (a Mac's port is in the database URL), checkout and ufw.
     linux_only = {"PG_PORT", "PG_VERSION", "BRANCH", "NO_FIREWALL"}
     # What run starts: a Linux install's systemd units name theirs.
-    mac_only = {"WEB_PORT", "PG_BIN", "NGINX_BIN", "NGINX_CONFIG",
+    mac_only = {"WEB_PORT", "WEB_TLS_PORT", "PG_BIN", "NGINX_BIN", "NGINX_CONFIG",
                 "LUMIVERB_ROOT_MAP",  # a Linux install's map is scheduler-env.py's, after this file
                 "LUMIVERB_RESET_ON_THIS_MACHINE"}  # never a server's: anything on it could reset any account
     ours = keys(_install(tmp_path)["env"].read_text())

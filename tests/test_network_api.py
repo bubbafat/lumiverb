@@ -30,7 +30,7 @@ from tests.test_first_run_setup import (  # noqa: F401 (control: a fixture)
 
 pytestmark = pytest.mark.slow
 
-ADDRESSES = ["https://macstudio.local:6465", "https://192.168.86.55:6465"]
+ADDRESSES = ["https://macstudio.local:6443", "https://192.168.86.55:6443"]
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def mac(control, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setenv("NGINX_CONFIG", str(conf))
     monkeypatch.setenv("WEB_PORT", "6464")
     monkeypatch.setattr(network, "addresses", lambda port, scheme="https": [
-        a.replace("6465", str(port)).replace("https", scheme) for a in ADDRESSES])
+        a.replace("6443", str(port)).replace("https", scheme) for a in ADDRESSES])
     monkeypatch.setattr(rate_limit.login_limiter, "_hits", {})
     get_settings.cache_clear()
     yield tmp_path

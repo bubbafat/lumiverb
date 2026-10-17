@@ -136,3 +136,14 @@ def test_initdb_makes_the_superuser_not_the_role(env_file, tmp_path):
     with patch.object(postgres.subprocess, "run", side_effect=initdb):
         postgres.make_cluster_if_missing(tmp_path / "bin", tmp_path, env.get(roles.SUPERUSER_URL) or env["CONTROL_PLANE_DATABASE_URL"])
     assert seen == {"user": "lumiverb", "password": "old-pw"}
+
+
+@pytest.mark.parametrize("url", ["postgresql://x", "postgresql://127.0.0.1:6468/control_plane", "not a url"])
+def test_a_url_naming_no_superuser_is_left_alone(tmp_path, url):
+    """Nothing to move over: run goes on, and initdb says what's missing."""
+    env_file = tmp_path / "env"
+    env_file.write_text(f"CONTROL_PLANE_DATABASE_URL={url}\nPG_BIN=/pg\n")
+    env = read_env_file(env_file)
+    assert roles.with_app_role(env_file, env) == env
+    assert env_file.read_text() == f"CONTROL_PLANE_DATABASE_URL={url}\nPG_BIN=/pg\n"
+    assert not list(tmp_path.glob("env.before-app-role-*"))

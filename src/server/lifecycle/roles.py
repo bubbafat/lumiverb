@@ -66,7 +66,13 @@ def with_app_role(env_file: Path, env: dict[str, str], *, password: str | None =
     if env.get(SUPERUSER_URL) or not env.get("CONTROL_PLANE_DATABASE_URL"):
         return env
     superuser = env["CONTROL_PLANE_DATABASE_URL"]
-    if make_url(superuser).username == APP_ROLE:
+    try:
+        named = make_url(superuser)
+    except Exception:  # noqa: BLE001 — not a URL: nothing to move over (initdb, then the API, say why)
+        return env
+    if not named.username or not named.password:
+        return env  # no superuser to keep: initdb refuses it, saying so (postgres.py)
+    if named.username == APP_ROLE:
         raise RoleError(f"{env_file} connects as {APP_ROLE} but names no {SUPERUSER_URL}")
     password = password or secrets.token_urlsafe(32)
     new = {name: _as(env[name], APP_ROLE, password) for name in URLS if env.get(name)}

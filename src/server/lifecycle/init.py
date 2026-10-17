@@ -28,6 +28,7 @@ from src.server.lifecycle.migrate import APP_DIR
 # 6466 and 6467 were Quickwit's (ADR-019: search is in PostgreSQL).
 WEB_PORT = 6464
 API_PORT = 6465
+TLS_PORT = 6443  # HTTPS, for other devices (network.py), once Settings › Network lets them in
 PG_PORT = 6468  # Lumiverb's own PostgreSQL (not Homebrew's, on 5432)
 PG_ROLE = "lumiverb"
 # The scheduler reads every library folder where it is: this machine has the files.
@@ -120,8 +121,9 @@ XDG_CACHE_HOME={data / 'cache'}
 API_LISTEN_HOST=127.0.0.1
 API_PORT={api_port}
 
-# What this install uses
+# What this install uses (WEB_TLS_PORT: HTTPS for other devices, Settings › Network)
 WEB_PORT={web_port}
+WEB_TLS_PORT={TLS_PORT}
 
 # What lumiverb-server run starts besides the API and the scheduler
 {runs}{roots}
@@ -301,10 +303,14 @@ def init(env_file: Path, choices: Choices, *, web_root: Path = WEB_ROOT, say: Ca
     if env.get("NGINX_CONFIG"):
         # Where it listens is Settings › Network's (network.py): this machine
         # only, as a new install is set up there (routers/setup.py), until an
-        # admin says other devices may use it. run rewrites the lines then.
+        # admin says other devices may use it. The lines are run's, which
+        # writes them at every start, with the certificate (tls.py): made here
+        # only for a new install, never again. Homebrew runs this after an
+        # upgrade's link, as the new run starts: written then, they'd undo its.
         path = Path(env["NGINX_CONFIG"])
         web_port = _port(env, "WEB_PORT", env_file)
         site = nginx_site(listen=(network.include_line(data),), server_name="_",
                           root=web_root, upstream=f"http://127.0.0.1:{_port(env, 'API_PORT', env_file)}")
         say(f"✓ {path}" if write_new(path, nginx_conf(site), 0o644) else f"· {path} kept")
-        network.write_listen_file(data, web_port, network.other_devices(data))
+        if not network.listen_file(data).exists():
+            network.write_listen_file(data, web_port, False)

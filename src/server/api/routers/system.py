@@ -343,7 +343,7 @@ def _network() -> Network:
         ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(settings.web_port, "http")] if ours else [],
         ca_fingerprint=tls.ca_fingerprint(data) if ours else None)
     return Network(available=True, other_devices=network.other_devices(data),
-                   addresses=network.addresses(network.tls_port(settings.web_port, settings.web_tls_port)),
+                   addresses=network.addresses(network.tls_port(settings.web_tls_port)),
                    certificate=certificate)
 
 
