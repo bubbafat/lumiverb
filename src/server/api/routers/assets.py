@@ -2,28 +2,39 @@
 
 import logging
 from datetime import datetime
-from typing import Any, Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, create_model, model_validator
 from sqlmodel import Session
 
-from src.shared.io_utils import normalize_rel_path
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
-from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_editor, require_signed_in
-from src.server.api.dependencies import require_tenant_admin
+from src.server.api.dependencies import (
+    get_current_user_id,
+    get_tenant_session,
+    require_editor,
+    require_reader,
+    require_signed_in,
+)
+from src.server.api.devices import may_call
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS
-from src.shared import asset_status
-from src.server.repository.assets import MISSING_CONDITIONS, AssetMetadataRepository, AssetOcrRepository, AssetRepository
-from src.server.repository.libraries import LibraryRepository
-from src.server.repository import lineage
-from src.shared.producers import CLIP_MODEL_ID
-from src.shared.producers import PERSON as P_PERSON
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
+from src.server.repository import lineage
+from src.server.repository.assets import (
+    MISSING_CONDITIONS,
+    AssetMetadataRepository,
+    AssetOcrRepository,
+    AssetRepository,
+)
+from src.server.repository.libraries import LibraryRepository
+from src.shared import asset_status
+from src.shared.io_utils import normalize_rel_path
+from src.shared.producers import CLIP_MODEL_ID
+from src.shared.producers import PERSON as P_PERSON
 
 logger = logging.getLogger(__name__)
 
@@ -550,6 +561,7 @@ class VideoFacetSubmit(VideoFacetModel):
 
 
 @router.put("/{asset_id}/video-facet", response_model=VideoFacetModel, dependencies=[Depends(require_editor)])
+@may_call("asset")
 def put_video_facet(
     asset_id: str,
     body: VideoFacetSubmit,
@@ -583,16 +595,18 @@ class CaptureResponse(BaseModel):
     changed: bool  # taken_at or its zone differ from what was stored
 
 
-@router.put("/{asset_id}/capture", response_model=CaptureResponse, dependencies=[Depends(require_tenant_admin)])
+@router.put("/{asset_id}/capture", response_model=CaptureResponse, dependencies=[Depends(require_reader)])
+@may_call("asset")
 def put_capture(
     asset_id: str,
     body: CaptureSubmit,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> CaptureResponse:
-    """Store a clip's capture facts, read again from its file (the scheduler's
-    capture producer, so admins: its key is an admin's): when it was
-    taken, its zone, and its GPS accuracy (only with the file's GPS). The
-    file's GPS itself is the scan's and isn't touched."""
+    """Store a clip's capture facts, read again from its file by its
+    library's reader (the scheduler's capture producer, whose key is an
+    admin's, or the device that reads it): when it was taken, its zone, and
+    its GPS accuracy (only with the file's GPS). The file's GPS itself is
+    the scan's and isn't touched."""
     made = require_lineage(body.lineage, "capture")  # before anything is saved
     taken_at = body.taken_at
     if taken_at is not None and taken_at.tzinfo is None:

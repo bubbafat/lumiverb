@@ -3,7 +3,7 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
@@ -23,6 +23,7 @@ from src.server.api.errors import (
     validation_error_handler,
 )
 from src.server.storage.store import Unavailable
+from src.server.api import devices
 from src.server.api.https_seen import NoteHttps
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
@@ -63,6 +64,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 from src.server.api.routers import admin, ai, archive, assets, producers, changes, projects, keys, libraries, me, path_filters, readers, scans, tenant, trash, uploads, video
+from src.server.api.routers import devices as devices_routes
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.setup import router as setup_router
@@ -110,7 +112,9 @@ set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows the
 # (FASTAPI_OTEL_AUTO_CONFIGURE, OTEL_*): Lumiverb records and sends nothing.
 NO_TELEMETRY = {"tracing": False, "metrics": False, "logs": False, "operation_spans": False,
                 "auto_configure": False}
-app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY)
+# A device's key goes no further than the routes a scan calls (src/server/api/devices.py).
+app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY,
+              dependencies=[Depends(devices.gate)])
 
 
 # Every error in one envelope: {"error": {"code", "message", "details"}} (errors.py).
@@ -167,6 +171,7 @@ app.include_router(libraries.router)
 app.include_router(changes.router)
 app.include_router(scans.router)
 app.include_router(readers.router)
+app.include_router(devices_routes.router)
 app.include_router(uploads.router)
 app.include_router(artifacts_router)
 app.include_router(ingest_router)

@@ -23,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.server import uploaded_video, uploads
 from src.server.api.dependencies import get_tenant_session, require_editor
+from src.server.api.devices import may_call
 from src.server.api.errors import ApiError, ConflictError
 from src.server.repository.assets import AssetRepository
 from src.shared.utils import utcnow
@@ -81,6 +82,7 @@ def _held(session: Session, upload_id: str, *, lock: bool = True) -> dict:
 
 
 @router.post("/v1/assets/{asset_id}/uploads", response_model=Upload)
+@may_call("asset")
 def start_upload(asset_id: str, body: StartUpload, request: Request,
                  session: Annotated[Session, Depends(get_tenant_session)]) -> Upload:
     """Start an upload of the clip's video preview or analysis proxy, or
@@ -102,12 +104,14 @@ def start_upload(asset_id: str, body: StartUpload, request: Request,
 
 
 @router.get("/v1/uploads/{upload_id}", response_model=Upload)
+@may_call("upload")
 def upload_status(upload_id: str, session: Annotated[Session, Depends(get_tenant_session)]) -> Upload:
     """Where an upload is: its received, and whether it's finished."""
     return _shown(_held(session, upload_id, lock=False))
 
 
 @router.put("/v1/uploads/{upload_id}", response_model=Received)
+@may_call("upload")
 async def put_chunk(upload_id: str, request: Request, session: Annotated[Session, Depends(get_tenant_session)],
                     offset: int = Query(ge=0)) -> Received:
     """A chunk, the request's body, beginning at offset in the file: what's
@@ -143,6 +147,7 @@ async def put_chunk(upload_id: str, request: Request, session: Annotated[Session
 
 
 @router.post("/v1/uploads/{upload_id}/finish", response_model=Kept)
+@may_call("upload")
 async def finish_upload(upload_id: str, request: Request,
                         session: Annotated[Session, Depends(get_tenant_session)]) -> Kept:
     """Keep the upload: every byte there and the whole file's SHA-256 as
@@ -198,6 +203,7 @@ def _into_the_store(store, key: str, path) -> None:
 
 
 @router.delete("/v1/uploads/{upload_id}", status_code=204)
+@may_call("upload")
 def drop_upload(upload_id: str, request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
     """Drop an upload and its bytes. 404 when there's none."""
     _held(session, upload_id)

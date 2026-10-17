@@ -158,22 +158,22 @@ def _library(env) -> str:
     return r.json()["library_id"]
 
 
-def _ingest(env, library_id: str, f: File, *, preview: bool = True) -> str:
-    """Upload a file as the scanner does (a video with its 10-second preview)."""
+def _ingest(env, library_id: str, f: File, *, preview: bool = True, headers: dict | None = None) -> str:
+    """Upload a file as the scanner does (a video with its 10-second preview), as an editor unless headers say."""
     from PIL import Image
 
     buf = io.BytesIO()
     Image.new("RGB", (64, 36), color=(10, 20, 30)).save(buf, format="JPEG")
     buf.seek(0)
     video = f.rel_path.endswith(".mov")
-    r = env.client.post("/v1/ingest", headers=env.editor, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
+    r = env.client.post("/v1/ingest", headers=headers or env.editor, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id, "rel_path": f.rel_path, "file_size": str(f.file_size),
         "file_mtime": f.mtime.isoformat(), "media_type": "video" if video else "image", "width": "64",
         "height": "36", "exif": json.dumps({"content_hash": f.sha}), "lineage": ingest_made(f.sha)})
     assert r.status_code == 200, r.text
     asset_id = r.json()["asset_id"]
     if video and preview:
-        r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=env.editor,
+        r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=headers or env.editor,
                             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
                             data={"lineage": made_json("video_preview", f.sha)})
         assert r.status_code == 200, r.text
@@ -233,12 +233,14 @@ class Run:
 
 
 def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unlisted=(), answer: bool | None = None,
-          allow_mass_missing: bool = False, page: int = 500, finish: bool = True, **opts) -> Run:
-    """A whole scan as a client makes it. Stops at a finish the server
-    refuses (run.finish is None), uploading nothing; before the finish when
-    finish is False (the scan's listing still there)."""
-    c, h = env.client, env.editor
-    run = Run(_start(env, library_id, **opts))
+          allow_mass_missing: bool = False, page: int = 500, finish: bool = True, headers: dict | None = None,
+          **opts) -> Run:
+    """A whole scan as a client makes it, as an editor unless headers say.
+    Stops at a finish the server refuses (run.finish is None), uploading
+    nothing; before the finish when finish is False (the scan's listing
+    still there)."""
+    c, h = env.client, headers or env.editor
+    run = Run(_start(env, library_id, headers=h, **opts))
     listing = _listing(disk, settling, empty)
     for i in range(0, len(listing), 1000):
         _ok(c.post(f"/v1/scans/{run.scan_id}/found", json={"files": listing[i:i + 1000]}, headers=h))
@@ -270,7 +272,7 @@ def _scan(env, library_id: str, disk: list[File], *, settling=(), empty=(), unli
         uploads += [p for p, d in run.decisions.items() if d["decision"] == "upload"]
         uploads += (run.moves or {}).get("upload", [])
         for p in uploads:
-            run.uploaded[p] = _ingest(env, library_id, on_disk[p])
+            run.uploaded[p] = _ingest(env, library_id, on_disk[p], headers=h)
     return run
 
 
