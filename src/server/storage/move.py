@@ -343,15 +343,9 @@ def forget_library(data_dir: Path, tenant_id: str, library_id: str) -> list[Path
     if not (tenant_id.startswith(ACCOUNT_PREFIX) and library_id.startswith(previews_location.LIBRARY_PREFIX)
             and Path(tenant_id).name == tenant_id and Path(library_id).name == library_id):
         raise ValueError(f"Not an account and a library: {tenant_id!r}, {library_id!r}")
-    removed: list[Path] = []
     with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
         location = previews_location.read(data_dir)
-        for root in location.roots:
-            folder = root / tenant_id / library_id
-            if not location.available(data_dir, root) or not folder.is_dir() or folder.is_symlink():
-                continue
-            shutil.rmtree(folder)
-            removed.append(folder)
+        removed = _removed_everywhere(data_dir, location, Path(tenant_id, library_id))
         unplugged = [r for r in location.roots_for(library_id) if not location.available(data_dir, r)]
         if not unplugged and (library_id in location.libraries or library_id in location.libraries_moving_from):
             previews_location.write(
@@ -360,6 +354,34 @@ def forget_library(data_dir: Path, tenant_id: str, library_id: str) -> list[Path
                 libraries_moving_from={k: v for k, v in location.libraries_moving_from.items() if k != library_id})
     for folder in removed:
         logger.info("Library %s deleted for good: its previews in %s are gone", library_id, folder)
+    return removed
+
+
+def forget_account(data_dir: Path, tenant_id: str) -> list[Path]:
+    """An account that's gone (no longer in the control plane): its folder
+    goes from every folder previews may be in now, under the move lock. A
+    folder whose drive isn't plugged in keeps it. Returns the folders
+    removed. Raises MoveError when a move holds the lock."""
+    data_dir = Path(os.path.abspath(data_dir))
+    if not (tenant_id.startswith(ACCOUNT_PREFIX) and Path(tenant_id).name == tenant_id):
+        raise ValueError(f"Not an account: {tenant_id!r}")
+    with _one_at_a_time(data_dir, wait=LOOK_WAIT_SEC):
+        removed = _removed_everywhere(data_dir, previews_location.read(data_dir), Path(tenant_id))
+    for folder in removed:
+        logger.info("Account %s is gone: its previews in %s are gone", tenant_id, folder)
+    return removed
+
+
+def _removed_everywhere(data_dir: Path, location: Location, rel: Path) -> list[Path]:
+    """rel removed from every folder previews may be in that can be reached
+    (never through a link). Under the move lock."""
+    removed: list[Path] = []
+    for root in location.roots:
+        folder = root / rel
+        if not location.available(data_dir, root) or not folder.is_dir() or folder.is_symlink():
+            continue
+        shutil.rmtree(folder)
+        removed.append(folder)
     return removed
 
 

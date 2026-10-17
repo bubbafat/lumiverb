@@ -94,6 +94,15 @@ class Store(Protocol):
 # {tenant}/{library}/{kind}/{bucket}/{file}: bucket is the id's ULID % 100,
 # two digits. Fixed: every row that names a key holds one of these.
 
+# Every kind a library's keys are of (the builders below): what the daily sweep looks at.
+KINDS = ("proxies", "thumbnails", "scenes", "previews", "analysis", "face_crops")
+
+
+def kind_of(key: str) -> str | None:
+    """A library's key's kind (its third part), or None for any other key."""
+    parts = key.split("/")
+    return parts[2] if len(parts) > 3 and parts[2] in KINDS else None
+
 
 def _bucket(ulid: str) -> int:
     return int(ULID.from_str(ulid)) % 100

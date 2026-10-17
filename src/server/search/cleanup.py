@@ -1,28 +1,33 @@
-"""Filesystem cleanup: detect and remove orphaned tenant dirs, library dirs, and artifact files.
+"""The daily sweep: the stored files no row names, removed (ADR-020: through
+the Store, by key, one library at a time).
 
 Safety guards:
 - DB query failures skip the affected tenant/library (never treat empty results as "nothing expected")
 - Files newer than 1 hour are skipped (may be mid-ingest)
 - If >25% of files in a library would be deleted, abort that library
+- A library whose storage can't be reached (a drive unplugged) is skipped, and
+  says so: nothing there is taken for missing or orphaned
 - Library and account folders the database doesn't list are only reported
   (orphan_folders), never removed here: a database restored from an older
   backup looks just like that (Robert). remove_orphan_folders removes them,
   when an admin names them or says all.
+- Waits while the previews move
 - Dry-run by default
+
+Folders, and the partial writes a crash left, are the filesystem provider's:
+src/server/storage/folders.py.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
 
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.storage import folders
 from src.server.storage import store as stored
 
 logger = logging.getLogger(__name__)
@@ -32,8 +37,7 @@ _MIN_AGE_SECONDS = 3600  # 1 hour
 # If more than this fraction of files in a library would be deleted, skip it.
 _MAX_DELETE_FRACTION = 0.25
 
-# Subdirectories under a library dir that contain artifacts.
-_ARTIFACT_SUBDIRS = ("proxies", "thumbnails", "previews", "scenes", "analysis", "face_crops")
+MOVING = folders.MOVING
 
 
 @dataclass
@@ -48,54 +52,6 @@ class CleanupResult:
     # Skipped because Upkeep is paused (not "nothing to clean up"), and which accounts.
     paused: bool = False
     paused_tenants: list[str] = field(default_factory=list)
-
-
-def _list_subdirs(parent: Path) -> list[str]:
-    """Return names of immediate subdirectories."""
-    if not parent.is_dir():
-        return []
-    return [d.name for d in parent.iterdir() if d.is_dir()]
-
-
-def _walk_files(directory: Path) -> list[Path]:
-    """Recursively list all files under directory."""
-    files = []
-    if not directory.is_dir():
-        return files
-    for root, _dirs, filenames in os.walk(directory):
-        for name in filenames:
-            files.append(Path(root) / name)
-    return files
-
-
-def _file_age_seconds(path: Path) -> float:
-    """Return file age in seconds based on mtime."""
-    try:
-        return time.time() - path.stat().st_mtime
-    except OSError:
-        return 0.0
-
-
-def _folder(data_dir: Path, path: Path) -> dict:
-    """A folder the database doesn't list, as reported: its id (the folder's
-    name), its path under DATA_DIR, its size and its newest mtime."""
-    size = 0
-    newest = 0.0
-    for root, dirs, files in os.walk(path):
-        for name in [*dirs, *files, ""]:
-            try:
-                st = (Path(root) / name).stat()
-            except OSError:
-                continue
-            newest = max(newest, st.st_mtime)
-            if name in files:
-                size += st.st_size
-    return {
-        "folder_id": path.name,
-        "path": str(path.relative_to(data_dir)),
-        "bytes": size,
-        "newest_mtime": datetime.fromtimestamp(newest, tz=UTC).isoformat() if newest else None,
-    }
 
 
 def _warn_orphan_folders(result: CleanupResult) -> None:
@@ -177,148 +133,65 @@ def _get_expected_keys_for_library(
         return None
 
 
-def run_cleanup_for_tenant(
-    data_dir: Path,
-    tenant_id: str,
-    session: Session,
-    *,
-    dry_run: bool = True,
-    library_id: str | None = None,
-) -> CleanupResult:
-    """Run file cleanup for a single tenant. Session must be for the tenant DB.
-
-    library_id: only that library's directory; the account's playback cuts
-    (not a library's) are left for a whole-account run.
-    """
-    result = CleanupResult()
-    tenant_dir = data_dir / tenant_id
-
-    if not tenant_dir.is_dir():
-        return result
-
-    # Get all library IDs from DB (include trashed — they still have files)
-    try:
-        lib_rows = session.execute(
-            text("SELECT library_id FROM libraries")
-        ).fetchall()
-        known_library_ids = {r[0] for r in lib_rows}
-    except Exception as exc:
-        result.errors.append(f"Failed to query libraries for tenant {tenant_id}: {exc}")
-        return result
-
-    # Check library dirs on disk
-    disk_lib_dirs = [
-        d for d in _list_subdirs(tenant_dir)
-        if d.startswith("lib_") and (library_id is None or d == library_id)
-    ]
-
-    for lib_dir_name in disk_lib_dirs:
-        lib_dir = tenant_dir / lib_dir_name
-
-        if lib_dir_name not in known_library_ids:
-            result.orphan_folders.append(_folder(data_dir, lib_dir))
-            continue
-
-        # Library exists in DB — check individual files
-        expected_keys = _get_expected_keys_for_library(session, lib_dir_name, tenant_id)
-        if expected_keys is None:
-            result.skipped_libraries += 1
-            result.errors.append(f"Skipped library {lib_dir_name}: DB query failed")
-            continue
-
-        # Build set of relative keys for files on disk
-        # Key format: {tenant_id}/{library_id}/proxies/{bucket}/{filename}
-        disk_files: list[tuple[Path, str]] = []  # (abs_path, key)
-        for subdir_name in _ARTIFACT_SUBDIRS:
-            subdir = lib_dir / subdir_name
-            for f in _walk_files(subdir):
-                rel_key = str(f.relative_to(data_dir))
-                disk_files.append((f, rel_key))
-
-        if not disk_files:
-            continue
-
-        # Find orphans (on disk but not in DB)
-        orphan_files: list[tuple[Path, int]] = []
-        for abs_path, key in disk_files:
-            if key not in expected_keys:
-                # Skip files newer than threshold (may be mid-ingest)
-                if _file_age_seconds(abs_path) < _MIN_AGE_SECONDS:
-                    continue
-                try:
-                    size = abs_path.stat().st_size
-                except OSError:
-                    continue
-                orphan_files.append((abs_path, size))
-
-        # Safety check: abort if too many files would be deleted
-        if len(orphan_files) > _MAX_DELETE_FRACTION * len(disk_files):
-            msg = (
-                f"Skipped library {lib_dir_name}: {len(orphan_files)}/{len(disk_files)} "
-                f"files ({len(orphan_files) / len(disk_files):.0%}) would be deleted, "
-                f"exceeds {_MAX_DELETE_FRACTION:.0%} safety threshold"
-            )
-            logger.warning(msg)
-            result.skipped_libraries += 1
-            result.errors.append(msg)
-            continue
-
-        for abs_path, size in orphan_files:
-            logger.info(
-                "%s orphan file: %s (%d bytes)",
-                "Would remove" if dry_run else "Removing",
-                abs_path,
-                size,
-            )
-            if not dry_run:
-                abs_path.unlink(missing_ok=True)
-            result.orphan_files += 1
-            result.bytes_freed += size
-
-    if library_id is not None:
-        return result
-
-    # Playback cuts (copies of each video's start) of assets that are gone.
-    try:
-        from src.server.api.routers.playback import sweep_cuts
-        from src.server.storage.cache import playback_cuts
-
-        known_assets = {r[0] for r in session.execute(text("SELECT asset_id FROM assets")).fetchall()}
-        result.orphan_files += sweep_cuts(playback_cuts(tenant_id, root=data_dir), known_assets, dry_run=dry_run)
-    except Exception as exc:  # noqa: BLE001 — never fail the rest of cleanup over a cache
-        result.errors.append(f"Playback cut sweep failed for tenant {tenant_id}: {exc}")
-
+def _skipped(result: CleanupResult, why: str) -> CleanupResult:
+    result.skipped_libraries += 1
+    result.errors.append(why)
     return result
 
 
-MOVING = "The previews are moving: cleanup waits until they're moved."
+def _sweep_library(
+    store: stored.Store,
+    tenant_id: str,
+    library_id: str,
+    expected: set[str],
+    *,
+    dry_run: bool,
+) -> CleanupResult:
+    """One library's stored files no row names, removed: those an hour old
+    or more, unless they're over a quarter of the library's files."""
+    result = CleanupResult()
+    unreachable = (f"Skipped library {library_id}: its previews can't be reached now "
+                   "(is its drive plugged in?)")
+    now = time.time()
+    try:
+        keys = [key for key in store.list(f"{tenant_id}/{library_id}/") if stored.kind_of(key)]
+        orphans: list[tuple[str, int]] = []
+        for key in keys:
+            if key in expected:
+                continue
+            try:
+                st = store.stat(key)
+            except stored.NotFound:
+                continue  # gone meanwhile
+            if now - st.modified < _MIN_AGE_SECONDS:
+                continue  # may be mid-ingest
+            orphans.append((key, st.size))
+    except stored.Unavailable:
+        logger.warning("cleanup: %s", unreachable)
+        return _skipped(result, unreachable)
 
+    # Safety check: abort if too many files would be deleted
+    if len(orphans) > _MAX_DELETE_FRACTION * len(keys):
+        msg = (
+            f"Skipped library {library_id}: {len(orphans)}/{len(keys)} "
+            f"files ({len(orphans) / len(keys):.0%}) would be deleted, "
+            f"exceeds {_MAX_DELETE_FRACTION:.0%} safety threshold"
+        )
+        logger.warning(msg)
+        return _skipped(result, msg)
 
-def previews_folder() -> tuple[Path | None, str | None]:
-    """The folder the previews are in (DATA_DIR or the one chosen), or why it
-    isn't cleaned now: while they move, files are in two places at once."""
-    from src.server.config import get_settings
-    from src.shared import previews_location
-
-    location = previews_location.read(get_settings().data_dir)
-    if location.moving:
-        return None, MOVING
-    if not location.previews.is_dir():
-        return None, f"The previews folder isn't there: {location.previews}"
-    return location.previews, None
-
-
-def library_folders(tenant_id: str, library_id: str | None = None) -> list[tuple[str, Path]]:
-    """The account's libraries with a folder of their own (plugged in), and
-    their folders: cleaned there, one library at a time."""
-    from src.server.config import get_settings
-    from src.shared import previews_location
-
-    data = get_settings().data_dir
-    location = previews_location.read(data)
-    return [(lib, root) for lib, root in sorted(location.libraries.items())
-            if (library_id is None or lib == library_id) and location.available(data, root)
-            and (root / tenant_id / lib).is_dir()]
+    for key, size in orphans:
+        logger.info("%s orphan file: %s (%d bytes)", "Would remove" if dry_run else "Removing", key, size)
+        if not dry_run:
+            try:
+                store.delete(key)
+            except stored.Unavailable:
+                logger.warning("cleanup: %s", unreachable)
+                result.errors.append(unreachable)
+                break
+        result.orphan_files += 1
+        result.bytes_freed += size
+    return result
 
 
 def _merged(result: CleanupResult, other: CleanupResult) -> None:
@@ -329,57 +202,86 @@ def _merged(result: CleanupResult, other: CleanupResult) -> None:
     result.errors.extend(other.errors)
 
 
+def run_cleanup_for_tenant(
+    tenant_id: str,
+    session: Session,
+    *,
+    dry_run: bool = True,
+    library_id: str | None = None,
+) -> CleanupResult:
+    """Run file cleanup for a single tenant. Session must be for the tenant DB.
+
+    library_id: only that library; the account's folders the database
+    doesn't list and its playback cuts (not a library's) are left for a
+    whole-account run.
+    """
+    result = CleanupResult()
+
+    # Every library in the DB, trashed ones too: they still have files.
+    try:
+        known = {r[0] for r in session.execute(text("SELECT library_id FROM libraries")).fetchall()}
+    except Exception as exc:
+        result.errors.append(f"Failed to query libraries for tenant {tenant_id}: {exc}")
+        return result
+
+    store = stored.get_store()
+    swept = sorted(known if library_id is None else known & {library_id})
+    for lib in swept:
+        expected_keys = _get_expected_keys_for_library(session, lib, tenant_id)
+        if expected_keys is None:
+            _skipped(result, f"Skipped library {lib}: DB query failed")
+            continue
+        _merged(result, _sweep_library(store, tenant_id, lib, expected_keys, dry_run=dry_run))
+
+    crashed, crashed_bytes = folders.left_by_a_crash(tenant_id, swept, dry_run=dry_run)
+    result.orphan_files += crashed
+    result.bytes_freed += crashed_bytes
+
+    if library_id is not None:
+        return result
+
+    result.orphan_folders.extend(folders.measured(f"{tenant_id}/{lib}")
+                                 for lib in sorted(folders.libraries(tenant_id) - known))
+
+    # Playback cuts (copies of each video's start) of assets that are gone.
+    try:
+        from src.server.api.routers.playback import sweep_cuts
+        from src.server.storage.cache import playback_cuts
+
+        known_assets = {r[0] for r in session.execute(text("SELECT asset_id FROM assets")).fetchall()}
+        result.orphan_files += sweep_cuts(playback_cuts(tenant_id), known_assets, dry_run=dry_run)
+    except Exception as exc:  # noqa: BLE001 — never fail the rest of cleanup over a cache
+        result.errors.append(f"Playback cut sweep failed for tenant {tenant_id}: {exc}")
+
+    return result
+
+
 def run_cleanup_all_tenants(*, dry_run: bool = True) -> CleanupResult:
-    """Run cleanup across all tenants. Uses control plane to enumerate tenants."""
+    """Run cleanup across all tenants (the control plane's), and report the
+    folders of accounts it doesn't list."""
     from src.server.database import get_control_session, get_tenant_session
     from src.server.repository.control_plane import TenantRepository
 
-    data_dir, why_not = previews_folder()
-    if data_dir is None:
+    if why_not := folders.why_waiting():
         return CleanupResult(errors=[why_not])
 
-    result = CleanupResult()
-
-    # Get known tenants from control plane
     with get_control_session() as control_session:
-        tenants = TenantRepository(control_session).list_all()
-    known_tenant_ids = {t.tenant_id for t in tenants}
+        tenant_ids = sorted(t.tenant_id for t in TenantRepository(control_session).list_all())
 
-    # Check tenant dirs on disk
-    disk_tenant_dirs = [
-        d for d in _list_subdirs(data_dir) if d.startswith("ten_")
-    ]
+    result = CleanupResult()
+    result.orphan_folders.extend(folders.measured(t) for t in sorted(folders.accounts() - set(tenant_ids)))
 
-    for tenant_dir_name in disk_tenant_dirs:
-        tenant_dir = data_dir / tenant_dir_name
-
-        if tenant_dir_name not in known_tenant_ids:
-            result.orphan_folders.append(_folder(data_dir, tenant_dir))
-            continue
-
-        # Tenant exists — check its libraries and files
+    for tenant_id in tenant_ids:
         try:
-            with get_tenant_session(tenant_dir_name) as session:
-                if _paused(session, tenant_dir_name, dry_run):
+            with get_tenant_session(tenant_id) as session:
+                if _paused(session, tenant_id, dry_run):
                     result.paused = True
-                    result.paused_tenants.append(tenant_dir_name)
+                    result.paused_tenants.append(tenant_id)
                     continue
-                tenant_result = run_cleanup_for_tenant(
-                    data_dir, tenant_dir_name, session, dry_run=dry_run,
-                )
-                for lib, root in library_folders(tenant_dir_name):
-                    _merged(tenant_result, run_cleanup_for_tenant(root, tenant_dir_name, session, dry_run=dry_run,
-                                                                  library_id=lib))
+                _merged(result, run_cleanup_for_tenant(tenant_id, session, dry_run=dry_run))
         except Exception as exc:
-            logger.error("Failed to run cleanup for tenant %s: %s", tenant_dir_name, exc)
-            result.errors.append(f"Tenant {tenant_dir_name}: {exc}")
-            continue
-
-        result.orphan_folders.extend(tenant_result.orphan_folders)
-        result.orphan_files += tenant_result.orphan_files
-        result.bytes_freed += tenant_result.bytes_freed
-        result.skipped_libraries += tenant_result.skipped_libraries
-        result.errors.extend(tenant_result.errors)
+            logger.error("Failed to run cleanup for tenant %s: %s", tenant_id, exc)
+            result.errors.append(f"Tenant {tenant_id}: {exc}")
 
     _warn_orphan_folders(result)
     return result
@@ -394,14 +296,11 @@ def run_cleanup_single_tenant(
 ) -> CleanupResult:
     """Run cleanup for a single tenant (used when called with tenant API key),
     or one library of it."""
-    data_dir, why_not = previews_folder()
-    if data_dir is None:
+    if why_not := folders.why_waiting():
         return CleanupResult(errors=[why_not])
     if _paused(session, tenant_id, dry_run):
         return CleanupResult(paused=True, paused_tenants=[tenant_id])
-    result = run_cleanup_for_tenant(data_dir, tenant_id, session, dry_run=dry_run, library_id=library_id)
-    for lib, root in library_folders(tenant_id, library_id):
-        _merged(result, run_cleanup_for_tenant(root, tenant_id, session, dry_run=dry_run, library_id=lib))
+    result = run_cleanup_for_tenant(tenant_id, session, dry_run=dry_run, library_id=library_id)
     _warn_orphan_folders(result)
     return result
 
@@ -425,22 +324,6 @@ class RemovedFolders:
     errors: list[str] = field(default_factory=list)
 
 
-def _remove(data_dir: Path, path: Path, still_unlisted, dry_run: bool, out: RemovedFolders) -> None:
-    """Remove one folder after checking again that the database doesn't list it."""
-    if not still_unlisted():
-        logger.info("remove-orphan-folders: %s is listed now; kept", path)
-        return
-    folder = _folder(data_dir, path)
-    logger.warning("remove-orphan-folders: %s %s (%d bytes)", "would remove" if dry_run else "removing",
-                   path, folder["bytes"])
-    if not dry_run:
-        import shutil
-
-        shutil.rmtree(path)
-    out.removed.append(folder)
-    out.bytes_freed += folder["bytes"]
-
-
 def _listed(session: Session, library_id: str) -> bool:
     return session.execute(
         text("SELECT 1 FROM libraries WHERE library_id = :id"), {"id": library_id},
@@ -448,7 +331,6 @@ def _listed(session: Session, library_id: str) -> bool:
 
 
 def remove_orphan_folders(
-    data_dir: Path,
     *,
     tenant_id: str | None,
     session: Session | None,
@@ -461,21 +343,35 @@ def remove_orphan_folders(
 
     tenant_id with its session: that account's library folders. tenant_id
     None: every account's, and the folders of accounts that are gone.
+    Waits, removing nothing, while the previews move.
     """
     from src.server.database import get_control_session, get_tenant_session
     from src.server.repository.control_plane import TenantRepository
 
+    if why_not := folders.why_waiting():
+        return RemovedFolders(errors=[why_not])
     wanted = None if folder_ids is None else set(folder_ids)
     out = RemovedFolders()
 
     def take(name: str) -> bool:
         return wanted is None or name in wanted
 
+    def remove(prefix: str, still_unlisted) -> None:
+        try:
+            folder = folders.remove(prefix, still_unlisted, dry_run=dry_run)
+        except Exception as exc:  # noqa: BLE001 — the other folders go on
+            logger.error("remove-orphan-folders failed for %s: %s", prefix, exc)
+            out.errors.append(f"{prefix}: {exc}")
+            return
+        if folder is not None:
+            out.removed.append(folder)
+            out.bytes_freed += folder["bytes"]
+
     def libraries_of(tid: str, sess: Session) -> None:
         known = {r[0] for r in sess.execute(text("SELECT library_id FROM libraries")).fetchall()}
-        for name in _list_subdirs(data_dir / tid):
-            if name.startswith("lib_") and name not in known and take(name):
-                _remove(data_dir, data_dir / tid / name, lambda n=name: not _listed(sess, n), dry_run, out)
+        for name in sorted(folders.libraries(tid) - known):
+            if take(name):
+                remove(f"{tid}/{name}", lambda n=name: not _listed(sess, n))
 
     if tenant_id is not None:
         libraries_of(tenant_id, session)
@@ -485,13 +381,11 @@ def remove_orphan_folders(
                 return {t.tenant_id for t in TenantRepository(ctrl).list_all()}
 
         known_tenants = tenant_ids()
-        for name in _list_subdirs(data_dir):
-            if not name.startswith("ten_"):
-                continue
-            if name not in known_tenants:
-                if take(name):
-                    _remove(data_dir, data_dir / name, lambda n=name: n not in tenant_ids(), dry_run, out)
-                continue
+        on_disk = folders.accounts()
+        for name in sorted(on_disk - known_tenants):
+            if take(name):
+                remove(name, lambda n=name: n not in tenant_ids())
+        for name in sorted(on_disk & known_tenants):
             try:
                 with get_tenant_session(name) as sess:
                     libraries_of(name, sess)
