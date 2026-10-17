@@ -1,9 +1,9 @@
 """InsightFace provider: face detection + ArcFace embedding in one pass.
 
 Its model (buffalo_l, about 330 MB) is kept with Lumiverb's others, in the
-install's data folder (model_root), for the scheduler's faces process and the
-API's search by image alike. InsightFace's own default, ~/.insightface, is
-read by neither but a development checkout; a model already downloaded
+models folder (model_root, src/processing/models_dir.py), for the scheduler's
+faces process and the API's search by image alike. InsightFace's own
+default, ~/.insightface, is read by neither; a model already downloaded
 there is copied in, not downloaded again, and left where it was.
 """
 
@@ -26,14 +26,13 @@ MODEL_VERSION = "buffalo_l"
 
 def model_root() -> Path:
     """Where the model is kept: INSIGHTFACE_HOME (an operator's), else the
-    install's data folder (DATA_DIR/insightface-cache, as CLIP's is
-    DATA_DIR/hf-cache), else InsightFace's own ~/.insightface (a development
-    checkout). InsightFace itself reads no setting: it's told (root=)."""
+    models folder's (DATA_DIR/models/insightface, beside CLIP's and
+    Whisper's). InsightFace itself reads no setting: it's told (root=)."""
+    from src.processing.models_dir import insightface_root
+
     if home := os.environ.get("INSIGHTFACE_HOME"):
         return Path(home).expanduser()
-    if data := os.environ.get("DATA_DIR"):
-        return Path(data) / "insightface-cache"
-    return Path.home() / ".insightface"
+    return insightface_root()
 
 
 def _home_copy() -> Path:

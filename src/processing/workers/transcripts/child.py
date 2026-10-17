@@ -15,7 +15,9 @@ whatever the worker's install looks like:
           the speech, without VAD of its own (the speech was found already).
 
 Failures print {"error", "stage"} and exit 1; stage "load" is the model not
-loading (the machine's trouble, not the clip's).
+loading (the machine's trouble, not the clip's). Whisper's weights are in
+the models folder: HF_HOME, which it inherits from the scheduler
+(src/processing/models_dir.py use_models_dir).
 """
 
 from __future__ import annotations

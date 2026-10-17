@@ -45,23 +45,14 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    # Force open_clip / huggingface_hub to cache weights in
-                    # a writable directory under the configured data dir.
-                    # The systemd unit pins the service home filesystem
-                    # read-only outside of `ReadWritePaths=${DATA_DIR}`,
-                    # so the default `~/.cache/huggingface` location 500s
-                    # with "Read-only file system". Set the env vars before
-                    # `import open_clip` so they're picked up at module
-                    # import time. Idempotent — only sets if not already
-                    # configured by the operator.
-                    import os
-                    from src.server.config import get_settings
+                    # Its weights in the models folder (DATA_DIR/models,
+                    # the scheduler's too): the systemd unit makes the
+                    # service's home read-only, outside DATA_DIR. Set before
+                    # `import open_clip`, which reads it at import time (the
+                    # API sets it as it starts too: main.py).
+                    from src.processing.models_dir import use_models_dir
 
-                    cache_root = os.path.join(get_settings().data_dir, "hf-cache")
-                    os.makedirs(cache_root, exist_ok=True)
-                    os.environ.setdefault("HF_HOME", cache_root)
-                    os.environ.setdefault("TRANSFORMERS_CACHE", cache_root)
-                    os.environ.setdefault("HF_HUB_CACHE", cache_root)
+                    use_models_dir()
 
                     import open_clip
 

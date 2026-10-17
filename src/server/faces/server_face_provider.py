@@ -9,8 +9,8 @@ needs two extra setup steps that don't apply on the worker side:
    filesystem to read-only outside `${DATA_DIR}` (see deploy-api.sh —
    `ProtectSystem=strict` + `ReadWritePaths=${DATA_DIR}`). InsightFace
    downloads models to `~/.insightface/models` unless told otherwise
-   (it reads no setting: the provider passes root=, model_root). We set
-   `INSIGHTFACE_HOME` to the data folder's insightface-cache, the
+   (it reads no setting: the provider passes root=, model_root): the
+   models folder (DATA_DIR/models, src/processing/models_dir.py), the
    scheduler's too, so search by image and the faces process share one copy.
 
 2. **Module-level singleton.** Workers spawn fresh per-batch
@@ -40,17 +40,13 @@ _lock = threading.Lock()
 
 
 def _ensure_writable_cache() -> str:
-    """Point InsightFace at a cache dir under data_dir before its first
-    import. Idempotent — if `INSIGHTFACE_HOME` is already set we trust
-    the operator's choice."""
-    from src.server.config import get_settings
+    """Where InsightFace's model is kept (model_root: the models folder, or
+    an operator's INSIGHTFACE_HOME), made if it isn't there yet."""
+    from src.processing.workers.faces.insightface_provider import model_root
 
-    cache_root = os.environ.get("INSIGHTFACE_HOME")
-    if not cache_root:
-        cache_root = os.path.join(get_settings().data_dir, "insightface-cache")
-        os.environ["INSIGHTFACE_HOME"] = cache_root
+    cache_root = model_root()
     os.makedirs(cache_root, exist_ok=True)
-    return cache_root
+    return str(cache_root)
 
 
 def get_provider() -> "InsightFaceProvider":

@@ -45,6 +45,11 @@ class CLIPEmbeddingProvider(EmbeddingProvider):
         if self._model is None:
             with self._lock:
                 if self._model is None:
+                    # Its weights in the models folder (the scheduler sets it as it starts too).
+                    from src.processing.models_dir import use_models_dir
+
+                    use_models_dir()
+
                     import open_clip
 
                     from src.shared.torch_device import cpu_threads_for, torch_device

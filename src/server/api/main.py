@@ -92,6 +92,12 @@ async def lifespan(app: FastAPI):
     from src.server.storage.store import get_store
 
     get_store()
+    # AI models' weights in one folder, the scheduler's too (ADR-020 decision 3):
+    # what was kept elsewhere before is moved in, before search loads one.
+    from src.processing.models_dir import adopt_old_models, use_models_dir
+
+    use_models_dir()
+    adopt_old_models()
     playback.start_cuts()
     yield
     # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.

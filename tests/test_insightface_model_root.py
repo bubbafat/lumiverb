@@ -1,7 +1,7 @@
 """Where the faces model (InsightFace buffalo_l) is kept
 (src/processing/workers/faces/insightface_provider.py model_root): the
-install's data folder, with Lumiverb's other models, for the scheduler's
-faces process and the API's search by image alike. InsightFace reads no
+models folder, with Lumiverb's other models (src/processing/models_dir.py),
+for the scheduler's faces process and the API's search by image alike. InsightFace reads no
 setting (INSIGHTFACE_HOME was set and ignored): it's told, root=. A model
 already in ~/.insightface is copied in, not downloaded again, and left there."""
 
@@ -23,6 +23,7 @@ def home(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(Path, "home", lambda: h)
     monkeypatch.delenv("INSIGHTFACE_HOME", raising=False)
     monkeypatch.delenv("DATA_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     return h
 
 
@@ -34,10 +35,11 @@ def _downloaded(home: Path) -> Path:
     return model
 
 
-def test_the_install_keeps_it_in_its_data_folder(home, tmp_path, monkeypatch):
-    assert faces.model_root() == home / ".insightface", "a development checkout: InsightFace's own"
+def test_the_install_keeps_it_in_its_models_folder(home, tmp_path, monkeypatch):
+    assert faces.model_root() == home / ".cache" / "lumiverb" / "models" / "insightface", \
+        "a development checkout: this machine's cache folder's"
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    assert faces.model_root() == tmp_path / "data" / "insightface-cache"
+    assert faces.model_root() == tmp_path / "data" / "models" / "insightface"
     monkeypatch.setenv("INSIGHTFACE_HOME", str(tmp_path / "chosen"))
     assert faces.model_root() == tmp_path / "chosen", "an operator's choice wins"
 
@@ -92,6 +94,6 @@ def test_the_provider_tells_insightface_where(home, tmp_path, monkeypatch):
 
     monkeypatch.setattr(insightface.app, "FaceAnalysis", FakeAnalysis)
     faces.InsightFaceProvider().ensure_loaded()
-    root = tmp_path / "data" / "insightface-cache"
+    root = tmp_path / "data" / "models" / "insightface"
     assert told == {"name": "buffalo_l", "root": str(root)}
     assert (root / "models" / "buffalo_l" / "det_10g.onnx").is_file(), "copied in before InsightFace looks"
