@@ -26,7 +26,6 @@ from src.server.repository.assets import AssetRepository
 from src.server.repository.libraries import LibraryRepository, PathFilterRepository
 from src.shared.io_utils import normalize_path_prefix
 from src.shared.readers import SERVER, read_by_server
-from src.shared.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +135,7 @@ def create_library(
         path_filter_repo = PathFilterRepository(session)
         path_filter_repo.copy_defaults_to_library(tenant_id=tenant_id, library_id=library.library_id)
     if body.is_public:
-        library.is_public = True
-        session.add(library)
-        session.commit()
-        session.refresh(library)
+        repo.update(library, is_public=True)
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).upsert(library.library_id, tenant_id)
     return LibraryResponse(
@@ -232,35 +228,11 @@ def list_library_health(
     repair-summary endpoint. Trashed libraries are excluded — they have
     no work to do and shouldn't surface in the indicator either.
     """
-    from sqlalchemy import text
-
-    from src.server.repository.lineage import LINEAGE_JOIN
-    from src.server.repository.assets import OUTSTANDING_CONDITIONS
-
-    # Failures waiting their turn are pending too: not healthy.
-    pending_clause = " OR ".join(
-        f"({cond})" for cond in OUTSTANDING_CONDITIONS.values()
-    )
-    pending_clause = f"a.proxy_key IS NULL OR {pending_clause}"
-
-    rows = session.execute(
-        text(f"""
-            SELECT
-                a.library_id,
-                COUNT(*) FILTER (WHERE {pending_clause}) AS pending
-            FROM active_assets a
-            {LINEAGE_JOIN}
-            JOIN libraries l ON l.library_id = a.library_id
-            WHERE l.status != 'trashed'
-            GROUP BY a.library_id
-        """)
-    ).all()
-
-    # Include libraries with zero assets (or all healthy) explicitly so
-    # the UI can render a dot for them too. The GROUP BY above only
-    # returns rows for libraries that have at least one asset.
-    seen = {row.library_id: row.pending for row in rows}
+    # Failures waiting their turn are pending too: not healthy. Libraries with
+    # no clips (or all healthy) are listed too, so the UI can render a dot
+    # for them: pending_counts lists only those with clips.
     repo = LibraryRepository(session)
+    seen = repo.pending_counts()
     return [
         LibraryHealthItem(
             library_id=lib.library_id,
@@ -393,16 +365,7 @@ def update_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if body.root_path is not None and read_by_server(library):
         require_folder_chosen_here(request)
-    if body.name is not None:
-        library.name = body.name
-    if body.root_path is not None:
-        library.root_path = body.root_path
-    if body.is_public is not None:
-        library.is_public = body.is_public
-    library.updated_at = utcnow()
-    session.add(library)
-    session.commit()
-    session.refresh(library)
+    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public)
 
     # Maintain public_libraries control plane index
     if body.is_public is not None:

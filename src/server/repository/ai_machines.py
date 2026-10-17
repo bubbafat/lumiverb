@@ -113,6 +113,35 @@ def free_name(ctrl: Session, tenant_id: str, base: str) -> str:
     return name
 
 
+def update_vision(ctrl: Session, tenant: Tenant, *, api_url: str | None, api_key: str | None,
+                  model: str | None) -> AiMachine | None:
+    """The one vision endpoint the operator's admin API knows (the Mac app's):
+    api_url "" removes its machine, another makes or moves it; api_key its
+    key; model the vision job's. None: as it is. Commits; the machine, or
+    None when there's none."""
+    machine = first_vision_machine(ctrl, tenant.tenant_id)
+    if api_url is not None:
+        url = api_url.strip().rstrip("/")
+        if not url:
+            if machine is not None:
+                ctrl.delete(machine)
+            machine = None
+        elif machine is None:
+            machine = new_vision_machine(ctrl, tenant.tenant_id, url)
+        else:
+            machine.api_url = url
+    if api_key is not None and machine is not None:
+        machine.api_key = api_key
+    if machine is not None:
+        ctrl.add(machine)
+    if model is not None:
+        set_job_model(tenant, "vision", model)
+    ctrl.add(tenant)
+    ctrl.commit()
+    ctrl.refresh(tenant)
+    return machine
+
+
 def new_vision_machine(ctrl: Session, tenant_id: str, api_url: str, api_key: str = "") -> AiMachine:
     """A machine doing vision at api_url, named after its host (not added to the session)."""
     url = api_url.strip().rstrip("/")

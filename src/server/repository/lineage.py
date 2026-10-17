@@ -630,6 +630,19 @@ def forget(session: Session, asset_ids: list[str], artifact: str, *, commit: boo
             session.commit()
 
 
+def lock_settings(session: Session, artifact: str) -> None:
+    """One change of a producer's settings at a time (two saves at once mustn't
+    lose either's), until the transaction ends."""
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"producer.{artifact}"})
+
+
+def failing_since(session: Session, since) -> int:
+    """Clip-steps in sight whose last try failed since `since`."""
+    return session.execute(text(
+        "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
+        " WHERE l.error IS NOT NULL AND l.failed_at > :since"), {"since": since}).scalar() or 0
+
+
 def producer_of(session: Session, asset_id: str, artifact: str) -> str | None:
     """Whose the clip's artifact is: its producer's name (a person's: PERSON), or None when it has none."""
     return session.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = :t"),

@@ -26,7 +26,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server import system_health as h
@@ -94,7 +93,9 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
 
     db_error = None
     try:
-        session.execute(text("SELECT 1"))
+        from src.server.database import reachable
+
+        reachable(session)
     except Exception as exc:  # noqa: BLE001 — that's the answer
         session.rollback()
         db_error = _short(exc)
@@ -175,9 +176,9 @@ def _website(session: Session, db_error: str | None, now: datetime) -> h.Row:
 
 def _processing(session: Session, tenant_id: str, status: Any, now: datetime, unreadable: bool = False) -> h.Row:
     def failing() -> int:
-        return session.execute(text(
-            "SELECT count(*) FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
-            " WHERE l.error IS NOT NULL AND l.failed_at > :since"), {"since": now - h.FAILING_WINDOW}).scalar() or 0
+        from src.server.repository import lineage
+
+        return lineage.failing_since(session, now - h.FAILING_WINDOW)
 
     return h.processing_row(
         at=status.at if status else None, now=now,
@@ -210,8 +211,9 @@ def _ai(tenant_id: str, status: Any, now: datetime) -> h.Row:
 
 
 def _search(session: Session, tenant_id: str, now: datetime) -> h.Row:
-    unsynced = _kept(tenant_id, "unsynced", COUNTS_EVERY_SEC, lambda: session.execute(text(
-        "SELECT count(*) FROM active_assets WHERE search_synced_at IS NULL")).scalar() or 0)
+    from src.server.repository.assets import AssetRepository
+
+    unsynced = _kept(tenant_id, "unsynced", COUNTS_EVERY_SEC, AssetRepository(session).unsynced_count)
     return h.search_row(unsynced=unsynced, now=now)
 
 

@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from src.server.api.dependencies import (
     get_current_user_id,
@@ -292,11 +292,9 @@ def create_project(
     if body.from_search is not None:
         asset_ids = _search_matches(body.from_search, request, session, user_id)
     if asset_ids:  # before the project exists, so a refusal leaves none behind
-        from sqlalchemy import text as sa_text
+        from src.server.repository.assets import AssetRepository
 
-        found = set(session.execute(
-            sa_text("SELECT asset_id FROM active_assets WHERE asset_id = ANY(:ids)"), {"ids": list(asset_ids)},
-        ).scalars())
+        found = AssetRepository(session).in_sight(list(asset_ids))
         gone = next((a for a in asset_ids if a not in found), None)
         if gone is not None:
             raise HTTPException(status_code=404, detail=f"Asset {gone} not found or trashed")
@@ -788,7 +786,6 @@ def export_project(
     import posixpath
 
     from src.server.export import EXPORT_PROVIDERS, ExportBin, ExportClip, still
-    from src.server.models.tenant import Library, VideoFacetRow
 
     provider = EXPORT_PROVIDERS.get(format)
     if provider is None:
@@ -806,18 +803,11 @@ def export_project(
     # Hidden clips are still in the project but never exported.
     hidden = repo.hidden_clip_counts(col.project_id)
 
-    roots = {
-        lib.library_id: lib.root_path
-        for lib in session.exec(
-            select(Library).where(Library.library_id.in_({a.library_id for a in assets}))  # type: ignore[attr-defined]
-        ).all()
-    } if assets else {}
-    facets = {
-        f.asset_id: f
-        for f in session.exec(
-            select(VideoFacetRow).where(VideoFacetRow.asset_id.in_([a.asset_id for a in videos]))  # type: ignore[attr-defined]
-        ).all()
-    } if videos else {}
+    from src.server.repository.assets import AssetRepository
+    from src.server.repository.libraries import LibraryRepository
+
+    roots = LibraryRepository(session).roots_of({a.library_id for a in assets})
+    facets = AssetRepository(session).video_facets([a.asset_id for a in videos])
 
     def where(a) -> str:
         # A relative root (a library created that way) is taken as relative to "/".

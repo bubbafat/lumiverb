@@ -117,6 +117,50 @@ class LibraryRepository:
         stmt = select(Library).where(Library.library_id == library_id)
         return self._session.exec(stmt).first()
 
+    def update(self, library: Library, *, name: str | None = None, root_path: str | None = None,
+               is_public: bool | None = None) -> None:
+        """What's given changes (None: as it is); commits."""
+        if name is not None:
+            library.name = name
+        if root_path is not None:
+            library.root_path = root_path
+        if is_public is not None:
+            library.is_public = is_public
+        library.updated_at = utcnow()
+        self._session.add(library)
+        self._session.commit()
+        self._session.refresh(library)
+
+    def pending_counts(self) -> dict[str, int]:
+        """Per library not in the trash: its clips with work still to do
+        (no preview, or anything a producer still needs, failures waiting
+        their turn included). A library with no clips isn't listed."""
+        from src.server.repository.assets import OUTSTANDING_CONDITIONS
+        from src.server.repository.lineage import LINEAGE_JOIN
+
+        pending = "a.proxy_key IS NULL OR " + " OR ".join(f"({cond})" for cond in OUTSTANDING_CONDITIONS.values())
+        rows = self._session.execute(text(f"""
+            SELECT a.library_id, COUNT(*) FILTER (WHERE {pending}) AS pending
+            FROM active_assets a
+            {LINEAGE_JOIN}
+            JOIN libraries l ON l.library_id = a.library_id
+            WHERE l.status != 'trashed'
+            GROUP BY a.library_id
+        """)).all()
+        return {row.library_id: row.pending for row in rows}
+
+    def active_brief(self) -> list[tuple[str, str, str]]:
+        """The active libraries' (library_id, name, reader), by name."""
+        return [tuple(r) for r in self._session.execute(text(
+            "SELECT library_id, name, reader FROM libraries WHERE status = 'active' ORDER BY name")).all()]
+
+    def roots_of(self, library_ids: set[str]) -> dict[str, str]:
+        """Each library's root folder."""
+        if not library_ids:
+            return {}
+        return {lib.library_id: lib.root_path for lib in self._session.exec(
+            select(Library).where(Library.library_id.in_(library_ids))).all()}  # type: ignore[attr-defined]
+
     def get_by_name(self, name: str) -> Library | None:
         """Return library by name or None."""
         stmt = select(Library).where(Library.name == name)

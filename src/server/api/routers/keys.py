@@ -34,9 +34,7 @@ def _caller_user_id(request: Request, session) -> str | None:
     key_id = getattr(request.state, "key_id", None)
     if user_id or not key_id:
         return user_id
-    from src.server.models.control_plane import ApiKey
-
-    key = session.get(ApiKey, key_id)
+    key = ApiKeyRepository(session).get(key_id)
     return key.created_by_user_id if key is not None else None
 
 
@@ -155,12 +153,7 @@ def revoke_key(
 
     with get_control_session() as session:
         repo = ApiKeyRepository(session)
-
-        from sqlmodel import select
-        from src.server.models.control_plane import ApiKey
-
-        stmt = select(ApiKey).where(ApiKey.key_id == key_id, ApiKey.tenant_id == tenant_id)
-        target = session.exec(stmt).first()
+        target = repo.get_for_tenant(key_id, tenant_id)
         if target is None or target.revoked_at is not None:
             raise HTTPException(status_code=404, detail="Key not found")
 

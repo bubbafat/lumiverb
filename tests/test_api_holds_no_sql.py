@@ -6,9 +6,6 @@ What counts as building SQL here: calling sqlalchemy's or sqlmodel's
 statement builders (text, select, insert, update, delete, …) and running
 anything on a session (exec, execute, query, scalar(s), get, add, delete,
 merge, flush, refresh).
-
-The files listed in NOT_YET still do, until their SQL moves (one area at a
-time): the list only shrinks.
 """
 
 from __future__ import annotations
@@ -25,19 +22,6 @@ BUILDERS = {"text", "select", "insert", "update", "delete", "func", "and_", "or_
             "bindparam", "union", "union_all", "exists", "tuple_", "case", "cast"}
 SESSION_CALLS = {"exec", "execute", "query", "scalar", "scalars", "get", "add", "add_all", "delete", "merge",
                  "flush", "refresh", "get_bind", "connection"}
-
-NOT_YET = {
-    "routers/admin.py",
-    "routers/keys.py",
-    "routers/libraries.py",
-    "routers/producers.py",
-    "routers/projects.py",
-    "routers/scans.py",
-    "routers/system.py",
-    "routers/tenant.py",
-    "routers/upkeep.py",
-}
-
 
 def _session_like(node: ast.expr) -> bool:
     """A name or attribute that holds a database session (session, db, s, …_session)."""
@@ -68,18 +52,8 @@ def _files() -> list[Path]:
 
 
 def test_the_api_builds_no_sql():
-    found = {str(p.relative_to(API)): sql_in(p) for p in _files()}
-    building = {name: lines for name, lines in found.items() if lines and name not in NOT_YET}
-    assert not building, (
-        "Routes ask a repository (src/server/repository/) instead of building SQL:\n"
-        + "\n".join(line for lines in building.values() for line in lines))
-
-
-def test_the_list_only_shrinks():
-    """A file that no longer builds SQL comes off NOT_YET."""
-    clean = [name for name in NOT_YET if (API / name).exists() and not sql_in(API / name)]
-    missing = [name for name in NOT_YET if not (API / name).exists()]
-    assert not clean and not missing, f"take these off NOT_YET: {clean + missing}"
+    building = [line for p in _files() for line in sql_in(p)]
+    assert not building, "Routes ask a repository (src/server/repository/) instead of building SQL:\n" + "\n".join(building)
 
 
 def test_it_finds_what_it_says_it_finds(tmp_path):

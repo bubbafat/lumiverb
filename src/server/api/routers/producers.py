@@ -28,7 +28,6 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_serializer
-from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.api.content_hashes import ContentHash, why_not
@@ -391,8 +390,7 @@ def set_settings(
     from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
 
     p = producer_or_404(artifact)
-    # One change at a time per producer: two saves at once mustn't lose either's settings.
-    session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"producer.{artifact}"})
+    lineage.lock_settings(session, artifact)  # one change at a time per producer
     values = dict(lineage.overrides(session, artifact))
     for key, value in body.settings.items():
         setting = p.setting(key)
@@ -557,9 +555,9 @@ def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_te
     given up after 10 tries until someone asks for it to be tried again. An
     artifact made earlier stays what it was. Clips that don't exist are
     left out. Returns {"recorded"}."""
-    ids = list({f.asset_id for f in body.items})
-    known = {r[0] for r in session.execute(
-        text("SELECT asset_id FROM assets WHERE asset_id = ANY(:ids)"), {"ids": ids})} if ids else set()
+    from src.server.repository.assets import AssetRepository
+
+    known = AssetRepository(session).existing_ids(list({f.asset_id for f in body.items}))
     recorded = 0
     for f in body.items:
         if f.asset_id in known:
@@ -711,8 +709,9 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     status = read_status(session, now)
     paused, admin = lineage.pauses(session), _admin(request)
     held = paused.work
-    libraries = session.execute(text(
-        "SELECT library_id, name, reader FROM libraries WHERE status = 'active' ORDER BY name")).all()
+    from src.server.repository.libraries import LibraryRepository
+
+    libraries = LibraryRepository(session).active_brief()
     failing = scan_waits(session, status)
     status.state = pause_state(set(held), libraries_paused=sum(1 for lib in libraries if paused.scans_paused(lib[0])),
                                libraries=len(libraries))
@@ -746,7 +745,9 @@ def read_status(session: Session, now: datetime | None = None) -> SchedulerStatu
 
     from src.shared.utils import utcnow
 
-    raw = session.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.status'")).scalar()
+    from src.server.repository.system_metadata import SystemMetadataRepository
+
+    raw = SystemMetadataRepository(session).get_value("scheduler.status")
     status = SchedulerStatus()
     if raw:
         try:
