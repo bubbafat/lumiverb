@@ -20,6 +20,7 @@ from src.server.api.main import app
 from src.server.config import get_settings
 from src.server.database import _engines, get_control_session
 from src.server.repository.control_plane import TenantDbRoutingRepository
+from src.server.storage import local
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 
 
@@ -39,6 +40,7 @@ def env(tmp_path_factory):
         os.environ["ADMIN_KEY"] = "test-admin-secret"
         os.environ["DATA_DIR"] = str(data_dir)
         get_settings.cache_clear()
+        local.get_storage.cache_clear()  # one per process: an earlier module's would be its folder
         _engines.clear()
 
         with patch("src.server.accounts.provision_tenant_database"), TestClient(app) as bootstrap:
@@ -66,6 +68,7 @@ def env(tmp_path_factory):
 
     os.environ.pop("DATA_DIR", None)
     get_settings.cache_clear()
+    local.get_storage.cache_clear()
     _engines.clear()
 
 

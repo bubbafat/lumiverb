@@ -7,6 +7,8 @@ import type { StorageInfo } from "../../api/client";
 
 const fetchMock = vi.fn();
 let role = "admin";
+// The install's admin too (the server's /v1/me): an account admin may not be.
+let serverAdmin = true;
 let state: StorageInfo;
 const sent: { method: string; url: string; body: unknown }[] = [];
 const GB = 1024 ** 3;
@@ -34,7 +36,7 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     sent.push({ method, url, body });
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
-    if (path === "/me") return json({ email: "a@b.c", role });
+    if (path === "/me") return json({ email: "a@b.c", role, server_admin: role === "admin" && serverAdmin });
     if (path === "/system/storage") return json(state);
     if (path === "/system/storage/previews") {
       if (body.folder === "/nowhere") {
@@ -72,6 +74,7 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
   role = "admin";
+  serverAdmin = true;
   sent.length = 0;
 });
 
@@ -175,7 +178,14 @@ describe("StorageSection", () => {
   it("isn't shown to someone who isn't an admin", async () => {
     role = "viewer";
     renderSection();
-    expect(await screen.findByText("Only admins see where Lumiverb keeps its files.")).toBeTruthy();
+    expect(await screen.findByText("Only a server admin sees where Lumiverb keeps its files.")).toBeTruthy();
+    expect(sent.some((s) => s.url.includes("/system/storage"))).toBe(false);
+  });
+
+  it("isn't shown to an account's admin who isn't the server's", async () => {
+    serverAdmin = false;
+    renderSection();
+    expect(await screen.findByText("Only a server admin sees where Lumiverb keeps its files.")).toBeTruthy();
     expect(sent.some((s) => s.url.includes("/system/storage"))).toBe(false);
   });
 });

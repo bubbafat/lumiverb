@@ -13,6 +13,8 @@ class CurrentUserResponse(BaseModel):
     user_id: str | None
     email: str | None
     role: str
+    # The install's admin too (ADR-018 decision 8): only when signed in, never with a key.
+    server_admin: bool = False
 
 
 @router.get("", response_model=CurrentUserResponse)
@@ -23,6 +25,7 @@ def get_current_user(request: Request) -> CurrentUserResponse:
 
     if not user_id:
         return CurrentUserResponse(user_id=None, email=None, role=role)
+    server_admin = getattr(request.state, "server_admin", False) is True
 
     email: str | None = None
     with get_control_session() as session:
@@ -31,4 +34,4 @@ def get_current_user(request: Request) -> CurrentUserResponse:
         if user is not None:
             email = user.email
 
-    return CurrentUserResponse(user_id=user_id, email=email, role=role)
+    return CurrentUserResponse(user_id=user_id, email=email, role=role, server_admin=server_admin)

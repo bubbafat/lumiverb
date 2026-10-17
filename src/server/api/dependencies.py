@@ -1,9 +1,9 @@
 """FastAPI dependencies for auth and database sessions."""
 
 import hmac
-from typing import Annotated, Generator
+from typing import Generator
 
-from fastapi import Header, HTTPException, Request
+from fastapi import HTTPException, Request
 from sqlmodel import Session
 
 from src.server.config import get_settings
@@ -30,24 +30,31 @@ def get_tenant_session(request: Request) -> Generator[Session, None, None]:
         yield session
 
 
-def require_admin(
-    authorization: Annotated[str | None, Header()] = None,
-) -> None:
-    """
-    Read Authorization: Bearer <token> and compare to settings.admin_key.
-    Raises HTTP 401 if missing or wrong, HTTP 500 if ADMIN_KEY not configured.
-    """
-    settings = get_settings()
-    if not settings.admin_key:
-        raise HTTPException(
-            status_code=500,
-            detail="ADMIN_KEY not configured",
-        )
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    token = authorization[7:].strip()
-    if not hmac.compare_digest(token, settings.admin_key):
-        raise HTTPException(status_code=401, detail="Invalid admin key")
+def is_install_key(token: str) -> bool:
+    """The install's own key (ADMIN_KEY in its env file), for what runs on
+    it: its upkeep, the scripts that set it up, the CLI's `lumiverb admin`
+    there. Not an account's key, and not a person."""
+    admin_key = get_settings().admin_key
+    # As bytes: a header may carry any Latin-1 character, which compare_digest refuses in a str.
+    return bool(admin_key and hmac.compare_digest(token.encode(), admin_key.encode()))
+
+
+SERVER_ADMIN_REQUIRED = "This is the server admin's: sign in as one."
+
+
+def require_server_admin(request: Request) -> None:
+    """What belongs to the install rather than an account (ADR-018 decision
+    8): its accounts, and what they share (where previews live, the network,
+    backups, logs). A server admin who signed in (users.server_admin, as it
+    is now: the middleware reads it at each request), or, on /v1/admin, the
+    install's own key (the middleware's install_key). A key a person made
+    is never a server admin, nor is an account admin who isn't one: 403
+    server_admin_required."""
+    from src.server.api.errors import ApiError
+
+    if getattr(request.state, "server_admin", False) is True or getattr(request.state, "install_key", False) is True:
+        return
+    raise ApiError(403, "server_admin_required", SERVER_ADMIN_REQUIRED)
 
 
 def require_tenant_admin(request: Request) -> None:

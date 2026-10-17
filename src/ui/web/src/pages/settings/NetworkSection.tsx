@@ -40,8 +40,8 @@ function Addresses({ addresses }: { addresses: string[] }) {
 /** Whether other devices on the network (a phone, another computer) may use a
  * Mac's Lumiverb: over plain HTTP, with nothing to set up on them, and HTTPS
  * too if an admin adds it (the certificate it serves, and plain HTTP turned off
- * once a device has used it). A new install is this Mac only; an admin changes
- * it here, on the Mac. */
+ * once a device has used it). A new install is this Mac only; a server admin
+ * changes it here, on the Mac. */
 export default function NetworkSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
@@ -52,7 +52,8 @@ export default function NetworkSection() {
   if (isLoading || !network) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
-  const isAdmin = user?.role === "admin";
+  // The install's, not an account's: its server admin changes it.
+  const isAdmin = user?.server_admin === true;
   const plain = httpForOthers(network);
 
   return (
@@ -92,7 +93,7 @@ export default function NetworkSection() {
                   ? "Other devices on your network can use Lumiverb."
                   : "Only the Mac Lumiverb is installed on can use it."}
               </p>
-              <p className="text-sm text-gray-500">Only admins can change this.</p>
+              <p className="text-sm text-gray-500">Only a server admin can change this.</p>
             </div>
           )}
 

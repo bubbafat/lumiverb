@@ -1,4 +1,7 @@
-"""Admin API: tenant provisioning and management."""
+"""The server admin's API (ADR-018 decision 8): the install's accounts, and
+who its server admins are. A server admin who signed in, or the install's
+own key (ADMIN_KEY, for its scripts and the CLI's `lumiverb admin`):
+dependencies.require_server_admin."""
 
 from typing import Annotated
 
@@ -7,13 +10,15 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.accounts import AccountError, create_account, remove_account
-from src.server.api.dependencies import get_db_session, require_admin
+from src.server.api.dependencies import get_db_session, require_server_admin
+from src.server.api.errors import ApiError, ConflictError
 from src.server.repository.control_plane import (
     ApiKeyRepository,
     TenantRepository,
+    UserRepository,
 )
 
-router = APIRouter(prefix="/v1/admin", tags=["admin"])
+router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_server_admin)])
 
 
 class CreateTenantRequest(BaseModel):
@@ -68,7 +73,6 @@ class KeyMetadataItem(BaseModel):
 @router.post("/tenants", response_model=CreateTenantResponse)
 def create_tenant(
     body: CreateTenantRequest,
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> CreateTenantResponse:
     """
@@ -105,7 +109,6 @@ def create_tenant(
 
 @router.get("/tenants", response_model=list[TenantListItem])
 def list_tenants(
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> list[TenantListItem]:
     """Return all tenants with status and plan. No API keys in response."""
@@ -126,7 +129,6 @@ def list_tenants(
 def update_tenant(
     tenant_id: str,
     body: UpdateTenantRequest,
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> UpdateTenantResponse:
     """Update a tenant's vision endpoint and model. Only provided fields are
@@ -151,7 +153,6 @@ def update_tenant(
 def create_tenant_key(
     tenant_id: str,
     body: CreateTenantKeyRequest,
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> CreateTenantKeyResponse:
     """
@@ -181,7 +182,6 @@ def create_tenant_key(
 @router.get("/tenants/{tenant_id}/keys", response_model=list[KeyMetadataItem])
 def list_tenant_keys(
     tenant_id: str,
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> list[KeyMetadataItem]:
     """
@@ -210,7 +210,6 @@ def list_tenant_keys(
 @router.delete("/tenants/{tenant_id}", status_code=204)
 def delete_tenant(
     tenant_id: str,
-    _: Annotated[None, Depends(require_admin)],
     session: Annotated[Session, Depends(get_db_session)],
 ) -> None:
     """Soft delete: set tenant status to 'deleted' and revoke all API keys."""
@@ -223,3 +222,57 @@ def delete_tenant(
         key_repo.revoke(key.key_id)
     tenant_repo.update_status(tenant_id, "deleted")
     return None
+
+
+class ServerAdmin(BaseModel):
+    user_id: str
+    email: str
+    tenant_id: str
+    account: str  # their account's name
+
+
+class ServerAdmins(BaseModel):
+    server_admins: list[ServerAdmin]
+
+
+class NameServerAdmin(BaseModel):
+    email: str  # anyone's with a sign-in here, in any account
+
+
+def _server_admins(session: Session) -> ServerAdmins:
+    names = {t.tenant_id: t.name for t in TenantRepository(session).list_all()}
+    return ServerAdmins(server_admins=[
+        ServerAdmin(user_id=u.user_id, email=u.email, tenant_id=u.tenant_id, account=names.get(u.tenant_id, ""))
+        for u in UserRepository(session).server_admins()])
+
+
+@router.get("/server-admins", response_model=ServerAdmins)
+def list_server_admins(session: Annotated[Session, Depends(get_db_session)]) -> ServerAdmins:
+    """The install's server admins, by email."""
+    return _server_admins(session)
+
+
+@router.post("/server-admins", response_model=ServerAdmins)
+def name_server_admin(body: NameServerAdmin, session: Annotated[Session, Depends(get_db_session)]) -> ServerAdmins:
+    """Make someone who signs in here a server admin (one already is: nothing
+    changes). 404 user_not_found when nobody here has that email. Then the
+    server admins."""
+    user = UserRepository(session).get_by_email(body.email.strip())
+    if user is None:
+        raise ApiError(404, "user_not_found", "Nobody signs in here with that email.")
+    UserRepository(session).set_server_admin(user.user_id, True)
+    return _server_admins(session)
+
+
+@router.delete("/server-admins/{user_id}", status_code=204)
+def remove_server_admin(user_id: str, session: Annotated[Session, Depends(get_db_session)]) -> None:
+    """They're no longer a server admin, at once (their sign-in and their
+    account stay). 404 when they aren't one; 409 last_server_admin for the
+    last one: name another first (on the machine itself,
+    `lumiverb-server server-admins remove` may)."""
+    user = UserRepository(session).get_by_id(user_id)
+    if user is None or not user.server_admin:
+        raise HTTPException(status_code=404, detail="Server admin not found")
+    if not UserRepository(session).set_server_admin(user_id, False, keep_one=True):
+        raise ConflictError("last_server_admin",
+                            "They're the last server admin: name another first.")

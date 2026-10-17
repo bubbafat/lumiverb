@@ -7,6 +7,8 @@ import WelcomePage from "./WelcomePage";
 const fetchMock = vi.fn();
 const STEPS = ["storage", "network", "find", "ai", "people", "library"];
 let role = "admin";
+// The install's admin too: an account admin who isn't has no say in where previews live or who can open it.
+let serverAdmin = true;
 let done: string[] = [];
 let detail = "normal";
 const sent: { method: string; path: string; body: unknown }[] = [];
@@ -28,6 +30,7 @@ function levelField(value: string) {
 
 beforeEach(() => {
   role = "admin";
+  serverAdmin = true;
   done = [];
   detail = "normal";
   vi.stubGlobal("fetch", fetchMock);
@@ -37,8 +40,10 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
     sent.push({ method, path, body });
-    const progress = () => ({ steps: STEPS, done, dismissed: false, finished: done.length === STEPS.length });
-    if (path === "/me") return json({ email: "a@b.c", role });
+    // The caller's steps, as the server says (routers/tenant.py).
+    const steps = serverAdmin ? STEPS : STEPS.slice(2);
+    const progress = () => ({ steps, done, dismissed: false, finished: steps.every((s) => done.includes(s)) });
+    if (path === "/me") return json({ email: "a@b.c", role, server_admin: role === "admin" && serverAdmin });
     if (path === "/tenant/setup" && method === "GET") return json(progress());
     if (path === "/tenant/setup") {
       done = body.done ?? done;
@@ -145,6 +150,16 @@ describe("WelcomePage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "I'll finish later" }));
     expect(await screen.findByText("Libraries page")).toBeTruthy();
     expect(sent.some((s) => s.method === "PUT")).toBe(false);
+  });
+
+  it("leaves where previews live and who can open it to the server admin", async () => {
+    serverAdmin = false;
+    renderPage();
+    expect(await screen.findByRole("heading", { level: 2, name: "What to find" })).toBeTruthy();
+    const steps = screen.getByRole("list", { name: "Steps" });
+    expect(within(steps).getAllByRole("button").map((b) => b.textContent)).toEqual(
+      ["1. What to find", "2. AI machines", "3. People", "4. Your first library"]);
+    expect(sent.some((s) => s.path === "/system/storage" || s.path === "/system/network")).toBe(false);
   });
 
   it("is an admin's", async () => {

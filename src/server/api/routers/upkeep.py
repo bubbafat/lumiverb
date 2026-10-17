@@ -36,6 +36,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from src.server.api.dependencies import is_install_key
 from src.server.api.errors import GoneError
 from src.server.api.limits import MAX_IDS, require_scope
 from src.server.config import get_settings
@@ -166,14 +167,6 @@ def _bearer(authorization: str | None) -> str | None:
     return authorization[7:].strip() or None
 
 
-def _is_admin_key(token: str) -> bool:
-    """The operator's admin key (ADMIN_KEY), not an account's key."""
-    import hmac
-
-    settings = get_settings()
-    return bool(settings.admin_key and hmac.compare_digest(token, settings.admin_key))
-
-
 def _tenant_for_key(token: str) -> tuple[str, str, str] | None:
     """(tenant_id, connection_string, role) for a live tenant API key, or None.
 
@@ -219,7 +212,7 @@ def upkeep_scope(
     token = _bearer(authorization)
     if token is None:
         raise HTTPException(status_code=401, detail="Admin key or tenant API key required")
-    if _is_admin_key(token):
+    if is_install_key(token):
         if tenants != "all":
             raise HTTPException(
                 status_code=400,

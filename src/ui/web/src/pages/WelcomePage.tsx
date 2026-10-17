@@ -114,13 +114,15 @@ export default function WelcomePage() {
     return <div className="mx-auto max-w-3xl px-6 py-6"><div className="h-32 rounded-lg bg-gray-900/50 animate-pulse" /></div>;
   }
   const done = new Set(progress.done);
-  const asked = STEPS.findIndex((s) => s.id === params.get("step"));
-  const index = asked >= 0 ? asked : Math.max(0, STEPS.findIndex((s) => !done.has(s.id)));
-  const step = STEPS[index];
-  const last = index === STEPS.length - 1;
+  // The caller's: where previews live and who can open it only for a server admin (the install's, not the account's).
+  const steps = STEPS.filter((s) => progress.steps.includes(s.id));
+  const asked = steps.findIndex((s) => s.id === params.get("step"));
+  const index = asked >= 0 ? asked : Math.max(0, steps.findIndex((s) => !done.has(s.id)));
+  const step = steps[index];
+  const last = index === steps.length - 1;
 
   function go(to: number) {
-    setParams({ step: STEPS[to].id });
+    setParams({ step: steps[to].id });
     window.scrollTo?.(0, 0);
   }
 
@@ -140,7 +142,7 @@ export default function WelcomePage() {
       </div>
 
       <ol aria-label="Steps" className="flex flex-wrap gap-2">
-        {STEPS.map((s, i) => (
+        {steps.map((s, i) => (
           <li key={s.id}>
             <button
               type="button"

@@ -6,9 +6,14 @@ Settings › Backups).
 Seven rows (website, processing, AI machines, search, storage, disk, backups), each
 green, yellow or red with a one-line reason and where to fix it; the rules
 are src/server/system_health.py. Admins see it (the Admin page, and its
-link's dot); nobody else, a public page's visitor least of all. The web page asks every 10 seconds, so what costs more
+link's dot); nobody else, a public page's visitor least of all. The disk
+and backups rows are the install's, so only a server admin sees them. The web page asks every 10 seconds, so what costs more
 than a query (counting clips) is kept for a little while
 per worker.
+
+What belongs to the install rather than an account (where previews live,
+the network, backups, the log) is a server admin's (ADR-018 decision 8:
+dependencies.require_server_admin); anyone signed in sees the network.
 """
 
 from __future__ import annotations
@@ -29,7 +34,12 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server import system_health as h
-from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
+from src.server.api.dependencies import (
+    get_tenant_session,
+    require_server_admin,
+    require_signed_in,
+    require_tenant_admin,
+)
 from src.server.api.limits import MAX_PAGE
 from src.server.version import running
 from src.shared.utils import utcnow
@@ -131,8 +141,9 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         return h.storage_row(libraries=libraries, storage=seen, stopped=stopped, at=at, now=now)
 
     rows.append(_row("storage", "Storage", storage, db_error, session))
-    rows.append(_row("disk", "Disk", lambda: _disk(now)))
-    rows.append(_row("backups", "Backups", lambda: _backups_row(now)))
+    if getattr(request.state, "server_admin", False) is True:  # the install's, not the account's
+        rows.append(_row("disk", "Disk", lambda: _disk(now)))
+        rows.append(_row("backups", "Backups", lambda: _backups_row(now)))
 
     return SystemHealth(
         state=h.overall(rows),
@@ -395,7 +406,7 @@ NOT_SEEN = ("No device has opened Lumiverb over HTTPS yet. Open it at an HTTPS a
             "until then, plain HTTP stays on so other devices can still reach it.")
 
 
-@router.put("/network", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+@router.put("/network", response_model=Network, dependencies=[Depends(require_server_admin)])
 def change_network(body: NetworkChange, request: Request) -> Network:
     """An admin's choice, on the machine itself (as for choosing a library's
     folder): run applies it in a few seconds, restarting nginx. Other devices
@@ -449,7 +460,7 @@ def _here_and_admin(request: Request) -> None:
         raise ApiError(403, "network_elsewhere", ELSEWHERE)
 
 
-@router.put("/network/certificate", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+@router.put("/network/certificate", response_model=Network, dependencies=[Depends(require_server_admin)])
 def keep_your_certificate(body: YourCertificate, request: Request) -> Network:
     """An admin's own certificate and key, for other devices instead of
     Lumiverb's authority's (public hosting): checked first (422
@@ -473,7 +484,7 @@ def keep_your_certificate(body: YourCertificate, request: Request) -> Network:
     return _network()
 
 
-@router.delete("/network/certificate", response_model=Network, dependencies=[Depends(require_tenant_admin)])
+@router.delete("/network/certificate", response_model=Network, dependencies=[Depends(require_server_admin)])
 def forget_your_certificate(request: Request) -> Network:
     """Back to Lumiverb's authority's certificate, on the machine itself."""
     from src.server.config import get_settings
@@ -566,14 +577,14 @@ def _backups(request: Request) -> Backups:
     )
 
 
-@router.get("/backups", response_model=Backups, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+@router.get("/backups", response_model=Backups, dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def get_backups(request: Request) -> Backups:
     """The backups made, where they go, and when the next one is."""
     return _backups(request)
 
 
 @router.post("/backups", response_model=Backups, status_code=202,
-             dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+             dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def back_up_now(request: Request) -> Backups:
     """Starts a backup now (Back up now); it runs in the background."""
     import os
@@ -596,7 +607,7 @@ def back_up_now(request: Request) -> Backups:
 
 
 @router.put("/backups/folder", response_model=Backups,
-            dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+            dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def change_backups_folder(body: BackupFolderChange, request: Request) -> Backups:
     """An admin's choice, on the machine itself (as for a library's folder):
     backups go there from now on; those made already stay where they are."""
@@ -718,14 +729,14 @@ def _storage(request: Request, session: Session) -> Storage:
                    changeable_here=on_this_machine(request), libraries=own)
 
 
-@router.get("/storage", response_model=Storage, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+@router.get("/storage", response_model=Storage, dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def get_storage_location(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> Storage:
     """Where the previews are, how full their disk and the data disk are, and a move under way."""
     return _storage(request, session)
 
 
 @router.put("/storage/previews", response_model=Storage, status_code=202,
-            dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+            dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def move_previews(body: PreviewsChange, request: Request,
                   session: Annotated[Session, Depends(get_tenant_session)]) -> Storage:
     """Moves the previews to another folder (or back to the data folder), on
@@ -768,7 +779,7 @@ def move_previews(body: PreviewsChange, request: Request,
 
 
 @router.post("/storage/move", response_model=Storage, status_code=202,
-             dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+             dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def go_on_moving(request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> Storage:
     """Try again: a move that stopped (its error said why) goes on now."""
     from src.server.api.errors import ApiError
@@ -813,7 +824,7 @@ def _accounts() -> int:
         return len(TenantRepository(ctrl).list_all())
 
 
-@router.get("/logs", response_model=ServiceLog, dependencies=[Depends(require_signed_in), Depends(require_tenant_admin)])
+@router.get("/logs", response_model=ServiceLog, dependencies=[Depends(require_signed_in), Depends(require_server_admin)])
 def get_logs(
     request: Request,
     after: str | None = None,

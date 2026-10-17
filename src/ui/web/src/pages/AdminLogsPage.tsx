@@ -73,7 +73,9 @@ export default function AdminLogsPage() {
     return (
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
         <p className="text-sm text-red-400">
-          {log.error.code === "logs_elsewhere" ? log.error.message : "Admin access required."}
+          {log.error.code === "logs_elsewhere" || log.error.code === "server_admin_required"
+            ? log.error.message
+            : "Admin access required."}
         </p>
       </div>
     );

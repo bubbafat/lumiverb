@@ -320,7 +320,8 @@ class UserRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, tenant_id: str, email: str, password_hash: str, role: str = "viewer") -> User:
+    def create(self, tenant_id: str, email: str, password_hash: str, role: str = "viewer", *,
+               server_admin: bool = False) -> User:
         from ulid import ULID
         user = User(
             user_id="usr_" + str(ULID()),
@@ -328,6 +329,7 @@ class UserRepository:
             email=email,
             password_hash=password_hash,
             role=role,
+            server_admin=server_admin,
         )
         self._session.add(user)
         self._session.commit()
@@ -358,6 +360,27 @@ class UserRepository:
             .with_for_update()
         )
         return len(list(self._session.exec(stmt).all()))
+
+    def server_admins(self) -> list[User]:
+        """The install's server admins, every account's, by email."""
+        return list(self._session.exec(select(User).where(User.server_admin).order_by(User.email)).all())
+
+    def set_server_admin(self, user_id: str, server_admin: bool, *, keep_one: bool = False) -> bool:
+        """Make the user a server admin or not, and commit. False when
+        keep_one and they're the last one (nothing changes): the server
+        admins are locked while it's decided, so two taking each other's
+        away at once leave one."""
+        admins = self._session.exec(select(User).where(User.server_admin).with_for_update()).all()
+        user = self._session.exec(select(User).where(User.user_id == user_id).with_for_update()).first()
+        if user is None:
+            raise ValueError(f"User not found: {user_id}")
+        if keep_one and not server_admin and user.server_admin and len(admins) == 1:
+            self._session.rollback()
+            return False
+        user.server_admin = server_admin
+        self._session.add(user)
+        self._session.commit()
+        return True
 
     def update_role(self, user_id: str, role: str) -> User:
         user = self.get_by_id(user_id)
