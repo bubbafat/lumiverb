@@ -134,6 +134,25 @@ describe("AdminPage", () => {
     expect(dot("Archive").getAttribute("aria-label")).toBe("Not checked lately · last seen 2 hours ago");
   });
 
+  it("says a device's library by its check-ins, never as out of this server's reach", async () => {
+    const checkedIn = (minutes: number) => ({
+      client: "studio.local", version: "0.1.68", state: "idle" as const, waiting_files: 0, waiting_bytes: 0,
+      last_full_scan_at: null, checked_in_at: new Date(Date.now() - minutes * 60_000).toISOString() });
+    api.listLibraries.mockResolvedValue([
+      { library_id: "lib_4", name: "Trips", root_path: "/Users/robert/Trips", status: "active", is_public: false,
+        last_scan_at: null, reader: "dev_1", reader_name: "Studio Mac", checked_in: checkedIn(1) },
+      { library_id: "lib_5", name: "Old drive", root_path: "/Volumes/Old", status: "active", is_public: false,
+        last_scan_at: null, reader: "dev_2", reader_name: "Garage PC", checked_in: checkedIn(3 * 24 * 60) },
+    ]);
+    renderPage();
+    const libs = await screen.findByRole("list", { name: "Libraries" });
+    const row = (name: string) => within(libs).getByText(name).closest("li")!;
+    expect(within(row("Trips")).getByRole("img").getAttribute("aria-label"))
+      .toBe("Read by Studio Mac · checked in 1 minute ago");
+    expect(within(row("Old drive")).getByText("Read by Garage PC · not heard from in 3 days")).toBeTruthy();
+    expect(within(libs).queryByRole("img", { name: /Can't be reached|Not checked lately/ })).toBeNull();
+  });
+
   it("says a library not checked lately was never seen when it wasn't", async () => {
     api.getSystemHealth.mockResolvedValue(health({
       libraries: [{ library_id: "lib_3", name: "Archive", reachable: null, seen_at: null }],

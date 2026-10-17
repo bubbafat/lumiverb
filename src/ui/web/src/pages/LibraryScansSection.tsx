@@ -10,9 +10,7 @@ import {
 } from "../api/client";
 import type { ReaderCheckIn } from "../api/types";
 import { timeAgo } from "../lib/format";
-
-/** A reader not heard from for this long is said to be (it checks in every minute or so). */
-const QUIET_MS = 5 * 60_000;
+import { QUIET_MS } from "../lib/readers";
 
 /** Who reads a library's files and whether its scans run (ADR-018 phase 1), as Settings → Processing says it for
  * every library: its own Scans pause, or Pause all's. When its reader last checked in and how it was (phase 4).

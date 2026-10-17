@@ -57,8 +57,8 @@ def test_a_librarys_scans_pause_on_their_own_and_the_rest_go_on(env, resumed):
     client, headers, *_ = env
     a = _library(env, "PausedAlone")[2]
     b = _library(env, "StillScanned")[2]
-    assert _row(env, a) == {"library_id": a, "name": "PausedAlone", "reader": "server", "paused": False,
-                            "paused_at": None, "paused_by": None, "waits": []}
+    assert _row(env, a) == {"library_id": a, "name": "PausedAlone", "reader": "server", "reader_name": None,
+                            "checked_in": None, "paused": False, "paused_at": None, "paused_by": None, "waits": []}
     assert _listed(env, a)["reader"] == "server" and _listed(env, a)["scans_paused"] is False
 
     assert client.post(PAUSE, json={"library_ids": [a]}, headers=headers).status_code == 204

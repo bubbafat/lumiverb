@@ -113,7 +113,7 @@ class LibraryListItem(BaseModel):
     checked_in: CheckedIn | None = None
 
 
-def _checked_in(row: dict | None) -> CheckedIn | None:
+def checked_in_of(row: dict | None) -> CheckedIn | None:
     if row is None:
         return None
     full = row["last_full_scan_at"]
@@ -222,7 +222,7 @@ def list_libraries(
             reader_name=names.get(lib.reader),
             scans_paused=lib.scans_paused_at is not None,
             scan_requested_at=lib.scan_requested_at.isoformat() if lib.scan_requested_at else None,
-            checked_in=_checked_in(seen.get(lib.library_id)),
+            checked_in=checked_in_of(seen.get(lib.library_id)),
         )
         for lib in libraries
     ]

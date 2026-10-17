@@ -40,6 +40,7 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.devices import may_call
+from src.server.api.routers.libraries import CheckedIn
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
 from src.server.reader_work import FROM_ORIGINALS
@@ -589,6 +590,9 @@ class LibraryScans(BaseModel):
     library_id: str
     name: str
     reader: str
+    # The reader device's name (None: this server), and its latest check-in for the library (ADR-018 decision 1).
+    reader_name: str | None = None
+    checked_in: CheckedIn | None = None
     paused: bool = False
     paused_by: str | None = None  # admins only
     paused_at: datetime | None = None
@@ -716,7 +720,12 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     held = paused.work
     from src.server.repository.libraries import LibraryRepository
 
+    from src.server import check_ins
+    from src.server.api.routers.libraries import checked_in_of
+    from src.server.repository.devices import DeviceRepository
+
     libraries = LibraryRepository(session).active_brief()
+    seen, names = check_ins.latest(session), DeviceRepository(session).names()
     failing = scan_waits(session, status)
     status.state = pause_state(set(held), libraries_paused=sum(1 for lib in libraries if paused.scans_paused(lib[0])),
                                libraries=len(libraries))
@@ -726,7 +735,8 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
                     paused_by=held[t]["paused_by"] if t in held and admin else None)
         for t in pause_targets()]
     status.libraries = [
-        LibraryScans(library_id=library_id, name=name, reader=reader, paused=paused.scans_paused(library_id),
+        LibraryScans(library_id=library_id, name=name, reader=reader, reader_name=names.get(reader),
+                     checked_in=checked_in_of(seen.get(library_id)), paused=paused.scans_paused(library_id),
                      paused_at=paused.libraries.get(library_id, {}).get("paused_at"),
                      paused_by=paused.libraries.get(library_id, {}).get("paused_by") if admin else None,
                      waits=[w for w in failing if w["library_id"] == library_id])

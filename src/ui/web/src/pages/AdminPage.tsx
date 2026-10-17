@@ -15,6 +15,7 @@ import { HealthDot } from "../components/HealthDot";
 import { timeAgo } from "../lib/format";
 import { useSystemHealth } from "../lib/useSystemHealth";
 import { SETUP_QUERY_KEY } from "./WelcomePage";
+import { readByDevice, readerLine } from "../lib/readers";
 
 const POLL_INTERVAL = 10_000;
 
@@ -71,10 +72,14 @@ type Reach = { reachable: boolean | null; seen_at: string | null };
 function LibraryRow({ lib, reach: seen }: { lib: LibraryListItem; reach: Reach }) {
   const lastScan = lib.last_scan_at ? timeAgo(lib.last_scan_at) : "Never";
   const known = REACH[String(seen.reachable)];
+  // A device's: its check-ins say how it is, never this server's reach (ADR-018 decision 1).
+  const device = readByDevice(lib) ? readerLine(lib) : null;
   // Not known now: when it was last seen.
-  const reach = known.state ? known : {
-    ...known, label: `${known.label} · ${seen.seen_at ? `last seen ${timeAgo(seen.seen_at)}` : "never seen"}`,
-  };
+  const reach: { state: HealthState | null; label: string } = device
+    ? { state: device.attention ? "yellow" : "green", label: device.text }
+    : known.state ? known : {
+      ...known, label: `${known.label} · ${seen.seen_at ? `last seen ${timeAgo(seen.seen_at)}` : "never seen"}`,
+    };
   return (
     <li className="flex items-center gap-3 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3">
       {reach.state ? (
@@ -88,6 +93,9 @@ function LibraryRow({ lib, reach: seen }: { lib: LibraryListItem; reach: Reach }
           <span className="font-medium text-gray-100">{lib.name}</span>
         </div>
         <p className="mt-0.5 font-mono text-xs text-gray-500 truncate">{lib.root_path}</p>
+        {device && (
+          <p className={`mt-0.5 text-xs ${device.attention ? "text-amber-300" : "text-gray-400"}`}>{device.text}</p>
+        )}
       </div>
       <div className="text-right text-sm text-gray-400 shrink-0">
         <div>Last ingest</div>
@@ -190,7 +198,8 @@ export default function AdminPage() {
       </section>
 
       <section>
-        <SectionHeader title="Libraries" subtitle="Whether the scheduler can reach each library's storage" />
+        <SectionHeader title="Libraries"
+          subtitle="Whether each library's files can be reached: this server's looks, or its device's check-ins" />
         {libsLoading ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
