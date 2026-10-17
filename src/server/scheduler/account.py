@@ -28,9 +28,9 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
+from src.processing.originals import Originals
 from src.server.scheduler.kinds import SCAN_EVERY_SEC
 from src.server.scheduler.scans import ScanState
 
@@ -82,10 +82,10 @@ class Account:
         self.stopping = threading.Event()
         # The server's settings were read at least once: its jobs can go.
         self.settings_ready = False
-        # library_id -> the library; and its storage on this machine at the
-        # latest look (None: not reachable).
+        # library_id -> the library; and its originals on this machine at the
+        # latest look (src/processing/originals.py; None: not reachable).
         self.libraries: dict[str, dict] = {}
-        self.roots: dict[str, Path | None] = {}
+        self.reached: dict[str, Originals | None] = {}
         # When the scheduler last looked at every library's storage (look_at_storage).
         self._looked_at: float | None = None
         # library_id -> {seen_at, away_since} (ISO times or None): when its
@@ -164,13 +164,13 @@ class Account:
         """The scheduler's own look at each library's storage, when due:
         every LOOK_EVERY_SEC, and at once when a library wasn't looked at
         since this start (so before any of its storage work is handed out).
-        Looked at as the scan pass does (reachable_root: with a timeout; an
+        Looked at as the scan pass does (originals.reach: with a timeout; an
         unmounted mount point is an empty folder), so the two never
         disagree. Storage work goes by it whatever is paused; the scheduler
         doesn't call it while Pause all is on (nothing touches the drives
         then). Slow (a share that sleeps takes its timeout): called off the
         dispatching thread. True when it looked."""
-        from src.processing.roots import reachable_root
+        from src.processing.originals import reach
 
         now = self._clock()
         with self._lock:
@@ -179,18 +179,19 @@ class Account:
         if not new and self._looked_at is not None and now - self._looked_at < LOOK_EVERY_SEC:
             return False
         self._looked_at = now
-        self.set_reachable({lib["library_id"]: reachable_root(lib, require_entries=True) for lib in libraries})
+        self.set_reachable({lib["library_id"]: reach(lib, require_entries=True) for lib in libraries})
         return True
 
-    def set_reachable(self, roots: dict[str, Path | None]) -> None:
+    def set_reachable(self, found: Mapping[str, Originals | None]) -> None:
         """A look at libraries' storage (the scheduler's own, or the scan
-        pass's before it walks one): each one's root on this machine, None
-        where it can't be read. Libraries it leaves out keep their last look."""
+        pass's before it walks one): each one's originals on this machine,
+        None where they can't be read. Libraries it leaves out keep their
+        last look."""
         now = self._wall().isoformat()
         with self._lock:
-            self.roots.update(roots)
-            for library_id, root in roots.items():
-                self._looked(library_id, root is not None, now)
+            self.reached.update(found)
+            for library_id, originals in found.items():
+                self._looked(library_id, originals is not None, now)
 
     def _looked(self, library_id: str, reached: bool, now: str) -> None:
         seen = self._seen.setdefault(library_id, {"seen_at": None, "away_since": None})
@@ -218,33 +219,34 @@ class Account:
 
     @property
     def reachable(self) -> dict[str, bool]:
-        return {i: r is not None for i, r in self.roots.items()}
+        return {i: r is not None for i, r in self.reached.items()}
 
     def unreachable(self, library_id: str) -> None:
         """A job found the storage gone: storage work in it waits for the next look."""
         now = self._wall().isoformat()
         with self._lock:
-            self.roots[library_id] = None
+            self.reached[library_id] = None
             self._looked(library_id, False, now)
 
     def storage_gone(self, library_id: str) -> bool:
         """The library's storage can't be read now, looked at as the scan pass
         does (with a timeout; an unmounted mount point is an empty folder)."""
-        from src.processing.roots import reachable_root
+        from src.processing.originals import reach
 
         with self._lock:
             library = self.libraries.get(library_id)
-        return library is None or reachable_root(library, require_entries=True) is None
+        return library is None or reach(library, require_entries=True) is None
 
     def library_ids(self, *, storage: bool) -> list[str]:
         """Libraries a kind's jobs can run in: those whose storage was reachable at the last look, when it reads originals."""
         with self._lock:
-            return [i for i in self.libraries if not storage or self.roots.get(i) is not None]
+            return [i for i in self.libraries if not storage or self.reached.get(i) is not None]
 
-    def root(self, library_id: str) -> Path | None:
-        """The library's storage on this machine at the last look, or None."""
+    def originals(self, library_id: str) -> Originals | None:
+        """The library's originals on this machine at the last look, or None.
+        Only a job's inputs read them (src/server/scheduler/inputs.py)."""
         with self._lock:
-            return self.roots.get(library_id)
+            return self.reached.get(library_id)
 
     def set_gpu_hold(self, hold: int) -> None:
         """Requests AI machines sharing this machine's GPU give up while video is decoded on it."""

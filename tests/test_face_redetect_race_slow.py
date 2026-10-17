@@ -5,6 +5,7 @@ never deadlock (one lock order: the clip, then its faces in face_id order)."""
 
 from __future__ import annotations
 
+import os
 import threading
 from unittest.mock import patch
 
@@ -75,10 +76,10 @@ def test_un_assigning_during_redetection_neither_deadlocks_nor_is_lost(env):
     clip = _ingest_with(lib, "g.jpg", _sha(), None)
     with _db(env) as s:
         [face_id] = FaceRepository(s).submit_faces(clip, "m", "1", [{"bounding_box": BOX, "detection_confidence": 0.9}])
-        person_id = f"person_race_{_sha()[:8]}"
+        person_id = f"person_race_{os.urandom(8).hex()}"
         s.add(Person(person_id=person_id, display_name="Bob"))
         s.flush()
-        s.add(FacePersonMatch(match_id=f"fpm_{_sha()[:12]}", face_id=face_id, person_id=person_id, confirmed=False))
+        s.add(FacePersonMatch(match_id=f"fpm_{os.urandom(8).hex()}", face_id=face_id, person_id=person_id, confirmed=False))
         s.commit()
 
     # Re-detection finds the face again; meanwhile a person says it isn't Bob.

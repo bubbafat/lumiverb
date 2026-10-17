@@ -648,40 +648,21 @@ SAME_DRIVE = ("That's the drive this library's originals are on: when it's unplu
 # sleeps (prod's CIFS mount of the Mac's drives) can block a stat for minutes,
 # and this runs in the request.
 ORIGINALS_TIMEOUT_SEC = 2.0
-# A stat of the originals still stuck, per folder: while one is, no other starts
-# (as roots.reachable_root does for its probe), so threads don't pile up.
-_stats: dict[str, object] = {}
 
 
 def _originals_device(library) -> int | None:
-    """The device the library's originals are on here, or None when that
+    """The drive the library's originals are on here, or None when that
     isn't known now: no root map entry, not there, or not answering within
-    ORIGINALS_TIMEOUT_SEC (roots.reachable_root's probe, in a thread)."""
-    import os
-    import threading
-
-    from src.processing.roots import reachable_root
+    ORIGINALS_TIMEOUT_SEC (src/processing/originals.py: the probe and the
+    drive's look each in a thread)."""
+    from src.processing.originals import reach
 
     try:
-        root = reachable_root({"library_id": library.library_id, "name": library.name,
-                               "root_path": library.root_path}, timeout=ORIGINALS_TIMEOUT_SEC)
+        originals = reach({"library_id": library.library_id, "name": library.name,
+                           "root_path": library.root_path}, timeout=ORIGINALS_TIMEOUT_SEC)
     except Exception:  # noqa: BLE001 — a root map it can't read: not known here
         return None
-    if root is None:
-        return None
-    stuck = _stats.get(str(root))
-    if stuck is not None and stuck.is_alive():
-        return None
-    found: dict[str, int] = {}
-
-    def stat() -> None:
-        found["dev"] = os.stat(root).st_dev
-
-    worker = threading.Thread(target=stat, name=f"originals-stat-{library.library_id}", daemon=True)
-    _stats[str(root)] = worker
-    worker.start()
-    worker.join(ORIGINALS_TIMEOUT_SEC)
-    return found.get("dev")
+    return None if originals is None else originals.device(timeout=ORIGINALS_TIMEOUT_SEC)
 
 
 def _same_device(folder, device: int | None) -> bool | None:

@@ -41,6 +41,11 @@ IMAGE_EXTENSIONS = (
 
 SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 
+
+def media_type_of(ext: str) -> str:
+    """"video" or "image", by a file's extension (lowercase, with its dot)."""
+    return "video" if ext in VIDEO_EXTENSIONS else "image"
+
 # List form with leading dots for claim_asset_by_status and regex building
 IMAGE_EXTENSIONS_LIST = sorted(IMAGE_EXTENSIONS)
 VIDEO_EXTENSIONS_LIST = sorted(VIDEO_EXTENSIONS)

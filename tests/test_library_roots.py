@@ -319,6 +319,7 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
 
     from rich.console import Console
 
+    from src.processing.originals import Folder
     from src.processing.scan import run_scan
     from tests.scan_fakes import FakeScans
 
@@ -326,10 +327,10 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
     with (
         patch("src.processing.scan._load_tenant_filters", return_value=[]),
         patch("src.processing.scan._load_library_filters", return_value=[]),
-        patch("src.processing.scan._walk_library", return_value=[]) as walk,
+        patch.object(Folder, "walk", autospec=True, return_value=[]) as walk,
     ):
         run_scan(FakeScans().client(), library, console=Console(quiet=True))
-    assert walk.call_args.args[0] == here
+    assert walk.call_args.args[0] == Folder(here.resolve(), library["library_id"])
 
 
 @pytest.mark.fast

@@ -218,11 +218,11 @@ def library_list() -> None:
     table.add_column("ID", style="dim")
     table.add_column("Name")
     table.add_column("Root path", overflow="fold")
-    from src.processing.roots import local_library_root
+    from src.processing.originals import where
 
     root_map = load_config().root_map
     # Shown only when a mapping moves a root on this machine.
-    here = {lib.get("library_id"): local_library_root(lib, root_map) for lib in libraries}
+    here = {lib.get("library_id"): where(lib, root_map) for lib in libraries}
     mapped = any(str(p) != lib.get("root_path") for lib in libraries if (p := here[lib.get("library_id")]))
     if mapped:
         table.add_column("Here", overflow="fold")

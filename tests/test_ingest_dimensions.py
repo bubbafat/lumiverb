@@ -281,7 +281,7 @@ def test_extract_poster_from_truncated_video_raises():
 @pytest.mark.fast
 @_skip_no_ffprobe
 # ---------------------------------------------------------------------------
-# Discovery: _walk_library
+# Discovery: the originals' walk (src/processing/originals.py)
 # ---------------------------------------------------------------------------
 
 
@@ -289,7 +289,7 @@ def test_extract_poster_from_truncated_video_raises():
 def test_walk_library_lists_zero_byte_files(tmp_path):
     """A zero-byte file is on disk (maybe mid-rewrite): listed, so it isn't
     taken for deleted; the scan doesn't ingest it."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -301,7 +301,7 @@ def test_walk_library_lists_zero_byte_files(tmp_path):
     empty = lib_root / "empty.jpg"
     empty.write_bytes(b"")
 
-    results = _walk_library(lib_root)
+    results = Folder(lib_root).walk()
     rel_paths = [r["rel_path"] for r in results]
 
     assert "good.jpg" in rel_paths
@@ -316,7 +316,7 @@ def test_walk_library_lists_zero_byte_files(tmp_path):
 @pytest.mark.fast
 def test_missing_file_detection_computes_correct_diff(tmp_path):
     """Assets on server but not on disk should be identified for removal."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
@@ -324,7 +324,7 @@ def test_missing_file_detection_computes_correct_diff(tmp_path):
     # Only one file on disk
     (lib_root / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
 
-    local_files = _walk_library(lib_root)
+    local_files = Folder(lib_root).walk()
     local_rel_paths = {f["rel_path"] for f in local_files}
 
     # Server has three assets
@@ -356,14 +356,14 @@ def test_missing_file_detection_skips_when_root_missing(tmp_path):
 @pytest.mark.fast
 def test_missing_file_detection_respects_path_prefix(tmp_path):
     """With --path prefix, only assets under that prefix should be considered."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     (lib_root / "a").mkdir(parents=True)
     (lib_root / "b").mkdir(parents=True)
     (lib_root / "a" / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
 
-    local_files = _walk_library(lib_root, path_prefix="a")
+    local_files = Folder(lib_root).walk(scope="a")
     local_rel_paths = {f["rel_path"] for f in local_files}
 
     server_assets = {
@@ -385,13 +385,13 @@ def test_missing_file_detection_respects_path_prefix(tmp_path):
 @pytest.mark.fast
 def test_missing_single_deleted_file(tmp_path):
     """A single file removed from disk should be detected."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
     (lib_root / "still_here.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
 
-    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    local_rel_paths = {f["rel_path"] for f in Folder(lib_root).walk()}
     server = {"still_here.jpg": "ast_1", "was_deleted.jpg": "ast_2"}
     missing = [aid for rp, aid in server.items() if rp not in local_rel_paths]
 
@@ -401,13 +401,13 @@ def test_missing_single_deleted_file(tmp_path):
 @pytest.mark.fast
 def test_missing_multiple_deleted_files(tmp_path):
     """Multiple deleted files should all be detected."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     lib_root.mkdir()
     (lib_root / "keep.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
 
-    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    local_rel_paths = {f["rel_path"] for f in Folder(lib_root).walk()}
     server = {
         "keep.jpg": "ast_keep",
         "gone1.jpg": "ast_gone1",
@@ -422,14 +422,14 @@ def test_missing_multiple_deleted_files(tmp_path):
 @pytest.mark.fast
 def test_missing_entire_directory(tmp_path):
     """All assets under a removed directory should be detected."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     (lib_root / "kept").mkdir(parents=True)
     (lib_root / "kept" / "photo.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
     # "removed/" directory does NOT exist on disk
 
-    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    local_rel_paths = {f["rel_path"] for f in Folder(lib_root).walk()}
     server = {
         "kept/photo.jpg": "ast_kept",
         "removed/a.jpg": "ast_a",
@@ -458,13 +458,13 @@ def test_protect_missing_library_root(tmp_path):
 @pytest.mark.fast
 def test_missing_recursive_nested_files(tmp_path):
     """Deeply nested missing files should be detected."""
-    from src.processing.ingest import _walk_library
+    from src.processing.originals import Folder
 
     lib_root = tmp_path / "library"
     (lib_root / "a" / "b").mkdir(parents=True)
     (lib_root / "a" / "b" / "exists.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
 
-    local_rel_paths = {f["rel_path"] for f in _walk_library(lib_root)}
+    local_rel_paths = {f["rel_path"] for f in Folder(lib_root).walk()}
     server = {
         "a/b/exists.jpg": "ast_exists",
         "a/b/gone.jpg": "ast_gone_shallow",

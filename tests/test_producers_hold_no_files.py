@@ -34,7 +34,8 @@ FORBIDDEN = {
                                                    r"|\bmkdtemp\b|\bmkstemp\b",
     "moving files about": r"\bshutil\b",
     "where things are kept": r"\bcache_dir\b|\bget_storage\b|\bget_store\b|storage\.(local|files|store)\b",
-    "finding an original": r"\bresolve_source_path\b|\bcheck_rel_path\b|\bio_utils\b|\bacct\.root\(",
+    "finding an original": r"\bresolve_source_path\b|\bcheck_rel_path\b|\bio_utils\b|\bacct\.(root|originals)\("
+                           r"|\bprocessing\.(originals|roots)\b",
     "opening a path": r"(?<![\w.])open\(",
 }
 CHECK = re.compile("|".join(f"(?:{p})" for p in FORBIDDEN.values()))
@@ -59,9 +60,11 @@ def test_the_check_would_find_one():
     for line in ("import tempfile", "with tempfile.TemporaryDirectory() as tmp:", "import shutil",
                  "from src.processing.cache_dir import cache_dir", "store = get_store()",
                  "from src.server.storage.local import get_storage", "source = resolve_source_path(root, rel)",
-                 "root = self.acct.root(library_id)", "with open(path, 'rb') as f:"):
+                 "root = self.acct.root(library_id)", "originals = self.acct.originals(library_id)",
+                 "from src.processing.originals import reach", "with open(path, 'rb') as f:"):
         assert CHECK.search(line), line
     for line in ("frame = self.scratch / 'frame-1.jpg'", "with self.inputs.original(clip) as source:",
+                 "with self.inputs.originals(self.job.items) as paths:",
                  "with Image.open(frame) as img:", "devnull = os.open(os.devnull, os.O_WRONLY)",
                  "files={'file': ('rep.jpg', s.frame, 'image/jpeg')}"):
         assert not CHECK.search(line), line

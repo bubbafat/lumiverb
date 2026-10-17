@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.processing.originals import Folder
 from src.server.scheduler import account as account_mod
 from src.server.scheduler.scans import ScanState
 
@@ -56,14 +57,14 @@ class Wall:
 def test_storage_work_goes_by_the_latest_look(acct, tmp_path: Path) -> None:
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
     assert acct.library_ids(storage=True) == []  # not looked at yet
-    acct.set_reachable({"lib_1": tmp_path, "lib_2": None})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1"), "lib_2": None})
     assert acct.library_ids(storage=True) == ["lib_1"]
     assert acct.library_ids(storage=False) == ["lib_1", "lib_2"]
-    assert acct.root("lib_1") == tmp_path and acct.root("lib_2") is None
+    assert acct.originals("lib_1") == Folder(tmp_path, "lib_1") and acct.originals("lib_2") is None
     acct.unreachable("lib_1")  # a job found it gone
     assert acct.library_ids(storage=True) == [] and acct.reachable == {"lib_1": False, "lib_2": False}
-    acct.set_reachable({"lib_2": tmp_path})  # a scan's look at one library leaves the other's
-    assert acct.library_ids(storage=True) == ["lib_2"] and acct.root("lib_1") is None
+    acct.set_reachable({"lib_2": Folder(tmp_path, "lib_2")})  # a scan's look at one library leaves the other's
+    assert acct.library_ids(storage=True) == ["lib_2"] and acct.originals("lib_1") is None
 
 
 def test_only_libraries_this_server_reads_are_looked_at_or_worked_in(acct, tmp_path: Path, monkeypatch) -> None:
@@ -107,7 +108,7 @@ def test_each_look_is_kept_as_when_last_seen_and_since_when_unreachable(acct, tm
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
     assert acct.storage_seen() == {}  # not looked at yet, no record
     t0 = acct.wall.now
-    acct.set_reachable({"lib_1": tmp_path, "lib_2": None})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1"), "lib_2": None})
     assert acct.storage_seen() == {
         "lib_1": {"seen_at": t0.isoformat(), "away_since": None, "checked": True},
         "lib_2": {"seen_at": None, "away_since": t0.isoformat(), "checked": True},
@@ -117,14 +118,14 @@ def test_each_look_is_kept_as_when_last_seen_and_since_when_unreachable(acct, tm
     assert acct.storage_seen()["lib_1"] == {"seen_at": t0.isoformat(), "away_since": t1.isoformat(), "checked": True}
     assert acct.storage_seen()["lib_2"]["away_since"] == t0.isoformat()
     t2 = acct.wall.advance(minutes=5)
-    acct.set_reachable({"lib_1": tmp_path, "lib_2": None})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1"), "lib_2": None})
     assert acct.storage_seen()["lib_1"] == {"seen_at": t2.isoformat(), "away_since": None, "checked": True}
 
 
 def test_a_job_finding_the_storage_gone_is_a_look(acct, tmp_path: Path) -> None:
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}])
     t0 = acct.wall.now
-    acct.set_reachable({"lib_1": tmp_path})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1")})
     t1 = acct.wall.advance(minutes=1)
     acct.unreachable("lib_1")
     assert acct.storage_seen()["lib_1"] == {"seen_at": t0.isoformat(), "away_since": t1.isoformat(), "checked": True}
@@ -140,7 +141,7 @@ def test_the_record_from_before_a_restart_is_kept_but_not_looked_at_yet(acct, tm
         "lib_2": {"seen_at": None, "away_since": "2026-10-09T09:00:00+00:00", "checked": False},
     }
     assert acct.library_ids(storage=True) == []  # a record isn't a look: storage work waits for one
-    acct.set_reachable({"lib_1": tmp_path, "lib_2": None})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1"), "lib_2": None})
     assert acct.storage_seen()["lib_2"] == {"seen_at": None, "away_since": "2026-10-09T09:00:00+00:00",
                                             "checked": True}  # still gone since then
     acct.seed_storage(None)  # nothing to restore
@@ -149,7 +150,7 @@ def test_the_record_from_before_a_restart_is_kept_but_not_looked_at_yet(acct, tm
 
 def test_records_of_libraries_that_are_gone_are_let_go(acct, tmp_path: Path) -> None:
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}, {"library_id": "lib_2", "name": "B"}])
-    acct.set_reachable({"lib_1": tmp_path, "lib_2": tmp_path})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1"), "lib_2": Folder(tmp_path, "lib_2")})
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}])
     assert list(acct.storage_seen()) == ["lib_1"]
 
@@ -159,7 +160,7 @@ def test_the_preview_cache_is_the_accounts_one_and_never_reads_an_original(acct,
     reachable or not (ADR-020 decision 4)."""
     acct.set_libraries([{"library_id": "lib_1", "name": "A"}])
     first = acct.proxy_cache("lib_1")
-    acct.set_reachable({"lib_1": tmp_path})
+    acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1")})
     assert acct.proxy_cache("lib_1") is first and acct.proxy_cache("lib_2") is first
     assert not hasattr(first, "_root_path")
 

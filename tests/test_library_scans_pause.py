@@ -184,7 +184,7 @@ def test_a_library_paused_mid_pass_waits_and_isnt_failing(tmp_path):
     def scan_library(*a, **kw):
         raise LumiverbAPIError("scans_paused", "Scans of Paused are paused", 409)
 
-    with (patch("src.server.scheduler.scans.reachable_root", lambda library, **kw: tmp_path),
+    with (patch("src.processing.roots.reachable_root", lambda library, **kw: tmp_path),
           patch("src.server.scheduler.scans.scan_library", scan_library)):
         scan_pass(MagicMock(), [library], state, now=1000.0)
     assert state.failing == {}
@@ -192,7 +192,7 @@ def test_a_library_paused_mid_pass_waits_and_isnt_failing(tmp_path):
     def failing(*a, **kw):  # any other refusal is still the scan failing
         raise LumiverbAPIError("library_trashed", "The library is in the trash.", 409)
 
-    with (patch("src.server.scheduler.scans.reachable_root", lambda library, **kw: tmp_path),
+    with (patch("src.processing.roots.reachable_root", lambda library, **kw: tmp_path),
           patch("src.server.scheduler.scans.scan_library", failing)):
         scan_pass(MagicMock(), [library], state, now=1000.0)
     assert list(state.failing) == ["lib_1"]

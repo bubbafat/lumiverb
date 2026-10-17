@@ -1,9 +1,9 @@
 """What a job's work is made from (ADR-020 decision 4): each clip's stored
 preview and analysis proxy, by the keys its queue row carries
 (src/server/scheduler/queue.py), and its original for a producer that reads
-the storage (storage=True: src/producers/runner.py lets no other ask). A
-producer asks its job (Work.inputs); where the file comes from is this
-module's:
+the storage (storage=True: src/producers/runner.py lets no other ask),
+through its library's originals (src/processing/originals.py). A producer
+asks its job (Work.inputs); where the file comes from is this module's:
 
 - beside the API (its Store on this machine's disk: service.stores_here),
   from the Store by key: a file a tool reads is held for the block
@@ -95,47 +95,51 @@ class Inputs:
     @contextlib.contextmanager
     def original(self, clip: dict) -> Iterator[Path]:
         """The clip's original on its library's storage, as a file for the
-        block. The storage away at the last look, or gone since: the job
-        isn't tried (NotTried). The file missing from storage that's there
-        waits for the scan that says so (Waits, SCAN). A path that would
-        leave the library is the clip's (Failed)."""
-        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
+        block (its library's originals at the last look:
+        src/processing/originals.py). The storage away at the last look, or
+        gone since: the job isn't tried (NotTried). The file missing from
+        storage that's there waits for the scan that says so (Waits, SCAN). A
+        path that would leave the library is the clip's (Failed), as is a
+        file that can't be read (another OSError, saying why)."""
+        from src.shared.io_utils import UnsafeRelPathError
 
         acct, library_id = self._acct, clip["library_id"]
-        root = acct.root(library_id)
-        if root is None:
+        originals = acct.originals(library_id)
+        if originals is None:
             logger.info("scheduler: %s's storage isn't reachable; its storage work waits", clip["rel_path"])
             acct.unreachable(library_id)
             raise NotTried(clip["rel_path"])
-        try:
-            source = resolve_source_path(root, clip["rel_path"])
-        except UnsafeRelPathError:
-            raise Failed("outside the library") from None
-        if not source.is_file():
-            if acct.storage_gone(library_id):
-                logger.info("scheduler: %s's storage went away; its storage work waits", clip["rel_path"])
-                acct.unreachable(library_id)
-                raise NotTried(clip["rel_path"])
-            logger.warning("scheduler: %s isn't on its storage; it waits for the scan", clip["rel_path"])
-            raise Waits("missing", reason=SCAN)
-        yield source
+        with contextlib.ExitStack() as held:
+            try:
+                source = held.enter_context(originals.local_file(clip["rel_path"]))
+            except UnsafeRelPathError:
+                raise Failed("outside the library") from None
+            except OSError as exc:
+                if acct.storage_gone(library_id):
+                    logger.info("scheduler: %s's storage went away; its storage work waits", clip["rel_path"])
+                    acct.unreachable(library_id)
+                    raise NotTried(clip["rel_path"]) from None
+                if not isinstance(exc, FileNotFoundError):
+                    raise
+                logger.warning("scheduler: %s isn't on its storage; it waits for the scan", clip["rel_path"])
+                raise Waits("missing", reason=SCAN) from None
+            yield source
 
     @contextlib.contextmanager
     def originals(self, clips: Iterable[dict]) -> Iterator[dict[str, Path]]:
         """The clips' originals that are there now, by asset id, as files for
         the block: for reading many at once (one exiftool). Quietly without
         the ones that aren't: each clip's own original() says why."""
-        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
+        from src.shared.io_utils import UnsafeRelPathError
 
         found: dict[str, Path] = {}
-        for clip in clips:
-            root = self._acct.root(clip["library_id"])
-            if root is None:
-                continue
-            try:
-                source = resolve_source_path(root, clip["rel_path"])
-            except UnsafeRelPathError:
-                continue
-            if source.is_file():
-                found[clip["asset_id"]] = source
-        yield found
+        with contextlib.ExitStack() as held:
+            for clip in clips:
+                originals = self._acct.originals(clip["library_id"])
+                if originals is None:
+                    continue
+                try:
+                    found[clip["asset_id"]] = held.enter_context(originals.local_file(clip["rel_path"]))
+                except (OSError, UnsafeRelPathError):
+                    continue
+            yield found

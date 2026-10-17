@@ -21,6 +21,7 @@ from rich.console import Console
 from src.processing import roots
 from src.processing import machine
 from src.processing.machine import Machine
+from src.processing.originals import Folder
 from src.processing.scan import ScanStats
 from src.server.scheduler import runners
 from src.server.scheduler.dispatch import Job
@@ -183,7 +184,7 @@ def test_where_each_librarys_storage_is_is_said_before_any_scan(das: Path) -> No
     server = FakeServer([LIB, {"library_id": "lib_2", "name": "Gone", "root_path": "/nowhere"}],
                         pending={"lib_1": [CHANGE]})
     _pass(server, scan=scan, on_roots=said.update)
-    assert seen and seen[0] == {"lib_1": das / "Footage", "lib_2": None}
+    assert seen and seen[0] == {"lib_1": Folder(das / "Footage", "lib_1"), "lib_2": None}
 
 
 @pytest.mark.fast

@@ -12,7 +12,7 @@ Accepted (2026-10-16, Robert).
 | 1 | The `Store` interface and its filesystem provider; contract tests | Done (v0.1.35) |
 | 2 | The API's own code through the `Store` (no paths outside the provider) | Done (v0.1.36–v0.1.39). The daily sweep lists and deletes by key, a library at a time; folders the database doesn't list, and writes a crash left, are the filesystem provider's (`storage/folders.py`) |
 | 3 | Producers get inputs and scratch from the runner; caches with caps | Done (v0.1.40–v0.1.44): scratch from the runner; inputs by key from the queue's rows, the Store held for the job beside the API; the scheduler's caches capped, a file a job holds never evicted; model weights in one folder, pruned of those no setting names; originals only through `inputs.original` for `storage=True` producers (faces and the preview cache read none), and `tests/test_producers_hold_no_files.py` |
-| 4 | The server's originals behind its read-only `Originals` interface; the API documented as a client's whole contract | Not started |
+| 4 | The server's originals behind its read-only `Originals` interface; the API documented as a client's whole contract | In progress: the interface (v0.1.45), `src/processing/originals.py`: `reach` gives a library's originals when they can be read now, then `walk`, `stat` and `local_file`; the scheduler's looks, scans and job inputs, the API's drive check and the CLI's scan all read through it (`tests/test_originals_only.py`). Next: cursor-api as a client's whole contract |
 | 5 | Clients keep only bounded caches of their own | Not started |
 
 ## Overview
@@ -146,13 +146,16 @@ Originals don't go through the `Store`. They aren't Lumiverb's (they're never wr
 - they may be unmounted or asleep (`reachable_root`).
 
 ```python
-class Originals(Protocol):
-    def reachable(self, library) -> bool: ...
-    def walk(self, library, scope: str) -> Iterator[Found]: ...      # the scan's listing
-    def stat(self, library, rel_path: str) -> Stat: ...
+def reach(library, *, require_entries=False, timeout=...) -> Originals | None: ...  # readable now?
+
+class Originals(Protocol):                  # one library's, as reach found them
+    def walk(self, scope: str | None = None, ...) -> list[dict]: ...   # the scan's listing
+    def stat(self, rel_path: str) -> Stat | None: ...
     @contextmanager
-    def local_file(self, library, rel_path: str) -> Iterator[Path]: ...
+    def local_file(self, rel_path: str) -> Iterator[Path]: ...
 ```
+
+As built (phase 4), `reachable(library)` became `reach(library)`, which gives the originals it found rather than a yes. So what's read afterwards is the folder that was looked at, not the root mapped again. The scheduler keeps each library's latest look this way, and a job's inputs read from it.
 
 - `roots.py`, `resolve_source_path` and the scan's walk move behind it.
 - Nothing writes through it, and nothing on the server outside it opens an original.

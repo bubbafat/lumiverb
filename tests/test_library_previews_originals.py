@@ -1,9 +1,9 @@
 """Whether a library's previews are on its originals' drive (Library settings
 › Previews, routers/libraries.py): asked in the request, so never waited on.
 A network share whose server sleeps (prod's CIFS mount of the Mac's drives)
-can block a stat for minutes: the originals are probed as the scheduler
-probes a library's root (roots.reachable_root, in a thread), for 2 seconds,
-and not knowing says nothing."""
+can block a stat for minutes: the originals are reached as the scheduler
+reaches a library's (src/processing/originals.py: the root's probe and the
+drive's look each in a thread), for 2 seconds, and not knowing says nothing."""
 
 from __future__ import annotations
 
