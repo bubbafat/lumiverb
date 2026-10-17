@@ -46,6 +46,9 @@ CONTENT_TYPES: dict[str, str] = {
 }
 
 
+# Videos are kept checked and rewritten (src/server/uploaded_video.py): what a browser plays, without metadata.
+VIDEO_ARTIFACTS = frozenset({"video_preview", "analysis_proxy"})
+
 # Image artifacts are stored re-encoded, without the original's metadata
 # (src/server/preview_image.py): (format, quality).
 IMAGE_ARTIFACTS: dict[str, tuple[str, int]] = {"proxy": ("WEBP", 80), "thumbnail": ("WEBP", 80),
@@ -61,13 +64,16 @@ def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type: str) -> str:
+async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type: str) -> tuple[str, float | None]:
     """The upload, kept under key: streamed (never all in memory) to a write
-    nothing sees until it's whole, an image re-encoded (IMAGE_ARTIFACTS), then
-    put in its place. Its SHA-256 as kept. 413 past the type's limit, 400 for
-    an image that isn't one; nothing is kept then."""
+    nothing sees until it's whole, an image re-encoded (IMAGE_ARTIFACTS), a
+    video checked and rewritten (VIDEO_ARTIFACTS), then put in its place. Its
+    SHA-256 as kept, and a video's length as the server measured it. 413 past
+    the type's limit, 400 for an image that isn't one, 422 video_not_playable
+    for a video that isn't one Lumiverb keeps; nothing is kept then."""
     from starlette.concurrency import run_in_threadpool
 
+    from src.server import uploaded_video
     from src.server.preview_image import NotAnImageError
 
     max_bytes = _max_upload_bytes(artifact_type)
@@ -81,17 +87,27 @@ async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type
                     raise HTTPException(status_code=413, detail="File too large")
                 hasher.update(chunk)
                 f.write(chunk)
+        if artifact_type in VIDEO_ARTIFACTS:
+            try:
+                kept = await run_in_threadpool(uploaded_video.keep, partial)
+            except uploaded_video.NotPlayableError as exc:
+                raise ApiError(422, "video_not_playable",
+                               f"{artifact_type} isn't a video every browser plays: {exc}. Send H.264 (8-bit 4:2:0,"
+                               " at most High profile, limited range) with AAC-LC audio, at most stereo, in an MP4.",
+                               {"problems": exc.problems}) from None
+            return kept.sha256, kept.duration_sec
         if artifact_type not in IMAGE_ARTIFACTS:
-            return hasher.hexdigest()
+            return hasher.hexdigest(), None
         try:
-            return await run_in_threadpool(_reencode_image_file, partial, *IMAGE_ARTIFACTS[artifact_type])
+            return await run_in_threadpool(_reencode_image_file, partial, *IMAGE_ARTIFACTS[artifact_type]), None
         except NotAnImageError:
             raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
 
 
 class ArtifactUploadResponse(BaseModel):
     key: str
-    sha256: str
+    sha256: str  # of what's kept: a video's rewrite, an image's re-encoding
+    duration_sec: float | None = None  # a video's length, as the server measured it
 
 
 @router.post("/{asset_id}/artifacts/{artifact_type}", response_model=ArtifactUploadResponse, dependencies=[Depends(require_editor)])
@@ -156,7 +172,7 @@ async def upload_artifact(
             )
         key = keys.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
-    sha256 = await _save_upload(get_store(), key, file, artifact_type)
+    sha256, duration_sec = await _save_upload(get_store(), key, file, artifact_type)
 
     if artifact_type == "proxy":
         asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
@@ -174,13 +190,14 @@ async def upload_artifact(
     # video_scenes.rep_frame_ms alone. (Earlier this branch fell through to
     # set_video_preview, which clobbered the MP4 preview path with the JPG.)
 
-    return ArtifactUploadResponse(key=key, sha256=sha256)
+    return ArtifactUploadResponse(key=key, sha256=sha256, duration_sec=duration_sec)
 
 
 class BatchArtifactItem(BaseModel):
     artifact_type: str
     key: str
     sha256: str
+    duration_sec: float | None = None
 
 
 class BatchArtifactUploadResponse(BaseModel):
@@ -245,7 +262,7 @@ async def upload_artifacts_batch(
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
 
-        sha256 = await _save_upload(store, key, upload_file, artifact_type)
+        sha256, duration_sec = await _save_upload(store, key, upload_file, artifact_type)
 
         if artifact_type == "proxy":
             asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)
@@ -256,7 +273,7 @@ async def upload_artifacts_batch(
         if artifact_type in ("proxy", "video_preview"):
             record_lineage(session, asset_id, artifact_type, made[artifact_type])
 
-        items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256))
+        items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256, duration_sec=duration_sec))
 
     return BatchArtifactUploadResponse(items=items)
 

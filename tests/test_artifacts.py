@@ -33,6 +33,7 @@ from tests.clips import make_clip
 from tests.conftest import PG_IMAGE, _AuthClient, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
 from tests.machine_lineage import made, made_json
 from tests.stored_in import stored_in
+from tests.videos import playable
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +304,7 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
     auth, _, library_id, _, storage, tenant_url, _ = artifact_env
     video_asset_id = make_clip(tenant_url, library_id, "clip.mp4", media_type="video", file_size=5000)
 
-    mp4_content = b"FTYP" + secrets.token_bytes(512)
+    mp4_content = playable()
     r = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
@@ -312,8 +313,9 @@ def test_upload_video_preview_writes_file_no_sha256_col(artifact_env) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert "key" in body
-    assert body["sha256"] == _sha256(mp4_content)
-    assert storage.abs_path(body["key"]).exists()
+    # What's kept is the server's rewrite (src/server/uploaded_video.py), and its length the server's measure.
+    assert body["sha256"] == _sha256(storage.abs_path(body["key"]).read_bytes())
+    assert body["duration_sec"] == pytest.approx(1.0, abs=0.1)
 
     engine = create_engine(tenant_url)
     with engine.connect() as conn:
@@ -369,7 +371,7 @@ def test_upload_scene_rep_does_not_overwrite_video_preview_key(artifact_env) -> 
     video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
     # Step 1: upload an MP4 video preview, capturing the resulting key.
-    mp4_content = b"FTYP" + secrets.token_bytes(512)
+    mp4_content = playable()
     r_prev = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
         files={"file": ("preview.mp4", mp4_content, "video/mp4")},
@@ -586,17 +588,17 @@ def test_download_video_preview_returns_bytes(artifact_env) -> None:
     rel_path = f"dl_clip_{secrets.token_hex(4)}.mp4"
     video_asset_id = make_clip(tenant_url, library_id, rel_path, media_type="video", file_size=5000)
 
-    mp4_content = b"FTYP" + secrets.token_bytes(512)
-    auth.post(
+    up = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
-        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("video_preview")},
     )
+    assert up.status_code == 200, up.text
 
     r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 200
     assert r.headers["content-type"] == "video/mp4"
-    assert r.content == mp4_content
+    assert _sha256(r.content) == up.json()["sha256"]  # what was kept
 
 
 @pytest.mark.slow
@@ -814,10 +816,9 @@ def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
     video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_stream")
 
-    mp4_content = b"FTYP" + secrets.token_bytes(2048)
     r_up = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
-        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("video_preview")},
     )
     assert r_up.status_code == 200, r_up.text
@@ -825,7 +826,51 @@ def test_preview_endpoint_streams_uploaded_mp4(artifact_env) -> None:
     r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
-    assert r.content == mp4_content
+    assert _sha256(r.content) == r_up.json()["sha256"]  # what was kept
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("artifact_type", ["video_preview", "analysis_proxy"])
+def test_a_video_no_browser_plays_is_refused_and_nothing_kept(artifact_env, artifact_type) -> None:
+    # ADR-018 decisions 10 and 11: the server takes only what every browser plays (src/server/uploaded_video.py).
+    from tests.videos import made_with
+
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
+    video_asset_id = _create_video_asset(tenant_url, library_id, prefix=f"refused_{artifact_type}")
+    hevc = made_with("-c:v", "libx265", "-pix_fmt", "yuv420p", "-x265-params", "log-level=error", "-tag:v", "hvc1")
+    r = auth.post(f"/v1/assets/{video_asset_id}/artifacts/{artifact_type}",
+                  files={"file": ("v.mp4", hevc, "video/mp4")}, data={"lineage": made_json(artifact_type)})
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "video_not_playable" and any("not H.264" in p for p in error["details"]["problems"])
+    engine = create_engine(tenant_url)
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT video_preview_key, analysis_proxy_key FROM assets WHERE asset_id = :id"),
+                           {"id": video_asset_id}).fetchone()
+    engine.dispose()
+    assert tuple(row) == (None, None)
+    from pathlib import Path
+
+    assert not [p for p in Path(storage._data_dir).rglob("*") if video_asset_id in str(p)], "no file of it kept"
+
+
+@pytest.mark.slow
+def test_a_video_kept_says_nothing_of_where_it_was_taken(artifact_env, tmp_path) -> None:
+    import subprocess
+
+    auth, _, library_id, _, storage, tenant_url, _ = artifact_env
+    video_asset_id = _create_video_asset(tenant_url, library_id, prefix="located")
+    tagged = tmp_path / "tagged.mp4"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=25:duration=1",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-metadata", "location=+40.6892-074.0445/", str(tagged)], check=True)
+    r = auth.post(f"/v1/assets/{video_asset_id}/artifacts/video_preview",
+                  files={"file": ("v.mp4", tagged.read_bytes(), "video/mp4")},
+                  data={"lineage": made_json("video_preview")})
+    assert r.status_code == 200, r.text
+    kept = storage.abs_path(r.json()["key"]).read_bytes()
+    assert b"loci" in tagged.read_bytes() and b"loci" not in kept  # an MP4's location box
 
 
 @pytest.mark.slow
@@ -840,10 +885,9 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     auth, _, library_id, _, _, tenant_url, _ = artifact_env
     video_asset_id = _create_video_asset(tenant_url, library_id, prefix="preview_after_scene")
 
-    mp4_content = b"FTYP" + secrets.token_bytes(2048)
     r_up = auth.post(
         f"/v1/assets/{video_asset_id}/artifacts/video_preview",
-        files={"file": ("preview.mp4", mp4_content, "video/mp4")},
+        files={"file": ("preview.mp4", playable(), "video/mp4")},
         data={"lineage": made_json("video_preview")},
     )
     assert r_up.status_code == 200, r_up.text
@@ -860,7 +904,7 @@ def test_preview_endpoint_serves_mp4_after_scene_rep_upload(artifact_env) -> Non
     r = auth.get(f"/v1/assets/{video_asset_id}/artifacts/video_preview")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "video/mp4"
-    assert r.content == mp4_content, (
+    assert _sha256(r.content) == r_up.json()["sha256"], (
         "preview endpoint returned non-MP4 bytes after a scene_rep upload — "
         "video_preview_key was clobbered"
     )
@@ -1000,7 +1044,7 @@ def test_a_download_while_the_previews_cant_be_reached_is_503_never_missing(arti
     assert r.status_code == 200, r.text
     video_id = make_clip(tenant_url, library_id, f"away_{secrets.token_hex(4)}.mov", media_type="video")
     r = auth.post(f"/v1/assets/{video_id}/artifacts/video_preview",
-                  files={"file": ("p.mp4", b"\x00\x00\x00\x18ftypmp42 preview", "video/mp4")},
+                  files={"file": ("p.mp4", playable(), "video/mp4")},
                   data={"lineage": made_json("video_preview")})
     assert r.status_code == 200, r.text
 

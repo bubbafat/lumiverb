@@ -31,6 +31,7 @@ from testcontainers.postgres import PostgresContainer
 
 from src.server.api.main import app
 from src.server.config import get_settings
+from src.server import uploaded_video
 from src.server.database import _engines
 from src.server.storage.local import LocalStorage
 from tests.conftest import PG_IMAGE, _ensure_psycopg2, _provision_tenant_db, _run_control_migrations
@@ -53,6 +54,8 @@ def media(tmp_path_factory) -> dict[str, bytes]:
                 "-c:v", "libx264", "-preset", "ultrafast", "-g", "30", "-pix_fmt", "yuv420p", "-c:a", "aac",
                 "-movflags", "+faststart", str(out)]
         subprocess.run(cmd, check=True)
+        # As the server keeps it (its rewrite, src/server/uploaded_video.py), so what's served is what was sent.
+        uploaded_video.keep(out)
         return out.read_bytes()
 
     return {"proxy": make("proxy.mp4", 6.0, 2), "preview": make("preview.mp4", 3.0, 1),

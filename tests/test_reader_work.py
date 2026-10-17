@@ -22,6 +22,7 @@ from src.shared.producers import PRODUCERS
 from tests.producer_fakes import due
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
+from tests.videos import playable
 
 ALL_WORK = ["previews", "probe", "capture", "analysis_proxy"]
 
@@ -68,7 +69,7 @@ def _video(env, rel_path: str, *, capture: bool = True) -> tuple[str, str]:
 def _preview_sent(env, clip: str, sha: str) -> None:
     client, headers, *_ = env
     r = client.post(f"/v1/assets/{clip}/artifacts/video_preview", headers=headers,
-                    files={"file": ("p.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypmp42 preview"), "video/mp4")},
+                    files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
                     data={"lineage": json.dumps(_want(env, "video_preview", sha))})
     assert r.status_code == 200, r.text
 
