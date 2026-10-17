@@ -941,14 +941,10 @@ class AssetRepository:
         self._session.commit()
 
     def set_video_indexed(self, asset_id: str) -> None:
-        """Set asset.video_indexed = True. Used when video-vision job completes."""
-        asset = self._session.get(Asset, asset_id)
-        if asset is None:
-            raise ValueError(f"Asset not found: {asset_id}")
-        asset.video_indexed = True
-        asset.updated_at = utcnow()
-        self._session.add(asset)
-        self._session.commit()
+        """The clip's scenes are found (its last chunk is in); not committed:
+        it lands with how they were found."""
+        self._session.execute(text("UPDATE assets SET video_indexed = true, updated_at = now() WHERE asset_id = :a"),
+                              {"a": asset_id})
 
     def update_exif(
         self,

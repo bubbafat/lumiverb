@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
 from datetime import timedelta
 
 from sqlalchemy import func, insert, text
@@ -60,6 +62,112 @@ class VideoSceneRepository:
         self._session.add(scene)
         self._session.commit()
 
+    # -- A redo: scenes found beside the ones the clip shows ---------------------------------
+
+    def shows_scenes(self, asset_id: str) -> bool:
+        """Whether the clip's scenes are found: a run now finds new ones beside them."""
+        return bool(self._session.execute(text("SELECT video_indexed FROM assets WHERE asset_id = :a"),
+                                          {"a": asset_id}).scalar())
+
+    def found_beside(self, asset_id: str, made: dict) -> tuple[dict | None, int | None]:
+        """A redo's run, found beside the scenes the clip shows (which stay, with
+        their descriptions, images and search entries, until the new ones are
+        found and described: swap_in). Its own run under way goes on. Returns
+        the run its chunks record, or None when there's nothing to find beside
+        (the clip shows no scenes yet, its first run going on, or shows them
+        found this way already); and how many scenes another run had staged,
+        dropped with its chunks (None when no chunks were dropped). Commits."""
+        row = self._session.execute(text(
+            "SELECT a.video_indexed, l.producer, l.producer_version, l.settings_hash"
+            " FROM assets a LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = 'scenes'"
+            " WHERE a.asset_id = :a FOR UPDATE OF a"), {"a": asset_id}).first()
+        if row is None or not row.video_indexed or (row.producer, row.producer_version, row.settings_hash) == (
+                made["producer"], str(made.get("version") or ""), made.get("settings_hash")):
+            self._session.commit()
+            return None, None
+        run = self._session.execute(text("SELECT run FROM video_index_chunks WHERE asset_id = :a LIMIT 1"),
+                                    {"a": asset_id}).scalar()
+        if same_run(run, made):
+            self._session.commit()
+            return made, None
+        # The chunks the scenes shown were found with, or another run's, go, with
+        # the scenes that run staged; the scenes shown stay.
+        dropped = self._session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a AND staged IS NOT NULL"),
+                                        {"a": asset_id}).rowcount
+        self._session.execute(text("DELETE FROM video_index_chunks WHERE asset_id = :a"), {"a": asset_id})
+        self._session.commit()
+        return made, dropped
+
+    def mark_found(self, asset_id: str) -> None:
+        """A redo's scenes, every chunk in: found, described next (not committed)."""
+        self._session.execute(text("UPDATE video_scenes SET staged = 'found' WHERE asset_id = :a AND staged = 'finding'"),
+                              {"a": asset_id})
+
+    def swap_in(self, asset_id: str, described: dict | None) -> Swap | None:
+        """A redo's found scenes become the ones the clip shows, in one step: the
+        old ones go (and with them what search found of them). described: how
+        the new ones were described (recorded for the clip), or None when
+        nothing describes them. None when there's nothing to swap in (done
+        already). Commits; the old scenes' images are the caller's to delete."""
+        from src.server.repository import lineage
+
+        self._session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
+        new = self._session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
+                                         " WHERE asset_id = :a AND staged = 'found'"), {"a": asset_id}).all()
+        if not new:
+            self._session.rollback()
+            return None
+        old = self._session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
+                                         " WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id}).all()
+        self._session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id})
+        self._session.execute(text("UPDATE video_scenes SET staged = NULL WHERE asset_id = :a AND staged = 'found'"),
+                              {"a": asset_id})
+        if described is not None:
+            lineage.record(self._session, asset_id, "scene_vision", described, commit=False)
+        library_id = self._session.execute(text("SELECT library_id FROM assets WHERE asset_id = :a"),
+                                           {"a": asset_id}).scalar()
+        self._session.commit()
+        return Swap(library_id=library_id, new_frames={r.rep_frame_ms for r in new},
+                    old_frames={r.rep_frame_ms for r in old}, new=len(new), old=len(old))
+
+    def run_of(self, scene_id: str, scene_lineage: dict) -> SceneRun | None:
+        """The scene's clip, which of its runs the scene is in (staged), and how
+        many of that run's scenes aren't described as scene_lineage says yet."""
+        row = self._session.execute(text("SELECT asset_id, staged FROM video_scenes WHERE scene_id = :s"),
+                                    {"s": scene_id}).first()
+        if row is None:
+            return None
+        undescribed = self._session.execute(text(
+            "SELECT count(*) FROM video_scenes WHERE asset_id = :a"
+            " AND staged IS NOT DISTINCT FROM CAST(:st AS text)"
+            " AND (description IS NULL OR lineage IS DISTINCT FROM CAST(:l AS jsonb))"
+        ), {"a": row.asset_id, "st": row.staged, "l": json.dumps(scene_lineage)}).scalar()
+        return SceneRun(asset_id=row.asset_id, staged=row.staged, undescribed=undescribed or 0)
+
+
+def same_run(run: dict | None, made: dict) -> bool:
+    """Whether a run's chunks find scenes as made says (its level too)."""
+    keys = ("producer", "version", "settings_hash", "level")
+    return run is not None and all(str(run.get(k) or "") == str(made.get(k) or "") for k in keys)
+
+
+@dataclass(frozen=True)
+class Swap:
+    """A redo's scenes swapped in: the clip's library, the frames of the new
+    scenes' and the old ones' images, and how many of each."""
+    library_id: str
+    new_frames: set[int]
+    old_frames: set[int]
+    new: int
+    old: int
+
+
+@dataclass(frozen=True)
+class SceneRun:
+    asset_id: str
+    staged: str | None  # None: the scenes the clip shows; "finding"/"found": a redo's
+    undescribed: int
+
 
 class ChunksBusy(Exception):
     """A clip's chunk is claimed (its lease not run out) or failed in this
@@ -78,6 +186,9 @@ class VideoIndexChunkRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def get_by_id(self, chunk_id: str) -> VideoIndexChunk | None:
+        return self._session.exec(select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)).first()
 
     def create_chunks_for_asset(
         self,
