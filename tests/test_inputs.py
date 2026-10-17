@@ -125,7 +125,7 @@ def test_a_preview_with_no_stored_file_is_the_caches(placed, key):
     inputs = Inputs(acct, store)
     assert inputs.preview_bytes(_photo(proxy_key=key)) == b"the cache's"
     acct.proxy_cache.assert_called_once_with("lib_1")
-    acct.proxy_cache.return_value.get.assert_called_once_with("ast_1", "photo.jpg")
+    acct.proxy_cache.return_value.get.assert_called_once_with("ast_1", content_hash=None)
     assert inputs.stored_preview(_photo(proxy_key=key)) is None
 
 

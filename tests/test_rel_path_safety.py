@@ -79,19 +79,21 @@ def test_resolve_source_path_follows_a_symlink_inside_the_root(tmp_path: Path) -
     assert resolve_source_path(tmp_path, "same/b.jpg") == tmp_path / "same" / "b.jpg"
 
 
-def test_the_runner_never_reads_through_a_symlink_out_of_the_root(tmp_path: Path) -> None:
+def test_a_jobs_inputs_never_read_through_a_symlink_out_of_the_root(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from src.producers.runner import Failed, Work
+    from src.producers.runner import Failed
+    from src.server.scheduler.inputs import Inputs
 
     root = tmp_path / "library"
     root.mkdir()
     (tmp_path / "x.jpg").write_bytes(b"outside")
     (root / "link.jpg").symlink_to(tmp_path / "x.jpg")
-    work = Work.__new__(Work)
-    work.acct = SimpleNamespace(root=lambda _library_id: root)
-    with pytest.raises(Failed):
-        work.original({"library_id": "lib_1", "rel_path": "link.jpg"})
+    inputs = Inputs(SimpleNamespace(root=lambda _library_id: root), None)
+    with pytest.raises(Failed), inputs.original({"library_id": "lib_1", "rel_path": "link.jpg"}):
+        pass
+    with inputs.originals([{"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "link.jpg"}]) as found:
+        assert found == {}, "quietly left out"
 
 
 @pytest.mark.parametrize("rel_path", BAD)
@@ -167,16 +169,13 @@ def test_api_takes_absolute_canonical_library_roots(root_path: str) -> None:
     assert checked_root_path(root_path) == root_path
 
 
-def test_proxy_cache_never_reads_outside_the_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from unittest.mock import patch
+def test_the_preview_cache_never_reads_a_librarys_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It has no library root to read from: a preview comes from the cache or the API (ADR-020 decision 4)."""
+    import inspect
 
     from src.processing.proxy import proxy_cache
 
     monkeypatch.setattr(proxy_cache, "cache_dir", lambda name: tmp_path / "cache" / name)
-    root = tmp_path / "library"
-    root.mkdir()
-    (tmp_path / "secret.jpg").write_bytes(b"outside")
-    cache = proxy_cache.ProxyCache(root_path=root)
-    with patch.object(cache, "put_from_path") as put:
-        assert cache.get("ast_x", "../secret.jpg") is None
-    put.assert_not_called()
+    assert "root_path" not in inspect.signature(proxy_cache.ProxyCache).parameters
+    assert not hasattr(proxy_cache.ProxyCache, "put_from_path")
+    assert proxy_cache.ProxyCache().get("ast_x") is None

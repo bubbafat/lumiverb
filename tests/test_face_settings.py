@@ -161,7 +161,6 @@ def test_the_scheduler_finds_faces_at_the_level_its_lineage_names(tmp_path, monk
     from tests.test_scheduler_runners import FakeAccount, _job
 
     acct = FakeAccount(tmp_path)
-    monkeypatch.setattr("src.producers.faces.work.face_proxy", lambda item, root, cache: True)
     used = dict(FACES.defaults)
     acct.producers = MagicMock()
     acct.producers.settings.return_value = used

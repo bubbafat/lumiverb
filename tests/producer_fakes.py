@@ -38,6 +38,7 @@ class FakeAccount:
 
     def __init__(self, client: Any, roots: dict[str, Path | None] | None = None) -> None:
         from src.processing.producer_settings import ProducerSettings
+        from src.server.scheduler.inputs import Inputs
 
         self.client = client
         self.producers = ProducerSettings(client)
@@ -45,6 +46,7 @@ class FakeAccount:
         self.failures = Failures()
         self.roots = dict(roots or {})
         self.away: list[str] = []
+        self.inputs = Inputs(self, None)  # the originals at roots; no Store on this disk
 
     def root(self, library_id: str) -> Path | None:
         return self.roots.get(library_id)

@@ -1,7 +1,9 @@
 """What a job's work is made from (ADR-020 decision 4): each clip's stored
 preview and analysis proxy, by the keys its queue row carries
-(src/server/scheduler/queue.py). A producer asks its job (Work.inputs);
-where the file comes from is this module's:
+(src/server/scheduler/queue.py), and its original for a producer that reads
+the storage (storage=True: src/producers/runner.py lets no other ask). A
+producer asks its job (Work.inputs); where the file comes from is this
+module's:
 
 - beside the API (its Store on this machine's disk: service.stores_here),
   from the Store by key: a file a tool reads is held for the block
@@ -17,14 +19,18 @@ taken for missing.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+import logging
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 from src.processing.proxy.proxy_cache import fit
 from src.producers.clip import PROXY_CACHE_EDGE
-from src.producers.runner import Waits
+from src.producers.runner import Failed, NotTried, Waits
 from src.server.storage.store import NotFound, Store, Unavailable
+from src.shared.waits import SCAN
+
+logger = logging.getLogger(__name__)
 
 
 class Inputs:
@@ -56,7 +62,7 @@ class Inputs:
         None when there's none to be had."""
         if (stored := self.stored_preview(clip)) is not None:
             return stored
-        return self._acct.proxy_cache(clip["library_id"]).get(clip["asset_id"], clip.get("rel_path"))
+        return self._acct.proxy_cache(clip["library_id"]).get(clip["asset_id"], content_hash=clip.get("content_hash"))
 
     @contextlib.contextmanager
     def analysis_proxy(self, clip: dict) -> Iterator[Path | None]:
@@ -83,3 +89,53 @@ class Inputs:
         with the job's scratch, and no copy is kept."""
         if self._store is None:
             self._acct.analysis_cache.put(clip["asset_id"], path)
+
+    # -- Originals (storage=True) ---------------------------------------------------
+
+    @contextlib.contextmanager
+    def original(self, clip: dict) -> Iterator[Path]:
+        """The clip's original on its library's storage, as a file for the
+        block. The storage away at the last look, or gone since: the job
+        isn't tried (NotTried). The file missing from storage that's there
+        waits for the scan that says so (Waits, SCAN). A path that would
+        leave the library is the clip's (Failed)."""
+        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
+
+        acct, library_id = self._acct, clip["library_id"]
+        root = acct.root(library_id)
+        if root is None:
+            logger.info("scheduler: %s's storage isn't reachable; its storage work waits", clip["rel_path"])
+            acct.unreachable(library_id)
+            raise NotTried(clip["rel_path"])
+        try:
+            source = resolve_source_path(root, clip["rel_path"])
+        except UnsafeRelPathError:
+            raise Failed("outside the library") from None
+        if not source.is_file():
+            if acct.storage_gone(library_id):
+                logger.info("scheduler: %s's storage went away; its storage work waits", clip["rel_path"])
+                acct.unreachable(library_id)
+                raise NotTried(clip["rel_path"])
+            logger.warning("scheduler: %s isn't on its storage; it waits for the scan", clip["rel_path"])
+            raise Waits("missing", reason=SCAN)
+        yield source
+
+    @contextlib.contextmanager
+    def originals(self, clips: Iterable[dict]) -> Iterator[dict[str, Path]]:
+        """The clips' originals that are there now, by asset id, as files for
+        the block: for reading many at once (one exiftool). Quietly without
+        the ones that aren't: each clip's own original() says why."""
+        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
+
+        found: dict[str, Path] = {}
+        for clip in clips:
+            root = self._acct.root(clip["library_id"])
+            if root is None:
+                continue
+            try:
+                source = resolve_source_path(root, clip["rel_path"])
+            except UnsafeRelPathError:
+                continue
+            if source.is_file():
+                found[clip["asset_id"]] = source
+        yield found

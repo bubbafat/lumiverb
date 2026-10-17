@@ -227,3 +227,24 @@ def test_a_scans_preview_from_the_cache_is_the_size_producers_see(tmp_path, monk
     Image.new("RGB", (2048, 1536), (10, 20, 30)).save(buf, format="JPEG")
     cache.put_scan("ast_1", buf.getvalue(), "sha256:" + "0" * 64)
     assert max(Image.open(io.BytesIO(cache.get("ast_1"))).size) == 1280
+
+
+def test_a_preview_cached_for_other_content_isnt_the_clips_the_servers_is_downloaded(tmp_path, monkeypatch):
+    """The cache knows what each was made from (its sidecar): one made from
+    content the clip no longer has is never handed out as the clip's."""
+    from unittest.mock import MagicMock
+
+    now, before = "sha256:" + "1" * 64, "sha256:" + "0" * 64
+    client = MagicMock()
+    client._url.side_effect = lambda path: path
+    client._client.get.return_value = MagicMock(status_code=200, content=b"the server's")
+    cache = _capped(tmp_path, monkeypatch, cap=0)
+    cache._client = client
+    cache.put_scan("ast_1", b"made from before", before)
+    assert cache.get("ast_1", content_hash=now) == b"the server's"
+    assert cache.get_source_hash("ast_1") == now, "kept, and what it's of"
+    assert cache.get("ast_1", content_hash=now) == b"the server's"
+    assert client._client.get.call_count == 1, "downloaded once"
+    cache.put_scan("ast_2", b"this content", now)
+    assert cache.get("ast_2", content_hash=now) == b"this content"
+    assert cache.get("ast_2") == b"this content", "nothing to compare with: as it is"

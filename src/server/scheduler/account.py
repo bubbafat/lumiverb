@@ -95,7 +95,7 @@ class Account:
         self._seen: dict[str, dict[str, str | None]] = {}
         self._checked: set[str] = set()
         self._lock = threading.Lock()
-        self._proxy_caches: dict[str, Any] = {}
+        self._proxy_cache: Any = None
         self._vision_provider: tuple[tuple, Any] | None = None
         self._transcriber: tuple[str, Any] | None = None
         self._refreshed_at: float | None = None
@@ -266,19 +266,16 @@ class Account:
     # -- caches and models --------------------------------------------------
 
     def proxy_cache(self, library_id: str) -> Any:
-        """The images CLIP, faces and vision see, for clips of one library,
-        where the API doesn't keep them on this machine (inputs.py): made from
-        the original while its storage is reachable, else downloaded."""
+        """The previews CLIP, faces and vision see where the API doesn't keep
+        them on this machine (inputs.py): this machine's cache, downloaded into
+        from the API. Never made from an original (ADR-020 decision 4)."""
         from src.processing.proxy.proxy_cache import ProxyCache
         from src.producers.clip import PROXY_CACHE_EDGE
 
-        root = self.root(library_id)
         with self._lock:
-            cache = self._proxy_caches.get(library_id)
-            if cache is None or cache._root_path != root:
-                cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, root_path=root, client=self.client)
-                self._proxy_caches[library_id] = cache
-            return cache
+            if self._proxy_cache is None:
+                self._proxy_cache = ProxyCache(max_edge=PROXY_CACHE_EDGE, client=self.client)
+            return self._proxy_cache
 
     def vision_provider(self) -> tuple[Any, str]:
         """Describes and reads images on whichever vision machine is free, and the model."""

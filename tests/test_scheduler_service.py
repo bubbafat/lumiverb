@@ -1416,12 +1416,14 @@ class Storage:
 
 class ReadsOriginals(Work):
     """A producer reading each clip's original, as probe, capture and render
-    do: through Work.original, which goes by the latest look and notes
-    storage found gone since."""
+    do: through its inputs (Work.inputs.original), which go by the latest
+    look and note storage found gone since. One that reads the storage."""
+
+    artifact = "probe"
 
     def make(self, clip: dict) -> str:
-        self.original(clip)
-        return clip["asset_id"]
+        with self.inputs.original(clip):
+            return clip["asset_id"]
 
     def save(self, client, made) -> None:
         client.post(f"/made/{self.job.kind}")

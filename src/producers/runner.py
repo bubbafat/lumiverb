@@ -29,6 +29,11 @@ subclass that makes one clip's artifact (make) and saves what was made
   a folder of its own (Work.scratch), removed when the job ends, however it
   ends, and at the scheduler's start (empty_scratch): a producer makes no
   temporary file of its own (ADR-020 decision 4).
+- Inputs. What a clip is made from comes from the job (Work.inputs): its
+  stored preview and analysis proxy, and its original only for a producer
+  that reads the storage (storage=True). A producer opens no file it didn't
+  get from its job; a file it uploads (a frame, a render) is handed to the
+  client as its path (tests/test_producers_hold_no_files.py).
 
 What a job says (dispatch.Outcome): NOT_TRIED, None (each clip saved or
 charged) or the clips that wait without either (a Waiting: each with why,
@@ -46,7 +51,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.shared.waits import HELD, SCAN, Waiting, reasons_of
+from src.shared.waits import HELD, Waiting, reasons_of
 
 if TYPE_CHECKING:
     from src.server.scheduler.dispatch import Job
@@ -183,7 +188,11 @@ class Saving:
             raise Stopped(path)
         if "json" in kwargs:
             kwargs = {**kwargs, "json": strip_nul(kwargs["json"])}
-        return getattr(self.__inner, method)(path, **kwargs)
+        with contextlib.ExitStack() as opened:
+            if "files" in kwargs:
+                kwargs = {**kwargs, "files": _opened(kwargs["files"], opened)}
+            return getattr(self.__inner, method)(path, **kwargs)
+
 
     def post(self, path: str, **kwargs: Any) -> Any:
         return self._write("post", path, **kwargs)
@@ -196,6 +205,47 @@ class Saving:
 
     def delete(self, path: str, **kwargs: Any) -> Any:
         return self._write("delete", path, **kwargs)
+
+
+def _opened(files: Any, opened: contextlib.ExitStack) -> Any:
+    """files as httpx takes them, each one given as a path (a job's file in its
+    scratch) opened for the request."""
+    def one(value: Any) -> Any:
+        if isinstance(value, tuple) and len(value) >= 2 and isinstance(value[1], Path):
+            return (value[0], opened.enter_context(open(value[1], "rb")), *value[2:])
+        return value
+
+    if isinstance(files, dict):
+        return {name: one(value) for name, value in files.items()}
+    return [(name, one(value)) for name, value in files]
+
+
+class _ProducerInputs:
+    """The account's inputs (src/server/scheduler/inputs.py) as one producer's
+    work has them: a clip's original only when it reads the storage
+    (storage=True), the only producers whose jobs go just where it's reachable."""
+
+    def __init__(self, inputs: Any, artifact: str) -> None:
+        self.__inputs = inputs
+        self.__artifact = artifact
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.__inputs, name)
+
+    def _reads_storage(self) -> None:
+        from src.shared.producers import PRODUCERS
+
+        spec = PRODUCERS.get(self.__artifact)
+        if spec is None or not spec.storage:
+            raise RuntimeError(f"{self.__artifact or 'this work'} doesn't read the originals (storage=True)")
+
+    def original(self, clip: dict) -> Any:
+        self._reads_storage()
+        return self.__inputs.original(clip)
+
+    def originals(self, clips: Any) -> Any:
+        self._reads_storage()
+        return self.__inputs.originals(clips)
 
 
 class Work:
@@ -239,9 +289,10 @@ class Work:
     @property
     def inputs(self) -> Any:
         """What the clips are made from: each one's stored preview and
-        analysis proxy (src/server/scheduler/inputs.py). Where they come from
-        is the job's, never the producer's."""
-        return self.acct.inputs
+        analysis proxy, and (storage=True) its original
+        (src/server/scheduler/inputs.py). Where they come from is the job's,
+        never the producer's."""
+        return _ProducerInputs(self.acct.inputs, self.artifact)
 
     def end(self) -> None:
         """The job's scratch removed (the runner's, as the job ends)."""
@@ -281,31 +332,6 @@ class Work:
 
         guard = self.acct.guard(PRODUCERS[self.artifact].job)
         return Failed(error) if guard.charges(error) else Waits(error)
-
-    def original(self, clip: dict) -> Any:
-        """The clip's original on the library's storage. The storage away at
-        the last look, or gone since: the job isn't tried (NotTried). The file
-        missing from storage that's there waits for the scan that says so."""
-        from src.shared.io_utils import UnsafeRelPathError, resolve_source_path
-
-        acct, library_id = self.acct, clip["library_id"]
-        root = acct.root(library_id)
-        if root is None:
-            logger.info("scheduler: %s's storage isn't reachable; its storage work waits", clip["rel_path"])
-            acct.unreachable(library_id)
-            raise NotTried(clip["rel_path"])
-        try:
-            source = resolve_source_path(root, clip["rel_path"])
-        except UnsafeRelPathError:
-            raise Failed("outside the library") from None
-        if not source.is_file():
-            if acct.storage_gone(library_id):
-                logger.info("scheduler: %s's storage went away; its storage work waits", clip["rel_path"])
-                acct.unreachable(library_id)
-                raise NotTried(clip["rel_path"])
-            logger.warning("scheduler: %s isn't on its storage; it waits for the scan", clip["rel_path"])
-            raise Waits("missing", reason=SCAN)
-        return source
 
 
 class _Job:

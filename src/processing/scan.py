@@ -903,7 +903,7 @@ def run_scan(
     cache_previews: keep each preview made, and every unchanged clip's, in
     this machine's proxy cache (the CLI's: the Mac app browses it). The
     scheduler beside the API keeps none: it reads the stored previews where
-    they are (proxy_cache.py `stored`), and unchanged files are only counted.
+    they are (src/server/scheduler/inputs.py), and unchanged files are only counted.
     """
     library_id = library["library_id"]
     root_path = reachable_root(library)
@@ -1169,7 +1169,7 @@ def _run(
 
     # After the finish: a file whose content was just archived as missing
     # comes back at its new path.
-    proxy_cache = ProxyCache(root_path=root_path, client=client) if cache_previews else None
+    proxy_cache = ProxyCache(client=client) if cache_previews else None
     _upload(client, library_id, root_path, work, proxy_cache, stats, concurrency=concurrency, console=console)
     stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
     if proxy_cache is not None:

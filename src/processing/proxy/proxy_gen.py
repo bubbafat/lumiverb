@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 PROXY_LONG_EDGE = 2048
 PROXY_JPEG_QUALITY = 75
-FACE_PROXY_LONG_EDGE = 1280  # InsightFace uses 640x640 internally; 1280 is plenty
 
 
 def _keep() -> str:
@@ -224,12 +223,3 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
         ).copy_memory()
         proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
         return proxy_bytes, width_orig, height_orig
-
-
-def generate_face_proxy(source_path: Path) -> bytes:
-    """Generate a JPEG proxy suitable for face detection.
-
-    Same pipeline as upload proxies but at 1280px instead of 2048px.
-    """
-    jpeg_bytes, _, _ = generate_proxy_bytes(source_path, max_long_edge=FACE_PROXY_LONG_EDGE)
-    return jpeg_bytes
