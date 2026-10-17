@@ -98,16 +98,19 @@ def test_on_a_mac_open_to_other_devices_the_link_is_its_network_address(admin, t
     monkeypatch.setenv("APP_HOST", "http://localhost:6464")
     monkeypatch.setenv("NGINX_CONFIG", str(conf))
     monkeypatch.setenv("WEB_PORT", "6464")
-    monkeypatch.setattr(network, "addresses", lambda port, scheme="https": [f"{scheme}://macstudio.local:{port}",
-                                                                          f"{scheme}://192.168.86.55:{port}"])
+    monkeypatch.setattr(network, "addresses", lambda port, scheme: [f"{scheme}://macstudio.local:{port}",
+                                                                  f"{scheme}://192.168.86.55:{port}"])
     get_settings.cache_clear()
 
     assert _invite(admin, "mac-only@example.com")["invite_urls"][0].startswith(
         "http://localhost:6464/join?token="), "this Mac only: its own address, until Settings › Network says"
-    network.set_other_devices(tmp_path, True)
+    network.set_choice(tmp_path, network.Choice(other_devices=True, https=True))
     first, by_address = _invite(admin)["invite_urls"]
-    assert first.startswith("https://macstudio.local:6443/join?token="), "its name first (Apple devices), over HTTPS"
+    assert first.startswith("http://macstudio.local:6464/join?token="), "its name first (Apple devices), plain HTTP: any device opens it at once"
     assert by_address == first.replace("macstudio.local", "192.168.86.55"), "the same link by address: any device"
+    network.set_choice(tmp_path, network.Choice(other_devices=True, https=True, plain_http=False))
+    assert _invite(admin, "https@example.com")["invite_urls"][0].startswith(
+        "https://macstudio.local:6443/join?token="), "HTTPS alone"
 
 
 def test_a_new_link_voids_the_old_one(admin):

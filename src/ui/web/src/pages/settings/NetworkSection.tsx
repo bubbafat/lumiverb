@@ -5,10 +5,12 @@ import {
   forgetYourCertificate,
   getCurrentUser,
   getNetworkAccess,
+  httpForOthers,
   keepYourCertificate,
   setNetworkAccess,
   type NetworkAccess,
   type NetworkCertificate,
+  type NetworkChange,
 } from "../../api/client";
 
 const NETWORK_QUERY_KEY = ["system", "network"];
@@ -21,20 +23,37 @@ function untilDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+function seenAt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function Addresses({ addresses }: { addresses: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {addresses.map((address) => (
+        <li key={address} className="break-all font-mono text-sm text-indigo-300">{address}</li>
+      ))}
+    </ul>
+  );
+}
+
 /** Whether other devices on the network (a phone, another computer) may use a
- * Mac's Lumiverb, over HTTPS, and the certificate they're served. A new install
- * is this Mac only; an admin changes it here, on the Mac. */
+ * Mac's Lumiverb: over plain HTTP, with nothing to set up on them, and HTTPS
+ * too if an admin adds it (the certificate it serves, and plain HTTP turned off
+ * once a device has used it). A new install is this Mac only; an admin changes
+ * it here, on the Mac. */
 export default function NetworkSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: network, isLoading } = useQuery({ queryKey: NETWORK_QUERY_KEY, queryFn: getNetworkAccess });
   const saved = (next: NetworkAccess) => queryClient.setQueryData(NETWORK_QUERY_KEY, next);
-  const change = useMutation({ mutationFn: setNetworkAccess, onSuccess: saved });
+  const change = useMutation({ mutationFn: (next: NetworkChange) => setNetworkAccess(next), onSuccess: saved });
 
   if (isLoading || !network) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
   const isAdmin = user?.role === "admin";
+  const plain = httpForOthers(network);
 
   return (
     <div className="rounded-lg border border-gray-700/50 bg-gray-900/50 p-6 space-y-5">
@@ -56,13 +75,13 @@ export default function NetworkSection() {
                 className="mt-0.5"
                 checked={network.other_devices}
                 disabled={change.isPending}
-                onChange={(e) => change.mutate(e.target.checked)}
+                onChange={(e) => change.mutate({ other_devices: e.target.checked })}
               />
               <span>
                 Let other devices on my network use Lumiverb
                 <span className="block text-xs text-gray-500">
-                  Phones, tablets and other computers on the same Wi-Fi or network, over an encrypted connection
-                  (HTTPS). Off: this Mac only.
+                  Phones, tablets and other computers on the same Wi-Fi or network, with nothing to set up on them.
+                  Off: this Mac only.
                 </span>
               </span>
             </label>
@@ -81,28 +100,102 @@ export default function NetworkSection() {
             <p className="text-sm text-red-300">{said(change.error, "Couldn't change it. Try again.")}</p>
           )}
 
-          {network.other_devices && (
+          {network.other_devices && plain && (
             <div className="space-y-2">
               <p className="text-sm text-gray-300">On another device, open:</p>
-              <ul className="space-y-1">
-                {network.addresses.map((address) => (
-                  <li key={address} className="break-all font-mono text-sm text-indigo-300">{address}</li>
-                ))}
-              </ul>
+              <Addresses addresses={network.addresses} />
               <p className="text-xs text-gray-500">
                 If the Mac asks whether nginx may accept incoming network connections, choose Allow.
               </p>
             </div>
           )}
 
-          {network.other_devices && network.certificate && (
-            <Certificate certificate={network.certificate} isAdmin={isAdmin} onSaved={saved} />
+          {network.other_devices && (
+            <Https network={network} isAdmin={isAdmin} pending={change.isPending} onChange={change.mutate}
+                   onSaved={saved} />
           )}
 
           {isAdmin && (
             <p className="text-xs text-gray-500">
               Changing this restarts Lumiverb's web server: pages may not load for a few seconds.
             </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** HTTPS, which an admin adds if they want it: plain HTTP stays on beside it
+ * until they turn it off, once a device has used HTTPS. */
+function Https({
+  network,
+  isAdmin,
+  pending,
+  onChange,
+  onSaved,
+}: {
+  network: NetworkAccess;
+  isAdmin: boolean;
+  pending: boolean;
+  onChange: (next: NetworkChange) => void;
+  onSaved: (next: NetworkAccess) => void;
+}) {
+  if (!isAdmin && !network.https) return null;
+  return (
+    <div className="space-y-4 border-t border-gray-700/50 pt-4">
+      {isAdmin ? (
+        <label className="flex items-start gap-3 text-sm text-gray-200">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={network.https}
+            disabled={pending}
+            onChange={(e) => onChange({ https: e.target.checked })}
+          />
+          <span>
+            Also offer an encrypted connection (HTTPS)
+            <span className="block text-xs text-gray-500">
+              Optional. Each device that uses it trusts Lumiverb's certificate once; plain HTTP keeps working
+              meanwhile.
+            </span>
+          </span>
+        </label>
+      ) : (
+        <p className="text-sm text-gray-200">Other devices can use an encrypted connection (HTTPS) too.</p>
+      )}
+
+      {network.https && (
+        <>
+          <div className="space-y-2">
+            <p className="text-sm text-gray-300">Over HTTPS, open:</p>
+            <Addresses addresses={network.https_addresses} />
+          </div>
+          {network.certificate && <Certificate certificate={network.certificate} isAdmin={isAdmin} onSaved={onSaved} />}
+          <p className="text-xs text-gray-400" role="status">
+            {network.https_seen
+              ? `A device (${network.https_seen.address}) opened Lumiverb over HTTPS on ${seenAt(network.https_seen.at)}.`
+              : "No device has opened Lumiverb over HTTPS yet."}
+          </p>
+          {isAdmin && (
+            <label className="flex items-start gap-3 text-sm text-gray-200">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={network.plain_http}
+                // Turned off only once a device has used HTTPS; back on whenever.
+                disabled={pending || (network.plain_http && !network.https_seen)}
+                onChange={(e) => onChange({ plain_http: e.target.checked })}
+              />
+              <span>
+                Keep plain HTTP for other devices too
+                <span className="block text-xs text-gray-500">
+                  {network.plain_http && !network.https_seen
+                    ? "You can turn it off once a device has opened Lumiverb over HTTPS."
+                    : "Off: other devices are sent to HTTPS. This Mac keeps its own address either way."}
+                </span>
+              </span>
+            </label>
           )}
         </>
       )}

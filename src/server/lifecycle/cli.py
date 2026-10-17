@@ -441,7 +441,7 @@ def _run(args: argparse.Namespace) -> int:
     if env.get("NGINX_BIN"):
         (data / "nginx").mkdir(parents=True, exist_ok=True)
     # Its own nginx listens where Settings › Network says: on this machine only
-    # until an admin says other devices may use it.
+    # until an admin says other devices may use it (over HTTP, and HTTPS if they add it).
     web_port = env.get("WEB_PORT", "")
     listens = network.managed(data, env.get("NGINX_CONFIG")) and web_port.isdigit()
     tls_port = network.tls_port(env.get("WEB_TLS_PORT")) if listens else 0
@@ -449,11 +449,11 @@ def _run(args: argparse.Namespace) -> int:
         print(f"✗ WEB_TLS_PORT {tls_port} is also {taken}: set another in {named or 'the env file'}", file=sys.stderr)
         return 1
     if listens:
-        try:  # the certificate other devices are served (tls.py): made, or renewed, now
+        try:  # the certificate other devices are served over HTTPS (tls.py): made, or renewed, now
             network.apply(data, int(web_port), tls_port)
-        except Exception:  # noqa: BLE001 — this machine is still served; the watch tries again
+        except Exception:  # noqa: BLE001 — served over plain HTTP meanwhile; the watch tries again
             logger.exception("Network: couldn't apply the choice or the certificate")
-            network.write_listen_file(data, int(web_port), False)
+            network.without_https(data, int(web_port))
     supervisor = Supervisor(children, relay=log.relay)
     if listens:
         threading.Thread(target=network.watch, args=(data, int(web_port), tls_port, stop,

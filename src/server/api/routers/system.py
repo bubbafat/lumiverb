@@ -303,17 +303,31 @@ class NetworkCertificate(BaseModel):
     ca_fingerprint: str | None = None
 
 
+class HttpsSeen(BaseModel):
+    at: datetime
+    address: str
+
+
 class Network(BaseModel):
     # This install's own nginx (lumiverb-server run's): where it listens is
     # changed here. An nginx set up otherwise (a Linux install's) isn't.
     available: bool
-    other_devices: bool  # may use it (over HTTPS), or this machine only
-    addresses: list[str]  # where other devices reach it
-    certificate: NetworkCertificate | None = None  # None until run has made one
+    other_devices: bool  # may use it, or this machine only
+    https: bool = False  # other devices over HTTPS too (each trusts the certificate once)
+    plain_http: bool = True  # other devices over plain HTTP too: off only beside HTTPS, once seen working
+    addresses: list[str]  # where other devices reach it over plain HTTP
+    https_addresses: list[str] = []  # and over HTTPS
+    # The first device seen using HTTPS since it last changed: until one is,
+    # plain HTTP isn't turned off (409 https_not_seen).
+    https_seen: HttpsSeen | None = None
+    certificate: NetworkCertificate | None = None  # HTTPS's; None until run has made one
 
 
 class NetworkChange(BaseModel):
-    other_devices: bool
+    # Each left out stays as it is.
+    other_devices: bool | None = None
+    https: bool | None = None
+    plain_http: bool | None = None
 
 
 class YourCertificate(BaseModel):
@@ -335,15 +349,19 @@ def _network() -> Network:
     data = Path(settings.data_dir)
     if settings.web_port <= 0 or not network.managed(data, settings.nginx_config):
         return Network(available=False, other_devices=False, addresses=[])
-    served = tls.describe(data)
+    chosen = network.choice(data)
+    served = tls.describe(data) if chosen.https else None
     ours = served is not None and served.source == tls.LUMIVERB
     certificate = None if served is None else NetworkCertificate(
         source=served.source, names=list(served.names), expires_at=served.not_after,
         ca_url="/lumiverb-ca.crt" if ours else None,
         ca_addresses=[f"{a}/lumiverb-ca.crt" for a in network.addresses(settings.web_port, "http")] if ours else [],
         ca_fingerprint=tls.ca_fingerprint(data) if ours else None)
-    return Network(available=True, other_devices=network.other_devices(data),
-                   addresses=network.addresses(network.tls_port(settings.web_tls_port)),
+    seen = network.https_seen(data) if chosen.https else None
+    return Network(available=True, other_devices=chosen.other_devices, https=chosen.https,
+                   plain_http=chosen.plain_http, addresses=network.addresses(settings.web_port, "http"),
+                   https_addresses=network.addresses(network.tls_port(settings.web_tls_port), "https"),
+                   https_seen=None if seen is None else HttpsSeen(at=seen.at, address=seen.address),
                    certificate=certificate)
 
 
@@ -353,21 +371,35 @@ def get_network() -> Network:
     return _network()
 
 
+NOT_SEEN = ("No device has opened Lumiverb over HTTPS yet. Open it at an HTTPS address on one first: "
+            "until then, plain HTTP stays on so other devices can still reach it.")
+
+
 @router.put("/network", response_model=Network, dependencies=[Depends(require_tenant_admin)])
 def change_network(body: NetworkChange, request: Request) -> Network:
     """An admin's choice, on the machine itself (as for choosing a library's
-    folder): run applies it in a few seconds, restarting nginx."""
-    from src.server.api.client_address import on_this_machine
+    folder): run applies it in a few seconds, restarting nginx. Other devices
+    keep plain HTTP unless HTTPS is on and a device has used it (409
+    https_not_seen); HTTPS off brings plain HTTP back."""
+    import dataclasses
+
     from src.server.api.errors import ApiError
     from src.server.config import get_settings
     from src.server.lifecycle import network
 
-    if not _network().available:
-        raise ApiError(409, "network_not_here", NOT_HERE)
-    if not on_this_machine(request):
-        raise ApiError(403, "network_elsewhere", ELSEWHERE)
-    network.set_other_devices(Path(get_settings().data_dir), body.other_devices)
-    logger.info("Other devices on the network %s (an admin's choice)", "may use it" if body.other_devices else "can't use it")
+    _here_and_admin(request)
+    data = Path(get_settings().data_dir)
+    was = network.choice(data)
+    chosen = network.Choice(**{name: getattr(was, name) if value is None else value
+                               for name, value in body.model_dump().items()})
+    if not chosen.https:
+        chosen = dataclasses.replace(chosen, plain_http=True)  # all other devices have then
+    if chosen.https != was.https:
+        network.forget_https_seen(data)
+    if not chosen.plain_http and was.plain_http and network.https_seen(data) is None:
+        raise ApiError(409, "https_not_seen", NOT_SEEN)
+    network.set_choice(data, chosen)
+    logger.info("Network: %s (an admin's choice)", chosen.said())
     return _network()
 
 
@@ -392,11 +424,15 @@ def keep_your_certificate(body: YourCertificate, request: Request) -> Network:
     from src.server.config import get_settings
     from src.server.lifecycle import tls
 
+    from src.server.lifecycle import network
+
     _here_and_admin(request)
+    data = Path(get_settings().data_dir)
     try:
-        tls.keep_yours(Path(get_settings().data_dir), body.certificate, body.key)
+        tls.keep_yours(data, body.certificate, body.key)
     except tls.TlsError as exc:
         raise ApiError(422, "certificate_not_usable", str(exc)) from None
+    network.forget_https_seen(data)  # what a device trusted may not be this one
     logger.info("Network: an admin's own certificate is served to other devices")
     return _network()
 
@@ -407,8 +443,12 @@ def forget_your_certificate(request: Request) -> Network:
     from src.server.config import get_settings
     from src.server.lifecycle import tls
 
+    from src.server.lifecycle import network
+
     _here_and_admin(request)
-    tls.forget_yours(Path(get_settings().data_dir))
+    data = Path(get_settings().data_dir)
+    tls.forget_yours(data)
+    network.forget_https_seen(data)
     logger.info("Network: Lumiverb's own certificate is served to other devices again")
     return _network()
 
