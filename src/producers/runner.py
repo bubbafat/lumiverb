@@ -206,6 +206,15 @@ class Saving:
     def delete(self, path: str, **kwargs: Any) -> Any:
         return self._write("delete", path, **kwargs)
 
+    def upload(self, asset_id: str, artifact: str, path: Path, lineage: dict) -> dict:
+        """A job's big file (a render in its scratch) as the clip's artifact, sent in
+        chunks that survive a dropped connection (src/processing/uploads.py)."""
+        from src.processing.uploads import send
+
+        if self.__stopping is not None and self.__stopping.is_set():
+            raise Stopped(f"/v1/assets/{asset_id}/uploads")
+        return send(self.__inner, asset_id, artifact, path, lineage)
+
 
 def _opened(files: Any, opened: contextlib.ExitStack) -> Any:
     """files as httpx takes them, each one given as a path (a job's file in its

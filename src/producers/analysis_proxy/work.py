@@ -1,10 +1,10 @@
-"""Rendering a video's analysis proxy from its original, uploading it, and
+"""Rendering a video's analysis proxy from its original, uploading it (in
+chunks: src/processing/uploads.py), and
 keeping it in this machine's cache where the API doesn't keep it on this
 disk (transcripts and scenes read it there: src/server/scheduler/inputs.py)."""
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -46,9 +46,8 @@ class Render(Work):
 
     def save(self, client, made: list[tuple[dict, Path]]) -> None:
         for clip, work in made:
-            data = {"lineage": json.dumps(self.lineage(clip, used=self.settings.output()))}
-            client.post(f"/v1/assets/{clip['asset_id']}/artifacts/analysis_proxy",
-                        files={"file": ("analysis.mp4", work, "video/mp4")}, data=data)
+            # In chunks: an hour's proxy is hundreds of MB (ADR-018 decision 9).
+            client.upload(clip["asset_id"], "analysis_proxy", work, self.lineage(clip, used=self.settings.output()))
             self.inputs.rendered(clip, work)
 
     def done(self, clip: dict, work: Path) -> None:
