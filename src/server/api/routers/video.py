@@ -1,15 +1,13 @@
 """Video API: scene chunks (init, claim next, complete, fail), scenes, and a
 video's faces. All require tenant auth."""
 
-import json
 import uuid
 from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-from sqlalchemy import text
 from sqlalchemy.orm.exc import StaleDataError
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import why_not
@@ -17,7 +15,6 @@ from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, GoneError
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.repository.lineage import record as record_lineage
-from src.server.models.tenant import VideoIndexChunk
 from src.server.repository.assets import AssetMetadataRepository, AssetRepository
 from src.server.repository.faces import FaceRepository
 from src.server.repository.libraries import LibraryRepository
@@ -69,7 +66,10 @@ def init_chunks(
     if body.redo:
         made = require_lineage(body.lineage, "scenes")
         _now_current(session, made)
-        run = _redo_beside(session, asset_id, made)
+        run, dropped = VideoSceneRepository(session).found_beside(asset_id, made)
+        if dropped is not None:
+            _log.info("Scenes of %s found again beside the ones shown (%d staged by another run dropped)",
+                      asset_id, dropped)
     chunk_repo = VideoIndexChunkRepository(session)
     created = chunk_repo.create_chunks_for_asset(asset_id, body.duration_sec, body.scene_sec, run=run)
     # A new run: chunks that failed in an earlier one are tried again (within
@@ -94,48 +94,6 @@ def _now_current(session: Session, made: dict) -> None:
                             {"settings_hash": want["settings_hash"]})
 
 
-def _same_run(run: dict | None, made: dict) -> bool:
-    """Whether a run's chunks find scenes as made says (its level too)."""
-    keys = ("producer", "version", "settings_hash", "level")
-    return run is not None and all(str(run.get(k) or "") == str(made.get(k) or "") for k in keys)
-
-
-def _redo_beside(session: Session, asset_id: str, made: dict) -> dict | None:
-    """A redo's run, found beside the scenes the clip shows (which stay, with
-    their descriptions, images and search entries, until the new ones are
-    found and described: _swap_in). Its own run under way goes on. Returns
-    the run its chunks record, or None when there's nothing to find beside:
-    the clip shows no scenes yet (its first run goes on) or shows them found
-    this way already."""
-    row = session.execute(text(
-        "SELECT a.video_indexed, l.producer, l.producer_version, l.settings_hash"
-        " FROM assets a LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = 'scenes'"
-        " WHERE a.asset_id = :a FOR UPDATE OF a"), {"a": asset_id}).first()
-    if row is None or not row.video_indexed or (row.producer, row.producer_version, row.settings_hash) == (
-            made["producer"], str(made.get("version") or ""), made.get("settings_hash")):
-        session.commit()
-        return None
-    run = session.execute(text("SELECT run FROM video_index_chunks WHERE asset_id = :a LIMIT 1"),
-                          {"a": asset_id}).scalar()
-    if _same_run(run, made):
-        session.commit()
-        return made
-    # The chunks the scenes shown were found with, or another run's, go, with
-    # the scenes that run staged; the scenes shown stay.
-    dropped = session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a AND staged IS NOT NULL"),
-                              {"a": asset_id}).rowcount
-    session.execute(text("DELETE FROM video_index_chunks WHERE asset_id = :a"), {"a": asset_id})
-    session.commit()
-    _log.info("Scenes of %s found again beside the ones shown (%d staged by another run dropped)", asset_id, dropped)
-    return made
-
-
-def _shows_scenes(session: Session, asset_id: str) -> bool:
-    """Whether the clip's scenes are found: a run now finds new ones beside them."""
-    return bool(session.execute(text("SELECT video_indexed FROM assets WHERE asset_id = :a"),
-                                {"a": asset_id}).scalar())
-
-
 def _described_here(request: Request) -> bool:
     """Whether the account has a model describing scenes. Without one nothing
     would describe a redo's scenes, so they're shown as soon as they're found."""
@@ -152,31 +110,19 @@ def _swap_in(request: Request, session: Session, asset_id: str, described: dict 
     (at keys the server derives, and not where a new scene's is). described:
     how the new ones were described (recorded for the clip), or None when
     nothing describes them. False when there's nothing to swap in (done already)."""
-    session.execute(text("SELECT 1 FROM assets WHERE asset_id = :a FOR UPDATE"), {"a": asset_id})
-    new = session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
-                               " WHERE asset_id = :a AND staged = 'found'"), {"a": asset_id}).all()
-    if not new:
-        session.rollback()
+    swapped = VideoSceneRepository(session).swap_in(asset_id, described)
+    if swapped is None:
         return False
-    old = session.execute(text("SELECT scene_id, rep_frame_ms FROM video_scenes"
-                               " WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id}).all()
-    session.execute(text("DELETE FROM video_scenes WHERE asset_id = :a AND staged IS NULL"), {"a": asset_id})
-    session.execute(text("UPDATE video_scenes SET staged = NULL WHERE asset_id = :a AND staged = 'found'"),
-                    {"a": asset_id})
-    if described is not None:
-        record_lineage(session, asset_id, "scene_vision", described, commit=False)
-    library_id = session.execute(text("SELECT library_id FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
-    session.commit()
-    _log.info("Scenes of %s swapped in: %d new, %d old ones dropped", asset_id, len(new), len(old))
+    _log.info("Scenes of %s swapped in: %d new, %d old ones dropped", asset_id, swapped.new, swapped.old)
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         return True
     store = get_store()
     # Only the images at the keys the server derives (a scene's rep frame),
     # and not one a new scene shares (the same moment of the same video).
-    for ms in {r.rep_frame_ms for r in old} - {r.rep_frame_ms for r in new}:  # best effort: only space
+    for ms in swapped.old_frames - swapped.new_frames:  # best effort: only space
         try:
-            store.delete(stored.scene_rep_key(tenant_id, library_id, asset_id, ms))
+            store.delete(stored.scene_rep_key(tenant_id, swapped.library_id, asset_id, ms))
         except OSError as exc:  # Unavailable too: the daily sweep takes it once it can
             _log.warning("Couldn't delete a scene image of %s: %s", asset_id, exc)
     return True
@@ -272,12 +218,12 @@ def complete_chunk(
 ) -> ChunkCompleteResponse:
     made = require_lineage(body.lineage, "scenes")  # how the scenes were found, before anything is saved
     chunk_repo = VideoIndexChunkRepository(session)
-    chunk = session.exec(select(VideoIndexChunk).where(VideoIndexChunk.chunk_id == chunk_id)).first()
+    chunk = chunk_repo.get_by_id(chunk_id)
     if chunk is None:
         raise HTTPException(status_code=404, detail="Chunk not found")
 
     # A clip that shows scenes already is a redo's: its scenes are found beside them.
-    staged = "finding" if _shows_scenes(session, chunk.asset_id) else None
+    staged = "finding" if VideoSceneRepository(session).shows_scenes(chunk.asset_id) else None
     ok = chunk_repo.complete_chunk(
         chunk_id=chunk_id,
         worker_id=body.worker_id,
@@ -305,13 +251,11 @@ def complete_chunk(
         if staged:
             # Found: described next, while the clip still shows its old ones,
             # then swapped in by the last description (update_scene_vision).
-            session.execute(text("UPDATE video_scenes SET staged = 'found' WHERE asset_id = :a AND staged = 'finding'"),
-                            {"a": asset_id})
+            VideoSceneRepository(session).mark_found(asset_id)
             lineage.start_over(session, [asset_id], "scene_vision")
             show_now = not _described_here(request)
         else:
-            session.execute(text("UPDATE assets SET video_indexed = true, updated_at = now() WHERE asset_id = :a"),
-                            {"a": asset_id})
+            AssetRepository(session).set_video_indexed(asset_id)
     session.commit()
     if show_now:
         _swap_in(request, session, asset_id, None)
@@ -458,18 +402,12 @@ def update_scene_vision(
     # description was made the same way: a video described half with old
     # settings and half with new isn't current, and its redo isn't done. A
     # redo's found scenes, all described, are swapped in with that record.
-    row = session.execute(text("SELECT asset_id, staged FROM video_scenes WHERE scene_id = :s"),
-                          {"s": scene_id}).first()
-    if row is not None and row.staged != "finding":
-        others = session.execute(text(
-            "SELECT count(*) FROM video_scenes WHERE asset_id = :a"
-            " AND staged IS NOT DISTINCT FROM CAST(:st AS text)"
-            " AND (description IS NULL OR lineage IS DISTINCT FROM CAST(:l AS jsonb))"
-        ), {"a": row.asset_id, "st": row.staged, "l": json.dumps(_scene_lineage(made))}).scalar()
-        if not others and row.staged == "found":
-            _swap_in(request, session, row.asset_id, made)
-        elif not others:
-            record_lineage(session, row.asset_id, "scene_vision", made)
+    run = scene_repo.run_of(scene_id, _scene_lineage(made))
+    if run is not None and run.staged != "finding":
+        if not run.undescribed and run.staged == "found":
+            _swap_in(request, session, run.asset_id, made)
+        elif not run.undescribed:
+            record_lineage(session, run.asset_id, "scene_vision", made)
     return SceneVisionUpdateResponse(scene_id=scene_id, status="updated")
 
 
@@ -622,8 +560,7 @@ def submit_video_faces(
         for face_id, data in zip(face_ids, images, strict=True):
             key = stored.face_crop_key(tenant_id, asset.library_id, face_id)
             store.write(key, data)
-            session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
+            FaceRepository(session).set_crop_key(face_id, key)
     session.commit()
     LibraryRepository(session).bump_revision(asset.library_id)
-    session.refresh(asset)
-    return VideoFacesResponse(face_count=asset.face_count or 0, face_ids=face_ids)
+    return VideoFacesResponse(face_count=asset.face_count or 0, face_ids=face_ids)  # read again: committed

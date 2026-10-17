@@ -904,6 +904,10 @@ class FaceRepository:
 
         return {"assigned": assigned, "scanned": len(rows)}
 
+    def set_crop_key(self, face_id: str, key: str) -> None:
+        """Where the face's crop is stored (not committed)."""
+        self._session.execute(text("UPDATE faces SET crop_key = :key WHERE face_id = :fid"), {"key": key, "fid": face_id})
+
     def get_by_asset_id(self, asset_id: str) -> list[Face]:
         """Return all faces for an asset, ordered by confidence desc."""
         stmt = (
