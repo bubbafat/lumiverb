@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Index, Integer, JSON, SmallInteger, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, JSON, SmallInteger, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
@@ -67,6 +67,31 @@ class Library(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     scans_paused_by: str | None = Field(default=None, nullable=True)
+    # Only the account's admins and the people given a role on it (library_roles) see it.
+    private: bool = Field(default=False, sa_column_kwargs={"server_default": "false"}, nullable=False)
+
+
+class LibraryRole(SQLModel, table=True):
+    """A person's role on one library, where it isn't the one their account
+    role gives them (ADR-018 decision 8): "admin" (the library's admin),
+    "editor", "viewer", or "none" (they don't see it). The rule is
+    src/server/repository/library_roles.py's."""
+
+    __tablename__ = "library_roles"
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'editor', 'viewer', 'none')", name="library_roles_role"),
+    )
+
+    library_id: str = Field(
+        sa_column=Column(Text, ForeignKey("libraries.library_id", ondelete="CASCADE"), primary_key=True))
+    # The control database's users.user_id.
+    user_id: str = Field(primary_key=True, index=True)
+    role: str = Field(nullable=False)
+    set_by: str | None = Field(default=None, nullable=True)
+    set_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    )
 
 
 class LibraryChange(SQLModel, table=True):

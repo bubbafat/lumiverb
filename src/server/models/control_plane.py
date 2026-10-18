@@ -118,6 +118,10 @@ class User(SQLModel, table=True):
     # request, so taking it away takes effect at once; only when signed in
     # (dependencies.require_server_admin): their keys never carry it.
     server_admin: bool = Field(default=False, nullable=False)
+    # Their account role on every library but the ones set otherwise for them
+    # and the private ones; false: only the libraries they're given a role on
+    # (ADR-018 decision 8; src/server/repository/library_roles.py).
+    every_library: bool = Field(default=True, sa_column_kwargs={"server_default": "true"}, nullable=False)
     # In every JWT as "tv"; bumped to revoke all of the user's tokens.
     token_version: int = Field(default=0, nullable=False)
     created_at: datetime = Field(
