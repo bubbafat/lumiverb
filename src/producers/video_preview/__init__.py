@@ -14,6 +14,5 @@ PRODUCER = ProducerSpec(
         Setting("quality", "better", "Quality", kind="notch", choices=QUALITY, means=X264_CRF),
         Setting("audio_kbps", 128, "Audio", minimum=32, maximum=320, unit="kbps", advanced=True, fixed=MADE_AT_SCAN),
     ),
-    cant_redo="Video previews are made when a file is scanned, new files' with the settings now; those made"
-              " already aren't remade yet (lumiverb scan --force makes a library's again).",
+    made_at_scan=True,
 )

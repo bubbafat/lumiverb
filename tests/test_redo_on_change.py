@@ -292,15 +292,32 @@ def test_only_admins_stop_or_resume_and_only_they_see_who(env):
         client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=headers)
 
 
-def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env):
+def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env, monkeypatch):
     lib = _library(env, "RedoCant")
     client, headers, *_ = lib
+    monkeypatch.setitem(lineage.CANT_REDO, "scenes", "Scenes aren't found again yet.")  # none is, today
+    p = _producer(lib, "scenes")
+    assert p["redoable"] is False and p["why_not"] == "Scenes aren't found again yet."
+    r = client.post("/v1/producers/scenes/pause", json={"scope": "redo"}, headers=headers)
+    assert r.status_code == 409 and _error(r)["code"] == "cant_redo"
+    assert _producer(lib, "vision")["redoable"] is True
+
+
+def test_what_scans_make_is_remade_and_its_remakes_stop_and_go_on(env):
+    # ADR-018 decision 6: previews too, by scans (src/server/scans.py, reason remake).
+    lib = _library(env, "RedoScans")
+    client, headers, *_ = lib
     for artifact in ("proxy", "video_preview"):
-        p = _producer(lib, artifact)
-        assert p["redoable"] is False and p["why_not"]
-        r = client.post(f"/v1/producers/{artifact}/pause", json={"scope": "redo"}, headers=headers)
-        assert r.status_code == 409 and _error(r)["code"] == "cant_redo"
-    assert _producer(lib, "vision")["redoable"] is True and _producer(lib, "scenes")["redoable"] is True
+        assert _producer(lib, artifact)["redoable"] is True
+        try:
+            assert client.post(f"/v1/producers/{artifact}/pause", json={"scope": "redo"},
+                               headers=headers).status_code == 204
+            assert _producer(lib, artifact)["redo_stopped"] is True
+            r = client.post(f"/v1/producers/{artifact}/pause", json={"scope": "work"}, headers=headers)
+            assert r.status_code == 409 and _error(r)["code"] == "not_scheduled"  # its work is scans'
+        finally:
+            assert client.post(f"/v1/producers/{artifact}/resume", json={"scope": "redo"},
+                               headers=headers).status_code == 204
     assert client.post("/v1/producers/nope/pause", json={"scope": "redo"}, headers=headers).status_code == 404
 
 

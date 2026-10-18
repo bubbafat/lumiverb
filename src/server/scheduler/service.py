@@ -40,6 +40,7 @@ from typing import Any
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
+from src.shared.producers import MADE_AT_SCAN
 from src.shared.stop_signals import set_on_signals
 
 logger = logging.getLogger(__name__)
@@ -647,7 +648,8 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str] | None,
 
 
 # The producers whose redo the scheduler lists (a redo kind each).
-REDONE = tuple(dict.fromkeys(k.artifact for k in KINDS.values() if k.redo))
+# Each producer made again: the scheduler's redo kinds, and what scans remake (src/server/scans.py).
+REDONE = tuple(dict.fromkeys([*(k.artifact for k in KINDS.values() if k.redo), *MADE_AT_SCAN]))
 
 
 def _hold_new_versions_in_database(tenant_id: str) -> None:

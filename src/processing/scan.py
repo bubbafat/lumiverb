@@ -1116,6 +1116,9 @@ def _run(
             work.unchanged.append(f)
         elif action == "skipped":
             work.skipped += 1
+    # Previews made another way than now are remade after everything else (ADR-018 decision 6).
+    remakes = sum(1 for f in work.changed if f["_plan"].get("reason") == "remake")
+    work.changed.sort(key=lambda f: f["_plan"].get("reason") == "remake")
     # Not listed when nothing is cached: the plan's count says how many.
     unchanged = len(work.unchanged) if cache_previews else counts["unchanged"]
     stats.unchanged += unchanged
@@ -1126,7 +1129,8 @@ def _run(
         f"{len(to_hash):,} to check, "
         f"{unchanged:,} unchanged, "
         f"{counts['gone']:,} not found"
-        + (f", {len(work.changed):,} to scan again" if work.changed else "")
+        + (f", {len(work.changed) - remakes:,} to scan again" if len(work.changed) > remakes else "")
+        + (f", {remakes:,} with previews to remake" if remakes else "")
     )
 
     # A move needs a clip gone from this scan; the server looks for them

@@ -119,7 +119,7 @@ class PlanRequest(BaseModel):
 class PlannedFile(BaseModel):
     rel_path: str
     action: Literal["upload", "hash", "unchanged", "skipped"]
-    # upload: new | preview_missing | force; hash: changed | thorough | removed | move | rekey
+    # upload: new | preview_missing | force | remake; hash: changed | thorough | removed | move | rekey
     # (an unchanged clip whose content hash was made before fp1: its fp1, to take its place);
     # skipped: removed; unchanged: none.
     reason: str | None = None
