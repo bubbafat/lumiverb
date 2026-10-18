@@ -387,19 +387,26 @@ def redoable(artifact: str) -> bool:
     return (artifact in MISSING_FLAGS.values() or artifact in MADE_AT_SCAN) and artifact not in CANT_REDO
 
 
+# A lineage row l names the file it was made from, or the clip a's file isn't
+# known: unless it does, it's stale however it was made (_stale_sql), so a
+# redo and a scan's remake make it again.
+NAMES_ITS_FILE = "(a.content_hash IS NULL OR l.source_hash IS NOT NULL)"
+
+
 def redo_due(artifact: str) -> str:
     """Made, but with another producer, version or settings than now (:p_<a>,
-    :v_<a>, :h_<a>), from the file as it is: what a redo makes again. A
-    person's is never redone; one missing, or made from a file that has since
-    changed, is due as missing instead; a failure waits its turn. On
-    active_assets a, after LINEAGE_JOIN."""
+    :v_<a>, :h_<a>), or from a file it doesn't name while the clip's is known
+    (made before its hash was: stale, as counts has it), from the file as it
+    is: what a redo makes again. A person's is never redone; one missing, or
+    made from a file that has since changed, is due as missing instead; a
+    failure waits its turn. On active_assets a, after LINEAGE_JOIN."""
     assert redoable(artifact), artifact
     return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND NOT {source_changed(artifact)}"
             f" AND NOT {waiting(artifact)} AND NOT ({RECHECK[artifact]})"
             f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id"
             f"   AND l.artifact = '{artifact}' AND (l.producer = :person"
             f"     OR (l.producer = :p_{artifact} AND l.producer_version = :v_{artifact}"
-            f"         AND l.settings_hash = :h_{artifact}))))")
+            f"         AND l.settings_hash = :h_{artifact} AND {NAMES_ITS_FILE}))))")
 
 
 def redo_params(artifact: str, want: dict[str, Any]) -> dict[str, Any]:

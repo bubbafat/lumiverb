@@ -132,6 +132,31 @@ def test_new_files_only_keeps_them_and_a_remake_goes_a_few_at_a_scan(env, api, l
         _back_to_defaults(env)
 
 
+def test_a_preview_made_before_its_file_had_a_hash_is_remade(env, api, lib, uploaded):
+    # Its lineage names no file, so it's stale (Processing counts it): a scan remakes it, once.
+    _image(lib, "a.png", 1)
+    _scan(api, lib)
+    engine = create_engine(env[5])
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE artifact_lineage l SET source_hash = NULL FROM assets a"
+                              " WHERE a.asset_id = l.asset_id AND a.library_id = :l AND l.artifact = 'proxy'"),
+                         {"l": lib.id})
+        uploaded.clear()
+        _scan(api, lib)
+        assert uploaded == ["a.png"]
+        with engine.connect() as conn:
+            named = conn.execute(text("SELECT l.source_hash = a.content_hash FROM artifact_lineage l"
+                                      " JOIN assets a ON a.asset_id = l.asset_id"
+                                      " WHERE a.library_id = :l AND l.artifact = 'proxy'"), {"l": lib.id}).scalar()
+        assert named is True
+    finally:
+        engine.dispose()
+    uploaded.clear()
+    _scan(api, lib)
+    assert uploaded == []
+
+
 def test_a_dry_run_remakes_nothing(env, api, lib):
     client, headers, *_ = env
     path = _image(lib, "a.png", 1)

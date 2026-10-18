@@ -61,7 +61,7 @@ from src.server.models.tenant import ScanSession
 from src.server.reader_work import previews_missing
 from src.server.repository import lineage
 from src.server.repository.assets import AssetRepository
-from src.server.repository.lineage import APPLIES, MADE
+from src.server.repository.lineage import APPLIES, MADE, NAMES_ITS_FILE
 from src.shared.content_hash import FULL_UP_TO, SHA256, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.producers import MADE_AT_SCAN
@@ -192,7 +192,8 @@ _REMAKE = " OR ".join(
     f"(:remake_{a} AND ({APPLIES[a]}) AND ({MADE[a]})"
     f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id AND l.artifact = '{a}'"
     f"   AND (l.producer = :person OR l.retry_at > now()"
-    f"        OR (l.producer = :p_{a} AND l.producer_version = :v_{a} AND l.settings_hash = :h_{a}))))"
+    f"        OR (l.producer = :p_{a} AND l.producer_version = :v_{a} AND l.settings_hash = :h_{a}"
+    f"            AND {NAMES_ITS_FILE}))))"
     for a in MADE_AT_SCAN)
 _PLAN = f"""
     WITH gone AS ({GONE}),

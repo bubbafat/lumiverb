@@ -159,6 +159,24 @@ def test_a_description_whose_lineage_row_went_missing_is_redone(env):
     assert _due(lib, "redo_vision") == [clip]
 
 
+def test_a_description_made_before_its_file_had_a_hash_is_redone(env):
+    # Its lineage names no file (made while the file's hash wasn't known), so
+    # it's stale, counted so in Processing, and not missing (unknown isn't
+    # changed): its redo makes it again, or it would wait for ever, unsaid.
+    lib = _library(env, "RedoNoSource")
+    client, headers, *_ = lib
+    clip = _ingest_with(lib, "a.jpg", _sha(), None)
+    r = saved(client, "vision", clip, json={"model_id": "m", "description": "words",
+                                            "lineage": _want(lib, "vision", None)}, headers=headers)
+    assert r.status_code == 200, r.text
+    with _db(lib) as s:
+        s.execute(text("UPDATE artifact_lineage SET source_hash = NULL WHERE asset_id = :a"), {"a": clip})
+        s.commit()
+    assert _counts(lib, "vision")["stale"] == 1
+    assert _due(lib, "vision") == []
+    assert _due(lib, "redo_vision") == [clip]
+
+
 def test_a_failed_redo_waits_its_turn(env):
     lib = _library(env, "RedoFailed")
     client, headers, *_ = lib
