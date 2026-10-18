@@ -47,6 +47,7 @@ from src.shared.producers import (
     UNKNOWN,
     effective_settings,
     level_of,
+    notches,
     settings_hash,
     use_settings,
 )
@@ -117,9 +118,11 @@ def desired(session: Session, artifact: str, job_models: Mapping[str, str] | Non
     version, settings and their hash, and its level (None without a level
     setting: see below). job_models: the account's model per AI job."""
     p = PRODUCERS[artifact]
-    settings = effective_settings(artifact, overrides(session, artifact), account_settings(session, job_models))
+    changed = overrides(session, artifact)
+    settings = effective_settings(artifact, changed, account_settings(session, job_models))
     return {"producer": p.producer, "version": p.version, "settings": settings,
-            "settings_hash": settings_hash(settings), "level": level_of(artifact, uses(session, artifact))}
+            "settings_hash": settings_hash(settings), "level": level_of(artifact, uses(session, artifact)),
+            "notches": notches(artifact, changed)}
 
 
 def _stale_sql() -> str:

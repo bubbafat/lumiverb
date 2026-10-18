@@ -325,6 +325,23 @@ def test_settings_answers_ahead_when_told(settings_client, flag, redo):
     assert _settings("transcript", "vad_min_silence_ms=800", "--remake", "--new-only").exit_code == 2
 
 
+def test_settings_takes_a_notch_by_its_name(settings_client):
+    settings_client.get.return_value.json.return_value = {"producers": [_producer(
+        "analysis_proxy", "Analysis proxies", settings={"crf": 28},
+        fields=[{"key": "quality", "label": "Quality", "kind": "notch", "value": "better", "default": "better",
+                 "minimum": None, "maximum": None, "unit": "", "advanced": False, "fixed": None,
+                 "choices": ["good", "better", "best"]}])]}
+    settings_client.raw.return_value = _response(200, {"settings": {"crf": 23}, "fields": [
+        {"key": "quality", "value": "best"}]})
+    result = _settings("analysis_proxy", "quality=best", "--new-only")
+    assert result.exit_code == 0, result.output
+    assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"quality": "best"}, "redo": False}
+    assert "quality = best" in result.output
+    assert _settings("analysis_proxy", "quality=superb").exit_code == 2
+    listed = " ".join(_settings("analysis_proxy").output.split())
+    assert "good / better / best" in listed
+
+
 def test_settings_puts_one_back_to_its_default(settings_client):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 500}})
     _settings("transcript", "vad_min_silence_ms=")

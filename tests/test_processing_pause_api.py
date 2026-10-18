@@ -195,12 +195,12 @@ def test_new_settings_dont_resume_a_paused_producer(env):
     client, headers, *_ = env
     try:
         assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": 30}, "redo": True},
+        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
                        headers=headers)
         assert r.status_code == 200, r.text
         assert r.json()["paused"] is True and _producers(env)["analysis_proxy"]["paused"] is True
     finally:
-        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": None}, "redo": True},
+        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
                    headers=headers)
         client.post("/v1/producers/analysis_proxy/resume", json={"scope": "work"}, headers=headers)
 
@@ -223,14 +223,14 @@ def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
             assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
             held = set(pause_targets())
             assert set(_on_hold_in_database(env[4]).work) == held
-            r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": 30}, "redo": True},
+            r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
                            headers=headers)
             assert r.status_code == 200 and r.json()["paused"] is True, r.text
             assert _model(env, "vision", LLAVA, redo=True).status_code == 200
             assert set(_on_hold_in_database(env[4]).work) == held and _queue(env)["state"] == "paused"
     finally:
         assert client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers).status_code == 204  # the toggle
-        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": None}, "redo": True},
+        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
                    headers=headers)
         with fake:
             _model(env, "vision", "")

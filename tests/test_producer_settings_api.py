@@ -40,7 +40,7 @@ def _put(env, artifact: str, headers=None, **body):
 def _defaults_after(env):
     yield
     for artifact, keys in {"transcript": ["vad_min_silence_ms"], "vision": ["prompt", "max_edge", "temperature"],
-                           "analysis_proxy": ["max_edge", "crf"]}.items():
+                           "analysis_proxy": ["max_edge", "quality"]}.items():
         _put(env, artifact, settings={k: None for k in keys}, redo=True)
 
 
@@ -153,7 +153,7 @@ def test_saving_settings_resumes_a_stopped_redo(env):
     client, headers, *_ = env
     assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
     assert _producer(env, "analysis_proxy")["redo_stopped"] is True
-    r = _put(env, "analysis_proxy", settings={"crf": 30}, redo=True)
+    r = _put(env, "analysis_proxy", settings={"quality": "good"}, redo=True)
     assert r.status_code == 200, r.text
     assert r.json()["redo_stopped"] is False and _producer(env, "analysis_proxy")["redo_stopped"] is False
 
@@ -178,7 +178,7 @@ def test_an_unknown_producer_is_404(env):
 def test_saving_the_same_settings_leaves_a_stopped_redo_stopped(env):
     client, headers, *_ = env
     assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-    r = _put(env, "analysis_proxy", settings={"crf": 28})  # its default: nothing changes
+    r = _put(env, "analysis_proxy", settings={"quality": "better"})  # its default: nothing changes
     assert r.status_code == 200 and r.json()["redo_stopped"] is True, r.text
     assert r.json()["redo_stopped_at"] and r.json()["redo_stopped_by"], r.text  # as GET says it, to an admin
     client.post("/v1/producers/analysis_proxy/resume", json={"scope": "redo"}, headers=headers)

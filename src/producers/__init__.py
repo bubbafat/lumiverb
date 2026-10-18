@@ -60,6 +60,15 @@ def _check(found: list[ProducerSpec]) -> None:
         if len(levels) > 1 or any(s.remakes or s.default not in s.choices for s in levels):
             raise ValueError(f"{p.artifact}: one level setting at most, kept out of the hash"
                              " (remakes=False), its default among its choices")
+        others = {s.key for s in p.settings}
+        for s in p.settings:
+            if s.kind != "notch":
+                continue
+            stands_for = {tuple(sorted(m)) for m in s.means.values()}
+            if not s.remakes or s.default not in s.choices or set(s.means) != set(s.choices) \
+                    or len(stands_for) != 1 or set(next(iter(stands_for))) & others:
+                raise ValueError(f"{p.artifact}: its notch {s.key!r} is in the hash (remakes=True), its default"
+                                 " among its choices, each choice meaning the same keys, none another setting's")
         if p.part_of and p.part_of not in {q.artifact for q in found}:
             raise ValueError(f"{p.artifact}: it's part of {p.part_of!r}, which no producer makes")
         missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]

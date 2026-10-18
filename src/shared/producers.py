@@ -93,9 +93,10 @@ def settings_hash(settings: Mapping[str, Any]) -> str:
 def effective_settings(artifact: str, overrides: Mapping[str, Any] | None = None,
                        account: Mapping[str, str] | None = None) -> dict[str, Any]:
     """The producer's defaults, then explicit overrides, then its job's model
-    from the account ({job: model}; a job without one leaves the default).
-    Unknown keys in overrides are ignored: only declared settings change
-    output. A job's model comes from the job alone: an override can't say another."""
+    from the account ({job: model}; a job without one leaves the default),
+    each notch as what it stands for (resolved). Unknown keys in overrides
+    are ignored: only declared settings change output. A job's model comes
+    from the job alone: an override can't say another."""
     p = PRODUCERS[artifact]
     out = dict(p.defaults)
     for key, value in (overrides or {}).items():
@@ -103,6 +104,29 @@ def effective_settings(artifact: str, overrides: Mapping[str, Any] | None = None
             out[key] = value
     if p.job and account and account.get(p.job):
         out["model"] = account[p.job]
+    return resolved(artifact, out)
+
+
+def resolved(artifact: str, settings: Mapping[str, Any]) -> dict[str, Any]:
+    """The settings as what they make (ADR-018 decision 6): each notch ("better")
+    replaced by the numbers it stands for ({"crf": 28}), which lineage hashes
+    and a producer's work reads. A notch it doesn't know is its default's."""
+    out = dict(settings)
+    for s in PRODUCERS[artifact].settings:
+        if s.kind == "notch" and s.key in out:
+            chosen = out.pop(s.key)
+            out.update(s.means.get(chosen, s.means[s.default]))
+    return out
+
+
+def notches(artifact: str, overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """The producer's notches as chosen (its defaults, then overrides): what
+    Settings shows, as the settings themselves are what they stand for."""
+    out = {}
+    for s in PRODUCERS[artifact].settings:
+        if s.kind == "notch":
+            chosen = (overrides or {}).get(s.key, s.default)
+            out[s.key] = chosen if chosen in s.choices else s.default
     return out
 
 
