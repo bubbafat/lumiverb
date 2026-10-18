@@ -48,6 +48,8 @@ class SetLocationRequest(BaseModel):
     lat: float | None = Field(default=None, allow_inf_nan=False)
     lon: float | None = Field(default=None, allow_inf_nan=False)
     same_as: str | None = None  # another clip: its location (a person's, else the file's)
+    # A place from GET /v1/places ("geonames:<id>"): its point, the place kept with it (Place names plug-in).
+    place_id: str | None = Field(default=None, max_length=64)
     # What may be replaced: "none", a person's location ("person"), or the file's too ("all").
     replace: Literal["none", "person", "all"] = "none"
 
@@ -91,6 +93,23 @@ def _who(request: Request) -> str:
     return get_current_user_id(request)
 
 
+def _place(session: Session, place: str) -> tuple[float, float, dict]:
+    """A place's point and what's kept of it: 409 plugin_off, 503 places_not_ready, 422 unknown_place."""
+    from src.server.api.routers.places import require_places
+    from src.server.database import get_control_session
+    from src.server.repository.places import PlaceRepository, geonameid_of, label
+
+    require_places(session)
+    geonameid = geonameid_of(place)
+    row = None
+    if geonameid is not None:
+        with get_control_session() as control:
+            row = PlaceRepository(control).get(geonameid)
+    if row is None or not is_fix(row["lat"], row["lon"]):
+        raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")
+    return float(row["lat"]), float(row["lon"]), {"id": place, "label": label(row), "source": "geonames"}
+
+
 def _refresh(session: Session, asset_ids: list[str]) -> None:
     if asset_ids:
         from src.server.api.routers.assets import _refresh_grids
@@ -109,10 +128,12 @@ def set_locations(
     ids = _ids(body)
     assert body is not None
     by_point = body.lat is not None or body.lon is not None
-    if by_point == (body.same_as is not None):
-        raise HTTPException(status_code=400, detail="Send lat and lon, or same_as")
+    if sum((by_point, body.same_as is not None, body.place_id is not None)) != 1:
+        raise HTTPException(status_code=400, detail="Send lat and lon, same_as, or place_id")
     basis: dict = {}
-    if by_point:
+    if body.place_id is not None:
+        lat, lon, basis["place"] = _place(session, body.place_id)
+    elif by_point:
         if body.lat is None or body.lon is None or not is_fix(body.lat, body.lon):
             raise ApiError(422, "invalid_location", "lat and lon must be a real place: -90..90, -180..180, not 0, 0")
         lat, lon = float(body.lat), float(body.lon)

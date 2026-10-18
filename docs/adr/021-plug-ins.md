@@ -9,7 +9,7 @@ Accepted (2026-10-18, Robert). Phase 1 first: one plug-in, place names from GeoN
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | The mechanism: the registry, each account's switch, the acknowledgment and its record, the API, the CLI, Settings › Plug-ins | Built: `src/plugins/`, `repository/plugins.py`, `routers/plugins.py`, `lumiverb plugins`, `pages/settings/PluginsSection.tsx`; every turn-on asks (not only the first) |
-| 2 | Place names (GeoNames): the place list downloaded once for the server; place search when setting a location (ADR-017 phase 4, its first part) | Not started |
+| 2 | Place names (GeoNames): the place list downloaded once for the server; place search when setting a location (ADR-017 phase 4, its first part) | Built: `src/plugins/geonames/data.py`, `src/server/plugin_data.py`, `GET /v1/places`, `place_id` on `PUT /v1/assets/locations`, Set location's Place, the GeoNames credit beside a place's name |
 | 3 | Robert tries the UI; his feedback | Waiting on 1 and 2 |
 | 4 | Other plug-ins distilled from what Lumiverb already has (faces, transcripts, descriptions, location guesses, …) | Not until phase 3 |
 
@@ -78,6 +78,16 @@ ADR-017 phase 4 needs names for places. They come from GeoNames, under Creative 
 - **What's fetched:** `cities1000.zip` (every town of 1,000 people or more: 171,329 places, 11 MB, 2026-10-18), `admin1CodesASCII.txt` (regions) and `countryInfo.txt` (countries), from `download.geonames.org`, once for the server (`LUMIVERB_GEONAMES_URL` names a mirror). Nothing about anyone's photos is sent. Kept in the control database: each place's id, name, ASCII name, point, feature code, country, region, population and time zone; not its alternate names (10 MB more; later, if search needs "Wien" for Vienna). A new fetch replaces the old in one transaction, so search never sees half a list.
 - **What it adds (phase 2):** place search when setting a location, by name (`GET /v1/places?q=`), most populous first; and `PUT /v1/assets/locations` taking `{place_id}`, which sets a person's location at that place's point and records the place. Where place names show, the credit shows.
 - **Later (ADR-017 phase 4's rest):** a name beside every location ("Near Port of Spain, Trinidad and Tobago"), and suggestions from text in photos.
+
+## Open question: when a new version asks again (Robert, 2026-10-18)
+
+Robert: "the requiring acknowledgment on an upgrade should be defined by the plug-in itself: going from Creative Commons to Creative Commons should not require a new acknowledgment; going from Creative Commons to MIT or another license could, but only the new plug-in can know that." And: "the plug-in wouldn't necessarily know it's a new install versus an upgrade, but I kinda wanna think about that."
+
+What's known already: whether an account accepted anything, and which version (`plugin_acknowledgments`). A new install (or an account that never turned it on) has nothing accepted and is always asked. Only an upgrade has an older acceptance, so the question is the plug-in's alone: does what was accepted still cover it? Ways it could say so, for Robert to choose:
+- **Terms apart from wording:** the acknowledgment names its terms (`terms="cc-by-4.0"`) beside its text's version; a new version with the same terms is covered, other terms ask again.
+- **What it still covers:** the acknowledgment lists the earlier versions its text still covers (`covers=("1",)`); an acceptance of one of them stands.
+
+Until then decision 5 stands as built: any new version asks again. No plug-in has a second version yet.
 
 ## Alternatives considered
 

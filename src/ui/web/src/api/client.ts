@@ -1,4 +1,6 @@
 import type {
+  Place,
+  PlaceCredit,
   Plugin,
   ApiKeyCreateResponse,
   ApiKeyItem,
@@ -1988,9 +1990,16 @@ export type LocationReplace = "none" | "person" | "all";
  * Replacing a location the file or a person gave answers 409 location_exists
  * (details: count, person, file) until `replace` says so. */
 export async function setLocations(
-  body: { asset_ids: string[]; replace?: LocationReplace } & ({ lat: number; lon: number } | { same_as: string }),
+  body: { asset_ids: string[]; replace?: LocationReplace }
+    & ({ lat: number; lon: number } | { same_as: string } | { place_id: string }),
 ): Promise<{ updated: string[]; skipped: string[] }> {
   return apiFetch("/assets/locations", { method: "PUT", body });
+}
+
+/** Places whose name starts with q ("Name, region or country" narrows it), the Place names plug-in's: 409
+ * plugin_off while it's off, 503 places_not_ready until its list is fetched. With the credit to show beside them. */
+export async function searchPlaces(q: string, limit = 8): Promise<{ places: Place[]; credit: PlaceCredit }> {
+  return apiFetch(`/places?${new URLSearchParams({ q, limit: String(limit) })}`);
 }
 
 /** Clear a person's location from these clips (the file's GPS stays). */

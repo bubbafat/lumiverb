@@ -126,7 +126,14 @@ def summary(session: Session, row: dict[str, Any]) -> str | None:
     if same_as:
         rel = session.execute(text("SELECT rel_path FROM assets WHERE asset_id = :a"), {"a": same_as}).scalar()
         return f"Same place as {rel.rsplit('/', 1)[-1]}" if rel else None
+    place = basis.get("place")
+    if isinstance(place, dict) and place.get("label"):
+        return str(place["label"])
     return basis.get("summary") or None
+
+
+# A place name's source, shown beside it (its license asks for the credit).
+CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/"}}
 
 
 def display_name(user_id: str | None) -> str | None:
@@ -158,6 +165,8 @@ def for_asset(session: Session, asset_id: str) -> dict[str, Any] | None:
         "lat": row["lat"], "lon": row["lon"], "radius_m": row["radius_m"],
         "source": row["source"], "status": row["status"],
         "basis_summary": summary(session, row),
+        # Who a place name in basis_summary is from, to show beside it (None without one).
+        "credit": CREDITS.get(str(((row["basis"] or {}).get("place") or {}).get("source"))),
         # A guess kept with nothing else to go by: its fixes went ("source
         # removed"), or are outside the window now ("outside window").
         "basis_gone": bool((row["basis"] or {}).get("basis_gone")) if row["source"] == TIME else False,

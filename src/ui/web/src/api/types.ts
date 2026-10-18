@@ -46,6 +46,44 @@ export interface Plugin {
   acknowledgment: PluginAcknowledgment | null;
   /** The acceptance it's on by (or waiting with); who, for admins. */
   acknowledged: { version: string; by: string | null; at: string } | null;
+  /** What it keeps for the whole server (GeoNames' place list), as it's fetched; null: nothing. */
+  data?: PluginData | null;
+}
+
+export interface PluginData {
+  /** What it is ("The place list") and what count counts ("places"). */
+  title: string;
+  unit: string;
+  state: "missing" | "fetching" | "ready" | "failed";
+  /** Bytes downloaded so far, of total (when known), while fetching. */
+  done?: number;
+  total?: number | null;
+  /** What it's doing now ("Downloading the place list"). */
+  detail?: string | null;
+  error?: string | null;
+  /** How many it keeps (places), once ready. */
+  count?: number | null;
+  ready_at?: string | null;
+}
+
+/** A place found by name (the Place names plug-in): what setting a location by place takes. */
+export interface Place {
+  place_id: string;
+  name: string;
+  region: string | null;
+  country: string | null;
+  /** "Port of Spain, Trinidad and Tobago". */
+  label: string;
+  lat: number;
+  lon: number;
+  population: number;
+}
+
+/** Shown beside place names: their source and license ask it. */
+export interface PlaceCredit {
+  text: string;
+  url: string;
+  license_url: string;
 }
 
 /** A role on one library (ADR-018 decision 8): "none" means they don't see it. */
@@ -275,6 +313,8 @@ export interface AssetLocation {
   /** Who set it, for a person's: looked up when a signed-in person reads it (null for an API key). */
   set_by?: string | null;
   set_at?: string | null;
+  /** Who a place name in basis_summary is from, to show beside it (GeoNames); null without one. */
+  credit?: { text: string; url: string } | null;
 }
 
 export interface SimilarHit {

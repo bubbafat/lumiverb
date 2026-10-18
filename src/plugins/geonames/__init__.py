@@ -32,5 +32,8 @@ PLUGIN = PluginSpec(
             Link("GeoNames' terms", "https://www.geonames.org/export/"),
         ),
     ),
+    data="src.plugins.geonames.data:fetch",
+    data_title="The place list",
+    data_unit="places",
     order=100,
 )

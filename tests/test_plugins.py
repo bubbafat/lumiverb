@@ -28,8 +28,12 @@ GEONAMES = "geonames"
 
 
 @pytest.fixture(autouse=True)
-def _off(env):  # noqa: F811
-    """Every test starts with every plug-in off and no acceptance kept, in both accounts."""
+def _off(env, monkeypatch):  # noqa: F811
+    """Every test starts with every plug-in off and no acceptance kept, in both accounts. What a
+    plug-in keeps for the server isn't fetched here (tests/test_geonames.py fetches it)."""
+    from src.server import plugin_data
+
+    monkeypatch.setattr(plugin_data, "ensure", lambda *a, **k: "none")
     yield
     for headers in (env.admin, env.other):
         for p in registry():

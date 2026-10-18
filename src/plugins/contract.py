@@ -37,5 +37,12 @@ class PluginSpec:
     # What it does, a sentence or two (Settings › Plug-ins).
     description: str
     acknowledgment: Acknowledgment | None = None
+    # What it keeps for the whole server, fetched once when an account turns it
+    # on (src/server/plugin_data.py): "module:function", called with a
+    # progress(done, total, detail) and returning how many things it keeps.
+    data: str = ""
+    # What that is and what it counts, for people: "The place list", "places".
+    data_title: str = ""
+    data_unit: str = ""
     # Where it shows in lists.
     order: int = 1000

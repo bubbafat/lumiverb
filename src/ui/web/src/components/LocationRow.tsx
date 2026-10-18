@@ -64,6 +64,13 @@ export function LocationRow({
               <div className="text-xs text-gray-400">
                 {person.set_by ? `Set by ${person.set_by}` : "Set by hand"}
                 {person.basis_summary ? ` · ${person.basis_summary}` : ""}
+                {person.credit && (
+                  <>
+                    {" · "}
+                    <a href={person.credit.url} target="_blank" rel="noopener noreferrer"
+                       className="text-gray-500 hover:text-gray-300 hover:underline">{person.credit.text}</a>
+                  </>
+                )}
                 {canEdit && onClear && (
                   <>
                     {" · "}
