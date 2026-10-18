@@ -12,7 +12,7 @@ from src.server.api.dependencies import is_install_key
 from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, UserRepository
-from src.server.repository.library_roles import Person
+from src.server.repository.library_roles import MakerGoneError, person_of_key, person_of_user
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     # As they are now, like the role: taking it away takes effect at once.
                     request.state.server_admin = bool(user.server_admin)
                     # Whose roles on each library this request has (src/server/api/library_access.py).
-                    request.state.person = Person(user.user_id, user.role, user.every_library)
+                    request.state.person = person_of_user(user)
+                    request.state.token_version = user.token_version  # a playback link made now is theirs as now
                     request.state.is_public_request = False
                     return await call_next(request)
 
@@ -159,12 +160,10 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 if api_key is None:
                     return _error_response(401, "unauthorized", "Invalid or revoked API key")
                 # A key a person made acts as them, never above its own role, on each library.
-                person = None
-                if api_key.created_by_user_id is not None and api_key.device_id is None:
-                    maker = UserRepository(session).get_by_id(api_key.created_by_user_id)
-                    if maker is None or maker.tenant_id != api_key.tenant_id:
-                        return _error_response(401, "unauthorized", "Invalid or revoked API key")
-                    person = Person(maker.user_id, maker.role, maker.every_library, cap=api_key.role)
+                try:
+                    person = person_of_key(api_key, UserRepository(session))
+                except MakerGoneError:
+                    return _error_response(401, "unauthorized", "Invalid or revoked API key")
                 key_repo.touch_last_used(api_key.key_id)
                 routing_repo = TenantDbRoutingRepository(session)
                 routing = routing_repo.get_by_tenant_id(api_key.tenant_id)
