@@ -379,7 +379,7 @@ class UserRepository:
         self._session = session
 
     def create(self, tenant_id: str, email: str, password_hash: str, role: str = "viewer", *,
-               server_admin: bool = False) -> User:
+               server_admin: bool = False, every_library: bool = True) -> User:
         from ulid import ULID
         user = User(
             user_id="usr_" + str(ULID()),
@@ -388,6 +388,7 @@ class UserRepository:
             password_hash=password_hash,
             role=role,
             server_admin=server_admin,
+            every_library=every_library,
         )
         self._session.add(user)
         self._session.commit()
@@ -447,6 +448,19 @@ class UserRepository:
         if user.role != role:
             user.role = role
             user.token_version += 1  # tokens carry the role: revoke them
+        self._session.add(user)
+        self._session.commit()
+        self._session.refresh(user)
+        return user
+
+    def set_every_library(self, user_id: str, every_library: bool) -> User:
+        """Whether they see every library (their account role on each) or
+        only the ones they're given a role on; read at each request, so it
+        takes effect at once."""
+        user = self.get_by_id(user_id)
+        if user is None:
+            raise ValueError(f"User not found: {user_id}")
+        user.every_library = every_library
         self._session.add(user)
         self._session.commit()
         self._session.refresh(user)

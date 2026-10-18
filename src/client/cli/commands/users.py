@@ -1,5 +1,6 @@
 """User management CLI commands: user create (an invite), user invite (a new
-link), user list, user set-role, user remove."""
+link), user list, user set-role, user libraries (every one or only those
+they're given), user remove."""
 
 from __future__ import annotations
 
@@ -45,6 +46,9 @@ def _say_link(email: str, urls: list[str]) -> None:
 def create_user(
     email: Annotated[str, typer.Option("--email", help="Email address for the new user.")],
     role: Annotated[str, typer.Option("--role", help="Role: admin, editor, or viewer.")] = "viewer",
+    only_given: Annotated[bool, typer.Option(
+        "--only-given-libraries",
+        help="They see only the libraries they're given a role on (lumiverb library role).")] = False,
 ) -> None:
     """Invite someone: they get a link to choose their own password."""
     if not _EMAIL_RE.match(email):
@@ -56,7 +60,7 @@ def create_user(
         raise typer.Exit(1)
 
     client = LumiverbClient()
-    resp = client.raw("POST", "/v1/users", json={"email": email, "role": role})
+    resp = client.raw("POST", "/v1/users", json={"email": email, "role": role, "every_library": not only_given})
     if resp.status_code == 409:
         console.print(f"[red]Error: email already registered: {escape(email)}[/red]")
         raise typer.Exit(1)
@@ -95,6 +99,7 @@ def list_users() -> None:
     table = Table()
     table.add_column("EMAIL")
     table.add_column("ROLE")
+    table.add_column("LIBRARIES")
     table.add_column("LAST LOGIN")
     for u in users:
         last_login = u.get("last_login_at")
@@ -102,7 +107,8 @@ def list_users() -> None:
             last_login = last_login[:16].replace("T", " ")
         else:
             last_login = "never"
-        table.add_row(u.get("email", ""), u.get("role", ""), last_login)
+        libraries = "every one" if u.get("every_library", True) or u.get("role") == "admin" else "only given"
+        table.add_row(u.get("email", ""), u.get("role", ""), libraries, last_login)
     console.print(table)
 
 
@@ -131,6 +137,22 @@ def set_user_role(
     resp.raise_for_status()
     data = resp.json()
     console.print(f"[green]Role updated: {data['email']} → {data['role']}[/green]")
+
+
+@user_app.command("libraries")
+def set_user_libraries(
+    email: Annotated[str, typer.Option("--email", help="Email of the user to update.")],
+    every: Annotated[bool, typer.Option(
+        "--every/--only-given",
+        help="Every library at their role (but those set otherwise), or only those they're given a role on.")],
+) -> None:
+    """Whether someone sees every library, or only the ones they're given a role on."""
+    client = LumiverbClient()
+    user = _find_user_by_email(client, email)
+    resp = client.patch(f"/v1/users/{user['user_id']}", json={"every_library": every})
+    resp.raise_for_status()
+    sees = "every library" if every else "only the libraries they're given"
+    console.print(f"[green]{escape(email)} sees {sees}.[/green]")
 
 
 @user_app.command("remove")

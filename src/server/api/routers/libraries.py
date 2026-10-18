@@ -14,12 +14,13 @@ from src.server.api.dependencies import (
     get_tenant_session,
     require_editor,
     require_folder_chosen_here,
+    require_library_admin,
     require_signed_in,
     require_tenant_admin,
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS, require_scope
-from src.server.api.library_access import in_sight, names
+from src.server.api.library_access import in_sight, names, roles_in_sight
 from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
@@ -40,6 +41,8 @@ class CreateLibraryRequest(BaseModel):
     is_public: bool | None = None
     # Who reads its files: "server" (this server), or a registered device's id (/v1/devices).
     reader: str = SERVER
+    # Only the account's admins and the people given a role on it see it (ADR-018 decision 8).
+    private: bool = False
 
 
 class ReaderChoice(BaseModel):
@@ -49,18 +52,27 @@ class ReaderChoice(BaseModel):
     root_path: str | None = None
 
 
-def require_admin_for(request: Request, body: BaseModel, fields: set[str]) -> None:
-    """Library fields only a tenant admin may change (is_public and root_path):
-    403 for anyone else who sends them. The one place to swap in a per-library
-    admin role."""
-    if fields & body.model_fields_set:
+# Library fields only an account admin changes (making it public is the account's), and those its own
+# admin changes too (where its files are, who sees it: ADR-018 decision 8).
+ACCOUNT_ADMINS_FIELDS = {"is_public"}
+LIBRARY_ADMINS_FIELDS = {"root_path", "private"}
+
+
+def require_admin_for(request: Request, body: BaseModel) -> None:
+    """403 for anyone but an admin who sends a field that's an admin's: an
+    account admin's (ACCOUNT_ADMINS_FIELDS), or the library's admin's too
+    (LIBRARY_ADMINS_FIELDS)."""
+    if ACCOUNT_ADMINS_FIELDS & body.model_fields_set:
         require_tenant_admin(request)
+    if LIBRARY_ADMINS_FIELDS & body.model_fields_set:
+        require_library_admin(request)
 
 
 class LibraryUpdateRequest(BaseModel):
     name: str | None = None
     root_path: str | None = None
     is_public: bool | None = None
+    private: bool | None = None
 
 
 class LibraryResponse(BaseModel):
@@ -73,6 +85,10 @@ class LibraryResponse(BaseModel):
     reader: str = SERVER
     # The device's name (Devices API), for people; None for this server.
     reader_name: str | None = None
+    # Only the account's admins and the people given a role on it see it.
+    private: bool = False
+    # The caller's role on it (ADR-018 decision 8): "admin" (its admin), "editor" or "viewer".
+    role: str | None = None
 
 
 class CheckedIn(BaseModel):
@@ -114,6 +130,31 @@ class LibraryListItem(BaseModel):
     scan_requested_at: str | None = None
     # Its reader's latest check-in, none before the first.
     checked_in: CheckedIn | None = None
+    # Only the account's admins and the people given a role on it see it.
+    private: bool = False
+    # The caller's role on it (ADR-018 decision 8): "admin" (its admin), "editor" or "viewer".
+    role: str | None = None
+
+
+def role_of(request: Request, session: Session, library_id: str) -> str | None:
+    """The caller's role on a library: a person's there, else the request's own."""
+    roles = roles_in_sight(request, session)
+    return getattr(request.state, "role", None) if roles is None else roles.get(library_id)
+
+
+def _response(request: Request, session: Session, library, *, root_path: str | None = None) -> LibraryResponse:
+    """A library as the API answers with it, its root_path given in its place when given."""
+    return LibraryResponse(
+        library_id=library.library_id,
+        name=library.name,
+        root_path=library.root_path if root_path is None else root_path,
+        is_public=library.is_public,
+        cover_asset_id=LibraryRepository(session).resolve_cover(library),
+        reader=library.reader,
+        reader_name=_reader_name(session, library.reader),
+        private=library.private,
+        role=role_of(request, session, library.library_id),
+    )
 
 
 def checked_in_of(row: dict | None) -> CheckedIn | None:
@@ -177,7 +218,7 @@ def create_library(
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=root_path, reader=body.reader)
+    library = repo.create(name=body.name, root_path=root_path, reader=body.reader, private=body.private)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -186,14 +227,7 @@ def create_library(
         repo.update(library, is_public=True)
         with get_control_session() as ctrl_session:
             PublicLibraryRepository(ctrl_session).upsert(library.library_id, tenant_id)
-    return LibraryResponse(
-        library_id=library.library_id,
-        name=library.name,
-        root_path=library.root_path,
-        is_public=library.is_public,
-        reader=library.reader,
-        reader_name=_reader_name(session, library.reader),
-    )
+    return _response(request, session, library)
 
 
 @router.get("", response_model=list[LibraryListItem])
@@ -227,6 +261,8 @@ def list_libraries(
             scans_paused=lib.scans_paused_at is not None,
             scan_requested_at=lib.scan_requested_at.isoformat() if lib.scan_requested_at else None,
             checked_in=checked_in_of(seen.get(lib.library_id)),
+            private=lib.private,
+            role=role_of(request, session, lib.library_id),
         )
         for lib in libraries
     ]
@@ -245,15 +281,15 @@ def _named_libraries(session: Session, body: ScansPauseRequest) -> list[str]:
     return list(dict.fromkeys(body.library_ids or []))
 
 
-@router.post("/scans/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+@router.post("/scans/pause", status_code=204, dependencies=[Depends(require_library_admin)])
 @names("body.library_ids")
 def pause_scans(
     body: ScansPauseRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> None:
-    """Pause these libraries' scans, or every library's (admins; ADR-018
-    phase 1): no new or changed files are found in them, so neither their
+    """Pause these libraries' scans (their admin's), or every library's (an
+    account admin's; ADR-018 phase 1): no new or changed files are found in them, so neither their
     thumbnails nor video previews are made; changes reported meanwhile
     wait; every other kind of work goes on. A scan running finishes. Again
     is fine: who paused first, and when, stays."""
@@ -261,10 +297,10 @@ def pause_scans(
     session.commit()
 
 
-@router.post("/scans/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+@router.post("/scans/resume", status_code=204, dependencies=[Depends(require_library_admin)])
 @names("body.library_ids")
 def resume_scans(body: ScansPauseRequest, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
-    """Scan these libraries again, or every library (admins). While Pause
+    """Scan these libraries again (their admin's), or every library (an account admin's). While Pause
     all is on, everything else stays paused, each on its own."""
     lineage.resume_scans(session, _named_libraries(session, body))
     session.commit()
@@ -397,16 +433,8 @@ def get_library(
     is_public_request = getattr(request.state, "is_public_request", False)
     if is_public_request and not library.is_public:
         raise HTTPException(status_code=404, detail="Not found")
-    return LibraryResponse(
-        library_id=library.library_id,
-        name=library.name,
-        # Where the files are on the server isn't a visitor's business.
-        root_path="" if is_public_request else library.root_path,
-        is_public=library.is_public,
-        cover_asset_id=repo.resolve_cover(library),
-        reader=library.reader,
-        reader_name=_reader_name(session, library.reader),
-    )
+    # Where the files are on the server isn't a visitor's business.
+    return _response(request, session, library, root_path="" if is_public_request else None)
 
 
 @router.patch("/{library_id}", response_model=LibraryResponse)
@@ -420,7 +448,7 @@ def update_library(
     """Update library name, root_path and/or is_public. A folder is chosen
     on the library's reader: for this server's libraries, as on creating one
     (require_folder_chosen_here)."""
-    require_admin_for(request, body, {"is_public", "root_path"})
+    require_admin_for(request, body)
     if body.root_path is not None:
         checked_root_path(body.root_path)
     repo = LibraryRepository(session)
@@ -429,7 +457,7 @@ def update_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if body.root_path is not None and read_by_server(library):
         require_folder_chosen_here(request)
-    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public)
+    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public, private=body.private)
 
     # Maintain public_libraries control plane index
     if body.is_public is not None:
@@ -441,15 +469,7 @@ def update_library(
             else:
                 pub_repo.delete(library_id)
 
-    return LibraryResponse(
-        library_id=library.library_id,
-        name=library.name,
-        root_path=library.root_path,
-        is_public=library.is_public,
-        cover_asset_id=repo.resolve_cover(library),
-        reader=library.reader,
-        reader_name=_reader_name(session, library.reader),
-    )
+    return _response(request, session, library)
 
 
 def _reader_name(session: Session, reader: str) -> str | None:
@@ -471,14 +491,14 @@ def _known_reader(session: Session, reader: str) -> None:
         raise ApiError(404, "device_not_found", "There's no such device: register it first (/v1/devices).")
 
 
-@router.put("/{library_id}/reader", response_model=LibraryResponse, dependencies=[Depends(require_tenant_admin)])
+@router.put("/{library_id}/reader", response_model=LibraryResponse, dependencies=[Depends(require_library_admin)])
 def choose_reader(
     library_id: str,
     request: Request,
     body: ReaderChoice,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> LibraryResponse:
-    """Who reads the library's files (ADR-018 decision 1; admins): this
+    """Who reads the library's files (ADR-018 decision 1; its admin): this
     server or a registered device, never both at once. The new reader scans
     it and makes what needs its originals from its next check-in; the old
     one's scans of it are refused from now (409 not_the_reader). With
@@ -498,15 +518,7 @@ def choose_reader(
     if body.reader == SERVER and (root_path is not None or library.reader != SERVER):
         require_folder_chosen_here(request)
     repo.update(library, root_path=root_path, reader=body.reader)
-    return LibraryResponse(
-        library_id=library.library_id,
-        name=library.name,
-        root_path=library.root_path,
-        is_public=library.is_public,
-        cover_asset_id=repo.resolve_cover(library),
-        reader=library.reader,
-        reader_name=_reader_name(session, library.reader),
-    )
+    return _response(request, session, library)
 
 
 class DeleteLibraryRequest(BaseModel):
@@ -564,6 +576,7 @@ def delete_library(
 @router.post("/{library_id}/restore", response_model=LibraryResponse)
 def restore_library(
     library_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
@@ -584,9 +597,7 @@ def restore_library(
             raise HTTPException(status_code=404, detail="Library not found") from e
         raise ConflictError("not_trashed", "This library isn't in the trash.") from e
     repo.bump_revision(library_id)
-    return LibraryResponse(library_id=library.library_id, name=library.name,
-                           root_path=library.root_path, is_public=library.is_public, reader=library.reader,
-                           reader_name=_reader_name(session, library.reader))
+    return _response(request, session, library)
 
 
 @router.get("/{library_id}/ignored-paths", dependencies=[Depends(require_signed_in)])
