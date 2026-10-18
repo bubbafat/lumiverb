@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { getCurrentUser, logout } from "../../api/client";
+import { ApiError, getCurrentUser, logout } from "../../api/client";
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-indigo-600/20 text-indigo-300 border-indigo-600/30",
@@ -19,13 +20,50 @@ function roleBadge(role: string) {
   );
 }
 
+/** What a failed "who am I" said, as precisely as it can be told: the HTTP status and the server's code and
+ * message, or the browser's own error when no answer came. */
+export function whyNot(error: unknown): string {
+  if (error instanceof ApiError) {
+    return [`HTTP ${error.status}`, error.code, error.message].filter(Boolean).join(" · ");
+  }
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+}
+
 export default function AccountSection() {
-  const { data: user, isLoading } = useQuery({
+  const { data: user, error } = useQuery({
     queryKey: ["settings", "me"],
     queryFn: getCurrentUser,
   });
+  // The last failure, kept while it's asked again (a new try clears the query's own error).
+  const [failed, setFailed] = useState<{ why: string; at: Date } | null>(null);
+  useEffect(() => {
+    if (user) setFailed(null);
+    else if (error) setFailed({ why: whyNot(error), at: new Date() });
+  }, [user, error]);
 
-  if (isLoading) {
+  if (!user && failed) {
+    return (
+      <div className="rounded-lg border border-red-800/50 bg-gray-900/50 p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-100">Account</h2>
+        <div role="alert" className="space-y-1 text-sm">
+          <p className="text-red-300">Couldn&apos;t tell who&apos;s signed in. Asking again every few seconds.</p>
+          <p className="break-words font-mono text-xs text-gray-400">
+            {failed.why} ({failed.at.toLocaleTimeString()})
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void logout()}
+          className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:border-gray-500"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  if (!user) {
     return (
       <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />
     );
@@ -39,16 +77,16 @@ export default function AccountSection() {
         <div>
           <label className="block text-sm font-medium text-gray-400">Email</label>
           <p className="mt-1 text-sm text-gray-200">
-            {user?.email ?? "N/A (API key authentication)"}
+            {user.email ?? "None: signed in with an API key"}
           </p>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-400">Role</label>
-          <div className="mt-1">{roleBadge(user?.role ?? "viewer")}</div>
+          <div className="mt-1">{roleBadge(user.role)}</div>
         </div>
 
-        {user?.email && (
+        {user.email && (
           <div>
             <Link
               to="/reset-password"
