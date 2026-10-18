@@ -8,6 +8,7 @@
     lumiverb-server reset-password --env FILE [--email EMAIL]
     lumiverb-server backup --env FILE [--before-upgrade]
     lumiverb-server restore --env FILE BACKUP [--yes]
+    lumiverb-server ai-worker --env FILE [--host HOST] [--port PORT] [--at-once N] [--show-key]
 
 init: the install's env file and nginx's config, each written only if it
 isn't there (init.py), for Homebrew's post_install.
@@ -51,6 +52,12 @@ first, so it can be undone. Then migrated to this version; search is in the
 databases put back. A Mac's own PostgreSQL is started for
 the while if the service is stopped.
 
+ai-worker: CLIP and face detection for another machine's scheduler, as an
+AI machine in its Settings › AI (ADR-022, src/server/ai_worker/): the
+install's models, no account, database or files; on every interface, port
+6366, by default. Its key is made on first start, kept in the data folder
+(owner-only), and printed by --show-key, to paste into Settings › AI.
+
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
 environment (a dev checkout). On Linux /etc/lumiverb/env is the live
@@ -75,6 +82,7 @@ from getpass import getpass
 from pathlib import Path
 
 from src.server import backups
+from src.server.ai_worker import DEFAULT_PORT as DEFAULT_AI_WORKER_PORT
 from src.server.lifecycle import api_port, log, network, private, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
@@ -791,6 +799,42 @@ def _has_database(url: str) -> bool:
         engine.dispose()
 
 
+def _ai_worker(args: argparse.Namespace) -> int:
+    from src.server.ai_worker import ensure_key
+
+    env = install_env(args.env)
+    data = data_dir(env)
+    key = ensure_key(data)
+    if args.show_key:
+        print(key)
+        return 0
+    os.environ.update(env)  # DATA_DIR: the models folder (src/processing/models_dir.py)
+    import uvicorn
+
+    from src.server.ai_worker.app import CLIP_MODELS, FACE_MODELS, make_app
+    from src.server.scheduler.models import Models
+    from src.shared.logging_config import configure_api_logging
+
+    configure_api_logging()
+    models = Models()
+    stop = threading.Event()
+
+    def let_go_of_idle() -> None:  # a model unused for a while frees its GPU memory, as in the scheduler
+        while not stop.wait(60):
+            models.let_go_of_idle()
+
+    threading.Thread(target=let_go_of_idle, name="ai-worker-idle", daemon=True).start()
+    logger.info("Lumiverb AI worker on %s:%d, %d at once: CLIP %s, faces %s. Its key: lumiverb-server ai-worker "
+                "--show-key", args.host, args.port, args.at_once, ", ".join(CLIP_MODELS), ", ".join(sorted(FACE_MODELS)))
+    try:
+        uvicorn.run(make_app(models, key, at_once=args.at_once), host=args.host, port=args.port, access_log=False,
+                    log_config=None)
+    finally:
+        stop.set()
+        models.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lumiverb-server", description="Look after this machine's Lumiverb server.")
     _env_option(parser, None)
@@ -841,6 +885,13 @@ def main(argv: list[str] | None = None) -> int:
     _env_option(restore_command, argparse.SUPPRESS)
     restore_command.add_argument("backup", help="the backup's folder, or its name in the backups folder")
     restore_command.add_argument("--yes", action="store_true", help="don't ask first")
+    worker_command = commands.add_parser(
+        "ai-worker", help="do CLIP and face detection for another machine's Lumiverb (an AI machine in its Settings › AI)")
+    _env_option(worker_command, argparse.SUPPRESS)
+    worker_command.add_argument("--host", default="0.0.0.0", help="where it listens (every interface by default)")
+    worker_command.add_argument("--port", type=int, default=DEFAULT_AI_WORKER_PORT, help="its port (6366)")
+    worker_command.add_argument("--at-once", type=int, default=2, help="requests it works on at once (2)")
+    worker_command.add_argument("--show-key", action="store_true", help="print its key (made if there's none) and stop")
     for verb, does in (("pause", "pause processing here (what's running finishes)"),
                        ("resume", "resume processing here")):
         command = commands.add_parser(
@@ -853,7 +904,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
                 "reset-password": _reset_password, "server-admins": _server_admins, "backup": _backup,
-                "restore": _restore,
+                "restore": _restore, "ai-worker": _ai_worker,
                 "pause": _pausing, "resume": _pausing}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
