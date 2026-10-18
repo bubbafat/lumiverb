@@ -277,6 +277,12 @@ function ProducerRow({
         </span>
       </div>
       <CountsBar producer={producer} />
+      {producer.plugin && (
+        <p className="text-xs text-gray-500">
+          Part of the {producer.plugin.title} plug-in
+          {producer.plugin.on === false ? ": off, so nothing is made. Turn it on in Settings › Plug-ins." : "."}
+        </p>
+      )}
       {producer.artifact === "location" && (
         <p className="text-xs text-gray-500">Only in the libraries where Infer location is on, in each library&apos;s settings.</p>
       )}

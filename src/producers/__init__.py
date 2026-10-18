@@ -69,6 +69,11 @@ def _check(found: list[ProducerSpec]) -> None:
                     or len(stands_for) != 1 or set(next(iter(stands_for))) & others:
                 raise ValueError(f"{p.artifact}: its notch {s.key!r} is in the hash (remakes=True), its default"
                                  " among its choices, each choice meaning the same keys, none another setting's")
+        if p.plugin:
+            from src.plugins import plugin
+
+            if plugin(p.plugin) is None:
+                raise ValueError(f"{p.artifact}: it belongs to the plug-in {p.plugin!r}, which isn't one")
         if p.part_of and p.part_of not in {q.artifact for q in found}:
             raise ValueError(f"{p.artifact}: it's part of {p.part_of!r}, which no producer makes")
         missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]

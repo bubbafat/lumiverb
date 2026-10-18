@@ -54,10 +54,20 @@ from src.shared.producers import (
 )
 from src.shared.utils import utcnow
 
+
 # Which clips each producer applies to, and whether a clip has its artifact
 # (SQL on active_assets a; one made in parts exists once every part does).
 # Each producer declares both (src/producers/<artifact>/).
-APPLIES: dict[str, str] = {a: p.applies for a, p in PRODUCERS.items()}
+def _applies(p) -> str:
+    """A producer's applies, and for one a plug-in brings, only while that plug-in is on in the account."""
+    if not p.plugin:
+        return p.applies
+    from src.server.repository.plugins import on_sql
+
+    return f"({on_sql(p.plugin)}) AND ({p.applies})"
+
+
+APPLIES: dict[str, str] = {a: _applies(p) for a, p in PRODUCERS.items()}
 MADE: dict[str, str] = {a: p.made for a, p in PRODUCERS.items()}
 # Made, but due to be checked again (location guesses): "false" for the rest.
 RECHECK: dict[str, str] = {a: p.recheck or "false" for a, p in PRODUCERS.items()}

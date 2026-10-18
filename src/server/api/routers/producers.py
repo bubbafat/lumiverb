@@ -237,6 +237,8 @@ class ProducerItem(BaseModel):
     # Why its due work waits now, each reason with how many clips
     # (src/server/producer_waits.py); None without counts.
     waits: list[Wait] | None = None
+    # The plug-in it belongs to (ADR-021): {plugin_id, title, on}; it applies only while that's on here.
+    plugin: dict[str, Any] | None = None
 
 
 class Wait(BaseModel):
@@ -324,6 +326,10 @@ def list_producers(
     for artifact in PRODUCERS:
         want = wants[artifact] = lineage.desired(session, artifact, models)
         item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), paused, admin)
+        if item.plugin:
+            from src.server.repository.plugins import PluginRepository
+
+            item.plugin["on"] = PluginRepository(session).is_on(item.plugin["plugin_id"])
         if counts:
             counted[artifact] = lineage.counts(session, artifact, want, library_id, asset_ids, within=visible)
             item.counts = ProducerCounts(**counted[artifact])
@@ -371,8 +377,17 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
         waiting=job_wait.message if job_wait else None, unit=p.unit, level=want.get("level"),
-        part_of=p.part_of or None, needs=list(p.needs),
+        part_of=p.part_of or None, needs=list(p.needs), plugin=_plugin(p.plugin),
     )
+
+
+def _plugin(plugin_id: str) -> dict[str, Any] | None:
+    """The plug-in a producer belongs to, for its row: its id and title (on: whether it's on, added where
+    the account is at hand)."""
+    from src.plugins import plugin
+
+    spec = plugin(plugin_id) if plugin_id else None
+    return {"plugin_id": spec.plugin_id, "title": spec.title} if spec else None
 
 
 class SettingsIn(BaseModel):
