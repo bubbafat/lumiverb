@@ -75,7 +75,7 @@ class PluginOut(BaseModel):
     plugin_id: str
     title: str
     description: str
-    # on; off; waiting: turned on, but its acknowledgment's text changed since it was accepted (off until accepted)
+    # on; off; waiting: turned on, but its acknowledgment must be accepted again since (off until accepted)
     state: Literal["on", "off", "waiting"]
     acknowledgment: AcknowledgmentOut | None = None
     # The acceptance it's on by (or waiting with), while it's on or waiting.
