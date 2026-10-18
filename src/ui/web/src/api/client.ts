@@ -1,4 +1,5 @@
 import type {
+  Plugin,
   ApiKeyCreateResponse,
   ApiKeyItem,
   AssetDetail,
@@ -317,6 +318,20 @@ export async function setLibraryRole(libraryId: string, userId: string, role: Li
 /** Private: only the account's admins and the people given a role on it see it (its admin's). */
 export async function setLibraryPrivate(libraryId: string, isPrivate: boolean): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, { method: "PATCH", body: { private: isPrivate } });
+}
+
+/** Every plug-in and its state in this account (ADR-021). */
+export async function listPlugins(): Promise<Plugin[]> {
+  return (await apiFetch<{ plugins: Plugin[] }>("/plugins")).plugins;
+}
+
+/** Turn a plug-in on or off (account admins). Turning on one that asks an acknowledgment: 409
+ * acknowledgment_required (details: version, title, text, links) unless acknowledged is that version. */
+export async function setPlugin(pluginId: string, enabled: boolean, acknowledged?: string): Promise<Plugin> {
+  return apiFetch<Plugin>(`/plugins/${pluginId}`, {
+    method: "PUT",
+    body: { enabled, ...(acknowledged !== undefined ? { acknowledged } : {}) },
+  });
 }
 
 /** Whether a library's clips' locations are guessed (ADR-017; its admin's). Turning it off removes its guesses:

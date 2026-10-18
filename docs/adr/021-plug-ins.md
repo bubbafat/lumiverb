@@ -8,7 +8,7 @@ Accepted (2026-10-18, Robert). Phase 1 first: one plug-in, place names from GeoN
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | The mechanism: the registry, each account's switch, the acknowledgment and its record, the API, the CLI, Settings › Plug-ins | Not started |
+| 1 | The mechanism: the registry, each account's switch, the acknowledgment and its record, the API, the CLI, Settings › Plug-ins | Built: `src/plugins/`, `repository/plugins.py`, `routers/plugins.py`, `lumiverb plugins`, `pages/settings/PluginsSection.tsx`; every turn-on asks (not only the first) |
 | 2 | Place names (GeoNames): the place list downloaded once for the server; place search when setting a location (ADR-017 phase 4, its first part) | Not started |
 | 3 | Robert tries the UI; his feedback | Waiting on 1 and 2 |
 | 4 | Other plug-ins distilled from what Lumiverb already has (faces, transcripts, descriptions, location guesses, …) | Not until phase 3 |
