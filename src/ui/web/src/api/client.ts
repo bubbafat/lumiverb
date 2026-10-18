@@ -15,8 +15,11 @@ import type {
   InviteLink,
   LibraryHealthItem,
   LibraryListItem,
+  LibraryPeople,
+  LibraryPerson,
   LibraryResponse,
   LibraryRevision,
+  LibraryRole,
   ReaderCheckIn,
   SimilarityResponse,
   UserItem,
@@ -290,6 +293,24 @@ export async function restoreLibrary(libraryId: string): Promise<LibraryResponse
 
 export async function getLibrary(libraryId: string): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>(`/libraries/${libraryId}`);
+}
+
+/** Who can see and edit a library: everyone in the account with their role on it (its admin's). */
+export async function getLibraryPeople(libraryId: string): Promise<LibraryPeople> {
+  return apiFetch<LibraryPeople>(`/libraries/${libraryId}/people`);
+}
+
+/** Set someone's role on a library (its admin's); null: the account's rule again. */
+export async function setLibraryRole(libraryId: string, userId: string, role: LibraryRole | null): Promise<LibraryPerson> {
+  return apiFetch<LibraryPerson>(`/libraries/${libraryId}/people/${encodeURIComponent(userId)}`, {
+    method: "PUT",
+    body: { role },
+  });
+}
+
+/** Private: only the account's admins and the people given a role on it see it (its admin's). */
+export async function setLibraryPrivate(libraryId: string, isPrivate: boolean): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, { method: "PATCH", body: { private: isPrivate } });
 }
 
 export async function updateLibraryVisibility(
@@ -1626,12 +1647,18 @@ export async function listUsers(): Promise<UserItem[]> {
   return apiFetch<UserItem[]>("/users");
 }
 
-/** Invite someone: they get a link (invite_urls) to choose their own password. */
-export async function inviteUser(email: string, role: string): Promise<UserItem> {
+/** Invite someone: they get a link (invite_urls) to choose their own password. everyLibrary false: they see
+ * only the libraries they're given a role on. */
+export async function inviteUser(email: string, role: string, everyLibrary = true): Promise<UserItem> {
   return apiFetch<UserItem>("/users", {
     method: "POST",
-    body: { email, role },
+    body: { email, role, ...(everyLibrary ? {} : { every_library: false }) },
   });
+}
+
+/** Whether someone sees every library (their account role on each), or only the ones they're given a role on. */
+export async function setUserEveryLibrary(userId: string, everyLibrary: boolean): Promise<UserItem> {
+  return apiFetch<UserItem>(`/users/${userId}`, { method: "PATCH", body: { every_library: everyLibrary } });
 }
 
 /** A new link for someone who hasn't signed in yet; the old one stops working (409 already_joined otherwise). */

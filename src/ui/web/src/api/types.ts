@@ -19,6 +19,33 @@ export interface LibraryListItem {
   scan_requested_at?: string | null;
   /** Its reader's latest check-in (ADR-018 phase 4); none before the first, and older servers leave it out. */
   checked_in?: ReaderCheckIn | null;
+  /** Only the account's admins and the people given a role on it see it (ADR-018 decision 8). */
+  private?: boolean;
+  /** The caller's role on it: "admin" (its admin), "editor" or "viewer". Older servers leave it out. */
+  role?: LibraryRole | null;
+}
+
+/** A role on one library (ADR-018 decision 8): "none" means they don't see it. */
+export type LibraryRole = "admin" | "editor" | "viewer" | "none";
+
+/** Someone in the account, as a library's admin sees them: their role on it, and the role set for them there. */
+export interface LibraryPerson {
+  user_id: string;
+  email: string;
+  account_role: string;
+  /** False: they see only the libraries they're given a role on. */
+  every_library: boolean;
+  role: LibraryRole;
+  /** Set for them on this library; null when the account's rule gives it. */
+  set_role: LibraryRole | null;
+  set_by: string | null;
+  set_at: string | null;
+}
+
+export interface LibraryPeople {
+  library_id: string;
+  private: boolean;
+  people: LibraryPerson[];
 }
 
 export interface ReaderCheckIn {
@@ -50,6 +77,10 @@ export interface LibraryResponse {
   reader?: string;
   /** The device's name, for people; null for this server. */
   reader_name?: string | null;
+  /** Only the account's admins and the people given a role on it see it. */
+  private?: boolean;
+  /** The caller's role on it. Older servers leave it out. */
+  role?: LibraryRole | null;
 }
 
 export interface EmptyTrashResponse {
@@ -237,6 +268,8 @@ export interface UserItem {
   user_id: string;
   email: string;
   role: string;
+  /** False: they see only the libraries they're given a role on (ADR-018 decision 8). Older servers leave it out. */
+  every_library?: boolean;
   created_at: string;
   last_login_at: string | null;
   /** Made just now by an invite: the link to send them (it works once, for 7 days), at each

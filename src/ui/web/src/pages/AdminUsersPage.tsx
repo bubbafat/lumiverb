@@ -6,6 +6,7 @@ import {
   inviteUser,
   newInviteLink,
   updateUserRole,
+  setUserEveryLibrary,
   deleteUser,
   getNetworkAccess,
   ApiError,
@@ -29,12 +30,14 @@ function UserRow({
   user,
   currentUserId,
   onRoleChange,
+  onLibrariesChange,
   onRemove,
   onNewLink,
 }: {
   user: UserItem;
   currentUserId: string | null;
   onRoleChange: (userId: string, role: string) => void;
+  onLibrariesChange: (userId: string, everyLibrary: boolean) => void;
   onRemove: (user: UserItem) => void;
   onNewLink: (user: UserItem) => void;
 }) {
@@ -56,6 +59,21 @@ function UserRow({
             </option>
           ))}
         </select>
+      </td>
+      <td className="px-4 py-3">
+        {user.role === "admin" ? (
+          <span className="text-sm text-gray-400">Every library</span>
+        ) : (
+          <select
+            aria-label={`Libraries ${user.email} sees`}
+            value={user.every_library === false ? "given" : "every"}
+            onChange={(e) => onLibrariesChange(user.user_id, e.target.value === "every")}
+            className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200"
+          >
+            <option value="every">Every library</option>
+            <option value="given">Only those given</option>
+          </select>
+        )}
       </td>
       <td className="px-4 py-3 text-sm text-gray-400">{relativeTime(user.last_login_at)}</td>
       <td className="px-4 py-3 text-right whitespace-nowrap space-x-4">
@@ -90,6 +108,16 @@ export default function AdminUsersPage() {
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       updateUserRole(userId, role),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
+
+  const librariesMutation = useMutation({
+    mutationFn: ({ userId, everyLibrary }: { userId: string; everyLibrary: boolean }) =>
+      setUserEveryLibrary(userId, everyLibrary),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
+    onError: () => {
+      setRoleError("Failed to update which libraries they see.");
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -166,7 +194,11 @@ export default function AdminUsersPage() {
     <div className="mx-auto max-w-3xl px-6 py-6 space-y-10">
       <div>
         <h1 className="text-2xl font-semibold text-gray-100">Users</h1>
-        <p className="mt-1 text-sm text-gray-500">Who can use Lumiverb, and what they can do.</p>
+        <p className="mt-1 text-sm text-gray-500">
+          Who can use Lumiverb, and what they can do. A role is theirs on every library unless a library's People
+          (Library settings) says otherwise; someone who sees only the libraries they're given sees none until one
+          gives them a role.
+        </p>
       </div>
 
       {madeLink && <InviteLinkPanel link={madeLink} thisMacOnly={thisMacOnly} onDone={() => setMadeLink(null)} />}
@@ -186,6 +218,7 @@ export default function AdminUsersPage() {
                 <tr className="border-b border-gray-700/50">
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Email</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Role</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Libraries</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Last login</th>
                   <th className="px-4 py-2" />
                 </tr>
@@ -197,6 +230,10 @@ export default function AdminUsersPage() {
                     user={u}
                     currentUserId={currentUserId}
                     onRoleChange={handleRoleChange}
+                    onLibrariesChange={(userId, everyLibrary) => {
+                      setRoleError(null);
+                      librariesMutation.mutate({ userId, everyLibrary });
+                    }}
                     onRemove={handleRemove}
                     onNewLink={handleNewLink}
                   />
@@ -230,13 +267,16 @@ export default function AdminUsersPage() {
 export function InviteForm({ onMade }: { onMade: (link: MadeLink | null) => void }) {
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState<Role>("viewer");
+  const [onlyGiven, setOnlyGiven] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const inviteMutation = useMutation({
-    mutationFn: ({ email, role }: { email: string; role: string }) => inviteUser(email, role),
+    mutationFn: ({ email, role, everyLibrary }: { email: string; role: string; everyLibrary: boolean }) =>
+      inviteUser(email, role, everyLibrary),
     onSuccess: (made) => {
       onMade(made.invite_urls?.length ? { email: made.email, urls: made.invite_urls } : null);
       setNewEmail("");
       setNewRole("viewer");
+      setOnlyGiven(false);
       setCreateError(null);
     },
     onError: (err) => {
@@ -251,7 +291,7 @@ export function InviteForm({ onMade }: { onMade: (link: MadeLink | null) => void
   function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     setCreateError(null);
-    inviteMutation.mutate({ email: newEmail.trim(), role: newRole });
+    inviteMutation.mutate({ email: newEmail.trim(), role: newRole, everyLibrary: newRole === "admin" || !onlyGiven });
   }
 
   return (
@@ -283,6 +323,13 @@ export function InviteForm({ onMade }: { onMade: (link: MadeLink | null) => void
           ))}
         </select>
       </div>
+
+      {newRole !== "admin" && (
+        <label className="flex items-start gap-2 text-sm text-gray-300">
+          <input type="checkbox" checked={onlyGiven} onChange={(e) => setOnlyGiven(e.target.checked)} className="mt-0.5" />
+          <span>Only the libraries they're given a role on (a library's People, in its settings)</span>
+        </label>
+      )}
 
       {createError && <p className="text-sm text-red-400">{createError}</p>}
 

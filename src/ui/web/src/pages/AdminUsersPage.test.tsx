@@ -10,14 +10,22 @@ const LINK = "http://macstudio.local:6464/join?token=abc";
 const BY_ADDRESS = "http://192.168.86.55:6464/join?token=abc";
 let network = { available: true, other_devices: true, addresses: ["http://macstudio.local:6464"] };
 let posts: { url: string; body: unknown }[] = [];
+let patches: { url: string; body: unknown }[] = [];
 
 beforeEach(() => {
   network = { available: true, other_devices: true, addresses: ["http://macstudio.local:6464"] };
   posts = [];
+  patches = [];
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null });
+    if (init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      patches.push({ url, body });
+      return new Response(JSON.stringify({ user_id: "u2", email: "d@e.f", role: "viewer", created_at: hoursAgo(100),
+                                           last_login_at: null, ...body }), { status: 200 });
+    }
     if (url.endsWith("/v1/users") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       return new Response(
@@ -100,5 +108,23 @@ describe("AdminUsersPage", () => {
     fireEvent.click(buttons[0]);
     await waitFor(() => expect((screen.getByLabelText("Invite link") as HTMLInputElement).value).toBe(LINK + "2"));
     expect(posts.map((p) => p.url)).toEqual(["/v1/users/u2/invite"]);
+  });
+
+  it("says which libraries each sees, and changes it", async () => {
+    renderPage();
+    const viewer = (await screen.findByLabelText("Libraries d@e.f sees")) as HTMLSelectElement;
+    expect(viewer.value).toBe("every");
+    expect(screen.queryByLabelText("Libraries a@b.c sees")).toBeNull(); // an admin sees every library
+    fireEvent.change(viewer, { target: { value: "given" } });
+    await waitFor(() => expect(patches).toEqual([{ url: "/v1/users/u2", body: { every_library: false } }]));
+  });
+
+  it("invites someone who sees only the libraries they're given", async () => {
+    renderPage();
+    fireEvent.change(await screen.findByLabelText("Email"), { target: { value: "guest@b.co" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Only the libraries they're given/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Make invite link" }));
+    await screen.findByLabelText("Invite link");
+    expect(posts).toEqual([{ url: "/v1/users", body: { email: "guest@b.co", role: "viewer", every_library: false } }]);
   });
 });

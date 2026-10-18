@@ -136,12 +136,12 @@ describe("LibrariesPage a library in the trash", () => {
       { library_id: "lib_2", name: "Card", root_path: "/card", status: "active", is_public: false, last_scan_at: null },
     ]);
     renderPage();
-    expect(await screen.findByRole("button", { name: "Private" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Not public" })).toBeTruthy();
     cleanup();
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor" });
     renderPage();
     expect(await screen.findByText("Card")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Private" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Not public" })).toBeNull();
   });
 
   it("editors restore but don't delete for good", async () => {

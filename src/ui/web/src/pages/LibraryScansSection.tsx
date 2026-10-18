@@ -10,11 +10,12 @@ import {
 } from "../api/client";
 import type { ReaderCheckIn } from "../api/types";
 import { timeAgo } from "../lib/format";
+import { editsIt, roleOn, runsIt } from "../lib/libraryRoles";
 import { QUIET_MS, remakesHeld, toUpload } from "../lib/readers";
 
 /** Who reads a library's files and whether its scans run (ADR-018 phase 1), as Settings → Processing says it for
  * every library: its own Scans pause, or Pause all's. When its reader last checked in and how it was (phase 4).
- * Editors ask for a scan of the whole library (Scan now); admins pause and resume this library's scans. */
+ * Its editors ask for a scan of the whole library (Scan now); its admins pause and resume its scans. */
 export default function LibraryScansSection({ libraryId }: { libraryId: string }) {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
@@ -40,6 +41,7 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
   const reader = row?.reader ?? library?.reader ?? "server";
   const asked = Boolean(library?.scan_requested_at);
   const error = toggle.error ?? ask.error;
+  const role = roleOn(library, user?.role);
   return (
     <div className="space-y-2 rounded-lg border border-gray-700/50 bg-gray-900/50 px-4 py-3" aria-label="Scans">
       <h2 className="text-lg font-semibold text-gray-100">Scans</h2>
@@ -54,7 +56,7 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
         <p className="text-sm text-gray-400">A scan of the whole library is asked for: it starts within a minute.</p>
       )}
       <div className="flex flex-wrap gap-2">
-        {user && user.role !== "viewer" && !paused && (
+        {editsIt(role) && !paused && (
           <button
             type="button"
             disabled={ask.isPending || asked}
@@ -64,7 +66,7 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
             {asked ? "Scan asked for" : "Scan now"}
           </button>
         )}
-        {user?.role === "admin" && (
+        {runsIt(role) && (
           <button
             type="button"
             disabled={toggle.isPending}
