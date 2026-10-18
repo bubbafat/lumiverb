@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Phases 0 to 3 are done; phase 4's producers are done, and of its endpoints, CLIP and faces still run on the server itself. Phase 1's native-app leftovers wait with the native apps (paused).
+Accepted. Phases 0 to 4 are done: phase 4's last endpoints, CLIP and faces, run on AI machines too since ADR-022 (Lumiverb's AI worker). Phase 1's native-app leftovers wait with the native apps (paused).
 
 This ADR sets the direction for Lumiverb. Where another doc in this repo disagrees with it, this ADR wins and that doc is out of date. The working version, with discussion and the decision log, is the "Lumiverb Operating Model" doc (https://claude.ai/artifact/UuLm2upRoZKRbrvR59SvqM).
 
@@ -14,7 +14,7 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 | 1 | Projects and send to editor (v1) | Done on the server and the web, with project trash. Left, with the native apps (paused): real editor imports on a Mac; renaming collections to projects in the macOS and iOS apps |
 | 2 | One server: one machine schedules all processing and reads storage read-only | Done: the scheduler does all processing (a Mac's Homebrew install runs it; media's Lumiverb is stopped since Oct 11). The macOS app's AI and its scan are retired (Oct 14): it browses, and reports no changes (the full scan every 15 minutes finds them); a library may be read by a device instead (ADR-018) |
 | 3 | Lineage and reconciliation | Done: lineage and the reconciler; one producer per artifact (OCR apart from descriptions); the models chosen in Settings → AI; a change of settings or model asks what becomes of what was made (ADR-018 decision 6) |
-| 4 | Producers and endpoints | Producers done: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints: the account's AI machines, each with its jobs and how many requests it takes at once (descriptions, and transcripts on a server's); CLIP and faces still run on the server itself |
+| 4 | Producers and endpoints | Producers done: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints: the account's AI machines, each with its jobs and how many requests it takes at once: descriptions, transcripts on a server's, and CLIP and faces on Lumiverb's AI worker (ADR-022), the built-in machine doing them as before |
 
 ## Overview
 
