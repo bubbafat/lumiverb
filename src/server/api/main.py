@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from src.server.database import set_application_name
+from src.server.telemetry import NO_TELEMETRY
 from src.server.api.errors import (
     ApiError,
     api_error_handler,
@@ -111,10 +112,6 @@ async def lifespan(app: FastAPI):
 
 
 set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them
-# FastAPI's own OpenTelemetry, off whatever the environment says
-# (FASTAPI_OTEL_AUTO_CONFIGURE, OTEL_*): Lumiverb records and sends nothing.
-NO_TELEMETRY = {"tracing": False, "metrics": False, "logs": False, "operation_spans": False,
-                "auto_configure": False}
 # A device's key goes no further than the routes a scan calls (src/server/api/devices.py); a person
 # no further than the libraries they can see, editing where they're an editor (library_access.py).
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY,
