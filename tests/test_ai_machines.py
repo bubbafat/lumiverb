@@ -103,7 +103,7 @@ def _built_in(ai: dict) -> dict:
 @pytest.fixture
 def none(env):
     """Each test starts with no machines added and no vision model: only the
-    built-in machine, as every account starts, doing CLIP and transcripts with small."""
+    built-in machine, as every account starts, doing CLIP, faces and transcripts with small."""
     from sqlalchemy import update
 
     from src.server.database import get_control_session
@@ -115,7 +115,7 @@ def none(env):
     for m in _ai(env)["machines"]:
         if m["built_in"]:
             r = client.patch(f"/v1/ai/machines/{m['machine_id']}", headers=headers, json={
-                "name": "Built in", "jobs": ["clip", "transcripts"], "at_once": 1, "enabled": True})
+                "name": "Built in", "jobs": ["clip", "faces", "transcripts"], "at_once": 1, "enabled": True})
         else:
             r = client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
         assert r.status_code == 200, r.text
@@ -602,7 +602,7 @@ def test_every_account_starts_with_the_built_in_whisper_doing_transcripts(env, n
     built_in = _built_in(ai)
     assert ai["machines"][0] == built_in
     assert {k: built_in[k] for k in ("name", "api_url", "has_key", "jobs", "at_once", "enabled", "status")} == {
-        "name": "Built in", "api_url": "", "has_key": False, "jobs": ["clip", "transcripts"], "at_once": 1,
+        "name": "Built in", "api_url": "", "has_key": False, "jobs": ["clip", "faces", "transcripts"], "at_once": 1,
         "enabled": True, "status": None}
     assert _job(ai, "transcripts") == {"job": "transcripts", "label": "Transcripts", "model": "small",
                                        "machines": 1, "offering": 0, "choices": BUILT_IN_MODELS,
@@ -628,7 +628,7 @@ def test_a_new_account_gets_its_built_in_whisper(env, none):
     with get_control_session() as ctrl:
         [m] = machines(ctrl, tenant_id)
         assert (m.built_in, m.name, m.api_url, m.api_key, m.jobs, m.at_once, m.enabled) == (
-            True, "Built in", "", "", ["clip", "transcripts"], 1, True)
+            True, "Built in", "", "", ["clip", "faces", "transcripts"], 1, True)
         # Transcripts start at the model the job declares (kept by the job's name once chosen).
         assert job_model(ctrl.get(Tenant, tenant_id), "transcripts") == "small"
 
@@ -644,7 +644,7 @@ def test_the_built_in_whisper_stays_and_only_transcribes(env, none):
         r = client.patch(f"/v1/ai/machines/{built_in}", json=body, headers=headers)
         assert r.status_code == 409, (body, r.text)
         assert r.json()["error"]["code"] == "built_in_machine"
-    assert _built_in(_ai(env))["jobs"] == ["clip", "transcripts"]
+    assert _built_in(_ai(env))["jobs"] == ["clip", "faces", "transcripts"]
     # Adding one takes a URL: there's only the one built in.
     assert _add(env, name="Another", api_url="", jobs=["transcripts"]).status_code == 422
 
@@ -825,3 +825,21 @@ def test_clips_model_is_fixed_and_a_worker_offering_it_shares_it(env, none):
     assert clip["machines"] == 2 and "ViT-B-32" in clip["choices"]
     machines = client.get("/v1/ai/jobs/clip", headers=headers).json()["machines"]
     assert sorted((m["built_in"], m["api_url"]) for m in machines) == [(False, worker), (True, "")]
+
+
+@pytest.mark.slow
+def test_faces_model_is_fixed_and_a_worker_offering_it_shares_it(env, none):
+    """ADR-022 phase 3: face detection's model can't be changed (one model for a library's people),
+    and a Lumiverb AI worker listing it can be given the job beside the built-in machine."""
+    client, headers, *_ = env
+    r = _model(env, "faces", "antelopev2")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "model_fixed", r.text
+    assert r.json()["error"]["details"] == {"job": "faces", "model": "buffalo_l"}
+    worker = "http://10.10.10.3:6366/v1"  # lumiverb-server ai-worker
+    fake, _ = _machines({worker: ("ViT-B-32", "buffalo_l")})
+    with fake:
+        r = _add(env, name="GPU box", api_url=worker, jobs=["clip", "faces"], at_once=4)
+        assert r.status_code == 201, r.text
+    faces = _job(_ai(env), "faces")
+    assert faces["machines"] == 2 and faces["built_in"] and faces["fixed"]
+

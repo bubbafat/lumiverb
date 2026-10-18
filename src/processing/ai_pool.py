@@ -28,6 +28,7 @@ from typing import Any
 
 from src.processing.workers.captions.base import CaptionError, CaptionProvider
 from src.processing.workers.embeddings.base import EmbeddingError
+from src.processing.workers.faces import FaceError
 from src.processing.workers.transcripts.base import Heard, Transcriber, TranscriptError
 from src.shared.ai_jobs import AI_JOBS, JOBS
 from src.shared.vision_endpoint import VisionEndpointError, list_models
@@ -265,7 +266,7 @@ class _OnAMachine:
     failure moves the item to another. error: the job's error type, which
     says whether a failure was the machine's (endpoint_fault)."""
 
-    error: type[CaptionError] | type[TranscriptError] | type[EmbeddingError]
+    error: type[CaptionError] | type[TranscriptError] | type[EmbeddingError] | type[FaceError]
     # A failure that's the item's, not the machine's: try the other machines
     # before giving up on it (a server may refuse what another takes).
     move_item_faults = False
@@ -362,4 +363,15 @@ class PooledEmbedder(_OnAMachine):
     def embed(self, image: bytes) -> dict:
         """{vector, model_id, model_version} for an image (a preview's bytes)."""
         return self._on_a_machine(lambda e: e.embed(image))
+
+
+class PooledFaces(_OnAMachine):
+    """Faces in an image on whichever of the pool's machines is free (ADR-022):
+    the built-in machine's own face process, or an AI worker's."""
+
+    error = FaceError
+
+    def detect(self, image: bytes, settings: dict) -> dict:
+        """What was found ({detection_model, detection_model_version, embedding_model, faces})."""
+        return self._on_a_machine(lambda d: d.detect(image, settings))
 

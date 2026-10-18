@@ -1,12 +1,13 @@
 """Faces in videos (InsightFace, the photos' detector): frames from the
-analysis proxy, chosen by Detail (frames.py), looked at on the server's GPU
-by the faces' own process (src/producers/faces/detect.py), and each person
+analysis proxy, chosen by Detail (frames.py), looked at by the faces job's
+machines (the built-in one: the faces' own process, src/producers/faces/detect.py;
+or a Lumiverb AI worker, ADR-022), and each person
 seen saved as one face with the times they're seen (appearances.py). The
 crops are cut from the frames here: the server has none (work.py)."""
 
 from src.producers.contract import VIDEO, ProducerSpec, Setting
 from src.producers.faces.levels import on
-from src.producers.pools import GPU
+from src.producers.pools import FACES
 from src.producers.video_faces.frames import DEFAULT, DETAILS
 
 PRODUCER = ProducerSpec(
@@ -29,5 +30,5 @@ PRODUCER = ProducerSpec(
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
     part_of="faces",
-    kind="video_faces", flag="missing_video_faces", run="src.producers.video_faces.work:VideoFaces", pool=GPU,
+    kind="video_faces", flag="missing_video_faces", run="src.producers.video_faces.work:VideoFaces", pool=FACES,
 )

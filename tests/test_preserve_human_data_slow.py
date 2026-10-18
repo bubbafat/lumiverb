@@ -1217,6 +1217,31 @@ def test_one_and_one_without_embeddings_and_no_switch_needs_a_solid_overlap(env)
     assert _match(tenant_url, face_id) == (person_id, True)  # kept, beside the new face
 
 
+@contextmanager
+def _faces_model(client, headers, model: str):
+    """The account's face model switched, where the faces job keeps it (its AI job's model,
+    ADR-022: not a producer setting), for the while; Settings › AI doesn't offer a switch yet."""
+    from src.server.database import get_control_session
+    from src.server.models.control_plane import Tenant
+    from src.server.repository.ai_machines import set_job_model
+
+    tenant_id = client.get("/v1/tenant/context", headers=headers).json()["tenant_id"]
+    with get_control_session() as ctrl:
+        tenant = ctrl.get(Tenant, tenant_id)
+        before = dict(tenant.ai_job_models or {})
+        set_job_model(tenant, "faces", model)
+        ctrl.add(tenant)
+        ctrl.commit()
+    try:
+        yield
+    finally:
+        with get_control_session() as ctrl:
+            tenant = ctrl.get(Tenant, tenant_id)
+            tenant.ai_job_models = before
+            ctrl.add(tenant)
+            ctrl.commit()
+
+
 @pytest.mark.slow
 def test_a_name_carried_across_a_switch_teaches_the_new_model_that_person(env) -> None:
     """Robert's idea, end to end. The account switches its face model. A
@@ -1225,12 +1250,7 @@ def test_a_name_carried_across_a_switch_teaches_the_new_model_that_person(env) -
     model's embedding of it. Then the new model finds that person in a
     picture nobody has named, and suggests them."""
     client, headers, library_id, tenant_url = env
-    with _db(tenant_url) as s:
-        s.execute(text("INSERT INTO system_metadata (key, value, updated_at)"
-                       " VALUES ('producer.faces', '{\"model\": \"antelopev2\"}', now())"
-                       " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"))
-        s.commit()
-    try:
+    with _faces_model(client, headers, "antelopev2"):
         named = _seed_asset(tenant_url, library_id)
         person_id = _seed_person(tenant_url, emb=10)
         face_id = _seed_face(tenant_url, named, _box(0.10, 0.10), emb=10)
@@ -1247,10 +1267,6 @@ def test_a_name_carried_across_a_switch_teaches_the_new_model_that_person(env) -
         other = _seed_asset(tenant_url, library_id)
         result = _redetect_with(client, headers, other, [(_box(0.40, 0.40), _near(400))], "antelopev2")
         assert _match(tenant_url, result["face_ids"][0]) == (person_id, False)  # suggested, not confirmed
-    finally:
-        with _db(tenant_url) as s:
-            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.faces'"))
-            s.commit()
 
 
 @pytest.mark.slow
@@ -1294,12 +1310,7 @@ def test_mid_switch_a_face_the_new_model_hasnt_seen_gets_no_ranked_suggestions(e
     is in another space than the people's centroids: ranking people by
     distance to it would be noise. The popover falls back to its plain list."""
     client, headers, library_id, tenant_url = env
-    with _db(tenant_url) as s:
-        s.execute(text("INSERT INTO system_metadata (key, value, updated_at)"
-                       " VALUES ('producer.faces', '{\"model\": \"antelopev2\"}', now())"
-                       " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"))
-        s.commit()
-    try:
+    with _faces_model(client, headers, "antelopev2"):
         person_id = _seed_person(tenant_url, emb=12)
         with _db(tenant_url) as s:
             s.execute(text("UPDATE people SET centroid_model = 'antelopev2' WHERE person_id = :p"), {"p": person_id})
@@ -1309,7 +1320,3 @@ def test_mid_switch_a_face_the_new_model_hasnt_seen_gets_no_ranked_suggestions(e
         r = client.get(f"/v1/faces/{face_id}/nearest-people", headers=headers)
         assert r.status_code == 200, r.text
         assert r.json() == []
-    finally:
-        with _db(tenant_url) as s:
-            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.faces'"))
-            s.commit()

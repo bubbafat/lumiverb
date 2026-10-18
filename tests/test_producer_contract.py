@@ -222,7 +222,7 @@ def test_a_producer_is_one_folder(tmp_path):
     (('pool=Pool("example", job=GEO),', 'pool=Pool("example", job=GEO), unit="minute",'), "unit is a second"),
     (('flag="missing_example"', 'flag="example_missing"'), "its flag is a missing_* filter"),
     # A pool or AI job shared by name is declared alike, or its slots would depend on who's read first.
-    (('pool=Pool("example", job=GEO),', 'pool=Pool("gpu", slots=4),'), "the pool 'gpu' is declared another way"),
+    (('pool=Pool("example", job=GEO),', 'pool=Pool("probe", slots=4),'), "the pool 'probe' is declared another way"),
     (('AiJob("geo", "Places"', 'AiJob("vision", "Places"'), "the AI job 'vision' is declared another way"),
     (('pool=Pool("example", job=GEO),', 'pool=Pool("example", sized_by="nope"),'), "no setting of this machine's"),
     (('Setting("model", "", "Model", kind="text", fixed="Settings → AI")', ''), "takes its model"),

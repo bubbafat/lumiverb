@@ -1,5 +1,6 @@
-"""The faces in a photo, found in its preview by the scheduler's face process
-(src/producers/faces/detect.py), and a job's photos saved together. The
+"""The faces in a photo, found in its preview by the faces job's machines
+(ADR-022: the built-in one is the scheduler's face process,
+src/producers/faces/detect.py), and a job's photos saved together. The
 preview is the photo as it was hashed (changed content is a new clip): the
 original is never read here (ADR-020 decision 4)."""
 
@@ -7,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from src.producers.runner import Failed, Waits, Work
+from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ class Faces(Work):
         from src.producers.faces.levels import gates
 
         super().__init__(acct, job)
+        # Whichever of the faces job's machines is free (ADR-022): the built-in one or an AI worker.
+        self.detector = acct.guard("faces").detector(acct.models)
         # One read: what's found and its lineage agree.
         self.used = acct.producers.settings(self.artifact)
         self.detail = acct.producers.uses(self.artifact).get("detail")
@@ -27,18 +30,13 @@ class Faces(Work):
         self.gates = {**self.used, **gates(self.detail)}
 
     def make(self, clip: dict) -> dict:
-        from src.producers.runner import out_of_memory
-
         image = self.inputs.preview_bytes(clip)
         if image is None:
             raise Failed("no proxy")
-        with self.acct.models.gpu_turn():  # CLIP's built-in machine takes turns with it
-            found = self.acct.models.faces().detect(image, self.gates)  # in use: not let go of meanwhile
-        if "error" in found:
-            if out_of_memory(found["error"]):  # the GPU's trouble, not the photo's
-                raise Waits(found["error"])
-            raise Failed(found["error"])
-        return found
+        return self.detector.detect(image, self.gates)
+
+    def judge(self, clip: dict, error: Exception) -> Exception:
+        return self.machines_or_clip(error)  # the machines' guard decides whose it is
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
         from src.shared.producers import level_of

@@ -109,6 +109,7 @@ def get_tenant_session(tenant_id: str) -> Generator[Session, None, None]:
     request.state.connection_string."""
     engine = get_tenant_engine(tenant_id)
     with Session(engine) as session:
+        session.info["tenant_id"] = tenant_id  # whose it is (its AI jobs' models are the account's)
         yield session
 
 

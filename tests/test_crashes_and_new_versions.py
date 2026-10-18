@@ -127,7 +127,7 @@ def test_a_new_versions_hold_is_found_while_its_producer_is_paused(env):
     try:
         assert client.post("/v1/producers/vision/pause", json={"scope": "work"}, headers=headers).status_code == 204
         # No AI machines and no slots: nothing runs, only what's due is listed.
-        acct = FakeAccount(env[4], vision=0, transcripts=0, clip=0, libraries=(library_id,), reachable=(library_id,))
+        acct = FakeAccount(env[4], vision=0, transcripts=0, clip=0, faces=0, libraries=(library_id,), reachable=(library_id,))
         Scheduler(lambda: {env[4]: acct}, capacity={}, scan=MagicMock(), inline_refill=True).tick()
         p = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}["vision"]
         assert p["paused"] is True and p["redo_stopped"] is True and p["redo_stopped_by"] is None
