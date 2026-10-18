@@ -61,9 +61,9 @@ const STEPS: Step[] = [
   {
     id: "find",
     title: "What to find",
-    why: "Faces are found and grouped so you can name people; places are guessed for photos without a location. "
-      + "Set them before your first library: what's found is found as it's scanned.",
-    skip: "Faces are found at Normal in photos and Low in videos; places aren't guessed.",
+    why: "Faces are found and grouped so you can name people. Set them before your first library: what's found is "
+      + "found as it's scanned.",
+    skip: "Faces are found at Normal in photos and Low in videos.",
     body: () => <FindStep />,
   },
   {
@@ -87,7 +87,8 @@ const STEPS: Step[] = [
     id: "library",
     title: "Your first library",
     why: "A library is a folder of photos and videos. Lumiverb reads it and never changes it. Once it's added, "
-      + "Lumiverb scans it and starts making previews.",
+      + "Lumiverb scans it and starts making previews. Places can be guessed for its photos and videos without a "
+      + "location.",
     skip: "Nothing to browse yet. Add a library later from Libraries.",
     body: () => <LibraryStep />,
   },
@@ -214,7 +215,7 @@ function level(p: Producer | undefined): { value: string; choices: string[] } | 
   return field ? { value: String(field.value), choices: field.choices ?? [] } : null;
 }
 
-/** Faces in photos and videos (Off, Low, Normal, High) and place guesses. */
+/** Faces in photos and videos (Off, Low, Normal, High). */
 function FindStep() {
   const queryClient = useQueryClient();
   const { data: producers } = useQuery({ queryKey: ["producers", "setup"], queryFn: () => getProducers() });
@@ -227,7 +228,6 @@ function FindStep() {
   const by = Object.fromEntries(producers.map((p) => [p.artifact, p]));
   const photos = level(by.faces);
   const videos = level(by.video_faces);
-  const places = by.location?.fields?.find((f) => f.key === "infer_location");
 
   function Level({ label, artifact, value, hint }: { label: string; artifact: string; value: { value: string; choices: string[] }; hint: string }) {
     return (
@@ -257,23 +257,6 @@ function FindStep() {
         <Level label="Faces in videos" artifact="video_faces" value={videos}
                hint="Low: a frame from each scene. Normal: a few. High: every 3 seconds, slower." />
       )}
-      {places && (
-        <label className="flex items-start gap-3 text-sm text-gray-200">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={!!places.value}
-            disabled={change.isPending}
-            onChange={(e) => change.mutate({ artifact: "location", settings: { infer_location: e.target.checked } })}
-          />
-          <span>
-            Guess places
-            <span className="block text-xs text-gray-500">
-              Photos and videos without a location are placed from those taken around the same time.
-            </span>
-          </span>
-        </label>
-      )}
       {change.isError && (
         <p role="alert" className="text-sm text-red-300">
           {change.error instanceof ApiError ? change.error.message : "Couldn't change it. Try again."}
@@ -299,8 +282,9 @@ function LibraryStep() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("");
+  const [guess, setGuess] = useState(false);
   const add = useMutation({
-    mutationFn: () => createLibrary(name.trim(), folder.trim()),
+    mutationFn: () => createLibrary(name.trim(), folder.trim(), undefined, guess),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["libraries"] }),
   });
   if (add.isSuccess) {
@@ -327,6 +311,16 @@ function LibraryStep() {
         <span>Folder</span>
         <input aria-label="Library folder" className={inputClass} value={folder} placeholder="/Volumes/Media/Photos"
                onChange={(e) => setFolder(e.target.value)} />
+      </label>
+      <label className="flex items-start gap-3 text-sm text-gray-200">
+        <input type="checkbox" className="mt-0.5" checked={guess} onChange={(e) => setGuess(e.target.checked)} />
+        <span>
+          Guess places
+          <span className="block text-xs text-gray-500">
+            Photos and videos without a location are placed from those taken around the same time. Change it later
+            in the library&apos;s settings.
+          </span>
+        </span>
       </label>
       {add.isError && (
         <p role="alert" className="text-sm text-red-300">

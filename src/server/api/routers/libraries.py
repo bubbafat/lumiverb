@@ -43,6 +43,8 @@ class CreateLibraryRequest(BaseModel):
     reader: str = SERVER
     # Only the account's admins and the people given a role on it see it (ADR-018 decision 8).
     private: bool = False
+    # Its clips without a location are placed from those taken around the same time (ADR-017).
+    infer_location: bool = False
 
 
 class ReaderChoice(BaseModel):
@@ -53,9 +55,9 @@ class ReaderChoice(BaseModel):
 
 
 # Library fields only an account admin changes (making it public is the account's), and those its own
-# admin changes too (where its files are, who sees it: ADR-018 decision 8).
+# admin changes too (where its files are, who sees it, whether its locations are guessed: ADR-018 decision 8).
 ACCOUNT_ADMINS_FIELDS = {"is_public"}
-LIBRARY_ADMINS_FIELDS = {"root_path", "private"}
+LIBRARY_ADMINS_FIELDS = {"root_path", "private", "infer_location"}
 
 
 def require_admin_for(request: Request, body: BaseModel) -> None:
@@ -73,6 +75,10 @@ class LibraryUpdateRequest(BaseModel):
     root_path: str | None = None
     is_public: bool | None = None
     private: bool | None = None
+    # Whether its clips' locations are guessed (ADR-017). Turning it off removes its guesses: asked first
+    # (409 guesses_exist) unless remove_guesses says so.
+    infer_location: bool | None = None
+    remove_guesses: bool = False
 
 
 class LibraryResponse(BaseModel):
@@ -87,6 +93,8 @@ class LibraryResponse(BaseModel):
     reader_name: str | None = None
     # Only the account's admins and the people given a role on it see it.
     private: bool = False
+    # Its clips without a location are placed from those taken around the same time (ADR-017).
+    infer_location: bool = False
     # The caller's role on it (ADR-018 decision 8): "admin" (its admin), "editor" or "viewer".
     role: str | None = None
 
@@ -132,6 +140,8 @@ class LibraryListItem(BaseModel):
     checked_in: CheckedIn | None = None
     # Only the account's admins and the people given a role on it see it.
     private: bool = False
+    # Its clips without a location are placed from those taken around the same time (ADR-017).
+    infer_location: bool = False
     # The caller's role on it (ADR-018 decision 8): "admin" (its admin), "editor" or "viewer".
     role: str | None = None
 
@@ -153,6 +163,7 @@ def _response(request: Request, session: Session, library, *, root_path: str | N
         reader=library.reader,
         reader_name=_reader_name(session, library.reader),
         private=library.private,
+        infer_location=library.infer_location,
         role=role_of(request, session, library.library_id),
     )
 
@@ -218,7 +229,8 @@ def create_library(
     existing = repo.get_by_name(body.name)
     if existing is not None:
         raise HTTPException(status_code=409, detail="A library with this name already exists")
-    library = repo.create(name=body.name, root_path=root_path, reader=body.reader, private=body.private)
+    library = repo.create(name=body.name, root_path=root_path, reader=body.reader, private=body.private,
+                          infer_location=body.infer_location)
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
         path_filter_repo = PathFilterRepository(session)
@@ -262,6 +274,7 @@ def list_libraries(
             scan_requested_at=lib.scan_requested_at.isoformat() if lib.scan_requested_at else None,
             checked_in=checked_in_of(seen.get(lib.library_id)),
             private=lib.private,
+            infer_location=lib.infer_location,
             role=role_of(request, session, lib.library_id),
         )
         for lib in libraries
@@ -445,9 +458,14 @@ def update_library(
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> LibraryResponse:
-    """Update library name, root_path and/or is_public. A folder is chosen
-    on the library's reader: for this server's libraries, as on creating one
-    (require_folder_chosen_here)."""
+    """Update library name, root_path, is_public, private and/or
+    infer_location. A folder is chosen on the library's reader: for this
+    server's libraries, as on creating one (require_folder_chosen_here).
+    Turning Infer location off removes the library's location guesses (a
+    person's location stays): 409 guesses_exist with how many clips have one,
+    unless remove_guesses says so."""
+    from src.server.repository import locations
+
     require_admin_for(request, body)
     if body.root_path is not None:
         checked_root_path(body.root_path)
@@ -457,7 +475,19 @@ def update_library(
         raise HTTPException(status_code=404, detail="Library not found")
     if body.root_path is not None and read_by_server(library):
         require_folder_chosen_here(request)
-    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public, private=body.private)
+    if body.infer_location is False and library.infer_location:
+        guessed = locations.guesses_in(session, library_id)
+        if guessed and not body.remove_guesses:
+            one = guessed == 1
+            raise DecisionRequiredError(
+                "guesses_exist",
+                f"Turning Infer location off removes the location guesses of {guessed:,} clip{'' if one else 's'} "
+                "in this library. A location a person set stays.",
+                {"clips": guessed},
+            )
+        locations.stop_inferring(session, library_id)  # committed with the setting
+    repo.update(library, name=body.name, root_path=body.root_path, is_public=body.is_public, private=body.private,
+                infer_location=body.infer_location)
 
     # Maintain public_libraries control plane index
     if body.is_public is not None:

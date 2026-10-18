@@ -21,6 +21,8 @@ export interface LibraryListItem {
   checked_in?: ReaderCheckIn | null;
   /** Only the account's admins and the people given a role on it see it (ADR-018 decision 8). */
   private?: boolean;
+  /** Its clips without a location are placed from those taken around the same time (ADR-017). */
+  infer_location?: boolean;
   /** The caller's role on it: "admin" (its admin), "editor" or "viewer". Older servers leave it out. */
   role?: LibraryRole | null;
 }
@@ -79,6 +81,8 @@ export interface LibraryResponse {
   reader_name?: string | null;
   /** Only the account's admins and the people given a role on it see it. */
   private?: boolean;
+  /** Its clips without a location are placed from those taken around the same time (ADR-017). */
+  infer_location?: boolean;
   /** The caller's role on it. Older servers leave it out. */
   role?: LibraryRole | null;
 }

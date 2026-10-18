@@ -607,6 +607,7 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
 
     client, api_key, library_id, _ = public_lib_client
     auth = {"Authorization": f"Bearer {api_key}"}
+    assert client.patch(f"/v1/libraries/{library_id}", json={"infer_location": True}, headers=auth).status_code == 200
     guessed = _ingest(client, api_key, library_id, "trips/guessed.jpg", media_type="image")
     guess = {"lat": 3.5, "lon": 4.5, "radius_m": 900, "basis": {"summary": "From iPhone photos at 14:02"}}
     minutes = client.get("/v1/producers", params={"counts": "false"}, headers=auth).json()
@@ -633,6 +634,9 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
                        json={"asset_ids": [guessed]}).status_code in (401, 403)
     assert client.put(f"/v1/assets/locations/guess/{guessed}", params=visitor,
                       json={"guess": None, "minutes": minutes, "lineage": made("location")}).status_code in (401, 403)
+    # The library as the module's other tests have it.
+    assert client.patch(f"/v1/libraries/{library_id}", json={"infer_location": False, "remove_guesses": True},
+                        headers=auth).status_code == 200
 
 
 @pytest.mark.slow

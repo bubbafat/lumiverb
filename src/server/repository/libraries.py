@@ -82,7 +82,8 @@ class LibraryRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, name: str, root_path: str, reader: str = "server", *, private: bool = False) -> Library:
+    def create(self, name: str, root_path: str, reader: str = "server", *, private: bool = False,
+               infer_location: bool = False) -> Library:
         """Generate library_id as lib_ + ULID(), insert, return Library."""
         library_id = "lib_" + str(ULID())
         library = Library(
@@ -91,6 +92,7 @@ class LibraryRepository:
             root_path=root_path,
             reader=reader,
             private=private,
+            infer_location=infer_location,
         )
         self._session.add(library)
         self._session.commit()
@@ -120,12 +122,15 @@ class LibraryRepository:
         return self._session.exec(stmt).first()
 
     def update(self, library: Library, *, name: str | None = None, root_path: str | None = None,
-               is_public: bool | None = None, reader: str | None = None, private: bool | None = None) -> None:
+               is_public: bool | None = None, reader: str | None = None, private: bool | None = None,
+               infer_location: bool | None = None) -> None:
         """What's given changes (None: as it is); commits."""
         if name is not None:
             library.name = name
         if private is not None:
             library.private = private
+        if infer_location is not None:
+            library.infer_location = infer_location
         if root_path is not None:
             library.root_path = root_path
         if reader is not None:

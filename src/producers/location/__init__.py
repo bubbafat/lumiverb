@@ -3,16 +3,13 @@ fixes taken around the same time (GPS from the file, or a person's
 location), from any device in its library, with each device's clock
 corrected per day from scenes it shares with others. The math is infer.py;
 work.py asks the server for the fixes and saves what it found
-(PUT /v1/assets/locations/guess/{id}). Off until Infer location is on."""
+(PUT /v1/assets/locations/guess/{id}). Only in the libraries where Infer
+location is on (each library's, libraries.infer_location: off by default)."""
 
 from src.producers.contract import ALL, FIND, Pool, ProducerSpec, Setting
 
-INFER_DEFAULT = False
-
-# Inferring is on (its setting, as the account has it): SQL, so the clips it
-# applies to are none while it's off.
-INFER_ON = ("COALESCE((SELECT CAST(CAST(sm.value AS jsonb) ->> 'infer_location' AS boolean)"
-            f" FROM system_metadata sm WHERE sm.key = 'producer.location'), {str(INFER_DEFAULT).lower()})")
+# Its library infers location: SQL, so the clips it applies to are none in a library where it's off.
+INFER_ON = "EXISTS (SELECT 1 FROM libraries il WHERE il.library_id = a.library_id AND il.infer_location)"
 
 # Arithmetic over rows the database hands it: no GPU, no storage.
 CPU = Pool("cpu", slots=2)
@@ -31,7 +28,6 @@ PRODUCER = ProducerSpec(
     recheck=("EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id"
              " AND rl.recheck IS NOT NULL)"),
     settings=(
-        Setting("infer_location", INFER_DEFAULT, "Infer location", kind="bool"),
         # Not in lineage: a new window checks guesses again (regroup), keeping
         # each unless the new one is surer or its fixes are now outside it.
         Setting("inference_minutes", 360, "Inference window", minimum=5, maximum=1440, unit="min",
@@ -41,7 +37,6 @@ PRODUCER = ProducerSpec(
     needs=("capture",),
     # Its own file changing changes nothing here; its capture time does (which remakes it).
     redo_on_source_change=False,
-    on_settings="src.server.repository.locations:settings_changed",
     regroup="src.server.repository.locations:window_changed",
     kind="location", flag="missing_location", run="src.producers.location.work:Locate", tier=FIND, pool=CPU,
     batch=200,

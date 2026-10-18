@@ -4,7 +4,8 @@ camera clips placed from phone photos across folders, a person's location
 never written over and counted as a fix, guesses never used as fixes, the
 guesses around a fix checked again when it changes, goes or comes back, or
 the window changes (kept unless the new one is surer, replaced when the old
-one is wrong), the clock offset from scene pairs, and turning it off."""
+one is wrong), the clock offset from scene pairs, and Infer location, each
+library's: only its clips guessed, and turning it off removes its guesses."""
 
 from __future__ import annotations
 
@@ -29,10 +30,10 @@ PHONE = {"camera_make": "Apple", "camera_model": "iPhone 15 Pro"}
 CAMERA = {"camera_make": "Blackmagic Design", "camera_model": "Pocket Cinema Camera 6K"}
 
 
-def _library(env, name: str = "") -> str:
+def _library(env, name: str = "", *, infer: bool = True) -> str:
     client, headers, *_ = env
-    r = client.post("/v1/libraries", json={"name": f"loc-{name}-{os.urandom(3).hex()}", "root_path": "/tmp/loc"},
-                    headers=headers)
+    r = client.post("/v1/libraries", json={"name": f"loc-{name}-{os.urandom(3).hex()}", "root_path": "/tmp/loc",
+                                           "infer_location": infer}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["library_id"]
 
@@ -58,11 +59,16 @@ def _clip(env, lib: str, rel_path: str, when: str, *, offset: int | None = None,
     return r.json()["asset_id"]
 
 
-def _settings(env, *, on: bool = True, minutes: int = 360) -> None:
+def _settings(env, *, minutes: int = 360) -> None:
     client, headers, *_ = env
     r = client.put("/v1/producers/location/settings", headers=headers,
-                   json={"settings": {"infer_location": on, "inference_minutes": minutes}, "redo": True})
+                   json={"settings": {"inference_minutes": minutes}})
     assert r.status_code == 200, r.text
+
+
+def _infer(env, lib: str, on: bool, **more):
+    client, headers, *_ = env
+    return client.patch(f"/v1/libraries/{lib}", json={"infer_location": on, **more}, headers=headers)
 
 
 def _run(env, lib: str, only: list[str] | None = None):
@@ -113,12 +119,31 @@ def _context(env, asset_id: str, minutes: int = 360, clock: float = 0.0) -> dict
     return r.json()
 
 
-def test_nothing_is_guessed_while_infer_location_is_off(env) -> None:
-    _settings(env, on=False)
-    lib = _library(env, "off")
-    _clip(env, lib, "Phone/p.jpg", "2024-06-15T14:00:00", offset=120, gps=(10.0, -61.5), device=PHONE)
-    _clip(env, lib, "BMC/c.jpg", "2024-06-15T14:30:00")
-    assert _due(env, lib) == set()
+def test_only_the_libraries_that_infer_location_are_guessed(env) -> None:
+    _settings(env)
+    off = _library(env, "off", infer=False)
+    on = _library(env, "on")
+    clips = {}
+    for lib in (off, on):
+        _clip(env, lib, "Phone/p.jpg", "2024-06-15T14:00:00", offset=120, gps=(10.0, -61.5), device=PHONE)
+        clips[lib] = _clip(env, lib, "BMC/c.jpg", "2024-06-15T14:30:00")
+    assert _due(env, off) == set() and _due(env, on) == {clips[on]}
+    client, headers, *_ = env
+    assert client.get(f"/v1/libraries/{off}", headers=headers).json()["infer_location"] is False
+    assert client.get(f"/v1/libraries/{on}", headers=headers).json()["infer_location"] is True
+    listed = {lib["library_id"]: lib["infer_location"] for lib in client.get("/v1/libraries", headers=headers).json()}
+    assert listed[off] is False and listed[on] is True
+
+    # A fix appearing in the library that doesn't infer: nothing there is tried or checked again.
+    _clip(env, off, "Phone/q.jpg", "2024-06-15T14:20:00", offset=120, gps=(10.1, -61.5), device=PHONE)
+    assert _due(env, off) == set()
+
+    # Turned on: its clips are due, as never tried.
+    r = _infer(env, off, True)
+    assert r.status_code == 200 and r.json()["infer_location"] is True, r.text
+    assert _due(env, off) == {clips[off]}
+    _run(env, off)
+    assert _location(env, clips[off])["source"] == "time"
 
 
 def test_camera_clips_are_placed_from_phone_photos_across_folders(env) -> None:
@@ -654,16 +679,23 @@ def test_the_clock_offset_from_scene_pairs_places_a_camera_on_home_time(env) -> 
     assert loc["basis"]["summary"].endswith("· clock 6.0 h ahead")
 
 
-def test_changing_the_window_doesnt_ask_and_turning_it_off_removes_guesses(env) -> None:
+def test_changing_the_window_doesnt_ask_and_turning_a_library_off_removes_its_guesses(env) -> None:
     client, headers, *_ = env
     _settings(env)
     lib = _library(env, "toggle")
-    _clip(env, lib, "Phone/p.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
-    guessed = _clip(env, lib, "BMC/g.jpg", "2024-06-15T11:00:00")
+    other = _library(env, "toggle-other")
+    clips = {}
+    for library in (lib, other):
+        _clip(env, library, "Phone/p.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
+        clips[library] = _clip(env, library, "BMC/g.jpg", "2024-06-15T11:00:00")
+    guessed = clips[lib]
+    trashed = _clip(env, lib, "BMC/t.jpg", "2024-06-15T11:10:00")
     placed = _clip(env, lib, "BMC/placed.jpg", "2024-06-15T11:30:00")
     _person(env, [placed], 2.0, 2.0)
     _run(env, lib)
-    assert _location(env, guessed)["source"] == "time"
+    _run(env, other)
+    assert _location(env, guessed)["source"] == "time" and _location(env, clips[other])["source"] == "time"
+    _trash(env, trashed)  # its guess counts and goes too
 
     # The window isn't in lineage: nothing to make again, so nothing asked (guesses are checked again).
     r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
@@ -671,20 +703,30 @@ def test_changing_the_window_doesnt_ask_and_turning_it_off_removes_guesses(env) 
     assert _location(env, guessed)["source"] == "time"
     _run(env, lib)
     _settings(env)
-    r = client.put("/v1/producers/location/settings", json={"settings": {"infer_location": False}}, headers=headers)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
-    n = r.json()["error"]["details"]["clips"]
-    assert n >= 1 and "remove location guesses" in r.json()["error"]["message"]
+
+    r = _infer(env, lib, False)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "guesses_exist", r.text
+    assert r.json()["error"]["details"] == {"clips": 2}
+    assert "location guesses of 2 clips" in r.json()["error"]["message"]
     assert _location(env, guessed)["source"] == "time"  # asked, nothing done
-    r = client.put("/v1/producers/location/settings", json={"settings": {"infer_location": False}, "redo": True},
-                   headers=headers)
-    assert r.status_code == 200, r.text
-    assert _location(env, guessed) is None and _lineage(env, guessed) is None
+    assert client.get(f"/v1/libraries/{lib}", headers=headers).json()["infer_location"] is True
+    r = _infer(env, lib, False, remove_guesses=True)
+    assert r.status_code == 200 and r.json()["infer_location"] is False, r.text
+    assert _location(env, guessed) is None and _lineage(env, guessed) is None and _location(env, trashed) is None
     assert _location(env, placed)["source"] == "person" and _lineage(env, placed)["producer"] == "person"
-    assert _sql(env, "SELECT count(*) AS n FROM asset_location WHERE source = 'time'") == [{"n": 0}]
+    assert _location(env, clips[other])["source"] == "time"  # another library's stay
     assert _due(env, lib) == set()
-    _settings(env)
+
+    # A guess worked out before it was turned off, saved after: refused, nothing written.
+    guess = {"guess": {"lat": 1.0, "lon": 1.0, "radius_m": 100, "basis": {}}, "minutes": 360,
+             "lineage": made("location")}
+    assert client.put(f"/v1/assets/locations/guess/{guessed}", json=guess, headers=headers).json() == {"result": "off"}
+    assert _location(env, guessed) is None and _lineage(env, guessed) is None
+
+    # Off with nothing guessed asks nothing; on again, its clips are due again.
+    assert _infer(env, lib, True).status_code == 200
     assert guessed in _due(env, lib) and placed not in _due(env, lib)
+    assert _infer(env, lib, False).status_code == 200
 
 
 def test_the_guess_route_takes_only_what_a_machine_says_it_made(env) -> None:

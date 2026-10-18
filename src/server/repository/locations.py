@@ -205,13 +205,6 @@ def _gap_sql(c: str, f: str, c_device: str) -> str:
             f" - CASE WHEN {device_sql(f)} <> {c_device} THEN CAST(:delta AS double precision) ELSE 0 END)")
 
 
-def settings(session: Session) -> dict[str, Any]:
-    """The location producer's settings as the account has them now."""
-    from src.shared.producers import effective_settings
-
-    return effective_settings(ARTIFACT, lineage.overrides(session, ARTIFACT))
-
-
 def _iso(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -343,8 +336,41 @@ def _rank(sql: str) -> str:
             f" WHEN '{NEW_FIX}' THEN 1 WHEN '{WINDOW}' THEN 1 ELSE 0 END)")
 
 
-def inferring(session: Session) -> bool:
-    return bool(settings(session).get("infer_location"))
+def inferring(session: Session, asset_ids: list[str] | None = None) -> bool:
+    """Whether a library infers location (Infer location, each library's):
+    one of these clips' libraries, or any. Where none does there are no
+    guesses and no tries to check again."""
+    if asset_ids is None:
+        return bool(session.execute(text("SELECT EXISTS (SELECT 1 FROM libraries WHERE infer_location)")).scalar())
+    return bool(session.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM assets a JOIN libraries l ON l.library_id = a.library_id"
+        " WHERE a.asset_id = ANY(:ids) AND l.infer_location)"
+    ), {"ids": list(asset_ids)}).scalar())
+
+
+def guesses_in(session: Session, library_id: str) -> int:
+    """How many of a library's clips have a guess (in sight or not)."""
+    return int(session.execute(text(
+        "SELECT count(*) FROM asset_location loc JOIN assets a ON a.asset_id = loc.asset_id"
+        " WHERE a.library_id = :lib AND loc.source = :time"
+    ), {"lib": library_id, "time": TIME}).scalar() or 0)
+
+
+def stop_inferring(session: Session, library_id: str) -> None:
+    """Infer location turned off in a library: its guesses go, with the
+    producer's tries (a person's location and suggestions stay). Holds the
+    library until the transaction ends, so a guess being saved meanwhile
+    waits and finds it off (save_guess). Doesn't commit: the caller turns
+    the setting off in the same transaction."""
+    session.execute(text("SELECT 1 FROM libraries WHERE library_id = :lib FOR UPDATE"), {"lib": library_id})
+    session.execute(text(
+        "DELETE FROM asset_location loc USING assets a WHERE a.asset_id = loc.asset_id"
+        " AND a.library_id = :lib AND loc.source = :time"
+    ), {"lib": library_id, "time": TIME})
+    session.execute(text(
+        "DELETE FROM artifact_lineage l USING assets a WHERE a.asset_id = l.asset_id AND a.library_id = :lib"
+        " AND l.artifact = :artifact AND l.producer <> :person"
+    ), {"lib": library_id, "artifact": ARTIFACT, "person": PERSON})
 
 
 def window(session: Session) -> int:
@@ -423,8 +449,8 @@ def fix_changed(session: Session, asset_ids: list[str]) -> None:
     again: replaced, or gone if nothing's found); guesses near those that are
     fixes now are checked again; the clips themselves have no guess while
     they're fixes, and are due again when they aren't. A person's location
-    is never touched. Nothing while inferring is off. Doesn't commit."""
-    if not asset_ids or not inferring(session):
+    is never touched. Nothing where no library of theirs infers location. Doesn't commit."""
+    if not asset_ids or not inferring(session, asset_ids):
         return
     _made_from(session, BASIS_CHANGED, asset_ids)
     _new_fixes(session, _fixes(session, asset_ids))
@@ -437,14 +463,14 @@ def fixes_gone(session: Session, asset_ids: list[str]) -> None:
     """These clips went out of sight (trashed, missing, archived): guesses
     made from them are checked again. One with nothing else to go by keeps
     its place, marked "source removed" (save_guess). Doesn't commit."""
-    if asset_ids and inferring(session):
+    if asset_ids and inferring(session, asset_ids):
         _made_from(session, BASIS_GONE, asset_ids)
 
 
 def fixes_back(session: Session, asset_ids: list[str]) -> None:
     """These clips are back in sight (restored, unarchived, found again):
     those that are fixes are new fixes to the clips near them. Doesn't commit."""
-    if asset_ids and inferring(session):
+    if asset_ids and inferring(session, asset_ids):
         _new_fixes(session, _fixes(session, asset_ids))
 
 
@@ -492,7 +518,8 @@ def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, ma
     """The producer's guess for a clip, made in a window of `minutes`, or
     that it found none. Never over a person's location or the file's GPS
     ("kept": nothing written), nor over a suggestion (its lineage is
-    recorded, the row left); "gone" for a clip not in sight; "stale" when the
+    recorded, the row left); "gone" for a clip not in sight; "off" when its
+    library doesn't infer location now (nothing written); "stale" when the
     window is no longer the setting (nothing written: it's tried again).
 
     A clip with a guess due to be checked again (recheck), as its reason says:
@@ -512,12 +539,16 @@ def save_guess(session: Session, asset_id: str, guess: dict[str, Any] | None, ma
     is "stale" too: nothing written, it's worked out again. Doesn't commit."""
     lock(session, [asset_id])
     row = session.execute(text(
-        "SELECT (a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) AS has_file, loc.source, loc.radius_m,"
-        " loc.recheck FROM active_assets a LEFT JOIN asset_location loc ON loc.asset_id = a.asset_id"
+        "SELECT a.library_id, (a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) AS has_file, loc.source,"
+        " loc.radius_m, loc.recheck FROM active_assets a LEFT JOIN asset_location loc ON loc.asset_id = a.asset_id"
         " WHERE a.asset_id = :a"
     ), {"a": asset_id}).mappings().first()
     if row is None:
         return "gone"
+    # Shared with turning it off (stop_inferring): one waits for the other.
+    if not session.execute(text("SELECT infer_location FROM libraries WHERE library_id = :lib FOR SHARE"),
+                           {"lib": row["library_id"]}).scalar():
+        return "off"
     if row["source"] == PERSON or row["has_file"]:
         return "kept"
     if int(minutes) != window(session):
@@ -562,7 +593,7 @@ def file_changed(session: Session, asset_id: str, before: dict[str, Any] | None,
     is no longer right; with none, it's due again. Doesn't commit."""
     keys = ("taken_at", "taken_at_offset_min", "gps_lat", "gps_lon")
     before = before or {}
-    if all(before.get(k) == after.get(k) for k in keys) or not inferring(session):
+    if all(before.get(k) == after.get(k) for k in keys) or not inferring(session, [asset_id]):
         return
 
     def fixed(v: dict[str, Any]) -> bool:
@@ -582,16 +613,3 @@ def file_changed(session: Session, asset_id: str, before: dict[str, Any] | None,
     _try_again(session, [asset_id])
 
 
-def settings_changed(session: Session, before: dict[str, Any], after: dict[str, Any], *, apply: bool) -> int:
-    """The location producer's on_settings: Infer location turned off, every
-    guess goes, with the producer's tries (a person's location stays).
-    Returns how many clips have a guess."""
-    if not before.get("infer_location") or after.get("infer_location"):
-        return 0
-    n = int(session.execute(text("SELECT count(*) FROM asset_location WHERE source = :time"),
-                            {"time": TIME}).scalar() or 0)
-    if apply:
-        session.execute(text("DELETE FROM asset_location WHERE source = :time"), {"time": TIME})
-        session.execute(text("DELETE FROM artifact_lineage WHERE artifact = :artifact AND producer <> :person"),
-                        {"artifact": ARTIFACT, "person": PERSON})
-    return n

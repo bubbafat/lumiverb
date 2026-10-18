@@ -237,8 +237,19 @@ describe("LibrariesPage adding a library", () => {
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Footage" } });
     fireEvent.change(screen.getByLabelText("Root path"), { target: { value: "/Volumes/Footage" } });
     fireEvent.click(screen.getByRole("button", { name: "Create library" }));
-    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Footage", "/Volumes/Footage", "server"));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Footage", "/Volumes/Footage", "server", false));
     expect(screen.queryByLabelText("Read by")).toBeNull();
+  });
+
+  it("makes one whose locations are guessed when asked (ADR-017)", async () => {
+    api.createLibrary.mockResolvedValue({ library_id: "lib_9", name: "Trips", root_path: "/Volumes/Trips" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Add library" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Trips" } });
+    fireEvent.change(screen.getByLabelText("Root path"), { target: { value: "/Volumes/Trips" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Infer location/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create library" }));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Trips", "/Volumes/Trips", "server", true));
   });
 
   it("lets an admin make one a device reads, with its folder as the device sees it", async () => {
@@ -251,7 +262,7 @@ describe("LibrariesPage adding a library", () => {
     fireEvent.change(await screen.findByLabelText("Read by"), { target: { value: "dev_1" } });
     fireEvent.change(screen.getByLabelText("Its folder, as Studio Mac sees it"), { target: { value: "/Users/robert/Trips" } });
     fireEvent.click(screen.getByRole("button", { name: "Create library" }));
-    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Trips", "/Users/robert/Trips", "dev_1"));
+    await waitFor(() => expect(api.createLibrary).toHaveBeenCalledWith("Trips", "/Users/robert/Trips", "dev_1", false));
   });
 
   for (const [who, role] of [["an editor", "editor"], ["a viewer", "viewer"]]) {
