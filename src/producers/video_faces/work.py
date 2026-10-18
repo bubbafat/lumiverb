@@ -4,9 +4,9 @@ picks for the account's Detail), each looked at by the faces' process
 the people seen (appearances.py), and each person's crop cut from the frame
 their face is shown from. Saved in one request (POST /v1/video/{id}/faces).
 
-A frame ffmpeg can't read is left out (the others are still looked at); a
-video none of whose frames can be read is its failure. The GPU running out
-of memory waits, as for photos.
+A frame ffmpeg or the machine can't read is left out (the others are still
+looked at); a video none of whose frames can be read is its failure. The
+machines' trouble (the GPU out of memory, a worker gone) waits, as for photos.
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ class VideoFaces(Work):
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)
+        # Whichever of the faces job's machines is free (ADR-022): the built-in one or an AI worker.
+        self.detector = acct.guard("faces").detector(acct.models)
         # One read for the job: what's looked at and what its lineage says agree.
         self.used = acct.producers.settings(self.artifact)
         self.detail = acct.producers.uses(self.artifact).get("detail")
@@ -46,7 +48,7 @@ class VideoFaces(Work):
         from PIL import Image
 
         from src.processing.video.clip_extractor import extract_video_frame_detailed
-        from src.producers.runner import out_of_memory
+        from src.processing.workers.faces import FaceError
         from src.producers.video_faces.appearances import appearances
         from src.producers.video_faces.frames import frame_times
         from src.shared.face_crop import face_crop
@@ -72,12 +74,12 @@ class VideoFaces(Work):
                         unread.append(f"no frame at {ms} ms")
                         continue
                     # Asked for each frame: in use, so not let go of as idle on a long video.
-                    with self.acct.models.gpu_turn():  # CLIP's built-in machine takes turns with it
-                        result = self.acct.models.faces().detect(frame.read_bytes(), self.used)
-                    if "error" in result:
-                        if out_of_memory(result["error"]):  # the GPU's trouble, not the video's
-                            raise Waits(result["error"])
-                        unread.append(f"{ms} ms: {result['error']}")
+                    try:
+                        result = self.detector.detect(frame.read_bytes(), self.used)
+                    except FaceError as e:
+                        if e.endpoint_fault:  # the machines' trouble (the GPU, a worker gone): the video waits
+                            raise
+                        unread.append(f"{ms} ms: {e}")  # this frame's: the others are still looked at
                         frame.unlink(missing_ok=True)
                         continue
                     out.frames += 1
@@ -106,6 +108,9 @@ class VideoFaces(Work):
                     out.crops.append(crop)
         logger.info("video-faces: %s — %d people in %d frames", clip.get("rel_path"), len(out.faces), out.frames)
         return out
+
+    def judge(self, clip: dict, error: Exception) -> Exception:
+        return self.machines_or_clip(error)  # the machines' guard decides whose it is
 
     def save(self, client, made: list[tuple[dict, Found]]) -> None:
         from src.shared.producers import level_of

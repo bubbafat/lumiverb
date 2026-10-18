@@ -287,11 +287,20 @@ def _bbox_iou(a: dict | None, b: dict | None) -> float:
 
 
 def current_face_model(session: Session) -> str:
-    """The model that embeds faces now (the faces producer's setting):
-    centroids, auto-assignment and clustering use only its embeddings."""
+    """The model that embeds faces now: the faces job's (Settings › AI,
+    ADR-022), as the faces producer takes it; centroids, auto-assignment and
+    clustering use only its embeddings. The account's is read once a session
+    (whose it is: session.info["tenant_id"]); without one, the job's default."""
     from src.server.repository import lineage
+    from src.server.repository.ai_machines import account_job_models
 
-    return str(lineage.desired(session, "faces")["settings"].get("model") or "buffalo_l")
+    if model := session.info.get("face_model"):
+        return model
+    tenant_id = session.info.get("tenant_id")
+    models = account_job_models(tenant_id) if tenant_id else None
+    model = str(lineage.desired(session, "faces", models)["settings"].get("model") or "buffalo_l")
+    session.info["face_model"] = model
+    return model
 
 
 def _remove_keys(keys: list[str]) -> None:

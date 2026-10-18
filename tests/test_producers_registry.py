@@ -31,7 +31,8 @@ def test_each_ai_producer_takes_its_jobs_model():
     from src.shared.ai_jobs import JOBS
 
     assert {a: p.job for a, p in P.PRODUCERS.items() if p.job} == {
-        "vision": "vision", "ocr": "vision", "scene_vision": "vision", "transcript": "transcripts", "clip": "clip"}
+        "vision": "vision", "ocr": "vision", "scene_vision": "vision", "transcript": "transcripts", "clip": "clip",
+        "faces": "faces", "video_faces": "faces"}
     assert all(p.job in JOBS for p in P.PRODUCERS.values() if p.job)
     models = {"vision": "qwen3-vl:8b", "transcripts": "medium"}
     s = P.effective_settings("vision", account=models)

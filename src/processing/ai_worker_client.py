@@ -16,6 +16,7 @@ from typing import Any
 import requests
 
 from src.processing.workers.embeddings.base import EmbeddingError
+from src.processing.workers.faces import FaceError
 from src.shared.vision_endpoint import VisionEndpointError, check_url
 
 # One image's vector takes well under a second on a GPU, a few on a CPU; a
@@ -24,11 +25,13 @@ TIMEOUT_SEC = 120.0
 
 
 class AiWorker:
-    def __init__(self, api_url: str, api_key: str | None, *, timeout: float = TIMEOUT_SEC) -> None:
+    def __init__(self, api_url: str, api_key: str | None, *, timeout: float = TIMEOUT_SEC,
+                 error: type[EmbeddingError] | type[FaceError] = EmbeddingError) -> None:
+        """error: what the caller's job says a machine's failure is (CLIP's, faces')."""
         try:
             self._url = check_url(api_url)
         except VisionEndpointError as e:
-            raise EmbeddingError(str(e), endpoint_fault=True) from None
+            raise error(str(e), endpoint_fault=True) from None
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._timeout = timeout
 
@@ -67,3 +70,19 @@ class AiWorker:
         if not isinstance(vector, list) or not vector:
             raise EmbeddingError(f"{self._url} gave no vector", endpoint_fault=True)
         return {"vector": vector, "model_id": body.get("model_id"), "model_version": body.get("model_version")}
+
+    def faces(self, image: bytes, settings: dict[str, Any]) -> dict[str, Any]:
+        """What it found in one image, as the scheduler's face process says it. FaceError says whose a failure is."""
+        import json
+
+        body = self._post("faces", {"settings": json.dumps(settings)}, [image], FaceError)
+        results = body.get("results")
+        result = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else None
+        if result is None:
+            raise FaceError(f"{self._url} found nothing it says", endpoint_fault=True)
+        if "error" in result:
+            raise FaceError(str(result["error"]), endpoint_fault=False)
+        if not isinstance(result.get("faces"), list):
+            raise FaceError(f"{self._url} gave no faces list", endpoint_fault=True)
+        return result
+

@@ -207,6 +207,19 @@ class _Acct:
         self.models = _Models()
         self.inputs = Inputs(self, None)  # not beside the API's Store: the cache above
 
+    def guard(self, job: str):
+        """The faces job's machines: the built-in one alone, the face process above (ADR-022)."""
+        from src.processing.faces_guard import BuiltInFaces
+
+        class _Guard:
+            detector = staticmethod(BuiltInFaces)
+
+            def charges(self, error) -> bool:  # an image's trouble is the clip's, a machine's isn't
+                return not getattr(error, "endpoint_fault", False)
+
+        assert job == "faces"
+        return _Guard()
+
 
 CLIP = {"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a/b.mp4", "duration_sec": 6.0, "content_hash": "sha256:" + "ab" * 32}
 
@@ -271,9 +284,15 @@ def test_without_its_analysis_proxy_it_waits():
 
 @needs_ffmpeg
 def test_the_gpu_out_of_memory_waits(red_then_blue):
+    """The machine's trouble, not the video's: the faces job's error says so, and the runner waits on
+    the GPU running out of memory before anything's charged (src/producers/runner.py judged)."""
+    from src.processing.workers.faces import FaceError
+    from src.producers.runner import out_of_memory
+
     acct = _Acct(red_then_blue, _Detector({"error": "CUDA failure 2: out of memory"}))
-    with pytest.raises(Waits):
+    with pytest.raises(FaceError) as raised:
         VideoFaces(acct, None).make(CLIP)
+    assert raised.value.endpoint_fault and out_of_memory(raised.value)
 
 
 @needs_ffmpeg

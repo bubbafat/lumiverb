@@ -1,12 +1,13 @@
-"""Faces in photos (InsightFace), on the server's GPU, 25 photos a job
-(src/processing/workers/faces/insightface_provider.py, in a process of its
-own: detect.py; work.py saves a job's photos together). How many it finds
+"""Faces in photos (InsightFace), by the faces job's machines (ADR-022): the
+built-in one on the server's GPU (src/processing/workers/faces/insightface_provider.py,
+in a process of its own: detect.py) and Lumiverb's AI workers; 25 photos a
+job, saved together (work.py). How many it finds
 is its level (levels.py: Off / Low / Normal / High), as videos' is
 (src/producers/video_faces)."""
 
 from src.producers.contract import IMAGE, ProducerSpec, Setting
 from src.producers.faces.levels import DETAILS, on
-from src.producers.pools import GPU
+from src.producers.pools import FACES
 
 DEFAULT = "normal"
 
@@ -43,5 +44,6 @@ PRODUCER = ProducerSpec(
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
     regroup="src.server.repository.faces:regroup_faces",
-    kind="faces", flag="missing_faces", run="src.producers.faces.work:Faces", pool=GPU, batch=25,
+    # The faces job's machines (Settings › AI); on the server's GPU, the built-in one takes turns with CLIP.
+    kind="faces", flag="missing_faces", run="src.producers.faces.work:Faces", pool=FACES, batch=25,
 )

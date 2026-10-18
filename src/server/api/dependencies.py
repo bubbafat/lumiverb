@@ -27,6 +27,8 @@ def get_tenant_session(request: Request) -> Generator[Session, None, None]:
         raise HTTPException(status_code=500, detail="Tenant context missing")
     engine = get_engine_for_url(connection_string)
     with Session(engine) as session:
+        # Whose database it is, for what's the account's rather than its database's (its AI jobs' models).
+        session.info["tenant_id"] = getattr(request.state, "tenant_id", None)
         yield session
 
 

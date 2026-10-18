@@ -48,6 +48,13 @@ class FakeAccount:
         self.clip = MagicMock()
         self.clip.model = "ViT-B-32"
         self.clip.charges.return_value = True
+        self.faces = MagicMock()
+        self.faces.model = "buffalo_l"
+        self.faces.charges.return_value = True
+        # The built-in machine alone: the scheduler's face process, models' (a stand-in).
+        from src.processing.faces_guard import BuiltInFaces
+
+        self.faces.detector.side_effect = BuiltInFaces
         self.analysis_cache = MagicMock()  # held: what get says, as the cache holds it for the block
         self.analysis_cache.held.side_effect = lambda asset_id: contextlib.nullcontext(self.analysis_cache.get(asset_id))
         self.machine = Machine(analysis_proxy_decoder="cpu", gpu_decodes=0)
@@ -65,7 +72,7 @@ class FakeAccount:
         self.to_send[library_id] = (files, size)
 
     def guard(self, job: str):
-        return {"vision": self.vision, "transcripts": self.transcripts, "clip": self.clip}[job]
+        return {"vision": self.vision, "transcripts": self.transcripts, "clip": self.clip, "faces": self.faces}[job]
 
     def originals(self, library_id: str):
         """The library's originals in its folder in roots (the latest look)."""
