@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from src.server.api.dependencies import (
+    get_current_user_id,
     get_tenant_session,
     require_editor,
     require_signed_in,
@@ -156,8 +157,9 @@ class Models(BaseModel):
 class JobModelIn(BaseModel):
     # "": the job is off.
     model: str = Field(default="", max_length=200)
-    # Answers 409 redo_on_change: a new model makes everything its job made again.
-    redo: bool = False
+    # Answers 409 redo_on_change (ADR-018 decision 6): true, what the old model made is remade too, after
+    # everything else; false, new files only (it stays as it is until someone remakes it). Left out: asked.
+    redo: bool | None = None
 
 
 class StatusIn(BaseModel):
@@ -401,25 +403,26 @@ def remove_machine(machine_id: str, request: Request) -> AiSettings:
         return _settings(ctrl, request.state.tenant_id)
 
 
-def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model: str, redo: bool) -> None:
-    """A new model makes everything its job made again, after anything
-    missing (changing it is the approval, Robert Oct 9): 409 redo_on_change,
-    with how many clips of each kind, until the request says yes. Turning a
-    job off redoes nothing."""
+def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model: str,
+                        redo: bool | None) -> list[str]:
+    """What a new model leaves made another way than now, which the change
+    asks about (ADR-018 decision 6): 409 redo_on_change, with how many clips
+    of each kind (question "remake"), until the request says (redo). Returns
+    the producers that have some. Turning a job off remakes nothing."""
     from src.server.repository import lineage
     from src.server.repository.ai_machines import job_models
     from src.shared.producers import PRODUCERS
 
-    if not model or redo:
-        return
+    if not model:
+        return []
     now = job_models(tenant)
     then = {**now, job: model}
     changed = [a for a in lineage.JOB_ARTIFACTS.get(job, ())
                if lineage.redoable(a)
                and lineage.desired(session, a, then)["settings_hash"] != lineage.desired(session, a, now)["settings_hash"]]
     made = {a: n for a in changed if (n := lineage.would_redo(session, a, lineage.desired(session, a, then)))}
-    if not made:
-        return
+    if not made or redo is not None:
+        return list(made)
     clips = sum(made.values())
     held = lineage.pauses(session).work
     kinds = [{"artifact": a, "title": PRODUCERS[a].title, "clips": n, "paused": a in held} for a, n in made.items()]
@@ -427,24 +430,28 @@ def _ask_before_redoing(session: Session, tenant: Tenant | None, job: str, model
     paused = [k["title"] for k in kinds if k["paused"]]
     raise DecisionRequiredError(
         "redo_on_change",
-        f"{model} makes {clips:,} clip{'' if clips == 1 else 's'} again: {what}. That runs after anything "
-        "missing; until it's done, results mix the old model and the new."
+        f"{clips:,} clip{'' if clips == 1 else 's'} {'was' if clips == 1 else 'were'} made with the old model: "
+        f"{what}. New files only with {model}, and they stay as they are until you remake them; or remake them "
+        "too, after everything else: until that's done, results mix the old model and the new."
         + (f" Paused, so not made until it's resumed: {', '.join(paused)}." if paused else ""),
-        {"job": job, "model": model, "clips": clips, "artifacts": kinds},
+        {"job": job, "model": model, "clips": clips, "question": "remake", "artifacts": kinds},
     )
 
 
 @router.put("/jobs/{job}", response_model=AiSettings, dependencies=[Depends(require_tenant_admin)])
 def set_job_model(job: str, body: JobModelIn, request: Request,
-                  session: Annotated[Session, Depends(get_tenant_session)]) -> AiSettings:
+                  session: Annotated[Session, Depends(get_tenant_session)],
+                  user_id: Annotated[str, Depends(get_current_user_id)]) -> AiSettings:
     """Set a job's model; "" turns the job off. Every enabled machine doing
     the job is asked (what it says is its status): 409 model_not_offered,
     with each machine's models or why it couldn't say, when none offers it.
     The built-in machine isn't asked: it offers what faster-whisper knows.
     A faster-whisper model is kept by its one name ("small", not its repo).
-    A new model makes everything the job made again (after anything
-    missing): 409 redo_on_change with the count, unless redo says yes. Saving
-    a model resumes its producers' redo if an admin had stopped it."""
+    A new model asks what becomes of what the old one made (ADR-018
+    decision 6): 409 redo_on_change with the count, unless redo says. true
+    remakes it too, after everything else (the producers' redo resumed if an
+    admin had stopped it); false is new files only, their redo stopped by
+    this person (lineage.keep_made) until someone remakes them."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
@@ -469,15 +476,17 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
                                     f"No machine doing {JOBS[job].lower()} offers {model}.",
                                     {"job": job, "model": model, "machines": asked})
         changing = model != _job_model(tenant, job)
-        if changing:
-            _ask_before_redoing(session, tenant, job, model, body.redo)
+        made = _ask_before_redoing(session, tenant, job, model, body.redo) if changing else []
         _store_model(tenant, job, model)
         ctrl.add(tenant)
         ctrl.commit()
-        if changing:  # the newest ask wins: a stopped redo goes on with the new model
+        if changing:
             from src.server.repository import lineage
 
-            lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()), lineage.REDO)
+            if made and body.redo is False:  # new files only: what the old model made stays
+                lineage.keep_made(session, made, by=user_id)
+            else:  # the newest ask wins: a stopped redo goes on with the new model
+                lineage.resume(session, lineage.JOB_ARTIFACTS.get(job, ()), lineage.REDO)
             session.commit()
         return _settings(ctrl, tenant_id)
 

@@ -73,7 +73,7 @@ export default function AiSection() {
   const { data: ai, isLoading } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings, refetchInterval: 30_000 });
   const [adding, setAdding] = useState(false);
   // The model a job had before an admin changed it here: what it made is now stale.
-  const [replaced, setReplaced] = useState<{ label: string; model: string } | null>(null);
+  const [replaced, setReplaced] = useState<{ label: string; model: string; kept: boolean } | null>(null);
   if (isLoading || !ai) {
     return <div className="h-32 rounded-lg border border-gray-700/50 bg-gray-900/50 animate-pulse" />;
   }
@@ -124,13 +124,14 @@ export default function AiSection() {
             key={`${job.job}|${job.model}`}
             job={job}
             admin={admin}
-            onChanged={(old) => setReplaced(old ? { label: job.label, model: old } : null)}
+            onChanged={(old, kept) => setReplaced(old ? { label: job.label, model: old, kept } : null)}
           />
         ))}
         {replaced && (
-          <p role="status" className="text-sm text-amber-200">
-            What {replaced.label.toLowerCase()} made with {replaced.model} is being made again, after anything missing.
-            Follow it, or stop it, in{" "}
+          <p role="status" className={`text-sm ${replaced.kept ? "text-gray-400" : "text-amber-200"}`}>
+            {replaced.kept
+              ? `What ${replaced.label.toLowerCase()} made with ${replaced.model} stays as it is: the new model is for new files. Remake it whenever you like in `
+              : `What ${replaced.label.toLowerCase()} made with ${replaced.model} is being remade, after everything else. Follow it, or stop it, in `}
             <Link to="/settings/processing" className="text-indigo-300 underline hover:text-indigo-200">
               Processing
             </Link>
@@ -496,13 +497,14 @@ function JobModel({
   job: AiJob;
   admin: boolean;
   /** The model it had, when an admin changed it to another one here. */
-  onChanged: (old: string | null) => void;
+  // The model it replaced, and whether what that one made stays as it is (new files only).
+  onChanged: (old: string | null, kept: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const [changing, setChanging] = useState(false);
   const [model, setModel] = useState(job.model);
   const [problem, setProblem] = useState<string | null>(null);
-  // 409 redo_on_change: the new model makes what the job made again; the API asks first.
+  // 409 redo_on_change: the API asks what becomes of what the old model made (ADR-018 decision 6).
   const [redoing, setRedoing] = useState<{ message: string; next: string; clips: number } | null>(null);
   // What the machines doing it offer (the server says).
   const offered = job.choices;
@@ -512,8 +514,8 @@ function JobModel({
       setProblem(null);
       setRedoing(null);
     },
-    onSuccess: (next, { next: chosen }) => {
-      onChanged(job.model && chosen && chosen !== job.model ? job.model : null);
+    onSuccess: (next, { next: chosen, redo }) => {
+      onChanged(job.model && chosen && chosen !== job.model ? job.model : null, redo === false);
       queryClient.setQueryData(AI_QUERY_KEY, next);
       setChanging(false);
     },
@@ -568,8 +570,9 @@ function JobModel({
             ))}
           </select>
           {job.model && model && model !== job.model && !redoing && (
-            <p className="text-sm text-amber-300">
-              What was made with {job.model} is made again with {model}, after anything missing.
+            <p className="text-sm text-gray-400">
+              Saving asks about what {job.model} made: {model} for new files only, or remake that too, after
+              everything else.
             </p>
           )}
           {problem && (
@@ -580,14 +583,24 @@ function JobModel({
           {redoing && (
             <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
               <p className="text-sm text-amber-100">{redoing.message}</p>
-              <button
-                type="button"
-                disabled={save.isPending}
-                className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
-                onClick={() => save.mutate({ next: redoing.next, redo: true })}
-              >
-                {`Change it and redo ${redoing.clips.toLocaleString()} clip${redoing.clips === 1 ? "" : "s"}`}
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={save.isPending}
+                  className={`${buttonClass} bg-amber-600 text-white hover:bg-amber-500`}
+                  onClick={() => save.mutate({ next: redoing.next, redo: false })}
+                >
+                  New files only
+                </button>
+                <button
+                  type="button"
+                  disabled={save.isPending}
+                  className={`${buttonClass} text-amber-100 hover:bg-amber-500/20`}
+                  onClick={() => save.mutate({ next: redoing.next, redo: true })}
+                >
+                  {`Also remake ${redoing.clips.toLocaleString()} clip${redoing.clips === 1 ? "" : "s"}`}
+                </button>
+              </div>
             </div>
           )}
           <div className="flex flex-wrap gap-3">

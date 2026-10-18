@@ -282,33 +282,53 @@ def test_settings_changes_one(settings_client):
     result = _settings("transcript", "vad_min_silence_ms=800")
     assert result.exit_code == 0, result.output
     settings_client.raw.assert_called_once_with("PUT", "/v1/producers/transcript/settings",
-                                                json={"settings": {"vad_min_silence_ms": 800}, "redo": False})
+                                                json={"settings": {"vad_min_silence_ms": 800}})
     assert "vad_min_silence_ms = 800" in result.output
 
 
-def test_settings_asks_before_redoing_as_the_server_does(settings_client):
-    settings_client.raw.side_effect = [
-        _response(409, {"error": {"code": "redo_on_change", "message": "New settings make 12 clips of transcripts again."}}),
-        _response(200, {"settings": {"vad_min_silence_ms": 800}}),
-    ]
-    result = _settings("transcript", "vad_min_silence_ms=800", input="y\n")
+_REMAKE = {"error": {"code": "redo_on_change", "message": "12 clips of transcripts were made with the old settings.",
+                     "details": {"clips": 12, "question": "remake"}}}
+
+
+@pytest.mark.parametrize("typed,redo", [("r", True), ("n", False), ("", False)])
+def test_settings_asks_whether_to_remake_or_make_new_files_only_as_the_server_does(settings_client, typed, redo):
+    # ADR-018 decision 6: new files only is the default.
+    settings_client.raw.side_effect = [_response(409, _REMAKE), _response(200, {"settings": {"vad_min_silence_ms": 800}})]
+    result = _settings("transcript", "vad_min_silence_ms=800", input=f"{typed}\n")
     assert result.exit_code == 0, result.output
     assert "12 clips" in result.output
-    assert settings_client.raw.call_args_list[1].kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": True}
+    assert settings_client.raw.call_args_list[1].kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": redo}
 
 
 def test_settings_says_no_and_nothing_changes(settings_client):
-    settings_client.raw.return_value = _response(
-        409, {"error": {"code": "redo_on_change", "message": "New settings make 12 clips of transcripts again."}})
-    result = _settings("transcript", "vad_min_silence_ms=800", input="n\n")
+    settings_client.raw.return_value = _response(409, _REMAKE)
+    result = _settings("transcript", "vad_min_silence_ms=800", input="c\n")
     assert result.exit_code == 0 and "Nothing changed" in result.output
     assert settings_client.raw.call_count == 1
+
+
+def test_settings_asks_yes_or_no_before_something_is_dropped(settings_client):
+    settings_client.raw.side_effect = [
+        _response(409, {"error": {"code": "redo_on_change", "message": "New settings remove location guesses from 3 clips.",
+                                  "details": {"clips": 3, "question": "remove"}}}),
+        _response(200, {"settings": {"vad_min_silence_ms": 800}})]
+    result = _settings("transcript", "vad_min_silence_ms=800", input="y\n")
+    assert result.exit_code == 0, result.output
+    assert settings_client.raw.call_args_list[1].kwargs["json"]["redo"] is True
+
+
+@pytest.mark.parametrize("flag,redo", [("--remake", True), ("--yes", True), ("--new-only", False)])
+def test_settings_answers_ahead_when_told(settings_client, flag, redo):
+    settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 800}})
+    assert _settings("transcript", "vad_min_silence_ms=800", flag).exit_code == 0
+    assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": 800}, "redo": redo}
+    assert _settings("transcript", "vad_min_silence_ms=800", "--remake", "--new-only").exit_code == 2
 
 
 def test_settings_puts_one_back_to_its_default(settings_client):
     settings_client.raw.return_value = _response(200, {"settings": {"vad_min_silence_ms": 500}})
     _settings("transcript", "vad_min_silence_ms=")
-    assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": None}, "redo": False}
+    assert settings_client.raw.call_args.kwargs["json"] == {"settings": {"vad_min_silence_ms": None}}
 
 
 def test_settings_refuses_what_isnt_a_setting_or_a_number(settings_client):
@@ -479,7 +499,7 @@ def test_a_yes_or_no_setting_takes_on_off_true_false(faces_client, raw, value):
     faces_client.raw.return_value = _response(200, {"settings": {}, "fields": [{**_FACE_FIELDS[0], "value": value}]})
     result = _settings("faces", f"merge_close_clusters={raw}")
     assert result.exit_code == 0, result.output
-    assert faces_client.raw.call_args.kwargs["json"] == {"settings": {"merge_close_clusters": value}, "redo": False}
+    assert faces_client.raw.call_args.kwargs["json"] == {"settings": {"merge_close_clusters": value}}
     assert f"merge_close_clusters = {value}" in result.output
 
 

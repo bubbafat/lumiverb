@@ -2,9 +2,10 @@
 
 Mirrors the web's Settings → Processing (ADR-016 phase 4). An artifact is
 current, missing, stale (made with another producer, model or settings
-than now) or failing. Stale ones are made again after anything missing:
-changing a setting was the approval (Robert, Oct 9). An admin can stop a
-producer's redo and resume it; a new model for it resumes it. Pausing is
+than now) or failing. Stale ones are made again after everything else
+while the producer's redo runs: a new setting or model asks whether to
+remake them too or make only new files (ADR-018 decision 6), which stops
+its redo. An admin can stop a producer's redo and resume it. Pausing is
 `lumiverb pause|resume` (commands/pausing.py); the listing says the state.
 """
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 import math
 from typing import Annotated
 
+import click
 import typer
 from rich.console import Console
 from rich.markup import escape
@@ -293,16 +295,36 @@ def _yes_no(f: dict, raw: str) -> bool:
     return value
 
 
+def _remake_or_not(question: str | None) -> bool | None:
+    """The answer to the server's question: remake what the old settings
+    made too (True), new files only (False), or nothing changed (None). A
+    question of something dropped (location guesses) is yes or no."""
+    if question != "remake":
+        return True if typer.confirm("Go ahead?", default=False) else None
+    choice = typer.prompt("New files only (n), remake them too (r), or change nothing (c)?", default="n",
+                          type=click.Choice(["n", "r", "c"]), show_choices=False)
+    return {"n": False, "r": True}.get(choice)
+
+
 @producers_app.command("settings")
 def producers_settings(
     artifact: Annotated[str, typer.Argument(help="The producer, as the listing names it (e.g. transcript).")],
     changes: Annotated[list[str] | None, typer.Argument(
         help="KEY=VALUE to change (admins); KEY= puts it back to its default.")] = None,
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask; make again what the old settings made.")] = False,
+    remake: Annotated[bool, typer.Option(
+        "--remake", "--yes", "-y", help="Don't ask: remake what the old settings made too, after everything else.",
+    )] = False,
+    new_only: Annotated[bool, typer.Option(
+        "--new-only", help="Don't ask: new files only; what the old settings made stays as it is.")] = False,
 ) -> None:
     """A producer's settings, and changing the ones its code reads (admins).
-    New settings make what the old ones made again, after anything missing:
-    the server asks first, and so does this."""
+    What the old settings made is then made another way than now: the
+    server asks whether to remake it too, after everything else, or make
+    only new files with the new settings (ADR-018 decision 6), and so does
+    this, unless --remake or --new-only says."""
+    if remake and new_only:
+        console.print("[red]--remake or --new-only, not both.[/red]")
+        raise typer.Exit(2)
     client = LumiverbClient()
     producers = {p["artifact"]: p for p in client.get("/v1/producers", params={"counts": "false"}).json()
                  .get("producers", [])}
@@ -346,13 +368,15 @@ def producers_settings(
             body[key] = _yes_no(f, raw)
         else:
             body[key] = _number(f, raw)
-    r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": yes})
+    answer = {"redo": True} if remake else {"redo": False} if new_only else {}
+    r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, **answer})
     if r.status_code == 409 and ((r.json() or {}).get("error") or {}).get("code") == "redo_on_change":
         console.print(f"[yellow]{escape(_error(r))}[/yellow]")
-        if not typer.confirm("Go ahead?", default=False):
+        redo = _remake_or_not(((r.json().get("error") or {}).get("details") or {}).get("question"))
+        if redo is None:
             console.print("Nothing changed.")
             raise typer.Exit(0)
-        r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": True})
+        r = client.raw("PUT", f"/v1/producers/{artifact}/settings", json={"settings": body, "redo": redo})
     if r.status_code >= 400:
         console.print(f"[red]Couldn't change them: {escape(_error(r))}[/red]")
         raise typer.Exit(1)

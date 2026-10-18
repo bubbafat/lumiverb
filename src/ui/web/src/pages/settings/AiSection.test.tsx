@@ -90,10 +90,10 @@ beforeEach(() => {
       return json(settings());
     }
     if (path === "/ai/jobs/vision" && method === "PUT") {
-      if (made && body.model && body.model !== model && !body.redo) {
+      if (made && body.model && body.model !== model && body.redo === undefined) {
         return err(409, "redo_on_change",
-                   `${body.model} makes ${made} clips again: descriptions and tags (${made}). That runs after anything missing; until it's done, results mix the old model and the new.`,
-                   { job: "vision", model: body.model, clips: made,
+                   `${made} clips were made with the old model: descriptions and tags (${made}). New files only with ${body.model}, and they stay as they are until you remake them; or remake them too, after everything else.`,
+                   { job: "vision", model: body.model, clips: made, question: "remake",
                      artifacts: [{ artifact: "vision", title: "Descriptions and tags", clips: made }] });
       }
       if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
@@ -413,7 +413,7 @@ describe("AiSection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
     const select = screen.getByLabelText("Model for Descriptions & text");
     fireEvent.change(select, { target: { value: "llava:13b" } });
-    expect(screen.getByText(/What was made with qwen3-vl:8b is made again with llava:13b, after anything missing/)).toBeTruthy();
+    expect(screen.getByText(/Saving asks about what qwen3-vl:8b made: llava:13b for new files only, or remake that too/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Gaming PC: qwen3-vl:8b");
 
@@ -421,14 +421,14 @@ describe("AiSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText(/llava:13b/, { selector: "p" });
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b" });
-    // What the old model made is being made again: Processing follows it.
-    const note = await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being made again/);
+    // What the old model made is being remade: Processing follows it.
+    const note = await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being remade/);
     expect(within(note).getByRole("link", { name: "Processing" }).getAttribute("href")).toBe("/settings/processing");
   });
 });
 
 describe("AiSection model change that redoes clips", () => {
-  it("asks with the count before a new model makes clips again", async () => {
+  it("asks with the count whether to remake what the old model made too", async () => {
     machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
     offers = { [GAMING_PC]: [QWEN, "llava:13b"] };
     made = 12;
@@ -437,12 +437,25 @@ describe("AiSection model change that redoes clips", () => {
     fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("llava:13b makes 12 clips again");
-    expect(alert.textContent).toContain("after anything missing");
+    expect(alert.textContent).toContain("12 clips were made with the old model");
     expect(model).toBe(QWEN);  // nothing changed yet
-    fireEvent.click(within(alert).getByRole("button", { name: "Change it and redo 12 clips" }));
-    await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being made again/);
+    fireEvent.click(within(alert).getByRole("button", { name: "Also remake 12 clips" }));
+    await screen.findByText(/What descriptions & text made with qwen3-vl:8b is being remade/);
     expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b", redo: true });
+  });
+
+  it("new files only keeps what the old model made, and says Processing remakes it when asked", async () => {
+    machines = [machine({ name: "Gaming PC", status: { online: true, error: "", models: [QWEN, "llava:13b"], checked_at: null } })];
+    offers = { [GAMING_PC]: [QWEN, "llava:13b"] };
+    made = 12;
+    renderSection();
+    fireEvent.click(await screen.findByRole("button", { name: "Change the model for Descriptions & text" }));
+    fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(within(await screen.findByRole("alert")).getByRole("button", { name: "New files only" }));
+    const note = await screen.findByText(/made with qwen3-vl:8b stays as it is: the new model is for new files/);
+    expect(within(note).getByRole("link", { name: "Processing" })).toBeTruthy();
+    expect(lastSent("PUT", "/ai/jobs/vision")!.body).toEqual({ model: "llava:13b", redo: false });
   });
 
   it("forgets the question when another model is picked", async () => {
@@ -454,9 +467,9 @@ describe("AiSection model change that redoes clips", () => {
     fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "llava:13b" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByRole("button", { name: "Change it and redo 1 clip" })).toBeTruthy();
+    expect(within(alert).getByRole("button", { name: "Also remake 1 clip" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Model for Descriptions & text"), { target: { value: "m3" } });
-    expect(screen.queryByRole("button", { name: /Change it and redo/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Also remake/ })).toBeNull();
   });
 
   it("turns a job off without asking", async () => {

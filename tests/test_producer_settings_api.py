@@ -3,8 +3,9 @@
 
 Each producer declares its settings (src/producers/<artifact>/): GET
 /v1/producers serves them with their bounds; PUT /v1/producers/{artifact}/
-settings changes the ones its code reads, checked, and asks before
-redoing what the old ones made, as a model change in Settings → AI does.
+settings changes the ones its code reads, checked, and asks what becomes
+of what the old ones made, new files only or remade too (ADR-018 decision
+6), as a model change in Settings → AI does.
 """
 
 from __future__ import annotations
@@ -100,6 +101,52 @@ def test_new_settings_ask_before_making_again_what_the_old_ones_made(env):
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["temperature"] == 0.5
     assert _counts(lib, "vision")["stale"] == 1
+
+
+def test_new_files_only_keeps_what_the_old_settings_made_until_someone_remakes_it(env):
+    # ADR-018 decision 6: the change asks "new files only" (redo false) or "also remake them" (redo true).
+    client, headers, *_ = env
+    lib = _library(env, "SettingsNewOnly")
+    sha = _sha()
+    _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
+    r = _put(env, "vision", settings={"temperature": 0.5})
+    err = r.json()["error"]
+    assert r.status_code == 409 and err["details"]["question"] == "remake", r.text
+    assert "New files only" in err["message"] and "remake them too" in err["message"]
+    # A new version's hold (nobody's) becomes this person's choice.
+    _hold_as_a_new_version(env, "vision")
+    assert _producer(env, "vision")["new_version"] is True
+    try:
+        r = _put(env, "vision", settings={"temperature": 0.5}, redo=False)
+        assert r.status_code == 200, r.text
+        assert r.json()["settings"]["temperature"] == 0.5
+        assert r.json()["redo_stopped"] is True and r.json()["new_version"] is False
+        assert r.json()["redo_stopped_by"], "a person's choice, kept on the server"
+        assert _counts(lib, "vision")["stale"] == 1  # kept as it was
+        # Remake: the standing offer resumes its redo.
+        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert _producer(env, "vision")["redo_stopped"] is False
+    finally:
+        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+
+
+def test_new_files_only_with_nothing_made_yet_stops_nothing(env):
+    r = _put(env, "transcript", settings={"vad_min_silence_ms": 900}, redo=False)
+    assert r.status_code == 200 and r.json()["redo_stopped"] is False, r.text
+
+
+def _hold_as_a_new_version(env, artifact: str) -> None:
+    """The producer's redo stopped by nobody, as a new version of it stops it (lineage.hold_new_version)."""
+    from sqlalchemy import create_engine
+
+    engine = create_engine(env[5])
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO producer_pauses (target, scope, paused_by, paused_at)"
+                              " VALUES (:a, 'redo', NULL, now()) ON CONFLICT (target, scope) DO NOTHING"),
+                         {"a": artifact})
+    finally:
+        engine.dispose()
 
 
 def test_saving_settings_resumes_a_stopped_redo(env):

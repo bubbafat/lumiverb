@@ -84,8 +84,9 @@ export default function ProcessingSection() {
           {status && <Switch name="All processing" target="all" state={status.state} admin={admin} />}
         </div>
         <p className="mt-1 text-sm text-gray-400">
-          What each producer has made for your clips. Stale ones were made with another model or settings than now:
-          they're made again after anything missing. Changing a model in Settings → AI, or a producer's settings below, is what starts that.
+          What each producer has made for your clips. Some may be made another way than now: with another model,
+          settings or version. Changing a model in Settings → AI, or a producer's settings below, asks whether to
+          make new files only or remake those too, after everything else; you can remake them later here.
         </p>
       </div>
 
@@ -187,7 +188,7 @@ export default function ProcessingSection() {
           })}
         </ul>
       )}
-      {user && !admin && <p className="text-sm text-gray-500">Only admins can pause processing or stop a redo.</p>}
+      {user && !admin && <p className="text-sm text-gray-500">Only admins can pause processing or choose what's remade.</p>}
     </div>
   );
 }
@@ -199,7 +200,7 @@ function CountsBar({ producer }: { producer: Producer }) {
   return (
     <div aria-hidden="true" className="flex h-1.5 overflow-hidden rounded-full bg-gray-800">
       <div className="bg-emerald-500/80" style={{ width: pct(c.current) }} />
-      <div className="bg-amber-400/80" style={{ width: pct(c.stale) }} />
+      <div className="bg-indigo-400/50" style={{ width: pct(c.stale) }} />
       <div className="bg-amber-200/60" style={{ width: pct(c.below ?? 0) }} />
       <div className="bg-sky-500/70" style={{ width: pct(c.rechecking ?? 0) }} />
       <div className="bg-gray-600" style={{ width: pct(c.missing) }} />
@@ -286,7 +287,7 @@ function ProducerRow({
           ) : (
             <>
               <span className="text-gray-200">{n(c.current)}</span> current · {n(c.missing)} missing ·{" "}
-              <span className={c.stale ? "text-amber-300" : undefined}>{n(c.stale)} stale</span>
+              {n(c.stale)} made another way
               {!!c.rechecking && <span> · {n(c.rechecking)} rechecking</span>}
               {!!c.below && <span> · {n(c.below)} below</span>}
               {c.failing > 0 && (
@@ -760,8 +761,9 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
   );
 }
 
-/** What happens to a producer's stale clips: redone after anything missing, stopped (by an admin, or by a new
- * version of it waiting for an admin's OK), or not yet possible. */
+/** What happens to what a producer made another way than now (ADR-018 decision 6): remade after everything else
+ * while its redo runs; kept as it is by a person's choice (new files only), Remake a standing offer, not a warning;
+ * held by a new version of it until an admin's OK (amber); or not yet possible. */
 function RedoLine({ producer, stale, admin, paused, say }: { producer: Producer; stale: number; admin: boolean;
                                                             paused: boolean; say: WaitContext }) {
   const stopped = producer.new_version ? "new_version" : "redo_stopped";
@@ -773,7 +775,7 @@ function RedoLine({ producer, stale, admin, paused, say }: { producer: Producer;
   if (!producer.redoable) {
     return <p className="text-sm text-gray-500">Not made again yet. {producer.why_not}</p>;
   }
-  // A new version waits for an admin's OK: amber, as everything someone must act on.
+  // A new version waits for an admin's OK: amber, as everything someone must act on. Kept by choice: plain.
   const box = producer.redo_stopped && producer.new_version
     ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
     : producer.redo_stopped
@@ -786,18 +788,18 @@ function RedoLine({ producer, stale, admin, paused, say }: { producer: Producer;
           {producer.redo_stopped
             ? WAIT_SENTENCES[stopped]({ reason: stopped, clips: stale }, say)
             : paused
-              ? `Redoes ${clips(stale)} once it's resumed, after anything missing.`
-              : `Redoing ${clips(stale)}, after anything missing.`}
+              ? `Remakes ${clips(stale)} once it's resumed, after everything else.`
+              : `Remaking ${clips(stale)}, after everything else.`}
         </span>
         {admin && (
           <button
             type="button"
             className={linkClass}
             disabled={toggle.isPending}
-            aria-label={`${producer.redo_stopped ? "Resume" : "Stop"} redoing ${producer.title}`}
+            aria-label={producer.redo_stopped ? `Remake ${producer.title}` : `Stop remaking ${producer.title}`}
             onClick={() => toggle.mutate()}
           >
-            {producer.redo_stopped ? "Resume" : "Stop"}
+            {producer.redo_stopped ? "Remake" : "Stop"}
           </button>
         )}
       </div>
@@ -876,8 +878,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
   const queryClient = useQueryClient();
   const [values, setValues] = useState<Record<string, string>>(() => fromServer(fields));
   const [problem, setProblem] = useState<string | null>(null);
-  // 409 redo_on_change: what the old settings made is made again; the API asks first.
-  const [redoing, setRedoing] = useState<string | null>(null);
+  // 409 redo_on_change: the API asks what becomes of what the old settings made (ADR-018 decision 6): new
+  // files only, or remade too ("remake"); or whether to drop something ("remove").
+  const [redoing, setRedoing] = useState<{ message: string; question: string } | null>(null);
   const changed = fields.filter((f) => !f.fixed && !same(f, values[f.key]));
   const remade = changed.some((f) => f.remakes !== false);
   const done = (producer.counts?.current ?? 0) + (producer.counts?.stale ?? 0);
@@ -890,7 +893,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
     return value === f.default ? null : value;
   };
   const save = useMutation({
-    mutationFn: (redo: boolean) =>
+    mutationFn: (redo?: boolean) =>
       setProducerSettings(producer.artifact, Object.fromEntries(changed.map((f) => [f.key, asSent(f)])), redo),
     onMutate: () => {
       setProblem(null);
@@ -902,8 +905,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       return queryClient.invalidateQueries({ queryKey: PRODUCERS_QUERY_KEY });
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.code === "redo_on_change") setRedoing(e.message);
-      else setProblem(message(e));
+      if (e instanceof ApiError && e.code === "redo_on_change") {
+        setRedoing({ message: e.message, question: String(e.details?.question ?? "remake") });
+      } else setProblem(message(e));
     },
   });
   const input = (f: SettingField) => {
@@ -944,7 +948,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       className="mt-3 space-y-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (changed.length) save.mutate(false);
+        if (changed.length) save.mutate(undefined);
       }}
     >
       {main.map(input)}
@@ -955,8 +959,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
         </details>
       )}
       {remade && !redoing && done > 0 && (
-        <p className="text-amber-300">
-          Saving redoes the {done.toLocaleString()} {done === 1 ? "clip" : "clips"} already done, after the rest.
+        <p className="text-gray-400">
+          Saving asks about the {done.toLocaleString()} {done === 1 ? "clip" : "clips"} already made: new files
+          only, or remake them too, after everything else.
         </p>
       )}
       {changed.length > 0 && !remade && producer.artifact === "faces" && (
@@ -972,11 +977,22 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       )}
       {redoing && (
         <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-          <p className="text-amber-100">{redoing}</p>
+          <p className="text-amber-100">{redoing.message}</p>
           <div className="flex flex-wrap gap-4">
-            <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
-              Save and make them again
-            </button>
+            {redoing.question === "remake" ? (
+              <>
+                <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(false)}>
+                  New files only
+                </button>
+                <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
+                  Also remake them
+                </button>
+              </>
+            ) : (
+              <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
+                Save
+              </button>
+            )}
             <button type="button" className={linkClass} onClick={() => setRedoing(null)}>
               Cancel
             </button>

@@ -196,7 +196,7 @@ describe("ProcessingSection", () => {
     ];
     renderSection();
     const vision = await row("Descriptions and tags");
-    expect(vision.textContent).toContain("6 current · 1 missing · 3 stale");
+    expect(vision.textContent).toContain("6 current · 1 missing · 3 made another way");
     expect(within(vision).getByText(/qwen3-vl:8b-instruct/)).toBeTruthy();
     expect((await row("Visual search (CLIP)")).textContent).toContain("one model for all");
     const scenes = await row("Scenes");
@@ -224,37 +224,39 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     renderSection();
     const vision = await row("Descriptions and tags");
-    expect(vision.textContent).toContain("Redoing 3 clips, after anything missing.");
+    expect(vision.textContent).toContain("Remaking 3 clips, after everything else.");
+    expect(vision.textContent).toContain("3 made another way");
     expect(screen.queryByRole("button", { name: /Upgrade/ })).toBeNull();
-    expect(screen.getByText(/Changing a model in Settings → AI, or a producer.s settings below, is what starts that/)).toBeTruthy();
+    expect(screen.getByText(/asks whether to\s+make new files only or remake those too/)).toBeTruthy();
   });
 
   it("says nothing about redoing when nothing is stale", async () => {
     producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 1, failing: 0 } })];
     renderSection();
     const vision = await row("Descriptions and tags");
-    expect(vision.textContent).not.toContain("Redoing");
+    expect(vision.textContent).not.toContain("Remaking");
     expect(within(vision).queryByRole("button", { name: /Stop/ })).toBeNull();
   });
 
-  it("stops a redo and resumes it", async () => {
+  it("stops remaking, keeping the rest as they are, and offers to remake them (ADR-018 decision 6)", async () => {
     producers = [producer({})];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Stop redoing Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop remaking Descriptions and tags" }));
     await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/pause")
                                                && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
-    expect(await screen.findByText("Redo stopped: 3 clips stay as they are until it's resumed.")).toBeTruthy();
-    fireEvent.click(await screen.findByRole("button", { name: "Resume redoing Descriptions and tags" }));
+    expect(await screen.findByText("3 photos made another way than now stay as they are: an admin chose to keep them."))
+      .toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Remake Descriptions and tags" }));
     await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/resume")
                                                && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
-    expect(await screen.findByText("Redoing 3 clips, after anything missing.")).toBeTruthy();
+    expect(await screen.findByText("Remaking 3 clips, after everything else.")).toBeTruthy();
   });
 
   it("says why when the server refuses", async () => {
     producers = [producer({})];
     answers = [err(409, "cant_redo", "Descriptions and tags isn't made again yet.")];
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Stop redoing Descriptions and tags" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stop remaking Descriptions and tags" }));
     expect((await screen.findByRole("alert")).textContent).toContain("isn't made again yet");
   });
 
@@ -268,14 +270,14 @@ describe("ProcessingSection", () => {
     await waitFor(() => expect(sent.some((s) => s.url.includes("/producers?project_id=col_1"))).toBe(true));
   });
 
-  it("shows everyone the counts and the redo; only admins stop or resume it", async () => {
+  it("shows everyone the counts and the remakes; only admins stop or remake", async () => {
     role = "viewer";
     producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)", redo_stopped: true })];
     renderSection();
-    expect(await screen.findByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
-    expect((await row("Descriptions and tags")).textContent).toContain("Redoing 3 clips");
-    expect((await row("Text in images (OCR)")).textContent).toContain("Redo stopped");
-    expect(screen.queryByRole("button", { name: /Stop|Resume/ })).toBeNull();
+    expect(await screen.findByText("Only admins can pause processing or choose what's remade.")).toBeTruthy();
+    expect((await row("Descriptions and tags")).textContent).toContain("Remaking 3 clips");
+    expect((await row("Text in images (OCR)")).textContent).toContain("an admin chose to keep them");
+    expect(screen.queryByRole("button", { name: /Stop|Remake/ })).toBeNull();
   });
 
   // Pause switches (Robert, Oct 9): one per processing action; the global one's color is derived from them.
@@ -366,7 +368,7 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     renderSection();
     await waitFor(async () => expect((await row("Descriptions and tags")).textContent).toContain(
-      "Redoes 3 clips once it's resumed, after anything missing."));
+      "Remakes 3 clips once it's resumed, after everything else."));
     expect(state("Descriptions and tags")).toBe("paused");
     expect(screen.getByRole("switch", { name: "Descriptions and tags" }).textContent).toBe("Paused");
   });
@@ -447,13 +449,13 @@ describe("ProcessingSection", () => {
     expect(screen.getByLabelText("Scans of Stills").textContent).toBe("Running");
     expect(screen.queryByRole("switch")).toBeNull();
     expect(screen.queryByRole("button", { name: "Pause every library" })).toBeNull();
-    expect(screen.getByText("Only admins can pause processing or stop a redo.")).toBeTruthy();
+    expect(screen.getByText("Only admins can pause processing or choose what's remade.")).toBeTruthy();
   });
 
   it("says one clip right", async () => {
     producers = [producer({ counts: { applicable: 1, current: 0, stale: 1, missing: 0, failing: 0 } })];
     renderSection();
-    expect((await row("Descriptions and tags")).textContent).toContain("Redoing 1 clip, after anything missing.");
+    expect((await row("Descriptions and tags")).textContent).toContain("Remaking 1 clip, after everything else.");
   });
 
   it("shows why clips fail, and tries them again", async () => {
@@ -650,7 +652,7 @@ describe("ProcessingSection settings", () => {
     expect(screen.getByText(/Chosen in Settings → AI/)).toBeTruthy();
     expect(screen.queryByLabelText(/^Model/)).toBeNull();  // no input for it
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
-    expect(screen.getByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeTruthy();
+    expect(screen.getByText(/Saving asks about the 9 clips already made/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
     await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
     const put = sent.find((r) => r.method === "PUT")!;
@@ -658,13 +660,28 @@ describe("ProcessingSection settings", () => {
     expect(put.body).toEqual({ settings: { vad_min_silence_ms: 800 } });
   });
 
-  it("asks before making again what the old settings made", async () => {
-    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+  it.each([["New files only", false], ["Also remake them", true]])(
+    "asks what becomes of what the old settings made: %s (ADR-018 decision 6)", async (button, redo) => {
+      answers = [err(409, "redo_on_change", "12 clips of transcripts were made with the old settings.",
+                     { clips: 12, question: "remake" })];
+      await openSettings();
+      fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
+      expect(await screen.findByText(/made with the old settings/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      await waitFor(() => expect(sent.filter((r) => r.method === "PUT")).toHaveLength(2));
+      expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo });
+    });
+
+  it("asks yes or no before something is dropped", async () => {
+    answers = [err(409, "redo_on_change", "New settings remove location guesses from 3 clips.",
+                   { clips: 3, question: "remove" })];
     await openSettings();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
-    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Save and make them again" }));
+    expect(await screen.findByText(/remove location guesses/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "New files only" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sent.filter((r) => r.method === "PUT")).toHaveLength(2));
     expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo: true });
   });
@@ -703,25 +720,27 @@ describe("ProcessingSection settings", () => {
   });
 
   it("cancels the question, sending nothing more", async () => {
-    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    answers = [err(409, "redo_on_change", "12 clips of transcripts were made with the old settings.",
+                   { clips: 12, question: "remake" })];
     await openSettings();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
-    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    expect(await screen.findByText(/made with the old settings/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByText(/make 12 clips of transcripts again/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Save and make them again" })).toBeNull();
+    expect(screen.queryByText(/made with the old settings/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Also remake them" })).toBeNull();
     expect(sent.filter((r) => r.method === "PUT")).toHaveLength(1);
   });
 
   it("a change after the question takes the question away: its answer was for other values", async () => {
-    answers = [err(409, "redo_on_change", "New settings make 12 clips of transcripts again.", { clips: 12 })];
+    answers = [err(409, "redo_on_change", "12 clips of transcripts were made with the old settings.",
+                   { clips: 12, question: "remake" })];
     await openSettings();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
-    expect(await screen.findByText(/make 12 clips of transcripts again/)).toBeTruthy();
+    expect(await screen.findByText(/made with the old settings/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "900" } });
-    expect(screen.queryByRole("button", { name: "Save and make them again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Also remake them" })).toBeNull();
   });
 
   it("after saving shows what the server saved, so 1.50 isn't a change from 1.5", async () => {
@@ -738,7 +757,7 @@ describe("ProcessingSection settings", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Save the settings of Descriptions and tags" })
       .textContent).toBe("Save"));
     expect((screen.getByRole("button", { name: "Save the settings of Descriptions and tags" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeNull();
+    expect(screen.queryByText(/Saving asks about the 9 clips already made/)).toBeNull();
   });
 
   it("says why settings can't change in words, not only on hover (phones can't hover)", async () => {
@@ -784,9 +803,9 @@ describe("ProcessingSection settings", () => {
       fireEvent.click(await screen.findByText("Settings · version 1"));
       fireEvent.click(screen.getByLabelText("Merge close groups"));
       expect(screen.getByText("Face groups are worked out again; no face is found again.")).toBeTruthy();
-      expect(screen.queryByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeNull();
+      expect(screen.queryByText(/Saving asks about the 9 clips already made/)).toBeNull();
       fireEvent.change(screen.getByLabelText(/Least confidence/), { target: { value: "0.6" } });
-      expect(screen.getByText(/Saving redoes the 9 clips already done, after the rest\./)).toBeTruthy();
+      expect(screen.getByText(/Saving asks about the 9 clips already made/)).toBeTruthy();
     });
 
     it("says nothing is redone when nothing is done yet, and the face line is only for faces", async () => {
@@ -795,7 +814,7 @@ describe("ProcessingSection settings", () => {
       renderSection();
       fireEvent.click(await screen.findByText("Settings · version 1"));
       fireEvent.change(screen.getByLabelText(/Least confidence/), { target: { value: "0.6" } });
-      expect(screen.queryByText(/Saving redoes/)).toBeNull();
+      expect(screen.queryByText(/Saving asks about/)).toBeNull();
       fireEvent.click(screen.getByLabelText("Merge close groups"));
       expect(screen.queryByText(/Face groups/)).toBeNull();
     });
@@ -804,7 +823,7 @@ describe("ProcessingSection settings", () => {
       producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
                               counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];
       renderSection();
-      expect((await row("Location guesses")).textContent).toContain("6 current · 1 missing · 0 stale · 3 rechecking");
+      expect((await row("Location guesses")).textContent).toContain("6 current · 1 missing · 0 made another way · 3 rechecking");
     });
 
     it("says a new inference window checks guesses again, not that they're made again", async () => {
@@ -815,7 +834,7 @@ describe("ProcessingSection settings", () => {
       fireEvent.click(await screen.findByText("Settings · version 1"));
       fireEvent.change(screen.getByLabelText(/Inference window/), { target: { value: "120" } });
       expect(screen.getByText("Guesses are checked again.")).toBeTruthy();
-      expect(screen.queryByText(/Saving redoes/)).toBeNull();
+      expect(screen.queryByText(/Saving asks about/)).toBeNull();
     });
 
     it("shows editors yes or no as On or Off", async () => {
@@ -978,7 +997,7 @@ describe("Why work waits (no silent waits)", () => {
     ]);
   });
 
-  it("says a new version waits for an admin's OK in the redo's box, with Resume", async () => {
+  it("says a new version waits for an admin's OK in the remakes' box, with Remake", async () => {
     producers = [proxies([{ reason: "new_version", clips: 7 }], {
       counts: { applicable: 100, current: 93, stale: 7, missing: 0, failing: 0 }, redo_stopped: true, new_version: true })];
     renderSection();
@@ -986,8 +1005,8 @@ describe("Why work waits (no silent waits)", () => {
     expect(within(li).getByText(
       "A new version of Analysis proxies is ready: 7 videos made by an older one are made again once an admin resumes it.",
     )).toBeTruthy();
-    expect(within(li).queryByText(/Redo stopped/)).toBeNull();  // not an admin's stop
-    expect(within(li).getByRole("button", { name: "Resume redoing Analysis proxies" })).toBeTruthy();
+    expect(within(li).queryByText(/an admin chose to keep/)).toBeNull();  // not an admin's choice
+    expect(within(li).getByRole("button", { name: "Remake Analysis proxies" })).toBeTruthy();
     expect(await lines("Analysis proxies")).toEqual([]);  // said once, in the redo's box
   });
 

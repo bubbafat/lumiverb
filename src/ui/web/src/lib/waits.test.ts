@@ -80,7 +80,7 @@ describe("Why work waits", () => {
       "A new version of Analysis proxies is ready: 40 videos made by an older one are made again once an admin"
       + " resumes it.");
     expect(waitSentence({ reason: "redo_stopped", clips: 3 }, say)).toBe(
-      "Redo stopped: 3 clips stay as they are until it's resumed.");
+      "3 videos made another way than now stay as they are: an admin chose to keep them.");
   });
 
   it("says the scheduler's state", () => {
