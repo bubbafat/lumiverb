@@ -1,0 +1,302 @@
+# ADR-023: Plug-ins that stand on their own
+
+## Status
+
+Accepted (2026-10-18, Robert). Plug-ins run outside Lumiverb ("They run outside for safety"). His answers to the proposal's questions are under "Robert's answers"; the decisions below are his. Built runner first, with Settings › Plug-ins as "a ux stick in the ground that we can iterate on".
+
+Replaces ADR-021's decision 1 ("Built in only: code from outside Lumiverb is a later ADR of its own"). What ADR-021 built for an account (the switch, the acknowledgment, the re-accept rule, a plug-in's server-wide data and its progress) carries over.
+
+## Progress
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1a | The manifest, and installing a plug-in from a folder on the machine (the server admin's, on or off by default); every account's switch follows the default until its admin chooses | Not started |
+| 1b | The runner: each plug-in a process of its own, started, checked, restarted, kept from taking the server down (memory, time, priority, its folder's size), logged; on a Mac and on Linux | Not started |
+| 1c | Settings › Plug-ins built from the manifest (the stick in the ground): its state, what it reads, what it downloads, its settings form, checked by the server | Not started |
+| 2 | A plug-in's work on each clip through the protocol: its inputs, its outputs, kept and shown by Lumiverb; lookups | Not started |
+| 3 | GeoNames moved out: a plug-in like any other, its Lumiverb code and tables gone | Not started |
+| 4 | Downloads fetched by Lumiverb, and network and file confinement where the system gives it cheaply | Not started |
+| 5 | Installing plug-ins from elsewhere (a URL and its checksum), updates that ask again, removal; "Writing a plug-in" | Not started |
+
+## Overview
+
+Robert, 2026-10-18, after asking how Place names' settings work: "I think this is missing the Mark. I believe that our plug-in should be a totally independent feature that can be loaded in Lumiverb, but which could also come from a third-party. In this case I would expect that the plug-in exposes some sort of configuration settings, declaration, which defines the variable to set the type range of valid values or some sort of validator and the help text description for the UI and the UI dynamically builds this. It should also declare any dependency information such as making it clear that it depends on location data or that it depends on proxies already existing without this. We haven't really built a plug-in architecture. We've just built kind of a half to bake a different way of turning on features."
+
+He's right about what ADR-021 built. A plug-in today is a `PluginSpec` in Lumiverb's own Python: a title, a license and a switch. Everything Place names does is Lumiverb's code, named for it:
+
+- its tables in the control database (`geonames_*`), and the account's `asset_place`;
+- its SQL (`repository/places.py`, `asset_places.py`), its routes (`routers/places.py`), and its producer (`src/producers/place/`), whose setting is the producer's rather than the plug-in's;
+- the web app asking for `plugin_id === "geonames"` (`SetLocationModal.tsx`) and drawing "At …" and "Near …" (`LocationRow.tsx`).
+
+Nobody else could write one. Nothing says what it needs (a location). Its settings form is the producer's.
+
+This ADR makes a plug-in a separate program. It ships a **manifest**: what it is, its settings with their types, bounds, validation and help text, what it reads, what it shows, and what it downloads. Lumiverb runs it **in a process of its own**, kept from taking the server down, and talks to it over a **protocol**. Lumiverb hands it only what it declared. It hands back only kinds of output Lumiverb knows how to keep and show. It never holds a key to Lumiverb's API or its database. The UI is built from the manifest, so no screen names a plug-in. Lumiverb's own GeoNames is rebuilt as the first one, which proves the design.
+
+## Decisions
+
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Where does a plug-in's code run? | Outside Lumiverb, in a process of its own; never imported into the API or the scheduler. Any language: Lumiverb starts the command its manifest names. |
+| 2 | What does a plug-in declare? | A manifest file, read before any of its code runs: identity and version, its acknowledgment (as now), its settings schema, its inputs (what it needs and reads), its outputs (what it shows), its downloads and whether it needs the internet, and what it adds to Lumiverb's screens (lookups). |
+| 3 | How are its settings shown and checked? | Settings › Plug-ins builds the form from the schema. Each setting has a key, type, default, label and help text. A number also has bounds, a unit and whether it's whole. Text has a pattern and a length. A choice has its values with labels. A secret is never shown again. Each setting is the account's or the server's. Lumiverb checks every value against the schema before saving it or handing it on. A plug-in can also check what only it can know (does this API key work?), and its messages show beside the field. |
+| 4 | What can it read? | Only the inputs it declares, from a fixed list Lumiverb defines and versions: a clip's location, capture time, a few metadata fields, its preview image; later its video, its words (description, text read in it, transcript). Never an original, a path, a library's folders, other clips, people, or the account. Each input it declares is a dependency (a clip without it waits, or isn't one it applies to) and a permission shown to the admin. |
+| 5 | What can it give back? | For now (Robert), only kinds of output Lumiverb defines. In the first version these are **facts** shown with a clip ("Near Port of Spain"), optionally searchable, with the plug-in's credit, and **lookups** that a screen asks (Set location's Place search). Tags, scores and suggestions a person accepts come later, as a plug-in needs them. Lumiverb keeps what it gives back and checks every value (lengths, plain text, http(s) links only). |
+| 6 | What can it reach? | Only what it declares: "Safety and isolation first" (Robert). It runs with a clean environment (none of Lumiverb's settings, database addresses or keys) and its own data folder, and is handed nothing else. It has no network: Lumiverb fetches the downloads it declares (the admin sees the hosts and sizes) and hands them over in a folder. A plug-in that must call out (an online service) declares `internet`, and the admin sees that before it's installed. |
+| 7 | Who installs, who turns on? | The server admin installs a plug-in for the install (code on the server is the install's to allow), accepting what it reads and reaches, and installs it **on or off by default** "to make one's config easier" (Robert). An installed plug-in is there for every account and, where it's on, every library. An account follows the default until its admin turns the plug-in on or off there; after that its admin's choice stands. A plug-in with an acknowledgment that's on by default is accepted by the server admin at install, for the accounts that follow the default; an account admin turning it on themselves accepts it as now (ADR-021). Lumiverb's own plug-ins come installed. |
+| 8 | One process for every account? | Yes. A plug-in runs once for the server. Each request carries the account's settings and that account's clips' inputs, never which account it is. What it keeps (GeoNames' place list) is the server's. |
+| 9 | How isolated? | Good enough, on a Mac and on Linux: "We don't need enterprise security. We're just doing a good enough job. I don't want them taking down the server" (Robert). A process of its own, at a lower priority than Lumiverb's, ended by the runner when it uses more memory than it may, its requests given a time limit, its folder's size watched, restarted when it stops (waiting longer each time) and left stopped, with why, when it keeps stopping. Nothing Lumiverb runs waits on it longer than a request's limit. The file and network confinement the system gives cheaply (a Mac's sandbox profile) is added later (phase 4); it isn't a boundary against a plug-in's author: the server admin installs only what they trust. |
+
+## Design
+
+### The manifest
+
+A plug-in is a folder with `lumiverb-plugin.json` and its program. Place names', for example:
+
+```json
+{
+  "id": "geonames",
+  "version": "4",
+  "protocol": 1,
+  "title": "Place names (GeoNames)",
+  "description": "Find a place by name when setting a location, and see the nearest town and the landmark each photo or video was taken at.",
+  "author": "Lumiverb",
+  "homepage": "https://www.geonames.org/",
+  "run": ["bin/geonames-plugin"],
+
+  "acknowledgment": {"version": "3", "reaccept_from": "1", "title": "GeoNames: Creative Commons Attribution 4.0",
+                     "text": "…", "links": [{"label": "The license (CC BY 4.0)", "url": "https://creativecommons.org/licenses/by/4.0/"}]},
+  "credit": {"text": "GeoNames", "url": "https://www.geonames.org/"},
+
+  "downloads": [
+    {"url": "https://download.geonames.org/export/dump/cities1000.zip", "about_mb": 11, "title": "Towns of 1,000 people or more"},
+    {"url": "https://download.geonames.org/export/dump/allCountries.zip", "about_mb": 403, "title": "Every place, for its landmarks"},
+    {"url": "https://download.geonames.org/export/dump/alternateNamesV2.zip", "about_mb": 195, "title": "Names in other languages"}
+  ],
+  "data_version": 3,
+  "internet": false,
+  "memory_mb": 1024,
+  "disk_mb": 2000,
+
+  "settings": [
+    {"key": "radius_km", "type": "int", "default": 25, "minimum": 1, "maximum": 200, "unit": "km",
+     "label": "Nearest town within",
+     "help": "How far away a town can be and still name where a clip was. Farther than this, a clip is \"Not near a town\".",
+     "remakes": true},
+    {"key": "mirror", "type": "text", "scope": "server", "default": "", "pattern": "^(https://.+)?$", "max_length": 500,
+     "label": "Download from", "help": "A mirror of download.geonames.org, if this server can't reach it. Empty: GeoNames itself.",
+     "advanced": true}
+  ],
+
+  "work": {
+    "title": "Place names",
+    "version": "2",
+    "media": ["image", "video"],
+    "inputs": ["location"],
+    "batch": 200,
+    "outputs": [
+      {"key": "at", "kind": "fact", "label": "At"},
+      {"key": "near", "kind": "fact", "label": "Near", "searchable": true}
+    ]
+  },
+
+  "lookups": ["places"]
+}
+```
+
+- `version`: the plug-in's release, compared as numbers with dots (ADR-021's rule). `protocol`: the protocol version it speaks; Lumiverb refuses one it doesn't speak. `work.version` goes up when its output would differ, as a producer's version does. Lumiverb then holds the remakes for an admin to start, as for a new producer version (ADR-018).
+- `memory_mb` and `disk_mb`: what it may use, at most what the server allows (the runner holds it there: "Isolation").
+- The manifest is a file, not something the plug-in answers. What a plug-in reads and reaches is shown and accepted before any of its code has run.
+- Lumiverb checks the whole manifest when it's installed: known types, inputs, outputs and lookups; bounds that make sense; a default within them; https URLs. A plug-in whose manifest fails doesn't start, and the server admin sees why.
+
+### Settings: types, bounds, help, validation
+
+The fields are the ones Settings › Processing already draws for a producer (`fields`: key, label, kind, default, minimum, maximum, unit, advanced, remakes, choices). The manifest adds what a stranger's plug-in needs:
+
+| Type | Control | Checked by Lumiverb |
+|------|---------|---------------------|
+| `int`, `float` | number, with its unit | a finite number within `minimum`/`maximum`; whole for `int` |
+| `bool` | switch | true or false |
+| `text` | text field | `max_length` (at most 4,000), `pattern` (a regular expression, matched whole), not empty unless the default is |
+| `choice` | menu | one of `choices` (`[{"value": "km", "label": "Kilometres"}]`) |
+| `secret` | password field | as `text`; never returned by the API again (shown as "Set" or "Not set"), never logged |
+
+Every setting has `label` and `help` (a sentence under the field). It can also have `advanced` (folded away), `remakes` (its outputs are remade when it changes, after the same 409 `redo_on_change` question as a producer's settings) and `scope`. `account` (the default) is set by each account's admin; `server` is set by the server admin, for things like a mirror or a key for a service the whole install uses.
+
+A value is saved only once Lumiverb has checked it against the schema. Then, if the manifest says `"check": true`, the plug-in is asked (`POST /v1/settings/check`). It answers per field (`{"errors": {"api_key": "This key was refused by the service"}}`), and the error is shown beside that field. The plug-in's code never runs in the browser. Saved settings are kept per account (`plugin_settings`, in the account's database) or for the server (the control database), and are handed to the plug-in with each request.
+
+### Inputs: what it needs, and what it may read
+
+Lumiverb defines the inputs, and their shapes are versioned with the protocol. A clip without an input either **waits** (Lumiverb makes it for every clip, and it's coming) or **isn't one the plug-in applies to** (some clips never have it). Processing counts and says which.
+
+| Input | What's handed over | A clip without it |
+|-------|--------------------|-------------------|
+| `location` | The location the clip shows (a person's, else the file's GPS, else an applied guess; never a suggestion): latitude, longitude, how sure in metres, its source | Not applicable: "4,392 have no location" |
+| `capture_time` | When it was taken, with its time zone if known | Not applicable |
+| `metadata` | Media type, width and height, duration, camera make and model, lens | — (every clip) |
+| `preview` | The preview image (JPEG, up to 2048 px) | Waits for its preview |
+| `video` (later) | The analysis proxy (H.264 MP4), streamed | Waits for it |
+| `words` (later) | The description, the text read in it, the transcript | Waits while those are made; not applicable where they're off |
+
+Each input a plug-in declares is the one thing it reads. Settings › Plug-ins says so in words: "Reads each clip's location". A plug-in can't ask for more than it's handed, because it can't call Lumiverb at all.
+
+A clip's inputs are hashed when its work is handed out, and what the plug-in gives back is kept with that hash. A clip whose inputs have changed since (a person moved its location) is due again, and what it showed stays until the new output is saved. This is how Place names already treats a moved location (`asset_place.lat/lon`), made general.
+
+### Outputs: what it gives back, and where it shows
+
+| Kind | What it is | Where it shows |
+|------|------------|----------------|
+| `fact` | A short text for a clip (up to 200 characters), with an optional http(s) link | The Lightbox's details, under the plug-in's title, with its credit; signed-in only, never on a public page. `searchable`: its text is in the clip's search document |
+| none (`null`) | Nothing to say for this clip ("Not near a town") | Counted as made, shown as the output's empty line if it declares one |
+
+Later kinds, each when a plug-in needs it: `tags` (words a clip is found and filtered by), `score` (a number in declared bounds, for sorting and filtering) and `suggestion` (a proposed location, capture time or name, shown as "Maybe: … Use this / No"; a person decides, and derived data never overwrites theirs, as ADR-016 requires).
+
+Outputs are kept by Lumiverb in the account's database (`plugin_outputs`: clip, plug-in, key, value, the inputs' hash, lineage). A plug-in has no storage in an account. Turning it off keeps its outputs and hides them. Removing it from the server removes them, after the server admin is asked.
+
+### Lookups: what it adds to a screen
+
+Some plug-ins answer a person rather than a clip. Lumiverb defines each lookup and the screen that asks it. The first is `places`, for Set location's Place search: `GET /v1/lookups/places?q=` returns places (`id`, `name`, `region`, `country`, `kind`, `lat`, `lon`, `matched`), and `GET /v1/lookups/places/{id}` returns one. Clients still call `GET /v1/places?q=`. The API asks every plug-in that is on in the account and offers `places`, and labels each place with the plug-in that found it. A location set from a place records which plug-in and which place (`basis`), so the place's name and credit show with it.
+
+### The protocol
+
+HTTP/1.1 with JSON (multipart where images go), over a Unix socket in the plug-in's run folder that only Lumiverb can reach. Lumiverb asks; the plug-in answers:
+
+| Request | What for |
+|---------|----------|
+| `GET /v1/health` | `ready`, `preparing` (with `done`, `total`, `detail`: shown as "N of M") or `failed` (with why) |
+| `POST /v1/prepare` | Its downloads are in `downloads/`: build its data in its own folder. Lumiverb deletes the downloads once it's ready. Called again when `data_version` goes up; the old data is used meanwhile |
+| `POST /v1/work` | A batch of clips (ids that mean nothing outside the request), each with its declared inputs, and the account's settings. It answers per clip: its outputs, or an error that is the clip's (charged, as a failure) or the plug-in's (nothing charged, the clips wait, as for an AI machine that's down) |
+| `POST /v1/settings/check` | Its own check of new settings, when it declares one |
+| `GET /v1/lookups/<name>` | A lookup it offers |
+
+Every request has a time limit. Lumiverb checks every answer against the manifest (keys it declared, kinds and lengths) and refuses the rest, which is counted as the plug-in's error.
+
+### The runner (phase 1b)
+
+`lumiverb-server plugins run` starts and watches every installed plug-in. On a Mac it's a child of `run`, beside the API and the scheduler (`supervise.py`'s restart rules). On Linux it's a unit of its own, `lumiverb-plugins.service`, written by `update.sh` as the scheduler's is. For each plug-in it:
+
+- prepares its folders (`DATA_DIR/plugins/<id>/`: `data/` its own, `run/` with its socket, only Lumiverb's user can reach them) and starts the manifest's `run` command from the installed copy of its folder, with a clean environment: its folders and its socket (`LUMIVERB_PLUGIN_SOCKET`, `LUMIVERB_PLUGIN_DATA`), nothing of Lumiverb's;
+- waits for `ready` (`GET /v1/health`), restarts it when it exits (waiting longer each time, up to 10 minutes) and leaves it stopped, with why, when it keeps stopping soon after each start;
+- sends its output to the service log a line at a time, named (`plugin geonames | …`), so Admin › Logs shows it;
+- writes what each plug-in is doing (starting, running, preparing with how far, stopped and why) where the API reads it, for Settings › Plug-ins.
+
+The API and the scheduler talk to it through its socket. While it's down, its clips wait (`plugin_down`, a new wait code: no silent waits) and its lookups say it's unavailable.
+
+### Settings › Plug-ins (phase 1c): the stick in the ground
+
+Built from the manifests, for Robert to try and change: each plug-in a card with its title, version, author and description; what it's doing now (starting, running, preparing N of M, stopped and why); what it reads ("Reads each clip's location"), what it downloads and from where, whether it uses the internet; its switch in this account (and, for an account following the default, that it does: "On for every account, unless turned off here"); its settings form, built from its schema, each field with its help text and the server's or the plug-in's error beside it. The server admin also sees its default and the server's own settings.
+
+### Isolation: good enough (phases 1b and 4)
+
+Robert: "We don't need enterprise security. We're just doing a good enough job. I don't want them taking down the server." So the runner keeps a plug-in, however badly written, from hurting the server, on a Mac and on Linux alike:
+
+| What could go wrong | What the runner does |
+|---------------------|----------------------|
+| It crashes, or exits | Only it stops; restarted, waiting longer each time; left stopped, with why, when it keeps stopping |
+| It hangs, or answers slowly | Every request has a time limit; its clips wait, uncharged; a plug-in that stops answering its health check is restarted |
+| It uses too much memory | Ended above its limit (the manifest's `memory_mb`, at most what the server allows; 1 GB unless it says): the runner watches its processes' memory on both platforms, and on Linux the unit's `MemoryMax` holds all of them |
+| It uses the CPU | It runs at a lower priority than Lumiverb's API and scheduler (`nice`) |
+| It fills the disk | A file it writes can't pass a size limit (`RLIMIT_FSIZE`), and its data folder is watched: stopped, with why, above its `disk_mb` |
+| It reads Lumiverb's secrets | It's given none: a clean environment, no key to Lumiverb, nothing but its inputs |
+| It answers nonsense | Checked against its manifest; refused and counted as its error |
+
+What isn't held here is a plug-in written to do harm: it runs as Lumiverb's user and could read what that user can. The server admin installs only what they trust (decision 7). Phase 4 adds the file and network confinement the system gives cheaply: on a Mac a sandbox profile (`sandbox-exec`: tried on macOS 26.5 on 2026-10-18, it refused the network, refused reading Lumiverb's data folder and refused writing outside the plug-in's own folder; Apple calls it deprecated, so a test proves it each release); on Linux the unit's own (`ProtectSystem`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, no network but Unix sockets unless declared).
+
+### Installing (phase 1a, then 5)
+
+`lumiverb-server plugins install FOLDER --on|--off` runs on the machine, as `server-admins` does. It checks the manifest, shows it in words (what it reads, what it shows, what it downloads and from where, whether it uses the internet, its acknowledgment if it's to be on by default) and asks the server admin to accept. Then it copies the folder into the install (`DATA_DIR/plugins/<id>/program/`, read-only) and records it in the control database: which version, on or off by default, who accepted what and when. `--yes` is for no one to ask, having been shown it.
+
+- `lumiverb-server plugins list` shows what's installed and its state; `default ID on|off` changes its default for the accounts that follow it; `uninstall ID` stops it and removes its program (its outputs, from phase 2, after the server admin is asked how many there are).
+- Installing a newer version of a plug-in replaces it. One that reads or reaches more asks again; one that asks the same or less doesn't.
+- Phase 5 adds installing from a URL with its checksum (`--sha256`), and the Admin page.
+- Lumiverb's own plug-ins ship in the install (`plugins/<id>/`), installed already.
+
+"Writing a plug-in" (docs, phase 5) is the protocol's whole contract, as cursor-api's "Writing a client" is a reader's. A test holds it to the code.
+
+## Place names, rebuilt (phase 3)
+
+GeoNames becomes a program in `plugins/geonames/` that imports nothing of Lumiverb's (a test holds that), with the manifest above:
+
+- **Its data:** the same downloads, which Lumiverb fetches into its folder. It builds its own database there (towns, landmarks, names in other languages), not in Lumiverb's control database.
+- **Its work:** given each clip's location and the radius, it answers `near` and `at`, as the producer and `repository/places.py` do now: the same rules for which landmarks count and how far each kind reaches, moved into the plug-in.
+- **Its lookup:** `places`, as place search is now (the same tiers: exact names first, then other languages, then the start of a name).
+- **What goes from Lumiverb:** `src/producers/place/`, `repository/places.py` and `asset_places.py`, `routers/places.py`'s GeoNames code, the `geonames_*` tables, `asset_place`, `src/plugins/geonames/`, and the web app's `geonames` checks. Each goes only once its replacement holds its data (keep until replaced). The 14,237 named clips on Robert's Mac are named again by the plug-in, which took about 45 seconds as a producer, and their old names show until then. A person's locations set from a place keep their place, recorded as the plug-in's.
+
+## Build phases
+
+Each part is its own PR, with its tests and docs, the whole suite passing, and a release.
+
+### Phase 1a: the manifest and installing
+
+- `src/plugins/manifest.py`: reads and checks `lumiverb-plugin.json` (every field above; settings by the same rules as producers', `Setting.check`), refusing a manifest with anything it doesn't know.
+- The control database's installed plug-ins (version, manifest, on or off by default, who accepted what and when); `lumiverb-server plugins install|list|default|uninstall`.
+- Every account's switch: an installed plug-in follows the default until an account's admin turns it on or off; `GET /v1/plugins` lists installed plug-ins beside the built-in one (GeoNames, unchanged until phase 3), from their manifests.
+- A test plug-in (`tests/plugins/`), written against the protocol alone.
+
+### Phase 1b: the runner
+
+- `lumiverb-server plugins run`: each installed plug-in started, checked, restarted, held to its limits, logged, its state written for the API; a child of `run` on a Mac, `lumiverb-plugins.service` on Linux (`deploy-api.sh`, `update-api.sh`).
+- Tests start real plug-in processes: one that crashes, one that hangs, one that takes too much memory, one that writes too much, one that answers what it didn't declare; the server goes on, and each says why.
+
+### Phase 1c: Settings › Plug-ins
+
+- The cards above; the settings form built from the schema; `PUT /v1/plugins/{id}/settings` checked by Lumiverb and, when it asks, by the plug-in; the server's settings for the server admin.
+- An example plug-in to try it with (`plugins/example/`, every kind of setting), installable with one command.
+
+## Edge cases
+
+| Scenario | Behavior |
+|----------|----------|
+| The plug-in crashes or hangs | Its request times out; it's restarted, waiting longer each time; its clips wait (`plugin_down`), uncharged; Settings and Processing say so |
+| It answers something it didn't declare, or too long, or HTML | Refused and counted as its error; never shown |
+| It asks for an input Lumiverb doesn't define, or a protocol Lumiverb doesn't speak | Its manifest fails: not installed, and the server admin is told why |
+| Two accounts with different settings | Each request carries its account's settings; nothing of one account reaches another's requests |
+| A setting changes that remakes | The 409 `redo_on_change` question, as for a producer; remade after everything else |
+| An account turns it off | Its outputs stay and are hidden; nothing more is made; turned on again, what's missing is made |
+| Its data needs a newer download (`data_version`) | Fetched and prepared again in the background; the old data is used until the new is ready |
+| A download fails or the disk fills | `failed` with why, tried again an hour later (as `plugin_data` today) |
+| An update reads more than before | Not started until the server admin accepts it |
+| The Mac's sandbox goes away in a macOS release | Plug-ins run as in phase 1, isolated as processes and held to their limits; the Admin page says the confinement is missing |
+| An account never chose, and the server admin changes the default | It follows the new default; an account whose admin chose keeps its choice |
+
+## Code references
+
+| Area | File | Notes |
+|------|------|-------|
+| Today's plug-in | `src/plugins/contract.py`, `src/plugins/__init__.py`, `src/plugins/geonames/` | The spec becomes the manifest |
+| Account switch, acknowledgment | `src/server/repository/plugins.py`, `routers/plugins.py`, `pages/settings/PluginsSection.tsx` | Kept; reads manifests |
+| Server-wide data | `src/server/plugin_data.py`, `repository/plugin_data.py` | Becomes the host's downloads and `prepare` |
+| A plug-in's producer | `src/producers/contract.py` (`ProducerSpec.plugin`), `lineage.APPLIES`, `src/producers/place/` | Becomes one generic producer for every plug-in's `work` |
+| Settings fields | `src/producers/contract.py` `Setting`, `ProcessingSection.tsx` | The schema's shape and the form's controls |
+| GeoNames in Lumiverb | `repository/places.py`, `asset_places.py`, `routers/places.py`, `routers/locations.py`, `SetLocationModal.tsx`, `LocationRow.tsx` | Moves into the plug-in (phase 3) |
+| A process Lumiverb runs and asks | `src/server/ai_worker/` (ADR-022), `lifecycle/supervise.py` | The host's model |
+
+## Doc references
+
+- `docs/cursor-api.md`: plug-in settings, lookups, `plugin_down`.
+- `docs/architecture.md`: the plug-in host.
+- New: `docs/writing-a-plugin.md` (phase 5).
+- `CLAUDE.md`: the Plug-ins row.
+
+## Alternatives considered
+
+- **In-process Python packages** (entry points, as many apps load plug-ins). Simpler, but a plug-in would run as the server, with its database, its keys and every library's originals. Robert: "They run outside for safety."
+- **Plug-ins as services anywhere, at a URL with a key** (as AI machines are). This is the same protocol at another address, so it stays possible. But Lumiverb couldn't confine what it doesn't start, and the server admin would be installing and running each one by hand. Lumiverb starting them comes first.
+- **WebAssembly.** Strong confinement in any language, but GeoNames' work (zip files, a database, half a gigabyte of downloads) is a poor fit for it today, and no plug-in needs it yet.
+- **Plug-ins calling Lumiverb's API with a key of their own.** They could read anything the key allows, and confinement would mean scoping a key per plug-in. Being handed declared inputs is smaller and easier to check.
+
+## What this does NOT include
+
+- A plug-in catalogue or store, or plug-in updates found automatically.
+- Plug-ins that add pages or their own UI. Every screen is Lumiverb's, built from what's declared.
+- Moving faces, transcripts, descriptions or location guesses into plug-ins (ADR-021 phase 4). Each might come later, once this exists.
+- Video and words inputs, tags, scores and suggestions: each in a later phase, when a plug-in needs it.
+
+## Robert's answers (2026-10-18)
+
+To the proposal's five questions:
+
+1. Who installs: "Yes. And make them available to all libraries and allow the system admin to install them on or off by default to make one's config easier." (Decision 7.)
+2. No network by default, Lumiverb fetching what a plug-in declares: "Yes. Safety and isolation first." (Decision 6.)
+3. Facts and the place lookup only: "For now." (Decision 5.)
+4. The Mac's sandbox: "Needs to work on Linux too. Process isolation? We don't need enterprise security. We're just doing a good enough job. I don't want them taking down the server." (Decision 9: process isolation and limits on both, the system's confinement later where it's cheap.)
+5. Order: "Runner first with a ux stick in the ground that we can iterate on." (Phases 1a to 1c.)
