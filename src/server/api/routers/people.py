@@ -14,6 +14,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ConflictError
+from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
 from src.server.repository.faces import current_face_model
 
@@ -139,6 +140,7 @@ def list_people(
 
 
 @router.post("", response_model=PersonItem, status_code=201, dependencies=[Depends(require_editor)])
+@names("body.face_ids")
 def create_person(
     body: PersonCreateRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -721,8 +723,8 @@ def store_clusters(session: Session) -> dict:
 
     Run by upkeep (POST /v1/upkeep when the cache is old, and
     /v1/upkeep/recluster), never by a request that reads them."""
-    from src.server.repository.system_metadata import SystemMetadataRepository
     from src.server.repository.faces import FaceRepository, face_clusters_version
+    from src.server.repository.system_metadata import SystemMetadataRepository
 
     version = face_clusters_version(session)
     data = {**FaceRepository(session).cluster_cache(), "version": version}

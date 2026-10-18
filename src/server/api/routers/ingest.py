@@ -24,6 +24,7 @@ from src.server import preview_image
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.devices import may_call
+from src.server.api.library_access import names
 from src.server.repository.assets import (
     AssetEmbeddingRepository,
     AssetMetadataRepository,
@@ -347,6 +348,7 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
 
 @router.post("/v1/ingest", response_model=IngestResponse, dependencies=[Depends(require_editor)])
 @may_call("form")
+@names("form.library_id")
 async def create_and_ingest(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],

@@ -50,6 +50,31 @@ def lower(a: str, b: str | None) -> str:
     return a if b is None or RANK[a] <= RANK[b] else b
 
 
+# What a request names, and the library it's in.
+_LIBRARY_OF = {
+    "library": "SELECT library_id FROM libraries WHERE library_id = ANY(:ids)",
+    "asset": "SELECT DISTINCT library_id FROM assets WHERE asset_id = ANY(:ids)",
+    "scan": "SELECT DISTINCT library_id FROM scan_sessions WHERE scan_id = ANY(:ids)",
+    "upload": "SELECT DISTINCT a.library_id FROM uploads u JOIN assets a ON a.asset_id = u.asset_id"
+              " WHERE u.upload_id = ANY(:ids)",
+    "chunk": "SELECT DISTINCT a.library_id FROM video_index_chunks c JOIN assets a ON a.asset_id = c.asset_id"
+             " WHERE c.chunk_id = ANY(:ids)",
+    "scene": "SELECT DISTINCT a.library_id FROM video_scenes s JOIN assets a ON a.asset_id = s.asset_id"
+             " WHERE s.scene_id = ANY(:ids)",
+    "face": "SELECT DISTINCT a.library_id FROM faces f JOIN assets a ON a.asset_id = f.asset_id"
+            " WHERE f.face_id = ANY(:ids)",
+}
+NAMED = tuple(_LIBRARY_OF)
+
+
+def libraries_of(session: Session, kind: str, ids: list[str]) -> set[str]:
+    """The libraries these libraries, clips, scans, uploads, chunks, scenes
+    or faces are in (in the trash too); one that isn't there is in none."""
+    if not ids:
+        return set()
+    return set(session.execute(text(_LIBRARY_OF[kind]), {"ids": list(ids)}).scalars())
+
+
 _ROLES = """
     SELECT l.library_id,
            CASE WHEN :admin THEN 'admin'

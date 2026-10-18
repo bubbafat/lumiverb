@@ -19,6 +19,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS, require_scope
+from src.server.api.library_access import names
 from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
@@ -244,6 +245,7 @@ def _named_libraries(session: Session, body: ScansPauseRequest) -> list[str]:
 
 
 @router.post("/scans/pause", status_code=204, dependencies=[Depends(require_tenant_admin)])
+@names("body.library_ids")
 def pause_scans(
     body: ScansPauseRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -259,6 +261,7 @@ def pause_scans(
 
 
 @router.post("/scans/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
+@names("body.library_ids")
 def resume_scans(body: ScansPauseRequest, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
     """Scan these libraries again, or every library (admins). While Pause
     all is on, everything else stays paused, each on its own."""
@@ -301,6 +304,7 @@ def list_library_health(
 
 
 @router.post("/empty-trash", response_model=EmptyTrashResponse)
+@names("body.library_ids")
 def empty_trash(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
