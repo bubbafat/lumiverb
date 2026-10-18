@@ -98,6 +98,15 @@ describe("LibraryScansSection", () => {
       "This server checked in 1 minute ago: scanning now. Last full scan 3 minutes ago."));
   });
 
+  it("says what its scan has left to send", async () => {
+    checkedIn = { client: "this server", version: "0.1.69", state: "scanning", waiting_files: 212,
+                  waiting_bytes: 14 * 1024 ** 3, last_full_scan_at: null,
+                  checked_in_at: new Date(Date.now() - 60_000).toISOString() };
+    renderSection();
+    await waitFor(() => expect(screen.getByLabelText("Scans").textContent).toContain(
+      "This server checked in 1 minute ago: scanning now, 212 files (14 GB) to upload."));
+  });
+
   it("says when a reader hasn't checked in for a while", async () => {
     checkedIn = { client: "Robert's Mac Studio", version: "0.1.59", state: "idle", waiting_files: 0, waiting_bytes: 0,
                   last_full_scan_at: null, checked_in_at: new Date(Date.now() - 3 * 3600_000).toISOString() };

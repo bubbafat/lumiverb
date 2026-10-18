@@ -62,6 +62,14 @@ class Said:
     mark: int = 0
 
 
+def waiting(left: tuple[int, int] | None) -> dict[str, int]:
+    """What a reader's check-in says it has waiting to upload in a library,
+    from what its latest scan there has left to send (files, their size on
+    disk; None: no scan said)."""
+    files, size = left or (0, 0)
+    return {"waiting_files": max(0, files), "waiting_bytes": max(0, size)}
+
+
 def check_in(session: Session, *, reader: str, client: str, version: str, said: list[Said],
              now: datetime) -> tuple[list[dict], list[str]]:
     """Keep what the reader says of each library it reads (no commit), and

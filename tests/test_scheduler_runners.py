@@ -54,8 +54,12 @@ class FakeAccount:
         self.models = MagicMock()
         self.stopping = threading.Event()
         self.gone: list[str] = []
+        self.to_send: dict[str, tuple[int, int]] = {}
         # Not beside the API's Store: inputs come from the caches above (inputs.py).
         self.inputs = Inputs(self, None)
+
+    def to_upload(self, library_id: str, files: int, size: int) -> None:
+        self.to_send[library_id] = (files, size)
 
     def guard(self, job: str):
         return {"vision": self.vision, "transcripts": self.transcripts}[job]
@@ -978,12 +982,13 @@ def test_the_scan_pass_checks_in_first_and_leaves_out_paused_libraries(acct, mon
     acct.scan_state = MagicMock()
     passed = {}
 
-    def scan_pass(client, libraries, *a, scan_now, scanning, **kw):
+    def scan_pass(client, libraries, *a, scan_now, scanning, to_upload, **kw):
         calls.append("scan_pass")
         passed["ids"] = [lib["library_id"] for lib in libraries]
         passed["scan_now"] = scan_now
         scanning("lib_1")
         passed["scanning"] = acct.scanning
+        to_upload("lib_1", 3, 4096)  # what its scan has left to send
         scanning(None)
         return {}
 
@@ -992,3 +997,4 @@ def test_the_scan_pass_checks_in_first_and_leaves_out_paused_libraries(acct, mon
     assert calls == ["check_in", "scan_pass"]
     assert passed == {"ids": ["lib_1"], "scan_now": {"lib_1"}, "scanning": "lib_1"}
     assert acct.scanning is None  # what its check-ins say: scanning while it is
+    assert acct.to_send == {"lib_1": (3, 4096)}  # and what its scans have left to send

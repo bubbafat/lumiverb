@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readerLine, readByDevice } from "./readers";
+import { readerLine, readByDevice, toUpload } from "./readers";
 
 const NOW = Date.parse("2026-10-17T18:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -23,6 +23,12 @@ describe("Who reads a library", () => {
     expect(readerLine(lib, NOW)).toEqual({
       text: "Read by Studio Mac · scanning · 212 files (14 GB) to upload · checked in 1 minute ago", attention: false });
     expect(readerLine({ ...lib, checked_in: seen() }, NOW).text).toBe("Read by Studio Mac · checked in 1 minute ago");
+  });
+
+  it("says what a scan has left to send, or nothing when none", () => {
+    expect(toUpload({ waiting_files: 1, waiting_bytes: 40 * 1024 })).toBe("1 file (40 KB) to upload");
+    expect(toUpload({ waiting_files: 3, waiting_bytes: 0 })).toBe("3 files to upload");
+    expect(toUpload({ waiting_files: 0, waiting_bytes: 0 })).toBeNull();
   });
 
   it("asks for a look when it isn't heard from, hasn't checked in, or can't reach the folder", () => {

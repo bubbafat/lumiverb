@@ -5,11 +5,12 @@ device's key (Devices API) as the CLI's API key.
 It does for the libraries it reads what this server's scheduler does for
 its own, through the same code, and nothing else:
 
-1. **Checks in** every minute (POST /v1/readers/check-in): each library's
-   state, its last full scan and the mark it last fetched at; the answer is
-   the libraries it reads. When a library's mark moved, it fetches what
-   changed (reader-changes): what each thing it makes is made with now, and
-   what of that is paused.
+1. **Checks in** every minute (POST /v1/readers/check-in), a pass's long
+   scan or renders too: each library's state, what its latest scan there
+   has left to send (files and their size on disk), its last full scan and
+   the mark it last fetched at; the answer is the libraries it reads. When
+   a library's mark moved, it fetches what changed (reader-changes): what
+   each thing it makes is made with now, and what of that is paused.
 2. **Looks at each library's storage**, then **scans** as the scheduler
    does (scan_pass: reported changes, a full scan every full_scan_every
    seconds, Scan now, a failing file's back-off; scans paused, not
@@ -75,7 +76,10 @@ class Device:
         self.marks: dict[str, int] = {}  # each one's mark, as last fetched
         self.told: dict[str, dict] = {}  # each one's reader-changes
         self.reached: dict[str, Any] = {}  # each one's originals here at the latest look (None: not here)
+        self.to_send: dict[str, tuple[int, int]] = {}  # what each one's latest scan has left to send
         self.scanning: str | None = None
+        self.checked_in_at: float | None = None
+        self._checking_in = threading.Lock()  # one check-in at a time: a pass's, or one during a long pass
 
     # -- What a producer's inputs ask of it (src/server/scheduler/inputs.py) -------------
 
@@ -99,29 +103,51 @@ class Device:
     def check_in(self) -> list[str]:
         """Check in (decision 4): the libraries it reads now, and what
         changed in those whose mark moved. Returns those it no longer reads."""
-        from src.server.check_ins import PROTOCOL
+        from src.server.check_ins import PROTOCOL, waiting
         from src.server.version import running
 
-        said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),
-                 "last_full_scan_at": _iso(self.scan_state.last_full_scan.get(i))}
-                for i, lib in self.libraries.items()]
-        answer = self.client.post("/v1/readers/check-in", json={
-            "client": self.name, "version": running(), "protocol": PROTOCOL, "libraries": said}, retry=True).json()
-        self.check_in_every = float(answer.get("check_in_every_sec") or self.check_in_every)
-        self.libraries = {lib["library_id"]: lib for lib in answer["libraries"]}
-        for library_id in list(self.marks):
-            if library_id not in self.libraries:  # gone: another reader's now, or in the trash
-                self.marks.pop(library_id, None)
-                self.told.pop(library_id, None)
-                self.reached.pop(library_id, None)
-        for library_id, library in self.libraries.items():
-            if library_id not in self.told or self.marks.get(library_id) != library["mark"]:
-                changes = self.client.get(f"/v1/libraries/{library_id}/reader-changes",
-                                          params={"since": self.marks.get(library_id, 0)}).json()
-                self.told[library_id] = changes
-                self.producers.told(changes.get("made_with") or {})
-                self.marks[library_id] = changes["mark"]
-        return list(answer.get("gone") or [])
+        with self._checking_in:
+            self.checked_in_at = self._clock()  # tried: one that fails is tried again in a minute
+            said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),
+                     **waiting(self.to_send.get(i)),
+                     "last_full_scan_at": _iso(self.scan_state.last_full_scan.get(i))}
+                    for i, lib in self.libraries.items()]
+            answer = self.client.post("/v1/readers/check-in", json={
+                "client": self.name, "version": running(), "protocol": PROTOCOL, "libraries": said},
+                retry=True).json()
+            self.check_in_every = float(answer.get("check_in_every_sec") or self.check_in_every)
+            self.libraries = {lib["library_id"]: lib for lib in answer["libraries"]}
+            for library_id in {*self.marks, *self.to_send}:
+                if library_id not in self.libraries:  # gone: another reader's now, or in the trash
+                    self.marks.pop(library_id, None)
+                    self.told.pop(library_id, None)
+                    self.reached.pop(library_id, None)
+                    self.to_send.pop(library_id, None)
+            for library_id, library in self.libraries.items():
+                if library_id not in self.told or self.marks.get(library_id) != library["mark"]:
+                    changes = self.client.get(f"/v1/libraries/{library_id}/reader-changes",
+                                              params={"since": self.marks.get(library_id, 0)}).json()
+                    self.told[library_id] = changes
+                    self.producers.told(changes.get("made_with") or {})
+                    self.marks[library_id] = changes["mark"]
+            return list(answer.get("gone") or [])
+
+    def check_in_if_due(self) -> bool:
+        """Check in when it hasn't for check_in_every seconds: during a long
+        scan or render, so the server hears from it every minute as between
+        passes (a reader not heard from for 5 minutes is said to be). True
+        when it checked in."""
+        if self.checked_in_at is not None and self._clock() - self.checked_in_at < self.check_in_every:
+            return False
+        self.check_in()
+        return True
+
+    def to_upload(self, library_id: str, files: int, size: int) -> None:
+        """What the library's scan has found to add or read again and not
+        sent yet (the scan pass says, as it goes): its check-ins say it until
+        its next scan says otherwise, as a scan stopped part way leaves them
+        to send."""
+        self.to_send[library_id] = (files, size)
 
     def _state(self, library: dict) -> str:
         library_id = library["library_id"]
@@ -152,7 +178,7 @@ class Device:
                   [lib for lib in self.libraries.values() if not lib.get("scans_paused")], self.scan_state,
                   now=self._clock(), full_scan_every=self.full_scan_every, on_roots=self.reached.update,
                   scan_now={i for i, lib in self.libraries.items() if lib.get("scan_now")},
-                  scanning=scanning, cache_previews=False)
+                  scanning=scanning, cache_previews=False, to_upload=self.to_upload)
 
     def work(self) -> int:
         """What the server lists as needing the originals, in each library
@@ -219,16 +245,34 @@ class Device:
 
     def run(self, *, say: Callable[[str], None] = logger.info) -> None:
         """Pass after pass until stopped: checking in at least every
-        check_in_every seconds between them."""
-        while not self.stopping.is_set():
-            started = self._clock()
+        check_in_every seconds between them, and during a long one
+        (keep_checking_in)."""
+        beat = threading.Thread(target=self.keep_checking_in, name="device-check-in", daemon=True)
+        beat.start()
+        try:
+            while not self.stopping.is_set():
+                started = self._clock()
+                try:
+                    done = self.once()
+                    if done:
+                        say(f"Went through {done} clip(s)")
+                except Exception:  # noqa: BLE001 — the server away, a drive gone: the next pass tries again
+                    logger.exception("device: a pass failed; trying again")
+                self.stopping.wait(max(0.0, self.check_in_every - (self._clock() - started)))
+        finally:
+            self.stopping.set()
+            beat.join(timeout=5)
+
+    def keep_checking_in(self, every: float = 5.0) -> None:
+        """Until stopped, check in whenever check_in_every seconds passed
+        since the last check-in (check_in_if_due), looking every `every`
+        seconds: a pass checks in at its start, but a scan of a big library's
+        new files or a pass's renders can take hours."""
+        while not self.stopping.wait(every):
             try:
-                done = self.once()
-                if done:
-                    say(f"Went through {done} clip(s)")
-            except Exception:  # noqa: BLE001 — the server away, a drive gone: the next pass tries again
-                logger.exception("device: a pass failed; trying again")
-            self.stopping.wait(max(0.0, self.check_in_every - (self._clock() - started)))
+                self.check_in_if_due()
+            except Exception as exc:  # noqa: BLE001 — the server away: tried again at the next look
+                logger.warning("device: couldn't check in (%s); trying again", exc)
 
 
 def _iso(when: float | None) -> str | None:

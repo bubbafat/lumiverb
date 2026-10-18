@@ -104,10 +104,12 @@ class Account:
         self._followed_at: float | None = None
         self.ready = {job: False for job in self.guards}
         # What its check-ins heard (check_in): each library's mark, and those a scan of which was asked for;
-        # and the library being scanned now (the scan pass says), which they say.
+        # and the library being scanned now (the scan pass says), and what each library's latest scan has
+        # left to send (to_upload), which they say.
         self.marks: dict[str, int] = {}
         self.scan_now: set[str] = set()
         self.scanning: str | None = None
+        self.to_send: dict[str, tuple[int, int]] = {}
 
     def guard(self, job: str) -> Any:
         """The AI job's machines (src/processing/job_guard.py)."""
@@ -167,11 +169,12 @@ class Account:
         within the minute. The scan pass checks in first too."""
         from datetime import UTC
 
-        from src.server.check_ins import PROTOCOL
+        from src.server.check_ins import PROTOCOL, waiting
         from src.server.version import running
 
         with self._lock:
             said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),
+                     **waiting(self.to_send.get(i)),
                      "last_full_scan_at": (datetime.fromtimestamp(full, UTC).isoformat()
                                            if (full := self.scan_state.last_full_scan.get(i)) is not None else None)}
                     for i, lib in self.libraries.items()]
@@ -186,6 +189,14 @@ class Account:
             self.scan_now = {lib["library_id"] for lib in libraries if lib.get("scan_now")}
         if moved:
             self._refreshed_at = None
+
+    def to_upload(self, library_id: str, files: int, size: int) -> None:
+        """What the library's scan has found to add or read again and not
+        sent yet (the scan pass says, as it goes): its check-ins say it until
+        its next scan says otherwise, as a scan stopped part way leaves them
+        to send."""
+        with self._lock:
+            self.to_send[library_id] = (files, size)
 
     def _state(self, library: dict) -> str:
         """What a check-in says of the library (under the lock)."""
@@ -211,6 +222,7 @@ class Account:
 
         with self._lock:
             self.libraries = {lib["library_id"]: lib for lib in libraries if read_by_server(lib)}
+            self.to_send = {i: left for i, left in self.to_send.items() if i in self.libraries}
 
     def look_at_storage(self) -> bool:
         """The scheduler's own look at each library's storage, when due:

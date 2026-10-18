@@ -36,7 +36,7 @@ def scan(acct: Account, job: Job, *, now: float) -> None:
     # Saved like a producer's work: no NUL (a file's EXIF can have one).
     scan_pass(Saving(acct.client), scanned, acct.scan_state, now=now,
               full_scan_every=acct.machine.full_scan_every_min * 60, on_roots=acct.set_reachable,
-              scan_now=set(acct.scan_now), scanning=scanning)
+              scan_now=set(acct.scan_now), scanning=scanning, to_upload=acct.to_upload)
 
 
 def runners() -> dict[str, Callable[[Account, Job], Outcome]]:
