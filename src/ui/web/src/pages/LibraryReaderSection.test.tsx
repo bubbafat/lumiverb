@@ -74,6 +74,28 @@ describe("LibraryReaderSection", () => {
     expect((await screen.findByRole("link", { name: "Settings › Devices" })).getAttribute("href")).toBe("/settings/devices");
   });
 
+  it("is its admin's: one who isn't an account admin keeps this server or the device it has", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor", server_admin: false });
+    api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/Users/robert/Trips",
+                                       is_public: false, reader: "dev_1", reader_name: "Studio Mac", role: "admin" });
+    renderSection();
+    expect(await screen.findByText(/Studio Mac reads its files\./)).toBeTruthy();
+    const options = Array.from((screen.getByLabelText("Read by") as HTMLSelectElement).options).map((o) => o.text);
+    expect(options).toEqual(["This server", "Studio Mac"]);
+    expect(api.listDevices).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: "Settings › Devices" })).toBeNull();
+  });
+
+  it("is nobody's but its admin's: an editor of it sees nothing", async () => {
+    api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "admin", server_admin: true });
+    api.getLibrary.mockResolvedValue({ library_id: "lib_1", name: "Trips", root_path: "/t", is_public: false,
+                                       reader: "server", reader_name: null, role: "editor" });
+    const { container } = renderSection();
+    await waitFor(() => expect(api.getLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCurrentUser).toHaveBeenCalled());
+    expect(container.textContent).toBe("");
+  });
+
   it("is an admin's", async () => {
     api.getCurrentUser.mockResolvedValue({ email: "a@b.c", role: "editor", server_admin: false });
     const { container } = renderSection();

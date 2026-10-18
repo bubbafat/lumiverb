@@ -2,30 +2,34 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, chooseLibraryReader, getCurrentUser, getLibrary, listDevices } from "../api/client";
+import { roleOn, runsIt } from "../lib/libraryRoles";
 import { DEVICES_QUERY_KEY } from "./settings/DevicesSection";
 
 const SERVER = "server";
 
 /** Who reads the library's files (ADR-018 decision 1): this server, or a device (Settings › Devices), never both at
  * once. The reader scans the library and makes what needs its files; this server does everything else either way.
- * An admin's choice, with the folder as the new reader sees it. */
+ * Its admin's choice, with the folder as the new reader sees it. The account's devices are listed for an account
+ * admin (Settings › Devices); another of its admins chooses this server or the device it has. */
 export default function LibraryReaderSection({ libraryId }: { libraryId: string }) {
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const { data: library } = useQuery({ queryKey: ["library", libraryId], queryFn: () => getLibrary(libraryId) });
-  const isAdmin = user?.role === "admin";
-  const { data: devices } = useQuery({ queryKey: DEVICES_QUERY_KEY, queryFn: listDevices, enabled: isAdmin });
-  if (!library || !isAdmin) return null;
+  const accountAdmin = user?.role === "admin";
+  const { data: devices } = useQuery({ queryKey: DEVICES_QUERY_KEY, queryFn: listDevices, enabled: accountAdmin });
+  if (!library || !runsIt(roleOn(library, user?.role))) return null;
   // Built once the library is here, so the choice starts from it.
   return <ReaderForm key={`${library.reader}:${library.root_path}`} libraryId={libraryId} reader={library.reader ?? SERVER}
-                     readerName={library.reader_name ?? null} root={library.root_path} devices={devices ?? []} />;
+                     readerName={library.reader_name ?? null} root={library.root_path} devices={devices ?? []}
+                     accountAdmin={accountAdmin} />;
 }
 
-function ReaderForm({ libraryId, reader, readerName, root, devices }: {
+function ReaderForm({ libraryId, reader, readerName, root, devices, accountAdmin }: {
   libraryId: string;
   reader: string;
   readerName: string | null;
   root: string;
   devices: { device_id: string; name: string }[];
+  accountAdmin: boolean;
 }) {
   const queryClient = useQueryClient();
   const [choice, setChoice] = useState(reader);
@@ -76,7 +80,7 @@ function ReaderForm({ libraryId, reader, readerName, root, devices }: {
             )}
           </select>
         </label>
-        {devices.length === 0 && (
+        {accountAdmin && devices.length === 0 && (
           <p className="text-xs text-gray-500">
             To have another computer read it, register it in <Link to="/settings/devices" className="text-indigo-400 hover:text-indigo-300">Settings › Devices</Link>.
           </p>

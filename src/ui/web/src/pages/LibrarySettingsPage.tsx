@@ -11,6 +11,7 @@ import {
   ApiError,
 } from "../api/client";
 import type { PathFilterItem, ProjectUsage } from "../api/client";
+import LibraryPeopleSection from "./LibraryPeopleSection";
 import LibraryPreviewsSection from "./LibraryPreviewsSection";
 import LibraryReaderSection from "./LibraryReaderSection";
 import LibraryScansSection from "./LibraryScansSection";
@@ -468,6 +469,8 @@ export default function LibrarySettingsPage() {
         {libraryId && <LibraryScansSection libraryId={libraryId} />}
 
         {libraryId && <LibraryReaderSection libraryId={libraryId} />}
+
+        {libraryId && <LibraryPeopleSection libraryId={libraryId} />}
 
         {libraryId && <LibraryPreviewsSection libraryId={libraryId} />}
       </div>

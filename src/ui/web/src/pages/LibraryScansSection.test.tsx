@@ -5,6 +5,7 @@ import LibraryScansSection from "./LibraryScansSection";
 
 const fetchMock = vi.fn();
 let role = "admin";
+let libRole: string | undefined;
 let paused = false;
 let asked: string | null = null;
 let checkedIn: Record<string, unknown> | null = null;
@@ -30,7 +31,7 @@ beforeEach(() => {
     if (path === "/libraries" && method === "GET") {
       return json([{ library_id: "lib_v", name: "Video", root_path: "/v", last_scan_at: null, status: "active",
                      is_public: false, reader: "server", scans_paused: paused, scan_requested_at: asked,
-                     checked_in: checkedIn }]);
+                     checked_in: checkedIn, role: libRole }]);
     }
     if (path === "/libraries/lib_v/scan-now" && method === "POST") {
       asked = new Date().toISOString();
@@ -50,6 +51,7 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllGlobals();
   role = "admin";
+  libRole = undefined;
   paused = false;
   asked = null;
   checkedIn = null;
@@ -86,6 +88,20 @@ describe("LibraryScansSection", () => {
     renderSection();
     await waitFor(() => expect(screen.getByLabelText("Scans").textContent).toContain("Its scans are paused"));
     await screen.findByText(/This server reads its files/);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("goes by the role on the library: its admin pauses it, its viewer asks for nothing", async () => {
+    role = "editor";
+    libRole = "admin";
+    renderSection();
+    expect(await screen.findByRole("button", { name: "Pause scans" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Scan now" })).toBeTruthy();
+    cleanup();
+    libRole = "viewer";
+    renderSection();
+    await screen.findByText(/This server reads its files/);
+    await waitFor(() => expect(sent.filter((r) => r.url.includes("/libraries")).length).toBeGreaterThan(1));
     expect(screen.queryByRole("button")).toBeNull();
   });
 

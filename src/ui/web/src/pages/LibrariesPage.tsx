@@ -318,6 +318,7 @@ export default function LibrariesPage() {
                         {lib.status === "trashed" && (
                           <Badge variant="trashed">Trashed</Badge>
                         )}
+                        {lib.private && <Badge variant="idle">Private</Badge>}
                       </div>
                       <p className="mt-0.5 break-all font-mono text-sm text-gray-400">
                         {lib.root_path}
@@ -377,7 +378,7 @@ export default function LibrariesPage() {
                                 : "border border-gray-600 text-gray-300 hover:bg-gray-800/50 hover:border-gray-500"
                             }`}
                           >
-                            {lib.is_public ? "Public" : "Private"}
+                            {lib.is_public ? "Public" : "Not public"}
                           </button>
                           )}
                           {lib.is_public && (
