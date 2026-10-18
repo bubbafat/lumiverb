@@ -10,7 +10,7 @@ import {
 } from "../api/client";
 import type { ReaderCheckIn } from "../api/types";
 import { timeAgo } from "../lib/format";
-import { QUIET_MS } from "../lib/readers";
+import { QUIET_MS, toUpload } from "../lib/readers";
 
 /** Who reads a library's files and whether its scans run (ADR-018 phase 1), as Settings → Processing says it for
  * every library: its own Scans pause, or Pause all's. When its reader last checked in and how it was (phase 4).
@@ -84,16 +84,16 @@ export default function LibraryScansSection({ libraryId }: { libraryId: string }
   );
 }
 
-/** "This server checked in 1 minute ago: scanning now. Last full scan 3 minutes ago." */
+/** "This server checked in 1 minute ago: scanning now, 212 files (14 GB) to upload. Last full scan 3 minutes ago." */
 function CheckedIn({ seen }: { seen: ReaderCheckIn }) {
   const who = seen.client === "this server" ? "This server" : seen.client;
   const quiet = Date.now() - new Date(seen.checked_in_at).getTime() > QUIET_MS;
-  const how = {
+  const how = [{
     scanning: "scanning now",
     idle: "",
     paused: "",
     away: "it can't reach the library's storage",
-  }[seen.state];
+  }[seen.state], toUpload(seen)].filter(Boolean).join(", ");
   return (
     <p className={`text-sm ${quiet ? "text-amber-300" : "text-gray-400"}`}>
       {quiet

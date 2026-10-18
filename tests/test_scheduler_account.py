@@ -246,13 +246,21 @@ def test_it_checks_in_as_the_reader_of_its_libraries(acct, tmp_path: Path) -> No
     acct.scan_state.last_full_scan["lib_1"] = datetime(2026, 10, 9, 11, 0, tzinfo=UTC).timestamp()
     acct.check_in()
     said = {s["library_id"]: s for s in posted[1]["libraries"]}
-    assert said["lib_1"] == {"library_id": "lib_1", "state": "away", "mark": 3,
-                             "last_full_scan_at": "2026-10-09T11:00:00+00:00"}
+    assert said["lib_1"] == {"library_id": "lib_1", "state": "away", "mark": 3, "waiting_files": 0,
+                             "waiting_bytes": 0, "last_full_scan_at": "2026-10-09T11:00:00+00:00"}
     assert said["lib_2"]["state"] == "paused" and said["lib_2"]["last_full_scan_at"] is None
     acct.set_reachable({"lib_1": Folder(tmp_path, "lib_1")})
     acct.scanning = "lib_1"
+    acct.to_upload("lib_1", 212, 14 * 1024 ** 3)  # what its scan has left to send, as the scan pass says
     acct.check_in()
-    assert {s["library_id"]: s["state"] for s in posted[2]["libraries"]} == {"lib_1": "scanning", "lib_2": "paused"}
+    said = {s["library_id"]: s for s in posted[2]["libraries"]}
+    assert {i: s["state"] for i, s in said.items()} == {"lib_1": "scanning", "lib_2": "paused"}
+    assert (said["lib_1"]["waiting_files"], said["lib_1"]["waiting_bytes"]) == (212, 14 * 1024 ** 3)
+    assert said["lib_2"]["waiting_files"] == 0
+    # A library it no longer reads takes what it had left with it.
+    answers.append({**answers[0], "libraries": answers[0]["libraries"][1:]})
+    acct.check_in()
+    assert acct.to_send == {}
 
 
 def test_a_mark_that_moved_has_the_settings_read_again_at_the_next_refresh(acct) -> None:

@@ -19,6 +19,13 @@ function bytes(n: number): string {
   return `${n} B`;
 }
 
+/** What a reader's latest scan of the library has left to send, "212 files (14 GB) to upload", or null when none. */
+export function toUpload(seen: Pick<ReaderCheckIn, "waiting_files" | "waiting_bytes">): string | null {
+  if (seen.waiting_files <= 0) return null;
+  return `${seen.waiting_files.toLocaleString()} file${seen.waiting_files === 1 ? "" : "s"}`
+    + `${seen.waiting_bytes > 0 ? ` (${bytes(seen.waiting_bytes)})` : ""} to upload`;
+}
+
 /** Whether a device reads it (else this server). */
 export function readByDevice(lib: ReaderOf): boolean {
   return !!lib.reader && lib.reader !== "server";
@@ -40,10 +47,8 @@ export function readerLine(lib: ReaderOf, now: number = Date.now()): { text: str
   if (seen.state === "scanning") parts.push("scanning");
   if (seen.state === "paused") parts.push("scans paused");
   if (seen.state === "away") parts.push("it can't reach the library's folder");
-  if (seen.waiting_files > 0) {
-    parts.push(`${seen.waiting_files.toLocaleString()} file${seen.waiting_files === 1 ? "" : "s"}`
-      + `${seen.waiting_bytes > 0 ? ` (${bytes(seen.waiting_bytes)})` : ""} to upload`);
-  }
+  const sending = toUpload(seen);
+  if (sending) parts.push(sending);
   parts.push(`checked in ${timeAgo(seen.checked_in_at, now)}`);
   return { text: parts.join(" · "), attention: seen.state === "away" };
 }

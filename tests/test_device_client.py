@@ -8,13 +8,16 @@ and the video added with their previews), and makes what needs the
 originals, probe facts, capture and the video's analysis proxy, through the
 producers' own work; the server's list of what needs the originals is then
 empty, and a second pass does nothing. A clip it can't make is reported as
-failing, for its own libraries' clips and what it makes alone.
+failing, for its own libraries' clips and what it makes alone. Its
+check-ins say what its scan has left to send, and go on during a long pass.
 """
 
 from __future__ import annotations
 
+import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,3 +166,89 @@ def test_its_work_makes_probe_facts_and_capture_through_the_producers(env, devic
     made = next(c for c in _clips(env, lib).values() if c["asset_id"] == clip)
     assert {"probe", "capture"} <= set(made["made"]) and made["duration_sec"] > 0.5
     assert clip not in {c["asset_id"] for c in _reader_work(env, lib) if {"probe", "capture"} & set(c["work"])}
+
+
+def _checked_in(env, lib: Lib) -> dict:
+    client, headers, *_ = env
+    return next(x for x in client.get("/v1/libraries", headers=headers).json()
+                if x["library_id"] == lib.id)["checked_in"]
+
+
+def test_its_check_ins_say_what_its_scan_has_left_to_send_and_go_on_during_a_long_pass(env, device):
+    """A scan of new files hears how many it has left to send and their size
+    on disk, then each one sent; a check-in during the scan (a long pass
+    checks in every minute) says them, scanning; the one after says none."""
+    lib, reader, _ = device
+    files = [_image(lib, "a.png", 1), _image(lib, "b.png", 2), _video(lib, "c.mp4")]
+    size = sum(f.stat().st_size for f in files)
+    now = [1000.0]
+    reader._clock = lambda: now[0]
+    heard: list[tuple[int, int]] = []
+    during: list[dict] = []
+    told = reader.to_upload
+
+    def to_upload(library_id: str, n: int, left: int) -> None:
+        told(library_id, n, left)
+        heard.append((n, left))
+        if len(heard) == 1:  # the scan knows what it has to send, and a minute passes
+            assert not reader.check_in_if_due(), "it checked in at the pass's start"
+            now[0] += reader.check_in_every
+            assert reader.check_in_if_due()
+            during.append(_checked_in(env, lib))
+
+    reader.to_upload = to_upload
+    reader.once()
+
+    assert heard[0] == (3, size) and heard[-1] == (0, 0), heard
+    assert [n for n, _ in heard] == sorted((n for n, _ in heard), reverse=True)
+    assert (during[0]["state"], during[0]["waiting_files"], during[0]["waiting_bytes"]) == ("scanning", 3, size)
+    after = _checked_in(env, lib)
+    assert (after["state"], after["waiting_files"], after["waiting_bytes"]) == ("idle", 0, 0)
+    assert set(_clips(env, lib)) == {"a.png", "b.png", "c.mp4"}
+
+
+def test_what_a_scan_stopped_part_way_left_is_said_until_its_next_scan(env, device):
+    lib, reader, _ = device
+    _image(lib, "a.png", 1)  # an empty folder is a drive not there: never scanned
+    reader.once()
+    reader.to_upload(lib.id, 212, 14 * 1024 ** 3)  # a scan stopped there
+    reader.check_in()
+    seen = _checked_in(env, lib)
+    assert (seen["waiting_files"], seen["waiting_bytes"]) == (212, 14 * 1024 ** 3)
+    reader.once()  # its next scan: nothing new on disk
+    assert reader.to_send[lib.id] == (0, 0)
+    assert _checked_in(env, lib)["waiting_files"] == 0
+
+
+class _Server:
+    """The check-in's answer, counted; the first one fails (the server away)."""
+
+    def __init__(self) -> None:
+        self.posts = 0
+        self.checked = threading.Event()
+
+    def post(self, path: str, **kw: Any):
+        from unittest.mock import MagicMock
+
+        assert path == "/v1/readers/check-in"
+        self.posts += 1
+        if self.posts == 1:
+            raise ConnectionError("the server is away")
+        if self.posts >= 3:
+            self.checked.set()
+        return MagicMock(json=lambda: {"libraries": [], "gone": [], "check_in_every_sec": 0.05})
+
+
+def test_it_keeps_checking_in_during_a_pass_and_a_failed_one_is_tried_again():
+    server = _Server()
+    reader = Device(server, full_scan_every=0)
+    reader.check_in_every = 0.05
+    beat = threading.Thread(target=reader.keep_checking_in, kwargs={"every": 0.01}, daemon=True)
+    beat.start()
+    try:
+        assert server.checked.wait(10), f"checked in {server.posts} time(s)"
+    finally:
+        reader.stopping.set()
+        beat.join(5)
+    assert not beat.is_alive()
+    assert server.posts >= 3, "it went on after a check-in failed"

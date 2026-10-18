@@ -274,9 +274,13 @@ class ScanningAccount:
         self.scan_now: set[str] = set()
         self.scanning: str | None = None
         self.asked: set[str] = set()  # what the next check-in says was asked for (Scan now)
+        self.to_send: dict[str, tuple[int, int]] = {}
 
     def check_in(self) -> None:
         self.scan_now, self.asked = self.asked, set()
+
+    def to_upload(self, library_id: str, files: int, size: int) -> None:
+        self.to_send[library_id] = (files, size)
 
     def reading(self) -> list[dict]:
         return list(self.server.libraries)

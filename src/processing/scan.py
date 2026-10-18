@@ -42,7 +42,7 @@ import json
 import logging
 import threading
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -725,13 +725,27 @@ def _hash_and_decide(
 
 def _upload(
     client: ApiClient, library_id: str, originals: Originals, work: _Work, proxy_cache: ProxyCache | None, stats: ScanStats,
-    *, concurrency: int, console: Console,
+    *, concurrency: int, console: Console, to_upload: Callable[[int, int], None] | None = None,
 ) -> None:
     """Make and upload the previews of what's new, then what changed,
-    `concurrency` at a time and never more than concurrency * 2 waiting."""
+    `concurrency` at a time and never more than concurrency * 2 waiting.
+    to_upload hears how many files are left and their size on disk: all of
+    them first (none too), then after each one is done or has failed."""
     total = len(work.new) + len(work.changed)
+    left = [total, sum(f.get("file_size") or 0 for f in (*work.new, *work.changed))]
+    if to_upload is not None:
+        to_upload(*left)
     if not total:
         return
+    sizes: dict[Future, int] = {}
+
+    def done(futures: set[Future]) -> None:
+        for fut in futures:
+            left[0] -= 1
+            left[1] -= sizes.pop(fut)
+        if to_upload is not None:
+            to_upload(*left)
+
     progress = _progress(console, "Scanning", eta=True)
     with progress, ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="scan") as pool:
         tid = progress.add_task("Scanning", total=total)
@@ -739,14 +753,18 @@ def _upload(
         for kind, files in (("new", work.new), ("changed", work.changed)):
             for f in files:
                 handler = _scan_one_video if f["media_type"] == "video" else _scan_one
-                inflight.add(pool.submit(
+                fut = pool.submit(
                     handler, client=client, library_id=library_id, originals=originals, f=f,
                     proxy_cache=proxy_cache, stats=stats, progress=progress, task_id=tid, counter_field=kind,
-                ))
+                )
+                sizes[fut] = f.get("file_size") or 0
+                inflight.add(fut)
                 if len(inflight) >= concurrency * 2:
-                    _, inflight = _drain(inflight)
+                    finished, inflight = _drain(inflight)
+                    done(finished)
         while inflight:
-            _, inflight = _drain(inflight)
+            finished, inflight = _drain(inflight)
+            done(finished)
 
 
 # ---------------------------------------------------------------------------
@@ -888,6 +906,7 @@ def run_scan(
     cache_previews: bool = False,
     explain: bool = False,
     include_trash: bool = False,
+    to_upload: Callable[[int, int], None] | None = None,
     console: Console,
 ) -> ScanStats:
     """Walk the library, tell the server what's there, read what it asks
@@ -918,6 +937,10 @@ def run_scan(
     decision 7: the CLI's scan asks for nothing), and beside the API the
     scheduler reads the stored previews where they are
     (src/server/scheduler/inputs.py): unchanged files are only counted.
+    to_upload: hears the files it has found to add or read again and hasn't
+    sent yet, and their size on disk, once it knows them and as each is sent
+    (a reader's check-in says them: ADR-018 decision 4). Not heard when the
+    scan stops before it sends any, a dry run's too.
     """
     library_id = library["library_id"]
     originals = reach(library)
@@ -977,7 +1000,7 @@ def run_scan(
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
                     waiting=waiting or {}, cache_previews=cache_previews,
                     differences=_Differences() if explain else None, include_trash=include_trash,
-                    console=console)
+                    to_upload=to_upload, console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -988,7 +1011,7 @@ def _run(
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
     waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, differences: _Differences | None,
-    include_trash: bool, console: Console,
+    include_trash: bool, to_upload: Callable[[int, int], None] | None, console: Console,
 ) -> ScanStats:
     """run_scan once its scan is started: walk, list, plan, hash, finish,
     upload. With differences (--explain, a dry run), what it collects is
@@ -1183,7 +1206,8 @@ def _run(
     # After the finish: a file whose content was just archived as missing
     # comes back at its new path.
     proxy_cache = ProxyCache(client=client) if cache_previews else None
-    _upload(client, library_id, originals, work, proxy_cache, stats, concurrency=concurrency, console=console)
+    _upload(client, library_id, originals, work, proxy_cache, stats, concurrency=concurrency, console=console,
+            to_upload=to_upload)
     stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
     if proxy_cache is not None:
         _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)
