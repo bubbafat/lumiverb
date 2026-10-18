@@ -1,0 +1,54 @@
+# Advisories in what Lumiverb ships, checked before a release too: on every
+# pull request that changes what's installed, on main, and every week (for
+# advisories published since). The same audit scripts/release.sh runs
+# (scripts/audit_release.py: the Python packages the Homebrew formula
+# installs, read with pip-audit, and every npm package its build installs,
+# read with npm audit). It fails on any advisory: exit 3 lists them, any
+# other failure means the audit couldn't run.
+#
+# Actions are pinned to a commit (tests/test_workflows.py), never a tag that
+# could move.
+name: Dependency audit
+
+on:
+  pull_request:
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - src/ui/web/package.json
+      - src/ui/web/package-lock.json
+      - scripts/audit_release.py
+      - .github/workflows/dependency-audit.yml
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - src/ui/web/package.json
+      - src/ui/web/package-lock.json
+      - scripts/audit_release.py
+      - .github/workflows/dependency-audit.yml
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      # Which extras a Homebrew install gets is the formula's to say (the tap's).
+      - name: The Homebrew formula
+        run: curl -fsSL -o "$RUNNER_TEMP/lumiverb.rb" https://raw.githubusercontent.com/bubbafat/homebrew-lumiverb/HEAD/Formula/lumiverb.rb
+      - name: Audit
+        run: python3 scripts/audit_release.py HEAD "$RUNNER_TEMP/lumiverb.rb"
