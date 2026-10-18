@@ -4,6 +4,8 @@
 
 Accepted (2026-10-18, Robert). Phase 1 first: one plug-in, place names from GeoNames, until Robert has tried the UI.
 
+Decision 1 (built in only) is replaced by ADR-023 (2026-10-18): plug-ins are programs of their own, run outside Lumiverb, declaring their settings, inputs and outputs; GeoNames is rebuilt as one. The account's switch, the acknowledgment and the re-accept rule carry over.
+
 ## Progress
 
 | Phase | Description | Status |
