@@ -310,10 +310,13 @@ class UnifiedBrowseRepository:
         assets_by_id = {a.asset_id: a for a in self._session.exec(stmt).all()}
         return [assets_by_id[aid] for aid in asset_ids if aid in assets_by_id]
 
-    def facets(self, spec: "QuerySpec", candidate_ids: list[str] | None = None):
+    def facets(self, spec: "QuerySpec", candidate_ids: list[str] | None = None,
+               rating_user_id: str | None = None):
         """Facets' row (routers/facets.py): the filter values among the clips
         the spec finds (its text search's candidates, candidate_ids, already
-        found), each kind in one column."""
+        found), each kind in one column. A rating filter is the caller's
+        ratings (rating_user_id), as the query's: someone else's favorite
+        isn't theirs."""
         from src.server.models.query_filter import LOCATION_JOIN, SearchTerm, has_location_sql, location_params
 
         conditions: list[str] = []
@@ -344,9 +347,8 @@ class UnifiedBrowseRepository:
         joins.append(LOCATION_JOIN)  # the location counts read the effective location
         location_params(params)
         if needs_rating:
-            joins.append(
-                "LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id"
-            )
+            joins.append("LEFT JOIN asset_ratings r ON r.asset_id = a.asset_id AND r.user_id = :rating_user_id")
+            params["rating_user_id"] = rating_user_id
         if needs_metadata:
             from src.server.repository.corrections import TAGS_JOIN
 
