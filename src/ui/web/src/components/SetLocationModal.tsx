@@ -197,7 +197,9 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
                   className="w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-800"
                 >
                   {p.label}
-                  {p.kind && <span className="text-gray-500"> · {p.kind}</span>}
+                  {(p.kind || p.matched) && (
+                    <span className="text-gray-500"> · {[p.kind, p.matched].filter(Boolean).join(" · ")}</span>
+                  )}
                 </button>
               </li>
             ))}

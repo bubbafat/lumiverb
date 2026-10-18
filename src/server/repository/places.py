@@ -1,8 +1,9 @@
 """Places by name (ADR-021's Place names plug-in, ADR-017 phase 4): the
 GeoNames list of towns in the control database, the same for every
 account, with their regions and countries, and its landmarks
-(src/plugins/geonames/landmarks.py). Replaced whole, in one transaction, so
-a search never sees half a list.
+(src/plugins/geonames/landmarks.py), each found by its names in other
+languages too (geonames_names). Replaced whole, in one transaction, so a
+search never sees half a list.
 """
 
 from __future__ import annotations
@@ -78,6 +79,12 @@ _LANDMARKS = (
 )
 
 
+# An other name's tier in a search (search): exactly what's typed, English 0 (as the place's own name),
+# another language 1; starting so, English 2 (as its own), another 3.
+_TIER = ("CASE WHEN n.folded = :exact THEN CASE WHEN n.language = 'en' THEN 0 ELSE 1 END"
+         " ELSE CASE WHEN n.language = 'en' THEN 2 ELSE 3 END END")
+
+
 def _kind(row: Any) -> dict[str, Any]:
     """A row as a dict, with its kind's noun when it's a landmark (None for a town)."""
     out = dict(row)
@@ -112,10 +119,14 @@ class PlaceRepository:
         self._session = session
 
     def replace(self, places: Iterable[dict[str, Any]], admin1: Iterable[dict[str, Any]],
-                countries: Iterable[dict[str, Any]], landmarks: Iterable[dict[str, Any]] = ()) -> int:
+                countries: Iterable[dict[str, Any]], landmarks: Iterable[dict[str, Any]] = (),
+                names: Iterable[dict[str, Any]] = ()) -> int:
         """The whole list, instead of what was there, in one transaction (the
-        caller commits). Returns how many places: towns and landmarks."""
-        for table in ("geonames_places", "geonames_landmarks", "geonames_admin1", "geonames_countries"):
+        caller commits): names are the places' other names ({geonameid, name,
+        folded, language}; a name twice for a place kept once). Returns how many places:
+        towns and landmarks."""
+        for table in ("geonames_places", "geonames_landmarks", "geonames_admin1", "geonames_countries",
+                      "geonames_names"):
             self._session.execute(text(f"DELETE FROM {table}"))
         n = 0
         for table, cols, rows in (
@@ -125,19 +136,33 @@ class PlaceRepository:
                                  "country_code", "admin1_code", "population", "timezone"), places),
             ("geonames_landmarks", ("geonameid", "name", "ascii_name", "folded", "lat", "lon", "feature_code",
                                     "country_code", "admin1_code"), landmarks),
+            ("geonames_names", ("geonameid", "name", "folded", "language"), names),
         ):
+            # A place's name in several languages is kept once: in English if it's English's too (the app's,
+            # which search ranks first), as GeoNames lists it in whatever order.
+            conflict = (" ON CONFLICT (geonameid, folded) DO UPDATE SET name = EXCLUDED.name,"
+                        " language = EXCLUDED.language WHERE EXCLUDED.language = 'en'"
+                        if table == "geonames_names" else " ON CONFLICT DO NOTHING")
             sql = text(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(':' + c for c in cols)})"
-                       " ON CONFLICT DO NOTHING")
-            batch: list[dict[str, Any]] = []
+                       + conflict)
+            batch: dict[Any, dict[str, Any]] = {}
             for row in rows:
-                batch.append({**row, "folded": fold(row["name"])})
+                row = {**row, "folded": row.get("folded") or fold(row["name"])}
+                # Once a statement: by key for the names (English kept), each row for the rest.
+                key = (row["geonameid"], row["folded"]) if table == "geonames_names" else len(batch)
+                if key not in batch or row.get("language") == "en":
+                    batch[key] = row
                 if table in ("geonames_places", "geonames_landmarks"):
                     n += 1
                 if len(batch) >= _BATCH:
-                    self._session.execute(sql, batch)
-                    batch = []
+                    self._session.execute(sql, list(batch.values()))
+                    batch = {}
             if batch:
-                self._session.execute(sql, batch)
+                self._session.execute(sql, list(batch.values()))
+        # How known each landmark is: how many other names it has (they have no population to rank by).
+        self._session.execute(text(
+            "UPDATE geonames_landmarks l SET known = c.n FROM (SELECT geonameid, count(*) AS n FROM geonames_names"
+            " GROUP BY geonameid) c WHERE c.geonameid = l.geonameid"))
         return n
 
     def count(self) -> int:
@@ -146,31 +171,52 @@ class PlaceRepository:
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Towns and landmarks whose name starts with what's typed, accents or
         not (folded: "zurich" finds Zürich), or GeoNames' ASCII spelling does
-        ("Zuerich"); the exact name first, then the most populous, landmarks
-        after towns. "Name, where" narrows it to a region or country starting
-        so (or a country's code). Each with its kind (None: a town)."""
+        ("Zuerich"), or one of its names in other languages does ("Eiffel
+        Tower" finds Tour Eiffel; matched says which when its own didn't).
+        Ranked by how well a place's best name matched (tier: exactly its own
+        or English name, the app's language, as New York City is "New York";
+        exactly another; its own or English name starts so; another does), then
+        the most populous, landmarks after towns, the best known first (the
+        most other names). "Name, where" narrows it to a region or country
+        starting so (or a country's code). Each with its kind (None: a town)."""
         name, _, where = query.partition(",")
         name, where = fold(name.strip()), fold(where.strip())
         if not name:
             return []
-        matches = "({t}.folded LIKE :prefix ESCAPE '\\' OR lower({t}.ascii_name) LIKE :prefix ESCAPE '\\')"
+        own = "({t}.folded LIKE :prefix ESCAPE '\\' OR lower({t}.ascii_name) LIKE :prefix ESCAPE '\\')"
+        exact = "({t}.folded = :exact OR lower({t}.ascii_name) = :exact)"
+        cols = "{t}.geonameid, {t}.name, {t}.lat, {t}.lon, {pop}, {t}.country_code, {t}.admin1_code, {code}, {known},"
+        town = cols.format(t="p", pop="p.population", code="NULL::text AS feature_code", known="0 AS known")
+        mark = cols.format(t="l", pop="0", code="l.feature_code", known="l.known")
         rows = self._session.execute(text(
             "WITH found AS ("
-            "  SELECT p.geonameid, p.name, p.ascii_name, p.folded, p.lat, p.lon, p.population, p.country_code,"
-            "    p.admin1_code, NULL::text AS feature_code FROM geonames_places p WHERE " + matches.format(t="p") +
-            "  UNION ALL"
-            "  SELECT l.geonameid, l.name, l.ascii_name, l.folded, l.lat, l.lon, 0, l.country_code, l.admin1_code,"
-            "    l.feature_code FROM geonames_landmarks l WHERE " + matches.format(t="l") +
+            f"  SELECT {town} NULL::text AS matched, NULL::text AS language,"
+            f"    CASE WHEN {exact.format(t='p')} THEN 0 ELSE 2 END AS tier"
+            "     FROM geonames_places p WHERE " + own.format(t="p") +
+            f"  UNION ALL SELECT {mark} NULL, NULL, CASE WHEN {exact.format(t='l')} THEN 0 ELSE 2 END"
+            "     FROM geonames_landmarks l WHERE " + own.format(t="l") +
+            f"  UNION ALL SELECT {town} n.name, n.language, {_TIER}"
+            "     FROM geonames_names n JOIN geonames_places p ON p.geonameid = n.geonameid"
+            "     WHERE n.folded LIKE :prefix ESCAPE '\\'"
+            f"  UNION ALL SELECT {mark} n.name, n.language, {_TIER}"
+            "     FROM geonames_names n JOIN geonames_landmarks l ON l.geonameid = n.geonameid"
+            "     WHERE n.folded LIKE :prefix ESCAPE '\\'"
+            "), best AS ("
+            # Each place once, ranked by its best name's tier: shown by its own name when that matched, else
+            # its other name that matched best (by tier, then English, then the shortest).
+            "  SELECT DISTINCT ON (geonameid) *, min(tier) OVER (PARTITION BY geonameid) AS best_tier"
+            "  FROM found"
+            "  ORDER BY geonameid, matched IS NOT NULL, tier, language = 'en' DESC, length(matched), matched"
             ")"
-            " SELECT f.geonameid, f.name, f.lat, f.lon, f.population, f.country_code, f.feature_code,"
+            " SELECT f.geonameid, f.name, f.lat, f.lon, f.population, f.country_code, f.feature_code, f.matched,"
             "   a.name AS region, c.name AS country"
-            " FROM found f"
+            " FROM best f"
             " LEFT JOIN geonames_admin1 a ON a.code = f.country_code || '.' || f.admin1_code"
             " LEFT JOIN geonames_countries c ON c.iso = f.country_code"
             " WHERE (:where = '' OR c.folded LIKE :where_prefix ESCAPE '\\'"
             "        OR a.folded LIKE :where_prefix ESCAPE '\\' OR lower(f.country_code) = :where)"
-            " ORDER BY (f.folded = :exact OR lower(f.ascii_name) = :exact) DESC, f.population DESC,"
-            "   f.feature_code IS NOT NULL, f.geonameid LIMIT :limit"
+            " ORDER BY f.best_tier, f.population DESC, f.feature_code IS NOT NULL, f.known DESC, f.geonameid"
+            " LIMIT :limit"
         ), {"prefix": _like(name), "exact": name, "where": where, "where_prefix": _like(where),
             "limit": int(limit)}).mappings().all()
         return [_kind(r) for r in rows]

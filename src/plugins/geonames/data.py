@@ -1,9 +1,11 @@
 """The place list (ADR-021's Place names): GeoNames' towns of 1,000 people
 or more, their regions and countries, and its landmarks (landmarks.py: the
-kinds kept, each with a Wikipedia article, some kinds every one), fetched
-from download.geonames.org (or the mirror LUMIVERB_GEONAMES_URL names) and
-kept in the control database, the same for every account. Only what's used
-is kept: names, points, kind, region, country, population and time zone.
+kinds kept, each with a Wikipedia article, some kinds every one), with
+their names in other languages for search ("Eiffel Tower" for Tour Eiffel),
+fetched from download.geonames.org (or the mirror LUMIVERB_GEONAMES_URL
+names) and kept in the control database, the same for every account. Only
+what's used is kept: names, points, kind, region, country, population and
+time zone.
 
 The big files (every feature, about 400 MB zipped; the alternate names, for
 which have a Wikipedia article, about 200 MB) are downloaded to disk and
@@ -13,6 +15,7 @@ read as they're unzipped, never whole into memory, then deleted.
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import zipfile
 from collections.abc import Callable, Iterator
@@ -33,6 +36,9 @@ _MOST = {PLACES: (100 * _MB, 300 * _MB), FEATURES: (1500 * _MB, 6000 * _MB), NAM
          REGIONS: (20 * _MB, None), COUNTRIES: (20 * _MB, None)}
 
 Progress = Callable[..., None]
+# An alternate name's language: ISO 639's two or three letters (with a variant: "zh-Hant"), or none.
+# GeoNames' other codes (link, post, iata, icao, abbr, wkdt, ...) are no one's name for a place.
+_LANGUAGE = re.compile(r"^([a-z]{2,3}(-[A-Za-z0-9]{1,8})?)?$")
 
 
 def parse_places(text: io.TextIOBase | Iterator[str]) -> Iterator[dict[str, Any]]:
@@ -99,6 +105,27 @@ def parse_landmarks(text: io.TextIOBase | Iterator[str], linked: set[int]) -> It
             continue
 
 
+def parse_names(text: io.TextIOBase | Iterator[str], own: dict[int, tuple[str, ...]],
+                fold: Callable[[str], str]) -> Iterator[dict[str, Any]]:
+    """The other names of the places kept (own: each one's own names, folded):
+    alternateNamesV2.txt's rows (id, geonameid, language, name, preferred,
+    short, colloquial, historic, from, to) in a language or none, neither
+    colloquial nor historic, that don't fold to the place's own name. The same
+    name twice for a place is the caller's to keep once."""
+    for line in text:
+        p = line.rstrip("\n").split("\t")
+        if len(p) < 8 or not p[1].isdigit():
+            continue
+        geonameid = int(p[1])
+        names = own.get(geonameid)
+        name = p[3].strip()
+        if names is None or not name or p[6] == "1" or p[7] == "1" or not _LANGUAGE.match(p[2]):
+            continue
+        folded = fold(name)
+        if folded and folded not in names:
+            yield {"geonameid": geonameid, "name": name, "folded": folded, "language": p[2]}
+
+
 def _download(client: httpx.Client, url: str, dest: Path, most: int, progress: Progress, done: int,
               total: int | None) -> int:
     """The file at url into dest, refused past most bytes. Returns its size."""
@@ -138,7 +165,7 @@ def fetch(progress: Progress) -> int:
     landmarks."""
     from src.server.config import get_settings
     from src.server.database import get_control_session
-    from src.server.repository.places import PlaceRepository
+    from src.server.repository.places import PlaceRepository, fold
 
     base = get_settings().lumiverb_geonames_url.rstrip("/") + "/"
     if not base.startswith(("https://", "http://")):
@@ -173,9 +200,13 @@ def fetch(progress: Progress) -> int:
         if not landmarks:
             raise ValueError(f"{FEATURES} has no landmarks in it")
 
-        progress(done, total, f"Saving {len(places):,} towns and {len(landmarks):,} landmarks", force=True)
+        # Each place's own names, folded: its other names are read as they're saved.
+        own = {p["geonameid"]: (fold(p["name"]), p["ascii_name"].lower()) for p in (*places, *landmarks)}
+        progress(done, total, f"Saving {len(places):,} towns and {len(landmarks):,} landmarks, with their "
+                              "names in other languages", force=True)
         with get_control_session() as session:
-            n = PlaceRepository(session).replace(places, regions, countries, landmarks)
+            n = PlaceRepository(session).replace(places, regions, countries, landmarks,
+                                                 names=parse_names(_member(here, NAMES), own, fold))
             session.commit()
         return n
     finally:
