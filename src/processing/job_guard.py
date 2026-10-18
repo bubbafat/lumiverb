@@ -19,15 +19,17 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from src.processing.ai_pool import MachinePool
+from src.processing.ai_pool import BuiltInCheck, MachinePool
 
 logger = logging.getLogger(__name__)
 
 
 class JobGuard:
-    def __init__(self, client: Any, job: str, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, client: Any, job: str, clock: Callable[[], float] = time.monotonic, *,
+                 built_in_check: BuiltInCheck | None = None) -> None:
         self._clock = clock
-        self.pool = MachinePool(client, job, clock=clock)
+        # built_in_check: how the job's built-in machine is checked (the transcripts job's Whisper by default).
+        self.pool = MachinePool(client, job, clock=clock, built_in_check=built_in_check)
         self.job = job
         self.label = self.pool.label
         self.error: str | None = None

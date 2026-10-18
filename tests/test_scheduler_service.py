@@ -56,11 +56,11 @@ def _no_database(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeAccount:
-    def __init__(self, tenant_id: str = "t1", *, vision: int = 2, transcripts: int = 1,
+    def __init__(self, tenant_id: str = "t1", *, vision: int = 2, transcripts: int = 1, clip: int = 1,
                  libraries: tuple[str, ...] = ("lib_1",), reachable: tuple[str, ...] = ("lib_1",),
                  devices_read: tuple[str, ...] = ()) -> None:
         self.tenant_id = tenant_id
-        self.slots = {"vision": vision, "transcripts": transcripts}
+        self.slots = {"vision": vision, "transcripts": transcripts, "clip": clip}
         self.libraries = libraries  # those this server reads
         self.reachable = reachable
         # Active libraries a device reads: the database lists their work from what's stored too.

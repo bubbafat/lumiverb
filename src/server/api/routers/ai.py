@@ -45,10 +45,10 @@ from src.server.api.errors import (
 from src.server.models.control_plane import AiMachine, Tenant
 from src.server.repository.ai_machines import first_vision_machine, job_model, key_for, machines
 from src.server.repository.ai_machines import set_job_model as _store_model
-from src.shared.ai_jobs import BUILT_IN_JOBS, JOBS
+from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
 from src.shared.vision_endpoint import VisionEndpointError, check_url, list_models
-from src.shared.whisper_models import BUILT_IN_MODELS, canonical, canonical_models
+from src.shared.whisper_models import canonical, canonical_models
 
 router = APIRouter(prefix="/v1/ai", tags=["ai"])
 
@@ -88,6 +88,8 @@ class JobOut(BaseModel):
     choices: list[str] = []
     # The built-in machine (the worker's own computer) can do it.
     built_in: bool = False
+    # Why its model can't be changed (CLIP's: one model for a library's vectors); None when it can.
+    fixed: str | None = None
 
 
 class AiSettings(BaseModel):
@@ -199,10 +201,11 @@ def _job_model(tenant: Tenant | None, job: str) -> str:
     return job_model(tenant, job)
 
 
-def _offers(machine: AiMachine) -> list[str]:
-    """The models a machine offers, by their one names: the built-in one,
-    what faster-whisper knows; any other, what it listed when last checked."""
-    return BUILT_IN_MODELS if machine.built_in else list(machine.models)
+def _offers(machine: AiMachine, job: str) -> list[str]:
+    """The models a machine offers for a job, by their one names: the built-in
+    one, what the scheduler itself runs for it (faster-whisper's sizes, CLIP's);
+    any other, what it listed when last checked."""
+    return list(AI_JOBS[job].built_in_models) if machine.built_in else list(machine.models)
 
 
 def _built_in_error(message: str) -> ConflictError:
@@ -234,10 +237,10 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
     for job, label in JOBS.items():
         model = _job_model(tenant, job)
         doing = [m for m in machines if m.enabled and job in m.jobs]
-        offering = sum(1 for m in doing if m.online and model and model in _offers(m))
-        choices = sorted({x for m in doing for x in _offers(m)})
+        offering = sum(1 for m in doing if m.online and model and model in _offers(m, job))
+        choices = sorted({x for m in doing for x in _offers(m, job)})
         jobs.append(JobOut(job=job, label=label, model=model, machines=len(doing), offering=offering,
-                           choices=choices, built_in=job in BUILT_IN_JOBS))
+                           choices=choices, built_in=job in BUILT_IN_JOBS, fixed=AI_JOBS[job].fixed or None))
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
@@ -380,7 +383,8 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
         moved = (machine.api_url, machine.api_key) != was[:2]
         if machine.built_in:
             # Nothing to ask: the worker checks it. A new job's model must be one it knows.
-            _check_jobs(ctrl.get(Tenant, tenant_id), list(set(machine.jobs) - was[2]), BUILT_IN_MODELS)
+            for added in sorted(set(machine.jobs) - was[2]):
+                _check_jobs(ctrl.get(Tenant, tenant_id), [added], list(AI_JOBS[added].built_in_models))
         elif machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
             models = _models_or_502(machine.api_url, machine.api_key)
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
@@ -458,12 +462,15 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
     model = canonical(body.model.strip())
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
+        if AI_JOBS[job].fixed and model != _job_model(tenant, job):
+            raise ConflictError("model_fixed", f"{JOBS[job]}: {AI_JOBS[job].fixed}",
+                                {"job": job, "model": _job_model(tenant, job)})
         if model:
             asked = []
             for machine in _machines(ctrl, tenant_id):
                 if machine.enabled and job in machine.jobs:
                     if machine.built_in:
-                        models, error = BUILT_IN_MODELS, ""
+                        models, error = list(AI_JOBS[job].built_in_models), ""
                     else:
                         models, error = _ask(machine.api_url, machine.api_key)
                         _record(machine, models, error)

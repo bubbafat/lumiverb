@@ -101,7 +101,7 @@ def test_every_request_needs_its_key() -> None:
     for headers in ({}, {"Authorization": "Bearer nope"}, {"Authorization": KEY}):
         r = client.get("/v1/models", headers=headers)
         assert r.status_code == 401 and r.json()["error"]["code"] == "unauthorized", headers
-        assert client.post("/v1/lumiverb/clip", headers=headers, data={"model": "ViT-B-32/openai"},
+        assert client.post("/v1/lumiverb/clip", headers=headers, data={"model": "ViT-B-32"},
                            files=_files(_png())).status_code == 401
     assert client.get("/v1/models", headers=AUTH).status_code == 200
 
@@ -143,7 +143,7 @@ def test_the_scheduler_checks_it_as_it_checks_any_ai_machine() -> None:
 
 def test_a_vector_for_each_image_and_its_models_version() -> None:
     client, made = _worker()
-    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32/openai"},
+    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"},
                     files=_files(_png((255, 0, 0)), b"not an image", _gif(), _png((0, 0, 255))))
     assert r.status_code == 200, r.text
     body = r.json()
@@ -163,11 +163,11 @@ def test_a_model_it_doesnt_serve_is_said() -> None:
     r = client.post("/v1/lumiverb/faces", headers=AUTH, data={"settings": '{"model": "antelopev2"}'},
                     files=_files(_png()))
     assert r.status_code == 404 and r.json()["error"]["code"] == "model_not_found"
-    for data in ({"model": "ViT-B-32/openai"}, {"settings": '{"model": "buffalo_l"}'}):
+    for data in ({"model": "ViT-B-32"}, {"settings": '{"model": "buffalo_l"}'}):
         path = "/v1/lumiverb/clip" if "model" in data else "/v1/lumiverb/faces"
         r = client.post(path, headers=AUTH, data=data)  # no images
         assert r.status_code == 400, path
-    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32/openai"},
+    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"},
                     files=_files(*[_png()] * (MAX_IMAGES + 1)))
     assert r.status_code == 400
 
@@ -198,7 +198,7 @@ def test_the_machines_troubles_are_a_503_so_the_work_goes_elsewhere() -> None:
             raise RuntimeError("the model wouldn't load")
 
     client, _ = _worker(clip=Broken)
-    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32/openai"}, files=_files(_png()))
+    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"}, files=_files(_png()))
     assert r.status_code == 503 and r.json()["error"]["code"] == "unavailable"
     # A photo's own trouble stays that photo's.
     client, _ = _worker(faces=FakeFaces({"error": "cannot identify image"}))
@@ -219,7 +219,7 @@ def test_requests_take_turns_at_once_at_a_time() -> None:
     codes: list[int] = []
 
     def send() -> None:
-        codes.append(client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32/openai"},
+        codes.append(client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"},
                                  files=_files(_png())).status_code)
 
     threads = [threading.Thread(target=send) for _ in range(3)]
@@ -230,6 +230,33 @@ def test_requests_take_turns_at_once_at_a_time() -> None:
     for t in threads:
         t.join(10)
     assert codes == [200, 200, 200] and clips[0].most == 1
+
+
+def test_the_model_takes_turns_however_many_requests_are_taken() -> None:
+    """Two requests at once (at_once 2) still give the model one image at a time: two threads on
+    Apple's GPU at once hang it (found running a worker for real)."""
+    hold = threading.Event()
+    clips: list[FakeClip] = []
+
+    def held(model, pretrained):
+        clips.append(FakeClip(model, pretrained, hold=hold))
+        return clips[-1]
+
+    client, _ = _worker(clip=held, at_once=2)
+    codes: list[int] = []
+
+    def send() -> None:
+        codes.append(client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"},
+                                 files=_files(_png())).status_code)
+
+    threads = [threading.Thread(target=send) for _ in range(2)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)
+    hold.set()
+    for t in threads:
+        t.join(10)
+    assert codes == [200, 200] and clips[0].most == 1
 
 
 def test_its_key_is_made_once_kept_owner_only_and_shown(tmp_path, capsys) -> None:

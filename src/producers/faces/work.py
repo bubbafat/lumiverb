@@ -32,7 +32,8 @@ class Faces(Work):
         image = self.inputs.preview_bytes(clip)
         if image is None:
             raise Failed("no proxy")
-        found = self.acct.models.faces().detect(image, self.gates)  # in use: not let go of meanwhile
+        with self.acct.models.gpu_turn():  # CLIP's built-in machine takes turns with it
+            found = self.acct.models.faces().detect(image, self.gates)  # in use: not let go of meanwhile
         if "error" in found:
             if out_of_memory(found["error"]):  # the GPU's trouble, not the photo's
                 raise Waits(found["error"])

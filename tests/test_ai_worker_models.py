@@ -46,7 +46,7 @@ def worker():
 def test_its_clip_vector_is_the_schedulers(worker):
     client, models = worker
     image = _proxy("face_single")
-    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32/openai"},
+    r = client.post("/v1/lumiverb/clip", headers=AUTH, data={"model": "ViT-B-32"},
                     files=[("images", ("p.jpg", image, "image/jpeg"))])
     assert r.status_code == 200, r.text
     vector = r.json()["results"][0]["vector"]

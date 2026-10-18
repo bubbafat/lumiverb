@@ -1,5 +1,6 @@
-"""A photo's CLIP vector, from its proxy, on this machine's GPU (the model is
-the scheduler's, shared by every account: src/server/scheduler/models.py)."""
+"""A photo's CLIP vector, from its proxy, by the CLIP job's machines (ADR-022):
+the built-in one is the scheduler's model, shared by every account
+(src/server/scheduler/models.py); a Lumiverb AI worker's is another machine's."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import logging
 import time
 from collections.abc import Callable
 
-from src.producers.clip import PROXY_CACHE_EDGE
+from src.producers.clip import CLIP_MODEL_ID, PROXY_CACHE_EDGE
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
@@ -41,21 +42,36 @@ def embed(*, asset_id: str, rel_path: str, clip_provider, preview: Callable[[], 
 
 
 class Clip(Work):
+    """A photo's vector by whichever of the CLIP job's machines is free (ADR-022): the
+    built-in one (this machine's CLIP, as embed() above) or a Lumiverb AI worker."""
+
     artifact = "clip"
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)
         settings = acct.producers.settings(self.artifact)
-        self.provider = acct.models.clip(settings["model"], settings["pretrained"])
+        self.embedder = acct.guard("clip").embedder(acct.models)
+        # What its vectors must be (the model and weights in use): one made with another isn't saved.
+        self.expected = (CLIP_MODEL_ID, f"{settings['model']}-{settings['pretrained']}")
         # The images CLIP sees are the proxy cache's: its size is what was used.
         self.used = {**settings, "input_edge": PROXY_CACHE_EDGE}
 
     def make(self, clip: dict) -> dict:
-        item = embed(asset_id=clip["asset_id"], rel_path=clip["rel_path"], clip_provider=self.provider,
-                     preview=lambda: self.inputs.preview_bytes(clip))
-        if item is None:
+        from src.processing.workers.embeddings.base import EmbeddingError
+
+        image = self.inputs.preview_bytes(clip)
+        if image is None:
             raise Failed("no embedding (no proxy)")
-        return item
+        made = self.embedder.embed(image)
+        if (made.get("model_id"), made.get("model_version")) != self.expected:
+            # The machine's: it served another model under the name.
+            raise EmbeddingError(f"made with {made.get('model_id')} {made.get('model_version')}, not "
+                                 f"{self.expected[1]}", endpoint_fault=True)
+        return {"asset_id": clip["asset_id"], "model_id": made["model_id"], "model_version": made["model_version"],
+                "vector": made["vector"]}
+
+    def judge(self, clip: dict, error: Exception) -> Exception:
+        return self.machines_or_clip(error)  # the machines' guard decides whose it is
 
     def save(self, client, made: list[tuple[dict, dict]]) -> None:
         # The batch route, one clip: search is left to the upkeep sweep, not committed per clip.

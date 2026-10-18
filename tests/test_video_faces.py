@@ -200,6 +200,9 @@ class _Acct:
             def faces(self):
                 return outer._detector
 
+            def gpu_turn(self):
+                return contextlib.nullcontext()
+
         self.analysis_cache = _Cache()
         self.models = _Models()
         self.inputs = Inputs(self, None)  # not beside the API's Store: the cache above

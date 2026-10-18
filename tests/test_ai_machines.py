@@ -103,7 +103,7 @@ def _built_in(ai: dict) -> dict:
 @pytest.fixture
 def none(env):
     """Each test starts with no machines added and no vision model: only the
-    built-in Whisper, as every account starts, doing transcripts with small."""
+    built-in machine, as every account starts, doing CLIP and transcripts with small."""
     from sqlalchemy import update
 
     from src.server.database import get_control_session
@@ -115,7 +115,7 @@ def none(env):
     for m in _ai(env)["machines"]:
         if m["built_in"]:
             r = client.patch(f"/v1/ai/machines/{m['machine_id']}", headers=headers, json={
-                "name": "Built in", "jobs": ["transcripts"], "at_once": 1, "enabled": True})
+                "name": "Built in", "jobs": ["clip", "transcripts"], "at_once": 1, "enabled": True})
         else:
             r = client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
         assert r.status_code == 200, r.text
@@ -183,7 +183,7 @@ def test_machines_each_with_their_jobs_and_how_many_at_once(env, none):
     assert studio["status"]["online"] is True and studio["status"]["models"] == [LLAVA, QWEN]
     assert _job(ai, "vision") == {"job": "vision", "label": "Descriptions & text", "model": "",
                                   "machines": 2, "offering": 0, "choices": [LLAVA, QWEN],
-                                  "built_in": False}
+                                  "built_in": False, "fixed": None}
     assert not gaming_pc["built_in"] and not studio["built_in"]
 
 
@@ -246,7 +246,7 @@ def test_a_jobs_model_must_be_offered_by_a_machine_doing_it(env, none):
     ai = r.json()
     assert _job(ai, "vision") == {"job": "vision", "label": "Descriptions & text", "model": QWEN,
                                   "machines": 2, "offering": 1, "choices": [LLAVA, QWEN],
-                                  "built_in": False}
+                                  "built_in": False, "fixed": None}
     # What saving found is each machine's status until the worker checks.
     assert _machine(ai, "Gaming PC")["status"]["online"] is True
     studio = _machine(ai, "Studio")["status"]
@@ -457,7 +457,7 @@ def test_leaving_a_job_without_a_machine_never_asks_and_processing_says_it_waits
     with fake:
         _model(env, "vision", "")
     assert _waiting(env, "vision") == ("Descriptions & text are off: no model is chosen in Settings → AI.")
-    assert _waiting(env, "clip") is None  # not an AI machines' job
+    assert _waiting(env, "clip") is None  # the built-in machine does CLIP
 
 
 @pytest.mark.slow
@@ -602,11 +602,15 @@ def test_every_account_starts_with_the_built_in_whisper_doing_transcripts(env, n
     built_in = _built_in(ai)
     assert ai["machines"][0] == built_in
     assert {k: built_in[k] for k in ("name", "api_url", "has_key", "jobs", "at_once", "enabled", "status")} == {
-        "name": "Built in", "api_url": "", "has_key": False, "jobs": ["transcripts"], "at_once": 1,
+        "name": "Built in", "api_url": "", "has_key": False, "jobs": ["clip", "transcripts"], "at_once": 1,
         "enabled": True, "status": None}
     assert _job(ai, "transcripts") == {"job": "transcripts", "label": "Transcripts", "model": "small",
                                        "machines": 1, "offering": 0, "choices": BUILT_IN_MODELS,
-                                       "built_in": True}
+                                       "built_in": True, "fixed": None}
+    # CLIP too (ADR-022): the scheduler's own, its one model fixed.
+    assert _job(ai, "clip") == {"job": "clip", "label": "Visual search (CLIP)", "model": "ViT-B-32",
+                                "machines": 1, "offering": 0, "choices": ["ViT-B-32"], "built_in": True,
+                                "fixed": "Another model makes every photo's vectors again; not offered yet."}
 
 
 @pytest.mark.slow
@@ -624,7 +628,7 @@ def test_a_new_account_gets_its_built_in_whisper(env, none):
     with get_control_session() as ctrl:
         [m] = machines(ctrl, tenant_id)
         assert (m.built_in, m.name, m.api_url, m.api_key, m.jobs, m.at_once, m.enabled) == (
-            True, "Built in", "", "", ["transcripts"], 1, True)
+            True, "Built in", "", "", ["clip", "transcripts"], 1, True)
         # Transcripts start at the model the job declares (kept by the job's name once chosen).
         assert job_model(ctrl.get(Tenant, tenant_id), "transcripts") == "small"
 
@@ -640,7 +644,7 @@ def test_the_built_in_whisper_stays_and_only_transcribes(env, none):
         r = client.patch(f"/v1/ai/machines/{built_in}", json=body, headers=headers)
         assert r.status_code == 409, (body, r.text)
         assert r.json()["error"]["code"] == "built_in_machine"
-    assert _built_in(_ai(env))["jobs"] == ["transcripts"]
+    assert _built_in(_ai(env))["jobs"] == ["clip", "transcripts"]
     # Adding one takes a URL: there's only the one built in.
     assert _add(env, name="Another", api_url="", jobs=["transcripts"]).status_code == 422
 
@@ -799,3 +803,25 @@ def test_no_machine_can_take_the_built_ins_name(env, none):
     with fake:
         r = _add(env, name="Built in", api_url=SPEACHES, jobs=["transcripts"])
     assert r.status_code == 409 and r.json()["error"]["code"] == "name_taken"
+
+
+@pytest.mark.slow
+def test_clips_model_is_fixed_and_a_worker_offering_it_shares_it(env, none):
+    """ADR-022: CLIP's model can't be changed (one model for a library's vectors), and a Lumiverb
+    AI worker listing it can be given the job beside the built-in machine."""
+    client, headers, *_ = env
+    r = _model(env, "clip", "ViT-L-14")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "model_fixed", r.text
+    assert r.json()["error"]["details"] == {"job": "clip", "model": "ViT-B-32"}
+    assert _model(env, "clip", "ViT-B-32").status_code == 200  # the same: nothing to ask
+    worker = "http://10.10.10.3:6366/v1"  # lumiverb-server ai-worker
+    fake, _ = _machines({worker: ("ViT-B-32", "buffalo_l"), GAMING_PC: (QWEN,)})
+    with fake:
+        r = _add(env, name="GPU box", api_url=worker, jobs=["clip"], at_once=4)
+        assert r.status_code == 201, r.text
+        r = _add(env, name="Gaming PC", jobs=["clip"])  # Ollama serves no CLIP
+        assert r.status_code == 409 and r.json()["error"]["details"]["job"] == "clip", r.text
+    clip = _job(_ai(env), "clip")
+    assert clip["machines"] == 2 and "ViT-B-32" in clip["choices"]
+    machines = client.get("/v1/ai/jobs/clip", headers=headers).json()["machines"]
+    assert sorted((m["built_in"], m["api_url"]) for m in machines) == [(False, worker), (True, "")]

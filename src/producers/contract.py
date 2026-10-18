@@ -149,6 +149,15 @@ class AiJob:
     # 2, so each clip's audio is got ready while the machines hear others
     # (the machines hold their own limits).
     per_request: int = 1
+    # The models the built-in machine offers for it (the scheduler's own: Whisper's sizes, CLIP's).
+    built_in_models: tuple[str, ...] = ()
+    # Why its model can't be changed ("" when it can): a model whose vectors
+    # are compared across a library (CLIP's) is one model for all of it.
+    fixed: str = ""
+    # Its built-in machine gives the server's GPU to video work while video is
+    # decoded (Whisper's, beside it). CLIP and faces take their turn beside the
+    # decodes instead, as they always have.
+    built_in_yields: bool = True
 
 
 # GPU sharing: while a pool's jobs run, AI machines sharing this machine's

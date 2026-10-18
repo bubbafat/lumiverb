@@ -43,6 +43,14 @@ class Models:
         self._clip: tuple[tuple[str, str], Any] | None = None
         self._faces: Any = None
         self._used: dict[str, float] = {}
+        # CLIP and face detection take turns on this machine's GPU (gpu_turn).
+        self._turn = threading.Lock()
+
+    def gpu_turn(self) -> threading.Lock:
+        """Held while this machine's CLIP or face detection works on an image:
+        they take turns on its GPU, as they always have (CLIP is an AI job now,
+        ADR-022, and its built-in machine is dispatched apart from faces)."""
+        return self._turn
 
     def _face_detector(self) -> Any:
         from src.producers.faces.detect import FaceDetector
