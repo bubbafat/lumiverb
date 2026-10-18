@@ -43,6 +43,8 @@ export default function LibrariesPage() {
   const [addPath, setAddPath] = useState("");
   // Who reads it: "server", or a registered device (Settings › Devices).
   const [addReader, setAddReader] = useState("server");
+  // Its clips without a location placed from those taken around the same time (ADR-017).
+  const [addInfer, setAddInfer] = useState(false);
   const [addError, setAddError] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // A library's share link just copied, or shown to copy by hand when this browser won't copy from here.
@@ -83,12 +85,13 @@ export default function LibrariesPage() {
   );
 
   const createMutation = useMutation({
-    mutationFn: () => createLibrary(addName.trim(), addPath.trim(), addReader),
+    mutationFn: () => createLibrary(addName.trim(), addPath.trim(), addReader, addInfer),
     onSuccess: () => {
       setAddOpen(false);
       setAddName("");
       setAddPath("");
       setAddReader("server");
+      setAddInfer(false);
       setAddError("");
       queryClient.invalidateQueries({ queryKey: ["libraries"] });
     },
@@ -577,6 +580,15 @@ export default function LibrariesPage() {
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+          <label className="flex items-start gap-2 text-sm text-gray-300">
+            <input type="checkbox" className="mt-0.5" checked={addInfer} onChange={(e) => setAddInfer(e.target.checked)} />
+            <span>
+              Infer location
+              <span className="block text-xs text-gray-500">
+                Photos and videos without a location are placed from the ones taken around the same time with one.
+              </span>
+            </span>
+          </label>
           <div className="flex justify-end gap-2">
             <button
               type="button"

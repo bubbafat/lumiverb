@@ -42,8 +42,6 @@ def test_every_producer_declares_what_the_rest_needs():
         # (a level is compared in lineage apart from the hash: below it is counted, redone when asked).
         if any(not s.remakes and s.kind != "level" for s in p.settings):
             assert callable(load(p.regroup)), p.artifact
-        if p.on_settings:
-            assert callable(load(p.on_settings)), p.artifact
     flags = [p.flag for p in producers.values() if p.flag]
     assert len(set(flags)) == len(flags)
 

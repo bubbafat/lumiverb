@@ -374,6 +374,32 @@ def library_private(
     console.print(f"[green]{escape(name)} is {'private' if private else 'open to the account'}.[/green]")
 
 
+@library_app.command("infer-location")
+def library_infer_location(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
+    on: Annotated[bool, typer.Option(
+        "--on/--off", help="On: its clips without a location are placed from those taken around the same time.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Remove its guesses without asking (turning it off).")] = False,
+) -> None:
+    """Guess where a library's clips were (Infer location), or stop and remove its guesses.
+    Needs the library's admin, or an account admin."""
+    from src.client.cli.decisions import send_until_decided
+
+    def remove(details: dict) -> dict:
+        n = int(details.get("clips", 0))
+        console.print(f"[yellow]{n:,} clip{'' if n == 1 else 's'} in {escape(name)} {'has' if n == 1 else 'have'} a "
+                      "location guess; turning it off removes them. A location a person set stays.[/yellow]")
+        if not yes and not typer.confirm("Go ahead?", default=False):
+            raise typer.Exit(0)
+        return {"remove_guesses": True}
+
+    client = LumiverbClient()
+    library = _library_named(client, name, trashed=False)
+    send_until_decided(client, "PATCH", f"/v1/libraries/{library['library_id']}", {"infer_location": on},
+                       answers={"guesses_exist": remove}, failed="Couldn't change it")
+    console.print(f"[green]{escape(name)}: {'guessing locations' if on else 'no location guesses'}.[/green]")
+
+
 def _library_named(client: LumiverbClient, name: str, *, trashed: bool) -> dict:
     """The library with this name, in the trash or out of it; exits 1 if there's none."""
     libraries = client.get("/v1/libraries", params={"include_trashed": True}).json()

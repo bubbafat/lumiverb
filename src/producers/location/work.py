@@ -19,7 +19,7 @@ from src.producers.location.infer import (
     locate,
     parse_time,
 )
-from src.producers.runner import Waits, Work
+from src.producers.runner import Work
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,6 @@ class Locate(Work):
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)
-        self.on = bool(acct.producers.settings(self.artifact)["infer_location"])
         self.minutes = int(acct.producers.uses(self.artifact)["inference_minutes"])
         self._clocks: dict[str, Clock] | None = None
 
@@ -65,9 +64,6 @@ class Locate(Work):
         return self._clocks.get(asset_id, NO_CLOCK)
 
     def make(self, clip: dict) -> dict[str, Any]:
-        if not self.on:
-            # The server's settings say on (it handed the clip out); these were read before.
-            raise Waits("Infer location is off in the settings read")
         clock = self.clock(clip["asset_id"])
         ctx = self.acct.client.get(f"/v1/assets/locations/context/{clip['asset_id']}", params={
             "minutes": self.minutes, "clock_offset_min": clock.offset_min}).json()
@@ -86,7 +82,8 @@ class Locate(Work):
         old guess or takes this one (the recheck rules, save_guess), and
         refuses one made in a window that's no longer the setting, or from a
         fix that's gone, moved or been retimed since ("stale": the settings
-        are read again, and the clip is tried again later)."""
+        are read again, and the clip is tried again later), and one for a
+        library where Infer location was turned off meanwhile ("off")."""
         stale = False
         for clip, result in made:
             r = client.put(f"/v1/assets/locations/guess/{clip['asset_id']}",

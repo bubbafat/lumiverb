@@ -95,6 +95,8 @@ def test_a_librarys_admin_runs_their_library_and_nothing_else(env, team):
     _ok(_role(env, team.a, team.member_id, "editor", team.lead))  # its people
     _ok(env.client.patch(f"/v1/libraries/{team.a}", json={"private": True}, headers=team.lead))
     assert _ok(env.client.get(f"/v1/libraries/{team.a}", headers=team.lead))["private"] is True
+    _ok(env.client.patch(f"/v1/libraries/{team.a}", json={"infer_location": True}, headers=team.lead))
+    assert _ok(env.client.get(f"/v1/libraries/{team.a}", headers=team.lead))["infer_location"] is True
     _ok(env.client.post("/v1/libraries/scans/pause", json={"library_ids": [team.a]}, headers=team.lead), 204)
     _ok(env.client.post("/v1/libraries/scans/resume", json={"library_ids": [team.a]}, headers=team.lead), 204)
     device = _ok(env.client.post("/v1/devices", json={"name": f"lead's {team.a}"}, headers=env.admin))
@@ -105,10 +107,14 @@ def test_a_librarys_admin_runs_their_library_and_nothing_else(env, team):
     for r in (env.client.get(f"/v1/libraries/{team.b}/people", headers=team.lead),
               _role(env, team.b, team.member_id, "none", team.lead),
               env.client.patch(f"/v1/libraries/{team.b}", json={"private": True}, headers=team.lead),
+              env.client.patch(f"/v1/libraries/{team.b}", json={"infer_location": True}, headers=team.lead),
               env.client.put(f"/v1/libraries/{team.b}/reader", json={"reader": "server"}, headers=team.lead),
               env.client.post("/v1/libraries/scans/pause", json={"library_ids": [team.a, team.b]}, headers=team.lead),
               env.client.post("/v1/libraries/scans/pause", json={"all": True}, headers=team.lead)):
         _error(r, 403, "library_admin_required")
+    # Not its editors' either.
+    assert env.client.patch(f"/v1/libraries/{team.a}", json={"infer_location": False},
+                            headers=team.member).status_code == 403
     # What's the account's stays an account admin's: making it public, its previews' place, new libraries.
     assert env.client.patch(f"/v1/libraries/{team.a}", json={"is_public": True},
                             headers=team.lead).status_code == 403
@@ -204,3 +210,28 @@ def test_the_cli_sets_roles_privacy_and_who_sees_every_library(env, team):
 
     r = _cli(env, team.member, "library", "role", "--name", name, "--email", team.lead_email, "--role", "none")
     assert r.exit_code == 1, "not theirs to set"
+
+
+def test_the_cli_turns_infer_location_on_and_asks_before_removing_guesses(env, team):
+    from tests.machine_lineage import made
+
+    name = _name_of(env, team.b)
+    r = _cli(env, env.admin, "library", "infer-location", "--name", name, "--on")
+    assert r.exit_code == 0 and "guessing locations" in r.output, r.output
+    assert _ok(env.client.get(f"/v1/libraries/{team.b}", headers=env.admin))["infer_location"] is True
+    clip = _scan(env, team.b, [File("g.jpg", f"g {team.b}")], headers=env.admin).uploaded["g.jpg"]
+    guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "minutes": 360,
+             "lineage": made("location")}
+    assert _ok(env.client.put(f"/v1/assets/locations/guess/{clip}", json=guess, headers=env.admin)) == {
+        "result": "stored"}
+
+    r = _cli(env, team.member, "library", "infer-location", "--name", name, "--off")
+    assert r.exit_code == 1, "not theirs to set"
+    with patch("typer.confirm", return_value=False):
+        r = _cli(env, env.admin, "library", "infer-location", "--name", name, "--off")
+    assert r.exit_code == 0 and "1 clip in" in r.output, r.output
+    assert _ok(env.client.get(f"/v1/assets/{clip}", headers=env.admin))["location"]["source"] == "time"
+    r = _cli(env, env.admin, "library", "infer-location", "--name", name, "--off", "--yes")
+    assert r.exit_code == 0 and "no location guesses" in r.output, r.output
+    assert _ok(env.client.get(f"/v1/assets/{clip}", headers=env.admin))["location"] is None
+    assert _ok(env.client.get(f"/v1/libraries/{team.b}", headers=env.admin))["infer_location"] is False

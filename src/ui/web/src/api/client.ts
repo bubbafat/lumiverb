@@ -214,10 +214,16 @@ export async function createLibrary(
   name: string,
   rootPath: string,
   reader?: string,
+  inferLocation = false,
 ): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>("/libraries", {
     method: "POST",
-    body: { name, root_path: rootPath, ...(reader && reader !== "server" ? { reader } : {}) },
+    body: {
+      name,
+      root_path: rootPath,
+      ...(reader && reader !== "server" ? { reader } : {}),
+      ...(inferLocation ? { infer_location: true } : {}),
+    },
   });
 }
 
@@ -311,6 +317,19 @@ export async function setLibraryRole(libraryId: string, userId: string, role: Li
 /** Private: only the account's admins and the people given a role on it see it (its admin's). */
 export async function setLibraryPrivate(libraryId: string, isPrivate: boolean): Promise<LibraryResponse> {
   return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, { method: "PATCH", body: { private: isPrivate } });
+}
+
+/** Whether a library's clips' locations are guessed (ADR-017; its admin's). Turning it off removes its guesses:
+ * 409 guesses_exist (details.clips) until removeGuesses says so. */
+export async function setLibraryInferLocation(
+  libraryId: string,
+  on: boolean,
+  removeGuesses = false,
+): Promise<LibraryResponse> {
+  return apiFetch<LibraryResponse>(`/libraries/${libraryId}`, {
+    method: "PATCH",
+    body: { infer_location: on, ...(removeGuesses ? { remove_guesses: true } : {}) },
+  });
 }
 
 export async function updateLibraryVisibility(
@@ -1090,9 +1109,9 @@ export async function redoBelow(
 }
 
 /** Change a producer's settings (admins): null puts one back to its default.
- * 409 redo_on_change (details.clips; details.question "remake", or "remove" when
- * something would be dropped) until redo says: true, what the old settings made is
- * remade too, after everything else; false, new files only (ADR-018 decision 6).
+ * 409 redo_on_change (details.clips; details.question "remake") until redo says: true,
+ * what the old settings made is remade too, after everything else; false, new files only
+ * (ADR-018 decision 6).
  * 422 bad_setting, unknown_setting or setting_fixed say what's wrong. */
 export async function setProducerSettings(
   artifact: string,

@@ -277,6 +277,9 @@ function ProducerRow({
         </span>
       </div>
       <CountsBar producer={producer} />
+      {producer.artifact === "location" && (
+        <p className="text-xs text-gray-500">Only in the libraries where Infer location is on, in each library&apos;s settings.</p>
+      )}
       {!producer.scheduled && scansPaused && <p className="text-sm text-amber-300">Paused with scans</p>}
       {off ? (
         <p className="text-sm text-gray-400">Off: nothing new is found. What's found stays.</p>
@@ -883,8 +886,8 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
   const [values, setValues] = useState<Record<string, string>>(() => fromServer(fields));
   const [problem, setProblem] = useState<string | null>(null);
   // 409 redo_on_change: the API asks what becomes of what the old settings made (ADR-018 decision 6): new
-  // files only, or remade too ("remake"); or whether to drop something ("remove").
-  const [redoing, setRedoing] = useState<{ message: string; question: string } | null>(null);
+  // files only, or remade too.
+  const [redoing, setRedoing] = useState<{ message: string } | null>(null);
   const changed = fields.filter((f) => !f.fixed && !same(f, values[f.key]));
   const remade = changed.some((f) => f.remakes !== false);
   const done = (producer.counts?.current ?? 0) + (producer.counts?.stale ?? 0);
@@ -910,7 +913,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
     },
     onError: (e) => {
       if (e instanceof ApiError && e.code === "redo_on_change") {
-        setRedoing({ message: e.message, question: String(e.details?.question ?? "remake") });
+        setRedoing({ message: e.message });
       } else setProblem(message(e));
     },
   });
@@ -989,20 +992,12 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
         <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
           <p className="text-amber-100">{redoing.message}</p>
           <div className="flex flex-wrap gap-4">
-            {redoing.question === "remake" ? (
-              <>
-                <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(false)}>
-                  New files only
-                </button>
-                <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
-                  Also remake them
-                </button>
-              </>
-            ) : (
-              <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
-                Save
-              </button>
-            )}
+            <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(false)}>
+              New files only
+            </button>
+            <button type="button" className={linkClass} disabled={save.isPending} onClick={() => save.mutate(true)}>
+              Also remake them
+            </button>
             <button type="button" className={linkClass} onClick={() => setRedoing(null)}>
               Cancel
             </button>

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 to 3 built.
+Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 to 3 built. Infer location became each library's on 2026-10-18 (Robert).
 
 ## Progress
 
@@ -44,7 +44,7 @@ A guess never overwrites the other two kinds. Location of any kind never leaves 
 | 2 | Do guesses count in "Has location" and "near"? | Not by default. A separate "Includes guesses" toggle adds them. |
 | 3 | Can text or landmark results apply themselves? | No. They are suggestions until a person picks "Use this". |
 | 4 | Can a guess be made from other guesses? | No. Only GPS from the file and a person's locations are fixes. |
-| 5 | How are guesses gated and bounded? | Two settings: **Infer location**, off by default, and **Inference window**, 360 minutes by default. Cross-device matching (phone to camera) by date and time is the main signal and is not limited to one folder. |
+| 5 | How are guesses gated and bounded? | Two settings: **Infer location**, off by default, and **Inference window**, 360 minutes by default. Cross-device matching (phone to camera) by date and time is the main signal and is not limited to one folder. Infer location is each library's (Robert, 2026-10-18); the window is the account's. |
 | 6 | Where do place names come from? | An offline gazetteer (GeoNames) on the server. Nothing leaves the box. |
 | 7 | Does a person's location spread to neighbours? | Yes. A person's location is a fix, so nearby clips get guesses from it. |
 | 8 | How are bulk location actions targeted? | Only by an explicit list of clips. Replacing an existing location needs a 409 decision. |
@@ -101,7 +101,7 @@ Settings, declared on the producer so lineage tracks them:
 | `infer_location` | `false` | Off: nothing is guessed and existing guesses are removed. |
 | `inference_minutes` | `360` | A clip takes a location from fixes up to this far before or after it. |
 
-These live in Settings → Processing → Location. Turning Infer location off goes through the usual counted 409; a new Inference window checks guesses again (see "As built").
+These live in Settings → Processing → Location. Turning Infer location off goes through the usual counted 409; a new Inference window checks guesses again (see "As built"). Since 2026-10-18 Infer location is each library's, not the producer's (see "As built").
 
 The producer:
 - `media = ALL`, `storage = False` (it never reads originals);
@@ -253,7 +253,8 @@ Requirements as in the ADR template: the full suite passes, tsc and vite build a
 - **Gaps** are between real instants when both clips record a zone, otherwise between wall clocks as written (the ADR's offset 0); the clock offset applies only to fixes from another device.
 - **Radius** adds the larger GPS accuracy (`gps_accuracy_m`) of the fixes used.
 - **A guess is never written over a suggestion** (phase 4), as it isn't over a person's or the file's.
-- **Turning Infer location off** asks first (409 `redo_on_change`, "New settings remove location guesses from N clips"), then removes every guess and the producer's lineage; a person's location stays. It's the spec's `on_settings`, a new field of the producer contract.
+- **Infer location is each library's** (Robert, 2026-10-18): `libraries.infer_location`, off by default, set by the library's admin (Library settings › Location guesses, Add library's and the setup wizard's library step's checkbox, `PATCH /v1/libraries/{id}`, `lumiverb library infer-location`). The producer's `applies` asks the clip's library; its only setting is the account's Inference window. The migration (`b5d9e3f7a1c4`) turned every library on where the account's setting was on, dropped that setting, and gave every guess's lineage the producer's new hash, so nothing was redone. The rechecks' triggers do nothing where no library of the clips' infers.
+- **Turning Infer location off** asks first (409 `guesses_exist`, "Turning Infer location off removes the location guesses of N clips in this library"), then removes that library's guesses and the producer's lineage there; a person's location stays. It holds the library row while it does, and a guess saved meanwhile (`save_guess`, which reads the library's setting with a share lock) waits and is refused ("off"). Before 2026-10-18 it was the producer's setting, asked as `redo_on_change`'s "remove" question through the producer contract's `on_settings`, both gone with it.
 
 ### Phase 4: Place names
 - GeoNames offline on the server.

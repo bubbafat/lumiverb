@@ -213,12 +213,6 @@ class ProducerSpec:
     # settings that don't remake change, as {key: value} (faces: the face
     # groups are worked out again; location: guesses are checked again).
     regroup: str = ""
-    # "module:function", called with (session, before, after, *, apply) when
-    # its output-affecting settings change from before to after: what it
-    # drops that a redo wouldn't (location guesses once inferring is off),
-    # counted (apply False) or done (apply True), as how many clips. The 409
-    # before new settings counts them.
-    on_settings: str = ""
     # Shown as a part of another producer (its artifact), not on its own:
     # Settings → Processing folds it into that producer's row.
     part_of: str = ""

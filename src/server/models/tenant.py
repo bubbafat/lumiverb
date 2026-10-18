@@ -69,6 +69,9 @@ class Library(SQLModel, table=True):
     scans_paused_by: str | None = Field(default=None, nullable=True)
     # Only the account's admins and the people given a role on it (library_roles) see it.
     private: bool = Field(default=False, sa_column_kwargs={"server_default": "false"}, nullable=False)
+    # Its clips without a location are placed from those taken around the same
+    # time (ADR-017, the location producer); off, its guesses go.
+    infer_location: bool = Field(default=False, sa_column_kwargs={"server_default": "false"}, nullable=False)
 
 
 class LibraryRole(SQLModel, table=True):

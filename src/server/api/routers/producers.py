@@ -401,9 +401,7 @@ def set_settings(
     "remake") until redo says. true remakes them too, after everything else
     (its redo resumed if it was stopped); false is new files only: they stay
     as they are, its redo stopped by this person (lineage.keep_made), until
-    someone remakes them. Settings that would drop something (location
-    guesses once inferring is off) ask first too (question "remove"); any
-    answer drops it. Nothing made yet: nothing asked, its redo resumed. A
+    someone remakes them. Nothing made yet: nothing asked, its redo resumed. A
     pause stays. A setting that doesn't remake (how faces are grouped) asks
     nothing and makes nothing again: when one changes, the producer's
     regroup runs (the face groups are worked out again; location guesses
@@ -433,19 +431,6 @@ def set_settings(
     lineage.set_overrides(session, artifact, values)
     after, uses = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
     if after["settings_hash"] != before["settings_hash"]:
-        on_settings = load(p.on_settings) if p.on_settings else None
-        # What the new settings drop that a redo wouldn't (location guesses once inferring is off).
-        dropped = on_settings(session, before["settings"], after["settings"], apply=False) if on_settings else 0
-        if dropped and body.redo is None:
-            session.rollback()
-            raise DecisionRequiredError(
-                "redo_on_change",
-                f"New settings remove {p.title.lower()} from {dropped:,} clip{'' if dropped == 1 else 's'}.",
-                {"artifact": artifact, "clips": dropped, "redo_stopped": False, "paused": False,
-                 "question": "remove", "artifacts": [{"artifact": artifact, "title": p.title, "clips": dropped}]},
-            )
-        if on_settings:
-            on_settings(session, before["settings"], after["settings"], apply=True)
         clips = lineage.would_redo(session, artifact, after)
         if clips and body.redo is None:
             paused = lineage.pauses(session)

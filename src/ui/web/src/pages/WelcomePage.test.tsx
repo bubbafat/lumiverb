@@ -60,8 +60,8 @@ beforeEach(() => {
     if (path === "/system/network") return json({ available: true, other_devices: false, addresses: [] });
     if (path === "/producers") {
       return json({ producers: [producer("faces", [levelField(detail)]), producer("video_faces", [levelField("low")]),
-                                producer("location", [{ key: "infer_location", label: "Infer", kind: "bool", value: false,
-                                                        default: false, minimum: null, maximum: null, unit: "",
+                                producer("location", [{ key: "inference_minutes", label: "Inference window", kind: "int",
+                                                        value: 360, default: 360, minimum: 5, maximum: 1440, unit: "min",
                                                         advanced: false, fixed: null }])] });
     }
     if (path === "/producers/faces/settings") {
@@ -126,6 +126,7 @@ describe("WelcomePage", () => {
     done = ["storage", "network"];
     renderPage();
     const photos = await screen.findByRole("combobox", { name: "Faces in photos" });
+    expect(screen.queryByRole("checkbox", { name: /Guess places/ })).toBeNull(); // each library's, as it's added
     expect((photos as HTMLSelectElement).value).toBe("normal");
     fireEvent.change(photos, { target: { value: "high" } });
     await vi.waitFor(() => expect(sent.some((s) => s.path === "/producers/faces/settings")).toBe(true));
@@ -138,8 +139,11 @@ describe("WelcomePage", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Your first library" })).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "Library name" }), { target: { value: "Family" } });
     fireEvent.change(screen.getByRole("textbox", { name: "Library folder" }), { target: { value: "/Volumes/Media/Photos" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Guess places/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add library" }));
     expect((await screen.findByRole("status")).textContent).toContain("Family is added");
+    expect(sent.find((s) => s.method === "POST" && s.path === "/libraries")?.body).toEqual(
+      { name: "Family", root_path: "/Volumes/Media/Photos", infer_location: true });
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     expect(await screen.findByText("Libraries page")).toBeTruthy();
     expect(done).toEqual(STEPS);

@@ -673,19 +673,6 @@ describe("ProcessingSection settings", () => {
       expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo });
     });
 
-  it("asks yes or no before something is dropped", async () => {
-    answers = [err(409, "redo_on_change", "New settings remove location guesses from 3 clips.",
-                   { clips: 3, question: "remove" })];
-    await openSettings();
-    fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "800" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
-    expect(await screen.findByText(/remove location guesses/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "New files only" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(sent.filter((r) => r.method === "PUT")).toHaveLength(2));
-    expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo: true });
-  });
-
   it("offers a quality as a notch, Good, Better or Best, not an encoder's number (ADR-018 decision 6)", async () => {
     const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
                       minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
@@ -852,7 +839,9 @@ describe("ProcessingSection settings", () => {
       producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
                               counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];
       renderSection();
-      expect((await row("Location guesses")).textContent).toContain("6 current · 1 missing · 0 made another way · 3 rechecking");
+      const shown = (await row("Location guesses")).textContent;
+      expect(shown).toContain("6 current · 1 missing · 0 made another way · 3 rechecking");
+      expect(shown).toContain("Only in the libraries where Infer location is on");
     });
 
     it("says a new inference window checks guesses again, not that they're made again", async () => {
