@@ -52,7 +52,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["playback"])
 
 # A copied link stops working within the hour; the player asks for a new
-# one when a link fails mid-play.
+# one when a link fails mid-play. A signed-in person's stops sooner, at
+# their next request after they can't see the clip any more (_still_theirs).
 STREAM_TTL_SECONDS = 3600
 # A cut within this of the whole video isn't worth making.
 _CAP_SLACK_SEC = 0.5
@@ -119,7 +120,13 @@ def mint_stream_token(
     ttl_seconds: int = STREAM_TTL_SECONDS,
     public_library_id: str | None = None,
     public_project_id: str | None = None,
+    user_id: str | None = None,
+    token_version: int | None = None,
+    key_id: str | None = None,
 ) -> str:
+    """A signed link: a public page's (pl, pp), or who it was made for, a
+    person signed in (u, their token version tv) or a key (k), each asked
+    again at every request (stream)."""
     # "n": every link is new, so a renewed one reloads the player.
     claims: dict = {"t": tenant_id, "a": asset_id, "e": int(time.time()) + ttl_seconds,
                     "n": secrets.token_urlsafe(6)}
@@ -127,6 +134,10 @@ def mint_stream_token(
         claims["pl"] = public_library_id
     if public_project_id:
         claims["pp"] = public_project_id
+    if user_id:
+        claims["u"], claims["tv"] = user_id, token_version
+    if key_id:
+        claims["k"] = key_id
     payload = _b64(json.dumps(claims, separators=(",", ":")).encode())
     return f"{payload}.{_signature(payload)}"
 
@@ -503,6 +514,9 @@ def get_playback(
         request.state.tenant_id, asset_id,
         public_library_id=public_library_id,
         public_project_id=public_project_id,
+        user_id=None if public else getattr(request.state, "user_id", None),
+        token_version=getattr(request.state, "token_version", None),
+        key_id=None if public else getattr(request.state, "key_id", None),
     )
     expires = datetime.fromtimestamp(read_stream_token(token)["e"], tz=UTC)
     return PlaybackResponse(
@@ -513,6 +527,44 @@ def get_playback(
         ready=ready,
         whole=whole_clip(source, asset.duration_sec),
     )
+
+
+def _still_theirs(session: Session, claims: dict, tenant_id: str, asset: Asset) -> bool:
+    """Whoever a signed-in link was made for can still play the clip: the
+    person as they are now (signed out everywhere since, by a new password
+    or role, ends it: their token version moved on), or the key (revoked
+    ends it), and either can still see the clip's library (ADR-018 decision
+    8: a role taken away ends it at once). A link that names nobody, made
+    before links did, plays no more: the player asks for a new one."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository, UserRepository
+    from src.server.repository.library_roles import (
+        LibraryRoleRepository,
+        MakerGoneError,
+        person_of_key,
+        person_of_user,
+    )
+
+    with get_control_session() as ctrl:
+        users = UserRepository(ctrl)
+        if isinstance(claims.get("k"), str):
+            key = ApiKeyRepository(ctrl).get(claims["k"])
+            if key is None or key.revoked_at is not None or key.tenant_id != tenant_id:
+                return False
+            try:
+                person = person_of_key(key, users)
+            except MakerGoneError:
+                return False
+        elif isinstance(claims.get("u"), str):
+            user = users.get_by_id(claims["u"])
+            if user is None or user.tenant_id != tenant_id or user.token_version != claims.get("tv"):
+                return False
+            person = person_of_user(user)
+        else:
+            return False
+    if person is None or person.account_admin:
+        return True
+    return LibraryRoleRepository(session).role_on(person, asset.library_id) not in (None, "none")
 
 
 @router.get("/v1/stream/{token}")
@@ -545,6 +597,8 @@ def stream(token: str, request: Request) -> StreamingResponse:
                 _check_public(session, asset, claims.get("pl"), claims.get("pp"))
             except HTTPException as exc:
                 raise HTTPException(status_code=404, detail="Not found") from exc
+        elif not _still_theirs(session, claims, tenant_id, asset):
+            raise ApiError(403, "invalid_link", "This link is invalid or expired")
         store = get_store()
         playable = _playable(asset, store)
         if playable is None:

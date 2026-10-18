@@ -46,6 +46,27 @@ class Person:
         return self.account_role == "admin"
 
 
+class MakerGoneError(Exception):
+    """A key a person made whose person isn't in its account any more: it does nothing."""
+
+
+def person_of_key(api_key, users) -> Person | None:
+    """Whose roles a key has: the person who made it, never above its own
+    role; None for a key no person made, or a device's. users: the control
+    database's UserRepository. MakerGoneError when its person has left."""
+    if api_key.created_by_user_id is None or api_key.device_id is not None:
+        return None
+    maker = users.get_by_id(api_key.created_by_user_id)
+    if maker is None or maker.tenant_id != api_key.tenant_id:
+        raise MakerGoneError(api_key.key_id)
+    return Person(maker.user_id, maker.role, maker.every_library, cap=api_key.role)
+
+
+def person_of_user(user) -> Person:
+    """A person signed in, as they are now."""
+    return Person(user.user_id, user.role, user.every_library)
+
+
 def lower(a: str, b: str | None) -> str:
     return a if b is None or RANK[a] <= RANK[b] else b
 

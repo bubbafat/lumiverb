@@ -370,10 +370,54 @@ def test_an_expired_link_is_refused(env, media):
 
     asset_id = _video(env, media, "expired")
     tenant_id = client.get("/v1/tenant/context", headers=env[1]).json()["tenant_id"]
-    token = mint_stream_token(tenant_id, asset_id, ttl_seconds=-1)
+    token = mint_stream_token(tenant_id, asset_id, ttl_seconds=-1, key_id=_key_id(env[1]))
     assert client.get(f"/v1/stream/{token}").status_code == 403
-    fresh = mint_stream_token(tenant_id, asset_id, ttl_seconds=60)
+    fresh = mint_stream_token(tenant_id, asset_id, ttl_seconds=60, key_id=_key_id(env[1]))
     assert client.get(f"/v1/stream/{fresh}").status_code == 200
+
+
+def _key_id(headers: dict) -> str:
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository
+
+    with get_control_session() as session:
+        return ApiKeyRepository(session).get_by_plaintext(headers["Authorization"][7:]).key_id
+
+
+@pytest.mark.slow
+def test_a_link_plays_while_whoever_it_was_made_for_can_still_see_the_clip(env, media):
+    """A signed-in link names who it was made for, asked again at every
+    request: a key revoked, a role taken away on the library, or a person
+    signed out everywhere (a new role or password) ends it at once."""
+    from src.server.api.routers.playback import mint_stream_token
+
+    client, admin, library_id, _storage, _keys = env
+    asset_id = _video(env, media, "whose")
+
+    made = client.post("/v1/keys", json={"label": "short-lived", "role": "viewer"}, headers=admin).json()
+    by_key = _path(_playback(env, asset_id, headers={"Authorization": f"Bearer {made['plaintext']}"}).json()["url"])
+    assert _fetch(client, by_key).status_code == 200
+    assert client.delete(f"/v1/keys/{made['key_id']}", headers=admin).status_code in (200, 204)
+    assert client.get(by_key).status_code == 403
+
+    email, password = "watcher@example.com", "a long enough password"
+    person = client.post("/v1/users", json={"email": email, "password": password, "role": "viewer"}, headers=admin)
+    assert person.status_code == 201, person.text
+    user_id = person.json()["user_id"]
+    token = client.post("/v1/auth/login", json={"email": email, "password": password}).json()["access_token"]
+    signed_in = _path(_playback(env, asset_id, headers={"Authorization": f"Bearer {token}"}).json()["url"])
+    assert _fetch(client, signed_in).status_code == 200
+    people = f"/v1/libraries/{library_id}/people/{user_id}"
+    assert client.put(people, json={"role": "none"}, headers=admin).status_code == 200
+    assert client.get(signed_in).status_code == 403, "they can't see the library: their link ends"
+    assert client.put(people, json={"role": None}, headers=admin).status_code == 200
+    assert _fetch(client, signed_in).status_code == 200, "given back, it plays again"
+    assert client.patch(f"/v1/users/{user_id}", json={"role": "editor"}, headers=admin).status_code == 200
+    assert client.get(signed_in).status_code == 403, "a new role signs them out everywhere"
+
+    tenant_id = client.get("/v1/tenant/context", headers=admin).json()["tenant_id"]
+    nobodys = mint_stream_token(tenant_id, asset_id, ttl_seconds=60)
+    assert client.get(f"/v1/stream/{nobodys}").status_code == 403, "a link from before links named anyone"
 
 
 @pytest.mark.slow
