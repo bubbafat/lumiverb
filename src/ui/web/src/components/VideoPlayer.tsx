@@ -76,7 +76,7 @@ export default function VideoPlayer({
       <div
         data-testid="video-frame"
         data-playback={full ? "full" : "preview"}
-        className={`overflow-hidden rounded-md ring-2 ${ring} transition-[box-shadow] duration-500`}
+        className={`overflow-hidden rounded-md ring-2 ${ring} transition-shadow duration-500`}
       >
         <video
           ref={ref}

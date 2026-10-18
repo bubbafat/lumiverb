@@ -67,7 +67,7 @@ function SimilarThumbnail({
     <button
       type="button"
       onClick={onClick}
-      className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
     >
       {isLoading && (
         <div className="absolute inset-0 animate-pulse bg-gray-700" />
@@ -159,7 +159,7 @@ function NoteSection({
         ) : editing ? (
           <div className="space-y-2">
             <textarea
-              className="w-full rounded border border-gray-600 bg-gray-900 p-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none resize-y"
+              className="w-full rounded-sm border border-gray-600 bg-gray-900 p-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden resize-y"
               rows={3}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -169,14 +169,14 @@ function NoteSection({
             <div className="flex gap-2">
               <button
                 type="button"
-                className="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
+                className="rounded-sm bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500"
                 onClick={save}
               >
                 Save
               </button>
               <button
                 type="button"
-                className="rounded bg-gray-700 px-3 py-1 text-xs text-gray-300 hover:bg-gray-600"
+                className="rounded-sm bg-gray-700 px-3 py-1 text-xs text-gray-300 hover:bg-gray-600"
                 onClick={cancel}
               >
                 Cancel
@@ -193,7 +193,7 @@ function NoteSection({
         ) : readOnly ? null : (
           <button
             type="button"
-            className="rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
+            className="rounded-sm bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
             onClick={startEdit}
           >
             Add note
@@ -207,9 +207,9 @@ function NoteSection({
 function MetadataSkeleton() {
   return (
     <div className="space-y-3">
-      <div className="h-4 w-3/4 animate-pulse rounded bg-gray-700" />
-      <div className="h-3 w-full animate-pulse rounded bg-gray-700/80" />
-      <div className="h-3 w-1/2 animate-pulse rounded bg-gray-700/80" />
+      <div className="h-4 w-3/4 animate-pulse rounded-sm bg-gray-700" />
+      <div className="h-3 w-full animate-pulse rounded-sm bg-gray-700/80" />
+      <div className="h-3 w-1/2 animate-pulse rounded-sm bg-gray-700/80" />
     </div>
   );
 }
@@ -615,7 +615,7 @@ export function Lightbox({
           <button
             type="button"
             onClick={() => { setAssignFaceId(null); navigate(`/people/${face.person!.person_id}`); }}
-            className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+            className="w-full rounded-sm px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
           >
             View person
           </button>
@@ -623,7 +623,7 @@ export function Lightbox({
             type="button"
             onClick={() => unassignMutation.mutate(face.face_id)}
             disabled={unassignMutation.isPending}
-            className="w-full rounded px-2 py-1 text-left text-xs text-red-400 hover:bg-gray-700"
+            className="w-full rounded-sm px-2 py-1 text-left text-xs text-red-400 hover:bg-gray-700"
           >
             {unassignMutation.isPending ? "Removing..." : "Remove tag"}
           </button>
@@ -642,7 +642,7 @@ export function Lightbox({
                       assignMutation.mutate({ faceId: face.face_id, personId: p.person_id });
                     }}
                     disabled={assignMutation.isPending}
-                    className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                    className="w-full rounded-sm px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
                   >
                     {p.display_name} <span className="text-gray-500">({p.face_count})</span>
                   </button>
@@ -658,10 +658,10 @@ export function Lightbox({
               value={assignSearch}
               onChange={(e) => setAssignSearch(e.target.value)}
               placeholder="Search by name..."
-              className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full rounded-sm border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
             />
             {assignSearch.trim() && searchResults.length > 0 && (
-              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-sm border border-gray-600 bg-gray-900 shadow-lg">
                 {searchResults
                   .filter((p) => p.person_id !== face.person!.person_id)
                   .map((p) => (
@@ -701,7 +701,7 @@ export function Lightbox({
                   type="button"
                   onClick={() => assignMutation.mutate({ faceId: face.face_id, personId: p.person_id })}
                   disabled={assignMutation.isPending}
-                  className="w-full rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                  className="w-full rounded-sm px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
                 >
                   {p.display_name} <span className="text-gray-500">({p.face_count})</span>
                 </button>
@@ -718,10 +718,10 @@ export function Lightbox({
               value={assignSearch}
               onChange={(e) => setAssignSearch(e.target.value)}
               placeholder="Search by name..."
-              className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+              className="w-full rounded-sm border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
             />
             {assignSearch.trim() && searchResults.length > 0 && (
-              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded border border-gray-600 bg-gray-900 shadow-lg">
+              <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-40 overflow-y-auto rounded-sm border border-gray-600 bg-gray-900 shadow-lg">
                 {searchResults.map((p) => (
                   <button
                     key={p.person_id}
@@ -765,7 +765,7 @@ export function Lightbox({
             value={newPersonName}
             onChange={(e) => setNewPersonName(e.target.value)}
             placeholder="Enter name..."
-            className="w-full rounded-lg border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-gray-600 bg-gray-900 px-2 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
             autoFocus
           />
           <div className="flex gap-2">
@@ -921,10 +921,7 @@ export function Lightbox({
         <div className="absolute top-0 inset-x-0 h-0.5 bg-gray-800 z-10">
           <div
             key={`${asset.asset_id}-slideshow`}
-            className="h-full bg-indigo-500 motion-reduce:hidden"
-            style={{
-              animation: "lv-progress 3s linear forwards",
-            }}
+            className="h-full bg-indigo-500 animate-lv-progress motion-reduce:hidden"
           />
         </div>
       )}
@@ -1046,7 +1043,7 @@ export function Lightbox({
                   return (
                     <div
                       key={face.face_id}
-                      className={`absolute border-2 ${borderColor} rounded cursor-pointer`}
+                      className={`absolute border-2 ${borderColor} rounded-sm cursor-pointer`}
                       style={{
                         left: `${face.bounding_box.x * 100}%`,
                         top: `${face.bounding_box.y * 100}%`,
@@ -1067,7 +1064,7 @@ export function Lightbox({
                       }}
                     >
                       {isNamed && (
-                        <span className="absolute -bottom-5 left-0 whitespace-nowrap rounded bg-black/70 px-1 text-xs text-white">
+                        <span className="absolute -bottom-5 left-0 whitespace-nowrap rounded-sm bg-black/70 px-1 text-xs text-white">
                           {face.person!.display_name}
                         </span>
                       )}
@@ -1130,7 +1127,7 @@ export function Lightbox({
             }`}
             aria-hidden
           >
-            <div className="flex flex-wrap justify-center gap-3 rounded-lg bg-black/60 px-4 py-2 text-xs text-gray-400 backdrop-blur-sm">
+            <div className="flex flex-wrap justify-center gap-3 rounded-lg bg-black/60 px-4 py-2 text-xs text-gray-400 backdrop-blur-xs">
               <span><kbd className="font-mono">←/→</kbd> Navigate</span>
               <span><kbd className="font-mono">Esc</kbd> Close</span>
               <span><kbd className="font-mono">Shift+F</kbd> Fullscreen</span>
@@ -1154,7 +1151,7 @@ export function Lightbox({
             className={`w-full border-t border-gray-700 bg-gray-900/50 p-4 lg:p-6 lg:w-80 lg:border-l lg:border-t-0 transition-[max-height] duration-200 motion-reduce:transition-none ${
               metaOpen
                 ? "overflow-y-auto max-h-none"
-                : "max-h-[3.5rem] overflow-hidden"
+                : "max-h-14 overflow-hidden"
             } lg:overflow-y-auto lg:max-h-none`}
           >
             {/* Details toggle — mobile only */}
@@ -1409,7 +1406,7 @@ export function Lightbox({
                                     disabled={!seekVideo}
                                     onClick={() => seekVideo?.(m.start / 1000)}
                                     title={seekVideo ? undefined : "Plays once the whole video is ready"}
-                                    className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white disabled:opacity-50 disabled:hover:bg-gray-800"
+                                    className="rounded-sm bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white disabled:opacity-50 disabled:hover:bg-gray-800"
                                   >
                                     {momentLabel(m)}
                                   </button>

@@ -7,7 +7,7 @@ const buttonClass = "rounded-md px-3 py-1 text-xs font-medium disabled:cursor-no
 /** "Edited" beside a value a person wrote (the one copy: Robert, Oct 9). */
 function EditedBadge() {
   return (
-    <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+    <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
       Edited
     </span>
   );

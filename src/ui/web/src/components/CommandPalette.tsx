@@ -95,7 +95,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           <input
             ref={inputRef}
             placeholder="Go to library…"
-            className="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500 outline-none"
+            className="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500 outline-hidden"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -447,7 +447,7 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
           min={1}
           max={32}
           value={atOnce}
-          className={`${inputClass} max-w-[8rem]`}
+          className={`${inputClass} max-w-32`}
           onChange={(e) => setAtOnce(Math.max(1, Math.min(32, Number(e.target.value) || 1)))}
         />
         <span className="block text-xs text-gray-500">

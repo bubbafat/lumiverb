@@ -53,7 +53,7 @@ export function SaveSearchAsProjectModal({ savedQuery, onClose }: Props) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Project name"
-          className="w-full rounded-md border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-none"
+          className="w-full rounded-md border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-hidden"
           autoFocus
           onKeyDown={(e) => {
             if (e.key === "Enter" && name.trim()) mutation.mutate();

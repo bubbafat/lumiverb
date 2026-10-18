@@ -94,7 +94,7 @@ function PersonRow({ person, isPrivate, busy, onChange }: {
             value={person.set_role ?? ""}
             disabled={busy}
             onChange={(e) => onChange(e.target.value === "" ? null : (e.target.value as LibraryRole))}
-            className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
+            className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
           >
             <option value="">Default ({ROLE_NAMES[defaultRole(person, isPrivate)]})</option>
             {CHOICES.map((r) => (

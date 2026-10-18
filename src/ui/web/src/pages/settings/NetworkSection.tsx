@@ -151,7 +151,7 @@ function Ports({ network, onSaved }: { network: NetworkAccess; onSaved: (next: N
     },
   });
   const changed = Number(http) !== network.http_port || Number(https) !== network.https_port;
-  const field = "mt-1 block w-28 rounded border border-gray-700 bg-gray-950 px-2 py-1 font-mono text-sm text-gray-200";
+  const field = "mt-1 block w-28 rounded-sm border border-gray-700 bg-gray-950 px-2 py-1 font-mono text-sm text-gray-200";
 
   return (
     <form
@@ -178,7 +178,7 @@ function Ports({ network, onSaved }: { network: NetworkAccess; onSaved: (next: N
         </label>
         <button
           type="submit"
-          className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
+          className="rounded-sm bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
           disabled={!changed || change.isPending || !http || !https}
         >
           Change ports
@@ -376,7 +376,7 @@ function Certificate({
           <label className="block text-xs text-gray-300">
             Certificate
             <textarea
-              className="mt-1 block h-24 w-full rounded border border-gray-700 bg-gray-950 p-2 font-mono text-xs text-gray-200"
+              className="mt-1 block h-24 w-full rounded-sm border border-gray-700 bg-gray-950 p-2 font-mono text-xs text-gray-200"
               value={pem}
               onChange={(e) => setPem(e.target.value)}
               placeholder="-----BEGIN CERTIFICATE-----"
@@ -385,7 +385,7 @@ function Certificate({
           <label className="block text-xs text-gray-300">
             Private key
             <textarea
-              className="mt-1 block h-24 w-full rounded border border-gray-700 bg-gray-950 p-2 font-mono text-xs text-gray-200"
+              className="mt-1 block h-24 w-full rounded-sm border border-gray-700 bg-gray-950 p-2 font-mono text-xs text-gray-200"
               value={key}
               onChange={(e) => setKey(e.target.value)}
               placeholder="-----BEGIN PRIVATE KEY-----"
@@ -395,7 +395,7 @@ function Certificate({
           <div className="flex gap-3">
             <button
               type="submit"
-              className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
+              className="rounded-sm bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 disabled:opacity-50"
               disabled={keep.isPending || !pem.trim() || !key.trim()}
             >
               Use it

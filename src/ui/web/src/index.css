@@ -1,6 +1,77 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+/* pb-safe, mt-safe, bottom-safe-offset-20 and the rest: the iPhone's notch and home bar. */
+@import 'tailwindcss-safe-area';
+
+@theme {
+  /* v3's line heights, fixed in rem: v4's scale with the font size, so a field
+     made 16px on touch screens (below) grew taller than it was. */
+  --text-xs--line-height: 1rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl--line-height: 2.25rem;
+  --text-4xl--line-height: 2.5rem;
+
+  --animate-lv-progress: lv-progress 3s linear forwards;
+  --animate-fade-in: fade-in 0.2s ease-out;
+
+  @keyframes lv-progress {
+    from {
+      width: 0%;
+    }
+    to {
+      width: 100%;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+/*
+  Tailwind CSS v4 also changed these defaults; v3's are kept so nothing
+  looks or feels different: a placeholder's colour (v4: the text's at half
+  opacity) and the pointer over buttons (v4: the browser's arrow).
+*/
+@layer base {
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
 
 /* iOS zooms the page in on any focused field under 16px and doesn't zoom
    back out, which leaves the layout looking cut off. Touch screens get

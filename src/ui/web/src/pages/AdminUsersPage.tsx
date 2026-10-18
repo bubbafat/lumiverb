@@ -51,7 +51,7 @@ function UserRow({
           value={user.role}
           disabled={isSelf}
           onChange={(e) => onRoleChange(user.user_id, e.target.value)}
-          className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
+          className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200 disabled:opacity-50"
         >
           {ROLES.map((r) => (
             <option key={r} value={r}>
@@ -68,7 +68,7 @@ function UserRow({
             aria-label={`Libraries ${user.email} sees`}
             value={user.every_library === false ? "given" : "every"}
             onChange={(e) => onLibrariesChange(user.user_id, e.target.value === "every")}
-            className="rounded border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200"
+            className="rounded-sm border border-gray-700 bg-gray-800 px-2 py-1 text-sm text-gray-200"
           >
             <option value="every">Every library</option>
             <option value="given">Only those given</option>
@@ -305,7 +305,7 @@ export function InviteForm({ onMade }: { onMade: (link: MadeLink | null) => void
           onChange={(e) => setNewEmail(e.target.value)}
           placeholder="them@example.com"
           required
-          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+          className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
         />
       </div>
       <div>

@@ -34,7 +34,7 @@
 
 ### Phase 4: Web UI (React + TypeScript + Tailwind)
 
-UI lives at `src/ui/web/`. Vite dev server proxies `/v1/` to `http://localhost:8000`. Stack: React 18, TypeScript, Tailwind CSS v3, React Router v6, TanStack Query v5, @tanstack/react-virtual.
+UI lives at `src/ui/web/`. Vite dev server proxies `/v1/` to `http://localhost:8000`. Stack: React 18, TypeScript, Tailwind CSS v4, React Router v7, TanStack Query v5, @tanstack/react-virtual.
 
 | Step | Description | Status |
 |------|-------------|--------|

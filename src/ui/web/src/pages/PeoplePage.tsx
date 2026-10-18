@@ -123,7 +123,7 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
     <button
       type="button"
       onClick={onClick}
-      className={`relative aspect-square overflow-hidden rounded-lg bg-gray-800 w-full focus:outline-none focus:ring-2 focus:ring-indigo-500 ${hasCrop ? "ring-2 ring-red-500/60" : ""}`}
+      className={`relative aspect-square overflow-hidden rounded-lg bg-gray-800 w-full focus:outline-hidden focus:ring-2 focus:ring-indigo-500 ${hasCrop ? "ring-2 ring-red-500/60" : ""}`}
     >
       {isLoading ? (
         <div className="h-full w-full animate-pulse bg-gray-700" />
@@ -131,7 +131,7 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
         <>
           <img src={url} alt={face.rel_path ?? ""} className="h-full w-full object-cover" />
           {isVideoFace(face) && (
-            <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white"
+            <span className="absolute bottom-1 left-1 rounded-sm bg-black/70 px-1 text-[10px] text-white"
                   title={face.frame_ms != null ? `Seen at ${clock(face.frame_ms)}` : undefined}>
               ▶{face.frame_ms != null ? ` ${clock(face.frame_ms)}` : ""}
             </span>
@@ -139,7 +139,7 @@ function ClusterFaceThumbnail({ face, onClick }: { face: PersonFaceItem; onClick
           {/* If showing full thumbnail (no crop), overlay bounding box in red to highlight the clustered face */}
           {!hasCrop && box && !isVideoFace(face) && (
             <div
-              className="absolute border-2 border-red-500 rounded pointer-events-none"
+              className="absolute border-2 border-red-500 rounded-sm pointer-events-none"
               style={{
                 left: `${box.x * 100}%`,
                 top: `${box.y * 100}%`,
@@ -351,7 +351,7 @@ function ClusterCard({
             placeholder="Enter name..."
             // An input keeps its own width unless told otherwise, which pushed
             // Save and Cancel out of the card; in a narrow one they wrap below.
-            className="min-w-[8rem] flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            className="min-w-32 flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
             autoFocus
           />
           <button
@@ -398,13 +398,13 @@ function ClusterCard({
           )}
           {/* Search for more */}
           <div className="flex flex-wrap gap-2">
-            <div className="relative min-w-[8rem] flex-1">
+            <div className="relative min-w-32 flex-1">
               <input
                 type="text"
                 value={assignSearch}
                 onChange={(e) => setAssignSearch(e.target.value)}
                 placeholder="Search by name..."
-                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
                 autoFocus
               />
               {assignSearch.trim() && searchResults.length > 0 && (
@@ -731,7 +731,7 @@ export default function PeoplePage() {
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="flex flex-col items-center gap-2 rounded-xl bg-gray-800/50 p-4">
               <div className="h-24 w-24 animate-pulse rounded-full bg-gray-700" />
-              <div className="h-4 w-16 animate-pulse rounded bg-gray-700" />
+              <div className="h-4 w-16 animate-pulse rounded-sm bg-gray-700" />
             </div>
           ))}
         </div>

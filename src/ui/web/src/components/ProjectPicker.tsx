@@ -100,7 +100,7 @@ export function ProjectPicker({ assetIds, onClose, onDone }: ProjectPickerProps)
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search projects..."
             autoFocus
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
           />
         </div>
 
@@ -114,20 +114,20 @@ export function ProjectPicker({ assetIds, onClose, onDone }: ProjectPickerProps)
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="Project name"
                 autoFocus
-                className="mb-2 w-full rounded border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+                className="mb-2 w-full rounded-sm border border-gray-600 bg-gray-800 px-2 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden"
               />
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setShowCreate(false)}
-                  className="rounded px-2 py-1 text-xs text-gray-400 hover:text-gray-300"
+                  className="rounded-sm px-2 py-1 text-xs text-gray-400 hover:text-gray-300"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={createMutation.isPending || !newName.trim()}
-                  className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                  className="rounded-sm bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
                 >
                   {createMutation.isPending ? "Creating..." : "Create & add"}
                 </button>

@@ -48,7 +48,7 @@ export default function AccountSection() {
         <h2 className="text-lg font-semibold text-gray-100">Account</h2>
         <div role="alert" className="space-y-1 text-sm">
           <p className="text-red-300">Couldn&apos;t tell who&apos;s signed in. Asking again every few seconds.</p>
-          <p className="break-words font-mono text-xs text-gray-400">
+          <p className="wrap-break-word font-mono text-xs text-gray-400">
             {failed.why} ({failed.at.toLocaleTimeString()})
           </p>
         </div>

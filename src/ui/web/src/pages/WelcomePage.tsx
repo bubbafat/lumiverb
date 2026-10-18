@@ -235,7 +235,7 @@ function FindStep() {
         <span className="block">{label}</span>
         <select
           aria-label={label}
-          className={`${inputClass} max-w-[12rem]`}
+          className={`${inputClass} max-w-48`}
           value={value.value}
           disabled={change.isPending}
           onChange={(e) => change.mutate({ artifact, settings: { detail: e.target.value } })}

@@ -179,7 +179,7 @@ export function Moving<T>({ move, onTriedAgain, what }: {
         {move.done_files.toLocaleString()} of {move.total_files.toLocaleString()} ({size(move.done_bytes)} of{" "}
         {size(move.total_bytes)}).
       </p>
-      <div className="h-2 w-full overflow-hidden rounded bg-gray-800" aria-hidden>
+      <div className="h-2 w-full overflow-hidden rounded-sm bg-gray-800" aria-hidden>
         <div className="h-full bg-indigo-500" style={{ width: `${Math.round(share * 100)}%` }} />
       </div>
       <p className="text-xs text-gray-500">Lumiverb keeps working. Previews not moved yet show from where they are.</p>

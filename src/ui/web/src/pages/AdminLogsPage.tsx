@@ -120,7 +120,7 @@ export default function AdminLogsPage() {
                 placeholder="Search"
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
-                className="w-full rounded border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 sm:w-64"
+                className="w-full rounded-sm border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-gray-200 sm:w-64"
               />
               <label className="flex items-center gap-2 text-sm text-gray-300">
                 <input type="checkbox" checked={problems} onChange={(e) => setProblems(e.target.checked)} />
@@ -157,7 +157,7 @@ export default function AdminLogsPage() {
                 <li key={e.id} className={`border-l-2 pl-3 py-0.5 ${LEVEL_STYLE[e.level]}`}>
                   <span className="mr-2 text-gray-500">{partName(e.part)}</span>
                   {e.at && <span className="mr-2 text-gray-500">{new Date(e.at).toLocaleString()}</span>}
-                  <span className="whitespace-pre-wrap break-words">{e.text}</span>
+                  <span className="whitespace-pre-wrap wrap-break-word">{e.text}</span>
                 </li>
               ))}
             </ol>

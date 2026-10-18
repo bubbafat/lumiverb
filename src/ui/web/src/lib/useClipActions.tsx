@@ -190,7 +190,7 @@ export function useClipActions(onDone?: () => void) {
         <div className="fixed bottom-safe-offset-20 left-1/2 z-50 w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 md:bottom-6">
           <div
             role={notice.error ? "alert" : "status"}
-            className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm shadow-2xl backdrop-blur-sm ${
+            className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 text-sm shadow-2xl backdrop-blur-xs ${
               notice.error ? "border-red-800/60 bg-red-950/95 text-red-200" : "border-gray-700 bg-gray-900/95 text-gray-200"
             }`}
           >
@@ -209,7 +209,7 @@ export function useClipActions(onDone?: () => void) {
               type="button"
               aria-label="Dismiss"
               onClick={() => setNotice(null)}
-              className="rounded px-1 text-gray-500 hover:text-gray-300"
+              className="rounded-sm px-1 text-gray-500 hover:text-gray-300"
             >
               ×
             </button>

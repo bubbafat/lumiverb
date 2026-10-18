@@ -137,7 +137,7 @@ export function NoTranscript({ assetId, canEdit, onChanged }: EmptyProps) {
       <UploadSrt
         assetId={assetId}
         label="Upload SRT"
-        className="inline-flex cursor-pointer items-center gap-1.5 rounded bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
+        className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-gray-700/60 px-3 py-1.5 text-xs text-gray-300 hover:bg-indigo-600/40 hover:text-indigo-200 transition-colors"
         onChanged={onChanged}
         onError={setError}
       />

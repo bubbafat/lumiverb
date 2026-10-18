@@ -7,7 +7,7 @@ import { setApiKey } from "../api/client";
 const MIN_PASSWORD_LENGTH = 12;
 
 const inputClass =
-  "w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500";
+  "w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500";
 
 /**
  * An invite's link (src/server/invites.py): the new person chooses their

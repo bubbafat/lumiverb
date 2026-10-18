@@ -115,7 +115,7 @@ function TrashForm({ settings, isAdmin }: { settings: TenantSettings; isAdmin: b
                     setSaved(false);
                     setAsk(null);
                   }}
-                  className="mx-1 w-16 rounded border border-gray-700 bg-gray-800 px-2 py-0.5 text-gray-100 disabled:opacity-50"
+                  className="mx-1 w-16 rounded-sm border border-gray-700 bg-gray-800 px-2 py-0.5 text-gray-100 disabled:opacity-50"
                 />{" "}
                 days <span className="text-gray-500">(30 by default)</span>
                 <span className="mt-0.5 block text-gray-400">

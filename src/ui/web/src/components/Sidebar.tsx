@@ -309,9 +309,9 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
                 className="flex items-center gap-2 rounded-lg px-2 py-2 animate-pulse"
               >
                 <div className="h-2 w-2 rounded-full bg-gray-700" />
-                <div className="h-5 w-5 rounded bg-gray-800" />
+                <div className="h-5 w-5 rounded-sm bg-gray-800" />
                 {showLabels && (
-                  <div className="h-4 flex-1 rounded bg-gray-800" />
+                  <div className="h-4 flex-1 rounded-sm bg-gray-800" />
                 )}
               </div>
             ))
@@ -471,7 +471,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
                       }}
                       onBlur={() => handleRenameView(sv.view_id, renameValue)}
                       autoFocus
-                      className="min-w-0 flex-1 rounded border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none"
+                      className="min-w-0 flex-1 rounded-sm border border-gray-600 bg-gray-800 px-1.5 py-0.5 text-sm text-gray-200 focus:border-indigo-500 focus:outline-hidden"
                     />
                   </div>
                 ) : (
@@ -494,7 +494,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
                           e.stopPropagation();
                           setMenuViewId(menuViewId === sv.view_id ? null : sv.view_id);
                         }}
-                        className="ml-auto shrink-0 rounded p-0.5 text-gray-500 opacity-0 transition-opacity hover:text-gray-300 group-hover/sv:opacity-100"
+                        className="ml-auto shrink-0 rounded-sm p-0.5 text-gray-500 opacity-0 transition-opacity hover:text-gray-300 group-hover/sv:opacity-100"
                       >
                         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                           <circle cx="12" cy="5" r="1.5" />

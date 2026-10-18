@@ -186,7 +186,7 @@ export function DirectoryTree({
                       e.stopPropagation();
                       setDropdownPath(isDropdownOpen ? null : node.path);
                     }}
-                    className="rounded px-1.5 py-0.5 text-xs text-gray-500 hover:bg-gray-700/50 hover:text-gray-300"
+                    className="rounded-sm px-1.5 py-0.5 text-xs text-gray-500 hover:bg-gray-700/50 hover:text-gray-300"
                   >
                     {node.asset_count}
                   </button>
@@ -247,7 +247,7 @@ export function DirectoryTree({
               >
                 <div className="h-4 w-4 shrink-0" />
                 <div className="h-2 w-2 shrink-0 rounded-full bg-gray-600" />
-                <div className="h-4 flex-1 animate-pulse rounded bg-gray-800" />
+                <div className="h-4 flex-1 animate-pulse rounded-sm bg-gray-800" />
               </div>
             )}
             {isExpanded && hasFetched && children && children.length > 0 && (
@@ -267,7 +267,7 @@ export function DirectoryTree({
         >
           <div className="h-4 w-4 shrink-0" />
           <div className="h-2 w-2 shrink-0 rounded-full bg-gray-600" />
-          <div className="h-4 flex-1 animate-pulse rounded bg-gray-800" />
+          <div className="h-4 flex-1 animate-pulse rounded-sm bg-gray-800" />
         </div>
       </div>
     );
