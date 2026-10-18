@@ -30,7 +30,7 @@ ADR-016 already says producers become plug-ins. This ADR starts with what every 
 | 2 | Which plug-ins now? | One: **Place names**, from GeoNames. No existing feature moves to a plug-in until Robert has tried the UI. |
 | 3 | Who turns one on? | An account admin, for their account. What a plug-in keeps for the whole server (GeoNames' place list) is fetched once, when the first account turns it on. |
 | 4 | What can a plug-in ask? | An **acknowledgment**, if it declares one: a title, the text, links (a license, a source) and a version. Turning the plug-in on shows it in full; **OK** turns it on and records who accepted which version and when; **Cancel** turns the switch back off and records nothing. Most plug-ins declare none and simply turn on. |
-| 5 | The text changes in a new release? | Its version goes up, and the plug-in is off in every account that accepted an older one until an admin accepts the new text. Settings says why. |
+| 5 | The text changes in a new release? | Its version goes up. It's accepted again only when the plug-in says so (Robert, 2026-10-18: "if not accepted yet or if the plugin says 'must re-accept'"): a new license, say, but not new wording under the same one. When it says so, the plug-in is off (`waiting`) in every account that accepted an earlier version until an admin accepts the new text; Settings says why. See "When a new version asks again". |
 | 6 | How does the API ask? | As every decision the API requires (cursor-api.md): turning on a plug-in with an acknowledgment is a 409 `acknowledgment_required` carrying the text and its version until the request says `acknowledged: "<version>"`, that version and no other. So no client turns one on without showing it: the web app's dialog, the CLI's prompt (or `--accept`, having been shown it). |
 | 7 | What's kept of an acknowledgment? | Each acceptance, for good: the plug-in, the version, who, when. Turning the plug-in off doesn't erase it. |
 
@@ -41,7 +41,7 @@ ADR-016 already says producers become plug-ins. This ADR starts with what every 
 `src/plugins/`: one folder a plug-in, its `__init__.py` declaring a `PluginSpec` (`src/plugins/contract.py`), as a producer's folder declares its `ProducerSpec`:
 
 - `plugin_id`, `title`, `description` (a sentence or two for Settings);
-- `acknowledgment`: `Acknowledgment(version, title, text, links)` or none;
+- `acknowledgment`: `Acknowledgment(version, title, text, links, reaccept_from)` or none;
 - what it keeps for the server, if anything (`data`: how to fetch it, as `module:function`, and what it is, for the status line).
 
 `src/plugins/__init__.py` lists them; everything else reads it.
@@ -80,15 +80,14 @@ ADR-017 phase 4 needs names for places. They come from GeoNames, under Creative 
 - **What it adds (phase 2):** place search when setting a location, by name (`GET /v1/places?q=`), most populous first; and `PUT /v1/assets/locations` taking `{place_id}`, which sets a person's location at that place's point and records the place. Where place names show, the credit shows.
 - **Later (ADR-017 phase 4's rest):** a name beside every location ("Near Port of Spain, Trinidad and Tobago"), and suggestions from text in photos.
 
-## Open question: when a new version asks again (Robert, 2026-10-18)
+## When a new version asks again (Robert, 2026-10-18)
 
-Robert: "the requiring acknowledgment on an upgrade should be defined by the plug-in itself: going from Creative Commons to Creative Commons should not require a new acknowledgment; going from Creative Commons to MIT or another license could, but only the new plug-in can know that." And: "the plug-in wouldn't necessarily know it's a new install versus an upgrade, but I kinda wanna think about that."
+Robert: "the requiring acknowledgment on an upgrade should be defined by the plug-in itself: going from Creative Commons to Creative Commons should not require a new acknowledgment; going from Creative Commons to MIT or another license could, but only the new plug-in can know that." Decided: "if not accepted yet or if the plugin says 'must re-accept'."
 
-What's known already: whether an account accepted anything, and which version (`plugin_acknowledgments`). A new install (or an account that never turned it on) has nothing accepted and is always asked. Only an upgrade has an older acceptance, so the question is the plug-in's alone: does what was accepted still cover it? Ways it could say so, for Robert to choose:
-- **Terms apart from wording:** the acknowledgment names its terms (`terms="cc-by-4.0"`) beside its text's version; a new version with the same terms is covered, other terms ask again.
-- **What it still covers:** the acknowledgment lists the earlier versions its text still covers (`covers=("1",)`); an acceptance of one of them stands.
-
-Until then decision 5 stands as built: any new version asks again. No plug-in has a second version yet.
+- **Not accepted yet** is the server's to know: an account with nothing accepted (a new install, or one that never turned it on) is always asked. Every turn-on asks too, as before (decision 4): turning a plug-in on shows its text.
+- **"Must re-accept"** is the plug-in's to say, on its acknowledgment: `reaccept_from`, the earliest version whose acceptance still stands. A version whose terms changed names itself; one that only rewords (or downloads more under the same license) keeps the one before's. Empty: any version accepted stands.
+- Versions are numbers with dots ("1", "2", "2.1"), compared as numbers (the registry refuses others). Naming a version rather than saying "this one asks" means a server that skips the release that asked still asks: one going from 1 straight to 2.1, where 2 asked, finds `reaccept_from = "2"` and waits.
+- Kept as before: the acceptance an account is on by stays the version it accepted (`plugins.acknowledged_version`), every acceptance in `plugin_acknowledgments`. `repository/plugins.py` `stands` decides, in Python and in SQL (`on_sql`, for the producers' queue).
 
 ## A plug-in's producers (Robert, 2026-10-18)
 

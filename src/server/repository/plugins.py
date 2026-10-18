@@ -2,9 +2,10 @@
 acknowledgment its admins accepted.
 
 A plug-in is on when its row says enabled and, if it declares an
-acknowledgment, the version accepted when it was turned on is the version
-now. Enabled with an older version accepted is "waiting": off until an
-admin accepts the new text. No row: off.
+acknowledgment, the version accepted when it was turned on still stands:
+any version, unless the plug-in says a newer one must be accepted again
+(its reaccept_from; Robert 2026-10-18). Enabled with one accepted before
+that is "waiting": off until an admin accepts the new text. No row: off.
 """
 
 from __future__ import annotations
@@ -16,27 +17,41 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.plugins import plugin as plugin_spec
-from src.plugins.contract import PluginSpec
+from src.plugins import version_key
+from src.plugins.contract import Acknowledgment, PluginSpec
 
 ON, OFF, WAITING = "on", "off", "waiting"
 
 
+def stands(ack: Acknowledgment, accepted: str | None) -> bool:
+    """Whether accepting this version (None: none accepted) still covers the acknowledgment now."""
+    key = version_key(accepted)
+    return key is not None and (not ack.reaccept_from or key >= version_key(ack.reaccept_from))
+
+
 def state_of(spec: PluginSpec, row: dict[str, Any] | None) -> str:
-    """on, off, or waiting (enabled, its acknowledgment's text changed since it was accepted)."""
+    """on, off, or waiting (enabled, but its acknowledgment must be accepted again since)."""
     if row is None or not row["enabled"]:
         return OFF
-    if spec.acknowledgment is not None and row["acknowledged_version"] != spec.acknowledgment.version:
+    if spec.acknowledgment is not None and not stands(spec.acknowledgment, row["acknowledged_version"]):
         return WAITING
     return ON
 
 
 def on_sql(plugin_id: str) -> str:
     """SQL true while the plug-in is on in the account: enabled, and the version of its acknowledgment
-    accepted the one now (what state_of says). The id and version are the registry's (checked there)."""
+    accepted still stands (what state_of says), versions compared as numbers. The id and versions are
+    the registry's (checked there)."""
     spec = plugin_spec(plugin_id)
     if spec is None:
         raise ValueError(f"No plug-in {plugin_id!r}")
-    accepted = f" AND pg.acknowledged_version = '{spec.acknowledgment.version}'" if spec.acknowledgment else ""
+    ack, accepted = spec.acknowledgment, ""
+    if ack is not None:
+        since = ",".join(str(n) for n in version_key(ack.reaccept_from)) if ack.reaccept_from else ""
+        # Only a version's numbers are cast (CASE evaluates in order): never one that isn't a version.
+        accepted = (" AND CASE WHEN pg.acknowledged_version ~ '^[0-9]{1,6}(\\.[0-9]{1,6}){0,3}$' THEN "
+                    + (f"string_to_array(pg.acknowledged_version, '.')::int[] >= ARRAY[{since}]" if since
+                       else "true") + " ELSE false END")
     return f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}' AND pg.enabled{accepted})"
 
 

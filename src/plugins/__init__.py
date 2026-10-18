@@ -14,8 +14,16 @@ import re
 from src.plugins.contract import PluginSpec
 
 _ID = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
-# An acknowledgment's version: in SQL (src/server/repository/plugins.py on_sql), so plain.
-_VERSION = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+# An acknowledgment's version: numbers with dots, compared as numbers, in SQL too
+# (src/server/repository/plugins.py on_sql).
+_VERSION = re.compile(r"^[0-9]{1,6}(\.[0-9]{1,6}){0,3}$")
+
+
+def version_key(version: str | None) -> tuple[int, ...] | None:
+    """A version as numbers, to compare; None for one that isn't a version."""
+    if version is None or not _VERSION.match(version):
+        return None
+    return tuple(int(part) for part in version.split("."))
 _registry: dict[str, PluginSpec] | None = None
 
 
@@ -37,10 +45,13 @@ def registry() -> dict[str, PluginSpec]:
         for p in found:
             if not _ID.match(p.plugin_id):
                 raise ValueError(f"{p.plugin_id!r}: a plug-in's id is lowercase letters, digits and dashes")
-            if p.acknowledgment is not None and not (_VERSION.match(p.acknowledgment.version)
-                                                     and p.acknowledgment.text.strip()):
-                raise ValueError(f"{p.plugin_id}: an acknowledgment needs a version (letters, digits, . _ -) "
-                                 "and its text")
+            ack = p.acknowledgment
+            if ack is not None and not (version_key(ack.version) and ack.text.strip()):
+                raise ValueError(f"{p.plugin_id}: an acknowledgment needs a version (numbers with dots: "
+                                 "\"1\", \"2.1\") and its text")
+            if ack is not None and ack.reaccept_from and not (
+                    version_key(ack.reaccept_from) and version_key(ack.reaccept_from) <= version_key(ack.version)):
+                raise ValueError(f"{p.plugin_id}: reaccept_from is a version up to its own ({ack.version})")
         _registry = {p.plugin_id: p for p in found}
     return _registry
 

@@ -1,8 +1,9 @@
 """Plug-ins (ADR-021) against the real API and database: each account's
 switch, what turning one on asks (its acknowledgment, shown and accepted by
 version, every time it's turned on), every acceptance kept, a new version
-of the text turning it off until it's accepted again, account admins only,
-and the CLI showing the text before it accepts."""
+of the text turning it off until it's accepted again only when the plug-in
+says so (reaccept_from), account admins only, and the CLI showing the text
+before it accepts."""
 
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ import src.plugins
 from src.client.cli.client import LumiverbClient
 from src.client.cli.main import app as cli_app
 from src.plugins import registry
-from src.server.repository.plugins import PluginRepository
+from src.server.repository.plugins import PluginRepository, on_sql
 from tests.test_library_access import PASSWORD, _person
 from tests.test_scans_api import env  # noqa: F401 — the shared fixture
 
@@ -116,28 +117,83 @@ def test_turning_one_on_asks_its_acknowledgment_and_keeps_who_accepted(env) -> N
     assert len(_accepted(env)) == 2
 
 
-def test_a_new_version_of_its_text_turns_it_off_until_accepted_again(env, monkeypatch) -> None:  # noqa: F811
-    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": _version()},
-                       headers=env.admin)
-    assert r.status_code == 200, r.text
+def _with_text(monkeypatch, version: str, reaccept_from: str) -> None:
+    """GeoNames as a later release would declare it: its text at this version, accepted again from that."""
     old = registry()[GEONAMES]
-    newer = dataclasses.replace(old, acknowledgment=dataclasses.replace(old.acknowledgment, version="next",
-                                                                        text=old.acknowledgment.text + "\n\nMore."))
+    newer = dataclasses.replace(old, acknowledgment=dataclasses.replace(
+        old.acknowledgment, version=version, reaccept_from=reaccept_from, text=old.acknowledgment.text + "\n\nMore."))
     monkeypatch.setitem(src.plugins.registry(), GEONAMES, newer)
 
-    listed = _plugins(env, env.admin)[GEONAMES]
-    assert listed["state"] == "waiting" and listed["acknowledged"]["version"] == old.acknowledgment.version
-    assert listed["acknowledgment"]["version"] == "next"
+
+def _on_in_sql(env) -> bool:  # noqa: F811
+    """What the producers' queue asks (lineage.APPLIES), as the database answers it."""
+    with env.db.connect() as conn:
+        return bool(conn.execute(text(f"SELECT {on_sql(GEONAMES)}")).scalar())
+
+
+def _on_in_python(env) -> bool:  # noqa: F811
     with env.db.connect() as conn:
         from sqlmodel import Session
 
-        assert PluginRepository(Session(bind=conn)).is_on(GEONAMES) is False
+        return PluginRepository(Session(bind=conn)).is_on(GEONAMES)
+
+
+def test_a_new_version_of_its_text_stays_on_unless_the_plug_in_says_accept_again(env, monkeypatch) -> None:  # noqa: F811
+    first = _version()
+    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": first},
+                       headers=env.admin)
+    assert r.status_code == 200, r.text
+    assert _on_in_sql(env) and _on_in_python(env)
+
+    # Its wording changed, the same terms: what was accepted still stands.
+    _with_text(monkeypatch, "2", reaccept_from="")
+    listed = _plugins(env, env.admin)[GEONAMES]
+    assert listed["state"] == "on" and listed["acknowledged"]["version"] == first
+    assert listed["acknowledgment"]["version"] == "2"
+    assert _on_in_sql(env) and _on_in_python(env)
+    # On already: nothing asked, nothing more kept.
+    assert env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True}, headers=env.admin).status_code == 200
+    assert [v for _, v, _ in _accepted(env)] == [first]
+
+    # Its terms changed: it says so, and it's off (waiting) until the new text is accepted.
+    _with_text(monkeypatch, "3", reaccept_from="3")
+    listed = _plugins(env, env.admin)[GEONAMES]
+    assert listed["state"] == "waiting" and listed["acknowledged"]["version"] == first
+    assert not _on_in_sql(env) and not _on_in_python(env)
     r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True}, headers=env.admin)
-    assert r.status_code == 409 and r.json()["error"]["details"]["version"] == "next"
+    assert r.status_code == 409 and r.json()["error"]["details"]["version"] == "3"
     assert r.json()["error"]["details"]["text"].endswith("More.")
-    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": "next"}, headers=env.admin)
+    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": "3"}, headers=env.admin)
     assert r.status_code == 200 and r.json()["state"] == "on"
-    assert [v for _, v, _ in _accepted(env)] == [old.acknowledgment.version, "next"]
+    assert [v for _, v, _ in _accepted(env)] == [first, "3"]
+    assert _on_in_sql(env) and _on_in_python(env)
+
+    # A later wording keeps the version that asked: accepting 3 stands for 4 (and 10: numbers, not text).
+    for later in ("4", "10"):
+        _with_text(monkeypatch, later, reaccept_from="3")
+        assert _plugins(env, env.admin)[GEONAMES]["state"] == "on" and _on_in_sql(env) and _on_in_python(env)
+
+
+def test_a_server_that_skipped_the_release_that_asked_still_asks(env, monkeypatch) -> None:  # noqa: F811
+    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": _version()},
+                       headers=env.admin)
+    assert r.status_code == 200, r.text
+    # Version 2 asked again (reaccept_from "2"); this server goes from 1 straight to 2.1, which only rewords.
+    _with_text(monkeypatch, "2.1", reaccept_from="2")
+    assert _plugins(env, env.admin)[GEONAMES]["state"] == "waiting"
+    assert not _on_in_sql(env) and not _on_in_python(env)
+
+
+def test_an_acknowledgment_version_is_numbers(monkeypatch) -> None:
+    old = registry()[GEONAMES]
+    for version, since in (("next", ""), ("1", "2"), ("2", "two")):
+        monkeypatch.setattr(src.plugins, "_registry", None)
+        bad = dataclasses.replace(old, acknowledgment=dataclasses.replace(old.acknowledgment, version=version,
+                                                                          reaccept_from=since))
+        with patch("src.plugins.geonames.PLUGIN", bad), pytest.raises(ValueError):
+            src.plugins.registry()
+    monkeypatch.setattr(src.plugins, "_registry", None)
+    assert src.plugins.registry()[GEONAMES] == old
 
 
 def test_each_account_its_own_and_only_its_admins_turn_one_on(env) -> None:  # noqa: F811

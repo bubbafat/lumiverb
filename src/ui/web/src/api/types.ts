@@ -41,7 +41,7 @@ export interface Plugin {
   plugin_id: string;
   title: string;
   description: string;
-  /** waiting: turned on, but its acknowledgment's text changed since it was accepted (off until accepted). */
+  /** waiting: turned on, but the plug-in says its acknowledgment must be accepted again (off until accepted). */
   state: "on" | "off" | "waiting";
   acknowledgment: PluginAcknowledgment | null;
   /** The acceptance it's on by (or waiting with); who, for admins. */
