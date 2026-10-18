@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { getCurrentUser } from "../../api/client";
+import { getCurrentUser, logout } from "../../api/client";
 
 const ROLE_COLORS: Record<string, string> = {
   admin: "bg-indigo-600/20 text-indigo-300 border-indigo-600/30",
@@ -59,6 +59,15 @@ export default function AccountSection() {
           </div>
         )}
       </div>
+
+      {/* The one way out on a phone, where there's no sidebar. */}
+      <button
+        type="button"
+        onClick={() => void logout()}
+        className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:border-gray-500"
+      >
+        Sign out
+      </button>
     </div>
   );
 }

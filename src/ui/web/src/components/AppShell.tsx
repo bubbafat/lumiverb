@@ -52,8 +52,15 @@ export default function AppShell() {
   }, []);
 
   // Admin, and its dot (the system's health), for admins only. Hidden until the
-  // role is known: never shown to someone it isn't for.
-  const { data: me } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser, enabled: Boolean(getApiKey()) });
+  // role is known: never shown to someone it isn't for. Asked again until it's
+  // known: a page opened while the server restarts (an upgrade) would otherwise
+  // go on without the role, hiding every admin's control.
+  const { data: me } = useQuery({
+    queryKey: ["settings", "me"],
+    queryFn: getCurrentUser,
+    enabled: Boolean(getApiKey()),
+    refetchInterval: (query) => (query.state.status === "error" ? 5_000 : false),
+  });
   const isAdmin = me?.role === "admin";
   const health = useSystemHealth(undefined, isAdmin);
   const adminAlert = isAdmin ? healthAlert(health.data, health.isError) : null;
