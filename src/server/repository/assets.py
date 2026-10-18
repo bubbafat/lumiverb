@@ -577,17 +577,20 @@ class AssetRepository:
         folder: str | None = None,
         after: tuple[datetime, str] | None = None,
         limit: int = 100,
+        within: list[str] | None = None,
     ) -> tuple[list[dict], int]:
         """Clips out of sight for these reasons, most recent first, outside
         trashed libraries (those come back or go with their library). Under a
-        folder (recursive) if given. Returns (page, total matching)."""
+        folder (recursive) if given; within: only these libraries. Returns
+        (page, total matching)."""
         where = (
             " FROM assets a JOIN libraries l ON l.library_id = a.library_id"
             " WHERE a.deleted_at IS NOT NULL AND a.deleted_reason = ANY(:reasons) AND l.status <> 'trashed'"
             "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
+            "   AND (CAST(:within AS text[]) IS NULL OR a.library_id = ANY(CAST(:within AS text[])))"
             "   AND (CAST(:under AS text) IS NULL OR a.rel_path LIKE :under ESCAPE '\\')"
         )
-        params = {"reasons": list(reasons), "lib": library_id, "under": _under(folder)}
+        params = {"reasons": list(reasons), "lib": library_id, "under": _under(folder), "within": within}
         total = int(self._session.execute(text("SELECT count(*)" + where), params).scalar() or 0)
         page_sql = where
         if after is not None:

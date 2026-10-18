@@ -19,7 +19,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
 from src.server.api.limits import MAX_IDS, require_scope
-from src.server.api.library_access import names
+from src.server.api.library_access import in_sight, names
 from src.server.database import get_control_session
 from src.server.repository import lineage
 from src.server.repository.control_plane import PublicLibraryRepository
@@ -198,16 +198,17 @@ def create_library(
 
 @router.get("", response_model=list[LibraryListItem])
 def list_libraries(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     include_trashed: Annotated[bool, Query(description="Include libraries with status=trashed")] = False,
 ) -> list[LibraryListItem]:
-    """Return all libraries for the tenant."""
+    """The account's libraries the caller can see."""
     from src.server import check_ins
 
     from src.server.repository.devices import DeviceRepository
 
     repo = LibraryRepository(session)
-    libraries = repo.list_all(include_trashed=include_trashed)
+    libraries = in_sight(request, session, repo.list_all(include_trashed=include_trashed))
     seen = check_ins.latest(session)
     names = DeviceRepository(session).names()
     return [
@@ -277,6 +278,7 @@ class LibraryHealthItem(BaseModel):
 
 @router.get("/health", response_model=list[LibraryHealthItem], dependencies=[Depends(require_signed_in)])
 def list_library_health(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> list[LibraryHealthItem]:
     """Return one row per non-trashed library indicating whether any
@@ -299,7 +301,7 @@ def list_library_health(
             pending=seen.get(lib.library_id, 0),
             healthy=seen.get(lib.library_id, 0) == 0,
         )
-        for lib in repo.list_all(include_trashed=False)
+        for lib in in_sight(request, session, repo.list_all(include_trashed=False))
     ]
 
 

@@ -16,12 +16,13 @@ import unicodedata
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor, require_signed_in
 from src.server.api.devices import may_call
+from src.server.api.library_access import edited, in_sight
 from src.server.repository.libraries import LibraryChangeRepository, LibraryRepository
 
 router = APIRouter(tags=["changes"])
@@ -107,15 +108,18 @@ def _match(path: str, roots: list[tuple[str, str]]) -> tuple[str, str] | None:
 
 @router.post("/v1/changes", response_model=ChangeReportResponse)
 def report_changes(
+    request: Request,
     body: ChangeReport,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
 ) -> ChangeReportResponse:
-    """Record paths that changed on storage. Paths in no library are counted, not kept."""
+    """Record paths that changed on storage. Paths in no library the caller
+    edits are counted, not kept."""
+    editable = edited(request, session)
     roots = [
         (lib.library_id, _clean(lib.root_path))
         for lib in LibraryRepository(session).list_all()
-        if lib.status != "trashed" and lib.root_path
+        if lib.status != "trashed" and lib.root_path and (editable is None or lib.library_id in editable)
     ]
     by_library: dict[str, list[str]] = {}
     unmatched: list[str] = []
@@ -139,13 +143,13 @@ def report_changes(
 
 @router.get("/v1/changes", response_model=ChangeSummaryResponse)
 def change_summary(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_signed_in)],
 ) -> ChangeSummaryResponse:
-    """Pending change counts per library, for a worker deciding what to scan."""
-    return ChangeSummaryResponse(
-        libraries=[LibraryChangeSummary(**row) for row in LibraryChangeRepository(session).summary()],
-    )
+    """Pending change counts per library the caller can see, for a worker deciding what to scan."""
+    rows = in_sight(request, session, LibraryChangeRepository(session).summary())
+    return ChangeSummaryResponse(libraries=[LibraryChangeSummary(**row) for row in rows])
 
 
 def _library_or_404(session: Session, library_id: str) -> None:

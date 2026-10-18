@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
-from src.server.api.library_access import names
+from src.server.api.library_access import names, seen
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.models.tenant import VALID_COLORS
 from src.server.repository.assets import AssetRepository
@@ -217,15 +217,17 @@ def lookup_ratings(
 
 @router.get("/favorites")
 def list_favorites(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     after: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_PAGE),
 ) -> dict:
-    """List favorited assets across all libraries, newest first."""
+    """List favorited assets across the libraries the caller can see, newest first."""
 
     rating_repo = RatingRepository(session)
-    assets, next_cursor = rating_repo.list_favorites(user_id, after=after, limit=limit)
+    assets, next_cursor = rating_repo.list_favorites(user_id, after=after, limit=limit,
+                                                     within=seen(request, session))
 
     # Look up library names for grouping
     lib_repo = LibraryRepository(session)

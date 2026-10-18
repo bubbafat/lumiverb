@@ -43,7 +43,7 @@ from src.server.api.devices import may_call
 from src.server.api.routers.libraries import CheckedIn
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
-from src.server.api.library_access import names
+from src.server.api.library_access import edited, names, seen
 from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
 from src.shared.producers import (
@@ -320,11 +320,12 @@ def list_producers(
     admin = _admin(request)
     paused = lineage.pauses(session)
     items, wants, counted = [], {}, {}
+    visible = seen(request, session)  # counted over the libraries a person can see (ADR-018 decision 8)
     for artifact in PRODUCERS:
         want = wants[artifact] = lineage.desired(session, artifact, models)
         item = _with_state(_item(artifact, want, waits, lineage.uses(session, artifact)), paused, admin)
         if counts:
-            counted[artifact] = lineage.counts(session, artifact, want, library_id, asset_ids)
+            counted[artifact] = lineage.counts(session, artifact, want, library_id, asset_ids, within=visible)
             item.counts = ProducerCounts(**counted[artifact])
         items.append(item)
     if counts:
@@ -334,7 +335,8 @@ def list_producers(
             p = PRODUCERS[item.artifact]
             item.waits = [Wait(**w) for w in producer_waits(
                 session, item.artifact, wants[item.artifact], counts=counted, paused=paused, status=status,
-                ai=waits.get(p.job) if p.job else None, library_id=library_id, asset_ids=asset_ids)]
+                ai=waits.get(p.job) if p.job else None, library_id=library_id, asset_ids=asset_ids,
+                within=visible)]
     return ProducerList(producers=items)
 
 
@@ -746,9 +748,10 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     from src.server.api.routers.libraries import checked_in_of
     from src.server.repository.devices import DeviceRepository
 
-    libraries = LibraryRepository(session).active_brief()
-    seen, names = check_ins.latest(session), DeviceRepository(session).names()
-    failing = scan_waits(session, status)
+    visible = seen(request, session)  # what a person can see of the libraries (ADR-018 decision 8)
+    libraries = [lib for lib in LibraryRepository(session).active_brief() if visible is None or lib[0] in visible]
+    checked, names = check_ins.latest(session), DeviceRepository(session).names()
+    failing = scan_waits(session, status, visible)
     status.state = pause_state(set(held), libraries_paused=sum(1 for lib in libraries if paused.scans_paused(lib[0])),
                                libraries=len(libraries))
     status.switches = [
@@ -758,7 +761,7 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
         for t in pause_targets()]
     status.libraries = [
         LibraryScans(library_id=library_id, name=name, reader=reader, reader_name=names.get(reader),
-                     checked_in=checked_in_of(seen.get(library_id)), paused=paused.scans_paused(library_id),
+                     checked_in=checked_in_of(checked.get(library_id)), paused=paused.scans_paused(library_id),
                      paused_at=paused.libraries.get(library_id, {}).get("paused_at"),
                      paused_by=paused.libraries.get(library_id, {}).get("paused_by") if admin else None,
                      waits=[w for w in failing if w["library_id"] == library_id])
@@ -771,6 +774,11 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
                                    paused=held_producers))
         except Exception:  # noqa: BLE001 — the time left is extra; what's running is still said
             logger.exception("producers: working out how long is left failed")
+    if visible is not None:
+        status.storage_waits = [i for i in status.storage_waits if i in visible]
+        status.storage = {i: v for i, v in status.storage.items() if i in visible}
+        status.held = [h for h in status.held if h.library_id in visible]
+        status.scans_failing = [f for f in status.scans_failing if f.library_id in visible]
     return status
 
 
@@ -850,6 +858,7 @@ class FailingClips(BaseModel):
 @router.get("/failures", response_model=FailingClips, dependencies=[Depends(require_signed_in)])
 @names(sees=("query.library_id",))
 def list_failures(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     artifact: str | None = None,
     library_id: str | None = None,
@@ -860,7 +869,8 @@ def list_failures(
     error, how many tries and when the next one is (none once given up)."""
     if artifact is not None:
         producer_or_404(artifact)
-    rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after)
+    rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after,
+                            within=seen(request, session))
     more = len(rows) > limit
     rows = rows[:limit]
     items = [FailingClip(asset_id=r["asset_id"], artifact=r["artifact"], title=PRODUCERS[r["artifact"]].title,
@@ -884,7 +894,7 @@ class RetryIn(BaseModel):
 
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
 @names("body.asset_ids", "body.library_id")
-def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
+def retry_failures(body: RetryIn, request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """Try failing clips again now, given up or not; the back-off starts
     over. asset_ids, or all: true; neither or both is a 400 scope_required.
     Returns {"retried"}."""
@@ -893,7 +903,8 @@ def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant
     require_scope(body.asset_ids is not None, body.all, "asset_ids")
     if body.artifact is not None:
         producer_or_404(body.artifact)
-    n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=body.asset_ids)
+    n = lineage.retry(session, artifact=body.artifact, library_id=body.library_id, asset_ids=body.asset_ids,
+                      within=edited(request, session))
     session.commit()
     return {"retried": n}
 
@@ -960,14 +971,15 @@ def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(g
     models, _ = tenant_ai(request)
     paused = lineage.pauses(session)
     out = []
+    within = edited(request, session)  # all: the libraries a person edits (ADR-018 decision 8)
     for artifact in artifacts:
         want = lineage.desired(session, artifact, models)
         retried = missing = stale = 0
         for library_id in libraries:
-            retried += lineage.retry(session, artifact=artifact, library_id=library_id)
+            retried += lineage.retry(session, artifact=artifact, library_id=library_id, within=within)
             if redo:
-                lineage.ask_redo(session, artifact, library_id)
-            c = lineage.counts(session, artifact, want, library_id)
+                lineage.ask_redo(session, artifact, library_id)  # admins only: every library theirs
+            c = lineage.counts(session, artifact, want, library_id, within=within)
             missing, stale = missing + c["missing"], stale + c["stale"]
         out.append(RunProducer(artifact=artifact, title=PRODUCERS[artifact].title, missing=missing,
                                redo=stale if lineage.redoable(artifact) else 0, retried=retried,
