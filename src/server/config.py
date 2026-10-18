@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     # Each account's playback cuts (src/server/storage/cache.py playback_cuts): at most this many GB.
     lumiverb_playback_cache_gb: float = 2.0
+    # Where the Place names plug-in fetches GeoNames' files (src/plugins/geonames/data.py): theirs, or a mirror.
+    lumiverb_geonames_url: str = "https://download.geonames.org/export/dump/"
 
     # API
     api_host: str = "0.0.0.0"

@@ -1,12 +1,14 @@
-import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { ApiError, setLocations, type LocationReplace } from "../api/client";
+import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError, listPlugins, searchPlaces, setLocations, type LocationReplace } from "../api/client";
+import type { Place } from "../api/types";
 import { Modal } from "./Modal";
 import { clipCount } from "./ProjectUsageList";
 
-/** "Set location…" for a selection (ADR-017): a point, or the same place as
- * one of the selected clips. Replacing a location the file or a person gave
- * asks first, as the API requires (409 location_exists). */
+/** "Set location…" for a selection (ADR-017): a place found by name (with the
+ * Place names plug-in on and its list fetched, ADR-021), a point, or the same
+ * place as one of the selected clips. Replacing a location the file or a
+ * person gave asks first, as the API requires (409 location_exists). */
 
 type Ask = { count: number; person: number; file: number };
 
@@ -31,21 +33,27 @@ export function SetLocationModal({
   onDone?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"point" | "same">("point");
+  const { data: plugins } = useQuery({ queryKey: ["plugins"], queryFn: listPlugins });
+  const geonames = plugins?.find((p) => p.plugin_id === "geonames");
+  const places = geonames?.state === "on" && geonames.data?.state === "ready";
+  const [picked, setPicked] = useState<"place" | "point" | "same" | null>(null);
+  const mode = picked ?? (places ? "place" : "point");
+  const setMode = setPicked;
   const [point, setPoint] = useState("");
+  const [place, setPlace] = useState<Place | null>(null);
   const [sameAs, setSameAs] = useState(assetIds[0] ?? "");
   const [ask, setAsk] = useState<Ask | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const parsed = parseLatLon(point);
-  const ready = mode === "point" ? parsed !== null : sameAs !== "";
+  const ready = mode === "place" ? place !== null : mode === "point" ? parsed !== null : sameAs !== "";
 
   const send = async (replace: LocationReplace) => {
     setBusy(true);
     setError(null);
     try {
-      const where = mode === "point" ? parsed! : { same_as: sameAs };
+      const where = mode === "place" ? { place_id: place!.place_id } : mode === "point" ? parsed! : { same_as: sameAs };
       await setLocations({ asset_ids: assetIds, replace, ...where });
       void queryClient.invalidateQueries();
       onDone?.();
@@ -93,6 +101,12 @@ export function SetLocationModal({
       ) : (
         <div className="space-y-4">
           <div className="flex gap-4 text-sm text-gray-300">
+            {places && (
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={mode === "place"} onChange={() => setMode("place")} />
+                Place
+              </label>
+            )}
             <label className="flex items-center gap-1.5">
               <input type="radio" checked={mode === "point"} onChange={() => setMode("point")} />
               Coordinates
@@ -104,7 +118,9 @@ export function SetLocationModal({
               </label>
             )}
           </div>
-          {mode === "point" ? (
+          {mode === "place" ? (
+            <PlaceSearch chosen={place} onChoose={setPlace} input={input} />
+          ) : mode === "point" ? (
             <input
               aria-label="Latitude, longitude"
               placeholder="48.85837, 2.29448"
@@ -136,5 +152,64 @@ export function SetLocationModal({
         </div>
       )}
     </Modal>
+  );
+}
+
+/** A place by name (the Place names plug-in): what's typed, the places it starts, the one chosen; GeoNames'
+ * credit beside them, as its license asks. */
+function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoose: (p: Place | null) => void;
+                                                    input: string }) {
+  const [typed, setTyped] = useState(chosen?.label ?? "");
+  const [term, setTerm] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setTerm(typed.trim()), 250);
+    return () => clearTimeout(t);
+  }, [typed]);
+  const searching = term.length >= 2 && term !== chosen?.label;
+  const { data, error } = useQuery({ queryKey: ["places", term], queryFn: () => searchPlaces(term),
+                                     enabled: searching });
+  return (
+    <div className="space-y-2">
+      <input
+        aria-label="Place"
+        placeholder="Port of Spain"
+        value={typed}
+        onChange={(e) => {
+          setTyped(e.target.value);
+          onChoose(null);
+        }}
+        className={input}
+      />
+      {searching && data && (
+        data.places.length === 0 ? (
+          <p className="text-sm text-gray-500">No place starts with that.</p>
+        ) : (
+          <ul aria-label="Places" className="max-h-56 overflow-y-auto rounded-lg border border-gray-700">
+            {data.places.map((p) => (
+              <li key={p.place_id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChoose(p);
+                    setTyped(p.label);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-800"
+                >
+                  {p.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+      {error && <p role="alert" className="text-sm text-red-300">{error instanceof Error ? error.message : String(error)}</p>}
+      <p className="text-xs text-gray-500">
+        Place names from{" "}
+        <a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer" className="hover:underline">GeoNames</a>
+        ,{" "}
+        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer"
+           className="hover:underline">CC BY 4.0</a>
+      </p>
+    </div>
   );
 }

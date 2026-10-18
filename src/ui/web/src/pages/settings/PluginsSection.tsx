@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, getCurrentUser, listPlugins, setPlugin } from "../../api/client";
-import type { Plugin, PluginAcknowledgment } from "../../api/types";
+import type { Plugin, PluginAcknowledgment, PluginData } from "../../api/types";
 
 export const PLUGINS_QUERY_KEY = ["plugins"];
 
@@ -20,7 +20,12 @@ export default function PluginsSection() {
   const queryClient = useQueryClient();
   const { data: user } = useQuery({ queryKey: ["settings", "me"], queryFn: getCurrentUser });
   const admin = user?.role === "admin";
-  const { data: plugins, isLoading, error } = useQuery({ queryKey: PLUGINS_QUERY_KEY, queryFn: listPlugins });
+  const { data: plugins, isLoading, error } = useQuery({
+    queryKey: PLUGINS_QUERY_KEY,
+    queryFn: listPlugins,
+    // While what a plug-in keeps for the server is fetched: how far, every second.
+    refetchInterval: (query) => (query.state.data?.some((p) => p.data?.state === "fetching") ? 1000 : false),
+  });
   // The plug-in being turned on and what it asks, while that's shown.
   const [asking, setAsking] = useState<{ plugin: Plugin; acknowledgment: PluginAcknowledgment } | null>(null);
   const change = useMutation({
@@ -63,7 +68,8 @@ export default function PluginsSection() {
         <ul aria-label="Plug-ins" className="divide-y divide-gray-800">
           {(plugins ?? []).map((p) => (
             <PluginRow key={p.plugin_id} plugin={p} admin={admin} busy={change.isPending}
-                       turningOn={asking?.plugin.plugin_id === p.plugin_id} onToggle={(on) => toggle(p, on)} />
+                       turningOn={asking?.plugin.plugin_id === p.plugin_id} onToggle={(on) => toggle(p, on)}
+                       onRetry={() => change.mutate({ plugin: p, on: true })} />
           ))}
         </ul>
       )}
@@ -82,13 +88,15 @@ export default function PluginsSection() {
   );
 }
 
-function PluginRow({ plugin, admin, busy, turningOn, onToggle }: {
+function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry }: {
   plugin: Plugin;
   admin: boolean;
   busy: boolean;
   // Its acknowledgment is shown: the switch is on until it's accepted or cancelled.
   turningOn: boolean;
   onToggle: (on: boolean) => void;
+  // Fetch what it keeps for the server again, after it failed.
+  onRetry: () => void;
 }) {
   const on = plugin.state === "on" || turningOn;
   const accepted = plugin.acknowledged;
@@ -115,6 +123,9 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle }: {
           {admin && " Turn it on to read and accept the new text."}
         </p>
       )}
+      {plugin.state === "on" && plugin.data && (
+        <DataLine data={plugin.data} admin={admin} busy={busy} onRetry={onRetry} />
+      )}
       {plugin.state === "on" && accepted && (
         <p className="text-xs text-gray-500">
           {plugin.acknowledgment?.title ?? "Its terms"} accepted {day(accepted.at)}
@@ -122,6 +133,56 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle }: {
         </p>
       )}
     </li>
+  );
+}
+
+function mb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** What a plug-in on keeps for the whole server, as it's fetched: how far, what's there, or why it failed. */
+function DataLine({ data, admin, busy, onRetry }: { data: PluginData; admin: boolean; busy: boolean;
+                                                     onRetry: () => void }) {
+  if (data.state === "ready") {
+    return (
+      <p className="text-sm text-gray-400">
+        {data.title}: {(data.count ?? 0).toLocaleString()} {data.unit}
+        {data.ready_at && `, fetched ${day(data.ready_at)}`}.
+      </p>
+    );
+  }
+  if (data.state === "missing" || data.state === "failed") {
+    return (
+      <p role={data.state === "failed" ? "alert" : undefined}
+         className={data.state === "failed" ? "text-sm text-red-300" : "text-sm text-gray-400"}>
+        {data.state === "failed"
+          ? <>Couldn&apos;t fetch {data.title.toLowerCase()}: {data.error}.</>
+          : <>{data.title} isn&apos;t fetched yet.</>}
+        {admin && (
+          <>
+            {" "}
+            <button type="button" disabled={busy} onClick={onRetry} className="text-indigo-300 hover:underline disabled:opacity-50">
+              Try again
+            </button>
+          </>
+        )}
+      </p>
+    );
+  }
+  const done = data.done ?? 0;
+  const total = data.total ?? null;
+  return (
+    <div className="space-y-1" role="status">
+      <p className="text-sm text-gray-400">
+        {data.detail ?? `Fetching ${data.title.toLowerCase()}`}
+        {total ? `: ${mb(done)} of ${mb(total)}` : done ? `: ${mb(done)}` : "…"}
+      </p>
+      {total ? (
+        <div className="h-1.5 w-full max-w-xs overflow-hidden rounded bg-gray-800">
+          <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (100 * done) / total)}%` }} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -29,13 +29,26 @@ def plugins_list() -> None:
     table.add_column("PLUG-IN")
     table.add_column("STATE")
     table.add_column("ACCEPTED")
+    table.add_column("FOR THE SERVER")
     for p in plugins:
         accepted = p.get("acknowledged")
         table.add_row(p["plugin_id"], p["title"], STATES.get(p["state"], p["state"]),
                       f"version {accepted['version']}, {accepted['at'][:10]}" + (f", {accepted['by']}"
                                                                                  if accepted.get("by") else "")
-                      if accepted else "")
+                      if accepted else "", _data(p.get("data")))
     console.print(table)
+
+
+def _data(data: dict | None) -> str:
+    """What it keeps for the server, as it's fetched: "171,329 places", "fetching 40%", "failed: why"."""
+    if not data or data["state"] == "missing":
+        return ""
+    if data["state"] == "ready":
+        return f"{data.get('count') or 0:,} {data['unit']}"
+    if data["state"] == "failed":
+        return f"failed: {data.get('error') or ''} (enable it again to try again)"
+    total = data.get("total")
+    return f"fetching {100 * data.get('done', 0) // total}%" if total else "fetching"
 
 
 def _show(details: dict) -> None:

@@ -8,6 +8,7 @@ let role = "admin";
 let state: "on" | "off" | "waiting" = "off";
 let version = "1";
 let accepted: { version: string; by: string | null; at: string } | null = null;
+let data: Record<string, unknown> | null = null;
 const sent: { method: string; path: string; body: unknown }[] = [];
 
 const ACK = () => ({
@@ -19,7 +20,7 @@ const ACK = () => ({
 
 function plugin() {
   return { plugin_id: "geonames", title: "Place names (GeoNames)", description: "Find a place by name.",
-           state, acknowledgment: ACK(), acknowledged: state === "off" ? null : accepted };
+           state, acknowledgment: ACK(), acknowledged: state === "off" ? null : accepted, data };
 }
 
 function json(body: unknown, status = 200) {
@@ -43,6 +44,7 @@ beforeEach(() => {
         state = "off";
         return json(plugin());
       }
+      if (state === "on") return json(plugin()); // on already: nothing asked
       if (acknowledged !== version) {
         return json({ error: { code: "acknowledgment_required", message: "Read it first.",
                                details: { plugin_id: "geonames", ...ACK() } } }, 409);
@@ -63,6 +65,7 @@ afterEach(() => {
   state = "off";
   version = "1";
   accepted = null;
+  data = null;
   sent.length = 0;
 });
 
@@ -147,5 +150,34 @@ describe("PluginsSection", () => {
     await waitFor(() => expect(screen.getByText(/An admin turns them on/)).toBeTruthy());
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.getByText("On")).toBeTruthy();
+  });
+
+  it("says how far the place list is fetched, what's there, or why it failed (Try again)", async () => {
+    state = "on";
+    accepted = { version: "1", by: "owner@example.com", at: "2026-10-18T12:00:00Z" };
+    const base = { title: "The place list", unit: "places" };
+    data = { ...base, state: "fetching", done: 5 * 1024 * 1024, total: 10 * 1024 * 1024,
+             detail: "Downloading the place list" };
+    const { unmount } = renderSection();
+    expect((await screen.findByRole("status")).textContent).toContain("Downloading the place list: 5.0 MB of 10.0 MB");
+    unmount();
+
+    data = { ...base, state: "ready", count: 171329, ready_at: "2026-10-18T12:00:00Z" };
+    const ready = renderSection();
+    expect(await screen.findByText(/The place list: 171,329 places, fetched/)).toBeTruthy();
+    ready.unmount();
+
+    data = { ...base, state: "missing" };
+    const missing = renderSection();
+    expect(await screen.findByText(/The place list isn't fetched yet/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    missing.unmount();
+
+    data = { ...base, state: "failed", error: "HTTP 404" };
+    renderSection();
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn't fetch the place list: HTTP 404.");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(puts()).toEqual([{ enabled: true }]));
+    expect(screen.queryByRole("dialog")).toBeNull(); // on already: nothing asked
   });
 });

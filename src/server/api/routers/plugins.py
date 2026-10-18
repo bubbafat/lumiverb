@@ -4,6 +4,10 @@ or off, and what turning one on asks first.
 GET /v1/plugins                — every plug-in, its state in this account, and what it asks (signed in)
 PUT /v1/plugins/{plugin_id}    — turn one on or off (account admins)
 
+What a plug-in keeps for the whole server (its spec's data: GeoNames'
+place list) is fetched in the background when an account turns it on
+(src/server/plugin_data.py); its state is each plug-in's `data`.
+
 Turning on a plug-in that declares an acknowledgment (a license, say) is a
 409 acknowledgment_required carrying its text and version until the request
 says it accepted that version: no client turns one on without showing it.
@@ -22,8 +26,9 @@ from sqlmodel import Session
 from src.plugins import plugin as plugin_spec
 from src.plugins import registry
 from src.plugins.contract import Acknowledgment, PluginSpec
+from src.server import plugin_data
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
-from src.server.api.errors import DecisionRequiredError
+from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.database import get_control_session
 from src.server.repository.control_plane import UserRepository
 from src.server.repository.plugins import ON, PluginRepository, state_of
@@ -51,6 +56,21 @@ class Accepted(BaseModel):
     at: datetime
 
 
+class DataOut(BaseModel):
+    """What it keeps for the whole server, as it's fetched."""
+
+    title: str  # what it is: "The place list"
+    unit: str  # what count counts: "places"
+    # missing (never fetched), fetching, ready, failed
+    state: Literal["missing", "fetching", "ready", "failed"]
+    done: int = 0  # bytes downloaded so far, while fetching
+    total: int | None = None  # bytes in all, when known
+    detail: str | None = None  # what it's doing now
+    error: str | None = None  # why it failed
+    count: int | None = None  # how many it keeps (places), once ready
+    ready_at: datetime | None = None
+
+
 class PluginOut(BaseModel):
     plugin_id: str
     title: str
@@ -60,6 +80,8 @@ class PluginOut(BaseModel):
     acknowledgment: AcknowledgmentOut | None = None
     # The acceptance it's on by (or waiting with), while it's on or waiting.
     acknowledged: Accepted | None = None
+    # What it keeps for the whole server (None: nothing).
+    data: DataOut | None = None
 
 
 class PluginList(BaseModel):
@@ -93,8 +115,22 @@ def _out(spec: PluginSpec, row: dict | None, accepted: dict | None, *, admin: bo
     if spec.acknowledgment is not None and state != "off" and accepted is not None:
         shown = Accepted(version=accepted["version"], by=_email(accepted["user_id"]) if admin else None,
                          at=accepted["acknowledged_at"])
+    data = plugin_data.status(spec.plugin_id)
     return PluginOut(plugin_id=spec.plugin_id, title=spec.title, description=spec.description, state=state,
-                     acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown)
+                     acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown,
+                     data=DataOut(title=spec.data_title, unit=spec.data_unit,
+                                  **{k: data.get(k) for k in DataOut.model_fields
+                                     if k not in ("title", "unit") and data.get(k) is not None})
+                     if data else None)
+
+
+def require_on(session: Session, plugin_id: str) -> None:
+    """409 plugin_off unless the plug-in is on in this account (details: plugin_id, title)."""
+    if not PluginRepository(session).is_on(plugin_id):
+        spec = plugin_spec(plugin_id)
+        title = spec.title if spec else plugin_id
+        raise ConflictError("plugin_off", f"{title} is off: an admin turns it on in Settings › Plug-ins.",
+                            {"plugin_id": plugin_id, "title": title})
 
 
 def _admin(request: Request) -> bool:
@@ -123,7 +159,9 @@ def set_plugin(
     """Turn a plug-in on or off in this account. Turning on one that asks
     an acknowledgment: 409 acknowledgment_required with its text and version
     (details) unless acknowledged is that version; accepting is kept for
-    good. On already, nothing changes. Off asks nothing."""
+    good. On already, nothing changes. Off asks nothing. On (newly or
+    already), what it keeps for the server is fetched if it isn't there, a
+    fetch that failed at once (Try again)."""
     spec = plugin_spec(plugin_id)
     if spec is None:
         raise HTTPException(status_code=404, detail="No such plug-in")
@@ -147,4 +185,6 @@ def set_plugin(
             repo.acknowledge(plugin_id, ack.version, user_id=by, now=now)
         repo.set(plugin_id, True, acknowledged_version=ack.version if ack else None, by=by, now=now)
     session.commit()
+    if body.enabled:
+        plugin_data.ensure(plugin_id, retry_now=True)
     return _out(spec, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True)
