@@ -47,6 +47,14 @@ describe("BottomNav", () => {
     expect(screen.getByRole("link", { name: "Admin" }).querySelector('[role="img"]')).toBeNull();
   });
 
+  it("leads to who's signed in, Settings and Sign out on every page, for everyone", () => {
+    for (const [path, admin] of [["/", true], ["/libraries/lib_1/browse", false]] as const) {
+      renderAt(path, null, admin);
+      expect(screen.getByRole("link", { name: "Account" }).getAttribute("href")).toBe("/settings/account");
+      cleanup();
+    }
+  });
+
   it("has no Admin for anyone but an admin", () => {
     renderAt("/", "red", false);
     expect(screen.queryByRole("link", { name: /Admin/ })).toBeNull();

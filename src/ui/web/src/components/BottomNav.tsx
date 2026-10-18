@@ -80,8 +80,17 @@ function SlidersIcon() {
   );
 }
 
+function PersonIcon() {
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5 20a7 7 0 0114 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `flex flex-1 flex-col items-center gap-1 py-3 text-xs transition-colors duration-150 ${
+  `flex min-w-0 flex-1 flex-col items-center gap-1 py-3 text-[11px] transition-colors duration-150 ${
     isActive ? "text-indigo-400" : "text-gray-400"
   }`;
 
@@ -131,6 +140,12 @@ export function BottomNav({ adminAlert = null, showAdmin = false }: { adminAlert
           <span>Settings</span>
         </NavLink>
       )}
+
+      {/* Who's signed in, Settings and Sign out: the sidebar's, which a phone doesn't show. */}
+      <NavLink to="/settings/account" className={linkClass}>
+        <PersonIcon />
+        <span>Account</span>
+      </NavLink>
     </nav>
   );
 }
