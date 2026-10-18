@@ -294,6 +294,18 @@ export interface AssetDetail {
   face_count?: number | null;
   /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
   location?: AssetLocation | null;
+  /** The nearest town to the location it shows (the Place names plug-in): label null when there's none that
+   * near; null until named. */
+  place?: AssetPlace | null;
+}
+
+/** The nearest town to where a clip was (the Place names plug-in's producer), with who to credit for the name. */
+export interface AssetPlace {
+  /** "Port of Spain, Trinidad and Tobago"; null: no town within its radius. */
+  label: string | null;
+  place_id: string | null;
+  distance_m: number | null;
+  credit: { text: string; url: string };
 }
 
 /** A clip's location beyond the file's: a person's, a guess, or a suggestion. */

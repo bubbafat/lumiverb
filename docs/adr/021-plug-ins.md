@@ -10,6 +10,7 @@ Accepted (2026-10-18, Robert). Phase 1 first: one plug-in, place names from GeoN
 |-------|-------------|--------|
 | 1 | The mechanism: the registry, each account's switch, the acknowledgment and its record, the API, the CLI, Settings › Plug-ins | Built: `src/plugins/`, `repository/plugins.py`, `routers/plugins.py`, `lumiverb plugins`, `pages/settings/PluginsSection.tsx`; every turn-on asks (not only the first) |
 | 2 | Place names (GeoNames): the place list downloaded once for the server; place search when setting a location (ADR-017 phase 4, its first part) | Built: `src/plugins/geonames/data.py`, `src/server/plugin_data.py`, `GET /v1/places`, `place_id` on `PUT /v1/assets/locations`, Set location's Place, the GeoNames credit beside a place's name |
+| 2b | Place names' producer: each clip with a location named with its nearest town (Robert, 2026-10-18: "Shouldn't this be a processor as well? A plugin processor?") | Built: `src/producers/place/` (`plugin="geonames"`), `asset_place`, `POST /v1/places/nearest`, `POST /v1/places/names`, the detail's `place`, the Lightbox's "Near …" |
 | 3 | Robert tries the UI; his feedback | Waiting on 1 and 2 |
 | 4 | Other plug-ins distilled from what Lumiverb already has (faces, transcripts, descriptions, location guesses, …) | Not until phase 3 |
 
@@ -88,6 +89,18 @@ What's known already: whether an account accepted anything, and which version (`
 - **What it still covers:** the acknowledgment lists the earlier versions its text still covers (`covers=("1",)`); an acceptance of one of them stands.
 
 Until then decision 5 stands as built: any new version asks again. No plug-in has a second version yet.
+
+## A plug-in's producers (Robert, 2026-10-18)
+
+Robert, on Place names showing in Settings › Plug-ins but not Processing: "Shouldn't this be a processor as well? A plugin processor?" What a plug-in does for every clip is a producer, the plug-in's: a producer declares `plugin` (`ProducerSpec.plugin`), and it applies only while that plug-in is on in the account (`lineage.APPLIES` puts `plugins.on_sql` before its own `applies`), so it has everything a producer has: a row in Processing with its counts, waits and Pause (and "Part of the … plug-in", saying when it's off), its redo when its settings change, failures shown. Its spec stays one folder that imports only the contract; the registry refuses a plug-in that isn't one.
+
+The first: **Place names** (`src/producers/place/`), decided as proposed ("Let's do it as proposed"):
+1. **What's named:** the location the clip shows: a person's, else the file's GPS, else an applied guess (never a suggestion); named again whenever that changes (the name is kept with the location it was found for, `asset_place.lat/lon`: a clip whose location no longer matches is due again, and its old name isn't shown meanwhile, though it stays until the new one is saved).
+2. **How near:** the nearest town within 25 km (its setting, `radius_km`, which remakes); beyond, "Not near a town" (lineage outcome `empty`). A section of a town (PPLX, "Zürich (Kreis 7)"), and historical, abandoned or destroyed places, are never a town's name.
+3. **Where it shows:** the Lightbox, under the location ("Near Port of Spain, Trinidad and Tobago · GeoNames"), signed-in only; never on a public page. Searching by place name stays later (ADR-017 decision 9).
+4. **Turned off:** names stay and nothing more is named; turned on again, what's missing is named.
+
+The scheduler's work asks the server for the job's clips' locations and nearest towns in one request, and saves what it found with the location it was found for: one that has moved since is refused as stale and named again. While the place list isn't fetched yet, or the plug-in was turned off meanwhile, its clips wait (held) instead of failing.
 
 ## Alternatives considered
 

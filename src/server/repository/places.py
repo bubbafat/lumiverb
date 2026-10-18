@@ -6,6 +6,7 @@ transaction, so a search never sees half a list.
 
 from __future__ import annotations
 
+import math
 import unicodedata
 from collections.abc import Iterable
 from typing import Any
@@ -15,6 +16,13 @@ from sqlmodel import Session
 
 PREFIX = "geonames:"
 _BATCH = 5000
+# What's a town's name: not a section of one ("Zürich (Kreis 7)"), nor a
+# historical, abandoned or destroyed place (as ix_geonames_places_lat leaves out).
+TOWNS = "p.feature_code NOT IN ('PPLX', 'PPLH', 'PPLQ', 'PPLW', 'PPLCH')"
+EARTH_M = 6_371_000.0
+# Meters between (p.lat, p.lon) and (:lat, :lon), the haversine way.
+_METERS = ("2 * 6371000.0 * asin(sqrt(LEAST(1.0, power(sin(radians(p.lat - :lat) / 2), 2)"
+           " + cos(radians(:lat)) * cos(radians(p.lat)) * power(sin(radians(p.lon - :lon) / 2), 2))))")
 
 
 def fold(name: str) -> str:
@@ -110,6 +118,34 @@ class PlaceRepository:
         ), {"prefix": _like(name), "exact": name, "where": where, "where_prefix": _like(where),
             "limit": int(limit)}).mappings().all()
         return [dict(r) for r in rows]
+
+    def nearest(self, lat: float, lon: float, within_m: float) -> dict[str, Any] | None:
+        """The nearest town to a point, within within_m meters, with how far
+        (distance_m); None when there's none that near. Reads a band of
+        latitude (indexed), then a band of longitude as wide in meters
+        (both sides of the antimeridian), then measures."""
+        dlat = math.degrees(within_m / EARTH_M)
+        dlon = dlat / max(math.cos(math.radians(lat)), 1e-6)
+        params: dict[str, Any] = {"lat": lat, "lon": lon, "lo": lat - dlat, "hi": lat + dlat,
+                                  "within": float(within_m)}
+        if dlon >= 180:
+            lons = "TRUE"
+        else:
+            west, east = lon - dlon, lon + dlon
+            ranges = [(max(west, -180.0), min(east, 180.0))]
+            if west < -180:
+                ranges.append((west + 360, 180.0))
+            if east > 180:
+                ranges.append((-180.0, east - 360))
+            lons = " OR ".join(f"p.lon BETWEEN :w{i} AND :e{i}" for i in range(len(ranges)))
+            for i, (w, e) in enumerate(ranges):
+                params[f"w{i}"], params[f"e{i}"] = w, e
+        measured = _SELECT.replace("SELECT ", f"SELECT {_METERS} AS distance_m, ", 1)
+        row = self._session.execute(text(
+            f"SELECT * FROM ({measured} WHERE {TOWNS} AND p.lat BETWEEN :lo AND :hi AND ({lons})) d"
+            " WHERE d.distance_m <= :within ORDER BY d.distance_m, d.population DESC LIMIT 1"
+        ), params).mappings().first()
+        return dict(row) if row else None
 
     def get(self, geonameid: int) -> dict[str, Any] | None:
         row = self._session.execute(text(f"{_SELECT} WHERE p.geonameid = :g"), {"g": geonameid}).mappings().first()

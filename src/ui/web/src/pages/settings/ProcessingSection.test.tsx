@@ -835,6 +835,14 @@ describe("ProcessingSection settings", () => {
       expect(screen.queryByText(/Face groups/)).toBeNull();
     });
 
+    it("says which plug-in a producer belongs to, and that it makes nothing while that's off", async () => {
+      producers = [producer({ artifact: "place", title: "Place names", fields: [],
+                              plugin: { plugin_id: "geonames", title: "Place names (GeoNames)", on: false } })];
+      renderSection();
+      expect((await row("Place names")).textContent)
+        .toContain("Part of the Place names (GeoNames) plug-in: off, so nothing is made");
+    });
+
     it("counts guesses being checked again apart from missing", async () => {
       producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
                               counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];

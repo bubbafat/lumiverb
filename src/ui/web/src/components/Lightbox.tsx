@@ -1685,6 +1685,7 @@ export function Lightbox({
                         gpsLat={detail.gps_lat}
                         gpsLon={detail.gps_lon}
                         location={detail.location}
+                        place={detail.place}
                         canEdit={canCorrect}
                         busy={locationBusy}
                         error={locationError}

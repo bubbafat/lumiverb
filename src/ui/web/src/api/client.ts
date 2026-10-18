@@ -1083,6 +1083,8 @@ export interface Producer {
   needs?: string[];
   /** Why its due work waits now, each reason with how many clips (lib/waits.ts says each); null without counts. */
   waits?: ProducerWait[] | null;
+  /** The plug-in it belongs to (ADR-021): it makes nothing while that's off in the account. */
+  plugin?: { plugin_id: string; title: string; on?: boolean } | null;
 }
 
 /** Why some of a producer's due work waits (src/shared/waits.py): only the fields its reason has are sent. */

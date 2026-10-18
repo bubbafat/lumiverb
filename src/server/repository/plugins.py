@@ -30,6 +30,16 @@ def state_of(spec: PluginSpec, row: dict[str, Any] | None) -> str:
     return ON
 
 
+def on_sql(plugin_id: str) -> str:
+    """SQL true while the plug-in is on in the account: enabled, and the version of its acknowledgment
+    accepted the one now (what state_of says). The id and version are the registry's (checked there)."""
+    spec = plugin_spec(plugin_id)
+    if spec is None:
+        raise ValueError(f"No plug-in {plugin_id!r}")
+    accepted = f" AND pg.acknowledged_version = '{spec.acknowledgment.version}'" if spec.acknowledgment else ""
+    return f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}' AND pg.enabled{accepted})"
+
+
 class PluginRepository:
     def __init__(self, session: Session) -> None:
         self._session = session

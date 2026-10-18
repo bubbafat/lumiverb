@@ -11,7 +11,7 @@ Accepted. Decisions were made with Robert on 2026-10-09. Phases 1 to 3 built. In
 | 1 | Groundwork: better EXIF, the `asset_location` table, the effective location in filters, nothing on public pages | Built. New and changed files only: backfilling clips already ingested moves to phase 3 |
 | 2 | A person's location: set it for explicit clips; Lightbox row | Built |
 | 3 | The `location` producer: camera clips located from phone photos by date and time; backfill `taken_at_offset_min` and `gps_accuracy_m` for clips already ingested | Built |
-| 4 | Offline place names and suggestions from text in the image | Not started. Place names come as a plug-in (ADR-021, Robert 2026-10-18): its GeoNames license accepted when an admin turns it on; place search first |
+| 4 | Offline place names and suggestions from text in the image | Part built (ADR-021, Robert 2026-10-18): place names are the Place names plug-in's, its GeoNames license accepted when an admin turns it on: place search when setting a location (v0.1.85) and each located clip's nearest town, its producer (`place`). Suggestions from text in the image not started |
 | 5 | Landmark suggestions through the vision job | Not started |
 
 ## Overview

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { AssetLocation } from "../api/types";
+import type { AssetLocation, AssetPlace } from "../api/types";
 
 /** Where a clip was shot (ADR-017): a person's, else the file's, else a
  * guess; a suggestion asks. Shown in the Lightbox's details. */
@@ -31,6 +31,8 @@ export interface LocationRowProps {
   gpsLat: number | null | undefined;
   gpsLon: number | null | undefined;
   location?: AssetLocation | null;
+  /** The nearest town to it (the Place names plug-in), shown under it with its source's credit. */
+  place?: AssetPlace | null;
   /** An editor or admin: shows Clear, Use this and No. */
   canEdit?: boolean;
   busy?: boolean;
@@ -43,7 +45,7 @@ export interface LocationRowProps {
 }
 
 export function LocationRow({
-  gpsLat, gpsLon, location, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
+  gpsLat, gpsLon, location, place, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
 }: LocationRowProps) {
   const [showBasis, setShowBasis] = useState(false);
   const file = gpsLat != null && gpsLon != null ? { lat: gpsLat, lon: gpsLon } : null;
@@ -52,6 +54,8 @@ export function LocationRow({
   const suggestion = location && location.status === "suggested" ? location : null;
   const shown = person ?? file ?? guess;
   if (!shown && !suggestion) return null;
+  // A place a person picked by name already says it (basis_summary): its nearest town isn't said twice.
+  const nearby = shown && place && !(person?.credit && person.basis_summary === place.label) ? place : null;
 
   return (
     <>
@@ -120,6 +124,14 @@ export function LocationRow({
                   <button type="button" disabled={busy} onClick={onReject} className={small}>No</button>
                 </>
               )}
+            </div>
+          )}
+          {nearby && (
+            <div className="text-xs text-gray-300">
+              {nearby.label ? `Near ${nearby.label}` : "Not near a town"}
+              {" · "}
+              <a href={nearby.credit.url} target="_blank" rel="noopener noreferrer"
+                 className="text-gray-500 hover:text-gray-300 hover:underline">{nearby.credit.text}</a>
             </div>
           )}
           {error && <div role="alert" className="text-xs text-red-300">{error}</div>}

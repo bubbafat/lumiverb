@@ -120,6 +120,9 @@ class AssetResponse(BaseModel):
     # ADR-017: what the file doesn't say (a person's location, a guess or a
     # suggestion), beside the file's GPS above. Signed-in only.
     location: dict | None = None
+    # The nearest town to the location it shows (the Place names plug-in's producer): {label (None: no
+    # town that near), place_id, distance_m, credit}; None until named. Signed-in only.
+    place: dict | None = None
     gps_accuracy_m: float | None = None
     # Faces found in it (null: not looked for yet); a video's, the people seen.
     face_count: int | None = None
@@ -301,9 +304,11 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     _trim_public_transcript(request, session, response)
     if not getattr(request.state, "is_public_request", False):
+        from src.server.repository import asset_places
         from src.server.repository.locations import for_asset
 
         response.location = for_asset(session, asset.asset_id)
+        response.place = asset_places.for_asset(session, asset.asset_id)
     return response
 
 
