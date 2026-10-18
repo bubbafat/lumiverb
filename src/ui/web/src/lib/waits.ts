@@ -85,7 +85,9 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const s = some(w, c);
     const who = w.device_name || "its device";
     const heard = w.checked_in_at ? `last checked in ${c.when(w.checked_in_at)}` : "not checked in yet";
-    return `${s.count} in ${w.library_name || "a library"} ${s.wait} for ${who}, which reads it (${heard}).`;
+    const held = w.remakes_held === "battery" ? "; its remakes wait for mains power"
+      : w.remakes_held === "metered" ? "; its remakes wait for a network that isn't metered" : "";
+    return `${s.count} in ${w.library_name || "a library"} ${s.wait} for ${who}, which reads it (${heard}${held}).`;
   },
   new_version: (w, c) => {
     const s = some(w, c);

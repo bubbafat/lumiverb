@@ -31,6 +31,8 @@ export interface ReaderCheckIn {
   waiting_bytes: number;
   last_full_scan_at: string | null;
   checked_in_at: string;
+  /** Why it holds its remakes back now (a device's, ADR-018 decision 6): on battery, or a metered network. */
+  remakes_held?: "battery" | "metered" | null;
 }
 
 export interface DirectoryNode {

@@ -84,6 +84,8 @@ class CheckedIn(BaseModel):
     waiting_bytes: int
     last_full_scan_at: str | None
     checked_in_at: str
+    # Why it holds its remakes back now: "battery" or "metered" (a device's; ADR-018 decision 6), or null.
+    remakes_held: str | None = None
 
 
 class LibraryListItem(BaseModel):
@@ -120,7 +122,7 @@ def checked_in_of(row: dict | None) -> CheckedIn | None:
     return CheckedIn(client=row["client"], version=row["version"], state=row["state"],
                      waiting_files=row["waiting_files"], waiting_bytes=row["waiting_bytes"],
                      last_full_scan_at=full.isoformat() if full else None,
-                     checked_in_at=row["checked_in_at"].isoformat())
+                     checked_in_at=row["checked_in_at"].isoformat(), remakes_held=row.get("remakes_held"))
 
 
 class ScansPauseRequest(BaseModel):

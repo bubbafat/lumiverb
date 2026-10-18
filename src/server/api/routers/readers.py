@@ -41,6 +41,8 @@ class LibrarySaid(BaseModel):
     last_full_scan_at: datetime | None = None
     # The mark it last fetched what changed at (0: never).
     mark: int = Field(default=0, ge=0, le=2**62)
+    # Why it holds its remakes back now (ADR-018 decision 6): on battery, or a metered network. None: they go on.
+    remakes_held: Literal["battery", "metered"] | None = None
 
 
 class CheckInRequest(BaseModel):
@@ -132,7 +134,8 @@ def check_in(body: CheckInRequest, request: Request,
     if body.protocol < check_ins.OLDEST_PROTOCOL:
         raise ApiError(426, "reader_too_old", "This reader is too old for this server: update it.",
                        {"oldest_protocol": check_ins.OLDEST_PROTOCOL, "protocol": check_ins.PROTOCOL})
-    said = [check_ins.Said(s.library_id, s.state, s.waiting_files, s.waiting_bytes, _utc(s.last_full_scan_at), s.mark)
+    said = [check_ins.Said(s.library_id, s.state, s.waiting_files, s.waiting_bytes, _utc(s.last_full_scan_at), s.mark,
+                           s.remakes_held)
             for s in body.libraries]
     reader = getattr(request.state, "device_id", None) or body.reader
     libraries, gone = check_ins.check_in(session, reader=reader, client=body.client, version=body.version,

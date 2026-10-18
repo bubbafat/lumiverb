@@ -599,9 +599,10 @@ def _send_found(client: ApiClient, scan_id: str, files: list[dict], console: Con
 
 
 def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console,
-          actions: str = EVERY_ACTION) -> tuple[dict, dict[str, dict]]:
+          actions: str = EVERY_ACTION, remakes: bool = True) -> tuple[dict, dict[str, dict]]:
     """The listing is complete: the plan's counts, and each planned file of
-    `actions` by rel_path."""
+    `actions` by rel_path. remakes False: none of the previews made another
+    way than now is to be remade (a reader holding its remakes back)."""
     # A folder whose name the server refuses can't be named: then nothing in
     # the library is taken for gone ("" is its root).
     named = sorted({u if _sendable(u, allow_root=True) else "" for u in unlisted})
@@ -609,7 +610,8 @@ def _plan(client: ApiClient, scan_id: str, unlisted: list[str], console: Console
         named = [""]
     params = {"action": actions, "limit": PLAN_PAGE}
     # Sent again, the same listing's plan comes back.
-    first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json={"unlisted": named}, retry=True).json()
+    body = {"unlisted": named, **({} if remakes else {"remakes": False})}
+    first = client.post(f"/v1/scans/{scan_id}/plan", params=params, json=body, retry=True).json()
     counts = first["counts"]
     plan = {p["rel_path"]: p for p in first["files"]}
     cursor = first.get("next_cursor")
@@ -944,6 +946,7 @@ def run_scan(
     explain: bool = False,
     include_trash: bool = False,
     to_upload: Callable[[int, int], None] | None = None,
+    remakes: bool = True,
     console: Console,
 ) -> ScanStats:
     """Walk the library, tell the server what's there, read what it asks
@@ -978,6 +981,9 @@ def run_scan(
     sent yet, and their size on disk, once it knows them and as each is sent
     (a reader's check-in says them: ADR-018 decision 4). Not heard when the
     scan stops before it sends any, a dry run's too.
+    remakes: False when this reader holds its remakes back (a device on
+    battery or a metered network, ADR-018 decision 6): the plan asks it to
+    remake no preview.
     """
     library_id = library["library_id"]
     originals = reach(library)
@@ -1037,7 +1043,7 @@ def run_scan(
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
                     waiting=waiting or {}, cache_previews=cache_previews,
                     differences=_Differences() if explain else None, include_trash=include_trash,
-                    to_upload=to_upload, previews=previews, console=console)
+                    to_upload=to_upload, previews=previews, remakes=remakes, console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -1048,7 +1054,8 @@ def _run(
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
     waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, differences: _Differences | None,
-    include_trash: bool, to_upload: Callable[[int, int], None] | None, previews: Previews, console: Console,
+    include_trash: bool, to_upload: Callable[[int, int], None] | None, previews: Previews, remakes: bool,
+    console: Console,
 ) -> ScanStats:
     """run_scan once its scan is started: walk, list, plan, hash, finish,
     upload. With differences (--explain, a dry run), what it collects is
@@ -1091,7 +1098,7 @@ def _run(
 
     _send_found(client, scan_id, list(on_disk.values()), console)
     counts, plan = _plan(client, scan_id, stats.unlisted, console,
-                         actions=EVERY_ACTION if cache_previews else WORK_ACTIONS)
+                         actions=EVERY_ACTION if cache_previews else WORK_ACTIONS, remakes=remakes)
 
     work = _Work()
     to_hash: list[dict] = []

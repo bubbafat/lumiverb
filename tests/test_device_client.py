@@ -10,6 +10,7 @@ producers' own work; the server's list of what needs the originals is then
 empty, and a second pass does nothing. A clip it can't make is reported as
 failing, for its own libraries' clips and what it makes alone. Its
 check-ins say what its scan has left to send, and go on during a long pass.
+Its remakes wait while it's on battery, and say so.
 """
 
 from __future__ import annotations
@@ -58,7 +59,8 @@ def device(env, tmp_path: Path):
         "reader": made.json()["device_id"]})
     assert r.status_code == 200, r.text
     api = _device_client(made.json()["key"])
-    return Lib(root, r.json()), Device(api, full_scan_every=0, name="Test Studio"), api
+    # On mains power and an unmetered network, whatever this machine is on.
+    return Lib(root, r.json()), Device(api, full_scan_every=0, name="Test Studio", held=lambda: None), api
 
 
 def _clips(env, lib: Lib) -> dict[str, dict]:
@@ -241,7 +243,7 @@ class _Server:
 
 def test_it_keeps_checking_in_during_a_pass_and_a_failed_one_is_tried_again():
     server = _Server()
-    reader = Device(server, full_scan_every=0)
+    reader = Device(server, full_scan_every=0, held=lambda: None)
     reader.check_in_every = 0.05
     beat = threading.Thread(target=reader.keep_checking_in, kwargs={"every": 0.01}, daemon=True)
     beat.start()
@@ -252,3 +254,62 @@ def test_it_keeps_checking_in_during_a_pass_and_a_failed_one_is_tried_again():
         beat.join(5)
     assert not beat.is_alive()
     assert server.posts >= 3, "it went on after a check-in failed"
+
+
+def _hashes(env, lib: Lib) -> dict[str, dict[str, str]]:
+    """Each clip's previews' and analysis proxy's settings hash, by rel_path."""
+    engine = create_engine(env[5])
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT a.rel_path, l.artifact, l.settings_hash FROM assets a"
+                " JOIN artifact_lineage l ON l.asset_id = a.asset_id WHERE a.library_id = :l"
+                " AND l.artifact IN ('proxy', 'video_preview', 'analysis_proxy')"), {"l": lib.id}).all()
+    finally:
+        engine.dispose()
+    out: dict[str, dict[str, str]] = {}
+    for rel_path, artifact, h in rows:
+        out.setdefault(rel_path, {})[artifact] = h
+    return out
+
+
+def test_its_remakes_wait_on_battery_and_say_so_then_go_on(env, device):
+    """ADR-018 decision 6: remakes wait for mains power; its check-ins and
+    Processing's device wait say why; plugged in, it remakes."""
+    from src.shared import producers as shared
+
+    lib, reader, _ = device
+    client, headers, *_ = env
+    _image(lib, "a.png", 1)
+    _video(lib, "b.mp4")
+    reader.once()
+    before = _hashes(env, lib)
+    try:
+        for artifact, notch in (("proxy", "best"), ("analysis_proxy", "good")):
+            r = client.put(f"/v1/producers/{artifact}/settings", json={"settings": {"quality": notch}, "redo": True},
+                           headers=headers)
+            assert r.status_code == 200, r.text
+        reader._held = lambda: "battery"
+        reader.once()
+        assert _hashes(env, lib) == before, "nothing remade on battery"
+        seen = next(x for x in client.get("/v1/libraries", headers=headers).json() if x["library_id"] == lib.id)
+        assert seen["checked_in"]["remakes_held"] == "battery"
+        waits = {p["artifact"]: p["waits"] for p in client.get(
+            "/v1/producers", params={"library_id": lib.id}, headers=headers).json()["producers"]}
+        [wait] = [w for w in waits["analysis_proxy"] if w["reason"] == "device"]
+        assert wait["remakes_held"] == "battery" and wait["clips"] == 1
+        assert wait["device_name"].startswith("Studio") and wait["checked_in_at"]  # who, and when it was heard
+
+        reader._held = lambda: None
+        reader.once()
+        after = _hashes(env, lib)
+        best = shared.settings_hash(shared.effective_settings("proxy", {"quality": "best"}))
+        good = shared.settings_hash(shared.effective_settings("analysis_proxy", {"quality": "good"}))
+        assert after["a.png"]["proxy"] == best and after["b.mp4"]["proxy"] == best
+        assert after["b.mp4"]["analysis_proxy"] == good
+        seen = next(x for x in client.get("/v1/libraries", headers=headers).json() if x["library_id"] == lib.id)
+        assert seen["checked_in"]["remakes_held"] is None
+    finally:
+        for artifact in ("proxy", "analysis_proxy"):
+            client.put(f"/v1/producers/{artifact}/settings", json={"settings": {"quality": None}, "redo": True},
+                       headers=headers)

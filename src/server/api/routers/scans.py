@@ -114,6 +114,9 @@ class PlanRequest(BaseModel):
     # Folders the walk couldn't list ("" is the library's own): nothing under
     # them is gone, and while there are any nothing is archived.
     unlisted: list[Annotated[str, Field(max_length=MAX_PATH)]] = Field(default_factory=list, max_length=MAX_IDS)
+    # Whether the reader remakes previews made another way than now (reason remake): false while it holds its
+    # remakes back (a device on battery or a metered network, ADR-018 decision 6).
+    remakes: bool = True
 
 
 class PlannedFile(BaseModel):
@@ -415,7 +418,7 @@ def plan_scan(
         if counts is None or list(scan.unlisted or []) != unlisted:
             raise ConflictError("scan_planned", "Its listing is complete: nothing more can be added.")
     else:
-        scans.plan(session, scan, unlisted, follow_moves=get_follow_moves(session))
+        scans.plan(session, scan, unlisted, follow_moves=get_follow_moves(session), remakes=body.remakes)
         counts = scans.counts(session, scan)
         scans.keep_answer(session, scan, "plan", counts)
     first = _page(session, scan.scan_id, actions, None, limit)
