@@ -220,6 +220,73 @@ more memory.
 Transcripts don't need Ollama: Lumiverb's own Whisper does them. To make
 them faster with another GPU, see [AI machines](docs/linux-server.md#6-ai-machines).
 
+## A second machine for search and faces
+
+The server finds faces and makes the vectors behind visual search itself.
+Another computer with a GPU can share that work: it runs Lumiverb's **AI
+worker**, which holds no library, no account and no files. It's sent each
+photo's preview and sends back what it found. It uses the same models as
+the server, so photos come out the same whichever machine did them.
+
+On a Mac with Lumiverb installed (`brew install bubbafat/lumiverb/lumiverb`;
+don't start its service there, that's a whole server):
+
+```bash
+lumiverb-server ai-worker --env /opt/homebrew/etc/lumiverb/env --install
+```
+
+It starts now and again at login, and restarts itself after `brew upgrade`.
+`--uninstall` takes it away.
+
+On a Linux machine with Lumiverb installed, as a systemd unit
+(`/etc/systemd/system/lumiverb-ai-worker.service`):
+
+```ini
+[Unit]
+Description=Lumiverb AI worker (search and faces for another Lumiverb)
+After=network-online.target
+
+[Service]
+User=lumiverb
+EnvironmentFile=/etc/lumiverb/env
+ExecStart=/opt/lumiverb/.venv/bin/lumiverb-server ai-worker
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now lumiverb-ai-worker
+```
+
+It listens on port 6366 on every network interface (`--port`, `--host`),
+over plain HTTP. Every request needs its key, so only Lumiverb can use it,
+but the previews it's sent cross your network unencrypted, as they do to an
+Ollama machine. Run it only on a network you trust. Its key:
+
+```bash
+lumiverb-server ai-worker --env /opt/homebrew/etc/lumiverb/env --show-key
+```
+
+On Linux, once the unit has started, it's in the data folder (`DATA_DIR`
+in `/etc/lumiverb/env`, `/var/lib/lumiverb` unless you chose another):
+
+```bash
+sudo cat /var/lib/lumiverb/ai-worker/key
+```
+
+Then, as an admin, in the Lumiverb it should help:
+
+1. **Settings › AI › Add machine**: a name, the URL
+   `http://<that computer's address>:6366/v1` and the key, then **Connect**.
+   It lists `ViT-B-32` and `buffalo_l`.
+2. Under **Does**, tick **Visual search (CLIP)** and **Faces**, then **Add**.
+
+The server's own **Built in** machine keeps doing them too, unless you
+untick them there. Each machine works on one photo at a time on its GPU.
+
 ---
 
 ## Architecture Overview

@@ -8,7 +8,7 @@
     lumiverb-server reset-password --env FILE [--email EMAIL]
     lumiverb-server backup --env FILE [--before-upgrade]
     lumiverb-server restore --env FILE BACKUP [--yes]
-    lumiverb-server ai-worker --env FILE [--host HOST] [--port PORT] [--at-once N] [--show-key]
+    lumiverb-server ai-worker --env FILE [--host HOST] [--port PORT] [--at-once N] [--show-key | --install | --uninstall]
 
 init: the install's env file and nginx's config, each written only if it
 isn't there (init.py), for Homebrew's post_install.
@@ -57,6 +57,9 @@ AI machine in its Settings › AI (ADR-022, src/server/ai_worker/): the
 install's models, no account, database or files; on every interface, port
 6366, by default. Its key is made on first start, kept in the data folder
 (owner-only), and printed by --show-key, to paste into Settings › AI.
+--install runs it as a Mac's service (a launchd agent of its own:
+src/server/ai_worker/service.py), --uninstall takes that away; after `brew
+upgrade` it restarts into the new install, as run does.
 
 Which install is always said, never assumed: --env FILE, or
 $LUMIVERB_ENV_FILE, or CONTROL_PLANE_DATABASE_URL already in the
@@ -808,6 +811,25 @@ def _ai_worker(args: argparse.Namespace) -> int:
     if args.show_key:
         print(key)
         return 0
+    if args.uninstall:
+        from src.server.ai_worker.service import uninstall
+
+        print("✓ The AI worker's service is stopped and gone" if uninstall() else "No AI worker service here")
+        return 0
+    if args.install:
+        from src.server.ai_worker.service import install
+
+        env_file = _named_env_file(args.env)
+        if env_file is None:
+            raise InstallError("--install needs the install's env file (--env FILE): the service names it")
+        try:
+            path = install(_launched_as(), env_file, data, host=args.host, port=args.port, at_once=args.at_once)
+        except RuntimeError as exc:
+            raise InstallError(str(exc)) from None
+        print(f"✓ The AI worker runs as a service ({path}), on port {args.port}, and again at login.\n"
+              f"  In the other Lumiverb's Settings › AI, add a machine at http://<this Mac's name>:{args.port}/v1\n"
+              f"  with its key (lumiverb-server ai-worker --env {env_file} --show-key) doing CLIP and faces.")
+        return 0
     os.environ.update(env)  # DATA_DIR: the models folder (src/processing/models_dir.py)
     import uvicorn
 
@@ -824,14 +846,28 @@ def _ai_worker(args: argparse.Namespace) -> int:
             models.let_go_of_idle()
 
     threading.Thread(target=let_go_of_idle, name="ai-worker-idle", daemon=True).start()
+    # `brew upgrade` moving the opt link it was started through: it stops and starts again as the new install.
+    launched, upgraded = _launched_as(), threading.Event()
+    threading.Thread(target=watch_for_upgrade, args=(launched, stop, upgraded), name="upgrade-watch",
+                     daemon=True).start()
+    server = uvicorn.Server(uvicorn.Config(make_app(models, key, at_once=args.at_once), host=args.host,
+                                           port=args.port, access_log=False, log_config=None))
+
+    def stop_serving() -> None:
+        stop.wait()
+        server.should_exit = True
+
+    threading.Thread(target=stop_serving, name="ai-worker-stop", daemon=True).start()
     logger.info("Lumiverb AI worker on %s:%d, %d at once: CLIP %s, faces %s. Its key: lumiverb-server ai-worker "
                 "--show-key", args.host, args.port, args.at_once, ", ".join(CLIP_MODELS), ", ".join(sorted(FACE_MODELS)))
     try:
-        uvicorn.run(make_app(models, key, at_once=args.at_once), host=args.host, port=args.port, access_log=False,
-                    log_config=None)
+        server.run()
     finally:
         stop.set()
         models.close()
+    if upgraded.is_set():
+        # The same process (launchd's agent stays up), now the new install's code.
+        os.execv(launched, [str(launched), *sys.argv[1:]])
     return 0
 
 
@@ -892,6 +928,9 @@ def main(argv: list[str] | None = None) -> int:
     worker_command.add_argument("--port", type=int, default=DEFAULT_AI_WORKER_PORT, help="its port (6366)")
     worker_command.add_argument("--at-once", type=int, default=2, help="requests it works on at once (2)")
     worker_command.add_argument("--show-key", action="store_true", help="print its key (made if there's none) and stop")
+    worker_command.add_argument("--install", action="store_true",
+                                help="run it as this Mac's service (a launchd agent: at login, after upgrades)")
+    worker_command.add_argument("--uninstall", action="store_true", help="stop the service and take it away")
     for verb, does in (("pause", "pause processing here (what's running finishes)"),
                        ("resume", "resume processing here")):
         command = commands.add_parser(

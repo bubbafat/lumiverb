@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-10-18). Robert's order of work, item 4: "CLIP and faces on AI machines", the last of ADR-016 phase 4's endpoints. ADR-016 decided the direction ("AI inference runs at named endpoints… Embedding models (CLIP, faces) must be uniform: one per library, served from any number of endpoints"); this ADR settles how.
+Accepted and built (2026-10-18; phases 1 to 4). Robert's order of work, item 4: "CLIP and faces on AI machines", the last of ADR-016 phase 4's endpoints. ADR-016 decided the direction ("AI inference runs at named endpoints… Embedding models (CLIP, faces) must be uniform: one per library, served from any number of endpoints"); this ADR settles how.
 
 ## Progress
 
@@ -11,7 +11,7 @@ Accepted (2026-10-18). Robert's order of work, item 4: "CLIP and faces on AI mac
 | 1 | The worker: `lumiverb-server ai-worker`, its API and its key | Built: `src/server/ai_worker/` (`app.py` its API, `__init__.py` its key), `lumiverb-server ai-worker`; `tests/test_ai_worker.py` (stand-ins, and the scheduler's own `list_models` over real HTTP), `tests/test_ai_worker_models.py` (`-m ai`: its vector and faces equal the scheduler's own) |
 | 2 | CLIP as an AI job: the built-in machine (as today) and workers | Built: `CLIP_JOB` (`src/producers/pools.py`), `src/processing/clip_guard.py` (the built-in machine's check and its CLIP, a worker's), `src/processing/ai_worker_client.py`, the producer on the job's machines (`src/producers/clip/work.py`), the control migration giving every built-in machine `clip`, the model fixed (`AiJob.fixed`, 409 `model_fixed`, Settings › AI); a worker took a library's new photos on a throwaway install |
 | 3 | Faces as an AI job: photos and video frames | Built: `FACES_JOB`, `src/processing/faces_guard.py`, `AiWorker.faces`, both face producers on the job's machines (a frame's own error skips that frame, the machines' waits the video), the control migration giving every built-in machine `faces`, its model `buffalo_l` fixed; the server's current face model is the account's faces job's (`faces.current_face_model`, through `session.info["tenant_id"]`); the old shared GPU pool is gone (the built-in machines' CLIP and faces take turns by `Models.gpu_turn`); a worker found the portrait's face and the crowd's two on a throwaway install |
-| 4 | Running a worker as a service on a second machine (a Mac's launchd, a Linux unit), and the README | Not started |
+| 4 | Running a worker as a service on a second machine (a Mac's launchd, a Linux unit), and the README | Built: `lumiverb-server ai-worker --install` / `--uninstall` (`src/server/ai_worker/service.py`: its own launchd agent, at login and again, its log in the data folder), the worker restarting into the new install after `brew upgrade` as run does (`watch_for_upgrade`), the README's "A second machine for search and faces" (the Mac's steps and a Linux unit); `tests/test_ai_worker_service.py` |
 
 ## Overview
 
