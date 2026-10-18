@@ -10,7 +10,7 @@ import {
 } from "../api/client";
 import type { ReaderCheckIn } from "../api/types";
 import { timeAgo } from "../lib/format";
-import { QUIET_MS, toUpload } from "../lib/readers";
+import { QUIET_MS, remakesHeld, toUpload } from "../lib/readers";
 
 /** Who reads a library's files and whether its scans run (ADR-018 phase 1), as Settings → Processing says it for
  * every library: its own Scans pause, or Pause all's. When its reader last checked in and how it was (phase 4).
@@ -93,7 +93,7 @@ function CheckedIn({ seen }: { seen: ReaderCheckIn }) {
     idle: "",
     paused: "",
     away: "it can't reach the library's storage",
-  }[seen.state], toUpload(seen)].filter(Boolean).join(", ");
+  }[seen.state], toUpload(seen), remakesHeld(seen)].filter(Boolean).join(", ");
   return (
     <p className={`text-sm ${quiet ? "text-amber-300" : "text-gray-400"}`}>
       {quiet

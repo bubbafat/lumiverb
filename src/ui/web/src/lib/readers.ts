@@ -26,6 +26,13 @@ export function toUpload(seen: Pick<ReaderCheckIn, "waiting_files" | "waiting_by
     + `${seen.waiting_bytes > 0 ? ` (${bytes(seen.waiting_bytes)})` : ""} to upload`;
 }
 
+/** Why a reader's remakes wait (ADR-018 decision 6), in words, or null when they go on. */
+export function remakesHeld(seen: Pick<ReaderCheckIn, "remakes_held">): string | null {
+  if (seen.remakes_held === "battery") return "its remakes wait for mains power";
+  if (seen.remakes_held === "metered") return "its remakes wait for a network that isn't metered";
+  return null;
+}
+
 /** Whether a device reads it (else this server). */
 export function readByDevice(lib: ReaderOf): boolean {
   return !!lib.reader && lib.reader !== "server";
@@ -49,6 +56,8 @@ export function readerLine(lib: ReaderOf, now: number = Date.now()): { text: str
   if (seen.state === "away") parts.push("it can't reach the library's folder");
   const sending = toUpload(seen);
   if (sending) parts.push(sending);
+  const held = remakesHeld(seen);
+  if (held) parts.push(held);
   parts.push(`checked in ${timeAgo(seen.checked_in_at, now)}`);
   return { text: parts.join(" · "), attention: seen.state === "away" };
 }

@@ -72,6 +72,9 @@ describe("Why work waits", () => {
       "12 videos in Footage wait for Robert's Mac Studio, which reads it (last checked in <2026-10-17T18:00:00Z>).");
     expect(waitSentence({ reason: "device", clips: 1, ...DETAILS.device, checked_in_at: null }, say)).toBe(
       "1 video in Footage waits for Robert's Mac Studio, which reads it (not checked in yet).");
+    expect(waitSentence({ reason: "device", clips: 12, ...DETAILS.device, remakes_held: "battery" }, say)).toBe(
+      "12 videos in Footage wait for Robert's Mac Studio, which reads it (last checked in <2026-10-17T18:00:00Z>;"
+      + " its remakes wait for mains power).");
     expect(waitIsLoud({ reason: "device", clips: 1 })).toBe(false);
   });
 

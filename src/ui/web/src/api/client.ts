@@ -1047,6 +1047,7 @@ export interface ProducerWait {
   device_id?: string;
   device_name?: string;
   checked_in_at?: string | null;
+  remakes_held?: "battery" | "metered" | null;
   /** ai_machines: the job. */
   job?: string;
   /** ai_machines: "off" | "no_machine" | "offline" | "unusable"; scheduler: "not_running" | "starting" | "cant_list". */

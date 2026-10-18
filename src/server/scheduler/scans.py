@@ -233,11 +233,12 @@ def scan_library(
     asked: bool = False,
     cache_previews: bool | None = None,
     to_upload: Callable[[int, int], None] | None = None,
+    remakes: bool = True,
 ) -> None:
     """Scan what's due in the library: the folder covering its reported
     changes and retries, or all of it when a full scan is due or one was
     asked for (asked: Scan now). cache_previews: run_scan's; None, the
-    scheduler's way (on a machine apart from the API). to_upload:
+    scheduler's way (on a machine apart from the API). to_upload, remakes:
     run_scan's."""
     library_id = library["library_id"]
     resp = client.get(f"/v1/libraries/{library_id}/changes").json()
@@ -271,7 +272,8 @@ def scan_library(
         cache_previews = not stores_here()
     stats = scan_fn(client, library, path_prefix=prefix, allow_moves=True, allow_mass_delete=False,
                     waiting=waiting, cache_previews=cache_previews, console=console,
-                    **({"to_upload": to_upload} if to_upload is not None else {}))
+                    **({"to_upload": to_upload} if to_upload is not None else {}),
+                    **({} if remakes else {"remakes": False}))
     if stats.root_unreachable:
         logger.warning("scheduler: %s became unreachable during the scan; changes kept", library["name"])
         return
@@ -366,6 +368,7 @@ def scan_pass(
     scanning: Callable[[str | None], None] | None = None,
     cache_previews: bool | None = None,
     to_upload: Callable[[str, int, int], None] | None = None,
+    remakes: bool = True,
 ) -> dict[str, Originals | None]:
     """Scan what's due in each library whose storage is reachable; each
     library's originals on this machine (src/processing/originals.py; None:
@@ -376,7 +379,8 @@ def scan_pass(
     scanned whole now; scanning hears each library as its scan starts, and
     None when it ends. cache_previews: scan_library's (a device keeps none).
     to_upload hears, by library, the files its scan has found to add or read
-    again and hasn't sent yet, and their size on disk (run_scan's)."""
+    again and hasn't sent yet, and their size on disk (run_scan's).
+    remakes: run_scan's (False: the reader holds its remakes back)."""
     if scan_fn is None:
         from src.processing.scan import run_scan as scan_fn
     console = console or Console(quiet=True)
@@ -407,7 +411,8 @@ def scan_pass(
             scan_library(client, library, originals, state, now=now, full_scan_every=full_scan_every,
                          scan_fn=scan_fn, console=console, asked=library["library_id"] in scan_now,
                          cache_previews=cache_previews,
-                         to_upload=partial(to_upload, library["library_id"]) if to_upload is not None else None)
+                         to_upload=partial(to_upload, library["library_id"]) if to_upload is not None else None,
+                         remakes=remakes)
         except LumiverbAPIError as exc:
             if exc.code != "scans_paused":
                 _scan_failed(state, library, exc, now)

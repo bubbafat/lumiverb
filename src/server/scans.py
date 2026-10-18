@@ -343,30 +343,34 @@ def add_found(session: Session, scan_id: str, files: list[Found]) -> None:
            "settling": [f.settling for f in latest.values()]})
 
 
-def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_moves: bool) -> None:
+def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_moves: bool,
+         remakes: bool = True) -> None:
     """The listing is complete: plan every found file, one statement. Moves
     are looked for when the account follows them, unless the scan forces
     every file or skips moves (as today's scanner: no move detection under
     --force or --skip-moves). Previews made another way than now are
-    remade (_remakes), never by a dry run."""
+    remade (_remakes), never by a dry run, nor when the reader holds its
+    remakes back (remakes False)."""
     scan.unlisted = unlisted
     scan.planned_at = utcnow()
     session.add(scan)
     session.flush()
     session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
                                   "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves),
-                                  **_remakes(session, scan)})
+                                  **_remakes(session, scan, wanted=remakes)})
 
 
-def _remakes(session: Session, scan: ScanSession) -> dict:
+def _remakes(session: Session, scan: ScanSession, *, wanted: bool = True) -> dict:
     """The plan's word on remaking previews (ADR-018 decision 6): each scan-
     made artifact's remakes run unless a person kept them (its redo stopped)
     or a new version of it waits for an admin (lineage.hold_new_version),
-    with what's wanted now; REMAKES_PER_SCAN of them, none in a dry run."""
+    with what's wanted now; REMAKES_PER_SCAN of them, none in a dry run or
+    when the reader holds them back (wanted False)."""
     paused = lineage.pauses(session)
-    out: dict = {"remake_cap": 0 if scan.dry_run else REMAKES_PER_SCAN}
+    go = wanted and not scan.dry_run
+    out: dict = {"remake_cap": REMAKES_PER_SCAN if go else 0}
     for artifact in MADE_AT_SCAN:
-        out[f"remake_{artifact}"] = not scan.dry_run and artifact not in paused.redo \
+        out[f"remake_{artifact}"] = go and artifact not in paused.redo \
             and not lineage.new_version_unseen(session, artifact)
         out.update(lineage.redo_params(artifact, lineage.desired(session, artifact)))
     return out

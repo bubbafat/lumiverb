@@ -72,13 +72,22 @@ def test_a_check_in_is_kept_and_answered_with_the_libraries_it_reads(env):
     seen = _listed(a)["checked_in"]
     assert seen | {"checked_in_at": None} == {"client": "this server", "version": "0.1.test", "state": "idle",
                                               "waiting_files": 0, "waiting_bytes": 0, "checked_in_at": None,
-                                              "last_full_scan_at": "2026-10-17T09:00:00+00:00"}
+                                              "last_full_scan_at": "2026-10-17T09:00:00+00:00", "remakes_held": None}
     assert _listed(b)["checked_in"] is None  # never said anything of it
 
     _check_in(env, [{"library_id": a[2], "state": "scanning", "waiting_files": 3, "waiting_bytes": 4096}])
     seen = _listed(a)["checked_in"]
     assert (seen["state"], seen["waiting_files"], seen["waiting_bytes"], seen["last_full_scan_at"]) == (
         "scanning", 3, 4096, None)
+    # Why its remakes wait (ADR-018 decision 6): kept with the rest, until it says otherwise.
+    _check_in(env, [{"library_id": a[2], "state": "idle", "remakes_held": "battery"}])
+    assert _listed(a)["checked_in"]["remakes_held"] == "battery"
+    _check_in(env, [{"library_id": a[2], "state": "idle"}])
+    assert _listed(a)["checked_in"]["remakes_held"] is None
+    client, headers, *_ = env
+    r = client.post("/v1/readers/check-in", json={"client": "x", "version": "1", "protocol": 1, "libraries": [
+        {"library_id": a[2], "state": "idle", "remakes_held": "tired"}]}, headers=headers)
+    assert r.status_code == 422, r.text
 
 
 @pytest.mark.slow

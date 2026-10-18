@@ -41,6 +41,8 @@ from src.server.reader_work import FROM_ORIGINALS, MADE_AT_SCAN
 from src.server.repository import lineage
 
 STATES = ("scanning", "idle", "paused", "away")
+# Why a reader holds its remakes back (a device's: they wait for mains power, or a network that isn't metered).
+REMAKES_HELD = ("battery", "metered")
 # How often a reader checks in (the answer says it).
 CHECK_IN_EVERY_SEC = 60
 # The conversation's version, and the oldest a reader may speak (426 reader_too_old below it).
@@ -60,6 +62,8 @@ class Said:
     waiting_bytes: int = 0
     last_full_scan_at: datetime | None = None
     mark: int = 0
+    # Why it holds its remakes back now (ADR-018 decision 6): REMAKES_HELD, or None when they go on.
+    remakes_held: str | None = None
 
 
 def waiting(left: tuple[int, int] | None) -> dict[str, int]:
@@ -87,20 +91,23 @@ def check_in(session: Session, *, reader: str, client: str, version: str, said: 
     if kept:
         session.execute(text("""
             INSERT INTO reader_check_ins (library_id, reader, client, version, state, waiting_files, waiting_bytes,
-                                          last_full_scan_at, mark, checked_in_at)
-            SELECT k.library_id, :reader, :client, :version, k.state, k.files, k.bytes, k.full_scan, k.mark, :now
+                                          last_full_scan_at, mark, remakes_held, checked_in_at)
+            SELECT k.library_id, :reader, :client, :version, k.state, k.files, k.bytes, k.full_scan, k.mark, k.held,
+                   :now
             FROM unnest(CAST(:ids AS text[]), CAST(:states AS text[]), CAST(:files AS bigint[]),
-                        CAST(:bytes AS bigint[]), CAST(:full AS timestamptz[]), CAST(:marks AS bigint[]))
-                 AS k(library_id, state, files, bytes, full_scan, mark)
+                        CAST(:bytes AS bigint[]), CAST(:full AS timestamptz[]), CAST(:marks AS bigint[]),
+                        CAST(:held AS text[]))
+                 AS k(library_id, state, files, bytes, full_scan, mark, held)
             ON CONFLICT (library_id) DO UPDATE SET
                 reader = EXCLUDED.reader, client = EXCLUDED.client, version = EXCLUDED.version,
                 state = EXCLUDED.state, waiting_files = EXCLUDED.waiting_files,
                 waiting_bytes = EXCLUDED.waiting_bytes, last_full_scan_at = EXCLUDED.last_full_scan_at,
-                mark = EXCLUDED.mark, checked_in_at = EXCLUDED.checked_in_at
+                mark = EXCLUDED.mark, remakes_held = EXCLUDED.remakes_held, checked_in_at = EXCLUDED.checked_in_at
         """), {"reader": reader, "client": client, "version": version, "now": now, "ids": list(kept),
                "states": [s.state for s in kept.values()], "files": [s.waiting_files for s in kept.values()],
                "bytes": [s.waiting_bytes for s in kept.values()],
-               "full": [s.last_full_scan_at for s in kept.values()], "marks": [s.mark for s in kept.values()]})
+               "full": [s.last_full_scan_at for s in kept.values()], "marks": [s.mark for s in kept.values()],
+               "held": [s.remakes_held for s in kept.values()]})
     return [{"library_id": r["library_id"], "name": r["name"], "root_path": r["root_path"], "reader": r["reader"],
              "scans_paused": paused.scans_paused(r["library_id"]), "mark": r["reader_mark"],
              "scan_now": r["scan_requested_at"] is not None} for r in rows], gone
@@ -112,7 +119,7 @@ def latest(session: Session) -> dict[str, dict[str, Any]]:
     the mark it had and when it checked in."""
     return {r["library_id"]: dict(r) for r in session.execute(text(
         "SELECT library_id, reader, client, version, state, waiting_files, waiting_bytes, last_full_scan_at,"
-        " mark, checked_in_at FROM reader_check_ins")).mappings()}
+        " mark, remakes_held, checked_in_at FROM reader_check_ins")).mappings()}
 
 
 def request_scan(session: Session, library_id: str, now: datetime) -> None:

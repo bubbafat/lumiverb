@@ -262,6 +262,12 @@ class Wait(BaseModel):
     # ai_machines (above); scheduler: "not_running", "starting" or "cant_list" (message: the error).
     why: str | None = None
     message: str | None = None
+    # device: the device reading the library (library_id, library_name above), when it last checked in for it,
+    # and why it holds its remakes back then ("battery", "metered"; ADR-018 decision 6).
+    device_id: str | None = None
+    device_name: str | None = None
+    checked_in_at: datetime | None = None
+    remakes_held: str | None = None
 
     @model_serializer(mode="wrap")
     def _what_it_says(self, handler: Any) -> dict[str, Any]:

@@ -118,7 +118,8 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
         due_in = lineage.due_by_library(session, artifact, want, list(devices), redo=redo_runs, asset_ids=asset_ids)
         for i, lib in devices.items():
             add(DEVICE, due_in.get(i, 0), library_id=i, library_name=lib["name"], device_id=lib["reader"],
-                device_name=lib["device_name"] or "", checked_in_at=lib["checked_in_at"])
+                device_name=lib["device_name"] or "", checked_in_at=lib["checked_in_at"],
+                remakes_held=lib["remakes_held"])
     if redoable and artifact in paused.redo:
         # A new version stops its redo by no one (lineage.hold_new_version); an admin, by name.
         add(NEW_VERSION if paused.redo[artifact]["paused_by"] is None else REDO_STOPPED, c["due_redo"])
@@ -152,10 +153,10 @@ def scan_waits(session: Session, status: Any) -> list[dict[str, Any]]:
 
 def _read_by_devices(session: Session, library_id: str | None) -> dict[str, dict[str, Any]]:
     """The active libraries a device reads (that one, when given), each
-    with its name, its device's id and name, and when that device last
-    checked in for it."""
+    with its name, its device's id and name, when that device last checked
+    in for it, and why it holds its remakes back then (remakes_held)."""
     rows = session.execute(text(
-        "SELECT l.library_id, l.name, l.reader, d.name AS device_name, c.checked_in_at"
+        "SELECT l.library_id, l.name, l.reader, d.name AS device_name, c.checked_in_at, c.remakes_held"
         " FROM libraries l LEFT JOIN devices d ON d.device_id = l.reader"
         " LEFT JOIN reader_check_ins c ON c.library_id = l.library_id AND c.reader = l.reader"
         " WHERE l.status = 'active' AND l.reader <> 'server'"

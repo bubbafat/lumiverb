@@ -97,6 +97,12 @@ def test_a_scan_remakes_previews_made_another_way_after_the_new_files(env, api, 
         uploaded.clear()
         _scan(api, lib)
         assert uploaded == [], "all made as now: nothing to remake"
+        # A reader holding its remakes back (a device on battery) asks for none.
+        _quality(env, "proxy", "good", True)
+        _scan(api, lib, remakes=False)
+        assert uploaded == []
+        _scan(api, lib)
+        assert sorted(uploaded) == ["a.png", "b.png", "c.mp4", "d.png"]
     finally:
         _back_to_defaults(env)
 

@@ -23,6 +23,12 @@ its own, through the same code, and nothing else:
    what it couldn't make is reported (POST /v1/producers/failures) and so
    leaves the list until its back-off ends.
 
+Remakes (decision 6) come after everything else: they stop at the next
+clip when new work may have come (a scan due, Scan now, the server's mark
+moved), the next pass taking it first, and wait while this machine is on
+battery or a metered network (src/processing/power.py), its scans then
+asking to remake no preview; its check-ins say so (remakes_held).
+
 It keeps no copy it decides from (decision 13): what there is to do is the
 server's list, asked for again every pass, and a scan compares the disk
 with the server, never with a record of its own. What it keeps between
@@ -53,7 +59,8 @@ class Device:
     and the passes."""
 
     def __init__(self, client: Any, *, full_scan_every: float, name: str | None = None,
-                 clock: Callable[[], float] = time.time, stopping: threading.Event | None = None) -> None:
+                 clock: Callable[[], float] = time.time, stopping: threading.Event | None = None,
+                 held: Callable[[], str | None] | None = None) -> None:
         from src.processing.failure_report import FailureReport
         from src.processing.machine import current
         from src.processing.producer_settings import ProducerSettings
@@ -78,6 +85,9 @@ class Device:
         self.reached: dict[str, Any] = {}  # each one's originals here at the latest look (None: not here)
         self.to_send: dict[str, tuple[int, int]] = {}  # what each one's latest scan has left to send
         self.scanning: str | None = None
+        # Why its remakes wait now (power.held: "battery", "metered"), as its check-ins say; None: they go on.
+        self.remakes_held: str | None = None
+        self._held = held or _held
         self.checked_in_at: float | None = None
         self._checking_in = threading.Lock()  # one check-in at a time: a pass's, or one during a long pass
 
@@ -108,8 +118,9 @@ class Device:
 
         with self._checking_in:
             self.checked_in_at = self._clock()  # tried: one that fails is tried again in a minute
+            held = {"remakes_held": self.remakes_held} if self.remakes_held else {}
             said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),
-                     **waiting(self.to_send.get(i)),
+                     **waiting(self.to_send.get(i)), **held,
                      "last_full_scan_at": _iso(self.scan_state.last_full_scan.get(i))}
                     for i, lib in self.libraries.items()]
             answer = self.client.post("/v1/readers/check-in", json={
@@ -178,14 +189,19 @@ class Device:
                   [lib for lib in self.libraries.values() if not lib.get("scans_paused")], self.scan_state,
                   now=self._clock(), full_scan_every=self.full_scan_every, on_roots=self.reached.update,
                   scan_now={i for i, lib in self.libraries.items() if lib.get("scan_now")},
-                  scanning=scanning, cache_previews=False, to_upload=self.to_upload)
+                  scanning=scanning, cache_previews=False, to_upload=self.to_upload,
+                  remakes=self.remakes_held is None)
 
     def work(self) -> int:
         """What the server lists as needing the originals, in each library
         reachable here: made, saved, or reported as failing. The remakes
-        after everything else. How many clips it went through."""
+        after everything else, while they go on (_Remaking). How many clips
+        it went through."""
         done = 0
+        remaking = _Remaking(self)
         for field in ("work", "remakes"):
+            if field == "remakes" and remaking.held():
+                break
             for library_id in list(self.libraries):
                 if self.reached.get(library_id) is None:
                     continue
@@ -199,9 +215,22 @@ class Device:
                         if artifact in held:
                             continue
                         clips = [c for c in page if artifact in (c.get(field) or [])]
-                        done += self._make(library_id, artifact, clips)
+                        done += self._make(library_id, artifact, clips,
+                                           stop=remaking.stop if field == "remakes" else None)
+                        if remaking.stopped:
+                            self.failures.flush()
+                            return done
         self.failures.flush()
         return done
+
+    def scan_due(self) -> bool:
+        """A scan of a library it reads is due: a full scan's time has come,
+        or one was asked for (Scan now). Scans paused: none is."""
+        now = self._clock()
+        return any(not lib.get("scans_paused")
+                   and (lib.get("scan_now")
+                        or now - self.scan_state.last_full_scan.get(i, float("-inf")) >= self.full_scan_every)
+                   for i, lib in self.libraries.items())
 
     def _pages(self, library_id: str) -> Iterator[list[dict]]:
         after = None
@@ -214,9 +243,11 @@ class Device:
             if not after:
                 return
 
-    def _make(self, library_id: str, artifact: str, clips: list[dict]) -> int:
+    def _make(self, library_id: str, artifact: str, clips: list[dict],
+              stop: Callable[[], bool] | None = None) -> int:
         """The clips' artifact, made through the producer's work and the
-        runner, in jobs of the producer's batch."""
+        runner, in jobs of the producer's batch; stop, asked before each
+        job, ends it early (a remake yielding)."""
         from src.producers import load
         from src.producers.runner import run
         from src.server.scheduler.dispatch import Job
@@ -225,7 +256,7 @@ class Device:
         spec = PRODUCERS[artifact]
         batch = max(1, int(getattr(spec, "batch", 1) or 1))
         for i in range(0, len(clips), batch):
-            if self.stopping.is_set():
+            if self.stopping.is_set() or (stop is not None and stop()):
                 return i
             items = tuple({**c, "library_id": library_id} for c in clips[i:i + batch])
             run(load(spec.run), self, Job(self.tenant_id, spec.kind, 0, items))
@@ -235,6 +266,7 @@ class Device:
     def once(self) -> int:
         """One pass: check in, look, scan, then the work on the originals.
         How many clips the work went through."""
+        self.remakes_held = self._held()  # its check-ins and scans go by it
         self.check_in()
         self.look()
         self.scan()
@@ -273,6 +305,38 @@ class Device:
                 self.check_in_if_due()
             except Exception as exc:  # noqa: BLE001 — the server away: tried again at the next look
                 logger.warning("device: couldn't check in (%s); trying again", exc)
+
+
+class _Remaking:
+    """When a pass's remakes stop (ADR-018 decision 6): at once while the
+    device holds them back (on battery, a metered network), and, once one
+    job is made, when new work may have come since the pass's check-in (a
+    scan due or asked for, the server's mark moved): the next pass takes it
+    first. Asked before each job."""
+
+    def __init__(self, device: Device) -> None:
+        self.device = device
+        self.marks = dict(device.marks)
+        self.jobs = 0
+        self.stopped = False
+
+    def held(self) -> bool:
+        """Whether they wait now; the device's check-ins say why."""
+        self.device.remakes_held = self.device._held()
+        self.stopped = self.stopped or self.device.remakes_held is not None
+        return self.stopped
+
+    def stop(self) -> bool:
+        if not self.held() and self.jobs and (self.device.marks != self.marks or self.device.scan_due()):
+            self.stopped = True
+        self.jobs += 1
+        return self.stopped
+
+
+def _held() -> str | None:
+    from src.processing.power import held
+
+    return held()
 
 
 def _iso(when: float | None) -> str | None:
