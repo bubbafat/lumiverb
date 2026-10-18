@@ -45,7 +45,7 @@ export function KeyboardShortcuts({ open, onClose }: KeyboardShortcutsProps) {
                     {s.keys.map((k) => (
                       <kbd
                         key={k}
-                        className="rounded border border-gray-700 bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-300"
+                        className="rounded-sm border border-gray-700 bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-300"
                       >
                         {k}
                       </kbd>

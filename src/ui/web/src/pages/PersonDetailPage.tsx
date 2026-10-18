@@ -23,7 +23,7 @@ function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: num
         type="button"
         onClick={() => onOpen(video ? clip.face.frame_ms ?? clip.moments[0]?.start : undefined)}
         aria-label={video ? `Play ${name}` : `Open ${name}`}
-        className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        className="group relative aspect-square w-full overflow-hidden rounded-lg bg-gray-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
       >
         {isLoading ? (
           <div className="h-full w-full animate-pulse bg-gray-700" />
@@ -36,7 +36,7 @@ function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: num
           <>
             {/* Whose tile it is: a video's still can show others first. */}
             <FaceCropImage faceId={clip.face.face_id} size={32} className="absolute left-1.5 top-1.5 ring-2 ring-black/60" />
-            <span className="absolute bottom-1.5 left-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
+            <span className="absolute bottom-1.5 left-1.5 rounded-sm bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white">
               ▶ Video
             </span>
           </>
@@ -49,7 +49,7 @@ function ClipThumbnail({ clip, onOpen }: { clip: PersonClip; onOpen: (atMs?: num
               key={m.start}
               type="button"
               onClick={() => onOpen(m.start)}
-              className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white"
+              className="rounded-sm bg-gray-800 px-1.5 py-0.5 text-[11px] tabular-nums text-gray-300 hover:bg-indigo-600 hover:text-white"
             >
               {momentLabel(m)}
             </button>
@@ -198,7 +198,7 @@ export default function PersonDetailPage() {
   if (personQuery.isLoading) {
     return (
       <div className="mx-auto max-w-6xl px-4 py-8">
-        <div className="h-8 w-48 animate-pulse rounded bg-gray-700" />
+        <div className="h-8 w-48 animate-pulse rounded-sm bg-gray-700" />
       </div>
     );
   }
@@ -238,7 +238,7 @@ export default function PersonDetailPage() {
               type="text"
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              className="rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-lg font-bold text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-lg font-bold text-white focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
               autoFocus
             />
             <button
@@ -299,7 +299,7 @@ export default function PersonDetailPage() {
                   value={mergeSearch}
                   onChange={(e) => setMergeSearch(e.target.value)}
                   placeholder="Merge into..."
-                  className="w-40 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                  className="w-40 rounded-lg border border-gray-600 bg-gray-800 px-3 py-1 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
                   autoFocus
                 />
                 {mergeSearch.trim() && mergeResults.length > 0 && (

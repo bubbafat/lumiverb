@@ -211,7 +211,7 @@ export default function ApiKeysSection() {
             Copy this key now. It won't be shown again.
           </p>
           <div className="flex items-center gap-2">
-            <code ref={keyText} className="flex-1 break-all rounded bg-gray-800 px-3 py-2 text-sm text-gray-100 font-mono select-all">
+            <code ref={keyText} className="flex-1 break-all rounded-sm bg-gray-800 px-3 py-2 text-sm text-gray-100 font-mono select-all">
               {newPlaintext}
             </code>
             <button
@@ -238,7 +238,7 @@ export default function ApiKeysSection() {
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="e.g. CI pipeline"
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           <div className="w-36">
@@ -246,7 +246,7 @@ export default function ApiKeysSection() {
             <select
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             >
               <option value="">Same as mine ({callerRole})</option>
               {callerRole === "admin" && <option value="admin">Admin</option>}
@@ -358,7 +358,7 @@ function UnusedKeysForm({ settings, isAdmin }: { settings: TenantSettings; isAdm
                   setDays(e.target.value);
                   changed();
                 }}
-                className="mx-1 w-16 rounded border border-gray-700 bg-gray-800 px-2 py-0.5 text-gray-100 disabled:opacity-50"
+                className="mx-1 w-16 rounded-sm border border-gray-700 bg-gray-800 px-2 py-0.5 text-gray-100 disabled:opacity-50"
               />{" "}
               days
             </span>

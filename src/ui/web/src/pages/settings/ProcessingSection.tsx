@@ -30,7 +30,7 @@ import { readerLine } from "../../lib/readers";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const inputClass =
-  "w-full rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-sm text-gray-100 focus:border-indigo-500 focus:outline-none";
+  "w-full rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-sm text-gray-100 focus:border-indigo-500 focus:outline-hidden";
 
 export const PRODUCERS_QUERY_KEY = ["producers"];
 
@@ -738,7 +738,7 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
           <li key={`${f.asset_id}|${f.artifact}`} className="min-w-0 border-t border-gray-800 pt-2 first:border-0 first:pt-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               <span className="min-w-0 text-gray-200">
-                <span className="[overflow-wrap:anywhere]">{f.rel_path}</span>{" "}
+                <span className="wrap-anywhere">{f.rel_path}</span>{" "}
                 <span className="whitespace-nowrap text-gray-500">· {f.library_name}</span>
               </span>
               {canRetry && (
@@ -753,7 +753,7 @@ function FailureList({ producer, canRetry, libraryId }: { producer: Producer; ca
                 </button>
               )}
             </div>
-            <p className="whitespace-pre-wrap break-words text-red-200">{f.error}</p>
+            <p className="whitespace-pre-wrap wrap-break-word text-red-200">{f.error}</p>
             <p className="text-xs text-gray-500">
               {f.given_up
                 ? `Gave up after ${f.attempts} tries.`
@@ -860,7 +860,7 @@ function SettingsList({ fields }: { fields: SettingField[] }) {
         {fields.map((f) => (
           <div key={f.key} className="contents">
             <dt className="text-gray-500">{f.label}</dt>
-            <dd className="min-w-0 whitespace-pre-wrap break-words text-gray-300">
+            <dd className="min-w-0 whitespace-pre-wrap wrap-break-word text-gray-300">
               {shown(f, f.value)}
               {f.fixed && !one && <span className="block text-xs text-gray-500">{f.fixed}</span>}
             </dd>
@@ -944,7 +944,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
         {f.fixed ? (
           <p className="text-xs text-gray-500">{f.fixed}</p>
         ) : f.kind === "notch" ? (
-          <select id={id} className={`${inputClass} sm:max-w-[12rem]`} value={values[f.key]}
+          <select id={id} className={`${inputClass} sm:max-w-48`} value={values[f.key]}
             onChange={(e) => edit(f.key, e.target.value)}>
             {(f.choices ?? []).map((c) => <option key={c} value={c}>{notchName(c)}</option>)}
           </select>
@@ -952,7 +952,7 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
           <textarea id={id} rows={4} className={inputClass} value={values[f.key]}
             onChange={(e) => edit(f.key, e.target.value)} />
         ) : (
-          <input id={id} type="number" className={`${inputClass} sm:max-w-[12rem]`} value={values[f.key]}
+          <input id={id} type="number" className={`${inputClass} sm:max-w-48`} value={values[f.key]}
             min={f.minimum ?? undefined} max={f.maximum ?? undefined} step={f.kind === "int" ? 1 : "any"}
             onChange={(e) => edit(f.key, e.target.value)} />
         )}

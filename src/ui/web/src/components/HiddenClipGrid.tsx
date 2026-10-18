@@ -29,7 +29,7 @@ function Card<T extends HiddenClip>({
   const where = [clip.library_name, folderOf(clip.rel_path)].filter(Boolean).join(" · ");
   const inner = (
     <>
-      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-800">
+      <div className="relative aspect-4/3 w-full overflow-hidden rounded-lg bg-gray-800">
         {url ? (
           <img src={url} alt="" className="h-full w-full object-cover" loading="lazy" />
         ) : (

@@ -102,7 +102,7 @@ export function LocationRow({
                   type="button"
                   aria-expanded={showBasis}
                   onClick={() => setShowBasis((v) => !v)}
-                  className="rounded bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300 hover:bg-amber-900/80"
+                  className="rounded-sm bg-amber-900/50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300 hover:bg-amber-900/80"
                 >
                   Guess
                 </button>

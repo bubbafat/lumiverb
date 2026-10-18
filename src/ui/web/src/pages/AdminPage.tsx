@@ -45,7 +45,7 @@ function HealthRowItem({ row }: { row: HealthRow }) {
       <HealthDot state={row.state} className="mt-1.5" />
       <div className="min-w-0 flex-1">
         <h3 className="font-medium text-gray-100">{row.title}</h3>
-        <p className="mt-0.5 text-sm text-gray-400 break-words">{row.reason}</p>
+        <p className="mt-0.5 text-sm text-gray-400 wrap-break-word">{row.reason}</p>
         {row.link && (
           <Link to={row.link} className="mt-1 inline-block text-sm text-indigo-400 hover:text-indigo-300 sm:hidden">
             {linkLabel(row.link)} →

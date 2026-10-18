@@ -427,7 +427,7 @@ export default function LibrariesPage() {
                             <button
                               type="button"
                               onClick={() => setEmptyTrashConfirm(lib.library_id)}
-                              className="rounded px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                              className="rounded-sm px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
                             >
                               Delete for good
                             </button>
@@ -450,7 +450,7 @@ export default function LibrariesPage() {
                                   type="button"
                                   onClick={() => deleteMutation.mutate({ id: lib.library_id, removeFromProjects: true })}
                                   disabled={deleteMutation.isPending}
-                                  className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                                  className="rounded-sm px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
                                 >
                                   Move to trash anyway
                                 </button>
@@ -460,7 +460,7 @@ export default function LibrariesPage() {
                                     setProjectsAsk(null);
                                     setDeleteConfirmId(null);
                                   }}
-                                  className="rounded px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
+                                  className="rounded-sm px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
                                 >
                                   Cancel
                                 </button>
@@ -482,14 +482,14 @@ export default function LibrariesPage() {
                                   deleteMutation.mutate({ id: lib.library_id })
                                 }
                                 disabled={deleteMutation.isPending}
-                                className="rounded px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                                className="rounded-sm px-2 py-1 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
                               >
                                 Confirm
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setDeleteConfirmId(null)}
-                                className="rounded px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
+                                className="rounded-sm px-2 py-1 text-sm text-gray-400 transition-colors duration-150 hover:text-gray-300"
                               >
                                 Cancel
                               </button>
@@ -498,7 +498,7 @@ export default function LibrariesPage() {
                             <button
                               type="button"
                               onClick={() => setDeleteConfirmId(lib.library_id)}
-                              className="rounded px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
+                              className="rounded-sm px-3 py-1.5 text-sm font-medium text-red-400 transition-colors duration-150 hover:bg-red-900/30"
                             >
                               Delete
                             </button>
@@ -542,7 +542,7 @@ export default function LibrariesPage() {
               onChange={(e) => setAddName(e.target.value)}
               placeholder="My Photos"
               required
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           {devices && devices.length > 0 && (
@@ -577,7 +577,7 @@ export default function LibrariesPage() {
               onChange={(e) => setAddPath(e.target.value)}
               placeholder="/Volumes/Photos/2024"
               required
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           <label className="flex items-start gap-2 text-sm text-gray-300">

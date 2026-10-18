@@ -606,7 +606,7 @@ export default function BrowsePage() {
     return (
       <div className="space-y-4">
         <div className="animate-pulse space-y-4">
-          <div className="h-8 w-48 rounded bg-gray-800" />
+          <div className="h-8 w-48 rounded-sm bg-gray-800" />
           <div className="flex gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
@@ -660,7 +660,7 @@ export default function BrowsePage() {
           <button
             type="button"
             onClick={() => setErrorDismissed(true)}
-            className="rounded px-2 py-1 text-sm font-medium hover:bg-red-900/30"
+            className="rounded-sm px-2 py-1 text-sm font-medium hover:bg-red-900/30"
           >
             Dismiss
           </button>

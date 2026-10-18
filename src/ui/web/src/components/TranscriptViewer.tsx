@@ -53,14 +53,14 @@ export default function TranscriptViewer({
   }
 
   return (
-    <div className="max-h-60 overflow-auto rounded border border-gray-700 bg-gray-950 p-2 text-sm">
+    <div className="max-h-60 overflow-auto rounded-sm border border-gray-700 bg-gray-950 p-2 text-sm">
       {entries.map((entry, i) =>
         onSeek && (seekableUntil == null || entry.seconds < seekableUntil) ? (
           <button
             key={i}
             type="button"
             onClick={() => onSeek(entry.seconds)}
-            className="flex w-full gap-3 rounded py-0.5 text-left hover:bg-gray-800/80"
+            className="flex w-full gap-3 rounded-sm py-0.5 text-left hover:bg-gray-800/80"
           >
             <span className="shrink-0 font-mono text-xs text-indigo-300">{entry.startTime}</span>
             <span className="text-gray-300">{entry.text}</span>

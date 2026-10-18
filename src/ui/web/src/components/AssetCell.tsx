@@ -84,7 +84,7 @@ function AssetCellInner({
         }
         setHovered(false);
       }}
-      className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
+      className="group relative w-full cursor-pointer overflow-hidden rounded-lg bg-gray-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950"
       style={{ aspectRatio: String(effectiveAspectRatio) }}
     >
       {/* Letterbox/pillarbox dark fill */}
@@ -152,7 +152,7 @@ function AssetCellInner({
 
       {/* Hover overlay */}
       <div
-        className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+        className="pointer-events-none absolute inset-0 bg-linear-to-t from-black/70 via-transparent to-transparent opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         aria-hidden
       />
       <div className="pointer-events-none absolute bottom-0 left-0 right-0 p-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
@@ -161,7 +161,7 @@ function AssetCellInner({
             {filename}
           </span>
           {isVideo && (
-            <span className="shrink-0 rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
+            <span className="shrink-0 rounded-sm bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
               Video
             </span>
           )}

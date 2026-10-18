@@ -179,7 +179,7 @@ function DataLine({ data, admin, busy, onRetry }: { data: PluginData; admin: boo
         {data.ready_at && ". The one fetched before is used meanwhile."}
       </p>
       {total ? (
-        <div className="h-1.5 w-full max-w-xs overflow-hidden rounded bg-gray-800">
+        <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-sm bg-gray-800">
           <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (100 * done) / total)}%` }} />
         </div>
       ) : null}

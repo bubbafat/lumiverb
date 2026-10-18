@@ -110,7 +110,7 @@ function DismissedPersonCard({
       <button
         type="button"
         onClick={() => lightboxAsset && setShowLightbox(true)}
-        className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-full bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-gray-700 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
       >
         {imgLoading ? (
           <div className="h-full w-full animate-pulse bg-gray-600" />
@@ -176,7 +176,7 @@ function DismissedPersonCard({
                 value={newName}
                 onChange={(e) => { setNewName(e.target.value); setAssignSearch(e.target.value); }}
                 placeholder="New name or search..."
-                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                className="w-full rounded-lg border border-gray-600 bg-gray-800 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
                 autoFocus
               />
               {assignSearch.trim() && searchResults.length > 0 && (

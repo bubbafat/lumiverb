@@ -20,7 +20,7 @@ import { timeAgo } from "../../lib/format";
 export const DEVICES_QUERY_KEY = ["devices"];
 
 const inputClass =
-  "rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500";
+  "rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 outline-hidden focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500";
 const smallButton =
   "rounded-lg border border-gray-700 px-3 py-1 text-sm text-gray-200 hover:border-gray-500 disabled:opacity-50";
 
@@ -260,7 +260,7 @@ function KeyPanel({ device, onDone }: { device: DeviceWithKey; onDone: () => voi
     <div role="region" aria-label="Its key" className="rounded-lg border border-amber-700/50 bg-amber-900/20 p-4 space-y-3">
       <p className="text-sm font-medium text-amber-300">{device.name}&apos;s key. Copy it now: it won&apos;t be shown again.</p>
       <div className="flex items-center gap-2">
-        <code ref={keyText} className="flex-1 break-all rounded bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 select-all">
+        <code ref={keyText} className="flex-1 break-all rounded-sm bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100 select-all">
           {device.key}
         </code>
         <button type="button" onClick={() => void copy()} className={smallButton}>
@@ -272,11 +272,11 @@ function KeyPanel({ device, onDone }: { device: DeviceWithKey; onDone: () => voi
       )}
       <div className="space-y-1 text-sm text-gray-300">
         <p>On the device, with Lumiverb installed, set where this server is and the key (paste it when asked):</p>
-        <pre className="overflow-x-auto rounded bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200">
+        <pre className="overflow-x-auto rounded-sm bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200">
           {`lumiverb config set --api-url ${server} --api-key -`}
         </pre>
         <p>Then leave it reading:</p>
-        <pre className="overflow-x-auto rounded bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200">lumiverb device run</pre>
+        <pre className="overflow-x-auto rounded-sm bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200">lumiverb device run</pre>
         <p className="text-xs text-gray-500">
           It reads the libraries whose settings choose it. If the device can&apos;t reach {server}, Settings › Network
           lets other devices use Lumiverb.

@@ -157,7 +157,7 @@ function PersonFilterDropdown({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search people..."
-            className="w-full rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-sm border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-hidden"
             autoFocus
           />
           <div className="mt-1 max-h-40 overflow-y-auto">
@@ -170,7 +170,7 @@ function PersonFilterDropdown({
                   setOpen(false);
                   setQ("");
                 }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-xs text-gray-200 hover:bg-gray-700"
               >
                 {p.representative_face_id && (
                   <FaceCropImage faceId={p.representative_face_id} size={24} />
@@ -373,7 +373,7 @@ export function FilterBar({
     hasDateFilter || filters.some((f) => f.type !== "library");
   const presets = getDatePresets();
 
-  const selectCls = "rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
+  const selectCls = "rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500";
 
   return (
     <div className="flex flex-col gap-2">
@@ -397,7 +397,7 @@ export function FilterBar({
           </span>
           <input
             type="search"
-            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-9 pr-8 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-gray-700 bg-gray-800 pl-9 pr-8 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             placeholder="Search ..."
             value={inputValue}
             onChange={(e) => { userTypingRef.current = true; setInputValue(e.target.value); }}
@@ -429,7 +429,7 @@ export function FilterBar({
                     onSetFilter("query", null);
                     setSearchFocused(false);
                   }}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-700"
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-700"
                 >
                   {p.representative_face_id && (
                     <FaceCropImage faceId={p.representative_face_id} size={28} />
@@ -631,7 +631,7 @@ export function FilterBar({
                 type="date"
                 value={customFrom}
                 onChange={(e) => setCustomFrom(e.target.value)}
-                className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 [color-scheme:dark]"
+                className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 scheme-dark"
                 aria-label="Date from"
               />
               <span className="text-xs text-gray-500">to</span>
@@ -640,7 +640,7 @@ export function FilterBar({
                 value={customTo}
                 onChange={(e) => setCustomTo(e.target.value)}
                 min={customFrom}
-                className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 [color-scheme:dark]"
+                className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-200 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 scheme-dark"
                 aria-label="Date to"
               />
               <button
@@ -750,7 +750,7 @@ export function FilterBar({
                 type="checkbox"
                 checked={hasGps}
                 onChange={(e) => onSetFilter("has_gps", e.target.checked ? "yes" : null)}
-                className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
+                className="rounded-sm border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Has location ({facets.has_gps_count})
             </label>
@@ -763,7 +763,7 @@ export function FilterBar({
                 type="checkbox"
                 checked={includeGuesses}
                 onChange={(e) => onSetFilter("include_guesses", e.target.checked ? "yes" : null)}
-                className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
+                className="rounded-sm border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Includes guesses
             </label>
@@ -776,7 +776,7 @@ export function FilterBar({
                 type="checkbox"
                 checked={hasFaces}
                 onChange={(e) => onSetFilter("has_faces", e.target.checked ? "yes" : null)}
-                className="rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
+                className="rounded-sm border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500"
               />
               Has faces ({facets.has_face_count})
             </label>
@@ -922,7 +922,7 @@ function FilterMenu({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-700 hover:text-gray-300"
+        className="rounded-sm px-2 py-1 text-xs text-gray-500 hover:bg-gray-700 hover:text-gray-300"
         title="Filter actions"
       >
         ...
@@ -989,7 +989,7 @@ function FilterSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 max-w-[200px]"
+        className="rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 max-w-[200px]"
       >
         <option value="">Any</option>
         {options.map((o) => (
@@ -1030,7 +1030,7 @@ function RangeInputs({
           value={min}
           onChange={(e) => onChangeMin(e.target.value)}
           placeholder={placeholderMin}
-          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
         />
         <span className="text-xs text-gray-500">–</span>
         <input
@@ -1038,7 +1038,7 @@ function RangeInputs({
           value={max}
           onChange={(e) => onChangeMax(e.target.value)}
           placeholder={placeholderMax}
-          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="w-16 rounded-md border border-gray-700 bg-gray-800 px-2 py-1.5 text-xs text-gray-200 placeholder:text-gray-600 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
         />
       </div>
     </div>

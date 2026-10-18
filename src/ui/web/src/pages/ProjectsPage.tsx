@@ -27,7 +27,7 @@ function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-const actionClass = "rounded px-2 py-1 text-xs text-gray-500 hover:text-gray-200";
+const actionClass = "rounded-sm px-2 py-1 text-xs text-gray-500 hover:text-gray-200";
 
 function CoverImage({ project }: { project: ProjectItem }) {
   const { url: coverUrl } = useAuthenticatedImage(
@@ -36,7 +36,7 @@ function CoverImage({ project }: { project: ProjectItem }) {
     { enabled: !!project.cover_asset_id },
   );
   return (
-    <div className="aspect-[4/3] bg-gray-800">
+    <div className="aspect-4/3 bg-gray-800">
       {coverUrl ? (
         <img src={coverUrl} alt={project.name} className="h-full w-full object-cover" />
       ) : (
@@ -87,12 +87,12 @@ function ProjectCard({ project, actions }: { project: ProjectItem; actions: Reac
                 <span className="text-xs text-amber-400/80">{trashedClips} in trash</span>
               )}
               {project.ownership === "shared" && (
-                <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
+                <span className="rounded-sm bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-gray-400">
                   Shared
                 </span>
               )}
               {project.visibility === "public" && (
-                <span className="rounded bg-indigo-900/40 px-1.5 py-0.5 text-[10px] text-indigo-400">
+                <span className="rounded-sm bg-indigo-900/40 px-1.5 py-0.5 text-[10px] text-indigo-400">
                   Public
                 </span>
               )}
@@ -136,7 +136,7 @@ function ConfirmAction({
           type="button"
           onClick={onConfirm}
           disabled={busy}
-          className="rounded px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 disabled:opacity-50"
+          className="rounded-sm px-2 py-1 text-xs font-medium text-red-400 hover:bg-red-900/30 disabled:opacity-50"
         >
           Confirm
         </button>
@@ -369,7 +369,7 @@ export default function ProjectsPage() {
               <button
                 type="button"
                 onClick={() => restoreMutation.mutate({ project: justTrashed, withClips: false })}
-                className="rounded px-2 py-1 font-medium text-indigo-300 hover:bg-gray-800"
+                className="rounded-sm px-2 py-1 font-medium text-indigo-300 hover:bg-gray-800"
               >
                 Undo
               </button>
@@ -377,7 +377,7 @@ export default function ProjectsPage() {
                 type="button"
                 onClick={() => setJustTrashed(null)}
                 aria-label="Dismiss"
-                className="rounded px-2 py-1 text-gray-500 hover:text-gray-300"
+                className="rounded-sm px-2 py-1 text-gray-500 hover:text-gray-300"
               >
                 ✕
               </button>
@@ -396,11 +396,11 @@ export default function ProjectsPage() {
                   // Exactly what's shown, not whatever is in the trash by now.
                   onClick={() => emptyMutation.mutate((projects ?? []).map((p) => p.project_id))}
                   disabled={emptyMutation.isPending}
-                  className="rounded px-2 py-1 font-medium text-red-400 hover:bg-red-900/30 disabled:opacity-50"
+                  className="rounded-sm px-2 py-1 font-medium text-red-400 hover:bg-red-900/30 disabled:opacity-50"
                 >
                   Confirm
                 </button>
-                <button type="button" onClick={() => setConfirming(null)} className="rounded px-2 py-1 text-gray-500 hover:text-gray-300">
+                <button type="button" onClick={() => setConfirming(null)} className="rounded-sm px-2 py-1 text-gray-500 hover:text-gray-300">
                   Cancel
                 </button>
               </div>
@@ -504,7 +504,7 @@ export default function ProjectsPage() {
               placeholder="Best of Europe"
               required
               autoFocus
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           <div>
@@ -520,7 +520,7 @@ export default function ProjectsPage() {
               value={createDesc}
               onChange={(e) => setCreateDesc(e.target.value)}
               placeholder="My favorite travel photos"
-              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
           </div>
           <div className="flex justify-end gap-2">

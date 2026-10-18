@@ -532,7 +532,7 @@ export default function UnifiedBrowsePage() {
               onKeyDown={(e) => { if (e.key === "Enter") handleSaveView(); }}
               placeholder="Search name"
               autoFocus
-              className="mb-3 w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="mb-3 w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-indigo-500 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
             />
             <div className="flex justify-end gap-2">
               <button
