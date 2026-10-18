@@ -86,7 +86,7 @@ from pathlib import Path
 
 from src.server import backups
 from src.server.ai_worker import DEFAULT_PORT as DEFAULT_AI_WORKER_PORT
-from src.server.lifecycle import api_port, log, network, private, upkeep
+from src.server.lifecycle import api_port, log, network, plugins_cli, private, upkeep
 from src.server.lifecycle.envfile import EnvFileError, read_env_file
 from src.server.lifecycle.init import WEB_ROOT, Choices, InitError, init
 from src.server.lifecycle.migrate import (
@@ -617,6 +617,17 @@ def _server_admins(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plugins(args: argparse.Namespace) -> int:
+    """plugins [install|default|uninstall]: the plug-ins installed on this server (ADR-023), on the machine."""
+    from src.server.config import get_settings
+    from src.server.lifecycle.plugins_cli import run
+
+    env, _ = _env_and_url(args)
+    os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
+    get_settings.cache_clear()
+    return run(args, data_dir(env))
+
+
 def _size(n: int) -> str:
     for unit in ("bytes", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -931,6 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     worker_command.add_argument("--install", action="store_true",
                                 help="run it as this Mac's service (a launchd agent: at login, after upgrades)")
     worker_command.add_argument("--uninstall", action="store_true", help="stop the service and take it away")
+    plugins_cli.add_parser(commands, _env_option)
     for verb, does in (("pause", "pause processing here (what's running finishes)"),
                        ("resume", "resume processing here")):
         command = commands.add_parser(
@@ -943,7 +955,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return {"init": _init, "migrate": _migrate, "run": _run, "setup": _setup,
                 "reset-password": _reset_password, "server-admins": _server_admins, "backup": _backup,
-                "restore": _restore, "ai-worker": _ai_worker,
+                "restore": _restore, "ai-worker": _ai_worker, "plugins": _plugins,
                 "pause": _pausing, "resume": _pausing}[args.command](args)
     except (InstallError, EnvFileError) as exc:
         print(f"✗ {exc}", file=sys.stderr)

@@ -36,7 +36,8 @@ export interface PluginAcknowledgment {
   links: { label: string; url: string }[];
 }
 
-/** An optional part of Lumiverb an account turns on (ADR-021). */
+/** An optional part of Lumiverb an account turns on: Lumiverb's own (ADR-021), or a program of its own the server
+ * admin installed (ADR-023). */
 export interface Plugin {
   plugin_id: string;
   title: string;
@@ -48,6 +49,19 @@ export interface Plugin {
   acknowledged: { version: string; by: string | null; at: string } | null;
   /** What it keeps for the whole server (GeoNames' place list), as it's fetched; null: nothing. */
   data?: PluginData | null;
+  /** built_in: Lumiverb's own; installed: the server admin installed it. The rest is an installed one's. */
+  kind?: "built_in" | "installed";
+  version?: string | null;
+  author?: string | null;
+  homepage?: string | null;
+  /** Its default, in every account whose admin hasn't turned it on or off; and whether this one hasn't. */
+  on_by_default?: boolean | null;
+  follows_default?: boolean;
+  /** In words: what it reads ("each clip's location (…)") and what it answers. */
+  reads?: string[];
+  answers?: string[];
+  downloads?: { url: string; title: string; about_mb: number }[];
+  internet?: boolean;
 }
 
 export interface PluginData {

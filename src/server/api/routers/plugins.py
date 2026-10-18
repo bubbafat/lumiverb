@@ -1,5 +1,8 @@
-"""Plug-ins (ADR-021): optional parts of Lumiverb that an account turns on
-or off, and what turning one on asks first.
+"""Plug-ins (ADR-021, ADR-023): optional parts of Lumiverb that an account
+turns on or off, and what turning one on asks first. Lumiverb's own (its
+code's) and those the server admin installed (programs of their own, each
+with its manifest: src/server/plugin_catalog.py), an installed one as its
+default says in an account whose admin hasn't chosen.
 
 GET /v1/plugins                — every plug-in, its state in this account, and what it asks (signed in)
 PUT /v1/plugins/{plugin_id}    — turn one on or off (account admins)
@@ -23,13 +26,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from src.plugins import plugin as plugin_spec
-from src.plugins import registry
-from src.plugins.contract import Acknowledgment, PluginSpec
+from src.plugins.contract import Acknowledgment
+from src.plugins.manifest import INPUTS, LOOKUPS
 from src.server import plugin_data
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError
 from src.server.database import get_control_session
+from src.server.plugin_catalog import Entry, entries, find
 from src.server.repository.control_plane import UserRepository
 from src.server.repository.plugins import ON, PluginRepository, state_of
 from src.shared.utils import utcnow
@@ -71,6 +74,12 @@ class DataOut(BaseModel):
     ready_at: datetime | None = None
 
 
+class DownloadOut(BaseModel):
+    url: str
+    title: str
+    about_mb: int
+
+
 class PluginOut(BaseModel):
     plugin_id: str
     title: str
@@ -82,6 +91,20 @@ class PluginOut(BaseModel):
     acknowledged: Accepted | None = None
     # What it keeps for the whole server (None: nothing).
     data: DataOut | None = None
+    # built_in: Lumiverb's own; installed: a program of its own the server admin installed (ADR-023).
+    kind: Literal["built_in", "installed"] = "built_in"
+    # An installed one's: its version, who made it, and where to read about it.
+    version: str | None = None
+    author: str | None = None
+    homepage: str | None = None
+    # An installed one's default, for accounts whose admin hasn't turned it on or off; and whether this one hasn't.
+    on_by_default: bool | None = None
+    follows_default: bool = False
+    # An installed one's, in words: what it reads, what it answers.
+    reads: list[str] = Field(default_factory=list)
+    answers: list[str] = Field(default_factory=list)
+    downloads: list[DownloadOut] = Field(default_factory=list)
+    internet: bool = False
 
 
 class PluginList(BaseModel):
@@ -109,26 +132,40 @@ def _email(user_id: str | None) -> str | None:
         return user.email if user else None
 
 
-def _out(spec: PluginSpec, row: dict | None, accepted: dict | None, *, admin: bool) -> PluginOut:
-    state = state_of(spec, row)
+def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool) -> PluginOut:
+    spec, installed = entry.spec, entry.installed
+    state = state_of(spec, row, installed.default if installed else None)
     shown = None
-    if spec.acknowledgment is not None and state != "off" and accepted is not None:
+    if row is None and installed is not None and state != "off" and installed.acknowledged_version:
+        # On by default: the server admin accepted it, for every account that hasn't chosen.
+        shown = Accepted(version=installed.acknowledged_version, at=installed.changed_at)
+    elif spec.acknowledgment is not None and state != "off" and accepted is not None:
         shown = Accepted(version=accepted["version"], by=_email(accepted["user_id"]) if admin else None,
                          at=accepted["acknowledged_at"])
-    data = plugin_data.status(spec.plugin_id)
-    return PluginOut(plugin_id=spec.plugin_id, title=spec.title, description=spec.description, state=state,
-                     acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown,
-                     data=DataOut(title=spec.data_title, unit=spec.data_unit,
-                                  **{k: data.get(k) for k in DataOut.model_fields
-                                     if k not in ("title", "unit") and data.get(k) is not None})
-                     if data else None)
+    data = plugin_data.status(spec.plugin_id) if installed is None else None
+    out = PluginOut(plugin_id=spec.plugin_id, title=spec.title, description=spec.description, state=state,
+                    acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown,
+                    data=DataOut(title=spec.data_title, unit=spec.data_unit,
+                                 **{k: data.get(k) for k in DataOut.model_fields
+                                    if k not in ("title", "unit") and data.get(k) is not None})
+                    if data else None)
+    if installed is not None:
+        m = installed.manifest
+        out = out.model_copy(update={
+            "kind": "installed", "version": m.version, "author": m.author or None, "homepage": m.homepage or None,
+            "on_by_default": installed.on_by_default, "follows_default": row is None,
+            "reads": [INPUTS[i] for i in (m.work.inputs if m.work else ())],
+            "answers": [LOOKUPS[name] for name in m.lookups],
+            "downloads": [DownloadOut(url=d.url, title=d.title, about_mb=d.about_mb) for d in m.downloads],
+            "internet": m.internet})
+    return out
 
 
 def require_on(session: Session, plugin_id: str) -> None:
     """409 plugin_off unless the plug-in is on in this account (details: plugin_id, title)."""
     if not PluginRepository(session).is_on(plugin_id):
-        spec = plugin_spec(plugin_id)
-        title = spec.title if spec else plugin_id
+        entry = find(plugin_id)
+        title = entry.spec.title if entry else plugin_id
         raise ConflictError("plugin_off", f"{title} is off: an admin turns it on in Settings › Plug-ins.",
                             {"plugin_id": plugin_id, "title": title})
 
@@ -145,8 +182,8 @@ def list_plugins(
     """Every plug-in, its state in this account and what turning it on asks."""
     repo = PluginRepository(session)
     rows, accepted = repo.rows(), repo.accepted()
-    return PluginList(plugins=[_out(p, rows.get(p.plugin_id), accepted.get(p.plugin_id), admin=_admin(request))
-                               for p in registry().values()])
+    return PluginList(plugins=[_out(e, rows.get(e.spec.plugin_id), accepted.get(e.spec.plugin_id),
+                                    admin=_admin(request)) for e in entries()])
 
 
 @router.put("/{plugin_id}", response_model=PluginOut, dependencies=[Depends(require_tenant_admin)])
@@ -162,9 +199,10 @@ def set_plugin(
     good. On already, nothing changes. Off asks nothing. On (newly or
     already), what it keeps for the server is fetched if it isn't there, a
     fetch that failed at once (Try again)."""
-    spec = plugin_spec(plugin_id)
-    if spec is None:
+    entry = find(plugin_id)
+    if entry is None:
         raise HTTPException(status_code=404, detail="No such plug-in")
+    spec, default = entry.spec, entry.installed.default if entry.installed else None
     repo = PluginRepository(session)
     by = getattr(request.state, "user_id", None) or (
         f"key:{request.state.key_id}" if getattr(request.state, "key_id", None) else None)
@@ -172,7 +210,7 @@ def set_plugin(
     row = repo.rows().get(plugin_id)
     if not body.enabled:
         repo.set(plugin_id, False, acknowledged_version=None, by=by, now=now)
-    elif state_of(spec, row) != ON:
+    elif state_of(spec, row, default) != ON:
         ack = spec.acknowledgment
         if ack is not None and body.acknowledged != ack.version:
             raise DecisionRequiredError(
@@ -185,6 +223,6 @@ def set_plugin(
             repo.acknowledge(plugin_id, ack.version, user_id=by, now=now)
         repo.set(plugin_id, True, acknowledged_version=ack.version if ack else None, by=by, now=now)
     session.commit()
-    if body.enabled:
+    if body.enabled and entry.installed is None:
         plugin_data.ensure(plugin_id, retry_now=True)
-    return _out(spec, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True)
+    return _out(entry, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True)
