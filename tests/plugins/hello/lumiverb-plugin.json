@@ -1,0 +1,22 @@
+{
+  "id": "hello",
+  "version": "1",
+  "protocol": 1,
+  "title": "Hello",
+  "description": "A plug-in for Lumiverb's tests: it answers its health and keeps nothing.",
+  "author": "Lumiverb's tests",
+  "run": ["python3", "hello.py"],
+  "memory_mb": 256,
+  "disk_mb": 10,
+  "settings": [
+    {"key": "greeting", "type": "text", "default": "Hello", "max_length": 40, "label": "Greeting",
+     "help": "What it says."},
+    {"key": "times", "type": "int", "default": 1, "minimum": 1, "maximum": 5, "label": "Times",
+     "help": "How many times it says it."},
+    {"key": "loud", "type": "bool", "default": false, "label": "Loud", "help": "Whether it shouts."},
+    {"key": "language", "type": "choice", "default": "en", "label": "Language", "help": "Which language.",
+     "choices": [{"value": "en", "label": "English"}, {"value": "fr", "label": "French"}]},
+    {"key": "token", "type": "secret", "default": "", "label": "Token", "help": "A token it never uses.",
+     "scope": "server", "advanced": true}
+  ]
+}

@@ -1,0 +1,80 @@
+"""The plug-ins installed on this server (ADR-023), in the control database:
+each one's version and manifest as installed, on or off by default, the
+acknowledgment the server admin accepted for the accounts that follow the
+default, and what it reads and reaches as accepted (installed_plugins);
+every install, change of default and uninstall, kept for good
+(plugin_install_log)."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import text
+from sqlmodel import Session
+
+INSTALL, DEFAULT, UNINSTALL = "install", "default", "uninstall"
+_COLUMNS = ("plugin_id, version, manifest, on_by_default, acknowledged_version, permissions, installed_by,"
+            " installed_at, changed_by, changed_at")
+
+
+class InstalledPluginRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def all(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._session.execute(text(
+            f"SELECT {_COLUMNS} FROM installed_plugins ORDER BY plugin_id")).mappings().all()]
+
+    def get(self, plugin_id: str) -> dict[str, Any] | None:
+        row = self._session.execute(text(f"SELECT {_COLUMNS} FROM installed_plugins WHERE plugin_id = :p"),
+                                    {"p": plugin_id}).mappings().first()
+        return dict(row) if row else None
+
+    def save(self, plugin_id: str, *, version: str, manifest: dict[str, Any], on_by_default: bool,
+             acknowledged_version: str | None, permissions: dict[str, Any], by: str, now: datetime) -> None:
+        """Installed, or installed again (a newer version, or the same): kept with who and when. Doesn't commit."""
+        self._session.execute(text(
+            "INSERT INTO installed_plugins (plugin_id, version, manifest, on_by_default, acknowledged_version,"
+            "   permissions, installed_by, installed_at, changed_by, changed_at)"
+            " VALUES (:p, :v, CAST(:m AS jsonb), :on, :ack, CAST(:perm AS jsonb), :by, :now, :by, :now)"
+            " ON CONFLICT (plugin_id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest,"
+            "   on_by_default = EXCLUDED.on_by_default, acknowledged_version = EXCLUDED.acknowledged_version,"
+            "   permissions = EXCLUDED.permissions, changed_by = EXCLUDED.changed_by,"
+            "   changed_at = EXCLUDED.changed_at"
+        ), {"p": plugin_id, "v": version, "m": json.dumps(manifest), "on": on_by_default, "ack": acknowledged_version,
+            "perm": json.dumps(permissions), "by": by, "now": now})
+        self._log(plugin_id, INSTALL, version=version, on_by_default=on_by_default,
+                  acknowledged_version=acknowledged_version, permissions=permissions, by=by, now=now)
+
+    def set_default(self, plugin_id: str, on: bool, *, acknowledged_version: str | None, by: str,
+                    now: datetime) -> None:
+        """On or off by default, with the acknowledgment accepted for it (None when off). Doesn't commit."""
+        self._session.execute(text(
+            "UPDATE installed_plugins SET on_by_default = :on, acknowledged_version = :ack, changed_by = :by,"
+            " changed_at = :now WHERE plugin_id = :p"
+        ), {"p": plugin_id, "on": on, "ack": acknowledged_version, "by": by, "now": now})
+        self._log(plugin_id, DEFAULT, on_by_default=on, acknowledged_version=acknowledged_version, by=by, now=now)
+
+    def remove(self, plugin_id: str, *, by: str, now: datetime) -> None:
+        """Uninstalled. Doesn't commit."""
+        version = self._session.execute(text("DELETE FROM installed_plugins WHERE plugin_id = :p RETURNING version"),
+                                        {"p": plugin_id}).scalar()
+        self._log(plugin_id, UNINSTALL, version=version, by=by, now=now)
+
+    def log(self, plugin_id: str) -> list[dict[str, Any]]:
+        """Its history, oldest first."""
+        return [dict(r) for r in self._session.execute(text(
+            "SELECT action, version, on_by_default, acknowledged_version, permissions, by, at"
+            " FROM plugin_install_log WHERE plugin_id = :p ORDER BY id"), {"p": plugin_id}).mappings().all()]
+
+    def _log(self, plugin_id: str, action: str, *, by: str, now: datetime, version: str | None = None,
+             on_by_default: bool | None = None, acknowledged_version: str | None = None,
+             permissions: dict[str, Any] | None = None) -> None:
+        self._session.execute(text(
+            "INSERT INTO plugin_install_log (plugin_id, action, version, on_by_default, acknowledged_version,"
+            "   permissions, by, at)"
+            " VALUES (:p, :a, :v, :on, :ack, CAST(:perm AS jsonb), :by, :now)"
+        ), {"p": plugin_id, "a": action, "v": version, "on": on_by_default, "ack": acknowledged_version,
+            "perm": json.dumps(permissions) if permissions is not None else None, "by": by, "now": now})

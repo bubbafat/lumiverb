@@ -5,7 +5,10 @@ A plug-in is on when its row says enabled and, if it declares an
 acknowledgment, the version accepted when it was turned on still stands:
 any version, unless the plug-in says a newer one must be accepted again
 (its reaccept_from; Robert 2026-10-18). Enabled with one accepted before
-that is "waiting": off until an admin accepts the new text. No row: off.
+that is "waiting": off until an admin accepts the new text. No row: off,
+or for a plug-in the server admin installed (ADR-023), its default: on or
+off by default, with the acknowledgment the server admin accepted for the
+accounts that haven't chosen (src/server/plugin_catalog.py).
 """
 
 from __future__ import annotations
@@ -29,8 +32,11 @@ def stands(ack: Acknowledgment, accepted: str | None) -> bool:
     return key is not None and (not ack.reaccept_from or key >= version_key(ack.reaccept_from))
 
 
-def state_of(spec: PluginSpec, row: dict[str, Any] | None) -> str:
-    """on, off, or waiting (enabled, but its acknowledgment must be accepted again since)."""
+def state_of(spec: PluginSpec, row: dict[str, Any] | None, default: dict[str, Any] | None = None) -> str:
+    """on, off, or waiting (enabled, but its acknowledgment must be accepted again since). default: an
+    installed plug-in's, for an account without a row (it hasn't chosen)."""
+    if row is None:
+        row = default
     if row is None or not row["enabled"]:
         return OFF
     if spec.acknowledgment is not None and not stands(spec.acknowledgment, row["acknowledged_version"]):
@@ -73,13 +79,16 @@ class PluginRepository:
         )).mappings().all()}
 
     def is_on(self, plugin_id: str) -> bool:
-        spec = plugin_spec(plugin_id)
-        if spec is None:
+        from src.server.plugin_catalog import find
+
+        entry = find(plugin_id)
+        if entry is None:
             return False
         row = self._session.execute(text(
             "SELECT plugin_id, enabled, acknowledged_version FROM plugins WHERE plugin_id = :p"
         ), {"p": plugin_id}).mappings().first()
-        return state_of(spec, dict(row) if row else None) == ON
+        default = entry.installed.default if entry.installed else None
+        return state_of(entry.spec, dict(row) if row else None, default) == ON
 
     def set(self, plugin_id: str, enabled: bool, *, acknowledged_version: str | None, by: str | None,
             now: datetime) -> None:
