@@ -368,8 +368,10 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict
 class SettingsIn(BaseModel):
     # key → value; null puts a setting back to its default. Others stay as they are.
     settings: dict[str, Any]
-    # Yes, make again what the old settings made (asked with 409 redo_on_change).
-    redo: bool = False
+    # What becomes of what the old settings made (asked with 409 redo_on_change, ADR-018 decision 6): true,
+    # remade too, after everything else; false, new files only (it stays as it is until someone remakes it).
+    # Left out: asked.
+    redo: bool | None = None
 
 
 @router.put("/{artifact}/settings", response_model=ProducerItem, dependencies=[Depends(require_tenant_admin)])
@@ -378,16 +380,22 @@ def set_settings(
     body: SettingsIn,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> ProducerItem:
     """Change a producer's output-affecting settings (admins). Only settings
     its code reads can be changed: 422 unknown_setting, setting_fixed (why,
-    in the message) or bad_setting (out of bounds, the wrong kind). New
-    settings make what the old ones made stale, and it's made again after
-    anything missing (Robert, Oct 9: the change is the approval): 409
-    redo_on_change with the count until redo says yes, as a model change in
-    Settings → AI asks. Saving resumes its redo if an admin had stopped it;
-    a pause stays. A setting that doesn't remake (how faces are grouped)
-    asks nothing and makes nothing again: when one changes, the producer's
+    in the message) or bad_setting (out of bounds, the wrong kind). What the
+    old settings made is then made another way than now, and the change
+    asks what becomes of it (ADR-018 decision 6), as a model change in
+    Settings → AI does: 409 redo_on_change with the count (question
+    "remake") until redo says. true remakes them too, after everything else
+    (its redo resumed if it was stopped); false is new files only: they stay
+    as they are, its redo stopped by this person (lineage.keep_made), until
+    someone remakes them. Settings that would drop something (location
+    guesses once inferring is off) ask first too (question "remove"); any
+    answer drops it. Nothing made yet: nothing asked, its redo resumed. A
+    pause stays. A setting that doesn't remake (how faces are grouped) asks
+    nothing and makes nothing again: when one changes, the producer's
     regroup runs (the face groups are worked out again; location guesses
     are checked again)."""
     from src.producers import load
@@ -418,34 +426,39 @@ def set_settings(
         on_settings = load(p.on_settings) if p.on_settings else None
         # What the new settings drop that a redo wouldn't (location guesses once inferring is off).
         dropped = on_settings(session, before["settings"], after["settings"], apply=False) if on_settings else 0
-        if dropped and not body.redo:
+        if dropped and body.redo is None:
             session.rollback()
             raise DecisionRequiredError(
                 "redo_on_change",
                 f"New settings remove {p.title.lower()} from {dropped:,} clip{'' if dropped == 1 else 's'}.",
                 {"artifact": artifact, "clips": dropped, "redo_stopped": False, "paused": False,
-                 "artifacts": [{"artifact": artifact, "title": p.title, "clips": dropped}]},
+                 "question": "remove", "artifacts": [{"artifact": artifact, "title": p.title, "clips": dropped}]},
             )
         if on_settings:
             on_settings(session, before["settings"], after["settings"], apply=True)
         clips = lineage.would_redo(session, artifact, after)
-        if clips and not body.redo:
+        if clips and body.redo is None:
             paused = lineage.pauses(session)
             stopped, held = artifact in paused.redo, artifact in paused.work
             session.rollback()
             also = " and ".join(PRODUCERS[a].title.lower() for a in lineage.made_from(artifact)[1:])
+            one = clips == 1
             raise DecisionRequiredError(
                 "redo_on_change",
-                f"New settings make {clips:,} clip{'' if clips == 1 else 's'} of {p.title.lower()} again"
-                + (f", and their {also} with them" if also else "") + ". That "
-                "runs after anything missing; until it's done, results mix the old settings and the new."
+                f"{clips:,} clip{'' if one else 's'} of {p.title.lower()} {'was' if one else 'were'} made with the "
+                "old settings. New files only, and they stay as they are until you remake them; or remake them "
+                "too" + (f", and their {also} with them" if also else "") + ", after everything else: until "
+                "that's done, results mix the old settings and the new."
                 + (f" {p.redo_note}" if p.redo_note else "")
-                + (" Its stopped redo starts again." if stopped else "")
+                + (" Its stopped redo starts again if they're remade." if stopped else "")
                 + (" It's paused: none of it is made until it's resumed." if held else ""),
                 {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
-                 "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
+                 "question": "remake", "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
             )
-        lineage.resume(session, [artifact], lineage.REDO)
+        if clips and body.redo is False:
+            lineage.keep_made(session, [artifact], by=user_id)
+        else:
+            lineage.resume(session, [artifact], lineage.REDO)
     if uses != used and p.regroup:
         load(p.regroup)(session, used, uses)
     session.commit()
@@ -519,8 +532,8 @@ def pause_switch(
     each can be resumed alone after; "all" is stored, so a producer a later
     version adds is paused too). A library's scans alone: POST
     /v1/libraries/scans/pause. Scope redo: a producer's
-    stale clips stay as they are until it's resumed, or its settings change
-    (what's missing is still made). What's running finishes. Again is
+    stale clips stay as they are until it's resumed (Remake), or a change of
+    its settings or model says to remake them (what's missing is still made). What's running finishes. Again is
     fine: who paused first stays."""
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.pause_everything(session, by=user_id)

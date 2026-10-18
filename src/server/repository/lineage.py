@@ -463,6 +463,18 @@ def pause(session: Session, target: str, scope: str, *, by: str | None) -> None:
         " ON CONFLICT (target, scope) DO NOTHING"), {"t": target, "s": scope, "by": by, "now": utcnow()})
 
 
+def keep_made(session: Session, artifacts: list[str] | tuple[str, ...], *, by: str) -> None:
+    """New files only (ADR-018 decision 6): what these producers made
+    another way than now stays as it is, by a person's choice, until someone
+    remakes it (resumes the redo): each one's redo stopped by them, whoever
+    stopped it before (a new version's hold becomes their choice). Doesn't
+    commit."""
+    kept = [a for a in artifacts if redoable(a)]
+    resume(session, kept, REDO)
+    for artifact in kept:
+        pause(session, artifact, REDO, by=by)
+
+
 def resume(session: Session, targets: list[str] | tuple[str, ...], scope: str) -> None:
     """Carry on with what was paused, in that scope. Resuming one switch while
     Pause all is on leaves every other switch there is now, and every

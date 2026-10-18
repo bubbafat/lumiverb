@@ -60,7 +60,7 @@ REASONS: dict[str, str] = {
     STORAGE: "a library's drive can't be reached, or hasn't been looked at since the scheduler started",
     DEVICE: "a device reads the library: the device makes it from its originals",
     NEW_VERSION: "a new version of it waits for an admin to resume its redo",
-    REDO_STOPPED: "an admin stopped its redo",
+    REDO_STOPPED: "an admin chose to keep what it made another way than now as it is (new files only, or Stop)",
     SCAN: "its file wasn't on its storage, or changed: a scan comes first",
     HELD: "its last try couldn't finish through no fault of the clip's: tried again within the hour",
     RETRY_LATER: "its last try failed: tried again later",

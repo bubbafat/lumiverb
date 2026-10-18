@@ -933,13 +933,13 @@ export async function removeMachine(machineId: string): Promise<AiSettings> {
 
 /** Set a job's model (admins); "" turns the job off. Every machine doing it is
  * asked: 409 model_not_offered (details.machines: name, models, error) when none offers it.
- * A new model makes everything the job made again, after anything missing:
- * 409 redo_on_change (details: model, clips, artifacts[{artifact, title, clips}])
- * until `redo` says yes. Saving a model resumes its producers' redo. */
-export async function setJobModel(job: string, model: string, redo = false): Promise<AiSettings> {
+ * A new model asks what becomes of what the old one made (ADR-018 decision 6):
+ * 409 redo_on_change (details: model, clips, question "remake", artifacts[{artifact, title, clips}])
+ * until `redo` says: true, remade too, after everything else; false, new files only. */
+export async function setJobModel(job: string, model: string, redo?: boolean): Promise<AiSettings> {
   return apiFetch<AiSettings>(`/ai/jobs/${job}`, {
     method: "PUT",
-    body: redo ? { model, redo: true } : { model },
+    body: redo === undefined ? { model } : { model, redo },
   });
 }
 
@@ -1067,16 +1067,18 @@ export async function redoBelow(
 }
 
 /** Change a producer's settings (admins): null puts one back to its default.
- * 409 redo_on_change (details.clips) until redo says yes; 422 bad_setting,
- * unknown_setting or setting_fixed say what's wrong. */
+ * 409 redo_on_change (details.clips; details.question "remake", or "remove" when
+ * something would be dropped) until redo says: true, what the old settings made is
+ * remade too, after everything else; false, new files only (ADR-018 decision 6).
+ * 422 bad_setting, unknown_setting or setting_fixed say what's wrong. */
 export async function setProducerSettings(
   artifact: string,
   settings: Record<string, unknown>,
-  redo = false,
+  redo?: boolean,
 ): Promise<Producer> {
   return apiFetch<Producer>(`/producers/${artifact}/settings`, {
     method: "PUT",
-    body: redo ? { settings, redo: true } : { settings },
+    body: redo === undefined ? { settings } : { settings, redo },
   });
 }
 

@@ -91,9 +91,11 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const s = some(w, c);
     return `A new version of ${c.title} is ready: ${s.count} made by an older one ${s.are} made again once an admin resumes it.`;
   },
-  redo_stopped: (w) => {
+  redo_stopped: (w, c) => {
+    const s = some(w, c);
     const one = w.clips === 1;
-    return `Redo stopped: ${n(w.clips)} clip${one ? "" : "s"} ${one ? "stays as it is" : "stay as they are"} until it's resumed.`;
+    return `${s.count} made another way than now ${one ? "stays as it is" : "stay as they are"}: `
+      + `an admin chose to keep ${s.them}.`;
   },
   scan: (w, c) => {
     const s = some(w, c);
