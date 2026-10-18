@@ -15,7 +15,6 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
 from src.server.models.filter_registry import parse_f_params
-from src.server.models.query_filter import LibraryScope
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +47,18 @@ def get_facets(
     Accepts the same ``?f=prefix:value`` params as ``/v1/query``.
     """
     from src.server.api.routers.projects import guard_project_filters
-    from src.server.api.routers.query import guard_public_spec
+    from src.server.api.routers.query import guard_public_spec, in_sight_spec
 
     spec = parse_f_params(f)
     public_cap_ms = guard_public_spec(request, session, spec)
     guard_project_filters(request, session, spec)
+    spec, library_ids = in_sight_spec(request, session, spec)
 
     # --- Candidate set from text search ---
     candidate_ids: list[str] | None = None
     if spec.search_terms:
         from src.server.api.routers.query import MAX_CANDIDATE_IDS, _run_text_search
 
-        library_ids: list[str] | None = None
-        for leaf in spec.leaves:
-            if isinstance(leaf, LibraryScope):
-                library_ids = list(leaf.library_ids)
-                break
         scores, _contexts, _source = _run_text_search(
             session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
             public=getattr(request.state, "is_public_request", False),

@@ -74,12 +74,12 @@ def _person(env, email: str, role: str, *, every_library: bool = True) -> str:
     return user_id
 
 
-def _key(env, user_id: str, role: str) -> dict:
-    """A key the person made, of this role."""
+def _key(env, user_id: str, role: str, *, with_id: bool = False):
+    """A key the person made, of this role (and its id)."""
     with get_control_session() as session:
-        _, plaintext = ApiKeyRepository(session).create(_tenant_of(env), "theirs", role=role,
-                                                        created_by_user_id=user_id)
-    return _bearer(plaintext)
+        api_key, plaintext = ApiKeyRepository(session).create(_tenant_of(env), "theirs", role=role,
+                                                              created_by_user_id=user_id)
+    return (_bearer(plaintext), api_key.key_id) if with_id else _bearer(plaintext)
 
 
 def _set(env, library_id: str, user_id: str, role: str | None) -> None:

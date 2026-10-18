@@ -59,7 +59,7 @@ def is_paused(artifact: str, paused: lineage.Pauses, library_id: str | None = No
 
 def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, counts: dict[str, dict[str, int]],
                    paused: lineage.Pauses, status: Any, ai: Any = None, library_id: str | None = None,
-                   asset_ids: list[str] | None = None) -> list[dict[str, Any]]:
+                   asset_ids: list[str] | None = None, within: list[str] | None = None) -> list[dict[str, Any]]:
     """Why the producer's due work waits: [{reason, clips, ...}] in the order
     of src/shared/waits.py, each only when some clips wait for it (an AI
     job's wait is said whatever: its work would). counts: every producer's
@@ -67,8 +67,14 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
     live); ai: the control plane's word on its AI job (ai_machines.JobWait).
     In one project (asset_ids), the clips the scheduler holds back aren't
     counted: it doesn't say which clips they are. Scans make the producers
-    it doesn't run: pausing Scans says so on their rows, and they list none."""
+    it doesn't run: pausing Scans says so on their rows, and they list none.
+    within: only these libraries are said (the ones a person can see), as
+    counts were counted."""
     p = PRODUCERS[artifact]
+
+    def shown(library: str | None) -> bool:
+        return (library_id is None or library == library_id) and (within is None or library in within)
+
     if not p.scheduled:
         return []
     c = counts[artifact]
@@ -104,7 +110,7 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
             paused=is_paused(need, paused, library_id))
     # Pause all touches no drive, so nothing looks at them: paused says it.
     if p.storage and live and not paused.everything:
-        away = [i for i in status.storage_waits if library_id is None or i == library_id]
+        away = [i for i in status.storage_waits if shown(i)]
         due_in = lineage.due_by_library(session, artifact, want, away, redo=redo_runs, asset_ids=asset_ids)
         names = _library_names(session, [i for i in away if due_in.get(i)])
         for i in away:
@@ -114,7 +120,7 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
                 checked=bool(getattr(seen, "checked", False)))
     if p.storage:
         # A device reads these libraries: what needs their originals is its (ADR-018 decision 1).
-        devices = _read_by_devices(session, library_id)
+        devices = {i: lib for i, lib in _read_by_devices(session, library_id).items() if shown(i)}
         due_in = lineage.due_by_library(session, artifact, want, list(devices), redo=redo_runs, asset_ids=asset_ids)
         for i, lib in devices.items():
             add(DEVICE, due_in.get(i, 0), library_id=i, library_name=lib["name"], device_id=lib["reader"],
@@ -127,7 +133,7 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
         held: dict[str, int] = {}
         scan_paused = False  # a library a scan comes first in has its scans paused
         for row in status.held:
-            if row.kind == p.kind and (library_id is None or row.library_id == library_id):
+            if row.kind == p.kind and shown(row.library_id):
                 why = row.why if row.why in (SCAN, HELD) else HELD  # a code it doesn't know: held
                 held[why] = held.get(why, 0) + row.clips
                 scan_paused |= why == SCAN and row.clips > 0 and paused.scans_paused(row.library_id or None)
@@ -138,17 +144,19 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
     return sorted(out, key=lambda w: _ORDER[w["reason"]])
 
 
-def scan_waits(session: Session, status: Any) -> list[dict[str, Any]]:
+def scan_waits(session: Session, status: Any, within: list[str] | None = None) -> list[dict[str, Any]]:
     """Why libraries' scans wait, as each library's row says it (GET
     /v1/producers/queue): each library whose scans keep failing, with the
     error, since when and the next try (SCAN_FAILING), while the scheduler
-    runs (only it knows; that it isn't running is said instead)."""
-    if not status.live or not status.scans_failing:
+    runs (only it knows; that it isn't running is said instead). within:
+    only these libraries."""
+    failing = [f for f in status.scans_failing if within is None or f.library_id in within]
+    if not status.live or not failing:
         return []
-    names = _library_names(session, [f.library_id for f in status.scans_failing])
+    names = _library_names(session, [f.library_id for f in failing])
     return [{"reason": SCAN_FAILING, "clips": 0, "library_id": f.library_id,
              "library_name": names.get(f.library_id, ""), "message": f.error, "since": f.since,
-             "next_try": f.next_try} for f in status.scans_failing]
+             "next_try": f.next_try} for f in failing]
 
 
 def _read_by_devices(session: Session, library_id: str | None) -> dict[str, dict[str, Any]]:

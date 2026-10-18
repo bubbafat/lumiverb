@@ -14,7 +14,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session,
 from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cursor
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
-from src.server.api.library_access import names
+from src.server.api.library_access import names, seen
 from src.shared.utils import utcnow
 from src.server.repository.assets import AssetRepository
 from src.server.repository.libraries import LibraryRepository
@@ -64,6 +64,7 @@ class TrashPage(BaseModel):
 @router.get("", response_model=TrashPage, dependencies=[Depends(require_signed_in)])
 @names(sees=("query.library_id",))
 def list_trash(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
     path: str | None = Query(default=None, description="Only clips under this folder (recursive)."),
@@ -81,6 +82,7 @@ def list_trash(
     listed_at = utcnow()
     rows, total = AssetRepository(session).page_hidden(
         ("user",), library_id=library_id, folder=path, after=decode_cursor(after), limit=limit,
+        within=seen(request, session),
     )
     return TrashPage(
         items=[

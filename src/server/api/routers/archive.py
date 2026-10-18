@@ -19,7 +19,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_PAGE
-from src.server.api.library_access import names
+from src.server.api.library_access import names, seen
 from src.server.repository.assets import AssetRepository
 
 router = APIRouter(prefix="/v1/archive", tags=["archive"], dependencies=[Depends(require_signed_in)])
@@ -67,6 +67,7 @@ _KINDS = {"all": ("archived", "missing"), "by_hand": ("archived",), "missing": (
 @router.get("", response_model=ArchivePage)
 @names(sees=("query.library_id",))
 def list_archive(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
     path: str | None = Query(default=None, description="Only clips under this folder (recursive)."),
@@ -78,6 +79,7 @@ def list_archive(
     their file went missing. Clips of a library in the trash aren't here."""
     rows, total = AssetRepository(session).page_hidden(
         _KINDS[kind], library_id=library_id, folder=path, after=decode_cursor(after), limit=limit,
+        within=seen(request, session),
     )
     return ArchivePage(
         items=[

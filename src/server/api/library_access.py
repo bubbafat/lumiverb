@@ -132,6 +132,45 @@ def _roles_named(request: Request, person: Person, named: list[tuple[str, list[s
     return edited
 
 
+def roles_in_sight(request: Request, session: Session) -> dict[str, str] | None:
+    """The person's role on each library they can see, by its id; None when
+    the request isn't a person's or is an account admin's: every library,
+    at the request's own role. Asked once a request."""
+    person = person_of(request)
+    if person is None:
+        return None
+    roles = getattr(request.state, "roles_in_sight", None)
+    if roles is None:
+        roles = {library_id: role for library_id, role in LibraryRoleRepository(session).roles_of(person).items()
+                 if role != "none"}
+        request.state.roles_in_sight = roles
+    return roles
+
+
+def seen(request: Request, session: Session) -> list[str] | None:
+    """The libraries the person can see; None: every library (no person,
+    or an account admin). What spans libraries shows only these."""
+    roles = roles_in_sight(request, session)
+    return None if roles is None else sorted(roles)
+
+
+def in_sight(request: Request, session: Session, items: list, library_of: Callable | None = None) -> list:
+    """The items (each a library, or of one: its library_id, an attribute or
+    a key) in a library the person can see."""
+    libraries = seen(request, session)
+    if libraries is None:
+        return list(items)
+    of = library_of or (lambda item: item["library_id"] if isinstance(item, dict) else item.library_id)
+    return [item for item in items if of(item) in set(libraries)]
+
+
+def edited(request: Request, session: Session) -> list[str] | None:
+    """The libraries the person can edit (an editor's role or more); None:
+    every library. What acts on every library acts on these."""
+    roles = roles_in_sight(request, session)
+    return None if roles is None else sorted(lib for lib, role in roles.items() if RANK[role] >= RANK["editor"])
+
+
 def role_here(request: Request) -> str | None:
     """The request's role where it acts: the lowest on the libraries it
     edits when it names any, else the account's (request.state.role)."""

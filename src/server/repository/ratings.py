@@ -130,9 +130,10 @@ class RatingRepository:
         return updated
 
     def list_favorites(
-        self, user_id: str, after: str | None = None, limit: int = 200
+        self, user_id: str, after: str | None = None, limit: int = 200, within: list[str] | None = None,
     ) -> tuple[list[Asset], str | None]:
-        """Return active favorited assets across all libraries, newest first.
+        """Return active favorited assets across all libraries (only these
+        when within is given), newest first.
 
         Uses cursor pagination on asset_ratings.updated_at DESC.
         Returns (assets, next_cursor).
@@ -143,6 +144,9 @@ class RatingRepository:
             "a.deleted_at IS NULL",
         ]
         params: dict = {"user_id": user_id, "limit": limit + 1}
+        if within is not None:
+            conditions.append("a.library_id = ANY(:within)")
+            params["within"] = list(within)
 
         if after:
             conditions.append("r.updated_at < :after_ts")

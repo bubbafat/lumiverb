@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
+from src.server.api.library_access import seen
 from src.server.api.limits import MAX_PAGE
 from src.server.api.routers.projects import guard_project_filters
 from src.server.models.filter_registry import parse_f_params
@@ -36,6 +37,7 @@ from src.server.models.query_filter import (
     LibraryScope,
     PathPrefix,
     PersonFilter,
+    QuerySpec,
     SearchTerm,
 )
 from src.server.repository.browse import UnifiedBrowseRepository
@@ -246,6 +248,24 @@ def guard_public_spec(request: Request, session: Session, spec) -> int | None:
     cap = playback_cap(session, public=True)
     return None if cap is None else cap * 1000
 
+def in_sight_spec(request: Request, session: Session, spec: QuerySpec) -> tuple[QuerySpec, list[str] | None]:
+    """The query kept to the libraries the caller can see (ADR-018 decision
+    8, roles per library), and the libraries its text search looks in: its
+    first library filter's, those the caller can see among them; None for
+    every library."""
+    library_ids: list[str] | None = None
+    for leaf in spec.leaves:
+        if isinstance(leaf, LibraryScope):
+            library_ids = list(leaf.library_ids)
+            break
+    visible = seen(request, session)
+    if visible is None:
+        return spec, library_ids
+    kept = QuerySpec(root=GroupFilter(Combinator.AND, (LibraryScope(tuple(visible)), spec.root)),
+                     sort=spec.sort, direction=spec.direction)
+    return kept, visible if library_ids is None else [lib for lib in library_ids if lib in set(visible)]
+
+
 def _visitor_view(item: QueryItem) -> QueryItem:
     """A result as a visitor to a public library sees it: what a public
     project's visitor sees of a clip (assets._project_visitor_view), not
@@ -298,6 +318,7 @@ def unified_query(
     # isn't for them to probe, so those filters are refused.
     public_cap_ms = guard_public_spec(request, session, spec)
     guard_project_filters(request, session, spec)
+    spec, library_ids = in_sight_spec(request, session, spec)
 
     search_terms = spec.search_terms
     candidate_ids: list[str] | None = None
@@ -308,13 +329,6 @@ def unified_query(
 
     # --- Text search via candidate-set pattern ---
     if search_terms:
-        # Extract library_ids from the filter tree for the search's scope
-        library_ids: list[str] | None = None
-        for leaf in spec.leaves:
-            if isinstance(leaf, LibraryScope):
-                library_ids = list(leaf.library_ids)
-                break
-
         scores, contexts, search_source = _run_text_search(
             session, search_terms, library_ids, limit=MAX_CANDIDATE_IDS, public_cap_ms=public_cap_ms,
             public=getattr(request.state, "is_public_request", False),

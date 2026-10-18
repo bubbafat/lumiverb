@@ -597,9 +597,9 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
         SORT_COLUMNS,
         _encode_cursor,
         _run_text_search,
+        in_sight_spec,
     )
     from src.server.models.filter_registry import from_json
-    from src.server.models.query_filter import LibraryScope
     from src.server.repository.browse import UnifiedBrowseRepository
 
     try:
@@ -609,6 +609,7 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
     if spec.sort not in SORT_COLUMNS:
         raise InvalidChoiceError("bad_search", f"Unknown sort {spec.sort!r}")
     guard_project_filters(request, session, spec)
+    spec, library_ids = in_sight_spec(request, session, spec)
     repo = UnifiedBrowseRepository(session)
     rating_user_id = user_id if spec.needs_rating_join else None
 
@@ -623,11 +624,6 @@ def _search_matches(saved: dict, request: Request, session: Session, user_id: st
     if spec.search_terms:
         # A text search's matches are a capped set ordered by relevance, all
         # at once: as GET /v1/query shows them, without a cursor.
-        library_ids: list[str] | None = None
-        for leaf in spec.leaves:
-            if isinstance(leaf, LibraryScope):
-                library_ids = list(leaf.library_ids)
-                break
         capped: set[str] = set()  # each search (clips, scenes, transcripts) is capped on its own
         scores, _contexts, _source = _run_text_search(
             session, spec.search_terms, library_ids, limit=MAX_CANDIDATE_IDS, capped=capped,

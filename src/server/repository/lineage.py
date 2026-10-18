@@ -213,15 +213,20 @@ def queued(artifact: str, *, redo: bool = False) -> str:
     return f"(({redo_due(artifact) if redo else handed_out(artifact)}) AND ({made_first(artifact)}))"
 
 
+_WITHIN = "(CAST(:within AS text[]) IS NULL OR a.library_id = ANY(CAST(:within AS text[])))"
+
+
 def _scope_sql() -> str:
-    """Clips in one library and/or among some ids, when given (:lib, :ids)."""
+    """Clips in one library, among some ids, and in some libraries (the ones
+    a person can see), when given (:lib, :ids, :within)."""
     return ("(CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
-            " AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))")
+            " AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))"
+            f" AND {_WITHIN}")
 
 
 def _stale_params(artifact: str, want: dict[str, Any], library_id: str | None,
-                  asset_ids: list[str] | None) -> dict[str, Any]:
-    return {"artifact": artifact, "lib": library_id, "ids": asset_ids, "person": PERSON,
+                  asset_ids: list[str] | None, within: list[str] | None = None) -> dict[str, Any]:
+    return {"artifact": artifact, "lib": library_id, "ids": asset_ids, "within": within, "person": PERSON,
             "producer": want["producer"], "version": want["version"], "hash": want["settings_hash"],
             "level": want.get("level")}
 
@@ -268,10 +273,10 @@ def _due_redo_sql(artifact: str) -> str:
 
 
 def counts(session: Session, artifact: str, want: dict[str, Any], library_id: str | None = None,
-           asset_ids: list[str] | None = None) -> dict[str, int]:
+           asset_ids: list[str] | None = None, within: list[str] | None = None) -> dict[str, int]:
     """{applicable, current, stale, missing, rechecking, below, failing,
-    given_up} for one artifact kind, over clips in sight (in one library, or
-    among asset_ids, when given). rechecking: made, and due to be checked
+    given_up} for one artifact kind, over clips in sight (in one library,
+    among asset_ids, or in the libraries within, when given). rechecking: made, and due to be checked
     again (not stale). below: made below the producer's level now (its level
     setting; not stale, and not current: made again only when asked,
     redo_below). given_up: failing ones no longer tried (after GIVE_UP_AFTER tries).
@@ -297,7 +302,7 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
         " FROM active_assets a"
         " LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = :artifact"
         f" WHERE {APPLIES[artifact]} AND {_scope_sql()}"
-    ), _stale_params(artifact, want, library_id, asset_ids)).one()
+    ), _stale_params(artifact, want, library_id, asset_ids, within)).one()
     (applicable, n_missing, n_stale, n_rechecking, n_below, failing, given_up,
      due_new, due_redo, retrying) = (int(v) for v in row)
     return {"applicable": applicable, "current": applicable - n_missing - n_stale - n_rechecking - n_below,
@@ -766,10 +771,11 @@ def note_crashes(session: Session, artifact: str, asset_ids: list[str], error: s
 
 
 def failures(session: Session, *, artifact: str | None = None, library_id: str | None = None,
-             asset_ids: list[str] | None = None, limit: int = 50, after: str | None = None) -> list[dict[str, Any]]:
+             asset_ids: list[str] | None = None, limit: int = 50, after: str | None = None,
+             within: list[str] | None = None) -> list[dict[str, Any]]:
     """Clips in sight whose last try failed, newest failure first: why, how
     many tries, and when the next one is (None when given up). after: the
-    cursor the last page ended with."""
+    cursor the last page ended with; within: only these libraries."""
     rows = session.execute(text(
         "SELECT l.asset_id, l.artifact, l.error, l.attempts, l.failed_at, l.retry_at,"
         " a.rel_path, a.library_id, a.media_type, lib.name AS library_name"
@@ -779,12 +785,14 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
         "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
         "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
         "   AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))"
+        f"  AND {_WITHIN}"
         "   AND (CAST(:after AS text) IS NULL"
         "        OR (COALESCE(l.failed_at, l.produced_at), l.asset_id || '/' || l.artifact)"
         "           < (CAST(split_part(:after, '|', 1) AS timestamptz), split_part(:after, '|', 2)))"
         " ORDER BY COALESCE(l.failed_at, l.produced_at) DESC, l.asset_id || '/' || l.artifact DESC"
         " LIMIT :n"
-    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after": after, "n": limit}).mappings().all()
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after": after, "n": limit,
+        "within": within}).mappings().all()
     out = []
     for r in rows:
         given_up = r["retry_at"] is not None and r["retry_at"].year >= 9999
@@ -795,17 +803,18 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
 
 
 def retry(session: Session, *, artifact: str | None = None, library_id: str | None = None,
-          asset_ids: list[str] | None = None) -> int:
+          asset_ids: list[str] | None = None, within: list[str] | None = None) -> int:
     """Try these failing clips again now, given up or not (the back-off starts
     over). None for a part means every one (the caller has made sure it was
-    named so). Doesn't commit. Returns how many."""
+    named so); within: only these libraries. Doesn't commit. Returns how many."""
     r = session.execute(text(
         "UPDATE artifact_lineage l SET retry_at = NULL, attempts = 0 FROM active_assets a"
         " WHERE a.asset_id = l.asset_id AND l.error IS NOT NULL"
         "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
         "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
         "   AND (CAST(:ids AS text[]) IS NULL OR l.asset_id = ANY(CAST(:ids AS text[])))"
-    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids})
+        f"  AND {_WITHIN}"
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "within": within})
     if r.rowcount:
         nudge(session)
     return int(r.rowcount or 0)
