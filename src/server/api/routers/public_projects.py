@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session
+from src.server.api.library_access import sight_of
 from src.server.api.limits import MAX_PAGE
 from src.server.repository.projects import ProjectRepository
 
@@ -39,12 +40,12 @@ class PublicProjectAssetsResponse(BaseModel):
 
 
 def _get_public_project(session: Session, project_id: str):
-    """Get project and verify it's actually public."""
-    repo = ProjectRepository(session)
-    col = repo.get_by_id(project_id)
+    """Get project and verify it's actually public: its clips the ones its
+    owner can still see (ADR-018 decision 8)."""
+    col = ProjectRepository(session).get_by_id(project_id)
     if col is None or col.visibility != "public":
         raise HTTPException(status_code=404, detail="Project not found")
-    return col, repo
+    return col, ProjectRepository(session, within=sight_of(session, col.owner_user_id))
 
 
 @router.get("/{project_id}", response_model=PublicProjectDetail)

@@ -481,8 +481,9 @@ def _project_clips(request: Request, session: Session, user_id: str, project_id:
     from src.server.api.routers.projects import _all_project_assets, _can_view
     from src.server.repository.projects import ProjectRepository
 
-    project = ProjectRepository(session).get_by_id(project_id)
-    if project is None or getattr(project, "deleted_at", None) is not None or not _can_view(project, user_id):
+    repo = ProjectRepository(session, within=seen(request, session))
+    project = repo.get_by_id(project_id)
+    if project is None or getattr(project, "deleted_at", None) is not None or not _can_view(project, user_id, repo):
         raise HTTPException(status_code=404, detail="Project not found")
     return [a.asset_id for a in _all_project_assets(project, request, session, user_id)]
 

@@ -171,6 +171,32 @@ def edited(request: Request, session: Session) -> list[str] | None:
     return None if roles is None else sorted(lib for lib, role in roles.items() if RANK[role] >= RANK["editor"])
 
 
+def sight_of(session: Session, owner: str | None) -> list[str] | None:
+    """The libraries someone who made something can see now: a public
+    project shows what its owner still can. owner: a user's id, or
+    "key:<id>" for a key's (its maker's, never above its role). None:
+    every library (nobody's, an account admin's, or a key no person made;
+    and one whose maker has left the account, as it was published by an
+    account admin)."""
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import ApiKeyRepository, UserRepository
+
+    if owner is None:
+        return None
+    cap = None
+    with get_control_session() as control:
+        if owner.startswith("key:"):
+            key = ApiKeyRepository(control).get(owner.removeprefix("key:"))
+            if key is None or key.created_by_user_id is None or key.device_id is not None:
+                return None
+            owner, cap = key.created_by_user_id, key.role
+        user = UserRepository(control).get_by_id(owner)
+    if user is None or user.role == "admin" and cap in (None, "admin"):
+        return None
+    person = Person(user.user_id, user.role, user.every_library, cap=cap)
+    return sorted(lib for lib, role in LibraryRoleRepository(session).roles_of(person).items() if role != "none")
+
+
 def role_here(request: Request) -> str | None:
     """The request's role where it acts: the lowest on the libraries it
     edits when it names any, else the account's (request.state.role)."""
