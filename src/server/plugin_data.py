@@ -5,8 +5,10 @@ The fetch says how far it is in the control database (plugin_data), so
 Settings › Plug-ins shows it. One that stops (the API restarted) is taken
 up again by upkeep once it hasn't been heard from for STALE; one that failed
 is tried again by upkeep after RETRY, or at once when an admin turns the
-plug-in on again (Try again). Only one fetch of a plug-in runs at a time
-(PluginDataRepository.claim).
+plug-in on again (Try again). One a release changed (its spec's
+data_version is newer than what was saved) is fetched again the same ways,
+what's there used until the new data is saved (current says which). Only
+one fetch of a plug-in runs at a time (PluginDataRepository.claim).
 """
 
 from __future__ import annotations
@@ -38,7 +40,11 @@ def status(plugin_id: str) -> dict[str, Any] | None:
     if spec is None or not spec.data:
         return None
     with get_control_session() as session:
-        return PluginDataRepository(session).get(plugin_id) or {"plugin_id": plugin_id, "state": "missing"}
+        row = PluginDataRepository(session).get(plugin_id)
+    if row is None:
+        return {"plugin_id": plugin_id, "state": "missing", "current": False}
+    # current: what's there is this release's (saved at its data_version or later).
+    return {**row, "current": row["ready_at"] is not None and row["version"] >= spec.data_version}
 
 
 def ensure(plugin_id: str, *, retry_now: bool = False, wait: bool = False) -> str:
@@ -53,15 +59,15 @@ def ensure(plugin_id: str, *, retry_now: bool = False, wait: bool = False) -> st
     with get_control_session() as session:
         repo = PluginDataRepository(session)
         if not repo.claim(plugin_id, now=now, stale_before=now - STALE, retry_before=now - RETRY,
-                          retry_now=retry_now):
+                          retry_now=retry_now, version=spec.data_version):
             row = repo.get(plugin_id)
             state = row["state"] if row else "missing"
             return {"ready": "ready", FETCHING: "running"}.get(state, "waiting")
     if wait:
-        _fetch(plugin_id, spec.data)
+        _fetch(plugin_id, spec.data, spec.data_version)
     else:
-        threading.Thread(target=_fetch, args=(plugin_id, spec.data), name=f"plugin-data-{plugin_id}",
-                         daemon=True).start()
+        threading.Thread(target=_fetch, args=(plugin_id, spec.data, spec.data_version),
+                         name=f"plugin-data-{plugin_id}", daemon=True).start()
     return "started"
 
 
@@ -70,7 +76,7 @@ def _load(target: str):
     return getattr(importlib.import_module(module), name)
 
 
-def _fetch(plugin_id: str, target: str) -> None:
+def _fetch(plugin_id: str, target: str, version: int) -> None:
     last = [0.0]
 
     def progress(done: int, total: int | None, detail: str, *, force: bool = False) -> None:
@@ -88,5 +94,5 @@ def _fetch(plugin_id: str, target: str) -> None:
             PluginDataRepository(session).failed(plugin_id, str(exc) or type(exc).__name__, utcnow())
         return
     with get_control_session() as session:
-        PluginDataRepository(session).ready(plugin_id, int(count), utcnow())
+        PluginDataRepository(session).ready(plugin_id, int(count), utcnow(), version)
     logger.info("Fetched %s's data: %d", plugin_id, count)

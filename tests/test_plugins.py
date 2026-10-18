@@ -139,6 +139,7 @@ def _on_in_python(env) -> bool:  # noqa: F811
 
 
 def test_a_new_version_of_its_text_stays_on_unless_the_plug_in_says_accept_again(env, monkeypatch) -> None:  # noqa: F811
+    _with_text(monkeypatch, "1", reaccept_from="")  # as a first release declares it
     first = _version()
     r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": first},
                        headers=env.admin)
@@ -175,6 +176,7 @@ def test_a_new_version_of_its_text_stays_on_unless_the_plug_in_says_accept_again
 
 
 def test_a_server_that_skipped_the_release_that_asked_still_asks(env, monkeypatch) -> None:  # noqa: F811
+    _with_text(monkeypatch, "1", reaccept_from="")
     r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": _version()},
                        headers=env.admin)
     assert r.status_code == 200, r.text

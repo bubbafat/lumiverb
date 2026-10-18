@@ -51,5 +51,8 @@ class PluginSpec:
     # What that is and what it counts, for people: "The place list", "places".
     data_title: str = ""
     data_unit: str = ""
+    # Goes up when a release keeps something else (GeoNames' landmarks beside its towns): a server whose
+    # data is older fetches it again, using what it has until the new data is saved.
+    data_version: int = 1
     # Where it shows in lists.
     order: int = 1000

@@ -82,6 +82,25 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1", "ast_2"], replace: "none", place_id: "geonames:3573890" });
   });
 
+  it("says what kind of landmark a place found is", async () => {
+    plugins.mockResolvedValue([GEONAMES]);
+    const castle = { place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World", region: "Florida",
+                     country: "United States", label: "Magic Kingdom, Walt Disney World, Florida, United States",
+                     lat: 28.4187, lon: -81.5812, population: 0, kind: "amusement park" };
+    search.mockResolvedValue({ places: [castle, PORT_OF_SPAIN], credit: CREDIT });
+    modal();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "magic" } });
+    expect(await screen.findByRole("button", { name: /^Magic Kingdom, Walt Disney World, Florida, United States\s*· amusement park$/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: PORT_OF_SPAIN.label })).toBeTruthy();  // a town: no kind
+  });
+
+  it("offers place search while a newer list is fetched, the one before used meanwhile", async () => {
+    plugins.mockResolvedValue([{ ...GEONAMES, data: { ...GEONAMES.data, state: "fetching" as const,
+                                                      ready_at: "2026-10-18T10:00:00Z" } }]);
+    modal();
+    expect(await screen.findByRole("textbox", { name: "Place" })).toBeTruthy();
+  });
+
   it("offers no place search while Place names is off or its list isn't fetched", async () => {
     plugins.mockResolvedValue([{ ...GEONAMES, data: { ...GEONAMES.data, state: "fetching" as const } }]);
     modal();
@@ -136,6 +155,30 @@ describe("LocationRow", () => {
       ...person, basis_summary: place.label, credit: place.credit }} />);
     expect(screen.queryByText(/Near Port of Spain/)).toBeNull();
     expect(screen.getAllByRole("link", { name: "GeoNames" })).toHaveLength(1);
+  });
+
+  it("says the landmark it's at over its town, or with its region and country when no town is near", () => {
+    const credit = { text: "GeoNames", url: "https://www.geonames.org/" };
+    const castle = { place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World", distance_m: 556,
+                     label: "Magic Kingdom, Walt Disney World, Florida, United States" };
+    const place = { label: "Horizon West, Florida, United States", place_id: "geonames:1", distance_m: 4000,
+                    landmark: castle, credit };
+    render(<LocationRow gpsLat={28.41} gpsLon={-81.58} location={null} place={place} />);
+    expect(screen.getByText("At Magic Kingdom, Walt Disney World")).toBeTruthy();
+    expect(screen.getByText(/Near Horizon West, Florida, United States/)).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "GeoNames" })).toHaveLength(1);
+    cleanup();
+    render(<LocationRow gpsLat={28.41} gpsLon={-81.58} location={null}
+                        place={{ ...place, label: null, place_id: null }} />);
+    expect(screen.getByText(/At Magic Kingdom, Walt Disney World, Florida, United States/)).toBeTruthy();
+    expect(screen.queryByText(/Not near a town/)).toBeNull();
+    expect(screen.getByRole("link", { name: "GeoNames" })).toBeTruthy();
+    cleanup();
+    // Picked by its name: the landmark isn't said twice; its town still is.
+    render(<LocationRow gpsLat={null} gpsLon={null} place={place} location={{
+      ...person, basis_summary: castle.label, credit }} />);
+    expect(screen.queryByText(/At Magic Kingdom/)).toBeNull();
+    expect(screen.getByText(/Near Horizon West/)).toBeTruthy();
   });
 
   it("gives viewers no edit controls", () => {

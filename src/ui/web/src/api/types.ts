@@ -76,7 +76,10 @@ export interface Place {
   label: string;
   lat: number;
   lon: number;
+  /** 0 for a landmark. */
   population: number;
+  /** A landmark's kind ("amusement park"); null: a town. */
+  kind?: string | null;
 }
 
 /** Shown beside place names: their source and license ask it. */
@@ -305,6 +308,9 @@ export interface AssetPlace {
   label: string | null;
   place_id: string | null;
   distance_m: number | null;
+  /** The landmark it's at (within its kind's reach); null: at none. label is the name with its region
+   * and country, for when no town is near. */
+  landmark?: { place_id: string; name: string; label: string; distance_m: number | null } | null;
   credit: { text: string; url: string };
 }
 
