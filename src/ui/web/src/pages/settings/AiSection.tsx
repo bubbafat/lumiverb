@@ -542,12 +542,13 @@ function JobModel({
             </span>
           )}
         </p>
-        {admin && !changing && (
+        {admin && !changing && !job.fixed && (
           <button type="button" className={linkClass} aria-label={`Change the model for ${job.label}`} onClick={() => setChanging(true)}>
             Change
           </button>
         )}
       </div>
+      {job.fixed && <p className="text-xs text-gray-500">{job.fixed}</p>}
       {changing && (
         <form
           className="space-y-3"

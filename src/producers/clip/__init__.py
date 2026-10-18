@@ -1,13 +1,19 @@
-"""Visual search: CLIP vectors of photos, on the server's GPU."""
+"""Visual search: CLIP vectors of photos, by the CLIP job's machines (ADR-022):
+the built-in machine (the scheduler's own model, on the server's GPU, as
+always) and Lumiverb's AI workers (lumiverb-server ai-worker)."""
 
 from src.producers.contract import IMAGE, NOT_READ_YET, ProducerSpec, Setting
-from src.producers.pools import GPU
+from src.producers.pools import CLIP
 
 WHOLE_LIBRARY = "Another model makes every photo's vectors again; not offered yet."
 
 # The model_id its vectors are stored under (asset_embeddings); other
 # models' vectors (the macOS app's FeaturePrint) aren't its artifact.
 CLIP_MODEL_ID = "clip"
+
+# The CLIP job's models (Settings › AI), by the name the job knows each by: open_clip's model and
+# weights. What a machine doing the job may serve; the producer's settings are the one in use.
+MODELS: dict[str, tuple[str, str]] = {"ViT-B-32": ("ViT-B-32", "openai")}
 
 # The proxy cache's long edge: the images CLIP, faces and the vision
 # machines are given (src/processing/proxy/proxy_cache.py).
@@ -25,6 +31,6 @@ PRODUCER = ProducerSpec(
         Setting("input_edge", PROXY_CACHE_EDGE, "Image size", unit="px", advanced=True, fixed=NOT_READ_YET),
     ),
     uniform=True, needs=("proxy",),
-    # CLIP and face detection take turns on the server's GPU.
-    kind="clip", flag="missing_embeddings", run="src.producers.clip.work:Clip", pool=GPU,
+    # The CLIP job's machines (Settings › AI); on the server's GPU, the built-in one takes turns with faces.
+    kind="clip", flag="missing_embeddings", run="src.producers.clip.work:Clip", pool=CLIP,
 )

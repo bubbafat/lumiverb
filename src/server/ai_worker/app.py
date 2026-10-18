@@ -7,7 +7,9 @@ POST /v1/lumiverb/faces    images and the face settings -> each one's faces
 Every request carries its key (Authorization: Bearer). Images are JPEG, PNG
 or WebP of at most 120 megapixels, checked before any model sees them (the
 server's rules, src/server/images.py); one that isn't is that image's error,
-never the request's. The work takes turns, at_once requests at a time. A
+never the request's. Requests are taken at_once at a time (decoding,
+waiting), and the models take turns on the GPU, one image at a time, as in
+the scheduler (two threads on Apple's GPU at once hang it). A
 request that fails for the machine's sake (out of memory, a model that
 won't load, the face process dying) is a 503: the scheduler sends its images
 to another machine.
@@ -26,12 +28,13 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
+from src.producers.clip import (
+    MODELS as CLIP_MODELS,  # the name the job knows each by -> open_clip's
+)
+from src.producers.faces import MODELS as FACE_MODELS  # InsightFace's model packs
+
 logger = logging.getLogger(__name__)
 
-# The CLIP models it serves, by the name the account's job knows each by -> open_clip's (model, pretrained).
-CLIP_MODELS: dict[str, tuple[str, str]] = {"ViT-B-32/openai": ("ViT-B-32", "openai")}
-# The face models it serves (InsightFace's model pack).
-FACE_MODELS = frozenset({"buffalo_l"})
 # What one request may carry: a job's photos (faces: 25) with room to spare,
 # each a preview or a video's frame (a few MB at most).
 MAX_IMAGES = 32
@@ -122,7 +125,8 @@ def make_app(models: Any, key: str, *, at_once: int = 2) -> FastAPI:
                     results.append({"error": f"The image {exc}."})
                     continue
                 try:
-                    results.append({"vector": provider.embed_image(img)})
+                    with models.gpu_turn():  # one image at a time on the GPU (MPS hangs on two)
+                        results.append({"vector": provider.embed_image(img)})
                 finally:
                     img.close()
             return {"model_id": provider.model_id, "model_version": provider.model_version, "results": results}
@@ -158,7 +162,8 @@ def make_app(models: Any, key: str, *, at_once: int = 2) -> FastAPI:
                 except NotAnImageError as exc:
                     results.append({"error": f"The image {exc}."})
                     continue
-                found = detector.detect(data, settings)
+                with models.gpu_turn():  # one image at a time on the GPU, CLIP's and faces' alike
+                    found = detector.detect(data, settings)
                 if "error" in found and out_of_memory(found["error"]):
                     raise RuntimeError(found["error"])  # the GPU's: the request goes elsewhere
                 results.append(found)

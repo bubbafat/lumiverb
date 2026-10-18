@@ -1,11 +1,13 @@
 """The account's AI machines doing a job, for the worker (Settings → AI).
 
 Each machine is an OpenAI-compatible endpoint with its own limit of
-requests at once; the job has one model (Robert's call, Oct 8). Before
-sending a machine work, the worker checks it offers the model, and tells
-the server what it found, per machine. The built-in machine is the
-worker's own computer: it's checked here (faster-whisper installed, and
-the model one it knows), not asked. A server is asked for the model by the
+requests at once (Lumiverb's AI worker lists its models the same way,
+ADR-022); the job has one model (Robert's call, Oct 8). Before sending a
+machine work, the worker checks it offers the model, and tells the server
+what it found, per machine. The built-in machine is the worker's own
+computer: it's checked here (faster-whisper installed and the model one it
+knows; CLIP's model one the scheduler loads: the job's guard says how), not
+asked. A server is asked for the model by the
 name it lists it as (Systran/faster-whisper-small for small). Requests go to online machines, each
 up to its limit, least busy for its size first. A machine that fails a
 request (the endpoint's fault: unreachable, out of memory, the model gone)
@@ -25,8 +27,9 @@ from pathlib import Path
 from typing import Any
 
 from src.processing.workers.captions.base import CaptionError, CaptionProvider
+from src.processing.workers.embeddings.base import EmbeddingError
 from src.processing.workers.transcripts.base import Heard, Transcriber, TranscriptError
-from src.shared.ai_jobs import JOBS
+from src.shared.ai_jobs import AI_JOBS, JOBS
 from src.shared.vision_endpoint import VisionEndpointError, list_models
 from src.shared.whisper_models import BUILT_IN_MODELS, canonical, served_as
 
@@ -58,11 +61,19 @@ class Machine:
     checking: bool = field(default=False, repr=False)
 
 
+# How the built-in machine is checked for a job's model: (the models it offers, the name it
+# serves this one by, why it can't do it: "" when it can).
+BuiltInCheck = Callable[[str], tuple[list[str], str, str]]
+
+
 class MachinePool:
     def __init__(self, client: Any, job: str, *, clock: Callable[[], float] = time.monotonic,
-                 recheck_sec: float = RECHECK_SEC) -> None:
+                 recheck_sec: float = RECHECK_SEC, built_in_check: BuiltInCheck | None = None) -> None:
         self._client = client
         self.job = job
+        self._built_in_check = built_in_check
+        # Whether its built-in machine gives this machine's GPU to video work (AiJob.built_in_yields).
+        self._built_in_yields = AI_JOBS[job].built_in_yields if job in AI_JOBS else True
         self.label = JOBS.get(job, job)
         self._clock = clock
         self._recheck_sec = recheck_sec
@@ -98,7 +109,7 @@ class MachinePool:
                 machine.name, machine.api_url, machine.api_key = m["name"], m["api_url"], api_key
                 machine.at_once = max(1, int(m.get("at_once") or 1))
                 machine.built_in = bool(m.get("built_in"))
-                machine.shares_gpu = bool(m.get("shares_gpu")) or machine.built_in
+                machine.shares_gpu = bool(m.get("shares_gpu")) or (machine.built_in and self._built_in_yields)
                 machines.append(machine)
             self.machines = machines
             self.model = model
@@ -185,7 +196,8 @@ class MachinePool:
     def _check(self, machine: Machine) -> None:
         model = self.model
         if machine.built_in:
-            models, serves, error = self._check_built_in()
+            models, serves, error = (self._built_in_check(model) if self._built_in_check is not None
+                                     else self._check_built_in())
         else:
             try:
                 models = list_models(machine.api_url, machine.api_key)
@@ -253,7 +265,7 @@ class _OnAMachine:
     failure moves the item to another. error: the job's error type, which
     says whether a failure was the machine's (endpoint_fault)."""
 
-    error: type[CaptionError] | type[TranscriptError]
+    error: type[CaptionError] | type[TranscriptError] | type[EmbeddingError]
     # A failure that's the item's, not the machine's: try the other machines
     # before giving up on it (a server may refuse what another takes).
     move_item_faults = False
@@ -339,3 +351,15 @@ class PooledTranscriber(_OnAMachine, Transcriber):
 
     def transcribe(self, speech_wav: Path) -> Heard:
         return self._on_a_machine(lambda t: t.transcribe(speech_wav))
+
+
+class PooledEmbedder(_OnAMachine):
+    """CLIP vectors on whichever of the pool's machines is free (ADR-022):
+    the built-in machine's own model, or an AI worker's."""
+
+    error = EmbeddingError
+
+    def embed(self, image: bytes) -> dict:
+        """{vector, model_id, model_version} for an image (a preview's bytes)."""
+        return self._on_a_machine(lambda e: e.embed(image))
+

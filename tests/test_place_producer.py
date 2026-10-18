@@ -41,8 +41,9 @@ MID_ATLANTIC = (20.0, -40.0)
 
 
 @pytest.fixture(autouse=True)
-def _fresh(env, geonames_site, monkeypatch):  # noqa: F811
+def _fresh(env, geonames_site, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", geonames_site)
+    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path))  # its downloads its own
     yield
     env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": False}, headers=env.admin)
 

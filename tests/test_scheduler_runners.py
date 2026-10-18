@@ -45,6 +45,9 @@ class FakeAccount:
         self.transcripts = MagicMock()
         self.transcripts.model = "small"
         self.transcripts.charges.return_value = True
+        self.clip = MagicMock()
+        self.clip.model = "ViT-B-32"
+        self.clip.charges.return_value = True
         self.analysis_cache = MagicMock()  # held: what get says, as the cache holds it for the block
         self.analysis_cache.held.side_effect = lambda asset_id: contextlib.nullcontext(self.analysis_cache.get(asset_id))
         self.machine = Machine(analysis_proxy_decoder="cpu", gpu_decodes=0)
@@ -62,7 +65,7 @@ class FakeAccount:
         self.to_send[library_id] = (files, size)
 
     def guard(self, job: str):
-        return {"vision": self.vision, "transcripts": self.transcripts}[job]
+        return {"vision": self.vision, "transcripts": self.transcripts, "clip": self.clip}[job]
 
     def originals(self, library_id: str):
         """The library's originals in its folder in roots (the latest look)."""
@@ -189,50 +192,45 @@ def test_no_text_result_is_judged_by_the_guard(acct, monkeypatch) -> None:
     assert "no OCR result" in str(acct.vision.charges.call_args.args[0])
 
 
-def test_a_clip_embedding_is_saved_with_its_lineage(acct, monkeypatch) -> None:
-    monkeypatch.setattr("src.producers.clip.work.embed", lambda **kw: {
-        "asset_id": kw["asset_id"], "model_id": "clip", "model_version": "ViT-B-32", "vector": [0.1, 0.2]})
+def test_a_clip_embedding_is_saved_with_its_lineage(acct) -> None:
+    # Whichever of the CLIP job's machines is free makes it (ADR-022): here, a stand-in for the guard's.
+    acct.cache.get.return_value = b"the preview"
+    acct.clip.embedder.return_value.embed.return_value = {
+        "vector": [0.1, 0.2], "model_id": "clip", "model_version": "ViT-B-32-openai"}
     _run(acct, "clip", "ast_1")
     item, lineage = _item_posted(acct, "/v1/assets/batch-embeddings")
     assert item["vector"] == [0.1, 0.2] and item["source_hash"] == SHA
+    assert (item["model_id"], item["model_version"]) == ("clip", "ViT-B-32-openai")
     assert lineage["producer"] == "clip"
-    # The model is the scheduler's, as the account's settings say.
-    acct.models.clip.assert_called_once_with("ViT-B-32", "openai")
+    # The built-in machine's model is the scheduler's.
+    acct.clip.embedder.assert_called_once_with(acct.models)
+    acct.clip.embedder.return_value.embed.assert_called_once_with(b"the preview")
 
 
-def test_a_proxy_that_cant_be_read_is_the_clips(acct) -> None:
-    acct.cache.get.return_value = b"not a jpeg"
-    acct.models.clip.return_value = MagicMock(model_id="clip", model_version="v")
-    assert _run(acct, "clip", "ast_1") is None
-    assert _charged(acct) == [("clip", "ast_1")]
+def test_the_gpu_running_out_of_memory_charges_no_clip(acct) -> None:
+    from src.processing.workers.embeddings.base import EmbeddingError
 
+    def embed(image):
+        if embed.calls == 1:
+            raise EmbeddingError("Out of memory: CUDA out of memory. Tried to allocate 20.00 MiB", endpoint_fault=True)
+        embed.calls += 1
+        return {"vector": [0.1], "model_id": "clip", "model_version": "ViT-B-32-openai"}
 
-@pytest.mark.parametrize("kind", ["clip", "ocr"])
-def test_this_machines_trouble_reading_a_proxy_is_a_crash(acct, kind) -> None:
-    acct.models.clip.return_value = MagicMock(model_id="clip", model_version="v")
-    acct.cache.get.side_effect = OSError(5, "Input/output error")
-    with pytest.raises(Crashed):
-        _run(acct, kind, "ast_1")
-    acct.failures.add.assert_not_called()
-    acct.vision.charges.assert_not_called()
-
-
-def test_an_embedding_that_cannot_be_made_is_a_failure(acct, monkeypatch) -> None:
-    monkeypatch.setattr("src.producers.clip.work.embed", lambda **kw: None)
-    _run(acct, "clip", "ast_1")
-    assert _charged(acct) == [("clip", "ast_1")]
-
-
-def test_the_gpu_running_out_of_memory_charges_no_clip(acct, monkeypatch) -> None:
-    def embed(**kw):
-        if kw["asset_id"] == "ast_2":
-            raise RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB")
-        return {"asset_id": kw["asset_id"], "model_id": "clip", "model_version": "v", "vector": [0.1]}
-
-    monkeypatch.setattr("src.producers.clip.work.embed", embed)
+    embed.calls = 0
+    acct.cache.get.return_value = b"the preview"
+    acct.clip.embedder.return_value.embed.side_effect = embed
     assert _run(acct, "clip", "ast_1", "ast_2") == ["ast_2"]
     acct.failures.add.assert_not_called()
 
+
+def test_a_vector_made_with_another_model_isnt_saved(acct) -> None:
+    acct.cache.get.return_value = b"the preview"
+    acct.clip.embedder.return_value.embed.return_value = {
+        "vector": [0.1], "model_id": "clip", "model_version": "ViT-L-14-laion2b"}
+    acct.clip.charges.return_value = False  # the machine's: it served another model under the name
+    assert _run(acct, "clip", "ast_1") == ["ast_1"]  # it waits, uncharged
+    assert not [c for c in acct.client.post.call_args_list if c.args and c.args[0] == "/v1/assets/batch-embeddings"]
+    acct.failures.add.assert_not_called()
 
 def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypatch, tmp_path) -> None:
     (tmp_path / "ast_1.jpg").write_bytes(b"x")

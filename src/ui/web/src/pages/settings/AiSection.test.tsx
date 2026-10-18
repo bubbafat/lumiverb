@@ -21,6 +21,8 @@ let machines: AiMachine[] = [];
 let offers: Record<string, string[]> = {};
 // Clips the old model made: a new one asks first (PUT answers 409 redo_on_change).
 let made = 0;
+// Jobs beyond descriptions and transcripts a test lists (CLIP's, fixed).
+let more: (ReturnType<typeof job> & { fixed?: string | null })[] = [];
 const sent: { method: string; url: string; body: unknown }[] = [];
 
 function machine(over: Partial<AiMachine>): AiMachine {
@@ -48,7 +50,7 @@ function job(name: string, label: string, chosen: string, builtInCan: boolean) {
 function settings(): AiSettings {
   return {
     machines,
-    jobs: [job("vision", "Descriptions & text", model, false), job("transcripts", "Transcripts", whisper, true)],
+    jobs: [job("vision", "Descriptions & text", model, false), job("transcripts", "Transcripts", whisper, true), ...more],
   };
 }
 
@@ -117,6 +119,7 @@ afterEach(() => {
   machines = [];
   offers = {};
   made = 0;
+  more = [];
   sent.length = 0;
 });
 
@@ -359,6 +362,16 @@ describe("AiSection", () => {
     expect(await screen.findByText("Transcripts: paused")).toBeTruthy();
     expect(screen.queryByText(/No other machine does/)).toBeNull();
     expect(lastSent("PATCH", "/ai/machines/aim_self")!.url).not.toContain("leave_jobs");
+  });
+
+  it("shows a fixed model with why, and no way to change it", async () => {
+    machines = [builtIn({ jobs: ["transcripts", "clip"] })];
+    more = [{ ...job("clip", "Visual search (CLIP)", "ViT-B-32", true),
+              fixed: "Another model makes every photo's vectors again; not offered yet." }];
+    renderSection();
+    expect(await screen.findByText("Another model makes every photo's vectors again; not offered yet.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Change the model for Visual search (CLIP)" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Change the model for Transcripts" })).toBeTruthy();
   });
 
   it("picks the transcripts model from what the machines doing them offer", async () => {

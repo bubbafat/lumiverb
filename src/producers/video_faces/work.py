@@ -72,7 +72,8 @@ class VideoFaces(Work):
                         unread.append(f"no frame at {ms} ms")
                         continue
                     # Asked for each frame: in use, so not let go of as idle on a long video.
-                    result = self.acct.models.faces().detect(frame.read_bytes(), self.used)
+                    with self.acct.models.gpu_turn():  # CLIP's built-in machine takes turns with it
+                        result = self.acct.models.faces().detect(frame.read_bytes(), self.used)
                     if "error" in result:
                         if out_of_memory(result["error"]):  # the GPU's trouble, not the video's
                             raise Waits(result["error"])

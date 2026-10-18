@@ -132,9 +132,11 @@ def geonames_site(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _fresh(env, geonames_site, monkeypatch):  # noqa: F811
-    """Every test: the plug-in off in both accounts, nothing fetched, the stand-in site."""
+def _fresh(env, geonames_site, monkeypatch, tmp_path):  # noqa: F811
+    """Every test: the plug-in off in both accounts, nothing fetched, the stand-in site, and a data
+    folder of its own (what's downloaded goes there: never another worker's at the same time)."""
     monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", geonames_site)
+    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path))
     _forget()
     yield
     for headers in (env.admin, env.other):

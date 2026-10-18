@@ -939,6 +939,8 @@ export interface AiJob {
   choices: string[];
   /** The built-in machine can do it. */
   built_in: boolean;
+  /** Why its model can't be changed (CLIP's: one model for a library's vectors); null when it can. */
+  fixed?: string | null;
 }
 
 export interface AiSettings {

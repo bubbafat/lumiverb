@@ -10,6 +10,9 @@ from src.producers.pools import GPU
 
 DEFAULT = "normal"
 
+# The face models a machine doing faces may serve (InsightFace's model packs): the producer's is in use.
+MODELS = frozenset({"buffalo_l"})
+
 # Proposed (PR: "merge close face clusters"): leaf selection splits one person's
 # sub-modes (years, glasses, light) into groups; ones closer than this merge. On
 # LFW with buffalo_l, 0.30-0.45 reunite people without mixing any; at 0.50
