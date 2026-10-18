@@ -61,6 +61,7 @@ from src.server.models.tenant import ScanSession
 from src.server.reader_work import previews_missing
 from src.server.repository import lineage
 from src.server.repository.assets import AssetRepository
+from src.server.repository.lineage import APPLIES, MADE
 from src.shared.content_hash import FULL_UP_TO, SHA256, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from src.shared.producers import MADE_AT_SCAN
@@ -182,9 +183,17 @@ REMOVED = """
 # library has, its hash made before fp1, is hashed whole too (legacy): it's
 # compared with what was. An unchanged clip whose previews were made another
 # way than now is uploaded again (remake: ADR-018 decision 6), while their
-# remakes run (:remake_<artifact>), REMAKES_PER_SCAN at most (:remake_cap,
-# the oldest clips first), its previews made at the account's settings.
-_REMAKE = " OR ".join(f"(:remake_{a} AND {lineage.redo_due(a)})" for a in MADE_AT_SCAN)
+# remakes run (:remake_<artifact>), REMAKES_PER_SCAN at most (_CAP_REMAKES,
+# the oldest clips first), its previews made at the account's settings. Each
+# clip's own lineage rows are looked up by index, as the rest of the plan is:
+# no join over every clip's lineage, nor a window over the plan, either of
+# which turned the one statement quadratic in the files found (v0.1.73).
+_REMAKE = " OR ".join(
+    f"(:remake_{a} AND ({APPLIES[a]}) AND ({MADE[a]})"
+    f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id AND l.artifact = '{a}'"
+    f"   AND (l.producer = :person OR l.retry_at > now()"
+    f"        OR (l.producer = :p_{a} AND l.producer_version = :v_{a} AND l.settings_hash = :h_{a}))))"
+    for a in MADE_AT_SCAN)
 _PLAN = f"""
     WITH gone AS ({GONE}),
     whole_sizes AS (
@@ -223,24 +232,24 @@ _PLAN = f"""
                END AS kind
         FROM scan_found f
         LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = f.rel_path AND a.deleted_at IS NULL
-        {lineage.LINEAGE_JOIN}
         LEFT JOIN removed r ON r.rel_path = f.rel_path
         WHERE f.scan_id = :scan_id
-    ),
-    capped AS (
-        SELECT p.rel_path, p.asset_id,
-               CASE WHEN p.kind = 'upload/remake' AND row_number() OVER (
-                             PARTITION BY p.kind = 'upload/remake' ORDER BY p.asset_id COLLATE "C") > :remake_cap
-                    THEN 'unchanged/' ELSE p.kind END AS kind
-        FROM planned p
     )
     UPDATE scan_found f
     SET action = split_part(p.kind, '/', 1), reason = NULLIF(split_part(p.kind, '/', 2), ''),
         asset_id = p.asset_id,
         legacy = split_part(p.kind, '/', 1) IN ('upload', 'hash') AND p.kind <> 'hash/rekey'
                  AND f.file_size IN (SELECT w.file_size FROM whole_sizes w)
-    FROM capped p
+    FROM planned p
     WHERE f.scan_id = :scan_id AND f.rel_path = p.rel_path AND p.kind IS NOT NULL
+"""
+
+# The remakes past REMAKES_PER_SCAN are left unchanged by this scan: the oldest clips' go first.
+_CAP_REMAKES = """
+    UPDATE scan_found SET action = 'unchanged', reason = NULL, legacy = false
+    WHERE scan_id = :scan_id AND reason = 'remake'
+      AND rel_path NOT IN (SELECT rel_path FROM scan_found WHERE scan_id = :scan_id AND reason = 'remake'
+                           ORDER BY asset_id COLLATE "C" LIMIT :remake_cap)
 """
 
 # Hashes sent, in order, with what the scan and the library know of each path now.
@@ -355,9 +364,16 @@ def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_mov
     scan.planned_at = utcnow()
     session.add(scan)
     session.flush()
+    # The listing is filled and emptied by every scan, so what the planner last
+    # read of it is seldom what it holds: told now, it joins it by hash, where
+    # it took it for empty and read it once a file, quadratic in the files found.
+    session.execute(text("ANALYZE scan_found"))
+    remaking = _remakes(session, scan, wanted=remakes)
     session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
                                   "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves),
-                                  **_remakes(session, scan, wanted=remakes)})
+                                  **remaking})
+    if any(remaking[f"remake_{a}"] for a in MADE_AT_SCAN):
+        session.execute(text(_CAP_REMAKES), {"scan_id": scan.scan_id, "remake_cap": remaking["remake_cap"]})
 
 
 def _remakes(session: Session, scan: ScanSession, *, wanted: bool = True) -> dict:
