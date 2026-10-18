@@ -20,6 +20,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.devices import may_call
 from src.server.api.errors import ConflictError, DecisionRequiredError, GoneError
+from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
 from src.server.models.tenant import Asset
@@ -247,6 +248,7 @@ RepairSummary = create_model("RepairSummary", total_assets=(int, 0), missing_pro
 
 
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
+@names(sees=("query.library_id",))
 def repair_summary(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -398,6 +400,7 @@ def _to_asset_response(asset) -> AssetResponse:
 
 
 @router.get("/by-path", response_model=AssetResponse)
+@names(sees=("query.library_id",))
 def get_asset_by_path(
     library_id: str,
     rel_path: str,
@@ -436,6 +439,7 @@ class ProjectUsageResponse(BaseModel):
 
 
 @router.post("/project-usage", response_model=ProjectUsageResponse)
+@names(sees=("body.asset_ids", "body.library_ids"))
 def project_usage(
     body: ProjectUsageRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -493,6 +497,7 @@ def _refresh_grids(session: Session, asset_ids: list[str]) -> None:
 
 
 @router.delete("", response_model=BatchTrashResponse, dependencies=[Depends(require_editor)])
+@names("body.asset_ids")
 def batch_trash_assets(
     body: BatchTrashRequest,
     request: Request,
@@ -680,6 +685,7 @@ def restore_asset(
 
 
 @router.post("/restore", response_model=RestoreResponse)
+@names("body.asset_ids")
 def restore_assets(
     body: RestoreRequest,
     request: Request,
@@ -702,6 +708,7 @@ def _folder_library(session: Session, library_id: str) -> None:
 
 
 @router.post("/archive", response_model=ArchiveResponse)
+@names("body.asset_ids", "body.library_id")
 def archive_assets(
     body: PickClipsRequest,
     request: Request,
@@ -723,6 +730,7 @@ def archive_assets(
 
 
 @router.post("/unarchive", response_model=UnarchiveResponse)
+@names("body.asset_ids", "body.library_id")
 def unarchive_assets(
     body: PickClipsRequest,
     request: Request,
@@ -776,6 +784,7 @@ class BatchOcrRequest(BaseModel):
 
 
 @router.post("/batch-ocr", status_code=200, dependencies=[Depends(require_editor)])
+@names("body.items[].asset_id")
 def submit_batch_ocr(
     body: BatchOcrRequest,
     request: Request,
@@ -829,6 +838,7 @@ class BatchVisionRequest(BaseModel):
 
 
 @router.post("/batch-vision", status_code=200, dependencies=[Depends(require_editor)])
+@names("body.items[].asset_id")
 def submit_batch_vision(
     body: BatchVisionRequest,
     request: Request,
@@ -1153,6 +1163,7 @@ class BatchEmbeddingRequest(BaseModel):
 
 
 @router.post("/batch-embeddings", status_code=200, dependencies=[Depends(require_editor)])
+@names("body.items[].asset_id")
 def submit_batch_embeddings(
     body: BatchEmbeddingRequest,
     request: Request,
@@ -1347,6 +1358,7 @@ class BatchFaceRequest(BaseModel):
 
 
 @router.post("/batch-faces", status_code=200, dependencies=[Depends(require_editor)])
+@names("body.items[].asset_id")
 def submit_batch_faces(
     body: BatchFaceRequest,
     request: Request,

@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_current_user_id, get_tenant_session
+from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS, MAX_PAGE
 from src.server.models.tenant import VALID_COLORS
 from src.server.repository.assets import AssetRepository
@@ -154,6 +155,7 @@ async def rate_asset(
 
 
 @router.put("/ratings")
+@names(sees=("body.asset_ids",))
 async def batch_rate_assets(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -192,6 +194,7 @@ async def batch_rate_assets(
 
 
 @router.post("/ratings/lookup")
+@names(sees=("body.asset_ids",))
 def lookup_ratings(
     body: RatingLookupRequest,
     session: Annotated[Session, Depends(get_tenant_session)],

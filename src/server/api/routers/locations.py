@@ -34,6 +34,7 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.errors import ApiError, DecisionRequiredError
+from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
 from src.server.repository import locations
 from src.shared.location import is_fix
@@ -98,6 +99,7 @@ def _refresh(session: Session, asset_ids: list[str]) -> None:
 
 
 @router.put("", response_model=SetLocationResponse, dependencies=[Depends(require_editor)])
+@names("body.asset_ids", sees=("body.same_as",))
 def set_locations(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -147,6 +149,7 @@ def set_locations(
 
 
 @router.delete("", response_model=ClearLocationResponse, dependencies=[Depends(require_editor)])
+@names("body.asset_ids")
 def clear_locations(
     session: Annotated[Session, Depends(get_tenant_session)],
     body: Annotated[LocationIdsRequest | None, Body()] = None,
@@ -161,6 +164,7 @@ def clear_locations(
 
 
 @router.post("/accept", response_model=AcceptLocationResponse, dependencies=[Depends(require_editor)])
+@names("body.asset_ids")
 def accept_locations(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -199,6 +203,7 @@ class ClocksRequest(BaseModel):
 
 
 @router.post("/clocks", dependencies=[Depends(require_tenant_admin)])
+@names("body.asset_ids")
 def location_clocks(
     session: Annotated[Session, Depends(get_tenant_session)],
     body: Annotated[ClocksRequest | None, Body()] = None,

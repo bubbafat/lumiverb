@@ -18,6 +18,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
+from src.server.api.library_access import names
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.assets import AssetRepository
@@ -274,6 +275,7 @@ def guard_project_filters(request: Request, session: Session, spec) -> None:
 
 
 @router.post("", response_model=ProjectItem, status_code=201)
+@names(sees=("body.asset_ids",))
 def create_project(
     body: CreateProjectRequest,
     request: Request,
@@ -543,6 +545,7 @@ def restore_project_clips(
 
 
 @router.post("/{project_id}/assets", response_model=BatchAddResponse, status_code=200)
+@names(sees=("body.asset_ids",))
 def add_assets_to_project(
     project_id: str,
     body: AssetIdsRequest,
@@ -566,6 +569,7 @@ def add_assets_to_project(
 
 
 @router.delete("/{project_id}/assets", response_model=BatchRemoveResponse)
+@names(sees=("body.asset_ids",))
 def remove_assets_from_project(
     project_id: str,
     body: AssetIdsRequest,
@@ -699,6 +703,7 @@ def list_project_assets(
 
 
 @router.patch("/{project_id}/reorder", status_code=200)
+@names(sees=("body.asset_ids",))
 def reorder_project(
     project_id: str,
     body: ReorderRequest,

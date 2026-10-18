@@ -14,6 +14,7 @@ from src.server.api.dependencies import get_current_user_id, get_tenant_session,
 from src.server.api.routers.archive import HiddenClip, decode_cursor, encode_cursor
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
+from src.server.api.library_access import names
 from src.shared.utils import utcnow
 from src.server.repository.assets import AssetRepository
 from src.server.repository.libraries import LibraryRepository
@@ -61,6 +62,7 @@ class TrashPage(BaseModel):
 
 
 @router.get("", response_model=TrashPage, dependencies=[Depends(require_signed_in)])
+@names(sees=("query.library_id",))
 def list_trash(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
@@ -97,6 +99,7 @@ def list_trash(
 
 
 @router.delete("/empty", response_model=EmptyTrashResponse)
+@names("body.asset_ids", "body.library_id")
 def empty_trash(
     request: Request,
     body: EmptyTrashRequest,

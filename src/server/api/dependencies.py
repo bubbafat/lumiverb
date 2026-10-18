@@ -69,10 +69,14 @@ def require_tenant_admin(request: Request) -> None:
 
 
 def require_editor(request: Request) -> None:
-    """Raise 403 unless the caller is Admin or Editor, or a device on a
-    route the device gate let it by (src/server/api/devices.py). Blocks
+    """Raise 403 unless the caller is Admin or Editor where it acts: on the
+    libraries the request edits when it names any (a person's role on each,
+    src/server/api/library_access.py), else in the account; or a device on
+    a route the device gate let it by (src/server/api/devices.py). Blocks
     Viewer and unauthenticated public requests."""
-    if getattr(request.state, "role", None) not in ("admin", "editor") and not _device_allowed(request):
+    from src.server.api.library_access import role_here
+
+    if role_here(request) not in ("admin", "editor") and not _device_allowed(request):
         raise HTTPException(status_code=403, detail="Editor access required")
 
 

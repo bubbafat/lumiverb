@@ -23,7 +23,7 @@ from src.server.api.errors import (
     validation_error_handler,
 )
 from src.server.storage.store import Unavailable
-from src.server.api import devices
+from src.server.api import devices, library_access
 from src.server.api.https_seen import NoteHttps
 from src.server.api.middleware import TenantResolutionMiddleware
 from src.shared.logging_config import configure_api_logging, escape_log_lines, hide_stream_links
@@ -112,9 +112,10 @@ set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows the
 # (FASTAPI_OTEL_AUTO_CONFIGURE, OTEL_*): Lumiverb records and sends nothing.
 NO_TELEMETRY = {"tracing": False, "metrics": False, "logs": False, "operation_spans": False,
                 "auto_configure": False}
-# A device's key goes no further than the routes a scan calls (src/server/api/devices.py).
+# A device's key goes no further than the routes a scan calls (src/server/api/devices.py); a person
+# no further than the libraries they can see, editing where they're an editor (library_access.py).
 app = FastAPI(title="Lumiverb API", version="0.1.0", lifespan=lifespan, telemetry=NO_TELEMETRY,
-              dependencies=[Depends(devices.gate)])
+              dependencies=[Depends(devices.gate), Depends(library_access.gate)])
 
 
 # Every error in one envelope: {"error": {"code", "message", "details"}} (errors.py).

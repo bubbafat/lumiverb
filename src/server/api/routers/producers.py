@@ -43,6 +43,7 @@ from src.server.api.devices import may_call
 from src.server.api.routers.libraries import CheckedIn
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
+from src.server.api.library_access import names
 from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
 from src.shared.producers import (
@@ -297,6 +298,7 @@ def tenant_ai(request: Request) -> tuple[dict[str, str], dict[str, Any]]:
 
 
 @router.get("", response_model=ProducerList, dependencies=[Depends(require_signed_in)])
+@names(sees=("query.library_id",))
 def list_producers(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -573,6 +575,7 @@ class FailuresIn(BaseModel):
 
 @router.post("/failures", dependencies=[Depends(require_reader)])
 @may_call("items", artifacts=FROM_ORIGINALS)
+@names("body.items[].asset_id")
 def report_failures(body: FailuresIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """The scheduler couldn't make these, or a device what it makes from its
     originals (for the libraries it reads): each is kept with its error and
@@ -845,6 +848,7 @@ class FailingClips(BaseModel):
 
 
 @router.get("/failures", response_model=FailingClips, dependencies=[Depends(require_signed_in)])
+@names(sees=("query.library_id",))
 def list_failures(
     session: Annotated[Session, Depends(get_tenant_session)],
     artifact: str | None = None,
@@ -879,6 +883,7 @@ class RetryIn(BaseModel):
 
 
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
+@names("body.asset_ids", "body.library_id")
 def retry_failures(body: RetryIn, session: Annotated[Session, Depends(get_tenant_session)]) -> dict:
     """Try failing clips again now, given up or not; the back-off starts
     over. asset_ids, or all: true; neither or both is a 400 scope_required.
@@ -920,6 +925,7 @@ class RunOut(BaseModel):
 
 
 @router.post("/run", response_model=RunOut, dependencies=[Depends(require_editor)])
+@names("body.library_ids")
 def run_now(body: RunIn, request: Request, session: Annotated[Session, Depends(get_tenant_session)]) -> RunOut:
     """Ask the scheduler to do work now (what lumiverb enrich does): failing
     clips of the producers named are tried again at once and the scheduler
@@ -988,6 +994,7 @@ class BelowOut(BaseModel):
 
 
 @router.post("/{artifact}/below/redo", response_model=BelowOut, dependencies=[Depends(require_tenant_admin)])
+@names("body.asset_ids", "body.library_id")
 def redo_below(artifact: str, body: BelowIn, request: Request,
                session: Annotated[Session, Depends(get_tenant_session)]) -> BelowOut:
     """Make again what a producer made below its level now (admins): raising

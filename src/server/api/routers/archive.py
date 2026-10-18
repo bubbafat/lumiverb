@@ -19,6 +19,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_current_user_id, get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_PAGE
+from src.server.api.library_access import names
 from src.server.repository.assets import AssetRepository
 
 router = APIRouter(prefix="/v1/archive", tags=["archive"], dependencies=[Depends(require_signed_in)])
@@ -64,6 +65,7 @@ _KINDS = {"all": ("archived", "missing"), "by_hand": ("archived",), "missing": (
 
 
 @router.get("", response_model=ArchivePage)
+@names(sees=("query.library_id",))
 def list_archive(
     session: Annotated[Session, Depends(get_tenant_session)],
     library_id: str | None = None,
@@ -115,6 +117,7 @@ _DELETE_BATCH = 500
 
 
 @router.delete("/missing", response_model=DeleteMissingResponse, dependencies=[Depends(require_tenant_admin)])
+@names("body.library_id")
 def delete_missing(
     request: Request,
     body: DeleteMissingRequest,

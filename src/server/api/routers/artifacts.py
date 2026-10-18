@@ -15,6 +15,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
 from src.server.api.errors import ApiError
+from src.server.api.library_access import role_here
 from src.server.repository.assets import AssetRepository
 from src.server.repository.lineage import record as record_lineage
 from src.server.storage import store as keys
@@ -355,7 +356,7 @@ def download_artifact(
         # viewers play it through /playback; editors and the server's tools need it whole.
         if public:
             raise HTTPException(status_code=403, detail="Analysis proxies aren't public")
-        if getattr(request.state, "role", None) == "viewer":
+        if role_here(request) == "viewer":
             from src.server.tenant_settings import playback_cap
 
             if playback_cap(session, public=False) is not None:

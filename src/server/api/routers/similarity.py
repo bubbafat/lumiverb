@@ -12,6 +12,7 @@ from sqlmodel import Session
 from src.server import images
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
+from src.server.api.library_access import names
 from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
 from src.server.models.similarity import CameraSpec, DateRange, SimilarityScope
 from src.server.repository.assets import AssetEmbeddingRepository, AssetRepository
@@ -109,6 +110,7 @@ class ImageSimilarityResponse(BaseModel):
 
 
 @router.get("", response_model=SimilarityResponse)
+@names(sees=("query.asset_id", "query.library_id"))
 def find_similar(
     asset_id: str,
     library_id: str,
@@ -287,6 +289,7 @@ def find_similar(
 
 
 @router.post("/search-by-image", response_model=ImageSimilarityResponse)
+@names(sees=("body.library_id",))
 def search_by_image(
     body: ImageSimilarityRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
@@ -295,7 +298,8 @@ def search_by_image(
     faces in it too, fusing the clips with those people in (as by vector
     with the picture). A picture with no faces, or a face path that fails,
     is searched by its look alone."""
-    from src.server.embeddings.clip_provider import CLIPEmbeddingProvider, MODEL_VERSION as CLIP_VERSION
+    from src.server.embeddings.clip_provider import MODEL_VERSION as CLIP_VERSION
+    from src.server.embeddings.clip_provider import CLIPEmbeddingProvider
 
     resolved_model_id = body.model_id or "clip"
     resolved_model_version = body.model_version or CLIP_VERSION
@@ -330,6 +334,7 @@ def search_by_image(
 
 
 @router.post("/search-by-vector", response_model=ImageSimilarityResponse)
+@names(sees=("body.library_id",))
 def search_by_vector(
     body: VectorSimilarityRequest,
     session: Annotated[Session, Depends(get_tenant_session)],
