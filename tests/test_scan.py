@@ -20,7 +20,13 @@ from PIL import Image
 from rich.console import Console
 
 from src.processing.originals import Folder
-from src.processing.scan import ScanStats, _hashed, _populate_cache_for_unchanged, run_scan
+from src.processing.scan import (
+    Previews,
+    ScanStats,
+    _hashed,
+    _populate_cache_for_unchanged,
+    run_scan,
+)
 from tests.scan_fakes import SCAN_ID, FakeScans, answer, finished, mass_missing
 
 pytestmark = pytest.mark.fast
@@ -61,7 +67,7 @@ def _file(root: Path, rel: str, data: bytes = b"bytes", *, mtime: float = HOUR_A
 def _scan(server: FakeScans, root: Path, **kwargs) -> ScanStats:
     kwargs = {"concurrency": 1, "console": Console(quiet=True), **kwargs}
     with (
-        patch("src.processing.scan._filters", return_value=([], [])),
+        patch("src.processing.scan._told", return_value=([], [], Previews())),
     ):
         return run_scan(server.client(), {"library_id": "lib_1", "root_path": str(root)}, **kwargs)
 

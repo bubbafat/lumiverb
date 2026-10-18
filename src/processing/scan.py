@@ -74,7 +74,7 @@ from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 from src.shared.path_filter import PathFilter, has_control_character
-from src.shared.producers import effective_settings
+from src.shared.producers import PRODUCERS, effective_settings
 from src.shared.producers import lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
@@ -186,24 +186,50 @@ def _existing_folder(originals: Originals, rel: str) -> str | None:
     return None
 
 
-def _filters(client: ApiClient, library_id: str) -> tuple[list[PathFilter], list[PathFilter]]:
-    """The account's path filters and the library's, as the server tells the
-    library's reader them (GET /v1/libraries/{id}/reader-changes). A scan
-    that can't have them fails: unfiltered, it would send what they leave out."""
-    filters = client.get(f"/v1/libraries/{library_id}/reader-changes").json()["filters"]
+def _told(client: ApiClient, library_id: str) -> tuple[list[PathFilter], list[PathFilter], Previews]:
+    """What the server tells the library's reader (GET /v1/libraries/{id}/
+    reader-changes): the account's path filters and the library's, and how
+    previews are made (made_with). A scan that can't have them fails:
+    unfiltered, it would send what they leave out."""
+    told = client.get(f"/v1/libraries/{library_id}/reader-changes").json()
+    filters = told["filters"]
 
     def each(level: dict) -> list[PathFilter]:
         return ([PathFilter(type="include", pattern=p) for p in level["includes"]]
                 + [PathFilter(type="exclude", pattern=p) for p in level["excludes"]])
 
-    return each(filters["account"]), each(filters["library"])
+    return each(filters["account"]), each(filters["library"]), Previews.told(told.get("made_with") or {})
 
 
-def _made(artifact: str, source_hash: str | None) -> dict:
-    """Lineage for what the scan makes: proxies, probes and previews come out
-    of its own constants, which are the registry's settings (a test holds
-    them together)."""
-    return producer_lineage(artifact, effective_settings(artifact), source_hash)
+@dataclass(frozen=True)
+class Previews:
+    """How the scan makes previews (ADR-018 decision 6): the account's
+    settings for a clip's preview and thumbnail (proxy) and a video's
+    preview, as the server tells the reader (reader-changes' made_with:
+    what each quality notch stands for), or the registry's defaults when it
+    doesn't say, or says them for another version than this one's; and the
+    lineage that says how they were made. Probes and capture facts have no
+    settings."""
+
+    proxy: dict = field(default_factory=lambda: effective_settings("proxy"))
+    video_preview: dict = field(default_factory=lambda: effective_settings("video_preview"))
+
+    @classmethod
+    def told(cls, made_with: Mapping[str, dict]) -> Previews:
+        def settings(artifact: str) -> dict:
+            spec, said = PRODUCERS[artifact], made_with.get(artifact) or {}
+            ours = effective_settings(artifact)
+            if (said.get("producer"), said.get("version")) != (spec.producer, spec.version) \
+                    or not isinstance(said.get("settings"), dict) or set(said["settings"]) != set(ours):
+                return ours
+            return dict(said["settings"])
+
+        return cls(settings("proxy"), settings("video_preview"))
+
+    def lineage(self, artifact: str, source_hash: str | None) -> dict:
+        settings = {"proxy": self.proxy, "video_preview": self.video_preview}.get(artifact)
+        return producer_lineage(artifact, effective_settings(artifact) if settings is None else settings,
+                                source_hash)
 
 
 def _hashes(f: dict) -> dict:
@@ -224,22 +250,26 @@ def _scan_one(
     progress: Progress,
     task_id: object,
     counter_field: str,
+    previews: Previews | None = None,
 ) -> None:
     """Scan a single file: proxy gen → EXIF → upload → cache (when there's one).
+    Its previews are made as previews says (the account's settings).
 
     Works for both new and changed files.
     """
     rel_path = f["rel_path"]
+    previews = previews or Previews()
     try:
         with originals.local_file(rel_path) as source_path:
             # 1. Generate 2048px JPEG proxy
-            jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(source_path)
+            jpeg_bytes, width_orig, height_orig = _generate_proxy_bytes(
+                source_path, jpeg_quality=previews.proxy["jpeg_quality"])
 
             # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
             exif_payload = _build_exif_payload(source_path, f["media_type"], **_hashes(f))
 
             # 3. Convert to WebP for server upload
-            webp_bytes = _jpeg_to_webp(jpeg_bytes)
+            webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
             # 4. POST /v1/ingest — create or update asset
             upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
@@ -256,8 +286,8 @@ def _scan_one(
             if f.get("file_mtime") is not None:
                 data["file_mtime"] = f["file_mtime"].isoformat()
             # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
-            data["lineage"] = json.dumps({"proxy": _made("proxy", f.get("content_hash")),
-                                          "capture": _made("capture", f.get("content_hash"))})
+            data["lineage"] = json.dumps({"proxy": previews.lineage("proxy", f.get("content_hash")),
+                                          "capture": previews.lineage("capture", f.get("content_hash"))})
 
             resp = client.post("/v1/ingest", files=upload, data=data)
             result = resp.json()
@@ -300,22 +330,26 @@ def _scan_one_video(
     progress: Progress,
     task_id: object,
     counter_field: str,
+    previews: Previews | None = None,
 ) -> None:
-    """Scan a single video: poster frame + EXIF + 10-sec preview → upload → cache."""
+    """Scan a single video: poster frame + EXIF + 10-sec preview → upload →
+    cache. Its previews are made as previews says (the account's settings)."""
     rel_path = f["rel_path"]
+    previews = previews or Previews()
     try:
         with originals.local_file(rel_path) as source_path:
             # 1. Extract poster frame as JPEG proxy
-            jpeg_bytes, width_orig, height_orig = _extract_video_poster(source_path)
+            jpeg_bytes, width_orig, height_orig = _extract_video_poster(
+                source_path, jpeg_quality=previews.proxy["jpeg_quality"])
 
             # 2. Extract EXIF, with the content hash (computed while hashing, when it was)
             exif_payload = _build_exif_payload(source_path, "video", **_hashes(f))
 
             # 3. Generate 10-second preview
-            preview_bytes = _generate_video_preview(source_path)
+            preview_bytes = _generate_video_preview(source_path, crf=previews.video_preview["crf"])
 
             # 4. Convert poster to WebP for upload
-            webp_bytes = _jpeg_to_webp(jpeg_bytes)
+            webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
             # 5. POST /v1/ingest — create asset with poster frame as proxy
             upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
@@ -334,10 +368,11 @@ def _scan_one_video(
             # Frame rate, timecode, audio layout for editor exports. A failed
             # probe doesn't block ingest; `lumiverb enrich --job-type probe`
             # backfills it.
-            made = {"proxy": _made("proxy", f.get("content_hash")), "capture": _made("capture", f.get("content_hash"))}
+            made = {"proxy": previews.lineage("proxy", f.get("content_hash")),
+                    "capture": previews.lineage("capture", f.get("content_hash"))}
             try:
                 data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
-                made["probe"] = _made("probe", f.get("content_hash"))
+                made["probe"] = previews.lineage("probe", f.get("content_hash"))
             except Exception as exc:  # noqa: BLE001 — any ffprobe failure
                 logger.warning("Probe failed for %s: %s", rel_path, exc)
             data["lineage"] = json.dumps(made)
@@ -350,7 +385,7 @@ def _scan_one_video(
                 client.post(
                     f"/v1/assets/{asset_id}/artifacts/video_preview",
                     files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
-                    data={"lineage": json.dumps(_made("video_preview", f.get("content_hash")))},
+                    data={"lineage": json.dumps(previews.lineage("video_preview", f.get("content_hash")))},
                 )
             del preview_bytes
 
@@ -726,6 +761,7 @@ def _hash_and_decide(
 def _upload(
     client: ApiClient, library_id: str, originals: Originals, work: _Work, proxy_cache: ProxyCache | None, stats: ScanStats,
     *, concurrency: int, console: Console, to_upload: Callable[[int, int], None] | None = None,
+    previews: Previews | None = None,
 ) -> None:
     """Make and upload the previews of what's new, then what changed,
     `concurrency` at a time and never more than concurrency * 2 waiting.
@@ -756,6 +792,7 @@ def _upload(
                 fut = pool.submit(
                     handler, client=client, library_id=library_id, originals=originals, f=f,
                     proxy_cache=proxy_cache, stats=stats, progress=progress, task_id=tid, counter_field=kind,
+                    previews=previews,
                 )
                 sizes[fut] = f.get("file_size") or 0
                 inflight.add(fut)
@@ -959,7 +996,7 @@ def run_scan(
     stats = ScanStats()
 
     # Its path filters, as its reader is told them (ADR-018 phase 4).
-    tenant_filters, library_filters = _filters(client, library_id)
+    tenant_filters, library_filters, previews = _told(client, library_id)
     total_filters = len(tenant_filters) + len(library_filters)
     if total_filters:
         console.print(f"Loaded {len(tenant_filters)} tenant + {len(library_filters)} library filter(s)")
@@ -1000,7 +1037,7 @@ def run_scan(
                     tenant_filters=tenant_filters, library_filters=library_filters, concurrency=concurrency,
                     waiting=waiting or {}, cache_previews=cache_previews,
                     differences=_Differences() if explain else None, include_trash=include_trash,
-                    to_upload=to_upload, console=console)
+                    to_upload=to_upload, previews=previews, console=console)
     except BaseException:
         _abandon(client, scan_id)
         raise
@@ -1011,7 +1048,7 @@ def _run(
     path_prefix: str | None, follow_moves: bool, moves: str, force: bool, media_type_filter: str, dry_run: bool,
     allow_mass_delete: bool, tenant_filters: list, library_filters: list, concurrency: int,
     waiting: Mapping[str, tuple[int, str | None]], cache_previews: bool, differences: _Differences | None,
-    include_trash: bool, to_upload: Callable[[int, int], None] | None, console: Console,
+    include_trash: bool, to_upload: Callable[[int, int], None] | None, previews: Previews, console: Console,
 ) -> ScanStats:
     """run_scan once its scan is started: walk, list, plan, hash, finish,
     upload. With differences (--explain, a dry run), what it collects is
@@ -1207,7 +1244,7 @@ def _run(
     # comes back at its new path.
     proxy_cache = ProxyCache(client=client) if cache_previews else None
     _upload(client, library_id, originals, work, proxy_cache, stats, concurrency=concurrency, console=console,
-            to_upload=to_upload)
+            to_upload=to_upload, previews=previews)
     stats.failed_seen = {p: _as_seen(on_disk[p]) for p in stats.failed_paths if p in on_disk}
     if proxy_cache is not None:
         _populate_cache_for_unchanged(client, work.unchanged, proxy_cache, stats, console)

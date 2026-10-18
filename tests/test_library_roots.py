@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from src.client.cli.config import CLIConfig, load_config, save_config
 from src.processing import machine, roots
 from src.processing.roots import local_library_root, map_root, reachable_root
+from src.processing.scan import Previews
 
 MAC = "/Volumes/media-01"
 
@@ -325,7 +326,7 @@ def test_scan_walks_the_mapped_root(home: Path, tmp_path: Path) -> None:
 
     library, here = _mapped_library(home, tmp_path)
     with (
-        patch("src.processing.scan._filters", return_value=([], [])),
+        patch("src.processing.scan._told", return_value=([], [], Previews())),
         patch.object(Folder, "walk", autospec=True, return_value=[]) as walk,
     ):
         run_scan(FakeScans().client(), library, console=Console(quiet=True))

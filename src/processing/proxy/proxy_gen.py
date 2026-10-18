@@ -33,7 +33,12 @@ def _keep() -> str:
 
 
 KEEP = _keep()
-PROXY_JPEG = f".jpg[Q={PROXY_JPEG_QUALITY},{KEEP}]"
+
+
+def jpeg_format(quality: int = PROXY_JPEG_QUALITY) -> str:
+    """libvips's JPEG at this quality, keeping only the colour profile."""
+    return f".jpg[Q={quality},{KEEP}]"
+
 
 # TIFFs may exceed libvips/libtiff's 50MB cumulative allocation cap, forcing a
 # Pillow fallback. Pillow decodes the full pixel array before resizing, so a
@@ -113,8 +118,10 @@ def _load_tiff_proxy_image(
         pil_img.close()
 
 
-def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE) -> tuple[bytes, int, int]:
-    """Generate a resized JPEG proxy from a source image.
+def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE,
+                         jpeg_quality: int = PROXY_JPEG_QUALITY) -> tuple[bytes, int, int]:
+    """Generate a resized JPEG proxy from a source image, at jpeg_quality
+    (a scan's: its preview's quality notch, ADR-018 decision 6).
 
     Returns (jpeg_bytes, width_orig, height_orig).
 
@@ -145,7 +152,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                         max_long_edge, height=max_long_edge,
                         size=pyvips.enums.Size.DOWN,
                     )
-                    proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+                    proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
                     logger.info("proxy: %s — embedded JPEG %dx%d → %dpx (%d bytes)",
                                 source_path.name, img.width, img.height, max_long_edge, len(proxy_bytes))
                     return proxy_bytes, width_orig, height_orig
@@ -168,7 +175,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                 max_long_edge, height=max_long_edge,
                 size=pyvips.enums.Size.DOWN,
             )
-            proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+            proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
             return proxy_bytes, width_orig, height_orig
         except Exception:
             # rawpy can't handle this file (e.g. Adobe-generated DNG) —
@@ -184,7 +191,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
                 height=max_long_edge,
                 size=pyvips.enums.Size.DOWN,
             ).copy_memory()
-            proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+            proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
             return proxy_bytes, width_orig, height_orig
 
     elif ext in TIFF_EXTENSIONS:
@@ -197,7 +204,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             height_orig=height_orig,
             max_long_edge=max_long_edge,
         )
-        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+        proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
         return proxy_bytes, width_orig, height_orig
 
     elif ext == ".bmp":
@@ -207,7 +214,7 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             width_orig, height_orig = pil_img.size
             pil_img.thumbnail((max_long_edge, max_long_edge), PILImage.LANCZOS)
             proxy_img = _pil_to_vips(pil_img)
-        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+        proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
         return proxy_bytes, width_orig, height_orig
 
     else:
@@ -221,5 +228,5 @@ def generate_proxy_bytes(source_path: Path, max_long_edge: int = PROXY_LONG_EDGE
             height=max_long_edge,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
-        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+        proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
         return proxy_bytes, width_orig, height_orig

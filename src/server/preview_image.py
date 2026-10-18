@@ -13,13 +13,24 @@ from PIL import Image, ImageOps
 from src.server.images import NotAnImageError, decoded  # noqa: F401 — what these raise
 
 THUMBNAIL_LONG_EDGE = 512
-THUMBNAIL_WEBP_QUALITY = 80
+# A preview's and a thumbnail's WebP quality at the default notch, better: the account's is quality(session).
+WEBP_QUALITY = 80
 
 
-def thumbnail(proxy: bytes) -> bytes:
+def quality(session) -> int:
+    """The WebP quality the account keeps previews and thumbnails at: what its
+    preview quality notch stands for (Settings › Processing › Proxies and
+    thumbnails, ADR-018 decision 6)."""
+    from src.server.repository import lineage
+
+    return int(lineage.desired(session, "proxy")["settings"].get("webp_quality", WEBP_QUALITY))
+
+
+def thumbnail(proxy: bytes, quality: int = WEBP_QUALITY) -> bytes:
     """A clip's thumbnail, made from its stored preview (already upright and
-    clean): WebP, at most THUMBNAIL_LONG_EDGE on its long side. At ingest, and
-    again when the thumbnail's file is lost (src/server/missing_artifacts.py)."""
+    clean): WebP at quality (the account's), at most THUMBNAIL_LONG_EDGE on its
+    long side. At ingest, and again when the thumbnail's file is lost
+    (src/server/missing_artifacts.py)."""
     img = decoded(proxy)  # NotAnImageError unless it's an image the server reads (images.py)
     try:
         rgb = img.convert("RGB")
@@ -28,7 +39,7 @@ def thumbnail(proxy: bytes) -> bytes:
             scale = THUMBNAIL_LONG_EDGE / max(w, h)
             rgb = rgb.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
-        rgb.save(buf, format="WEBP", quality=THUMBNAIL_WEBP_QUALITY)
+        rgb.save(buf, format="WEBP", quality=quality)
         return buf.getvalue()
     finally:
         img.close()

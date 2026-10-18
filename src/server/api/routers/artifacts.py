@@ -52,9 +52,11 @@ CONTENT_TYPES: dict[str, str] = {
 VIDEO_ARTIFACTS = frozenset({"video_preview", "analysis_proxy"})
 
 # Image artifacts are stored re-encoded, without the original's metadata
-# (src/server/preview_image.py): (format, quality).
+# (src/server/preview_image.py): (format, quality). A preview's and a
+# thumbnail's quality is the account's (preview_image.quality), this its default.
 IMAGE_ARTIFACTS: dict[str, tuple[str, int]] = {"proxy": ("WEBP", 80), "thumbnail": ("WEBP", 80),
                                                 "scene_rep": ("JPEG", 90)}
+PREVIEW_IMAGES = ("proxy", "thumbnail")
 
 
 def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
@@ -66,9 +68,11 @@ def _reencode_image_file(path: Path, fmt: str, quality: int) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type: str) -> tuple[str, float | None]:
+async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type: str,
+                       session: Session | None = None) -> tuple[str, float | None]:
     """The upload, kept under key: streamed (never all in memory) to a write
-    nothing sees until it's whole, an image re-encoded (IMAGE_ARTIFACTS), a
+    nothing sees until it's whole, an image re-encoded (IMAGE_ARTIFACTS; a
+    preview and a thumbnail at the account's quality, given its session), a
     video checked and rewritten (VIDEO_ARTIFACTS), then put in its place. Its
     SHA-256 as kept, and a video's length as the server measured it. 413 past
     the type's limit, 400 for an image that isn't one, 422 video_not_playable
@@ -100,8 +104,13 @@ async def _save_upload(store: Store, key: str, upload: UploadFile, artifact_type
             return kept.sha256, kept.duration_sec
         if artifact_type not in IMAGE_ARTIFACTS:
             return hasher.hexdigest(), None
+        fmt, quality = IMAGE_ARTIFACTS[artifact_type]
+        if artifact_type in PREVIEW_IMAGES and session is not None:
+            from src.server.preview_image import quality as account_quality
+
+            quality = account_quality(session)
         try:
-            return await run_in_threadpool(_reencode_image_file, partial, *IMAGE_ARTIFACTS[artifact_type]), None
+            return await run_in_threadpool(_reencode_image_file, partial, fmt, quality), None
         except NotAnImageError:
             raise HTTPException(status_code=400, detail=f"{artifact_type} must be a JPEG, PNG or WebP image") from None
 
@@ -198,7 +207,7 @@ async def upload_artifact(
             )
         key = keys.scene_rep_key(tenant_id, asset.library_id, asset_id, rep_frame_ms)
 
-    sha256, duration_sec = await _save_upload(get_store(), key, file, artifact_type)
+    sha256, duration_sec = await _save_upload(get_store(), key, file, artifact_type, session)
     record_kept(session, asset_id, artifact_type, key, sha256, made, width, height)
     # scene_rep: no asset-level column to update. The on-disk path is derived
     # from (tenant_id, library_id, asset_id, rep_frame_ms) on download via
@@ -278,7 +287,7 @@ async def upload_artifacts_batch(
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported artifact_type in batch: {artifact_type}")
 
-        sha256, duration_sec = await _save_upload(store, key, upload_file, artifact_type)
+        sha256, duration_sec = await _save_upload(store, key, upload_file, artifact_type, session)
 
         if artifact_type == "proxy":
             asset_repo.set_proxy_artifact(asset_id, key, sha256, width, height)

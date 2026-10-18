@@ -969,8 +969,9 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
       )}
       {remade && !redoing && done > 0 && (
         <p className="text-gray-400">
-          Saving asks about the {done.toLocaleString()} {done === 1 ? "clip" : "clips"} already made: new files
-          only, or remake them too, after everything else.
+          {producer.redoable
+            ? `Saving asks about the ${done.toLocaleString()} ${done === 1 ? "clip" : "clips"} already made: new files only, or remake them too, after everything else.`
+            : `New files get these settings; the ${done.toLocaleString()} ${done === 1 ? "clip" : "clips"} already made stay as ${done === 1 ? "it is" : "they are"}.`}
         </p>
       )}
       {changed.length > 0 && !remade && producer.artifact === "faces" && (
