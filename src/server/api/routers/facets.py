@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.server.api.dependencies import get_tenant_session
+from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.models.filter_registry import parse_f_params
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,8 @@ def get_facets(
 
     from src.server.repository.browse import UnifiedBrowseRepository
 
-    row = UnifiedBrowseRepository(session).facets(spec, candidate_ids)
+    rating_user_id = get_optional_user_id(request) if spec.needs_rating_join else None
+    row = UnifiedBrowseRepository(session).facets(spec, candidate_ids, rating_user_id)
 
     media_types: list[str] = []
     if row.has_images:

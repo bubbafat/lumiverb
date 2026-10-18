@@ -296,6 +296,27 @@ def test_facets_with_favorite_filter(facet_env):
     assert data["iso_range"] == [200, 200]
 
 
+@pytest.mark.slow
+def test_facets_count_the_callers_ratings_not_everyones(facet_env):
+    """A favorite filter is the caller's favorites, as the query's: someone
+    else's favorite clip isn't counted for them."""
+    e = facet_env
+    r = e["client"].post("/v1/keys", json={"label": "someone else", "role": "editor"}, headers=_headers(e["api_key"]))
+    assert r.status_code == 200, r.text
+    someone = _headers(r.json()["plaintext"])
+    for headers, clip in ((_headers(e["api_key"]), e["canon1"]), (someone, e["sony1"])):
+        assert e["client"].put(f"/v1/assets/{clip}/rating", json={"favorite": True},
+                               headers=headers).status_code == 200
+
+    def makes(headers) -> list[str]:
+        r = e["client"].get(f"/v1/assets/facets?f=favorite:yes&f=library:{e['library_id']}", headers=headers)
+        assert r.status_code == 200, r.text
+        return r.json()["camera_makes"]
+
+    assert makes(_headers(e["api_key"])) == ["Canon"]
+    assert makes(someone) == ["Sony"]
+
+
 # ---------------------------------------------------------------------------
 # Text search: the real search's candidates
 # ---------------------------------------------------------------------------
