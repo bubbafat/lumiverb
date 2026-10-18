@@ -1093,6 +1093,19 @@ class FaceRepository:
 
         return result, all_ids_per_cluster, truncated
 
+    def libraries_and_times(self, face_ids: list[str]) -> dict[str, tuple[str, datetime | None]]:
+        """Each face's library and its clip's time (taken, else the file's;
+        UTC), by face id: what a cluster shows of the faces a caller sees."""
+        from datetime import UTC
+
+        if not face_ids:
+            return {}
+        rows = self._session.execute(text(
+            "SELECT f.face_id, a.library_id, COALESCE(a.taken_at, a.file_mtime) FROM faces f"
+            " JOIN assets a ON a.asset_id = f.asset_id WHERE f.face_id = ANY(:ids)"), {"ids": list(face_ids)}).all()
+        return {r[0]: (r[1], r[2].replace(tzinfo=UTC) if r[2] is not None and r[2].tzinfo is None else r[2])
+                for r in rows}
+
     def cluster_cache(self, *, faces_per_cluster: int = 20) -> dict:
         """Every cluster of unassigned faces, as the cluster cache keeps them
         (``face_clusters_cache``): largest first, each with its position

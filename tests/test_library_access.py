@@ -40,10 +40,11 @@ PASSWORD = "a long enough password"
 # Path parameters that name something of the account's, not of one library.
 ACCOUNT = {"artifact", "artifact_type", "default_id", "device_id", "filter_id", "job", "key_id", "machine_id",
            "target", "tenant_id", "token", "user_id", "view_id"}
-# What spans libraries, shown only where a person can see it once those parts come (ADR-018 decision 8):
-# a project's clips, a person's faces, a cluster's.
+# What spans libraries: a project's clips, a person's faces, a cluster's. Each route shows of it only
+# what the person can see, and one they can't see at all is a 404 (a cluster's, 409 cluster_changed, as
+# for one that isn't there): tests/test_library_sight.py.
 SPANNING = {"project_id", "person_id", "cluster_id"}
-# Body, form and query fields naming what spans libraries, for the same parts.
+# Body, form and query fields naming what spans libraries, checked so by their routes.
 SPANNING_FIELDS = {
     ("POST", "/v1/people/{person_id}/merge"), ("POST", "/v1/faces/clusters/{cluster_id}/name"),
     ("POST", "/v1/faces/{face_id}/assign"), ("POST", "/v1/projects/empty-trash"), ("GET", "/v1/producers"),

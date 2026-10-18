@@ -12,20 +12,22 @@ id, name, clips, paths or camera. Counts are counted over what they see.
 
 from __future__ import annotations
 
+import json
 import uuid
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
+from sqlmodel import Session
 
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
+from src.server.repository.people import PersonRepository
 from tests.test_library_access import _key, _person, _routes, _set, _tenant_of
 from tests.test_scans_api import File, _library, _ok, _scan, env  # noqa: F401 — the shared fixture
 
-# Lists that span libraries shown only where a person can see them in a later part (ADR-018 phase 8):
-# people and faces.
-LATER = {"/v1/people", "/v1/people/dismissed", "/v1/faces/clusters"}
+# Lists the walk must reach: those that span libraries the most.
+SPANNING = {"/v1/people", "/v1/people/dismissed", "/v1/faces/clusters", "/v1/projects"}
 
 
 @pytest.fixture(scope="module")
@@ -78,9 +80,41 @@ def hidden(env):
         PublicProjectRepository(session).upsert(theirs, _tenant_of(env))
     assert env.client.delete(f"/v1/assets/{a3}", params={"remove_from_projects": "true"},
                              headers=env.admin).status_code in (200, 204)
+
+    # Faces: a person seen only in C, one seen in both (shown by C's face), a dismissed one only in C, and
+    # unnamed faces grouped: one group of both libraries' faces, one of C's alone.
+    face = {name: f"fac_{name}_{uuid.uuid4().hex[:12]}" for name in ("a", "c", "a2", "c2", "c3", "c4", "c5")}
+    with env.db.begin() as conn:
+        for name, clip in (("a", a1), ("c", c1), ("a2", a1), ("c2", c1), ("c3", c1), ("c4", c1), ("c5", c1)):
+            conn.execute(text("INSERT INTO faces (face_id, asset_id, detection_confidence, created_at)"
+                              " VALUES (:f, :a, :conf, now())"),
+                         {"f": face[name], "a": clip, "conf": 0.99 if name == "c" else 0.5})
+    with Session(env.db) as session:
+        people = PersonRepository(session)
+        only_c_person = people.create(f"Person {word}", face_ids=[face["c"]]).person_id
+        both = people.create("Seen in both", face_ids=[face["a"], face["c5"]]).person_id
+        dismissed = people.create_dismissed(face_ids=[face["c4"]]).person_id
+        session.execute(text("UPDATE people SET representative_face_id = :c WHERE person_id = :p"),
+                        {"c": face["c5"], "p": both})
+        session.commit()
+        from src.server.api.routers.people import cluster_id_of
+        from src.server.repository.faces import face_clusters_version
+        from src.server.repository.system_metadata import SystemMetadataRepository
+
+        groups = [[face["a2"], face["c2"]], [face["c3"]]]
+        SystemMetadataRepository(session).set_value("face_clusters_cache", json.dumps({
+            "clusters": [{"cluster_index": i, "size": len(ids), "face_ids": ids, "newest": None,
+                          "faces": [{"face_id": f, "asset_id": a1 if f == face["a2"] else c1} for f in ids]}
+                         for i, ids in enumerate(groups)],
+            "truncated": False, "computed_at": "2026-10-18T00:00:00+00:00",
+            "version": face_clusters_version(session)}))
+        session.commit()
     return SimpleNamespace(a=a, c=c, word=word, a1=a1, a2=a2, a3=a3, c_clips=(c1, c2, c3), key=key,
-                           only_c=only_c, mixed=mixed, theirs=theirs,
-                           marks=(c, library_c["name"], word, c1, c2, c3, only_c))
+                           only_c=only_c, mixed=mixed, theirs=theirs, face=face, only_c_person=only_c_person,
+                           both=both, dismissed=dismissed, both_group=cluster_id_of(groups[0]),
+                           c_group=cluster_id_of(groups[1]),
+                           marks=(c, library_c["name"], word, c1, c2, c3, only_c, only_c_person, dismissed,
+                                  face["c"], face["c2"], face["c3"], face["c4"], face["c5"], cluster_id_of(groups[1])))
 
 
 def _says_nothing_of(r, marks) -> None:
@@ -92,16 +126,18 @@ def _says_nothing_of(r, marks) -> None:
 @pytest.mark.slow
 def test_no_list_says_anything_of_a_library_they_cant_see(env, hidden):
     walked = 0
-    assert {path for _, path, _ in _routes()} >= LATER
+    assert {path for _, path, _ in _routes()} >= SPANNING
+    reached = set()
     for method, path, _ in _routes():
-        if method != "GET" or "{" in path or path in LATER:
+        if method != "GET" or "{" in path:
             continue
         r = env.client.get(path, headers=hidden.key)
         if r.status_code >= 400:
             continue  # nothing said (an admin's route, or one that needs more)
         _says_nothing_of(r, hidden.marks)
         walked += 1
-    assert walked > 15
+        reached.add(path)
+    assert walked > 15 and reached >= SPANNING
     for params in ({"include_trashed": "true"},):
         _says_nothing_of(env.client.get("/v1/libraries", params=params, headers=hidden.key), hidden.marks)
 
@@ -202,3 +238,50 @@ def test_restoring_a_projects_clips_restores_the_ones_they_edit(env, hidden):
         gone = dict(conn.execute(text("SELECT asset_id, deleted_at IS NOT NULL FROM assets WHERE asset_id = ANY(:ids)"),
                                  {"ids": [hidden.a3, hidden.c_clips[1]]}).all())
     assert gone == {hidden.a3: False, hidden.c_clips[1]: True}
+
+
+@pytest.mark.slow
+def test_people_show_only_the_faces_they_can_see(env, hidden):
+    for method, path, body in (("GET", f"/v1/people/{hidden.only_c_person}", None),
+                               ("GET", f"/v1/people/{hidden.only_c_person}/faces", None),
+                               ("PATCH", f"/v1/people/{hidden.only_c_person}", {"display_name": "Renamed"}),
+                               ("DELETE", f"/v1/people/{hidden.only_c_person}", None),
+                               ("POST", f"/v1/people/{hidden.both}/merge", {"source_person_id": hidden.only_c_person}),
+                               ("POST", f"/v1/people/{hidden.dismissed}/undismiss", {"display_name": "Them"}),
+                               ("POST", f"/v1/faces/{hidden.face['a2']}/assign", {"person_id": hidden.only_c_person})):
+        r = env.client.request(method, path, json=body, headers=hidden.key)
+        assert r.status_code == 404, (method, path, r.text)
+    shown = _ok(env.client.get(f"/v1/people/{hidden.both}", headers=hidden.key))
+    assert shown["face_count"] == 1 and shown["representative_face_id"] == hidden.face["a"], shown
+    assert shown["representative_asset_id"] == hidden.a1
+    faces = _ok(env.client.get(f"/v1/people/{hidden.both}/faces", headers=hidden.key))
+    assert [f["face_id"] for f in faces["items"]] == [hidden.face["a"]]
+    listed = {p["person_id"]: p for p in _ok(env.client.get("/v1/people", headers=hidden.key))["items"]}
+    assert hidden.both in listed and hidden.only_c_person not in listed
+    assert listed[hidden.both]["face_count"] == 1
+    for path in (f"/v1/people/{hidden.both}/nearest", f"/v1/faces/{hidden.face['a2']}/nearest-people"):
+        r = env.client.get(path, headers=hidden.key)
+        assert r.status_code == 200, (path, r.text)
+        _says_nothing_of(r, hidden.marks)
+    everyone = _ok(env.client.get(f"/v1/people/{hidden.both}", headers=env.admin))
+    assert everyone["face_count"] == 2 and everyone["representative_face_id"] == hidden.face["c5"]
+
+
+@pytest.mark.slow
+def test_groups_of_faces_show_only_the_faces_they_can_see(env, hidden):
+    groups = _ok(env.client.get("/v1/faces/clusters", params={"min_cluster_size": 1}, headers=hidden.key))
+    assert [(g["cluster_id"], g["size"], [f["face_id"] for f in g["faces"]]) for g in groups["clusters"]] == [
+        (hidden.both_group, 1, [hidden.face["a2"]])]
+    faces = _ok(env.client.get(f"/v1/faces/clusters/{hidden.both_group}/faces", headers=hidden.key))
+    assert [f["face_id"] for f in faces["items"]] == [hidden.face["a2"]] and faces["total"] == 1
+    for path in (f"/v1/faces/clusters/{hidden.c_group}/faces", f"/v1/faces/clusters/{hidden.c_group}/nearest-people"):
+        r = env.client.get(path, headers=hidden.key)
+        assert r.status_code == 409 and r.json()["error"]["code"] == "cluster_changed", (path, r.text)
+    named = _ok(env.client.post(f"/v1/faces/clusters/{hidden.both_group}/name", headers=hidden.key,
+                                json={"display_name": "Named by them"}), 201)
+    with env.db.connect() as conn:
+        theirs = {r[0] for r in conn.execute(text("SELECT face_id FROM face_person_matches WHERE person_id = :p"),
+                                             {"p": named["person_id"]})}
+    assert theirs == {hidden.face["a2"]}, "C's face in the group is left as it was"
+    everyone = _ok(env.client.get("/v1/faces/clusters", params={"min_cluster_size": 1}, headers=env.admin))
+    assert hidden.c_group in {g["cluster_id"] for g in everyone["clusters"]}
