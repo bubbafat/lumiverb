@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. From a design discussion with Robert on 2026-10-12. Under way: see Progress.
+Done. From a design discussion with Robert on 2026-10-12. Every phase is built except phase 9, which was dropped (see Progress).
 
 The order of the work (Progress) follows decision 12: today's scan moves onto this protocol first, so a library this server reads exercises every call a device will make, before there is a device.
 
@@ -224,4 +224,4 @@ A server on the internet with many accounts needs TLS, the isolation in decision
 
 ## Open questions
 
-- Does "New files only" by default cover only what the client makes (previews, analysis proxies), or every producer, including the server's AI output? Recommended: only what the client makes, since that's where a remake costs someone else's machine and upload link.
+- ~~Does "New files only" by default cover only what the client makes, or every producer?~~ Answered by phase 7: there's no default. Every change of a producer's settings or an AI job's model asks (409 `redo_on_change`), for every producer.
