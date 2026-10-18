@@ -161,11 +161,11 @@ def test_the_mark_moves_with_what_the_reader_acts_on(env):
     moves("a producer resumed", lambda: ok(client.post("/v1/producers/probe/resume", json={"scope": "work"},
                                                        headers=headers), 204))
 
-    def settings(crf):
-        ok(client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": crf}, "redo": True},
+    def settings(quality):
+        ok(client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": quality}, "redo": True},
                       headers=headers))
 
-    moves("what it makes is made another way", lambda: settings(30))
+    moves("what it makes is made another way", lambda: settings("good"))
     moves("and back", lambda: settings(None))
     moves("its root moved", lambda: ok(client.patch(f"/v1/libraries/{library_id}", json={"root_path": "/tmp/moved"},
                                                     headers=headers)))

@@ -26,7 +26,7 @@ def test_the_workers_constants_are_the_registrys_settings():
 
     proxy = P.PRODUCERS["proxy"].defaults
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
-    assert AnalysisProxySettings().output() == dict(P.PRODUCERS["analysis_proxy"].defaults)
+    assert AnalysisProxySettings().output() == P.effective_settings("analysis_proxy")  # better: CRF 28
     # Scenes have one setting, Detail, out of the hash: what they're found with is fixed in code.
     from src.producers.scenes import detail as scene_detail
 

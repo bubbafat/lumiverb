@@ -686,6 +686,22 @@ describe("ProcessingSection settings", () => {
     expect(sent.filter((r) => r.method === "PUT")[1].body).toEqual({ settings: { vad_min_silence_ms: 800 }, redo: true });
   });
 
+  it("offers a quality as a notch, Good, Better or Best, not an encoder's number (ADR-018 decision 6)", async () => {
+    const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
+                      minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
+                      choices: ["good", "better", "best"] } as NonNullable<Producer["fields"]>[number];
+    producers = [producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"], fields: [quality] })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    const select = screen.getByLabelText("Quality") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual(["Good", "Better", "Best"]);
+    expect(select.value).toBe("better");
+    fireEvent.change(select, { target: { value: "best" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save the settings of Analysis proxies" }));
+    await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
+    expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { quality: "best" } });
+  });
+
   it("sends a default as null, so the account goes back to following it", async () => {
     await openSettings();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });

@@ -180,7 +180,7 @@ def test_a_failure_waits_its_turn(env):
 def test_remakes_are_listed_apart_while_the_redo_runs(env):
     lib = _library(env, "ReaderRemake")
     video, _ = _all_made(lib, "a.mov")
-    _set(lib, "analysis_proxy", crf=30)
+    _set(lib, "analysis_proxy", quality="good")
     try:
         assert _work(lib) == {video: ([], ["analysis_proxy"])}
         _post(lib, "/v1/producers/analysis_proxy/pause", {"scope": "redo"})
@@ -188,7 +188,7 @@ def test_remakes_are_listed_apart_while_the_redo_runs(env):
         _post(lib, "/v1/producers/analysis_proxy/resume", {"scope": "redo"})
         assert _work(lib) == {video: ([], ["analysis_proxy"])}
     finally:
-        _set(lib, "analysis_proxy", crf=None)
+        _set(lib, "analysis_proxy", quality=None)
     assert _work(lib) == {}  # low, high, low again: nothing to do
 
 
@@ -262,7 +262,7 @@ def test_each_producers_work_is_what_the_scheduler_is_handed(env):
     _probed(lib, probed, sha)
     remade, _ = _all_made(lib, "e.mov")
     _all_made(lib, "f.mov")
-    _set(lib, "analysis_proxy", crf=30)
+    _set(lib, "analysis_proxy", quality="good")
     try:
         listed = _work(lib)
         for artifact in ("probe", "capture", "analysis_proxy"):
@@ -273,7 +273,7 @@ def test_each_producers_work_is_what_the_scheduler_is_handed(env):
             assert again == {a for a, (_, remakes) in listed.items() if artifact in remakes}, artifact
         assert listed[remade][1] == ["analysis_proxy"]
     finally:
-        _set(lib, "analysis_proxy", crf=None)
+        _set(lib, "analysis_proxy", quality=None)
 
 
 # ---------------------------------------------------------------------------

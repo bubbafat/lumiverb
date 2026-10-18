@@ -259,7 +259,7 @@ def producers_retry(
 def _bounds(f: dict) -> str:
     if f.get("fixed"):
         return "fixed"
-    if f.get("kind") == "level":
+    if f.get("kind") in ("level", "notch"):
         return " / ".join(f.get("choices") or [])
     if f.get("minimum") is None:
         return f["kind"]
@@ -359,7 +359,7 @@ def producers_settings(
             body[key] = None
         elif f["kind"] == "text":
             body[key] = raw
-        elif f["kind"] == "level":
+        elif f["kind"] in ("level", "notch"):
             if raw not in (f.get("choices") or []):
                 console.print(f"[red]{escape(f['label'])} is one of {', '.join(f.get('choices') or [])}.[/red]")
                 raise typer.Exit(2)

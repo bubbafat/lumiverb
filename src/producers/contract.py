@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # Tiers, highest first (Robert, Oct 9): 1 see it (scans, which make
@@ -57,7 +57,7 @@ class Setting:
     key: str
     default: Any
     label: str
-    kind: str = "int"  # "int" | "float" | "text" | "bool" | "level"
+    kind: str = "int"  # "int" | "float" | "text" | "bool" | "level" | "notch"
     minimum: float | None = None
     maximum: float | None = None
     unit: str = ""
@@ -73,11 +73,19 @@ class Setting:
     # at apart from it, and one made below the level now is out of date
     # ("below"), counted apart and made again only when asked; one made at
     # or above it is current (lineage.counts, lineage.redo_below).
+    # kind "notch" (ADR-018 decision 6): a quality ("good", "better",
+    # "best"), not an encoder's number: its values, lowest first, and what
+    # each stands for (means: {"better": {"crf": 28}}). It's in lineage as
+    # what it stands for (shared/producers.resolved), so a notch that means
+    # the numbers before it makes nothing stale, and a producer's work reads
+    # the numbers; each encoder maps them to its own (NVENC's CQ from x264's
+    # CRF). Retuning a notch makes what it made another way than now.
     choices: tuple[str, ...] = ()
+    means: dict[str, dict[str, Any]] = field(default_factory=dict, hash=False, compare=False)
 
     def check(self, value: Any) -> Any:
         """The value as stored, or ValueError saying what's wrong with it."""
-        if self.kind == "level":
+        if self.kind in ("level", "notch"):
             if value not in self.choices:
                 raise ValueError(f"{self.label} is one of {', '.join(self.choices)}")
             return value

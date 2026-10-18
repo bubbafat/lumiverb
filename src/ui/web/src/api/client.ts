@@ -967,7 +967,8 @@ export interface ProducerCounts {
 export interface SettingField {
   key: string;
   label: string;
-  kind: "int" | "float" | "text" | "bool" | "level";
+  // "notch": a quality, one of choices ("good", "better", "best"), not an encoder's number (ADR-018 decision 6).
+  kind: "int" | "float" | "text" | "bool" | "level" | "notch";
   value: unknown;
   default: unknown;
   minimum: number | null;

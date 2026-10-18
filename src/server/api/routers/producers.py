@@ -349,7 +349,7 @@ def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> Prod
 
 def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict[str, Any]) -> ProducerItem:
     p = PRODUCERS[artifact]
-    values = {**want["settings"], **uses}
+    values = {**want["settings"], **want.get("notches", {}), **uses}  # a notch as chosen, not what it stands for
     job_wait = waits.get(p.job) if p.job else None
     return ProducerItem(
         artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
