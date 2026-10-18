@@ -176,6 +176,7 @@ function DataLine({ data, admin, busy, onRetry }: { data: PluginData; admin: boo
       <p className="text-sm text-gray-400">
         {data.detail ?? `Fetching ${data.title.toLowerCase()}`}
         {total ? `: ${mb(done)} of ${mb(total)}` : done ? `: ${mb(done)}` : "…"}
+        {data.ready_at && ". The one fetched before is used meanwhile."}
       </p>
       {total ? (
         <div className="h-1.5 w-full max-w-xs overflow-hidden rounded bg-gray-800">

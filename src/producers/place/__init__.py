@@ -1,13 +1,16 @@
 """Place names (ADR-021, the Place names plug-in's producer; ADR-017 phase 4):
 each clip with a location gets the name of the nearest town within its
 radius ("Near Port of Spain, Trinidad and Tobago"), or that there's none
-that near. The location named is the one the clip shows: a person's, else
-the file's GPS, else an applied guess. The name is kept with that location
-(asset_place): when the location changes, the clip is due again, and its
-old name stays until the new one is saved. Only while the Place names
-plug-in is on in the account (plugin); turned off, names stay and stop
-being made. work.py asks the server for each clip's location and nearest
-town (POST /v1/places/nearest) and saves what it found (POST /v1/places/names)."""
+that near, and the landmark it's at, if any ("At Magic Kingdom": within its
+kind's reach, src/plugins/geonames/landmarks.py, for a location as sure;
+version 2, Robert 2026-10-18). The location named is the one the clip
+shows: a person's, else the file's GPS, else an applied guess. The name is
+kept with that location (asset_place): when the location changes, the clip
+is due again, and its old name stays until the new one is saved. Only while
+the Place names plug-in is on in the account (plugin); turned off, names
+stay and stop being made. work.py asks the server for each clip's location,
+nearest town and landmark (POST /v1/places/nearest) and saves what it found
+(POST /v1/places/names)."""
 
 from src.producers.contract import ALL, FIND, Pool, ProducerSpec, Setting
 
@@ -25,7 +28,7 @@ def located(coord: str, a: str = "a", loc: str = "l") -> str:
 CPU = Pool("cpu", slots=2)
 
 PRODUCER = ProducerSpec(
-    artifact="place", producer="place", version="1", media=ALL, title="Place names", order=125,
+    artifact="place", producer="place", version="2", media=ALL, title="Place names", order=125,
     # A location it shows: a person's, the file's GPS, or an applied guess (never a suggestion).
     applies=("(a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) OR EXISTS (SELECT 1 FROM asset_location pl"
              " WHERE pl.asset_id = a.asset_id AND (pl.source = 'person' OR (pl.source = 'time'"

@@ -3,8 +3,10 @@ database, with a local web server standing in for download.geonames.org:
 nothing fetched until an account turns it on, the place list fetched once
 for the server, its progress and failures said, upkeep taking up a fetch
 that stopped, search by name (the exact name first, then the most
-populous, narrowed by region or country), a location set by place, and the
-GeoNames credit beside every name."""
+populous, narrowed by region or country), landmarks beside the towns (the
+kinds kept, with a Wikipedia article or every one), a list from an older
+release fetched again while the old one is used, a location set by place,
+and the GeoNames credit beside every name."""
 
 from __future__ import annotations
 
@@ -20,7 +22,14 @@ import pytest
 from sqlalchemy import text
 
 from src.plugins import registry
-from src.plugins.geonames.data import parse_countries, parse_places, parse_regions
+from src.plugins.geonames import data as geonames_data
+from src.plugins.geonames.data import (
+    parse_countries,
+    parse_landmarks,
+    parse_places,
+    parse_regions,
+    wikipedia_linked,
+)
 from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.shared.utils import utcnow
@@ -47,7 +56,37 @@ PLACES = [
 ]
 REGIONS = "TT.05\tPort of Spain\tPort of Spain\t3573891\nFR.11\tÎle-de-France\tIle-de-France\t3012874\n" \
           "US.TX\tTexas\tTexas\t4736286\nCH.ZH\tZurich\tZurich\t2657895\nFR.76\tOccitanie\tOccitanie\t11071623\n" \
-          "BR.27\tSão Paulo\tSao Paulo\t3448433\n"
+          "BR.27\tSão Paulo\tSao Paulo\t3448433\nUS.FL\tFlorida\tFlorida\t4155751\n"
+
+
+def _feature(gid, name, lat, lon, cls, code, cc, admin1):
+    cols = [str(gid), name, name, "", str(lat), str(lon), cls, code, cc, "", admin1, "", "", "", "0", "", "30",
+            "Etc/UTC", "2026-01-01"]
+    return "\t".join(cols)
+
+
+MAGIC_KINGDOM = (28.4187, -81.5812)
+EIFFEL = (48.8583, 2.2945)
+CHAMP_DE_MARS = (48.8561, 2.2980)
+FEATURES = [
+    _feature(4164161, "Magic Kingdom, Walt Disney World", *MAGIC_KINGDOM, "L", "AMUS", "US", "FL"),  # kept whole
+    _feature(6254976, "Tour Eiffel", *EIFFEL, "S", "MNMT", "FR", "11"),  # a Wikipedia article
+    _feature(6618997, "Champ de Mars", *CHAMP_DE_MARS, "L", "PRK", "FR", "11"),  # one too
+    _feature(9999992, "Hôtel du Coin", 48.8584, 2.2946, "S", "HTL", "FR", "11"),  # a kind kept, no article
+    _feature(9999993, "Ruisseau", 48.86, 2.30, "H", "STM", "FR", "11"),  # an article, not a kind kept
+    _feature(2988507, "Paris", 48.85341, 2.3488, "P", "PPLC", "FR", "11"),  # a town: the towns' list's
+    "not a feature line",
+]
+LANDMARKS = 3  # of FEATURES
+ALTERNATE_NAMES = "\n".join([
+    "1\t6254976\tlink\thttps://en.wikipedia.org/wiki/Eiffel_Tower\t\t\t\t\t\t",
+    "2\t6254976\ten\tEiffel Tower\t1\t\t\t\t\t",
+    "3\t6618997\tlink\thttps://fr.wikipedia.org/wiki/Champ-de-Mars\t\t\t\t\t\t",
+    "4\t9999992\tlink\thttps://example.com/hotel\t\t\t\t\t\t",  # a link, not Wikipedia's
+    "5\t9999993\tlink\thttps://fr.wikipedia.org/wiki/Ruisseau\t\t\t\t\t\t",
+    "not a name line",
+]) + "\n"
+COUNT = 6 + LANDMARKS  # towns and landmarks
 COUNTRIES = "#ISO\tISO3\tISO-Numeric\tfips\tCountry\n" \
             "TT\tTTO\t780\tTD\tTrinidad and Tobago\nFR\tFRA\t250\tFR\tFrance\nUS\tUSA\t840\tUS\tUnited States\n" \
             "CH\tCHE\t756\tSZ\tSwitzerland\nBR\tBRA\t076\tBR\tBrazil\n"
@@ -63,6 +102,12 @@ def geonames_site(tmp_path_factory):
     (root / "cities1000.zip").write_bytes(buf.getvalue())
     (root / "admin1CodesASCII.txt").write_text(REGIONS, encoding="utf-8")
     (root / "countryInfo.txt").write_text(COUNTRIES, encoding="utf-8")
+    for name, member, lines in (("allCountries.zip", "allCountries.txt", "\n".join(FEATURES) + "\n"),
+                                ("alternateNamesV2.zip", "alternateNamesV2.txt", ALTERNATE_NAMES)):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(member, lines)
+        (root / name).write_bytes(buf.getvalue())
     handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
     handler.log_message = lambda *a, **k: None  # type: ignore[attr-defined]
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -85,7 +130,7 @@ def _fresh(env, geonames_site, monkeypatch):  # noqa: F811
 
 def _forget() -> None:
     with get_control_session() as session:
-        for table in ("plugin_data", "geonames_places", "geonames_admin1", "geonames_countries"):
+        for table in ("plugin_data", "geonames_places", "geonames_landmarks", "geonames_admin1", "geonames_countries"):
             session.execute(text(f"DELETE FROM {table}"))
         session.commit()
 
@@ -135,6 +180,14 @@ def test_the_files_are_read_as_geonames_writes_them() -> None:
     assert {r["code"]: r["name"] for r in parse_regions(REGIONS)}["FR.11"] == "Île-de-France"
     assert {c["iso"]: c["name"] for c in parse_countries(COUNTRIES)} == {
         "TT": "Trinidad and Tobago", "FR": "France", "US": "United States", "CH": "Switzerland", "BR": "Brazil"}
+    linked = wikipedia_linked(iter(ALTERNATE_NAMES.splitlines(keepends=True)))
+    assert linked == {6254976, 6618997, 9999993}
+    landmarks = list(parse_landmarks(iter(line + "\n" for line in FEATURES), linked))
+    assert [(p["name"], p["feature_code"]) for p in landmarks] == [
+        ("Magic Kingdom, Walt Disney World", "AMUS"), ("Tour Eiffel", "MNMT"), ("Champ de Mars", "PRK")]
+    assert landmarks[1] == {"geonameid": 6254976, "name": "Tour Eiffel", "ascii_name": "Tour Eiffel",
+                            "lat": EIFFEL[0], "lon": EIFFEL[1], "feature_code": "MNMT", "country_code": "FR",
+                            "admin1_code": "11"}
 
 
 def test_nothing_is_fetched_or_found_until_an_account_turns_it_on(env) -> None:  # noqa: F811
@@ -149,7 +202,8 @@ def test_nothing_is_fetched_or_found_until_an_account_turns_it_on(env) -> None: 
     on = _turn_on(env)
     assert on["data"]["state"] in ("fetching", "ready")
     ready = _until(env, "ready")
-    assert ready["count"] == 6 and ready["ready_at"] and ready["error"] is None
+    assert ready["count"] == COUNT and ready["ready_at"] and ready["error"] is None
+    assert not geonames_data.folder().exists()  # the downloads, deleted once read
     # Another account turning it on uses what's there.
     assert _search(env, "Paris", env.other).status_code == 409  # off there
     _turn_on(env, env.other)
@@ -218,7 +272,7 @@ def test_a_failed_fetch_says_why_and_is_tried_again(env, monkeypatch, geonames_s
     r = env.client.post("/v1/upkeep", headers=env.admin)
     assert r.status_code == 200 and r.json()["plugin_data"] == {GEONAMES: "waiting"}, r.text
     _turn_on(env)
-    assert _until(env, "ready")["count"] == 6
+    assert _until(env, "ready")["count"] == COUNT
 
 
 def test_upkeep_takes_up_a_fetch_that_stopped(env) -> None:  # noqa: F811
@@ -231,9 +285,63 @@ def test_upkeep_takes_up_a_fetch_that_stopped(env) -> None:  # noqa: F811
         session.commit()
     r = env.client.post("/v1/upkeep", headers=env.admin)
     assert r.status_code == 200 and r.json()["plugin_data"] == {GEONAMES: "started"}, r.text
-    assert _until(env, "ready")["count"] == 6
+    assert _until(env, "ready")["count"] == COUNT
     r = env.client.post("/v1/upkeep", headers=env.admin)
     assert r.json()["plugin_data"] == {GEONAMES: "ready"}
     # Off in every account: upkeep leaves it be.
     env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": False}, headers=env.admin)
     assert env.client.post("/v1/upkeep", headers=env.admin).json()["plugin_data"] == {}
+
+
+def test_landmarks_are_found_by_name_after_the_towns(env) -> None:  # noqa: F811
+    _turn_on(env)
+    _until(env, "ready")
+    found = _search(env, "magic").json()["places"]
+    assert [(p["label"], p["kind"], p["population"]) for p in found] == [
+        ("Magic Kingdom, Walt Disney World, Florida, United States", "amusement park", 0)]
+    assert found[0]["place_id"] == "geonames:4164161"
+    assert [p["name"] for p in _search(env, "tour eif").json()["places"]] == ["Tour Eiffel"]
+    assert [p["name"] for p in _search(env, "champ, france").json()["places"]] == ["Champ de Mars"]
+    assert _search(env, "paris").json()["places"][0]["kind"] is None  # a town
+    for left_out in ("Hôtel du Coin", "Ruisseau"):
+        assert _search(env, left_out).json()["places"] == [], left_out
+    # A location set by a landmark's name.
+    lib = _library(env)
+    clip = _scan(env, lib, [File("castle.jpg", f"castle {lib}")], headers=env.admin).uploaded["castle.jpg"]
+    r = env.client.put("/v1/assets/locations", json={"asset_ids": [clip], "place_id": "geonames:4164161"},
+                       headers=env.editor)
+    assert r.status_code == 200, r.text
+    location = env.client.get(f"/v1/assets/{clip}", headers=env.admin).json()["location"]
+    assert (location["lat"], location["lon"]) == (pytest.approx(MAGIC_KINGDOM[0]), pytest.approx(MAGIC_KINGDOM[1]))
+    assert location["basis_summary"] == "Magic Kingdom, Walt Disney World, Florida, United States"
+
+
+def test_a_list_from_an_older_release_is_fetched_again_while_it_is_used(env) -> None:  # noqa: F811
+    from src.server import plugin_data
+
+    _turn_on(env)
+    _until(env, "ready")
+    assert plugin_data.status(GEONAMES)["current"] is True
+    # The list a release before landmarks fetched: towns only, its version unsaid (1).
+    with get_control_session() as session:
+        session.execute(text("DELETE FROM geonames_landmarks"))
+        session.execute(text("UPDATE plugin_data SET version = NULL, count = 6"))
+        session.commit()
+    assert plugin_data.status(GEONAMES)["current"] is False
+    assert _search(env, "paris").status_code == 200  # what's there is used meanwhile
+    # The producer's lookups want this release's: they wait, and it's fetched again.
+    lib = _library(env)
+    clip = _scan(env, lib, [File("there.jpg", f"there {lib}")], headers=env.admin).uploaded["there.jpg"]
+    r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
+    assert r.status_code == 503 and r.json()["error"]["code"] == "places_not_ready", r.text
+    for _ in range(300):
+        if plugin_data.status(GEONAMES)["current"]:
+            break
+        time.sleep(0.05)
+    data = _until(env, "ready")
+    assert data["count"] == COUNT and plugin_data.status(GEONAMES)["version"] == 2
+    assert [p["name"] for p in _search(env, "magic").json()["places"]] == ["Magic Kingdom, Walt Disney World"]
+    r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
+    assert r.status_code == 200, r.text
+    # Upkeep leaves this release's list be.
+    assert env.client.post("/v1/upkeep", headers=env.admin).json()["plugin_data"] == {GEONAMES: "ready"}

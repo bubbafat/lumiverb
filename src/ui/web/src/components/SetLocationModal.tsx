@@ -35,7 +35,8 @@ export function SetLocationModal({
   const queryClient = useQueryClient();
   const { data: plugins } = useQuery({ queryKey: ["plugins"], queryFn: listPlugins });
   const geonames = plugins?.find((p) => p.plugin_id === "geonames");
-  const places = geonames?.state === "on" && geonames.data?.state === "ready";
+  // A list fetched, even while a newer one is fetched (the server searches what it has meanwhile).
+  const places = geonames?.state === "on" && (geonames.data?.state === "ready" || !!geonames.data?.ready_at);
   const [picked, setPicked] = useState<"place" | "point" | "same" | null>(null);
   const mode = picked ?? (places ? "place" : "point");
   const setMode = setPicked;
@@ -196,6 +197,7 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
                   className="w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-800"
                 >
                   {p.label}
+                  {p.kind && <span className="text-gray-500"> · {p.kind}</span>}
                 </button>
               </li>
             ))}

@@ -1,5 +1,6 @@
-"""Naming where clips were: one request for the job's clips' locations and
-the nearest town to each within the radius, then the names saved, each with
+"""Naming where clips were: one request for the job's clips' locations, the
+nearest town to each within the radius and the landmark each is at, then
+the names saved, each with
 the location it was found for (the server refuses one whose clip shows
 another location since: it's named again)."""
 
@@ -32,9 +33,10 @@ class Name(Work):
         where = self.found().get(clip["asset_id"])
         if where is None:
             return None  # out of sight, or it shows no location now: nothing to name
-        place = where.get("place")
+        place, landmark = where.get("place"), where.get("landmark")
         return {"place_id": place["place_id"] if place else None, "distance_m": where.get("distance_m"),
-                "lat": where["lat"], "lon": where["lon"]}
+                "landmark_id": landmark["place_id"] if landmark else None,
+                "landmark_distance_m": where.get("landmark_distance_m"), "lat": where["lat"], "lon": where["lon"]}
 
     def save(self, client, made: list[tuple[dict, Any]]) -> None:
         items = [{"asset_id": clip["asset_id"], "source_hash": clip.get("content_hash"), **result}
