@@ -14,7 +14,7 @@ from sqlmodel import Session
 
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ConflictError
-from src.server.api.library_access import names
+from src.server.api.library_access import edited, names, seen
 from src.server.api.limits import MAX_IDS
 from src.server.repository.faces import current_face_model
 
@@ -97,21 +97,38 @@ class ClustersResponse(BaseModel):
     pending: bool = False
 
 
+# ---------- What the caller sees (ADR-018 decision 8, roles per library) ----------
+
+
+def _people(request: Request, session: Session):
+    """The people repository as the caller sees it: people with a face in a
+    library they can see, and only those faces."""
+    from src.server.repository.people import PersonRepository
+
+    return PersonRepository(session, within=seen(request, session))
+
+
+def _person_or_404(repo, person_id: str | None, detail: str = "Person not found"):
+    """The person, when the caller sees them; 404 otherwise, as for one that isn't there."""
+    person = repo.get_by_id(person_id) if person_id else None
+    if person is None or not repo.shows(person):
+        raise HTTPException(status_code=404, detail=detail)
+    return person
+
+
 # ---------- Endpoints ----------
 
 @router.get("", response_model=PersonListResponse)
 def list_people(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     q: str | None = None,
 ) -> PersonListResponse:
-    """List people sorted by face count descending. Optional q param for name search."""
-    from src.server.repository.faces import FaceRepository
-    from src.server.repository.people import PersonRepository
-
-
-    repo = PersonRepository(session)
+    """List people sorted by face count descending (those the caller sees,
+    by the faces they see). Optional q param for name search."""
+    repo = _people(request, session)
     rows = repo.list_with_face_counts(after=after, limit=limit, q=q)
 
     items = []
@@ -143,15 +160,14 @@ def list_people(
 @names("body.face_ids")
 def create_person(
     body: PersonCreateRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Create a new named person. Optionally assign face_ids."""
-    from src.server.repository.people import PersonRepository
-
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
 
-    repo = PersonRepository(session)
+    repo = _people(request, session)
 
     # Check if any face_ids are already assigned
     if body.face_ids:
@@ -167,15 +183,13 @@ def create_person(
 
 @router.get("/dismissed", response_model=PersonListResponse)
 def list_dismissed_people(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonListResponse:
-    """List dismissed people sorted by face count descending."""
-    from src.server.repository.people import PersonRepository
-
-
-    repo = PersonRepository(session)
+    """List dismissed people sorted by face count descending (those the caller sees)."""
+    repo = _people(request, session)
     rows = repo.list_dismissed(after=after, limit=limit)
 
     items = []
@@ -209,26 +223,25 @@ def _person_item(repo, person, face_count: int) -> PersonItem:
         person_id=person.person_id,
         display_name=person.display_name,
         face_count=face_count,
-        representative_face_id=person.representative_face_id,
+        representative_face_id=repo.representative_face_id(person),
         representative_asset_id=repo.representative_asset_id(person),
         confirmation_count=person.confirmation_count,
     )
 
 
-def _nearest(session: Session, vector, limit: int, *, exclude_id: str | None = None) -> list[NearestPersonItem]:
+def _nearest(repo, vector, limit: int, *, exclude_id: str | None = None) -> list[NearestPersonItem]:
     """Named people by cosine distance (1 − similarity) from `vector` to their
-    centroids in the account's face model, nearest first."""
+    centroids in the account's face model, nearest first: those the caller
+    sees (repo's)."""
     import numpy as np
-
-    from src.server.repository.people import PersonRepository
 
     src = np.asarray(vector, dtype=np.float32)
     norm = float(np.linalg.norm(src))
     if norm > 0:
         src = src / norm
     results = []
-    for person_id, display_name, centroid, face_count in PersonRepository(session).named_centroids(
-            current_face_model(session), exclude_id=exclude_id):
+    for person_id, display_name, centroid, face_count in repo.named_centroids(
+            current_face_model(repo._session), exclude_id=exclude_id):
         pvec = np.array(centroid, dtype=np.float32)
         pnorm = float(np.linalg.norm(pvec))
         if pnorm > 0:
@@ -242,17 +255,17 @@ def _nearest(session: Session, vector, limit: int, *, exclude_id: str | None = N
 @router.get("/{person_id}/nearest", response_model=list[NearestPersonItem])
 def nearest_people_for_person(
     person_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
     """Return named people sorted by cosine distance to this person's centroid."""
-    from src.server.repository.people import PersonRepository
-
-    repo = PersonRepository(session)
+    repo = _people(request, session)
     person = repo.get_by_id(person_id)
-    if person is None or person.centroid_vector is None or person.centroid_model != current_face_model(session):
+    if person is None or not repo.shows(person) or person.centroid_vector is None \
+            or person.centroid_model != current_face_model(session):
         return []
-    return _nearest(session, person.centroid_vector, limit, exclude_id=person_id)
+    return _nearest(repo, person.centroid_vector, limit, exclude_id=person_id)
 
 
 class UndismissRequest(BaseModel):
@@ -263,14 +276,13 @@ class UndismissRequest(BaseModel):
 def undismiss_person(
     person_id: str,
     body: UndismissRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Restore a dismissed person and give them a name."""
-    from src.server.repository.people import PersonRepository
-
-    repo = PersonRepository(session)
-    person = repo.get_by_id(person_id)
-    if person is None or not person.dismissed:
+    repo = _people(request, session)
+    person = _person_or_404(repo, person_id, "Dismissed person not found")
+    if not person.dismissed:
         raise HTTPException(status_code=404, detail="Dismissed person not found")
 
     repo.undismiss(person, body.display_name.strip())
@@ -280,15 +292,12 @@ def undismiss_person(
 @router.get("/{person_id}", response_model=PersonItem)
 def get_person(
     person_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Get a person by ID."""
-    from src.server.repository.people import PersonRepository
-
-    repo = PersonRepository(session)
-    person = repo.get_by_id(person_id)
-    if person is None:
-        raise HTTPException(status_code=404, detail="Person not found")
+    repo = _people(request, session)
+    person = _person_or_404(repo, person_id)
 
     return _person_item(repo, person, repo.get_face_count(person_id))
 
@@ -297,15 +306,15 @@ def get_person(
 def update_person(
     person_id: str,
     body: PersonUpdateRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Update a person's display name."""
-    from src.server.repository.people import PersonRepository
-
     if not body.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
 
-    repo = PersonRepository(session)
+    repo = _people(request, session)
+    _person_or_404(repo, person_id)
     person = repo.update_name(person_id, body.display_name.strip())
     if person is None:
         raise HTTPException(status_code=404, detail="Person not found")
@@ -316,7 +325,7 @@ def update_person(
         person_id=person.person_id,
         display_name=person.display_name,
         face_count=face_count,
-        representative_face_id=person.representative_face_id,
+        representative_face_id=repo.representative_face_id(person),
         confirmation_count=person.confirmation_count,
     )
 
@@ -324,12 +333,12 @@ def update_person(
 @router.delete("/{person_id}", status_code=204, dependencies=[Depends(require_editor)])
 def delete_person(
     person_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> None:
     """Delete a person and all their face matches."""
-    from src.server.repository.people import PersonRepository
-
-    repo = PersonRepository(session)
+    repo = _people(request, session)
+    _person_or_404(repo, person_id)
     if not repo.delete(person_id):
         raise HTTPException(status_code=404, detail="Person not found")
 
@@ -337,18 +346,14 @@ def delete_person(
 @router.get("/{person_id}/faces", response_model=PersonFacesResponse)
 def list_person_faces(
     person_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> PersonFacesResponse:
-    """List faces matched to a person, cursor-paginated."""
-    from src.server.repository.people import PersonRepository
-
-
-    repo = PersonRepository(session)
-    person = repo.get_by_id(person_id)
-    if person is None:
-        raise HTTPException(status_code=404, detail="Person not found")
+    """List faces matched to a person (those the caller sees), cursor-paginated."""
+    repo = _people(request, session)
+    _person_or_404(repo, person_id)
 
     items = _face_items(session, repo.get_faces(person_id, after=after, limit=limit))
 
@@ -385,15 +390,16 @@ def _face_items(session: Session, faces: list) -> list[PersonFaceItem]:
 def merge_person(
     person_id: str,
     body: MergeRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
     """Merge source person into target (person_id). Source is deleted."""
-    from src.server.repository.people import PersonRepository
-
     if body.source_person_id == person_id:
         raise HTTPException(status_code=400, detail="Cannot merge a person into themselves")
 
-    repo = PersonRepository(session)
+    repo = _people(request, session)
+    _person_or_404(repo, person_id)
+    _person_or_404(repo, body.source_person_id)
     target = repo.merge(person_id, body.source_person_id)
     if target is None:
         raise HTTPException(status_code=404, detail="Person not found")
@@ -419,27 +425,25 @@ class ClusterNameRequest(BaseModel):
 def name_cluster(
     cluster_id: str,
     body: ClusterNameRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> PersonItem:
-    """Name all faces in a cluster. Creates a new person or assigns to existing.
+    """Name all faces in a cluster (those in libraries the caller edits).
+    Creates a new person or assigns to existing.
 
     409 cluster_changed when no cluster has this id any more, or some of its
     faces were named or dismissed since: load the clusters again.
     """
-    from src.server.repository.people import PersonRepository
-
     has_name = body.display_name is not None and body.display_name.strip() != ""
     if not has_name and not body.person_id:
         raise HTTPException(status_code=400, detail="Provide display_name or person_id")
 
-    face_ids = _unassigned_cluster_faces(session, cluster_id)
-    person_repo = PersonRepository(session)
+    face_ids = _unassigned_cluster_faces(session, cluster_id, request)
+    person_repo = _people(request, session)
 
     if body.person_id:
         # Assign to existing person
-        person = person_repo.get_by_id(body.person_id)
-        if person is None:
-            raise HTTPException(status_code=404, detail="Person not found")
+        person = _person_or_404(person_repo, body.person_id)
         # Assign each face (skip already-assigned)
         from src.server.repository.faces import FaceRepository
 
@@ -462,6 +466,7 @@ class DismissResult(BaseModel):
 @faces_router.post("/clusters/{cluster_id}/dismiss", response_model=DismissResult, dependencies=[Depends(require_editor)])
 def dismiss_cluster(
     cluster_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> DismissResult:
     """Dismiss a cluster by creating a dismissed person.
@@ -474,7 +479,7 @@ def dismiss_cluster(
     from src.server.repository.faces import _mark_clusters_dirty
     from src.server.repository.people import PersonRepository
 
-    face_ids = _unassigned_cluster_faces(session, cluster_id)
+    face_ids = _unassigned_cluster_faces(session, cluster_id, request)
     person_repo = PersonRepository(session)
     person = person_repo.create_dismissed(face_ids=face_ids)
     _mark_clusters_dirty(session)
@@ -485,6 +490,7 @@ def dismiss_cluster(
 @faces_router.get("/clusters/{cluster_id}/nearest-people", response_model=list[NearestPersonItem])
 def nearest_people_for_cluster(
     cluster_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
@@ -497,7 +503,7 @@ def nearest_people_for_cluster(
 
     from src.server.repository.faces import FaceRepository
 
-    face_ids = find_cluster(session, cluster_id).get("face_ids", [])
+    face_ids = find_cluster(session, cluster_id, request).get("face_ids", [])
     if not face_ids:
         return []
 
@@ -506,12 +512,13 @@ def nearest_people_for_cluster(
     vectors = FaceRepository(session).embeddings(face_ids[:100], current_face_model(session))
     if not vectors:
         return []
-    return _nearest(session, np.array(vectors, dtype=np.float32).mean(axis=0), limit)
+    return _nearest(_people(request, session), np.array(vectors, dtype=np.float32).mean(axis=0), limit)
 
 
 @faces_router.get("/{face_id}/nearest-people", response_model=list[NearestPersonItem])
 def nearest_people_for_face(
     face_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=5, ge=1, le=20),
 ) -> list[NearestPersonItem]:
@@ -540,7 +547,7 @@ def nearest_people_for_face(
         return []
 
     # The pgvector adapter returns the column as a numpy array via the ORM.
-    return _nearest(session, face.embedding_vector, limit)
+    return _nearest(_people(request, session), face.embedding_vector, limit)
 
 
 class ClusterFacesResponse(BaseModel):
@@ -552,15 +559,16 @@ class ClusterFacesResponse(BaseModel):
 @faces_router.get("/clusters/{cluster_id}/faces", response_model=ClusterFacesResponse)
 def list_cluster_faces(
     cluster_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     after: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> ClusterFacesResponse:
-    """List all faces in a cluster, cursor-paginated. 409 cluster_changed
-    when no cluster has this id any more."""
+    """List all faces in a cluster (those the caller sees), cursor-paginated.
+    409 cluster_changed when no cluster has this id any more."""
     from src.server.repository.faces import FaceRepository
 
-    all_face_ids = find_cluster(session, cluster_id).get("face_ids", [])
+    all_face_ids = find_cluster(session, cluster_id, request).get("face_ids", [])
     total = len(all_face_ids)
 
     # Apply cursor pagination over the sorted face ID list
@@ -636,6 +644,7 @@ def get_face_crop(
 def assign_face(
     face_id: str,
     body: FaceAssignRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Assign a face to a person (existing or new).
@@ -644,7 +653,6 @@ def assign_face(
     Returns 409 if face is already assigned.
     """
     from src.server.repository.faces import FaceRepository
-    from src.server.repository.people import PersonRepository
 
     if not body.person_id and not body.new_person_name:
         raise HTTPException(status_code=400, detail="Provide person_id or new_person_name")
@@ -656,7 +664,7 @@ def assign_face(
     if faces.get(face_id) is None:
         raise HTTPException(status_code=404, detail="Face not found")
 
-    repo = PersonRepository(session)
+    repo = _people(request, session)
 
     # Check if already assigned
     if existing := faces.assigned_among([face_id]).get(face_id):
@@ -666,9 +674,7 @@ def assign_face(
         person = repo.create(body.new_person_name.strip(), face_ids=[face_id])
         return {"person_id": person.person_id, "display_name": person.display_name}
     else:
-        person = repo.get_by_id(body.person_id)  # type: ignore[arg-type]
-        if person is None:
-            raise HTTPException(status_code=404, detail="Person not found")
+        person = _person_or_404(repo, body.person_id)
         repo.assign_face(face_id, body.person_id, confirmed=True)  # type: ignore[arg-type]
         return {"person_id": person.person_id, "display_name": person.display_name}
 
@@ -753,21 +759,58 @@ def clusters_current(session: Session, data: dict | None) -> bool:
     return data is not None and data.get("version") == face_clusters_version(session)
 
 
-def find_cluster(session: Session, cluster_id: str) -> dict:
-    """The cached cluster with this id; 409 cluster_changed when there's none."""
+def find_cluster(session: Session, cluster_id: str, request: Request | None = None) -> dict:
+    """The cached cluster with this id, of the faces the caller sees (when a
+    request is given); 409 cluster_changed when there's none, as when none
+    of its faces is in a library they can see."""
     for c in (cached_clusters(session) or {}).get("clusters", []):
         if cluster_id_of(c.get("face_ids") or []) == cluster_id:
-            return c
+            if request is None:
+                return c
+            for shown in in_sight_clusters(session, [c], seen(request, session)):
+                return shown
+            break
     raise ConflictError("cluster_changed", "This group changed. Reload the groups.", {"cluster_id": cluster_id})
 
 
-def _unassigned_cluster_faces(session: Session, cluster_id: str) -> list[str]:
-    """The cluster's face ids, none named or dismissed since it was computed;
-    409 cluster_changed otherwise. The faces are locked first, so of two
-    requests for one cluster the second waits and then gets the 409."""
+def in_sight_clusters(session: Session, clusters: list[dict], within: list[str] | None) -> list[dict]:
+    """The clusters as the caller sees them (within: the libraries they can
+    see; None, every one): of their faces in those, its size, sample and
+    newest photo; one with none of them isn't there. The id stays the
+    cluster's own (cluster_id_of its every face)."""
+    if within is None:
+        return clusters
     from src.server.repository.faces import FaceRepository
 
-    face_ids = find_cluster(session, cluster_id).get("face_ids") or []
+    ids = [fid for c in clusters for fid in (c.get("face_ids") or [])]
+    where = FaceRepository(session).libraries_and_times(ids)
+    libraries = set(within)
+    out = []
+    for c in clusters:
+        mine = [fid for fid in c.get("face_ids") or [] if where.get(fid, (None, None))[0] in libraries]
+        if not mine:
+            continue
+        kept = set(mine)
+        dates = [where[fid][1] for fid in mine if where[fid][1] is not None]
+        out.append({**c, "id": cluster_id_of(c.get("face_ids") or []), "face_ids": mine, "size": len(mine),
+                    "faces": [f for f in c.get("faces", []) if f.get("face_id") in kept],
+                    "newest": max(dates).isoformat() if dates else None})
+    return out
+
+
+def _unassigned_cluster_faces(session: Session, cluster_id: str, request: Request | None = None) -> list[str]:
+    """The cluster's face ids, none named or dismissed since it was computed;
+    409 cluster_changed otherwise. The faces are locked first, so of two
+    requests for one cluster the second waits and then gets the 409. With a
+    request, the faces the caller edits (403 when they see some, edit none)."""
+    from src.server.repository.faces import FaceRepository
+
+    face_ids = find_cluster(session, cluster_id, request).get("face_ids") or []
+    if request is not None and face_ids and (libraries := edited(request, session)) is not None:
+        where = FaceRepository(session).libraries_and_times(face_ids)
+        face_ids = [fid for fid in face_ids if where.get(fid, (None, None))[0] in set(libraries)]
+        if not face_ids:
+            raise HTTPException(status_code=403, detail="Editor access required")
     taken = FaceRepository(session).lock_counting_assigned(face_ids)
     if not face_ids or taken:
         raise ConflictError("cluster_changed", "This group changed. Reload the groups.", {"cluster_id": cluster_id})
@@ -791,6 +834,7 @@ def _without_assigned(session: Session, clusters: list[dict]) -> list[dict]:
 
 @faces_router.get("/clusters", response_model=ClustersResponse)
 def get_clusters(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     limit: int = Query(default=20, ge=1, le=50),
     faces_per_cluster: int = Query(default=6, ge=1, le=20),
@@ -802,12 +846,13 @@ def get_clusters(
     Reading them computes nothing: computed_at says when, and pending that
     faces changed since (upkeep computes them again within 5 minutes)."""
     data = cached_clusters(session)
-    all_clusters = _without_assigned(session, (data or {}).get("clusters", []))
+    all_clusters = in_sight_clusters(session, _without_assigned(session, (data or {}).get("clusters", [])),
+                                     seen(request, session))
     max_size = max((c["size"] for c in all_clusters), default=0)
     shown = order_clusters([c for c in all_clusters if c["size"] >= min_cluster_size], sort)[:limit]
     return ClustersResponse(
         clusters=[
-            ClusterItem(cluster_id=cluster_id_of(c.get("face_ids") or []), size=c["size"],
+            ClusterItem(cluster_id=c.get("id") or cluster_id_of(c.get("face_ids") or []), size=c["size"],
                         faces=c.get("faces", [])[:faces_per_cluster], newest=c.get("newest"))
             for c in shown
         ],

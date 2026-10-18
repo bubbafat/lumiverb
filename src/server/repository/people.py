@@ -17,11 +17,33 @@ from ulid import ULID
 from src.server.repository.faces import _lock_faces, _lock_faces_of_people, _mark_clusters_dirty, current_face_model
 
 
-class PersonRepository:
-    """CRUD for people (tenant-scoped). Operates within a tenant session."""
+# A person's face in the libraries the caller sees (:within, NULL for every one), on faces f joined to assets a.
+_WITHIN = "(CAST(:within AS text[]) IS NULL OR a.library_id = ANY(CAST(:within AS text[])))"
+# The person (p) has a face in one of them, in sight or not.
+_SEEN = ("(CAST(:within AS text[]) IS NULL OR EXISTS (SELECT 1 FROM face_person_matches sm"
+         " JOIN faces sf ON sf.face_id = sm.face_id JOIN assets sa ON sa.asset_id = sf.asset_id"
+         " WHERE sm.person_id = p.person_id AND sa.library_id = ANY(CAST(:within AS text[]))))")
 
-    def __init__(self, session: Session) -> None:
+
+class PersonRepository:
+    """CRUD for people (tenant-scoped). Operates within a tenant session.
+
+    within: the libraries the caller can see (ADR-018 decision 8, roles per
+    library; None: every library). A person is shown when they have a face
+    in one of those (shows), and with only those faces: counts, faces, the
+    picture they're shown by."""
+
+    def __init__(self, session: Session, within: list[str] | None = None) -> None:
         self._session = session
+        self.within = None if within is None else list(within)
+
+    def shows(self, person: Person) -> bool:
+        """Whether the caller sees this person: a face of theirs is in a
+        library the caller can see (every person when within is None)."""
+        if self.within is None:
+            return True
+        return self._session.execute(text(f"SELECT {_SEEN} FROM people p WHERE p.person_id = :pid"),
+                                     {"pid": person.person_id, "within": self.within}).scalar() is True
 
     def create(self, display_name: str, *, face_ids: list[str] | None = None) -> Person:
         """Create a new person. Optionally assign faces."""
@@ -115,7 +137,7 @@ class PersonRepository:
         import base64 as _b64
 
         having_conditions: list[str] = []
-        params: dict[str, object] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit, "within": self.within}
 
         if q:
             having_conditions.append(
@@ -157,8 +179,8 @@ class PersonRepository:
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             LEFT JOIN faces f ON f.face_id = m.face_id
             LEFT JOIN assets a
-                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
-            WHERE p.dismissed = false
+                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL AND {_WITHIN}
+            WHERE p.dismissed = false AND {_SEEN}
             GROUP BY p.person_id
             {having_sql}
             ORDER BY cnt DESC, p.person_id ASC
@@ -186,7 +208,7 @@ class PersonRepository:
         import base64 as _b64
 
         having_conditions: list[str] = []
-        params: dict[str, object] = {"limit": limit}
+        params: dict[str, object] = {"limit": limit, "within": self.within}
 
         if after:
             try:
@@ -213,8 +235,8 @@ class PersonRepository:
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
             LEFT JOIN faces f ON f.face_id = m.face_id
             LEFT JOIN assets a
-                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL
-            WHERE p.dismissed = true
+                ON a.asset_id = f.asset_id AND a.deleted_at IS NULL AND {_WITHIN}
+            WHERE p.dismissed = true AND {_SEEN}
             GROUP BY p.person_id
             {having_sql}
             ORDER BY cnt DESC, p.person_id ASC
@@ -262,13 +284,16 @@ class PersonRepository:
         self._session.commit()
         return len(empty_ids)
 
-    def best_face(self, person_id: str) -> str | None:
-        """The person's most confidently detected face: a representative for one without."""
+    def best_face(self, person_id: str, *, seen: bool = False) -> str | None:
+        """The person's most confidently detected face: a representative for
+        one without; seen, of those in the libraries within."""
         return self._session.execute(text(
             "SELECT f.face_id FROM faces f "
             "JOIN face_person_matches m ON m.face_id = f.face_id "
-            "WHERE m.person_id = :pid "
-            "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"), {"pid": person_id}).scalar()
+            "JOIN assets a ON a.asset_id = f.asset_id "
+            f"WHERE m.person_id = :pid AND {_WITHIN if seen else 'TRUE'} "
+            "ORDER BY f.detection_confidence DESC NULLS LAST LIMIT 1"),
+            {"pid": person_id, "within": self.within}).scalar()
 
     def ensure_representative(self, person: Person) -> None:
         """Gives a person without a representative face their best one, and
@@ -284,10 +309,22 @@ class PersonRepository:
 
     def representative_asset_id(self, person: Person) -> str | None:
         """The clip the person's representative face is in (their thumbnail's)."""
-        if not person.representative_face_id:
+        face_id = self.representative_face_id(person)
+        if not face_id:
             return None
-        face = self._session.get(Face, person.representative_face_id)
+        face = self._session.get(Face, face_id)
         return face.asset_id if face else None
+
+    def representative_face_id(self, person: Person) -> str | None:
+        """The face the person is shown by: their representative, unless it's
+        in a library the caller can't see, then their best face the caller can."""
+        face_id = person.representative_face_id
+        if self.within is None or face_id is None:
+            return face_id
+        in_sight = self._session.execute(text(
+            f"SELECT 1 FROM faces f JOIN assets a ON a.asset_id = f.asset_id WHERE f.face_id = :f AND {_WITHIN}"),
+            {"f": face_id, "within": self.within}).first() is not None
+        return face_id if in_sight else self.best_face(person.person_id, seen=True)
 
     def undismiss(self, person: Person, display_name: str) -> None:
         """A dismissed person named and shown again (with a representative face
@@ -312,16 +349,19 @@ class PersonRepository:
     def named_centroids(self, model: str, exclude_id: str | None = None) -> list[tuple[str, str, list[float], int]]:
         """Every named (not dismissed) person with a centroid in `model`'s
         space: (person_id, display_name, centroid, face_count)."""
-        rows = self._session.execute(text("""
+        rows = self._session.execute(text(f"""
             SELECT p.person_id, p.display_name, p.centroid_vector::text,
-                   COUNT(m.match_id)::int AS face_count
+                   COUNT(a.asset_id)::int AS face_count
             FROM people p
             LEFT JOIN face_person_matches m ON m.person_id = p.person_id
+            LEFT JOIN faces f ON f.face_id = m.face_id
+            LEFT JOIN assets a ON a.asset_id = f.asset_id AND {_WITHIN}
             WHERE p.dismissed = false AND p.centroid_vector IS NOT NULL
                   AND p.centroid_model = :model
                   AND p.person_id IS DISTINCT FROM CAST(:exclude_id AS text)
+                  AND {_SEEN}
             GROUP BY p.person_id
-        """), {"model": model, "exclude_id": exclude_id}).all()
+        """), {"model": model, "exclude_id": exclude_id, "within": self.within}).all()
         return [(r[0], r[1], [float(x) for x in r[2].strip("[]").split(",")], r[3]) for r in rows]
 
     def get_face_count(self, person_id: str) -> int:
@@ -337,9 +377,9 @@ class PersonRepository:
                 " FROM face_person_matches m"
                 " JOIN faces f ON f.face_id = m.face_id"
                 " JOIN assets a ON a.asset_id = f.asset_id"
-                " WHERE m.person_id = :pid AND a.deleted_at IS NULL"
+                f" WHERE m.person_id = :pid AND a.deleted_at IS NULL AND {_WITHIN}"
             ),
-            {"pid": person_id},
+            {"pid": person_id, "within": self.within},
         ).scalar()
         return result or 0
 
@@ -388,8 +428,8 @@ class PersonRepository:
         are kept intact so untrashing the asset restores the assignment
         automatically — only the read query hides them.
         """
-        conditions = ["m.person_id = :pid", "a.deleted_at IS NULL"]
-        params: dict[str, object] = {"pid": person_id, "limit": limit}
+        conditions = ["m.person_id = :pid", "a.deleted_at IS NULL", _WITHIN]
+        params: dict[str, object] = {"pid": person_id, "limit": limit, "within": self.within}
 
         if after:
             conditions.append("f.face_id > :after")
