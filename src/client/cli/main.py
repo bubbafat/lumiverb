@@ -20,6 +20,7 @@ from src.client.cli.commands.producers import producers_app
 from src.client.cli.commands.projects import projects_app
 from src.client.cli.commands.keys import keys_app
 from src.client.cli.commands.maintenance import maintenance_app
+from src.client.cli.commands.plugins import plugins_app
 from src.client.cli.commands.settings import settings_app
 from src.client.cli.commands.trash import trash_app
 from src.client.cli.commands.users import user_app
@@ -45,6 +46,7 @@ app.add_typer(archive_app, name="archive")
 app.add_typer(trash_app, name="trash")
 app.add_typer(producers_app, name="producers")
 app.add_typer(device_app, name="device")
+app.add_typer(plugins_app, name="plugins")
 
 from src.client.cli.commands.enrich import register as _register_enrich  # noqa: E402
 from src.client.cli.commands.pausing import register as _register_pausing  # noqa: E402

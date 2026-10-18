@@ -39,7 +39,7 @@ PASSWORD = "a long enough password"
 
 # Path parameters that name something of the account's, not of one library.
 ACCOUNT = {"artifact", "artifact_type", "default_id", "device_id", "filter_id", "job", "key_id", "machine_id",
-           "target", "tenant_id", "token", "user_id", "view_id"}
+           "plugin_id", "target", "tenant_id", "token", "user_id", "view_id"}
 # What spans libraries: a project's clips, a person's faces, a cluster's. Each route shows of it only
 # what the person can see, and one they can't see at all is a 404 (a cluster's, 409 cluster_changed, as
 # for one that isn't there): tests/test_library_sight.py.

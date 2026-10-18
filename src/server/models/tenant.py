@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, JSON, SmallInteger, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Identity, Index, Integer, JSON, SmallInteger, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlmodel import Field, SQLModel
 
@@ -92,6 +92,39 @@ class LibraryRole(SQLModel, table=True):
     role: str = Field(nullable=False)
     set_by: str | None = Field(default=None, nullable=True)
     set_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    )
+
+
+class Plugin(SQLModel, table=True):
+    """A plug-in's switch in this account (ADR-021; no row: off). On when
+    enabled and, for one that asks an acknowledgment, the version accepted is
+    the one now (src/server/repository/plugins.py)."""
+
+    __tablename__ = "plugins"
+
+    plugin_id: str = Field(primary_key=True)
+    enabled: bool = Field(default=False, sa_column_kwargs={"server_default": "false"}, nullable=False)
+    acknowledged_version: str | None = Field(default=None, nullable=True)
+    changed_by: str | None = Field(default=None, nullable=True)
+    changed_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    )
+
+
+class PluginAcknowledgment(SQLModel, table=True):
+    """Someone accepted a version of a plug-in's acknowledgment (ADR-021):
+    kept for good, never updated."""
+
+    __tablename__ = "plugin_acknowledgments"
+
+    id: int | None = Field(default=None, sa_column=Column(BigInteger, Identity(), primary_key=True))
+    plugin_id: str = Field(nullable=False, index=True)
+    version: str = Field(nullable=False)
+    user_id: str | None = Field(default=None, nullable=True)
+    acknowledged_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("now()")),
     )

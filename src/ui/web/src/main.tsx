@@ -38,6 +38,7 @@ import StorageSection from "./pages/settings/StorageSection";
 import SecuritySection from "./pages/settings/SecuritySection";
 import ApiKeysSection from "./pages/settings/ApiKeysSection";
 import DevicesSection from "./pages/settings/DevicesSection";
+import PluginsSection from "./pages/settings/PluginsSection";
 import { getApiKey } from "./api/client";
 import "./index.css";
 
@@ -228,6 +229,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="security" element={<SecuritySection />} />
               <Route path="keys" element={<ApiKeysSection />} />
               <Route path="devices" element={<DevicesSection />} />
+              <Route path="plugins" element={<PluginsSection />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

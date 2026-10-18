@@ -27,6 +27,27 @@ export interface LibraryListItem {
   role?: LibraryRole | null;
 }
 
+/** A plug-in's acknowledgment (ADR-021): what an admin reads and accepts before it's on (a license, say). */
+export interface PluginAcknowledgment {
+  version: string;
+  title: string;
+  /** Paragraphs, separated by a blank line. */
+  text: string;
+  links: { label: string; url: string }[];
+}
+
+/** An optional part of Lumiverb an account turns on (ADR-021). */
+export interface Plugin {
+  plugin_id: string;
+  title: string;
+  description: string;
+  /** waiting: turned on, but its acknowledgment's text changed since it was accepted (off until accepted). */
+  state: "on" | "off" | "waiting";
+  acknowledgment: PluginAcknowledgment | null;
+  /** The acceptance it's on by (or waiting with); who, for admins. */
+  acknowledged: { version: string; by: string | null; at: string } | null;
+}
+
 /** A role on one library (ADR-018 decision 8): "none" means they don't see it. */
 export type LibraryRole = "admin" | "editor" | "viewer" | "none";
 

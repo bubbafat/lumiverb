@@ -26,6 +26,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/settings/backups", label: "Backups", requireServerAdmin: true },
   { to: "/settings/storage", label: "Storage", requireServerAdmin: true },
   { to: "/settings/devices", label: "Devices", requireAdmin: true },
+  { to: "/settings/plugins", label: "Plug-ins", requireAdmin: true },
   { to: "/settings/security", label: "Security" },
   { to: "/settings/keys", label: "API Keys", requireEditor: true },
 ];
