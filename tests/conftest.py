@@ -470,6 +470,17 @@ def _no_host_fstab(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _auth_limits_fresh():
+    """Every test starts with nobody's sign-ins counted (src/server/api/rate_limit.py
+    counts them per process): another test's sign-ins on the same worker never
+    use up this one's, and a test of the limits makes its own."""
+    from src.server.api import rate_limit
+
+    for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter):
+        limiter._hits.clear()
+
+
+@pytest.fixture(autouse=True)
 def _default_machine():
     """This machine's processing settings (src/processing/machine.py) are the
     defaults in every test, never this machine's CLI config; a test sets its own."""
