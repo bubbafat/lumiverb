@@ -82,16 +82,18 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1", "ast_2"], replace: "none", place_id: "geonames:3573890" });
   });
 
-  it("says what kind of landmark a place found is", async () => {
+  it("says what kind of landmark a place found is, and the other name it was found by", async () => {
     plugins.mockResolvedValue([GEONAMES]);
     const castle = { place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World", region: "Florida",
                      country: "United States", label: "Magic Kingdom, Walt Disney World, Florida, United States",
                      lat: 28.4187, lon: -81.5812, population: 0, kind: "amusement park" };
-    search.mockResolvedValue({ places: [castle, PORT_OF_SPAIN], credit: CREDIT });
+    search.mockResolvedValue({ places: [castle, PORT_OF_SPAIN, { ...PORT_OF_SPAIN, place_id: "geonames:2", matched: "Puerto España" }],
+                               credit: CREDIT });
     modal();
     fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "magic" } });
     expect(await screen.findByRole("button", { name: /^Magic Kingdom, Walt Disney World, Florida, United States\s*· amusement park$/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: PORT_OF_SPAIN.label })).toBeTruthy();  // a town: no kind
+    expect(screen.getByRole("button", { name: /^Port of Spain, Trinidad and Tobago\s*· Puerto España$/ })).toBeTruthy();
   });
 
   it("offers place search while a newer list is fetched, the one before used meanwhile", async () => {

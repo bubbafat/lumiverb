@@ -80,6 +80,8 @@ export interface Place {
   population: number;
   /** A landmark's kind ("amusement park"); null: a town. */
   kind?: string | null;
+  /** The name in another language it was found by, when not its own ("Eiffel Tower" for Tour Eiffel). */
+  matched?: string | null;
 }
 
 /** Shown beside place names: their source and license ask it. */

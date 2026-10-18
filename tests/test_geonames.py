@@ -4,9 +4,10 @@ nothing fetched until an account turns it on, the place list fetched once
 for the server, its progress and failures said, upkeep taking up a fetch
 that stopped, search by name (the exact name first, then the most
 populous, narrowed by region or country), landmarks beside the towns (the
-kinds kept, with a Wikipedia article or every one), a list from an older
-release fetched again while the old one is used, a location set by place,
-and the GeoNames credit beside every name."""
+kinds kept, with a Wikipedia article or every one), places found by their
+names in other languages, a list from an older release fetched again while
+the old one is used, a location set by place, and the GeoNames credit
+beside every name."""
 
 from __future__ import annotations
 
@@ -26,12 +27,14 @@ from src.plugins.geonames import data as geonames_data
 from src.plugins.geonames.data import (
     parse_countries,
     parse_landmarks,
+    parse_names,
     parse_places,
     parse_regions,
     wikipedia_linked,
 )
 from src.server.config import get_settings
 from src.server.database import get_control_session
+from src.server.repository.places import fold
 from src.shared.utils import utcnow
 from tests.test_scans_api import File, _library, _scan, env  # noqa: F401 — the shared fixture
 
@@ -52,6 +55,7 @@ PLACES = [
     _place(2657896, "Zürich", "Zuerich", 47.36667, 8.55, "CH", "ZH", 415367, "PPLA"),  # GeoNames' own spellings
     _place(3448439, "São Paulo", "Sao Paulo", -23.5475, -46.63611, "BR", "27", 10021295, "PPLA"),
     _place(9999991, "Parisot", "Parisot", 44.26, 1.85, "FR", "76", 1100),
+    _place(2294768, "Sampa", "Sampa", 8.0, -2.7, "GH", "04", 20000),  # São Paulo is "Sampa" too
     "not a place line",
 ]
 REGIONS = "TT.05\tPort of Spain\tPort of Spain\t3573891\nFR.11\tÎle-de-France\tIle-de-France\t3012874\n" \
@@ -72,21 +76,32 @@ FEATURES = [
     _feature(4164161, "Magic Kingdom, Walt Disney World", *MAGIC_KINGDOM, "L", "AMUS", "US", "FL"),  # kept whole
     _feature(6254976, "Tour Eiffel", *EIFFEL, "S", "MNMT", "FR", "11"),  # a Wikipedia article
     _feature(6618997, "Champ de Mars", *CHAMP_DE_MARS, "L", "PRK", "FR", "11"),  # one too
+    _feature(9999994, "Eiffel Peak", 46.3, -122.4, "T", "PK", "US", "WA"),  # an article, no other names
     _feature(9999992, "Hôtel du Coin", 48.8584, 2.2946, "S", "HTL", "FR", "11"),  # a kind kept, no article
     _feature(9999993, "Ruisseau", 48.86, 2.30, "H", "STM", "FR", "11"),  # an article, not a kind kept
     _feature(2988507, "Paris", 48.85341, 2.3488, "P", "PPLC", "FR", "11"),  # a town: the towns' list's
     "not a feature line",
 ]
-LANDMARKS = 3  # of FEATURES
+LANDMARKS = 4  # of FEATURES
 ALTERNATE_NAMES = "\n".join([
+    "0\t6254976\tfr\tEiffel Tower\t\t\t\t\t\t",  # the same name as its English one, listed first
     "1\t6254976\tlink\thttps://en.wikipedia.org/wiki/Eiffel_Tower\t\t\t\t\t\t",
     "2\t6254976\ten\tEiffel Tower\t1\t\t\t\t\t",
     "3\t6618997\tlink\thttps://fr.wikipedia.org/wiki/Champ-de-Mars\t\t\t\t\t\t",
     "4\t9999992\tlink\thttps://example.com/hotel\t\t\t\t\t\t",  # a link, not Wikipedia's
     "5\t9999993\tlink\thttps://fr.wikipedia.org/wiki/Ruisseau\t\t\t\t\t\t",
+    "14\t9999994\tlink\thttps://en.wikipedia.org/wiki/Eiffel_Peak\t\t\t\t\t\t",
+    "6\t6254976\tde\tEiffelturm\t\t\t\t\t\t",
+    "7\t2657896\tit\tZurigo\t\t\t\t\t\t",
+    "8\t2657896\tde\tZürich\t1\t\t\t\t\t",  # its own name, folded: not again
+    "9\t2657896\tla\tTuricum\t\t\t\t1\t\t",  # historic
+    "10\t2657896\ten\tZurchy\t\t\t1\t\t\t",  # colloquial
+    "11\t2657896\tpost\t8001\t\t\t\t\t\t",  # a code, not a name
+    "12\t3448439\t\tSampa\t\t\t\t\t\t",  # no language: a name all the same
+    "13\t9999993\tfr\tLe Ruisseau\t\t\t\t\t\t",  # not a place kept
     "not a name line",
 ]) + "\n"
-COUNT = 6 + LANDMARKS  # towns and landmarks
+COUNT = 7 + LANDMARKS  # towns and landmarks
 COUNTRIES = "#ISO\tISO3\tISO-Numeric\tfips\tCountry\n" \
             "TT\tTTO\t780\tTD\tTrinidad and Tobago\nFR\tFRA\t250\tFR\tFrance\nUS\tUSA\t840\tUS\tUnited States\n" \
             "CH\tCHE\t756\tSZ\tSwitzerland\nBR\tBRA\t076\tBR\tBrazil\n"
@@ -173,7 +188,7 @@ def _search(env, q: str, headers=None, **params):  # noqa: F811
 
 def test_the_files_are_read_as_geonames_writes_them() -> None:
     places = list(parse_places(iter(line + "\n" for line in PLACES)))
-    assert [p["geonameid"] for p in places] == [3573890, 2988507, 4717560, 2657896, 3448439, 9999991]
+    assert [p["geonameid"] for p in places] == [3573890, 2988507, 4717560, 2657896, 3448439, 9999991, 2294768]
     zurich = places[3]
     assert (zurich["name"], zurich["ascii_name"], zurich["admin1_code"], zurich["population"]) == (
         "Zürich", "Zuerich", "ZH", 415367)
@@ -181,10 +196,18 @@ def test_the_files_are_read_as_geonames_writes_them() -> None:
     assert {c["iso"]: c["name"] for c in parse_countries(COUNTRIES)} == {
         "TT": "Trinidad and Tobago", "FR": "France", "US": "United States", "CH": "Switzerland", "BR": "Brazil"}
     linked = wikipedia_linked(iter(ALTERNATE_NAMES.splitlines(keepends=True)))
-    assert linked == {6254976, 6618997, 9999993}
+    assert linked == {6254976, 6618997, 9999993, 9999994}
     landmarks = list(parse_landmarks(iter(line + "\n" for line in FEATURES), linked))
     assert [(p["name"], p["feature_code"]) for p in landmarks] == [
-        ("Magic Kingdom, Walt Disney World", "AMUS"), ("Tour Eiffel", "MNMT"), ("Champ de Mars", "PRK")]
+        ("Magic Kingdom, Walt Disney World", "AMUS"), ("Tour Eiffel", "MNMT"), ("Champ de Mars", "PRK"),
+        ("Eiffel Peak", "PK")]
+    own = {p["geonameid"]: (fold(p["name"]), p["ascii_name"].lower())
+           for p in (*parse_places(iter(line + "\n" for line in PLACES)), *landmarks)}
+    names = list(parse_names(iter(ALTERNATE_NAMES.splitlines(keepends=True)), own, fold))
+    assert [(n["geonameid"], n["name"], n["language"]) for n in names] == [
+        (6254976, "Eiffel Tower", "fr"), (6254976, "Eiffel Tower", "en"), (6254976, "Eiffelturm", "de"),
+        (2657896, "Zurigo", "it"), (3448439, "Sampa", "")]
+    assert names[0]["folded"] == "eiffel tower"
     assert landmarks[1] == {"geonameid": 6254976, "name": "Tour Eiffel", "ascii_name": "Tour Eiffel",
                             "lat": EIFFEL[0], "lon": EIFFEL[1], "feature_code": "MNMT", "country_code": "FR",
                             "admin1_code": "11"}
@@ -339,9 +362,39 @@ def test_a_list_from_an_older_release_is_fetched_again_while_it_is_used(env) -> 
             break
         time.sleep(0.05)
     data = _until(env, "ready")
-    assert data["count"] == COUNT and plugin_data.status(GEONAMES)["version"] == 2
+    assert data["count"] == COUNT
+    assert plugin_data.status(GEONAMES)["version"] == registry()[GEONAMES].data_version
     assert [p["name"] for p in _search(env, "magic").json()["places"]] == ["Magic Kingdom, Walt Disney World"]
     r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
     assert r.status_code == 200, r.text
     # Upkeep leaves this release's list be.
     assert env.client.post("/v1/upkeep", headers=env.admin).json()["plugin_data"] == {GEONAMES: "ready"}
+
+
+def test_places_are_found_by_their_names_in_other_languages(env) -> None:  # noqa: F811
+    _turn_on(env)
+    _until(env, "ready")
+    found = _search(env, "zurigo").json()["places"]
+    assert [(p["name"], p["matched"]) for p in found] == [("Zürich", "Zurigo")]
+    # The same name in French and English, French listed first: kept once, as English.
+    with get_control_session() as session:
+        assert session.execute(text("SELECT language FROM geonames_names WHERE geonameid = 6254976"
+                                    " AND folded = 'eiffel tower'")).scalars().all() == ["en"]
+    # Several of its names start so: the English one says which. Landmarks by how known they are (their
+    # other names): the tower, then the peak (found by its own name).
+    assert [(p["name"], p["matched"]) for p in _search(env, "eiffel").json()["places"]] == [
+        ("Tour Eiffel", "Eiffel Tower"), ("Eiffel Peak", None)]
+    assert [(p["name"], p["matched"]) for p in _search(env, "eiffelt").json()["places"]] == [
+        ("Tour Eiffel", "Eiffelturm")]
+    # Found by its own name: said so, once.
+    assert [(p["name"], p["matched"]) for p in _search(env, "zur").json()["places"]] == [("Zürich", None)]
+    # Exactly a place's own name before exactly another's (with no language), though that's more populous.
+    assert [(p["name"], p["matched"]) for p in _search(env, "sampa").json()["places"]] == [
+        ("Sampa", None), ("São Paulo", "Sampa")]
+    # Exactly another's before starting with its own: "zurigo" is Zürich's whole name in Italian.
+    assert [p["name"] for p in _search(env, "zurig").json()["places"]] == ["Zürich"]
+    for left_out in ("turicum", "zurchy", "8001", "le ruisseau"):
+        assert _search(env, left_out).json()["places"] == [], left_out
+    # Narrowed by where, as by its own name.
+    assert _search(env, "zurigo, brazil").json()["places"] == []
+    assert [p["name"] for p in _search(env, "zurigo, switz").json()["places"]] == ["Zürich"]

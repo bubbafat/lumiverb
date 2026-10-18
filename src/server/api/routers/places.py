@@ -46,6 +46,8 @@ class Place(BaseModel):
     lon: float
     population: int  # 0 for a landmark
     kind: str | None = None  # a landmark's ("amusement park"); None: a town
+    # The name in another language it was found by, when not its own ("Eiffel Tower" for Tour Eiffel).
+    matched: str | None = None
 
 
 class Credit(BaseModel):
@@ -62,7 +64,7 @@ class PlaceList(BaseModel):
 def place_out(row: dict) -> Place:
     return Place(place_id=place_id(row["geonameid"]), name=row["name"], region=row.get("region"),
                  country=row.get("country"), label=label(row), lat=row["lat"], lon=row["lon"],
-                 population=row["population"], kind=row.get("kind"))
+                 population=row["population"], kind=row.get("kind"), matched=row.get("matched"))
 
 
 def require_places(session: Session, *, current: bool = False) -> None:
