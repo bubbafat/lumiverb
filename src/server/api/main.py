@@ -65,6 +65,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 from src.server.api.routers import admin, ai, archive, assets, producers, changes, projects, keys, libraries, me, path_filters, readers, scans, tenant, trash, uploads, video
 from src.server.api.routers import devices as devices_routes
+from src.server.api.routers import library_people
 from src.server.api.routers.auth import router as auth_router
 from src.server.api.routers.users import router as users_router
 from src.server.api.routers.setup import router as setup_router
@@ -169,6 +170,7 @@ app.include_router(ai.router)
 app.include_router(tenant.router)
 app.include_router(path_filters.router)
 app.include_router(libraries.router)
+app.include_router(library_people.router)
 app.include_router(changes.router)
 app.include_router(scans.router)
 app.include_router(readers.router)

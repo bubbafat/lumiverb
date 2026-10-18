@@ -301,6 +301,79 @@ def library_update(
     console.print(f"  root_path: {data.get('root_path')}")
 
 
+LIBRARY_ROLES = ("admin", "editor", "viewer", "none", "default")
+
+
+@library_app.command("people")
+def library_people(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
+) -> None:
+    """Who can see and edit a library: everyone in the account with their role on it.
+    Needs the library's admin, or an account admin."""
+    client = LumiverbClient()
+    library = _library_named(client, name, trashed=False)
+    data = client.get(f"/v1/libraries/{library['library_id']}/people").json()
+    table = Table(title=f"{name}{' (private)' if data['private'] else ''}")
+    table.add_column("EMAIL")
+    table.add_column("ROLE HERE")
+    table.add_column("HOW")
+    for p in data["people"]:
+        if p["account_role"] == "admin":
+            how = "account admin"
+        elif p["set_role"] is not None:
+            how = "set for this library"
+        elif data["private"]:
+            how = "private library"
+        elif not p["every_library"]:
+            how = "sees only what they're given"
+        else:
+            how = f"account role ({p['account_role']})"
+        table.add_row(p["email"], p["role"], how)
+    console.print(table)
+
+
+@library_app.command("role")
+def library_role(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
+    email: Annotated[str, typer.Option("--email", help="Whose role.")],
+    role: Annotated[str, typer.Option(
+        "--role", help="admin (the library's admin), editor, viewer, none (they don't see it), "
+                       "or default (their account role again).")],
+) -> None:
+    """Set someone's role on one library. Needs the library's admin, or an account admin."""
+    if role not in LIBRARY_ROLES:
+        console.print(f"[red]Error: role must be one of: {', '.join(LIBRARY_ROLES)}[/red]")
+        raise typer.Exit(1)
+    client = LumiverbClient()
+    library = _library_named(client, name, trashed=False)
+    people = client.get(f"/v1/libraries/{library['library_id']}/people").json()["people"]
+    person = next((p for p in people if p["email"] == email), None)
+    if person is None:
+        console.print(f"[red]Error: no one in the account has the email {escape(email)}.[/red]")
+        raise typer.Exit(1)
+    resp = client.raw("PUT", f"/v1/libraries/{library['library_id']}/people/{person['user_id']}",
+                      json={"role": None if role == "default" else role})
+    if resp.status_code >= 400:
+        err = resp.json().get("error", {}) if resp.content else {}
+        console.print(f"[red]Error: {escape(err.get('message') or f'HTTP {resp.status_code}')}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]{escape(email)} on {escape(name)}: {resp.json()['role']}[/green]")
+
+
+@library_app.command("private")
+def library_private(
+    name: Annotated[str, typer.Option("--name", "-n", help="Library name.")],
+    private: Annotated[bool, typer.Option(
+        "--on/--off", help="On: only account admins and the people given a role on it see it.")],
+) -> None:
+    """Make a library private, or open to everyone in the account at their role.
+    Needs the library's admin, or an account admin."""
+    client = LumiverbClient()
+    library = _library_named(client, name, trashed=False)
+    client.patch(f"/v1/libraries/{library['library_id']}", json={"private": private})
+    console.print(f"[green]{escape(name)} is {'private' if private else 'open to the account'}.[/green]")
+
+
 def _library_named(client: LumiverbClient, name: str, *, trashed: bool) -> dict:
     """The library with this name, in the trash or out of it; exits 1 if there's none."""
     libraries = client.get("/v1/libraries", params={"include_trashed": True}).json()

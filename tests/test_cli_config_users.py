@@ -300,7 +300,8 @@ def test_user_create_invites_and_prints_the_link_whole() -> None:
                                            "invite_urls": [URL, BY_ADDRESS]}), "--role", "editor")
 
     assert result.exit_code == 0, result.output
-    client.raw.assert_called_once_with("POST", "/v1/users", json={"email": "new@b.co", "role": "editor"})
+    client.raw.assert_called_once_with("POST", "/v1/users",
+                                       json={"email": "new@b.co", "role": "editor", "every_library": True})
     assert "Invited new@b.co (editor)" in result.output
     assert f"\n{URL}\n" in result.output, "on a line of its own"
     assert f"send this one instead:\n{BY_ADDRESS}\n" in result.output, "for devices without Bonjour"

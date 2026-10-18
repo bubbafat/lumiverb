@@ -32,6 +32,9 @@ class UserItem(BaseModel):
     user_id: str
     email: str
     role: str
+    # Their account role on every library but those set otherwise; false: only the libraries
+    # they're given a role on (ADR-018 decision 8).
+    every_library: bool = True
     created_at: str
     last_login_at: str | None
     # Made just now by an invite: the link to send them (the same link at each
@@ -44,6 +47,7 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str | None = None  # none: an invite, so they choose their own
     role: str = "viewer"
+    every_library: bool = True
 
 
 class InviteResponse(BaseModel):
@@ -52,7 +56,9 @@ class InviteResponse(BaseModel):
 
 
 class UpdateRoleRequest(BaseModel):
-    role: str
+    # Either or both; one left out stays as it is.
+    role: str | None = None
+    every_library: bool | None = None
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -64,6 +70,7 @@ def _user_item(user, invite: Invite | None = None) -> UserItem:
         user_id=user.user_id,
         email=user.email,
         role=user.role,
+        every_library=user.every_library,
         created_at=_iso(user.created_at) or "",
         last_login_at=_iso(user.last_login_at),
         invite_urls=list(invite.urls) if invite else None,
@@ -122,6 +129,7 @@ def create_user(
             email=body.email,
             password_hash=password_hash,
             role=body.role,
+            every_library=body.every_library,
         )
         invite = new_invite(session, user.user_id) if body.password is None else None
         return _user_item(user, invite)  # in the session: the invite's commit expired the user's fields
@@ -158,12 +166,13 @@ def update_user_role(
     body: UpdateRoleRequest,
     _: Annotated[None, Depends(require_tenant_admin)],
 ) -> UserItem:
-    """Update a user's role. Enforces the last-admin invariant."""
+    """Update a user's role, and whether they see every library or only the
+    ones they're given (every_library). Enforces the last-admin invariant."""
     tenant_id = getattr(request.state, "tenant_id", None)
     if not tenant_id:
         raise HTTPException(status_code=500, detail="Tenant context missing")
 
-    if body.role not in VALID_ROLES:
+    if body.role is not None and body.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"Invalid role; must be one of: {', '.join(sorted(VALID_ROLES))}")
 
     with get_control_session() as session:
@@ -171,17 +180,20 @@ def update_user_role(
         user = repo.get_by_id(user_id)
         if user is None or user.tenant_id != tenant_id:
             raise HTTPException(status_code=404, detail="User not found")
+        updated = user
 
-        if user.role == "admin" and body.role != "admin":
-            if repo.count_admins_locked(tenant_id) <= 1:
-                return _error_response(409, "last_admin", "Cannot demote the last admin")
+        if body.role is not None:
+            if user.role == "admin" and body.role != "admin":
+                if repo.count_admins_locked(tenant_id) <= 1:
+                    return _error_response(409, "last_admin", "Cannot demote the last admin")
 
-        # Their keys mustn't keep the role they lose.
-        above = {r for r, rank in ROLE_RANK.items() if rank > ROLE_RANK[body.role]}
-        ApiKeyRepository(session).revoke_created_by(tenant_id, user_id, roles=above)
-        updated = repo.update_role(user_id, body.role)
-
-    return _user_item(updated)
+            # Their keys mustn't keep the role they lose.
+            above = {r for r, rank in ROLE_RANK.items() if rank > ROLE_RANK[body.role]}
+            ApiKeyRepository(session).revoke_created_by(tenant_id, user_id, roles=above)
+            updated = repo.update_role(user_id, body.role)
+        if body.every_library is not None:
+            updated = repo.set_every_library(user_id, body.every_library)
+        return _user_item(updated)
 
 
 @router.delete("/{user_id}", status_code=204)
