@@ -63,9 +63,9 @@ def read(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         names.append(Path(path).name)
         return real_sha(path)
 
-    def proxy(path):
+    def proxy(path, **kw):
         names.append(Path(path).name)
-        return real_proxy(path)
+        return real_proxy(path, **kw)
 
     monkeypatch.setattr(scan_module, "content_hash", sha)
     monkeypatch.setattr(scan_module, "_generate_proxy_bytes", proxy)

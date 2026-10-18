@@ -702,6 +702,19 @@ describe("ProcessingSection settings", () => {
     expect(sent.find((r) => r.method === "PUT")!.body).toEqual({ settings: { quality: "best" } });
   });
 
+  it("says new files get a new preview quality, the rest staying as they are, where nothing is remade yet", async () => {
+    const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
+                      minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
+                      choices: ["good", "better", "best"] } as NonNullable<Producer["fields"]>[number];
+    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", media: ["image", "video"],
+                            redoable: false, scheduled: false, fields: [quality] })];
+    renderSection();
+    fireEvent.click(await screen.findByText("Settings · version 1"));
+    fireEvent.change(screen.getByLabelText("Quality"), { target: { value: "best" } });
+    expect(screen.getByText("New files get these settings; the 9 clips already made stay as they are.")).toBeTruthy();
+    expect(screen.queryByText(/Saving asks about/)).toBeNull();
+  });
+
   it("sends a default as null, so the account goes back to following it", async () => {
     await openSettings();
     fireEvent.change(screen.getByLabelText(/Shortest silence skipped/), { target: { value: "700" } });

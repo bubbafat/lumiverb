@@ -237,10 +237,11 @@ def test_what_changed_is_everything_a_reader_acts_on(env):
 
 
 @pytest.mark.slow
-def test_a_scan_takes_its_filters_from_what_changed(env, monkeypatch, tmp_path):
+def test_a_scan_takes_its_filters_and_how_it_makes_previews_from_what_changed(env, monkeypatch, tmp_path):
     # What the scheduler's scans and `lumiverb scan` exercise every time.
-    from src.processing.scan import _filters
+    from src.processing.scan import _told
     from src.shared.path_filter import PathFilter
+    from src.shared.producers import effective_settings
 
     client, headers, *_ = env
     lib = _library(env, "ScanFilters")
@@ -251,9 +252,15 @@ def test_a_scan_takes_its_filters_from_what_changed(env, monkeypatch, tmp_path):
         def get(self, path, **kw):
             return client.get(path, headers=headers, **kw)
 
-    account, library = _filters(Client(), lib[2])
+    account, library, previews = _told(Client(), lib[2])
     assert library == [PathFilter(type="exclude", pattern="**/Proxy/**")]
     assert all(isinstance(f, PathFilter) for f in account)
+    assert previews.video_preview == effective_settings("video_preview")
+    _ok(client.put("/v1/producers/video_preview/settings", json={"settings": {"quality": "best"}}, headers=headers))
+    try:
+        assert _told(Client(), lib[2])[2].video_preview["crf"] == 23  # the account's notch
+    finally:
+        _ok(client.put("/v1/producers/video_preview/settings", json={"settings": {"quality": None}}, headers=headers))
 
 
 # ---------------------------------------------------------------------------

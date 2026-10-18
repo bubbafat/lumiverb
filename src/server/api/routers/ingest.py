@@ -43,22 +43,22 @@ router = APIRouter(tags=["ingest"])
 
 PROXY_MAX_LONG_EDGE = 2048
 THUMBNAIL_LONG_EDGE = preview_image.THUMBNAIL_LONG_EDGE
-WEBP_QUALITY = 80
 MAX_PROXY_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB raw upload limit
 
 
-def _normalize_proxy(data: bytes) -> tuple[bytes, int, int]:
-    """The client's proxy as stored: WebP, at most PROXY_MAX_LONG_EDGE, with
-    nothing of the original's metadata (preview_image.py), a WebP too.
-    Returns (webp_bytes, width, height), the proxy's own dimensions."""
+def _normalize_proxy(data: bytes, quality: int = preview_image.WEBP_QUALITY) -> tuple[bytes, int, int]:
+    """The client's proxy as stored: WebP at quality (the account's,
+    preview_image.quality), at most PROXY_MAX_LONG_EDGE, with nothing of the
+    original's metadata (preview_image.py), a WebP too. Returns
+    (webp_bytes, width, height), the proxy's own dimensions."""
     from src.server.preview_image import reencoded
 
-    return reencoded(data, fmt="WEBP", quality=WEBP_QUALITY, max_long_edge=PROXY_MAX_LONG_EDGE)
+    return reencoded(data, fmt="WEBP", quality=quality, max_long_edge=PROXY_MAX_LONG_EDGE)
 
 
-def _generate_thumbnail(proxy_bytes: bytes) -> bytes:
+def _generate_thumbnail(proxy_bytes: bytes, quality: int = preview_image.WEBP_QUALITY) -> bytes:
     """Generate a thumbnail from proxy bytes. Returns WebP bytes (preview_image.thumbnail)."""
-    return preview_image.thumbnail(proxy_bytes)
+    return preview_image.thumbnail(proxy_bytes, quality)
 
 
 class IngestResponse(BaseModel):
@@ -154,15 +154,16 @@ def _do_ingest(
     store = get_store()
     asset_repo = AssetRepository(session)
 
-    # --- Normalize proxy to WebP ---
+    # --- Normalize proxy to WebP, at the account's quality ---
+    quality = preview_image.quality(session)
     try:
-        proxy_bytes, proxy_w, proxy_h = _normalize_proxy(raw_proxy)
+        proxy_bytes, proxy_w, proxy_h = _normalize_proxy(raw_proxy, quality)
     except Exception:
         logger.exception("Failed to process proxy image for asset %s", asset_id)
         raise HTTPException(status_code=400, detail="Failed to process proxy image")
 
     # --- Generate thumbnail from normalized proxy ---
-    thumb_bytes = _generate_thumbnail(proxy_bytes)
+    thumb_bytes = _generate_thumbnail(proxy_bytes, quality)
 
     # --- Keep proxy and thumbnail: each whole or not at all ---
     proxy_key = keys.proxy_key(tenant_id, library_id, asset_id, rel_path)

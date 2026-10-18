@@ -26,23 +26,26 @@ from src.processing.workers.exif_extract import (
 logger = logging.getLogger(__name__)
 
 
-from src.processing.proxy.proxy_gen import KEEP, PROXY_JPEG, PROXY_LONG_EDGE
+from src.processing.proxy.proxy_gen import KEEP, PROXY_JPEG_QUALITY, PROXY_LONG_EDGE, jpeg_format
 
+# The previews' quality at the registry's default notch, better (src/producers/proxy WEBP, video_preview):
+# a scan makes them at the account's (scan.py Previews), these when the server doesn't say.
 PROXY_WEBP_QUALITY = 80
+PREVIEW_CRF = 28
 
 
-def _jpeg_to_webp(jpeg_bytes: bytes) -> bytes:
+def _jpeg_to_webp(jpeg_bytes: bytes, quality: int = PROXY_WEBP_QUALITY) -> bytes:
     """Convert JPEG bytes to WebP using pyvips. Fast — no resize needed."""
     from src.processing.libvips import pyvips
 
     img = pyvips.Image.new_from_buffer(jpeg_bytes, "")
-    return img.write_to_buffer(f".webp[Q={PROXY_WEBP_QUALITY},{KEEP}]")
+    return img.write_to_buffer(f".webp[Q={quality},{KEEP}]")
 
 
-def _generate_proxy_bytes(source_path: Path) -> tuple[bytes, int, int]:
+def _generate_proxy_bytes(source_path: Path, jpeg_quality: int = PROXY_JPEG_QUALITY) -> tuple[bytes, int, int]:
     """Generate a resized JPEG proxy from a source image. Returns (bytes, width_orig, height_orig)."""
     from src.processing.proxy.proxy_gen import generate_proxy_bytes
-    return generate_proxy_bytes(source_path)
+    return generate_proxy_bytes(source_path, jpeg_quality=jpeg_quality)
 
 
 def _content_hash(source_path: Path) -> str | None:
@@ -118,7 +121,7 @@ def _probe_video_dimensions(source_path: Path) -> tuple[int, int]:
     )
 
 
-def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
+def _extract_video_poster(source_path: Path, jpeg_quality: int = PROXY_JPEG_QUALITY) -> tuple[bytes, int, int]:
     """Extract a poster frame (first frame) from a video. Returns (jpeg_bytes, width, height)."""
     import tempfile
 
@@ -140,14 +143,15 @@ def _extract_video_poster(source_path: Path) -> tuple[bytes, int, int]:
             height=PROXY_LONG_EDGE,
             size=pyvips.enums.Size.DOWN,
         ).copy_memory()
-        proxy_bytes = proxy_img.write_to_buffer(PROXY_JPEG)
+        proxy_bytes = proxy_img.write_to_buffer(jpeg_format(jpeg_quality))
         return proxy_bytes, width_orig, height_orig
     finally:
         tmp_path.unlink(missing_ok=True)
 
 
-def _generate_video_preview(source_path: Path) -> bytes:
-    """Generate a 10-second MP4 preview clip. Returns preview bytes.
+def _generate_video_preview(source_path: Path, crf: int = PREVIEW_CRF) -> bytes:
+    """Generate a 10-second MP4 preview clip, at x264's crf (its quality
+    notch's, ADR-018 decision 6). Returns preview bytes.
 
     Decoded by a Mac's media engine where there is one (ffmpeg_run.SHARED_MEMORY:
     a fifth of the CPU's work on a 4K or 5.3K original, and a scan makes
@@ -174,7 +178,7 @@ def _generate_video_preview(source_path: Path) -> bytes:
             "-t", str(PREVIEW_DURATION_SEC),
             # Limited range, as players expect: a full-range source (DJI's 1080p) is converted.
             "-vf", f"scale=-2:'min({PREVIEW_MAX_HEIGHT},ih)':out_range=tv,format=yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(crf),
             *(["-c:a", "aac", "-ac", "2", "-b:a", "128k"] if audio else ["-an"]),
             # No metadata: phones and drones write where they were (GPS) into the file.
             "-map_metadata", "-1", "-map_chapters", "-1",

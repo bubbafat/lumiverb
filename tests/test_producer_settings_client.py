@@ -24,7 +24,7 @@ def test_the_workers_constants_are_the_registrys_settings():
     from src.processing.workers.embeddings import clip_provider
     from src.processing.workers.faces import insightface_provider as face
 
-    proxy = P.PRODUCERS["proxy"].defaults
+    proxy = P.effective_settings("proxy")  # its quality notch at its default, better: what it stands for
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
     assert AnalysisProxySettings().output() == P.effective_settings("analysis_proxy")  # better: CRF 28
     # Scenes have one setting, Detail, out of the hash: what they're found with is fixed in code.
@@ -58,14 +58,19 @@ def test_the_previews_settings_are_what_the_scan_renders():
     from src.processing import ingest
 
     source = inspect.getsource(ingest._generate_video_preview)
-    preview = P.PRODUCERS["video_preview"].defaults
+    preview = P.effective_settings("video_preview")
     assert f"PREVIEW_DURATION_SEC = {preview['seconds']}" in source
     assert f"PREVIEW_MAX_HEIGHT = {preview['max_height']}" in source
-    assert f'"-crf", "{preview["crf"]}"' in source
+    # Its quality is the account's notch (scan.Previews); its default, better's CRF.
+    assert '"-crf", str(crf)' in source
+    assert inspect.signature(ingest._generate_video_preview).parameters["crf"].default == preview["crf"]
     assert f'"-b:a", "{preview["audio_kbps"]}k"' in source
-    assert ingest.PROXY_WEBP_QUALITY == P.PRODUCERS["proxy"].defaults["webp_quality"]
+    proxy = P.effective_settings("proxy")
+    assert ingest.PROXY_WEBP_QUALITY == proxy["webp_quality"]
+    from src.server import preview_image
     from src.server.api.routers import ingest as server_ingest
-    assert server_ingest.THUMBNAIL_LONG_EDGE == P.PRODUCERS["proxy"].defaults["thumbnail_edge"]
+    assert server_ingest.THUMBNAIL_LONG_EDGE == proxy["thumbnail_edge"]
+    assert proxy["webp_quality"] == preview_image.WEBP_QUALITY
 
 
 def _client(settings: dict | None = None, fails: bool = False) -> MagicMock:

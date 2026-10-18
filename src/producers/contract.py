@@ -41,6 +41,11 @@ VIDEO = ("video",)
 ALL = ("image", "video")
 
 
+# A quality's notches, lowest first (Setting kind "notch", ADR-018 decision 6), and what x264's CRF each
+# stands for in a render a browser plays: better is the CRF 28 every one was made with before notches.
+QUALITY = ("good", "better", "best")
+X264_CRF = {"good": {"crf": 32}, "better": {"crf": 28}, "best": {"crf": 23}}
+
 # Why a setting can't be changed here.
 ITS_JOBS = "Chosen in Settings → AI, for every producer its machines run."
 NOT_READ_YET = "Not read by this producer yet: changing it would change nothing it makes."

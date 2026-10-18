@@ -135,13 +135,13 @@ def repair(session: Session) -> dict[str, int]:
 def _thumbnail_again(session: Session, store: Store, asset_id: str, key: str) -> bool:
     """Make a clip's thumbnail again at its key from its preview, as ingest
     made it. False when the preview is gone too, or isn't an image."""
-    from src.server.preview_image import NotAnImageError, thumbnail
+    from src.server.preview_image import NotAnImageError, quality, thumbnail
 
     proxy_key = session.execute(text("SELECT proxy_key FROM assets WHERE asset_id = :a"), {"a": asset_id}).scalar()
     if not proxy_key:
         return False
     try:
-        data = thumbnail(store.read(proxy_key))
+        data = thumbnail(store.read(proxy_key), quality(session))
         store.write(key, data)
     except NotFound:
         return False
