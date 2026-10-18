@@ -491,10 +491,10 @@ def _targets(target: str, scope: str) -> list[str]:
     """What a pause names: one switch (Upkeep or a producer the scheduler
     makes) or every one ("all", named, never a missing target). 404 for no
     such producer; 409 per_library for "scans" (paused per library since
-    ADR-018 phase 1); 409 not_scheduled for what scans make (a library's
-    Scans pause stops it). A redo is a producer's: 422 bad_scope for Upkeep,
-    409 cant_redo for a producer that isn't made again yet; "all" names
-    every producer that is."""
+    ADR-018 phase 1); 409 not_scheduled for the work of what scans make (a
+    library's Scans pause stops it), though their remakes are a redo. A redo
+    is a producer's: 422 bad_scope for Upkeep, 409 cant_redo for a producer
+    that isn't made again yet; "all" names every producer that is."""
     from src.server.api.errors import InvalidChoiceError
 
     if target == PAUSE_SCANS:
@@ -503,7 +503,7 @@ def _targets(target: str, scope: str) -> list[str]:
     if target == PAUSE_ALL:
         if scope == lineage.WORK:
             return list(pause_targets())
-        return [a for a in pause_targets() if a in PRODUCERS and lineage.redoable(a)]
+        return [a for a in PRODUCERS if lineage.redoable(a)]  # scans' remakes too
     if target in SWITCH_TITLES:
         if scope == lineage.REDO:
             raise InvalidChoiceError("bad_scope", f"{SWITCH_TITLES[target]} make nothing again: pause its work.",
@@ -512,7 +512,7 @@ def _targets(target: str, scope: str) -> list[str]:
     p = producer_or_404(target)
     if scope == lineage.REDO and not lineage.redoable(target):
         raise ConflictError("cant_redo", f"{p.title} isn't made again yet. {lineage.CANT_REDO.get(target, '')}".strip())
-    if not p.scheduled:
+    if not p.scheduled and scope != lineage.REDO:  # what scans make: their remakes stop or go on (scans.py)
         raise ConflictError("not_scheduled", f"{p.title} are made by scans: pausing a library's scans stops them.",
                             {"artifact": target})
     return [target]

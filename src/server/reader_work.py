@@ -41,12 +41,13 @@ from sqlmodel import Session
 
 from src.server.repository import lineage
 from src.server.repository.lineage import APPLIES, LINEAGE_JOIN, MADE
+from src.shared.producers import MADE_AT_SCAN as SCANNED
 from src.shared.producers import PRODUCERS
 
 PREVIEWS = "previews"
 # What a scan makes of each file it reads and uploads with its clip: the
 # preview and thumbnail (the proxy producer's), a video's 10-second preview.
-MADE_AT_SCAN = ("proxy", "video_preview")
+MADE_AT_SCAN = SCANNED
 # What the producers that read the originals make, in the registry's order.
 FROM_ORIGINALS = tuple(a for a, p in PRODUCERS.items() if p.storage)
 WORK = (PREVIEWS, *FROM_ORIGINALS)

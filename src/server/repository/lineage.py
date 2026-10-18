@@ -41,6 +41,7 @@ from sqlmodel import Session
 
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
+    MADE_AT_SCAN,
     MISSING_FLAGS,
     PERSON,
     PRODUCERS,
@@ -135,7 +136,7 @@ def _stale_sql() -> str:
 
 def _lineage_cols() -> str:
     cols = []
-    for artifact in MISSING_FLAGS.values():
+    for artifact in (*MISSING_FLAGS.values(), *MADE_AT_SCAN):
         cols.append(f"max(l.source_hash) FILTER (WHERE l.artifact = '{artifact}'"
                     f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
         cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
@@ -365,7 +366,10 @@ JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {
 
 
 def redoable(artifact: str) -> bool:
-    return artifact in MISSING_FLAGS.values() and artifact not in CANT_REDO
+    """Made again in place when made another way than now: what the
+    scheduler makes (its redo kind), or a scan (MADE_AT_SCAN: the plan's
+    remake, src/server/scans.py), unless it can't be yet (cant_redo)."""
+    return (artifact in MISSING_FLAGS.values() or artifact in MADE_AT_SCAN) and artifact not in CANT_REDO
 
 
 def redo_due(artifact: str) -> str:

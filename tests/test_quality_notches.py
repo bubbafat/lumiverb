@@ -254,8 +254,9 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
     better = ingest("better.jpg")
     assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=80, max_long_edge=2048)[0]
     try:
-        r = client.put("/v1/producers/proxy/settings", json={"settings": {"quality": "best"}}, headers=headers)
-        assert r.status_code == 200, r.text  # previews aren't remade yet: nothing to ask
+        r = client.put("/v1/producers/proxy/settings", json={"settings": {"quality": "best"}, "redo": False},
+                       headers=headers)
+        assert r.status_code == 200, r.text  # new files only: the one made stays as it is
         best = ingest("best.jpg")
         stored = kept(best, "proxy")
         assert stored == reencoded(photo, fmt="WEBP", quality=90, max_long_edge=2048)[0]
@@ -268,7 +269,8 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
         assert r.status_code == 200, r.text
         assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=90)[0]
     finally:
-        client.put("/v1/producers/proxy/settings", json={"settings": {"quality": None}}, headers=headers)
+        client.put("/v1/producers/proxy/settings", json={"settings": {"quality": None}, "redo": True}, headers=headers)
+        client.post("/v1/producers/proxy/resume", json={"scope": "redo"}, headers=headers)
 
 
 def _proxies_of(lib, sha: str | None) -> dict:

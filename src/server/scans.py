@@ -59,15 +59,21 @@ from ulid import ULID
 
 from src.server.models.tenant import ScanSession
 from src.server.reader_work import previews_missing
+from src.server.repository import lineage
 from src.server.repository.assets import AssetRepository
 from src.shared.content_hash import FULL_UP_TO, SHA256, sampled, whole_file
 from src.shared.file_extensions import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
+from src.shared.producers import MADE_AT_SCAN
 from src.shared.utils import utcnow
 
 # An unfinished scan is deleted a day after its last call.
 TTL = timedelta(hours=24)
 # Files in one call (found, hashes); a plan's pages are MAX_PAGE (limits.py), as every page of clips.
 MAX_FILES = 1000
+# Unchanged files a scan uploads again, at most, to remake their previews (ADR-018 decision 6: after
+# everything else). A few at each scan, so no scan is long for them: new files a later scan finds wait
+# at most this many behind them.
+REMAKES_PER_SCAN = 250
 
 ACTIONS = ("upload", "hash", "unchanged", "skipped")
 # What a plan's pages list unless asked: what the client acts on.
@@ -174,7 +180,11 @@ REMOVED = """
 # is hashed again (rekey: its fp1 takes the place of its whole file's hash).
 # A file to hash or upload whose size a clip or file deleted for good of the
 # library has, its hash made before fp1, is hashed whole too (legacy): it's
-# compared with what was.
+# compared with what was. An unchanged clip whose previews were made another
+# way than now is uploaded again (remake: ADR-018 decision 6), while their
+# remakes run (:remake_<artifact>), REMAKES_PER_SCAN at most (:remake_cap,
+# the oldest clips first), its previews made at the account's settings.
+_REMAKE = " OR ".join(f"(:remake_{a} AND {lineage.redo_due(a)})" for a in MADE_AT_SCAN)
 _PLAN = f"""
     WITH gone AS ({GONE}),
     whole_sizes AS (
@@ -201,7 +211,9 @@ _PLAN = f"""
                        WHEN :force THEN 'upload/force'
                        WHEN :thorough THEN 'hash/thorough'
                        WHEN a.file_size = f.file_size AND a.file_mtime = f.file_mtime
-                           THEN CASE WHEN {_whole_file('a')} THEN 'hash/rekey' ELSE 'unchanged/' END
+                           THEN CASE WHEN {_whole_file('a')} THEN 'hash/rekey'
+                                     WHEN {_REMAKE} THEN 'upload/remake'
+                                     ELSE 'unchanged/' END
                        ELSE 'hash/changed' END
                    WHEN (r.unknown OR r.as_removed) AND NOT :force_add THEN 'skipped/removed'
                    WHEN r.rel_path IS NOT NULL THEN 'hash/removed'
@@ -211,15 +223,23 @@ _PLAN = f"""
                END AS kind
         FROM scan_found f
         LEFT JOIN assets a ON a.library_id = :library_id AND a.rel_path = f.rel_path AND a.deleted_at IS NULL
+        {lineage.LINEAGE_JOIN}
         LEFT JOIN removed r ON r.rel_path = f.rel_path
         WHERE f.scan_id = :scan_id
+    ),
+    capped AS (
+        SELECT p.rel_path, p.asset_id,
+               CASE WHEN p.kind = 'upload/remake' AND row_number() OVER (
+                             PARTITION BY p.kind = 'upload/remake' ORDER BY p.asset_id COLLATE "C") > :remake_cap
+                    THEN 'unchanged/' ELSE p.kind END AS kind
+        FROM planned p
     )
     UPDATE scan_found f
     SET action = split_part(p.kind, '/', 1), reason = NULLIF(split_part(p.kind, '/', 2), ''),
         asset_id = p.asset_id,
         legacy = split_part(p.kind, '/', 1) IN ('upload', 'hash') AND p.kind <> 'hash/rekey'
                  AND f.file_size IN (SELECT w.file_size FROM whole_sizes w)
-    FROM planned p
+    FROM capped p
     WHERE f.scan_id = :scan_id AND f.rel_path = p.rel_path AND p.kind IS NOT NULL
 """
 
@@ -327,13 +347,29 @@ def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_mov
     """The listing is complete: plan every found file, one statement. Moves
     are looked for when the account follows them, unless the scan forces
     every file or skips moves (as today's scanner: no move detection under
-    --force or --skip-moves)."""
+    --force or --skip-moves). Previews made another way than now are
+    remade (_remakes), never by a dry run."""
     scan.unlisted = unlisted
     scan.planned_at = utcnow()
     session.add(scan)
     session.flush()
     session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
-                                  "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves)})
+                                  "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves),
+                                  **_remakes(session, scan)})
+
+
+def _remakes(session: Session, scan: ScanSession) -> dict:
+    """The plan's word on remaking previews (ADR-018 decision 6): each scan-
+    made artifact's remakes run unless a person kept them (its redo stopped)
+    or a new version of it waits for an admin (lineage.hold_new_version),
+    with what's wanted now; REMAKES_PER_SCAN of them, none in a dry run."""
+    paused = lineage.pauses(session)
+    out: dict = {"remake_cap": 0 if scan.dry_run else REMAKES_PER_SCAN}
+    for artifact in MADE_AT_SCAN:
+        out[f"remake_{artifact}"] = not scan.dry_run and artifact not in paused.redo \
+            and not lineage.new_version_unseen(session, artifact)
+        out.update(lineage.redo_params(artifact, lineage.desired(session, artifact)))
+    return out
 
 
 def moves_possible(scan: ScanSession, follow_moves: bool) -> bool:

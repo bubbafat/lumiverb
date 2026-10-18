@@ -20,6 +20,5 @@ PRODUCER = ProducerSpec(
         Setting("quality", "better", "Quality", kind="notch", choices=QUALITY, means=WEBP),
         Setting("thumbnail_edge", 512, "Thumbnail edge", minimum=128, maximum=1024, unit="px", fixed=MADE_AT_SCAN),
     ),
-    cant_redo="Proxies and thumbnails are made when a file is scanned, new files' with the settings now; those"
-              " made already aren't remade yet (lumiverb scan --force makes a library's again).",
+    made_at_scan=True,
 )

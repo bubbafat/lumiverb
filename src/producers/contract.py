@@ -222,6 +222,10 @@ class ProducerSpec:
     # Shown as a part of another producer (its artifact), not on its own:
     # Settings → Processing folds it into that producer's row.
     part_of: str = ""
+    # Made by a scan from the original (a clip's previews): what's missing is
+    # the scan plan's (preview_missing), and so is a remake, a few at each
+    # scan after everything else (src/server/scans.py, reason remake).
+    made_at_scan: bool = False
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
     kind: str = ""  # the job kind's name ("render" for analysis copies)

@@ -1597,7 +1597,10 @@ def _statements(env):
 
 
 def _library_of(env, n: int) -> tuple[str, list[File]]:
-    """A library of n photos, made directly (as many scans would have left it)."""
+    """A library of n photos, made directly (as many scans would have left
+    it: their previews made as the account makes them now, so none is remade)."""
+    from src.server.repository import lineage
+
     lib = _library(env)
     files = [File(f"k/{i:05}.jpg", f"k{i}") for i in range(n)]
     with Session(env.db) as session:
@@ -1605,6 +1608,13 @@ def _library_of(env, n: int) -> tuple[str, list[File]]:
                                file_size=f.file_size, file_mtime=f.mtime, media_type="image", status="proxy_ready",
                                proxy_key=f"{lib}/proxy/{i:05}.webp", thumbnail_key=f"{lib}/thumbnail/{i:05}.webp",
                                created_at=T0, updated_at=T0) for i, f in enumerate(files)])
+        session.commit()
+        want = lineage.desired(session, "proxy")
+        session.execute(text(
+            "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash, source_hash,"
+            " produced_at) SELECT a.asset_id, 'proxy', :p, :v, :h, a.content_hash, now() FROM assets a"
+            " WHERE a.library_id = :lib"), {"p": want["producer"], "v": want["version"], "h": want["settings_hash"],
+                                            "lib": lib})
         session.commit()
     return lib, files
 

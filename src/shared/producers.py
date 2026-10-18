@@ -75,6 +75,9 @@ def pause_state(paused: set[str] | frozenset[str], *, libraries_paused: int = 0,
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.
 MISSING_FLAGS: dict[str, str] = {p.flag: p.artifact for p in PRODUCERS.values() if p.flag}
+# What a scan makes of each file it reads and uploads with its clip, and
+# remakes (src/server/scans.py): the preview and thumbnail, a video's preview.
+MADE_AT_SCAN: tuple[str, ...] = tuple(a for a, p in PRODUCERS.items() if p.made_at_scan)
 
 # Lineage a write carries when nothing says who made it (an old client, the
 # macOS app today): never current, so the server makes it again.
