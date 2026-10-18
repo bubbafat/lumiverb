@@ -158,17 +158,19 @@ def test_a_port_is_never_another_of_the_install_s():
 
 
 def test_a_port_something_else_listens_on_is_refused_but_its_own_aren_t():
-    from tests.test_server_postgres import free_port
-
-    https = free_port()
-    with socket.socket() as other:
+    with socket.socket() as other, socket.socket() as own:
+        # The HTTPS port is held for the whole test (nginx's own): a port found free and let go could be taken by
+        # another test meanwhile, and refused for that.
+        own.bind(("127.0.0.1", 0))
+        own.listen()
+        https = own.getsockname()[1]
         other.bind(("127.0.0.1", 0))  # this machine's own address only, as some programs do
         other.listen()
         taken = other.getsockname()[1]
         assert not network.free(taken)
-        why = network.port_problem(MAC, network.Ports(taken, https))
+        why = network.port_problem(MAC, network.Ports(taken, https), held=frozenset({https}))
         assert why == f"Something else on this Mac is using port {taken}: choose another for HTTP"
-        assert network.port_problem(MAC, network.Ports(taken, https), held=frozenset({taken})) is None, \
+        assert network.port_problem(MAC, network.Ports(taken, https), held=frozenset({taken, https})) is None, \
             "nginx's own, now"
     assert network.free(taken)
 
