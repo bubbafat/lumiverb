@@ -27,10 +27,36 @@ _SENTINEL = object()  # distinguishes "not provided" from None
 
 
 class ProjectRepository:
-    """Repository for projects and project_assets tables."""
+    """Repository for projects and project_assets tables.
 
-    def __init__(self, session: Session) -> None:
+    within: the libraries the caller can see (ADR-018 decision 8, roles per
+    library; None: every library). A project's clips, counts, cover and
+    order are of its clips in those; a project is listed when the caller
+    made it or can see one of its clips."""
+
+    def __init__(self, session: Session, within: list[str] | None = None) -> None:
         self._session = session
+        self.within = None if within is None else list(within)
+
+    def _seen(self, query):
+        """The query (over Asset) kept to the libraries within."""
+        return query if self.within is None else query.where(Asset.library_id.in_(self.within))  # type: ignore[attr-defined]
+
+    def _seen_sql(self, params: dict, alias: str = "a") -> str:
+        """SQL: the clip (alias) in the libraries within; params gets them."""
+        params["within"] = self.within
+        return f"(CAST(:within AS text[]) IS NULL OR {alias}.library_id = ANY(CAST(:within AS text[])))"
+
+    def shows(self, project: Project, user_id: str) -> bool:
+        """Whether the caller sees the project for its clips: they made it, or
+        one of its clips is in a library they can see (every one does when
+        within is None)."""
+        if self.within is None or (project.owner_user_id is not None and project.owner_user_id == user_id):
+            return True
+        params = {"pid": project.project_id}
+        return self._session.execute(text(
+            "SELECT 1 FROM project_assets pa JOIN assets a ON a.asset_id = pa.asset_id"
+            f" WHERE pa.project_id = :pid AND {self._seen_sql(params)} LIMIT 1"), params).first() is not None
 
     # ---- Project CRUD ----
 
@@ -64,7 +90,11 @@ class ProjectRepository:
         return self._session.exec(stmt).first()
 
     def list_for_user(self, user_id: str, *, statuses: tuple[str, ...] = ("active",)) -> list[Project]:
-        """Return projects owned by user + shared projects, in the given lifecycle states."""
+        """Return projects owned by user + shared projects, in the given
+        lifecycle states: those the caller sees for their clips (shows)."""
+        return [p for p in self._listed_for_user(user_id, statuses) if self.shows(p, user_id)]
+
+    def _listed_for_user(self, user_id: str, statuses: tuple[str, ...]) -> list[Project]:
         return list(
             self._session.exec(
                 select(Project)
@@ -181,14 +211,15 @@ class ProjectRepository:
         return True
 
     def has_asset(self, project_id: str, asset_id: str) -> bool:
-        """Whether the clip is in the project."""
-        return self._session.exec(select(ProjectAsset).where(
-            ProjectAsset.project_id == project_id, ProjectAsset.asset_id == asset_id)).first() is not None
+        """Whether the clip is in the project (and in a library within)."""
+        query = (select(ProjectAsset).join(Asset, ProjectAsset.asset_id == Asset.asset_id)
+                 .where(ProjectAsset.project_id == project_id, ProjectAsset.asset_id == asset_id))
+        return self._session.exec(self._seen(query)).first() is not None
 
     # ---- Asset count (no denormalized column) ----
 
     def asset_count(self, project_id: str) -> int:
-        result = self._session.execute(
+        result = self._session.execute(self._seen(
             select(func.count())
             .select_from(ProjectAsset)
             .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
@@ -196,7 +227,7 @@ class ProjectRepository:
                 ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
-        )
+        ))
         return int(result.scalar() or 0)
 
     # Clips still linked to a project but hidden, in kinds that need
@@ -219,13 +250,15 @@ class ProjectRepository:
     def hidden_clip_counts(self, project_id: str) -> dict[str, int]:
         """{"trashed", "missing", "library_trashed", "archived"} for the project's
         hidden clips, in one query."""
-        row = self._session.execute(text(self._HIDDEN_CLIPS_SQL), {"pid": project_id}).one()
+        params: dict = {"pid": project_id}
+        row = self._session.execute(text(self._HIDDEN_CLIPS_SQL + f" AND {self._seen_sql(params)}"), params).one()
         return {"trashed": int(row[0]), "missing": int(row[1]), "library_trashed": int(row[2]),
                 "archived": int(row[3])}
 
-    def trashed_asset_ids(self, project_id: str) -> list[str]:
+    def trashed_asset_ids(self, project_id: str, *, edited: list[str] | None = None) -> list[str]:
         """The clips in the project that a person trashed, whose library
-        isn't in the trash: the ones restoring with the project brings back."""
+        isn't in the trash: the ones restoring with the project brings back
+        (of those in the libraries edited, when given: the caller's)."""
         return list(self._session.execute(
             text(
                 "SELECT a.asset_id FROM project_assets pa"
@@ -233,8 +266,9 @@ class ProjectRepository:
                 " JOIN libraries l ON l.library_id = a.library_id"
                 " WHERE pa.project_id = :pid AND a.deleted_at IS NOT NULL"
                 "   AND a.deleted_reason = 'user' AND l.status <> 'trashed'"
+                "   AND (CAST(:edited AS text[]) IS NULL OR a.library_id = ANY(CAST(:edited AS text[])))"
             ),
-            {"pid": project_id},
+            {"pid": project_id, "edited": edited},
         ).scalars().all())
 
     def _usage_filter(self, asset_ids: list[str], library_ids: list[str]):
@@ -349,7 +383,7 @@ class ProjectRepository:
         else:  # manual
             order_col = ProjectAsset.position
 
-        query = (
+        query = self._seen(
             select(Asset, order_col.label("sort_value"))
             .join(ProjectAsset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
@@ -400,19 +434,22 @@ class ProjectRepository:
     # ---- Reorder ----
 
     def reorder(self, project_id: str, asset_ids: list[str]) -> bool:
-        """Reorder assets in project. asset_ids must include ALL active assets.
+        """Reorder assets in project. asset_ids must include ALL active assets
+        (the caller sees: the libraries within). Those the caller can't see
+        keep their places; the others take the places they had, in the new
+        order.
 
         Returns True on success. Raises ValueError if list is incomplete/has extras.
         """
-        # Get current active asset IDs in project
-        rows = self._session.execute(
-            select(ProjectAsset.asset_id)
+        # Get current active asset IDs in project, and the places they're in
+        rows = self._session.execute(self._seen(
+            select(ProjectAsset.asset_id, ProjectAsset.position)
             .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
                 ProjectAsset.project_id == project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
-        ).all()
+        )).all()
         current_ids = {r[0] for r in rows}
         submitted_ids = set(asset_ids)
 
@@ -422,7 +459,8 @@ class ProjectRepository:
                 "Reorder must include all active assets in the project."
             )
 
-        for position, asset_id in enumerate(asset_ids):
+        places = sorted(r[1] for r in rows) if self.within is not None else range(len(asset_ids))
+        for position, asset_id in zip(places, asset_ids, strict=True):
             self._session.execute(
                 sa_text(
                     "UPDATE project_assets SET position = :pos "
@@ -444,7 +482,7 @@ class ProjectRepository:
         a person trashes the clip (trash_many), it leaves the project
         (remove_assets), or it's deleted for good."""
         if project.cover_asset_id:
-            row = self._session.execute(
+            row = self._session.execute(self._seen(
                 select(ProjectAsset.asset_id)
                 .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
                 .where(
@@ -452,19 +490,17 @@ class ProjectRepository:
                     ProjectAsset.asset_id == project.cover_asset_id,
                     Asset.deleted_at.is_(None),  # type: ignore[union-attr]
                 )
-            ).first()
+            )).first()
             if row:
                 return project.cover_asset_id
 
-        # Fallback: first active asset by position
-        row = self._session.execute(
+        # Fallback: first active asset by position (that the caller sees)
+        row = self._session.execute(self._seen(
             select(ProjectAsset.asset_id)
             .join(Asset, ProjectAsset.asset_id == Asset.asset_id)
             .where(
                 ProjectAsset.project_id == project.project_id,
                 Asset.deleted_at.is_(None),  # type: ignore[union-attr]
             )
-            .order_by(ProjectAsset.position.asc())  # type: ignore[union-attr]
-            .limit(1)
-        ).first()
+        ).order_by(ProjectAsset.position.asc()).limit(1)).first()  # type: ignore[union-attr]
         return row[0] if row else None

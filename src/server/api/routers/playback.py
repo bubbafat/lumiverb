@@ -161,12 +161,14 @@ def _check_public(session: Session, asset: Asset, library_id: str | None, projec
         if lib is None or not lib.is_public:
             raise HTTPException(status_code=404, detail="Not found")
     elif project_id:
+        from src.server.api.library_access import sight_of
         from src.server.repository.projects import ProjectRepository
 
-        projects = ProjectRepository(session)
-        project = projects.get_by_id(project_id)
+        project = ProjectRepository(session).get_by_id(project_id)
         if project is None or project.visibility != "public":
             raise HTTPException(status_code=404, detail="Not found")
+        # What its owner can still see of it (ADR-018 decision 8).
+        projects = ProjectRepository(session, within=sight_of(session, project.owner_user_id))
         if not projects.has_asset(project_id, asset.asset_id):
             raise HTTPException(status_code=403, detail="Asset not in project")
     else:

@@ -18,7 +18,7 @@ from src.server.api.dependencies import (
 )
 from src.server.api.errors import DecisionRequiredError
 from src.server.api.limits import MAX_IDS, MAX_PAGE, require_scope
-from src.server.api.library_access import names
+from src.server.api.library_access import edited, names, seen
 from src.server.database import get_control_session
 from src.server.repository.control_plane import PublicProjectRepository
 from src.server.repository.assets import AssetRepository
@@ -238,13 +238,17 @@ def _require_owner(col, user_id: str) -> None:
         raise HTTPException(status_code=403, detail="Only the project owner can perform this action")
 
 
-def _can_view(col, user_id: str) -> bool:
-    """Check if user can view this project."""
+def _can_view(col, user_id: str, repo: ProjectRepository) -> bool:
+    """Check if user can view this project: theirs, shared, or nobody's, and
+    one they see for its clips (made by them, or a clip of it in a library
+    they can see: repo.shows)."""
     if col.owner_user_id is None:
-        return True  # legacy tenant-wide project
-    if col.owner_user_id == user_id:
-        return True
-    return col.visibility in ("shared", "public")
+        allowed = True  # legacy tenant-wide project
+    elif col.owner_user_id == user_id:
+        allowed = True
+    else:
+        allowed = col.visibility in ("shared", "public")
+    return allowed and repo.shows(col, user_id)
 
 
 def guard_project_filters(request: Request, session: Session, spec) -> None:
@@ -262,10 +266,10 @@ def guard_project_filters(request: Request, session: Session, spec) -> None:
         raise HTTPException(status_code=403, detail="Project filters aren't available on public pages")
     require_editor(request)
     user_id = get_current_user_id(request)
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     for leaf in leaves:
         project = repo.get_by_id(leaf.project_id) if leaf.project_id else None
-        if project is None or not _can_view(project, user_id):
+        if project is None or not _can_view(project, user_id, repo):
             raise HTTPException(status_code=404, detail="Project not found")
 
 
@@ -301,7 +305,7 @@ def create_project(
         if gone is not None:
             raise HTTPException(status_code=404, detail=f"Asset {gone} not found or trashed")
 
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = repo.create(
         name=body.name,
         owner_user_id=user_id,
@@ -320,15 +324,17 @@ def create_project(
 
 @router.get("", response_model=ProjectListResponse)
 def list_projects(
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
     status: Literal["active", "archived", "all", "trashed"] = "active",
 ) -> ProjectListResponse:
-    """List projects owned by user + shared projects. Active only unless status
-    says otherwise; "all" is active and archived. "trashed" is the caller's
-    own trash, and trashed projects appear nowhere else."""
-    repo = ProjectRepository(session)
+    """List projects owned by user + shared projects, the ones the caller
+    sees for their clips. Active only unless status says otherwise; "all"
+    is active and archived. "trashed" is the caller's own trash, and
+    trashed projects appear nowhere else."""
+    repo = ProjectRepository(session, within=seen(request, session))
     if status == "trashed":
         projects = repo.list_trashed(user_id)
     else:
@@ -381,14 +387,15 @@ def delete_projects_for_good(session: Session, projects: list, *, before: dateti
 @router.get("/{project_id}", response_model=ProjectItem)
 def get_project(
     project_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> ProjectItem:
     """Get project detail. Must be owner or project must be shared."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    if not _can_view(col, user_id):
+    if not _can_view(col, user_id, repo):
         raise HTTPException(status_code=404, detail="Project not found")
     return _project_to_item(col, repo, user_id, session=session)
 
@@ -404,7 +411,7 @@ def update_project(
 ) -> ProjectItem:
     """Update project metadata. Only the owner can update, and only an admin
     makes a project public."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
     _require_admin_to_publish(request, body.visibility)
@@ -451,7 +458,7 @@ def delete_project(
     """Move a project to the trash. Only the owner can. It disappears
     everywhere, its public link included, until restored; emptying the trash
     deletes it for good."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
     # The public_projects row stays, so a restored public project's link
@@ -475,7 +482,7 @@ def restore_project(
     them (with_clips), or it's refused with 409 clips_in_trash and the
     counts: restoring them brings them back everywhere, so the user decides.
     """
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = repo.get_by_id(project_id, include_trashed=True)
     if col is None or col.deleted_at is None:
         raise HTTPException(status_code=404, detail="Project not in the trash")
@@ -509,10 +516,12 @@ def _restore_trashed_clips(
     request: Request, session: Session, repo: ProjectRepository, project_id: str,
 ) -> tuple[int, int]:
     """Restore the project's clips that a person trashed, everywhere, back to
-    where they were (search finds each again: its words were kept). Returns
-    (back in sight, back in the archive)."""
+    where they were (search finds each again: its words were kept): those
+    in the libraries the caller edits. Returns (back in sight, back in the
+    archive)."""
     asset_repo = AssetRepository(session)
-    restored, _, to_archive = asset_repo.restore_many(repo.trashed_asset_ids(project_id))
+    restored, _, to_archive = asset_repo.restore_many(
+        repo.trashed_asset_ids(project_id, edited=edited(request, session)))
     for library_id in asset_repo.library_ids_of(restored):
         LibraryRepository(session).bump_revision(library_id)
     return len(restored) - len(to_archive), len(to_archive)
@@ -530,9 +539,9 @@ def restore_project_clips(
     everywhere: the library, search, and every other project holding them.
     Clips a scan trashed because their file went missing are only counted;
     they come back when the file does."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    if not _can_view(col, user_id):
+    if not _can_view(col, user_id, repo):
         raise HTTPException(status_code=404, detail="Project not found")
     restored, archived = _restore_trashed_clips(request, session, repo, project_id)
     return RestoreClipsResponse(restored=restored, missing=repo.hidden_clip_counts(project_id)["missing"],
@@ -664,9 +673,9 @@ def list_project_assets(
     limit: int = Query(200, ge=1, le=MAX_PAGE),
 ) -> ProjectAssetsResponse:
     """List assets in a project. Must be owner or project must be shared."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    if not _can_view(col, user_id):
+    if not _can_view(col, user_id, repo):
         raise HTTPException(status_code=404, detail="Project not found")
 
     assets, next_cursor = repo.list_assets(
@@ -703,12 +712,14 @@ def list_project_assets(
 def reorder_project(
     project_id: str,
     body: ReorderRequest,
+    request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
     _: Annotated[None, Depends(require_editor)],
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
-    """Reorder assets in project. Only the owner can reorder."""
-    repo = ProjectRepository(session)
+    """Reorder assets in project. Only the owner can reorder: the clips they
+    see; those they can't keep their places."""
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
     _require_owner(col, user_id)
 
@@ -730,7 +741,7 @@ _UNSAFE_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 
 def _all_project_assets(col, request: Request, session: Session, user_id: str) -> list:
     """Every live clip in a project, paging through to the end (no 1,000 cap)."""
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     assets, cursor = repo.list_assets(col.project_id, sort_order=col.sort_order, limit=_EXPORT_PAGE)
     while cursor:
         page, cursor = repo.list_assets(
@@ -794,9 +805,9 @@ def export_project(
             status_code=400,
             detail=f"Unknown format. Must be one of: {', '.join(EXPORT_PROVIDERS)}",
         )
-    repo = ProjectRepository(session)
+    repo = ProjectRepository(session, within=seen(request, session))
     col = _get_project_or_404(repo, project_id)
-    if not _can_view(col, user_id):
+    if not _can_view(col, user_id, repo):
         raise HTTPException(status_code=404, detail="Project not found")
 
     assets = _all_project_assets(col, request, session, user_id)
