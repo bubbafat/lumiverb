@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — Phase 1 built, in review
+Accepted. Phases 0 to 3 are done; phase 4's producers are done, and of its endpoints, CLIP and faces still run on the server itself. Phase 1's native-app leftovers wait with the native apps (paused).
 
 This ADR sets the direction for Lumiverb. Where another doc in this repo disagrees with it, this ADR wins and that doc is out of date. The working version, with discussion and the decision log, is the "Lumiverb Operating Model" doc (https://claude.ai/artifact/UuLm2upRoZKRbrvR59SvqM).
 
@@ -10,11 +10,11 @@ This ADR sets the direction for Lumiverb. Where another doc in this repo disagre
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Built, in review |
-| 1 | Projects and send to editor (v1) | Built, in review, with project trash. Left: real editor imports on a Mac; the macOS and iOS rename |
-| 2 | One server: one machine schedules all processing and reads storage read-only | Built; installed on prod and ingesting. In review (PR #9). Left: finishing the fresh ingest. The macOS app's AI and its scan are retired (Oct 14): it browses, and reports no changes (the full scan every 15 minutes finds them) |
-| 3 | Lineage and reconciliation | In progress: lineage and the reconciler built (in review); the vision model is chosen in Settings → AI. Next: one producer per artifact (OCR apart from descriptions) |
-| 4 | Producers and endpoints | Producers in progress: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints not started |
+| 0 | Groundwork and safety: this ADR, doc updates, stop overwriting human data, safe scanning | Done |
+| 1 | Projects and send to editor (v1) | Done on the server and the web, with project trash. Left, with the native apps (paused): real editor imports on a Mac; renaming collections to projects in the macOS and iOS apps |
+| 2 | One server: one machine schedules all processing and reads storage read-only | Done: the scheduler does all processing (a Mac's Homebrew install runs it; media's Lumiverb is stopped since Oct 11). The macOS app's AI and its scan are retired (Oct 14): it browses, and reports no changes (the full scan every 15 minutes finds them); a library may be read by a device instead (ADR-018) |
+| 3 | Lineage and reconciliation | Done: lineage and the reconciler; one producer per artifact (OCR apart from descriptions); the models chosen in Settings → AI; a change of settings or model asks what becomes of what was made (ADR-018 decision 6) |
+| 4 | Producers and endpoints | Producers done: each is one folder (spec and work), run by one runner; pools, AI jobs, flags and cascades come from the spec, so a producer ships as one folder with no pipeline edits (tested); the scheduler is the only orchestrator (`lumiverb enrich` asks it). Endpoints: the account's AI machines, each with its jobs and how many requests it takes at once (descriptions, and transcripts on a server's); CLIP and faces still run on the server itself |
 
 ## Overview
 
