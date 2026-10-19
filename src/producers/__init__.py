@@ -150,10 +150,7 @@ def _check(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> No
                 raise ValueError(f"{p.artifact}: its notch {s.key!r} is in the hash (remakes=True), its default"
                                  " among its choices, each choice meaning the same keys, none another setting's")
         if p.plugin and p.artifact not in added:
-            from src.plugins import plugin
-
-            if plugin(p.plugin) is None:
-                raise ValueError(f"{p.artifact}: it belongs to the plug-in {p.plugin!r}, which isn't one")
+            raise ValueError(f"{p.artifact}: only an installed plug-in's work belongs to a plug-in, not {p.plugin!r}")
         if p.part_of and p.part_of not in {q.artifact for q in found}:
             raise ValueError(f"{p.artifact}: it's part of {p.part_of!r}, which no producer makes")
         missing = [n for n in (*p.needs, *p.redo_also) if n not in {q.artifact for q in found}]

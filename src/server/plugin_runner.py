@@ -633,9 +633,8 @@ def main() -> int:
     try:  # Lumiverb's own plug-ins, as migrating installs them (nothing to do, usually)
         from src.server.own_plugins import install_own
 
-        settings = get_settings()
-        install_own(settings.control_plane_database_url, data, geonames_url=settings.lumiverb_geonames_url,
-                    say=logger.info, fail=logger.error)
+        install_own(get_settings().control_plane_database_url, data, environ=os.environ, say=logger.info,
+                    fail=logger.error)
     except Exception:  # noqa: BLE001 — the runner starts whatever happened
         logger.exception("plug-ins: Lumiverb's own plug-ins couldn't be looked at")
     Runner(data).run(stop)

@@ -60,7 +60,7 @@ def spec_for(plugin: Installed) -> ProducerSpec:
     media = ", ".join(f"'{x}'" for x in work.media)
     return ProducerSpec(
         artifact=artifact, producer=artifact, version=work.version, media=work.media, title=work.title,
-        applies=(f"({on_sql(m.plugin_id, spec=m.spec(), default=plugin.default)})"
+        applies=(f"({on_sql(m.spec(), plugin.default)})"
                  f" AND a.media_type IN ({media}) AND ({present_sql(work.inputs)})"),
         made=("EXISTS (SELECT 1 FROM plugin_outputs po WHERE po.asset_id = a.asset_id"
               f" AND po.plugin_id = '{m.plugin_id}' AND po.inputs_hash = {hash_sql(work.inputs)})"),

@@ -157,34 +157,11 @@ def _list(session) -> int:
                 else "uninstalled by the server admin" if own["uninstalled"]
                 else f"not installed: {own['failed']}" if own["failed"] else "not installed yet")
         print(f"Lumiverb's own: {own['plugin_id']} ({own['title']}) {said}")
-    _still_named(session)
     from src.server.plugin_install import EXAMPLE
 
     if EXAMPLE.is_dir() and not any(row["plugin_id"] == "example" for row in rows):
         print(f"To try Settings › Plug-ins, install Lumiverb's example: lumiverb-server plugins install {EXAMPLE} --off")
     return 0
-
-
-def _still_named(control) -> None:
-    """Each account's clips still showing the old Place names' name (part 3: until the GeoNames plug-in's are
-    saved; part 4 drops them once none do). Goes in part 4."""
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from src.server.database import get_tenant_session
-    from src.server.repository.asset_places import still_shown
-    from src.server.repository.control_plane import TenantRepository
-
-    for tenant in TenantRepository(control).list_all():
-        if tenant.status != "active":
-            continue
-        try:
-            with get_tenant_session(tenant.tenant_id) as session:
-                n = still_shown(session)
-        except SQLAlchemyError as exc:
-            print(f"  {tenant.name} ({tenant.tenant_id}): can't be read ({str(exc).strip().splitlines()[0]})")
-            continue
-        print(f"  {tenant.name} ({tenant.tenant_id}): {n:,} clip{'' if n == 1 else 's'} still showing an old place "
-              "name (the GeoNames plug-in names them)")
 
 
 def run(args: argparse.Namespace, data: Path) -> int:

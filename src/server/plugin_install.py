@@ -26,7 +26,6 @@ from typing import Any
 
 from sqlmodel import Session
 
-from src.plugins import registry
 from src.plugins.manifest import MANIFEST, Manifest, asks_more, parse, read
 from src.server.repository.installed_plugins import InstalledPluginRepository
 from src.server.repository.plugins import stands
@@ -99,8 +98,6 @@ def plan(folder: Path, session: Session, data: Path) -> Plan:
     if not folder.is_dir():
         raise PluginInstallError(f"No folder at {folder}")
     manifest = read(folder)
-    if manifest.plugin_id in registry():
-        raise PluginInstallError(f"{manifest.plugin_id} is one of Lumiverb's own plug-ins: it's installed already")
     plugins = (data / "plugins").resolve()
     if data.resolve().is_relative_to(folder) or folder.is_relative_to(plugins):
         raise PluginInstallError(f"{folder} is Lumiverb's own folder, not a plug-in's")

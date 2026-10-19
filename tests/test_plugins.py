@@ -150,7 +150,7 @@ def _on_in_sql(env) -> bool:  # noqa: F811
     answers it."""
     entry = find(GEONAMES)
     with env.db.connect() as conn:
-        return bool(conn.execute(text(f"SELECT {on_sql(GEONAMES, spec=entry.spec, default=entry.installed.default)}"))
+        return bool(conn.execute(text(f"SELECT {on_sql(entry.spec, entry.installed.default)}"))
                     .scalar())
 
 

@@ -132,16 +132,11 @@ def summary(session: Session, row: dict[str, Any]) -> str | None:
     return basis.get("summary") or None
 
 
-# A place name's source, shown beside it with its license (which asks for the credit).
-CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/",
-                        "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}}
-
-
 def credit(place: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Who a place name (a location's basis.place) is from, to show beside it: the credit kept with it when it
-    was set (ADR-023 phase 3: whatever becomes of the plug-in since), else GeoNames', else the installed
-    plug-in's that found it (its manifest's credit with its license, else its title); None for no place, or a
-    plug-in no longer installed that kept none."""
+    """Who a place name (a location's basis.place) is from, to show beside it (a license may ask for it): the
+    credit kept with it when it was set (ADR-023 phase 3: whatever becomes of the plug-in since), else the
+    installed plug-in's that found it (its manifest's credit with its license, else its title); None for no
+    place, or a plug-in no longer installed that kept none."""
     place = place if isinstance(place, dict) else {}
     if isinstance(place.get("credit"), dict) and place["credit"].get("text"):
         kept = place["credit"]
@@ -149,8 +144,6 @@ def credit(place: dict[str, Any] | None) -> dict[str, Any] | None:
     source = place.get("source")
     if not source:
         return None
-    if source in CREDITS:
-        return CREDITS[source]
     from src.server.plugin_catalog import installed
     from src.server.plugin_lookups import credit_of
 

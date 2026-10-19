@@ -5,8 +5,9 @@ tests' own GeoNames files (tests/plugins/geonames_lists.py), never from
 geonames.org.
 
 It says how far it's got while it fetches and builds, then answers as
-today's Place names did on the same files (the golden file, written from
-today's code: tests/test_geonames_parity.py); a restart uses its list, and
+the built-in Place names did on the same files (the golden file,
+tests/plugins/geonames_golden.json, written from that code before part 4
+removed it); a restart uses its list, and
 the downloads that finished, again; a list of an older version answers
 searches while the new one is built, its work waiting meanwhile; a download
 that fails, or a file that isn't GeoNames', says why and is fetched again
@@ -18,7 +19,6 @@ but Python's own and its own files, and is written for Python 3.9.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import json
 import os
 import shutil
@@ -199,26 +199,14 @@ def test_it_is_written_for_python_3_9() -> None:
     assert [v for v, _ in PYTHONS], "a python3 3.9 or later on this machine"
 
 
-def test_its_landmarks_are_lumiverbs_until_lumiverbs_go() -> None:
-    from src.plugins.geonames.landmarks import KINDS
-
-    spec = importlib.util.spec_from_file_location("geonames_plugin_landmarks", PROGRAM / "landmarks.py")
-    theirs = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = theirs  # its dataclass looks itself up there
-    try:
-        spec.loader.exec_module(theirs)
-    finally:
-        del sys.modules[spec.name]
-    assert {c: (k.noun, k.reach_m, k.every_one) for c, k in theirs.KINDS.items()} == {
-        c: (k.noun, k.reach_m, k.every_one) for c, k in KINDS.items()}
-
-
 def test_its_manifest_asks_what_place_names_asked_and_says_what_it_does() -> None:
-    from src.plugins.geonames import WAS
-
     m = read(PROGRAM)
-    assert (m.plugin_id, m.title, m.description) == (WAS.plugin_id, WAS.title, WAS.description)
-    assert m.acknowledgment == WAS.acknowledgment, "the built-in's version 3, word for word: no one asked again"
+    assert (m.plugin_id, m.title) == ("geonames", "Place names (GeoNames)")
+    ack = m.acknowledgment
+    assert (ack.version, ack.reaccept_from, ack.title) == ("3", "1", "GeoNames: Creative Commons Attribution 4.0"), \
+        "the built-in's version 3: every acceptance stands, no one asked again"
+    assert [link.url for link in ack.links] == ["https://www.geonames.org/", "https://creativecommons.org/licenses/by/4.0/",
+                                                "https://www.geonames.org/export/"]
     assert m.run == ("python3", "-I", "geonames.py") and not m.internet
     assert m.credit.shown() == {"text": "GeoNames", "url": "https://www.geonames.org/",
                                 "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
@@ -228,8 +216,11 @@ def test_its_manifest_asks_what_place_names_asked_and_says_what_it_does() -> Non
     assert (radius.key, radius.default, radius.minimum, radius.maximum, radius.remakes) == ("radius_km", 25, 1, 200,
                                                                                            True)
     assert (mirror.key, mirror.scope, mirror.default) == ("mirror", "server", "")
-    assert [(o.key, o.searchable, o.empty) for o in m.work.outputs] == [("at", False, ""),
+    # Both searched (Robert, 2026-10-19: people search by landmarks more than towns); work.version stays 1, so
+    # nothing is made again for it: the search sweep writes what's saved again (plugin_outputs.searched_again).
+    assert [(o.key, o.searchable, o.empty) for o in m.work.outputs] == [("at", True, ""),
                                                                         ("near", True, "Not near a town")]
+    assert (m.version, m.work.version) == ("2", "1")
     assert (m.work.inputs, m.lookups) == (("location",), ("places",))
 
 

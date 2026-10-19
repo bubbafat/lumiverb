@@ -65,7 +65,7 @@ class PluginWork(Work):
         from src.server.plugin_catalog import find
 
         entry = find(self.plugin_id)
-        if entry is None or entry.installed is None or entry.installed.manifest.work is None:
+        if entry is None or entry.installed.manifest.work is None:
             raise Waits(f"{self.plugin_id} isn't installed now")
         return entry.installed.manifest
 

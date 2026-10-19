@@ -18,10 +18,10 @@ holds up no other.
 
 Part 2, the GeoNames program (src/own_plugins/geonames/), on the tester's
 own made-up GeoNames files (tests/tester_geonames_lists.py, apart from the
-builder's), run by the real runner and asked through Lumiverb's own client:
-its facts, searches and places by id equal today's code's on the same
-files (but for a place at no real point, which it leaves out), every answer
-passing Lumiverb's checks; killed, it's started again with its list and
+builder's), run by the real runner and asked through Lumiverb's own client
+(its facts, searches and places by id were held to the built-in Place
+names' on the same files until part 4 removed that code): killed, it's
+started again with its list and
 fetches nothing; a file missing from the mirror fails naming it; a download
 cut off is fetched again, the finished ones aren't.
 
@@ -455,7 +455,7 @@ def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_c
 
 
 # ---------------------------------------------------------------------------
-# Part 2: the GeoNames program (src/own_plugins/geonames/), against today's code on the tester's own lists
+# Part 2: the GeoNames program (src/own_plugins/geonames/), on the tester's own lists
 # ---------------------------------------------------------------------------
 
 GEONAMES = Path(__file__).resolve().parents[1] / "src" / "own_plugins" / "geonames"
@@ -535,22 +535,6 @@ def site(lists_):
     s.close()
 
 
-@pytest.fixture
-def today(control, site, tmp_path, monkeypatch):  # noqa: F811
-    """Today's Place names on the tester's lists: today's fetch into the control database (the site's requests
-    then forgotten), and its repository."""
-    from src.plugins.geonames import data as geonames_data
-    from src.server.database import get_control_session
-    from src.server.repository.places import PlaceRepository
-
-    monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", site.url)
-    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path / "lumiverb"))
-    geonames_data.fetch(lambda *a, **k: None)
-    site.counts.clear()
-    with get_control_session() as session:
-        yield PlaceRepository(session)
-
-
 class _GeoNames:
     """The program installed as the runner sees it (a copy in its program folder, marked as an install marks it),
     on, with the site as its mirror, run by the real runner; asked through Lumiverb's own client."""
@@ -603,66 +587,9 @@ def _settings(g: _GeoNames, radius_km: int, mirror: str) -> dict:
     return values(g.manifest, {"radius_km": radius_km}, {"mirror": mirror})
 
 
-def test_part2_the_program_answers_as_today_on_the_testers_lists(today, site, lists_, short_data, machine_python):  # noqa: F811
-    """Its facts (at, near) for every point at radii of 1, 5 and 25 km, its searches and its places by id, from
-    its own socket, against today's repository on the same files: equal to the character, and every answer passes
-    Lumiverb's own checks (manifest.checked_outputs, plugin_lookups.checked_place)."""
-    from src.plugins.manifest import checked_outputs
-    from src.server.plugin_lookups import checked_place
-    from src.server.repository.places import label
-    from src.shared.location import is_fix
-
-    g = _GeoNames(short_data, site.url)
-    try:
-        g.until("ready", detail=None)
-        plugin = SimpleNamespace(manifest=g.manifest)
-        differences = []
-        points = lists_.points()
-        for km in (1, 5, 25):
-            for start in range(0, len(points), 200):
-                batch = points[start:start + 200]
-                clips = [{"id": str(n), "location": {"lat": la, "lon": lo, "sure_m": sure, "source": "file"}}
-                         for n, (la, lo, sure) in enumerate(batch, 1)]
-                said = g.ask("/v1/work", {"settings": _settings(g, km, site.url), "clips": clips})["clips"]
-                for n, (la, lo, sure) in enumerate(batch, 1):
-                    outputs = said[str(n)]["outputs"]
-                    checked_outputs(g.manifest.work, outputs)  # raises: what Lumiverb would refuse
-                    town, mark = today.nearest(la, lo, km * 1000), today.landmark_at(la, lo, sure)
-                    want = {"at": (mark["name"] if town else label(mark)) if mark else None,
-                            "near": label(town) if town else None}
-                    got = {k: (v or {}).get("text") for k, v in outputs.items()}
-                    if got != want:
-                        differences.append(("work", km, la, lo, sure, want, got))
-        fields = ("name", "region", "country", "kind", "matched", "population", "lat", "lon")
-        for q in lists_.queries():
-            got = g.ask("/v1/lookups/places", {"q": q, "limit": 10, "settings": _settings(g, 25, site.url)})["places"]
-            for raw in got:
-                checked_place(plugin, raw)
-            # Today's, but for a place at no real point, which the plug-in leaves out (plan section 1: what it keeps
-            # passes Lumiverb's checks, plugin_lookups.checked_place).
-            real = [r for r in today.search(q, 50) if is_fix(r["lat"], r["lon"])][:10]
-            want = [{"id": str(r["geonameid"]), **{k: r.get(k) for k in fields}} for r in real]
-            mine = [{"id": p["id"], **{k: p.get(k) for k in fields}} for p in got]
-            if mine != want:
-                differences.append(("search", q, want, mine))
-        for row in lists_.towns[:30] + lists_.landmarks[:30]:
-            gid = row[0]
-            want = today.get(gid)
-            got = g.ask("/v1/lookups/places", {"id": str(gid), "settings": _settings(g, 25, site.url)})["places"]
-            if want is None:
-                if got:
-                    differences.append(("id", gid, None, got))
-            elif [(p["id"], p["name"], p["lat"], p["lon"], p["kind"]) for p in got] != [
-                    (str(gid), want["name"], want["lat"], want["lon"], want["kind"])]:
-                differences.append(("id", gid, want, got))
-        assert differences == [], f"{len(differences)} differences, the first: {differences[:3]}"
-    finally:
-        g.stop()
-
-
 @ONE_PYTHON
 def test_part2_killed_its_restarted_and_uses_its_list_without_fetching_again(
-        today, site, short_data, machine_python):  # noqa: F811
+        site, short_data, machine_python):  # noqa: F811
     g = _GeoNames(short_data, site.url)
     try:
         g.until("ready", detail=None)
@@ -679,7 +606,7 @@ def test_part2_killed_its_restarted_and_uses_its_list_without_fetching_again(
 
 
 @ONE_PYTHON
-def test_part2_a_missing_file_fails_naming_it_and_its_ready_once_its_there(today, site, short_data, machine_python):  # noqa: F811
+def test_part2_a_missing_file_fails_naming_it_and_its_ready_once_its_there(site, short_data, machine_python):  # noqa: F811
     site.missing = {"alternateNamesV2.zip"}
     g = _GeoNames(short_data, site.url)
     try:
@@ -694,7 +621,7 @@ def test_part2_a_missing_file_fails_naming_it_and_its_ready_once_its_there(today
 
 
 @ONE_PYTHON
-def test_part2_cut_off_mid_download_it_keeps_what_it_finished(today, site, short_data, machine_python):  # noqa: F811
+def test_part2_cut_off_mid_download_it_keeps_what_it_finished(site, short_data, machine_python):  # noqa: F811
     """The last file (allCountries.zip) held half sent and the program killed: started again, the files it had
     finished aren't fetched again, the one cut off is, and the list is built."""
     site.hold = "allCountries.zip"

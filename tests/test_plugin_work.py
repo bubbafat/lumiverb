@@ -15,6 +15,7 @@ uncharged; a setting that remakes asks what becomes of what was made.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -482,6 +483,35 @@ def test_a_fact_is_shown_and_found_only_while_its_clip_has_what_it_was_made_from
 
 
 @pytest.mark.slow
+def test_a_newer_version_that_searches_another_output_finds_what_was_saved_after_the_sweep(facts, tmp_path):
+    """Its newer version searches `where` too (as GeoNames' version 2 searches `at`): what the older one saved is
+    found by it once the search sweep has written its text again from the facts saved, nothing made again; the
+    sweep writes it once."""
+    from src.server.search.sync import run_search_sync_sweep
+
+    f = facts
+    a, b, _ = f.clips
+    assert _set(f, {"word": "Zanzibar"}).status_code == 200
+    _job(f)
+    assert _found(f, "file") == set(), "where isn't searched"
+    newer = tmp_path / "facts-2"
+    shutil.copytree(FACTS, newer)
+    manifest = json.loads((newer / "lumiverb-plugin.json").read_text())
+    manifest["version"] = "2"
+    manifest["work"]["outputs"][0]["searchable"] = True
+    (newer / "lumiverb-plugin.json").write_text(json.dumps(manifest))
+    assert cli.main(["plugins", "install", str(newer), "--yes", "--env", str(f.env)]) == 0
+    refresh()
+    assert _found(f, "file") == set(), "what's saved says what it searched when it was saved"
+    with get_tenant_session(f.tenant_id) as session:
+        assert run_search_sync_sweep(session)["facts_synced"] == 2
+        assert run_search_sync_sweep(session)["facts_synced"] == 0, "once"
+    assert _found(f, "file") == {a, b}, "its where (… (file)) found now"
+    assert _found(f, "zanzibar") == {a, b}
+    assert _due(f) == [], "nothing made again"
+
+
+@pytest.mark.slow
 def test_an_output_with_nothing_to_say_shows_its_empty_line_and_isnt_searched(facts):
     f = facts
     a, _, _ = f.clips
@@ -531,6 +561,8 @@ def test_place_search_asks_each_plug_in_that_finds_places_and_says_which_couldnt
     assert f.client.put("/v1/plugins/facts", json={"enabled": False}, headers=f.robert).status_code == 200
     r = _places(f, "har")
     assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", "nothing on here finds places"
+    assert {"plugin_id": "facts", "title": "Facts"} in r.json()["error"]["details"]["plugins"], "and which would"
+    assert "Facts" in r.json()["error"]["message"]
 
 
 @pytest.mark.slow

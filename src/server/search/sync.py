@@ -13,6 +13,11 @@ row, so two things are kept here, each marked on its clip when synced:
 
 Each is written and marked in one transaction: what search finds is never
 ahead of or behind what's marked, only (for a moment) behind a save.
+
+A plug-in's facts are searched by the text saved with them (plugin_outputs
+search_text, ADR-023): the sweep writes it again where an installed
+plug-in's newer version searches other outputs than when they were saved
+(PluginOutputRepository.searched_again), from what they say.
 """
 
 from __future__ import annotations
@@ -298,13 +303,27 @@ def reset_synced(session: Session) -> None:
     session.commit()
 
 
+def _sync_facts(session: Session) -> int:
+    """Each installed plug-in's saved facts whose search text isn't what it searches now, written again: how
+    many (commits)."""
+    from src.server.plugin_catalog import installed
+    from src.server.repository.plugin_outputs import PluginOutputRepository
+
+    repo = PluginOutputRepository(session)
+    n = sum(repo.searched_again(pid, p.manifest.work) for pid, p in installed().items() if p.manifest.work)
+    session.commit()
+    return n
+
+
 def run_search_sync_sweep(session: Session) -> dict:
     """Write the rows of every stale clip and the segments of every stale
     transcript, a batch at a time by id for up to SWEEP_SEC (what's left
-    goes on next sweep; each is looked at once a sweep). Returns {"synced", "failed", "transcripts_synced", "transcripts_failed"}:
-    failed counts batches that couldn't be written (rolled back, tried next
-    sweep)."""
-    result = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0}
+    goes on next sweep; each is looked at once a sweep), then the search text
+    of plug-ins' facts saved before what they search changed. Returns
+    {"synced", "failed", "transcripts_synced", "transcripts_failed",
+    "facts_synced"}: failed counts batches that couldn't be written (rolled
+    back, tried next sweep)."""
+    result = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0, "facts_synced": 0}
     deadline = time.monotonic() + SWEEP_SEC
     for sync, done, failed in ((_sync_clips, "synced", "failed"),
                                (_sync_transcripts, "transcripts_synced", "transcripts_failed")):
@@ -318,4 +337,10 @@ def run_search_sync_sweep(session: Session) -> dict:
                 result[failed] += 1
                 break
             result[done] += n
+    try:
+        result["facts_synced"] = _sync_facts(session)
+    except Exception as exc:  # noqa: BLE001 — tried again next sweep
+        session.rollback()
+        logger.warning("Search sync of plug-ins' facts failed: %s", exc)
+        result["failed"] += 1
     return result

@@ -42,13 +42,8 @@ def test_every_producer_declares_what_the_rest_needs():
         # (a level is compared in lineage apart from the hash: below it is counted, redone when asked).
         if any(not s.remakes and s.kind != "level" for s in p.settings):
             assert callable(load(p.regroup)), p.artifact
-        # One a plug-in brings applies only while that plug-in is on in the account.
-        if p.plugin:
-            from src.plugins import plugin
-            from src.server.repository.lineage import APPLIES
-
-            assert plugin(p.plugin) is not None, p.artifact
-            assert APPLIES[p.artifact].startswith(f"(EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{p.plugin}'")
+        # Only an installed plug-in's work belongs to a plug-in (ADR-023: src/server/plugin_producers.py).
+        assert not p.plugin, p.artifact
     flags = [p.flag for p in producers.values() if p.flag]
     assert len(set(flags)) == len(flags)
 

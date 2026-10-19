@@ -1,6 +1,6 @@
 import type { Credit, PluginFacts } from "../api/types";
 
-/** Who to credit, linked, and the license it names ("GeoNames · CC BY 4.0"): beside a plug-in's facts or places,
+/** Who to credit, linked, and the license it names ("Its source · CC BY 4.0"): beside a plug-in's facts or places,
  * and a place a person picked. */
 export function CreditLinks({ credit, className = "hover:underline" }: { credit: Credit; className?: string }) {
   return (

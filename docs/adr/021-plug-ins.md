@@ -6,6 +6,8 @@ Accepted (2026-10-18, Robert). Phase 1 first: one plug-in, place names from GeoN
 
 Decision 1 (built in only) is replaced by ADR-023 (2026-10-18): plug-ins are programs of their own, run outside Lumiverb, declaring their settings, inputs and outputs; GeoNames is rebuilt as one. The account's switch, the acknowledgment and the re-accept rule carry over.
 
+Since ADR-023 phase 3 (2026-10-19) none of what this ADR built for GeoNames is in Lumiverb: its registry, `src/plugins/geonames/`, `plugin_data`, the control database's `geonames_*`, the producer and `asset_place` are gone, GeoNames a plug-in like any other (`src/own_plugins/geonames/`). The tables below say what was built here.
+
 ## Progress
 
 | Phase | Description | Status |
