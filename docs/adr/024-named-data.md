@@ -11,7 +11,7 @@ Nothing here is built. ADR-023 phase 3 (GeoNames moved out) doesn't anticipate i
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Names for what exists: Lumiverb's data listed and documented as `lumiverb.*` names, every built-in producer declaring by name what it reads and makes, protocol 1's inputs as names | Not started |
-| 2 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash | Not started |
+| 2 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash; broken chains warned of on Settings › Plug-ins | Not started |
 | 3 | Search by what a clip has: `has:<name>`, and not | Not started |
 | 4 | Search by value, by a name's type | Not started |
 
@@ -47,6 +47,7 @@ And on privacy: "I think it's less about enforced privacy and more about documen
 | 8 | Can two producers make the same name? | **Robert.** No: one maker per name, and a `lumiverb.*` name is Lumiverb's alone. Whether a plug-in may one day make a `lumiverb.*` name in place of Lumiverb's own (a better transcriber), or a mapping layer stand between a name and what makes it, is a future decision: "this feels like we're becoming needlessly complex. I think this is a future decision and for now they are not overloaded." |
 | 9 | How are clips found by their data? | **Robert.** By what they have, and don't: "has `lumiverb.video.analysis_proxy` but not `lumiverb.location.gps`". A filter `has:<name>`, negated by the filter algebra's `not` (`src/server/models/query_filter.py`); "has" is what the clip shows now. By value later, by the name's type: text matched as search matches it, numbers and times by range, points by distance. The `missing_*` filters each producer has today become `not has:`. |
 | 10 | Workflows ("When any video has a location.gps applied to it, perform action X")? | **Robert.** Not now: "100% forward looking and NOT something to build now." Contract names are what such a screen would list, which is a reason to keep the contract documented from the start. |
+| 11 | How does a person see a broken chain? | **Robert.** Settings › Plug-ins looks for broken dependency chains whenever it's loaded and shows each as a warning: "The plugin UI should explicitly look for broken dependency chains and report them when the page is loaded as a warning." Proposed: the server works them out when asked (`GET /v1/plugins`, each plug-in's `broken`), never kept apart, and follows the whole chain: a plug-in whose reading reaches, through others, a name nothing makes now, or one whose maker is off in this account or isn't running, each shown with its chain ("Fancy B reads Fancy A's metadata_a: Fancy A isn't installed"). A reader held by decision 5 is among them. The Admin page's plug-ins row counts them. |
 
 ## Design
 
