@@ -276,7 +276,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
 - **What.** Sections 1 to 4: `Data`, `makes` and `reads`, `src/producers/names.py`, the page, the protocol 1 table, the registry checks and the SQL spelling.
   - Every route, form and lineage that takes an id today also takes its name, mapped to today's id, family by family; storage is untouched. That includes the files' names (`/v1/assets/{id}/artifacts/{kind}`, the batch upload's fields, `POST /v1/assets/{id}/uploads`' `artifact`, ingest's files, the CLI's `--size`) and lineage's `producer`. Part 2's apps, Resolve, device and scan send all of them, to a part 1 or part 2 server, and to part 1's again after part 2's rollback.
   - `lumiverb producers --compare BEFORE AFTER`, the gate's comparison of two saved `GET /v1/producers?counts=true` answers, through `RENAMED`.
-  - `lumiverb-server migrate --to <revision>`: every account (and the control database, given its revision), down or up, refusing while the install is running. It's the rollback tool for parts 3 and 4, shipped and tested before they need it.
+  - `lumiverb-server migrate --to <revision>`: every account (and the control database, given its revision), down or up. It's the rollback tool for parts 3 and 4, shipped and tested before they need it. It refuses while the install is running, checking before it touches anything (`run` is up: its API answers, or its lock is held). With the service stopped, it starts a Mac's own PostgreSQL for the while (`postgres.up_while`), as `backup` and `restore` do; today's `migrate` doesn't.
   - The plug-in ids the machine uses refused at install.
   - No alembic revision.
 - **Gate.** The snapshot unchanged.
@@ -289,7 +289,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   - The protocol 1 table, a plug-in handed exactly what it was.
   - Every route under each id, each name and each file's name, the same answer; a lineage under each producer spelling leaving nothing due.
   - Job names, model ids, hit types and protocol 1's inputs never mapped.
-  - `migrate --to` down and up on a seeded install, and refused while the install runs.
+  - `migrate --to` down and up on a seeded install, and refused while the install runs; and run against a stopped install's own PostgreSQL, which it starts and stops again.
   - Reserved plug-in ids refused.
   - The spelling tests.
   - No alembic revision.
@@ -328,11 +328,11 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   - cursor-api, CLAUDE.md and ADR-024.
   - The file kinds wait for part 4, so this part is one family's.
 - **Gate.** The snapshot before (part 2's, in names) equals the one after. Nothing remade, no new-version hold, pauses and settings kept. A device, if there is one, checks in at protocol 2.
-- **Rollback.** On Robert's Mac, with part 3's release still installed:
-  1. stop the service;
-  2. `lumiverb-server migrate --to f8c4a2e6d0b5 --env <the env file>`: the accounts back to v0.1.104's head (parts 1 and 2 add no revision; the control database isn't touched by parts 3 and 4). `migrate --to` refuses while the install is running, as `restore` does. Otherwise part 3's API and scheduler would go on writing names into a database taken back to ids, and `run` would migrate it up again at its next start;
-  3. install part 2's release, from the tap's formula at its commit (never by switching the live tap checkout's branch);
-  4. start it.
+- **Rollback.** On Robert's Mac:
+  1. `brew services stop lumiverb`;
+  2. `/opt/homebrew/opt/lumiverb/bin/lumiverb-server migrate --to f8c4a2e6d0b5 --env /opt/homebrew/etc/lumiverb/env`: part 3's code takes the accounts back to v0.1.104's head (parts 1 and 2 add no revision; parts 3 and 4 don't touch the control database). `migrate --to` refuses while the service runs. Otherwise part 3's API and scheduler would go on writing names into a database taken back to ids, and `run` would migrate it up again at its next start;
+  3. point Homebrew's opt link at part 2's kept keg (the service runs `/opt/homebrew/opt/lumiverb/bin/lumiverb-server run`, and every upgrade keeps the old keg), then `brew pin lumiverb`, so the next `brew upgrade` doesn't move it back. The coordinator writes this step's exact commands from Homebrew's own linking code before the part ships, and the release notes mark them not rehearsed: it's never tried on Robert's install, and no throwaway uses Homebrew;
+  4. `brew services start lumiverb`, then the gate: counts identical, nothing remade.
 
   Or restore the backup taken before the upgrade (`backups.py`'s before an upgrade), which loses what was made since.
 
@@ -343,7 +343,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   - the previous release's code started on that database, with nothing remade or lost;
   - then up again.
 
-  They do this for part 3, and for part 4 with an open upload and a pending repair. The Homebrew step is written by whoever upgrades Robert's Mac (the coordinator), from Homebrew's own way of installing a formula at a commit. The release notes mark it as not rehearsed on a throwaway: Homebrew on this Mac is Robert's, and no throwaway uses it.
+  They do this for part 3, and for part 4 with an open upload and a pending repair. Step 3 is the coordinator's, as above.
 - **Tests.**
   - The migration's own mapping equal to `RENAMED`, while both exist.
   - The migration up and down on an account seeded with every table and key:
@@ -374,7 +374,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   - The files' names in URLs, uploads, the batch fields, ingest, playback's source, the CLI's `--size` and the caches.
   - Old kinds still taken until part 5.
 - **Gate.** The snapshot unchanged. Previews, thumbnails, video previews and playback on the web and both apps. An upload begun before the upgrade finishes after it. A missing-file repair pending before is still pending.
-- **Rollback.** As part 3's, with part 4's release installed: stop, `migrate --to <part 3's tenant revision>`, install part 3's release, start; or the backup. The release notes name the revision.
+- **Rollback.** As part 3's, with part 4's code: stop the service, `migrate --to <part 3's tenant revision>`, the opt link to part 3's kept keg and pinned (the coordinator's step), start, the gate; or the backup. The release notes name the revision.
 - **Tests.**
   - The migration up and down with an open upload and pending repairs.
   - The tester's rollback on a throwaway: an open upload and a pending missing-file repair through the upgrade, `migrate --to` down, and up again on part 3's code.
