@@ -30,5 +30,7 @@
       {"key": "when", "kind": "fact", "label": "When", "searchable": true},
       {"key": "what", "kind": "fact", "label": "What"}
     ]
-  }
+  },
+  "lookups": ["places"],
+  "credit": {"text": "Facts' places", "url": "https://example.org/facts"}
 }

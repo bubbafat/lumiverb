@@ -60,6 +60,8 @@ export interface Plugin {
   /** In words: what it reads ("each clip's location (…)") and what it answers. */
   reads?: string[];
   answers?: string[];
+  /** The lookups it answers, by name: "places" is Set location's Place search. */
+  lookups?: string[];
   downloads?: { url: string; title: string; about_mb: number }[];
   internet?: boolean;
   /** An installed one's process, as the plug-in runner last said; null for Lumiverb's own. */
@@ -139,6 +141,9 @@ export interface Place {
   kind?: string | null;
   /** The name in another language it was found by, when not its own ("Eiffel Tower" for Tour Eiffel). */
   matched?: string | null;
+  /** Who found it: "geonames", or an installed plug-in's id, and its title. */
+  source?: string;
+  source_title?: string | null;
 }
 
 /** Shown beside place names: their source and license ask it. */
@@ -146,6 +151,15 @@ export interface PlaceCredit {
   text: string;
   url: string;
   license_url: string;
+}
+
+/** What a place search found, from each source, and who to credit; the plug-ins that couldn't answer now. */
+export interface PlaceSearch {
+  places: Place[];
+  /** GeoNames' (with its license) when its places are among them. */
+  credit: PlaceCredit | null;
+  credits?: { source: string; text: string; url: string | null }[];
+  unavailable?: { plugin_id: string; title: string; why: string }[];
 }
 
 /** A role on one library (ADR-018 decision 8): "none" means they don't see it. */

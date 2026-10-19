@@ -16,6 +16,9 @@ answers:
                            declares>}]} -> {"clips": {id: {"outputs": {key:
                            {"text", "url"?} or null}}}}, or for a clip
                            {"error": {"whose": "clip" or "plugin", "message"}}
+  POST /v1/lookups/places  {"q", "limit", "settings"} or {"id", "settings"}
+                           -> {"places": [{"id", "name", "region", "country",
+                           "kind", "lat", "lon"}]}: Set location's Place search
 
 Its work gives each clip three facts, from the inputs its manifest declares
 (when it was taken, its metadata): the caption chosen in its settings, when
@@ -36,6 +39,26 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 
 PARTS = ((5, "night"), (12, "morning"), (17, "afternoon"), (21, "evening"), (24, "night"))
+
+# The places it finds by name: a handful, to try Set location's Place search with.
+PLACES = [
+    {"id": "eiffel", "name": "Eiffel Tower", "region": "Paris", "country": "France", "kind": "tower",
+     "lat": 48.85837, "lon": 2.29448},
+    {"id": "liberty", "name": "Statue of Liberty", "region": "New York", "country": "United States",
+     "kind": "monument", "lat": 40.68925, "lon": -74.0445},
+    {"id": "opera", "name": "Sydney Opera House", "region": "New South Wales", "country": "Australia",
+     "kind": "opera house", "lat": -33.85678, "lon": 151.21530},
+    {"id": "christ", "name": "Christ the Redeemer", "region": "Rio de Janeiro", "country": "Brazil",
+     "kind": "statue", "lat": -22.95192, "lon": -43.21049},
+]
+
+
+def places(sent: dict) -> list:
+    if "id" in sent:
+        return [p for p in PLACES if p["id"] == sent["id"]]
+    q = str(sent.get("q") or "").strip().lower()
+    found = [p for p in PLACES if p["name"].lower().startswith(q) or any(w.startswith(q) for w in p["name"].lower().split())]
+    return found[: int(sent.get("limit") or 10)]
 
 
 def taken(when: dict) -> str:
@@ -85,6 +108,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 — http.server's name
         sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/v1/lookups/places":
+            self._answer(200, {"places": places(sent)})
+            return
         if self.path == "/v1/work":
             settings, clips = sent.get("settings") or {}, sent.get("clips") or []
             self._answer(200, {"clips": {c["id"]: work(settings, c) for c in clips}})

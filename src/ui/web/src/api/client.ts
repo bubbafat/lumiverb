@@ -1,6 +1,5 @@
 import type {
-  Place,
-  PlaceCredit,
+  PlaceSearch,
   Plugin,
   ApiKeyCreateResponse,
   ApiKeyItem,
@@ -2017,9 +2016,11 @@ export async function setLocations(
   return apiFetch("/assets/locations", { method: "PUT", body });
 }
 
-/** Places whose name starts with q ("Name, region or country" narrows it), the Place names plug-in's: 409
- * plugin_off while it's off, 503 places_not_ready until its list is fetched. With the credit to show beside them. */
-export async function searchPlaces(q: string, limit = 8): Promise<{ places: Place[]; credit: PlaceCredit }> {
+/** Places whose name starts with q ("Name, region or country" narrows it): the Place names plug-in's and every
+ * installed plug-in's on here that finds places (ADR-023), each with its source. 409 plugin_off when none is on;
+ * 503 places_not_ready while GeoNames, the only one, hasn't its list yet. With the credits to show beside them,
+ * and the plug-ins that couldn't answer now. */
+export async function searchPlaces(q: string, limit = 8): Promise<PlaceSearch> {
   return apiFetch(`/places?${new URLSearchParams({ q, limit: String(limit) })}`);
 }
 

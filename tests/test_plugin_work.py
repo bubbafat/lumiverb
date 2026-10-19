@@ -317,7 +317,8 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     _job(f)
     r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
     assert r.status_code == 200, r.text
-    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts", "credit": None, "facts": [
+    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts",
+                                  "credit": {"text": "Facts' places", "url": "https://example.org/facts"}, "facts": [
         {"key": "where", "label": "Where", "text": "Zanzibar at 41.000, -73.000 (file)",
          "url": "https://www.openstreetmap.org/?mlat=41.0&mlon=-73.0"},
         {"key": "when", "label": "When", "text": "Zanzibar 2024-05-01T12:00:00Z", "url": None},
@@ -335,3 +336,66 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     assert _outputs(f, a) is not None, "and kept"
     assert f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert).status_code == 200
     assert _found(f, "zanzibar") == {a, b}, "on again: found again, nothing made again"
+
+
+# ---------------------------------------------------------------------------
+# Its place lookup: Set location's Place search (phase 2d)
+# ---------------------------------------------------------------------------
+
+
+def _places(f, q: str):
+    return f.client.get("/v1/places", params={"q": q}, headers=f.robert)
+
+
+@pytest.mark.slow
+def test_place_search_asks_each_plug_in_that_finds_places_and_says_which_couldnt(facts, monkeypatch):
+    import src.server.plugin_lookups as lookups
+
+    f = facts
+    assert _listed(f.client, f.robert)["facts"]["lookups"] == ["places"]
+    r = _places(f, "har")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"places": [{
+        "place_id": "facts:harbour", "name": "Harbour Point", "region": "Testshire", "country": "Testland",
+        "label": "Harbour Point, Testshire, Testland", "lat": 41.1, "lon": -73.2, "population": 0,
+        "kind": "lighthouse", "matched": None, "source": "facts", "source_title": "Facts"}],
+        "credit": None, "credits": [{"source": "facts", "text": "Facts' places", "url": "https://example.org/facts"}],
+        "unavailable": []}
+    asked = json.loads((f.data / "plugins" / "facts" / "data" / "last-lookup.json").read_text())
+    assert asked == {"q": "har", "limit": 10, "settings": {"word": "Seen", "behave": "well", "token": ""}}
+
+    assert _set(f, {"behave": "nonsense"}).status_code == 200
+    r = _places(f, "har")
+    assert r.status_code == 200 and r.json()["places"] == [], r.text
+    [why] = r.json()["unavailable"]
+    assert (why["plugin_id"], why["title"]) == ("facts", "Facts") and "doesn't say" in why["why"]
+    monkeypatch.setattr(lookups, "LOOKUP_TIMEOUT_SEC", 1.0)  # slow: it takes a minute
+    assert _set(f, {"behave": "slow"}).status_code == 200
+    assert "didn't answer" in _places(f, "har").json()["unavailable"][0]["why"]
+
+    assert f.client.put("/v1/plugins/facts", json={"enabled": False}, headers=f.robert).status_code == 200
+    r = _places(f, "har")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", "nothing on here finds places"
+
+
+@pytest.mark.slow
+def test_a_location_set_from_a_plug_ins_place_says_where_it_came_from(facts):
+    f = facts
+    a, b, nowhere = f.clips
+
+    def put(place: str):
+        return f.client.put("/v1/assets/locations", json={"asset_ids": [nowhere], "place_id": place},
+                            headers=f.robert)
+
+    r = put("facts:hill")
+    assert r.status_code == 200 and r.json()["updated"] == [nowhere], r.text
+    location = f.client.get(f"/v1/assets/{nowhere}", headers=f.robert).json()["location"]
+    assert (location["lat"], location["lon"], location["source"]) == (41.3, -73.4, "person")
+    assert location["basis_summary"] == "Hill Top, Testland"
+    assert location["credit"] == {"text": "Facts' places", "url": "https://example.org/facts"}
+    for unknown in ("facts:nope", "elsewhere:hill", "facts:"):
+        r = put(unknown)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_place", (unknown, r.text)
+    f.runner.stop_all()
+    r = put("facts:harbour")
+    assert r.status_code == 503 and r.json()["error"]["code"] == "plugin_unavailable", r.text

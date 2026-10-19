@@ -136,6 +136,20 @@ def summary(session: Session, row: dict[str, Any]) -> str | None:
 CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/"}}
 
 
+def credit(source: str | None) -> dict[str, Any] | None:
+    """Who a place name is from, to show beside it: GeoNames, or the installed plug-in that found it (its
+    manifest's credit, else its title); None for no place, or a plug-in no longer installed."""
+    if not source:
+        return None
+    if source in CREDITS:
+        return CREDITS[source]
+    from src.server.plugin_catalog import installed
+    from src.server.plugin_lookups import credit_of
+
+    found = installed().get(source)
+    return credit_of(found.manifest) if found else None
+
+
 def display_name(user_id: str | None) -> str | None:
     """Who set it, for a signed-in reader: the user's email (users have no
     other name). None for an API key, a user gone, or the control plane away."""
@@ -166,7 +180,7 @@ def for_asset(session: Session, asset_id: str) -> dict[str, Any] | None:
         "source": row["source"], "status": row["status"],
         "basis_summary": summary(session, row),
         # Who a place name in basis_summary is from, to show beside it (None without one).
-        "credit": CREDITS.get(str(((row["basis"] or {}).get("place") or {}).get("source"))),
+        "credit": credit(((row["basis"] or {}).get("place") or {}).get("source")),
         # A guess kept with nothing else to go by: its fixes went ("source
         # removed"), or are outside the window now ("outside window").
         "basis_gone": bool((row["basis"] or {}).get("basis_gone")) if row["source"] == TIME else False,

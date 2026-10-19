@@ -1,9 +1,9 @@
 {
   "id": "example",
-  "version": "2",
+  "version": "3",
   "protocol": 1,
   "title": "Example plug-in",
-  "description": "Lumiverb's example of a plug-in: it adds a few facts to each photo and video (a caption you choose, when it was taken, its shape) and shows how a plug-in runs, says what it reads, and how its settings look and are checked.",
+  "description": "Lumiverb's example of a plug-in: it adds a few facts to each photo and video (a caption you choose, when it was taken, its shape), finds a few famous places when you set a location, and shows how a plug-in runs, says what it reads, and how its settings look and are checked.",
   "author": "Lumiverb",
   "homepage": "https://github.com/bubbafat/lumiverb/blob/main/docs/adr/023-plug-in-architecture.md",
   "run": ["python3", "example.py"],
@@ -39,5 +39,6 @@
       {"key": "taken", "kind": "fact", "label": "Taken"},
       {"key": "shape", "kind": "fact", "label": "Shape"}
     ]
-  }
+  },
+  "lookups": ["places"]
 }
