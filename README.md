@@ -308,7 +308,9 @@ lumiverb-server plugins install FOLDER --off --env /opt/homebrew/etc/lumiverb/en
 A plug-in that works on each photo and video (its manifest's `work`) is
 handed only what it declares (a clip's location, when it was taken, its
 size and camera, a photo's preview) and gives back short facts that
-Lumiverb checks and keeps with the clip. Its work shows in **Settings ›
+Lumiverb checks and keeps with the clip. They show in the clip's details
+(the Lightbox), under the plug-in's name, and search finds a clip by those
+the plug-in marks searchable. Its work shows in **Settings ›
 Processing** like any other: how many clips it has made, what's left and
 why anything waits (its plug-in not running, say). Within half a minute of
 installing one, it starts on every clip in the accounts where it's on.

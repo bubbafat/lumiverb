@@ -11,7 +11,9 @@ What it's handed is its declared inputs and nothing else
 What it gives back is kept only once Lumiverb has checked it (each output it
 declared, plain text of a length, an http(s) link: manifest.checked_outputs)
 and only when the clip's inputs are what they were when they were handed
-out; one whose inputs changed since is "stale" (due again).
+out; one whose inputs changed since is "stale" (due again). The text of
+those it says are searchable is kept to be searched, a search finding the
+clip by them while it's on (src/server/search/text_search.py facts).
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from src.server.api.routers.plugins import require_on
 from src.server.plugin_catalog import Installed, find
 from src.server.repository import lineage
 from src.server.repository.clip_inputs import ClipInputsRepository
-from src.server.repository.plugin_outputs import PluginOutputRepository
+from src.server.repository.plugin_outputs import PluginOutputRepository, search_text
 from src.shared.producers import PRODUCERS
 
 router = APIRouter(prefix="/v1/plugins", tags=["plugins"])
@@ -135,7 +137,7 @@ def save_plugin_outputs(
             stale.append(item.asset_id)
         else:
             facts = checked[item.asset_id]
-            outputs.save(item.asset_id, plugin_id, facts, item.inputs_hash)
+            outputs.save(item.asset_id, plugin_id, facts, item.inputs_hash, search_text(work, facts))
             lineage.record(session, item.asset_id, artifact, with_source(made, item.source_hash),
                            outcome="ok" if any(facts.values()) else "empty", commit=False)
             saved += 1
