@@ -45,14 +45,16 @@ HELLO = Path(__file__).parent / "plugins" / "hello"
 
 @pytest.fixture
 def data(monkeypatch) -> Iterator[Path]:
-    """A data folder short enough for a Unix socket's path (macOS: 104 bytes), the runner's waits shortened,
-    and python3 on the PATH being this Python."""
+    """A data folder short enough for a Unix socket's path (macOS: 104 bytes), the runner looking often, and
+    python3 on the PATH being this Python. Its time limits stay generous (a minute to start, 5 s a health
+    check): a busy machine never ends a healthy plug-in here. Only a test of a plug-in that doesn't answer
+    shortens the start's, once every healthy one has started (_answer_within)."""
     root = Path(tempfile.mkdtemp(prefix="lvp", dir="/tmp"))
     bin_dir = root / "bin"
     bin_dir.mkdir()
     (bin_dir / "python3").symlink_to(sys.executable)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    for name, value in (("START_WITHIN_SEC", 3.0), ("HEALTH_EVERY_SEC", 0.3), ("HEALTH_TIMEOUT_SEC", 0.5),
+    for name, value in (("START_WITHIN_SEC", 60.0), ("HEALTH_EVERY_SEC", 0.3), ("HEALTH_TIMEOUT_SEC", 5.0),
                         ("MEMORY_EVERY_SEC", 0.3), ("DISK_EVERY_SEC", 0.3), ("STOP_WITHIN_SEC", 2.0),
                         ("RESTART_FIRST_SEC", 0.2), ("RESTART_MAX_SEC", 0.5), ("GIVE_UP_AFTER", 3),
                         ("LIST_EVERY_SEC", 0.2), ("HEARTBEAT_SEC", 0.2)):
@@ -86,7 +88,12 @@ def _runner(data: Path) -> tuple[Runner, Installs]:
     return Runner(data, installed=installs), installs
 
 
-def _until(runner: Runner, done: Callable[[], bool], within: float = 15.0) -> None:
+def _answer_within(monkeypatch, seconds: float) -> None:
+    """A plug-in now starting is ended unless it answers within seconds: for one that never will."""
+    monkeypatch.setattr(plugin_runner, "START_WITHIN_SEC", seconds)
+
+
+def _until(runner: Runner, done: Callable[[], bool], within: float = 60.0) -> None:
     end = time.monotonic() + within
     while time.monotonic() < end:
         runner.turn()
@@ -161,25 +168,40 @@ def test_one_that_keeps_crashing_is_started_again_then_left_stopped_and_the_rest
     ("hang", "It didn't answer within 3 s of starting"),
     ("memory", "MB of memory, more than its 128 MB"),
 ])
-def test_one_that_hangs_or_takes_too_much_memory_is_ended_and_started_again(data, mode, why) -> None:
+def test_one_that_hangs_or_takes_too_much_memory_is_ended_and_started_again(data, mode, why, monkeypatch) -> None:
     runner, installs = _runner(data)
     installs.add("hello")
     try:
         _until(runner, lambda: _state(runner, "hello") == READY)
+        _answer_within(monkeypatch, 3.0)  # hello has started: only the one that never answers is held to it
         installs.add("trouble", mode, memory_mb=128)
-        _until(runner, lambda: _state(runner, "trouble") == RESTARTING, within=20)
+        _until(runner, lambda: _state(runner, "trouble") == RESTARTING)
         assert why in runner.plugins["trouble"].why
         assert _state(runner, "hello") == READY
     finally:
         runner.stop_all()
 
 
-def test_one_that_stops_answering_or_answers_nonsense_is_ended(data) -> None:
+def test_one_that_answers_nonsense_is_ended(data, monkeypatch) -> None:
+    _answer_within(monkeypatch, 3.0)
     runner, installs = _runner(data)
     installs.add("trouble", "garbage")
     try:
-        _until(runner, lambda: _state(runner, "trouble") in (RESTARTING, STOPPED), within=20)
+        _until(runner, lambda: _state(runner, "trouble") in (RESTARTING, STOPPED))
         assert "It didn't answer within 3 s of starting" in runner.plugins["trouble"].why
+    finally:
+        runner.stop_all()
+
+
+def test_one_that_stops_answering_is_ended_and_started_again(data, monkeypatch) -> None:
+    runner, installs = _runner(data)
+    installs.add("trouble", "goes-quiet")
+    try:
+        _until(runner, lambda: _state(runner, "trouble") == READY)
+        # Ready: from now on it never answers. Each ask waits 0.2 s for it, and 3 missed in a row end it.
+        monkeypatch.setattr(plugin_runner, "HEALTH_TIMEOUT_SEC", 0.2)
+        _until(runner, lambda: _state(runner, "trouble") == RESTARTING)
+        assert runner.plugins["trouble"].why.startswith("It stopped answering")
     finally:
         runner.stop_all()
 
@@ -208,7 +230,7 @@ def test_a_file_bigger_than_it_may_write_fails_its_write_and_a_full_folder_stops
                                    for r in caplog.records))
         assert (data / "plugins" / "writer" / "data" / "big").stat().st_size <= 10 * 1024 * 1024
         _until(runner, lambda: _state(runner, "writer") == READY)  # the write failed; it goes on
-        _until(runner, lambda: _state(runner, "filler") == STOPPED, within=20)
+        _until(runner, lambda: _state(runner, "filler") == STOPPED)
         assert "more than its 10 MB: left stopped" in runner.plugins["filler"].why
     finally:
         runner.stop_all()

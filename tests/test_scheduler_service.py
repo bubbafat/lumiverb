@@ -517,13 +517,13 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     rec = Recorder()
     gate = threading.Event()
     acct = FakeAccount()
-    acct.refresh = lambda: gate.wait(5)
+    acct.refresh = lambda: gate.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
                   runners=rec.all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     start = time.monotonic()
     s.tick()
-    assert time.monotonic() - start < 1
+    assert time.monotonic() - start < 30, "the refresh's minute wasn't waited for (never how fast: a busy machine)"
     gate.set()
     deadline = time.monotonic() + 5
     while not rec.ran and time.monotonic() < deadline:
@@ -962,12 +962,12 @@ def test_failures_are_sent_off_the_dispatching_thread(monkeypatch: pytest.Monkey
     monkeypatch.setattr(service, "FLUSH_EVERY_SEC", 0)
     gate = threading.Event()
     acct = FakeAccount()
-    acct.failures.flush.side_effect = lambda: gate.wait(5)
+    acct.failures.flush.side_effect = lambda: gate.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
                   runners=Recorder().all(), scan=MagicMock())
     started = time.monotonic()
     s.tick()
-    assert time.monotonic() - started < 1
+    assert time.monotonic() - started < 30, "the flush's minute wasn't waited for"
     gate.set()
     s.stop()
 
@@ -1033,10 +1033,10 @@ def test_a_lock_connection_that_doesnt_answer_counts_as_lost() -> None:
     from src.server.scheduler.service import _still_holds
 
     hung = MagicMock()
-    hung.execute.side_effect = lambda *a, **kw: threading.Event().wait(5)
+    hung.execute.side_effect = lambda *a, **kw: threading.Event().wait(60)
     started = time.monotonic()
     assert _still_holds(hung, timeout=0.1) is False
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 30, "the hung minute wasn't waited for"
     assert _still_holds(MagicMock(), timeout=1) is True
     gone = MagicMock()
     gone.execute.side_effect = ConnectionError("server closed the connection")
@@ -1094,7 +1094,7 @@ def test_one_failure_flush_at_a_time_per_account(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(service, "FLUSH_EVERY_SEC", 0)
     gate = threading.Event()
     acct = FakeAccount()
-    acct.failures.flush.side_effect = lambda: gate.wait(5)
+    acct.failures.flush.side_effect = lambda: gate.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
                   runners=Recorder().all(), scan=MagicMock())
     for _ in range(3):

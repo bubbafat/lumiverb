@@ -894,7 +894,7 @@ def test_stopping_the_api_kills_a_running_cut(tmp_path, monkeypatch):
         started = time.monotonic()
         playback.stop_cuts()
         t.join(10)
-        assert not t.is_alive() and time.monotonic() - started < 5
+        assert not t.is_alive() and time.monotonic() - started < 30, "the 60 s cut wasn't waited for"
         assert failed and not playback._procs
         # One asked for while it stops doesn't start.
         with pytest.raises(playback._CutFailed):
@@ -960,7 +960,7 @@ def test_a_cut_is_made_off_the_request(env, media, monkeypatch, tmp_path):
     def held(cmd, *a, **k):
         if cmd[0] == "ffmpeg":
             in_request.append(threading.current_thread().name)
-            release.wait(30)
+            release.wait(60)
         return real(cmd, *a, **k)
 
     monkeypatch.setattr(playback.subprocess, "Popen", held)
@@ -968,7 +968,7 @@ def test_a_cut_is_made_off_the_request(env, media, monkeypatch, tmp_path):
     assert body["ready"] is False
     started = time.monotonic()
     r = client.get(_path(body["url"]))
-    assert time.monotonic() - started < 5
+    assert time.monotonic() - started < 30, "the held minute of ffmpeg wasn't waited for"
     assert r.status_code == 503 and r.json()["error"]["code"] == "playback_preparing"
     assert r.headers["retry-after"] == "2"
     release.set()

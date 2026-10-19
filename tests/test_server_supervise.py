@@ -236,7 +236,8 @@ def test_a_child_that_ignores_sigterm_is_killed_when_its_time_is_up(tmp_path):
     stop.set()
     thread.join(10)
     assert not _alive(pid)
-    assert 0.4 < time.monotonic() - started < 5
+    # It got its time (0.5 s) and no more than a while: killed, not left running (never how fast).
+    assert 0.4 < time.monotonic() - started < 30
 
 
 def test_its_temp_folder_is_emptied_before_it_starts(tmp_path):
