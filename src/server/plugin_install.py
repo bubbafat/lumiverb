@@ -135,15 +135,19 @@ def _remove(path: Path) -> None:
 
 
 def install(p: Plan, *, on_by_default: bool, acknowledged: bool, data: Path, session: Session, by: str,
-            now: datetime) -> None:
+            now: datetime, keep_accepted: bool = False) -> None:
     """Install it (or this version of it). acknowledged: the server admin accepted its acknowledgment, when it's
-    on by default and asks (Plan.acknowledgment_asked). Copied first, recorded, then swapped in."""
+    on by default and asks (Plan.acknowledgment_asked). keep_accepted: no one is asked (Lumiverb's own, updated:
+    src/server/own_plugins.py), so what the server admin accepted stays as it was, and the accounts following
+    the default wait when it no longer covers the new text. Copied first, recorded, then swapped in."""
     ack = p.manifest.acknowledgment
-    if p.acknowledgment_asked(on_by_default) and not acknowledged:
+    if p.acknowledgment_asked(on_by_default) and not acknowledged and not keep_accepted:
         raise PluginInstallError(f"On by default, {ack.title} is accepted for every account that hasn't chosen: "
                                  "accept it, or install it --off for each account's admin to")
     accepted = None
-    if on_by_default and ack is not None:
+    if keep_accepted:
+        accepted = p.before["acknowledged_version"] if p.before and on_by_default else None
+    elif on_by_default and ack is not None:
         accepted = ack.version if p.acknowledgment_asked(True) else p.before["acknowledged_version"]
     home = plugin_dir(data, p.manifest.plugin_id)
     home.mkdir(parents=True, exist_ok=True)

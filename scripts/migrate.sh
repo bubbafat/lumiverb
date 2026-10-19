@@ -66,37 +66,44 @@ except Exception as e:
 PYEOF
 )
 
+failed=0
 if [[ -z "$tenant_urls" ]]; then
   echo -e "${YELLOW}⚠ No tenants found — skipping tenant migrations.${NC}"
-  exit 0
-fi
+else
+  tenant_count=$(echo "$tenant_urls" | wc -l | tr -d ' ')
+  echo "Found $tenant_count tenant(s)"
 
-tenant_count=$(echo "$tenant_urls" | wc -l | tr -d ' ')
-echo "Found $tenant_count tenant(s)"
+  echo ""
+  echo "=== Step 3: Tenant migrations ==="
+  current=0
+  # A private log: a fixed /tmp path made by another user can't be written.
+  log="$(mktemp)"
+  trap 'rm -f "$log"' EXIT
+  while IFS=$'\t' read -r tenant_id conn_str; do
+    current=$((current + 1))
+    echo -n "  [$current/$tenant_count] $tenant_id ... "
+    if ALEMBIC_TENANT_URL="$conn_str" $UV run alembic -c alembic-tenant.ini upgrade head \
+        > "$log" 2>&1; then
+      echo -e "${GREEN}✓${NC}"
+    else
+      echo -e "${RED}✗ FAILED${NC}"
+      cat "$log" >&2
+      failed=$((failed + 1))
+    fi
+  done <<< "$tenant_urls"
 
-echo ""
-echo "=== Step 3: Tenant migrations ==="
-failed=0
-current=0
-# A private log: a fixed /tmp path made by another user can't be written.
-log="$(mktemp)"
-trap 'rm -f "$log"' EXIT
-while IFS=$'\t' read -r tenant_id conn_str; do
-  current=$((current + 1))
-  echo -n "  [$current/$tenant_count] $tenant_id ... "
-  if ALEMBIC_TENANT_URL="$conn_str" $UV run alembic -c alembic-tenant.ini upgrade head \
-      > "$log" 2>&1; then
-    echo -e "${GREEN}✓${NC}"
-  else
-    echo -e "${RED}✗ FAILED${NC}"
-    cat "$log" >&2
-    failed=$((failed + 1))
+  echo ""
+  if [[ $failed -gt 0 ]]; then
+    echo -e "${RED}✗ $failed tenant migration(s) failed.${NC}" >&2
+    exit 1
   fi
-done <<< "$tenant_urls"
+  echo -e "${GREEN}✓ All tenant migrations complete.${NC}"
+fi
 
 echo ""
-if [[ $failed -gt 0 ]]; then
-  echo -e "${RED}✗ $failed tenant migration(s) failed.${NC}" >&2
-  exit 1
-fi
-echo -e "${GREEN}✓ All tenant migrations complete.${NC}"
+echo "=== Step 4: Lumiverb's own plug-ins ==="
+# Installed where they aren't, updated where the shipped one is newer (src/server/own_plugins.py), into
+# DATA_DIR/plugins (DATA_DIR from the environment: the update's). One that can't be is said here, kept for the
+# Admin page and tried again at the next start: never this script's failure.
+$UV run python -m src.server.own_plugins \
+  || echo -e "${YELLOW}⚠ Lumiverb's own plug-ins weren't looked at; the plug-in runner tries at its start.${NC}"

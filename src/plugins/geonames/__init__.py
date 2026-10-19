@@ -7,11 +7,22 @@ turns it on, credited wherever its names show.
 Versions 2 (landmarks, a bigger download) and 3 (names in other
 languages) of its text are under the same license, so an acceptance of
 version 1 stands (reaccept_from, Robert 2026-10-18: Creative Commons to
-Creative Commons asks nothing)."""
+Creative Commons asks nothing).
+
+Since ADR-023 phase 3 it's an installed plug-in, a program of its own
+(src/own_plugins/geonames/, the same id and acknowledgment), so it isn't one
+of these (PLUGIN is None). What's here stays until part 4: the old list's
+fetch (data.py) and kinds (landmarks.py), read by part 3's fallbacks over
+the list it left in the control database, and how it was (WAS), which the
+plug-in's manifest is held to."""
 
 from src.plugins.contract import Acknowledgment, Link, PluginSpec
 
-PLUGIN = PluginSpec(
+PLUGIN = None
+
+# Place names as it was one of ADR-021's plug-ins: its title, description and acknowledgment, which the installed
+# plug-in's manifest keeps (tests/test_geonames_program.py).
+WAS = PluginSpec(
     plugin_id="geonames",
     title="Place names (GeoNames)",
     description=("Find a place by name when setting a location, and see the nearest town and the landmark each "

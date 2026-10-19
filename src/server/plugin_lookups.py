@@ -140,10 +140,12 @@ def find_places(session: Session, q: str, limit: int) -> tuple[list[dict], list[
 
 
 def one_place(session: Session, place: str) -> dict[str, Any] | None:
-    """A plug-in's place by its place_id (<plugin_id>:<id>), as the plug-in says it now; None when no plug-in on
-    here finds places by that name or it says there's no such place. LookupUnavailableError when it can't answer."""
+    """A plug-in's place by its place_id (<plugin_id>:<id>), as the plug-in says it now, with who to credit for
+    it (credit_of); None when no plug-in on here finds places by that name or it says there's no such place.
+    LookupUnavailableError when it can't answer."""
     plugin_id, _, own = place.partition(":")
     plugin = next((p for p in offering(session, PLACES) if p.manifest.plugin_id == plugin_id), None)
     if plugin is None or not own:
         return None
-    return next((p for p in _ask(session, plugin, {"id": own}) if p["place_id"] == place), None)
+    found = next((p for p in _ask(session, plugin, {"id": own}) if p["place_id"] == place), None)
+    return {**found, "credit": credit_of(plugin.manifest)} if found else None

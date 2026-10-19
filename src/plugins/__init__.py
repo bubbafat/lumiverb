@@ -1,8 +1,11 @@
 """The plug-ins: one folder each, found here (ADR-021).
 
 Each subpackage of this one is a plug-in: its ``__init__`` sets ``PLUGIN``
-to a PluginSpec (src/plugins/contract.py). Everything that lists plug-ins
-reads them from here.
+to a PluginSpec (src/plugins/contract.py), or to None for one that's no
+longer one of these (GeoNames, an installed plug-in since ADR-023 phase 3:
+src/own_plugins/geonames/; its old list's code stays for part 3's
+fallbacks until part 4). Everything that lists plug-ins reads them from
+here.
 """
 
 from __future__ import annotations
@@ -34,7 +37,10 @@ def registry() -> dict[str, PluginSpec]:
         found: list[PluginSpec] = []
         for module in pkgutil.iter_modules(__path__):
             if module.ispkg:
-                spec = getattr(importlib.import_module(f"{__name__}.{module.name}"), "PLUGIN", None)
+                package = importlib.import_module(f"{__name__}.{module.name}")
+                spec = getattr(package, "PLUGIN", None)
+                if spec is None and hasattr(package, "PLUGIN"):
+                    continue  # no longer one of these
                 if not isinstance(spec, PluginSpec):
                     raise ValueError(f"src/plugins/{module.name} declares no PLUGIN (a PluginSpec)")
                 found.append(spec)

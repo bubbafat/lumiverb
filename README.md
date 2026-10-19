@@ -311,13 +311,26 @@ size and camera, a photo's preview) and gives back short facts that
 Lumiverb checks and keeps with the clip. They show in the clip's details
 (the Lightbox), under the plug-in's name, and search finds a clip by those
 the plug-in marks searchable. A plug-in can also find places by name for
-**Set location**, beside GeoNames' (each place says where it's from). Its
+**Set location** (each place says where it's from when more than one plug-in
+found places). Its
 work shows in **Settings ›
 Processing** like any other: how many clips it has made, what's left and
 why anything waits (its plug-in not running, say). Within half a minute of
 installing one, it starts on every clip in the accounts where it's on.
 
-To try it, Lumiverb comes with an example that gives each photo and video a
+**Place names (GeoNames)** is one of Lumiverb's own plug-ins: it comes
+installed, off until an account's admin turns it on (accepting GeoNames'
+CC BY 4.0 license). Turned on, it downloads about 600 MB of GeoNames' lists
+once for the server and builds its own list of the world's towns and
+landmarks from them (Settings › Plug-ins says how far), then names
+where each photo and video was: the landmark it's at and the nearest town,
+in the Lightbox's Place names section, and finds places by name in Set
+location. Its radius is in Settings › Plug-ins. On a server that used it
+before, it stays on as it was and its clips keep their place names until
+it has named them again. A Linux install needs `DATA_DIR` in its env file
+for it, as for every plug-in.
+
+To try plug-ins, Lumiverb comes with an example that gives each photo and video a
 caption you choose, when it was taken and its shape, finds a few famous
 places in Set location, and has one setting of every kind. `lumiverb-server plugins` lists what's installed and says where
 the example is. `lumiverb-server plugins uninstall example` takes it away

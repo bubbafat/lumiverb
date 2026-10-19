@@ -50,9 +50,12 @@ os.environ.setdefault(
     "TENANT_DATABASE_URL_TEMPLATE", "postgresql://tests-start-their-own-db.invalid/{tenant_id}"
 )
 os.environ.setdefault("JWT_SECRET", "lumiverb-test-jwt-secret")
-# Nor does a test fetch the Place names plug-in's list from GeoNames: a test
-# that wants it serves its own (tests/test_geonames.py); anything else turning
-# the plug-in on fails to fetch at once, here, instead of going to the internet.
+# Nor does a test fetch GeoNames' lists from GeoNames: a test that wants them
+# serves its own (tests/plugins/geonames_lists.py). This address becomes the
+# mirror of every GeoNames plug-in Lumiverb installs in a test
+# (src/server/own_plugins.py), so one turned on fails to fetch at once instead
+# of going to the internet (and its process gets closed proxies besides:
+# _plugins_reach_no_internet).
 os.environ["LUMIVERB_GEONAMES_URL"] = "http://tests-serve-their-own-geonames.invalid/"
 
 # pyvips imports libvips via cffi.dlopen, which on macOS only searches the

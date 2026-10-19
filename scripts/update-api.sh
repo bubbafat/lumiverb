@@ -165,7 +165,11 @@ ok "Control plane migrations applied"
 
 export CONTROL_PLANE_DATABASE_URL="$DB_URL"
 export UV_BIN
-sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,ALEMBIC_CONTROL_URL,UV_BIN \
+# Its last step installs Lumiverb's own plug-ins (src/server/own_plugins.py) into DATA_DIR/plugins, making it.
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+LUMIVERB_GEONAMES_URL="$(grep '^LUMIVERB_GEONAMES_URL=' "$ENV_FILE" | cut -d= -f2- || true)"
+export DATA_DIR LUMIVERB_GEONAMES_URL
+sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,ALEMBIC_CONTROL_URL,UV_BIN,DATA_DIR,LUMIVERB_GEONAMES_URL \
   bash "$APP_DIR/scripts/migrate.sh"
 ok "Tenant migrations applied"
 
@@ -385,6 +389,7 @@ UNIT
   ok "lumiverb-plugins installed"
 else
   warn "No DATA_DIR in ${ENV_FILE}: no plug-in runner (plug-ins keep their folders on the data disk)"
+  warn "Place names (GeoNames) is a plug-in now: without DATA_DIR it stops working once the old place list goes"
 fi
 
 # ---------------------------------------------------------------------------

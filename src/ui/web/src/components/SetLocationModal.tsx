@@ -6,11 +6,11 @@ import { Modal } from "./Modal";
 import { CreditLinks } from "./PluginFactsSection";
 import { clipCount } from "./ProjectUsageList";
 
-/** "Set location…" for a selection (ADR-017): a place found by name (with the
- * Place names plug-in on and its list fetched, ADR-021, or an installed
- * plug-in on that finds places, ADR-023), a point, or the same place as one
- * of the selected clips. Replacing a location the file or a
- * person gave asks first, as the API requires (409 location_exists). */
+/** "Set location…" for a selection (ADR-017): a place found by name (with a
+ * plug-in on that finds places, ADR-023: GeoNames' Place names among them),
+ * a point, or the same place as one of the selected clips. Replacing a
+ * location the file or a person gave asks first, as the API requires (409
+ * location_exists). */
 
 type Ask = { count: number; person: number; file: number };
 
@@ -36,11 +36,8 @@ export function SetLocationModal({
 }) {
   const queryClient = useQueryClient();
   const { data: plugins } = useQuery({ queryKey: ["plugins"], queryFn: listPlugins });
-  const geonames = plugins?.find((p) => p.plugin_id === "geonames");
-  // A list fetched, even while a newer one is fetched (the server searches what it has meanwhile); or a plug-in
-  // on here that finds places.
-  const places = (geonames?.state === "on" && (geonames.data?.state === "ready" || !!geonames.data?.ready_at))
-    || !!plugins?.some((p) => p.state === "on" && p.lookups?.includes("places"));
+  // A plug-in on here that finds places (one still fetching its list is answered for meanwhile, or says so).
+  const places = !!plugins?.some((p) => p.state === "on" && p.lookups?.includes("places"));
   const [picked, setPicked] = useState<"place" | "point" | "same" | null>(null);
   const mode = picked ?? (places ? "place" : "point");
   const setMode = setPicked;
@@ -160,9 +157,9 @@ export function SetLocationModal({
   );
 }
 
-/** A place by name (the Place names plug-in, and installed plug-ins that find places): what's typed, the places
- * it starts, each from where, the one chosen; each source's credit beside them (GeoNames' license asks it), and
- * which plug-ins couldn't answer now. */
+/** A place by name (each plug-in on here that finds places): what's typed, the places it starts, each from where
+ * when more than one plug-in found them, the one chosen; each source's credit beside them, its license too
+ * (GeoNames' asks it), and which plug-ins couldn't answer now. */
 function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoose: (p: Place | null) => void;
                                                     input: string }) {
   const [typed, setTyped] = useState(chosen?.label ?? "");
@@ -174,6 +171,7 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
   const searching = term.length >= 2 && term !== chosen?.label;
   const { data, error } = useQuery({ queryKey: ["places", term], queryFn: () => searchPlaces(term),
                                      enabled: searching });
+  const fromMany = new Set(data?.places.map((p) => p.source) ?? []).size > 1;
   return (
     <div className="space-y-2">
       <input
@@ -202,10 +200,10 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
                   className="w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-800"
                 >
                   {p.label}
-                  {(p.kind || p.matched || (p.source && p.source !== "geonames")) && (
+                  {(p.kind || p.matched || fromMany) && (
                     <span className="text-gray-500">
                       {" · "}
-                      {[p.kind, p.matched, p.source && p.source !== "geonames" ? `from ${p.source_title ?? p.source}` : null]
+                      {[p.kind, p.matched, fromMany ? `from ${p.source_title ?? p.source}` : null]
                         .filter(Boolean).join(" · ")}
                     </span>
                   )}
@@ -219,14 +217,11 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
       {searching && data?.unavailable?.map((u) => (
         <p key={u.plugin_id} className="text-xs text-amber-300">{u.title} couldn&apos;t answer: {u.why}.</p>
       ))}
-      {(data?.credits ?? (data?.credit ? [{ source: "geonames", text: "GeoNames", url: data.credit.url,
-                                             license: { text: "CC BY 4.0", url: data.credit.license_url } }] : []))
-        .map((c) => (
-          <p key={c.source} className="text-xs text-gray-500">
-            {c.source === "geonames" ? "Place names from " : "Places from "}
-            <CreditLinks credit={c} />
-          </p>
-        ))}
+      {(data?.credits ?? []).map((c) => (
+        <p key={c.source} className="text-xs text-gray-500">
+          Places from <CreditLinks credit={c} />
+        </p>
+      ))}
     </div>
   );
 }

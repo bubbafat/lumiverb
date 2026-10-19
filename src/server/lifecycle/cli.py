@@ -324,14 +324,27 @@ def _init(args: argparse.Namespace) -> int:
 
 
 def _migrate(args: argparse.Namespace) -> int:
-    _, url = _env_and_url(args)
+    env, url = _env_and_url(args)
     try:
         count = migrate(url)
     except MigrationError as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     print(f"✓ Migrated the control plane and {count} account(s)")
+    _install_own(env, url, say=print, fail=lambda line: print(line, file=sys.stderr))
     return 0
+
+
+def _install_own(env: dict[str, str], url: str, *, say, fail) -> None:
+    """Migrating's last step: Lumiverb's own plug-ins installed or updated (src/server/own_plugins.py), never
+    stopping what follows."""
+    from src.server.own_plugins import install_own
+
+    try:
+        data: Path | None = data_dir(env)
+    except InstallError:
+        data = None
+    install_own(url, data, geonames_url=env.get("LUMIVERB_GEONAMES_URL") or None, say=say, fail=fail)
 
 
 def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
@@ -368,7 +381,10 @@ def _created_and_migrated(url: str, env: dict[str, str] | None = None) -> int:
         logger.info("Created the control database")
     if env is not None:
         backed_up_before_upgrade(env, url)
-    return migrate(url, say=logger.info)
+    count = migrate(url, say=logger.info)
+    if env is not None:
+        _install_own(env, url, say=logger.info, fail=logger.error)
+    return count
 
 
 def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrated: threading.Event) -> None:

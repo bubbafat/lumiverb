@@ -2,7 +2,8 @@
 each one's version and manifest as installed, on or off by default, the
 acknowledgment the server admin accepted for the accounts that follow the
 default, and what it reads and reaches as accepted (installed_plugins);
-every install, change of default and uninstall, kept for good
+every install, change of default and uninstall, kept for good, and an
+install of one of Lumiverb's own that failed, with why
 (plugin_install_log)."""
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-INSTALL, DEFAULT, UNINSTALL = "install", "default", "uninstall"
+INSTALL, DEFAULT, UNINSTALL, FAILED = "install", "default", "uninstall", "failed"
 _COLUMNS = ("plugin_id, version, manifest, on_by_default, acknowledged_version, permissions, installed_by,"
             " installed_at, changed_by, changed_at")
 
@@ -63,18 +64,22 @@ class InstalledPluginRepository:
                                         {"p": plugin_id}).scalar()
         self._log(plugin_id, UNINSTALL, version=version, by=by, now=now)
 
+    def failed(self, plugin_id: str, *, version: str | None, why: str, by: str, now: datetime) -> None:
+        """An install that failed (one of Lumiverb's own), and why. Doesn't commit."""
+        self._log(plugin_id, FAILED, version=version, why=why, by=by, now=now)
+
     def log(self, plugin_id: str) -> list[dict[str, Any]]:
         """Its history, oldest first."""
         return [dict(r) for r in self._session.execute(text(
-            "SELECT action, version, on_by_default, acknowledged_version, permissions, by, at"
+            "SELECT action, version, on_by_default, acknowledged_version, permissions, why, by, at"
             " FROM plugin_install_log WHERE plugin_id = :p ORDER BY id"), {"p": plugin_id}).mappings().all()]
 
     def _log(self, plugin_id: str, action: str, *, by: str, now: datetime, version: str | None = None,
              on_by_default: bool | None = None, acknowledged_version: str | None = None,
-             permissions: dict[str, Any] | None = None) -> None:
+             permissions: dict[str, Any] | None = None, why: str | None = None) -> None:
         self._session.execute(text(
             "INSERT INTO plugin_install_log (plugin_id, action, version, on_by_default, acknowledged_version,"
-            "   permissions, by, at)"
-            " VALUES (:p, :a, :v, :on, :ack, CAST(:perm AS jsonb), :by, :now)"
+            "   permissions, why, by, at)"
+            " VALUES (:p, :a, :v, :on, :ack, CAST(:perm AS jsonb), :why, :by, :now)"
         ), {"p": plugin_id, "a": action, "v": version, "on": on_by_default, "ack": acknowledged_version,
-            "perm": json.dumps(permissions) if permissions is not None else None, "by": by, "now": now})
+            "perm": json.dumps(permissions) if permissions is not None else None, "why": why, "by": by, "now": now})

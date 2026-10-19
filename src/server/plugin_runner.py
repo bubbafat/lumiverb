@@ -5,7 +5,9 @@ a good enough job. I don't want them taking down the server").
 
 `python -m src.server.plugin_runner`: on a Mac a child of `lumiverb-server
 run`, beside the API and the scheduler; on Linux its own unit,
-lumiverb-plugins.service. For each installed plug-in it:
+lumiverb-plugins.service. As it starts, it installs Lumiverb's own
+plug-ins as migrating does (src/server/own_plugins.py: nothing to do,
+usually). For each installed plug-in it:
 
 - runs it only while it's on somewhere: on by default, or turned on in an
   account (plugin_catalog.OnSomewhere: every account's switches read every
@@ -628,6 +630,14 @@ def main() -> int:
     stop = threading.Event()
     set_on_signals(stop)  # never set from the handler itself: it could deadlock the main thread's wait
     logger.info("plug-ins: the runner started")
+    try:  # Lumiverb's own plug-ins, as migrating installs them (nothing to do, usually)
+        from src.server.own_plugins import install_own
+
+        settings = get_settings()
+        install_own(settings.control_plane_database_url, data, geonames_url=settings.lumiverb_geonames_url,
+                    say=logger.info, fail=logger.error)
+    except Exception:  # noqa: BLE001 — the runner starts whatever happened
+        logger.exception("plug-ins: Lumiverb's own plug-ins couldn't be looked at")
     Runner(data).run(stop)
     logger.info("plug-ins: the runner stopped")
     return 0

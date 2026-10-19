@@ -190,7 +190,8 @@ def test_the_admin_page_shows_the_install_s_rows_to_a_server_admin_only(install)
         assert r.status_code == 200, r.text
         return [row["key"] for row in r.json()["rows"]]
 
-    assert rows(robert) == ["website", "processing", "ai", "search", "storage", "disk", "backups"]
+    assert rows(robert) == ["website", "processing", "ai", "search", "storage", "disk", "backups",
+                            "own_plugins"]
     assert rows(other) == ["website", "processing", "ai", "search", "storage"]
 
 

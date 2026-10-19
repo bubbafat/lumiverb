@@ -17,14 +17,14 @@ const search = vi.mocked(searchPlaces);
 
 const GEONAMES = {
   plugin_id: "geonames", title: "Place names (GeoNames)", description: "", state: "on" as const,
-  acknowledgment: null, acknowledged: null,
-  data: { title: "The place list", unit: "places", state: "ready" as const, count: 171329 },
+  acknowledgment: null, acknowledged: null, data: null, kind: "installed" as const, lookups: ["places"],
 };
 const PORT_OF_SPAIN = { place_id: "geonames:3573890", name: "Port of Spain", region: "Port of Spain",
                         country: "Trinidad and Tobago", label: "Port of Spain, Trinidad and Tobago",
-                        lat: 10.66668, lon: -61.51889, population: 49031 };
-const CREDIT = { text: "Place names from GeoNames, CC BY 4.0", url: "https://www.geonames.org/",
-                 license_url: "https://creativecommons.org/licenses/by/4.0/" };
+                        lat: 10.66668, lon: -61.51889, population: 49031, source: "geonames",
+                        source_title: "Place names (GeoNames)" };
+const CREDITS = [{ source: "geonames", text: "GeoNames", url: "https://www.geonames.org/",
+                   license: { text: "CC BY 4.0", url: "https://creativecommons.org/licenses/by/4.0/" } }];
 
 beforeEach(() => {
   set.mockReset();
@@ -65,9 +65,9 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenLastCalledWith({ asset_ids: ["ast_1", "ast_2"], replace: "all", lat: 1.5, lon: 2.5 });
   });
 
-  it("finds a place by name when Place names is on, and sets it by its id", async () => {
+  it("finds a place by name with a plug-in on that finds places, credits it, and sets it by its id", async () => {
     plugins.mockResolvedValue([GEONAMES]);
-    search.mockResolvedValue({ places: [PORT_OF_SPAIN], credit: CREDIT });
+    search.mockResolvedValue({ places: [PORT_OF_SPAIN], credit: null, credits: CREDITS, unavailable: [] });
     set.mockResolvedValueOnce({ updated: ["ast_1", "ast_2"], skipped: [] });
     const onClose = modal();
     fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "port of" } });
@@ -75,6 +75,8 @@ describe("SetLocationModal", () => {
     expect(search).toHaveBeenCalledWith("port of");
     expect((screen.getByRole("textbox", { name: "Place" }) as HTMLInputElement).value)
       .toBe("Port of Spain, Trinidad and Tobago");
+    expect(screen.getByText(/^Places from/)).toBeTruthy();
+    expect((screen.getByRole("link", { name: "GeoNames" }) as HTMLAnchorElement).href).toBe("https://www.geonames.org/");
     expect((screen.getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
       .toBe("https://creativecommons.org/licenses/by/4.0/");
     fireEvent.click(screen.getByRole("button", { name: "Set location" }));
@@ -84,47 +86,51 @@ describe("SetLocationModal", () => {
 
   it("says what kind of landmark a place found is, and the other name it was found by", async () => {
     plugins.mockResolvedValue([GEONAMES]);
-    const castle = { place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World", region: "Florida",
-                     country: "United States", label: "Magic Kingdom, Walt Disney World, Florida, United States",
-                     lat: 28.4187, lon: -81.5812, population: 0, kind: "amusement park" };
+    const castle = { ...PORT_OF_SPAIN, place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World",
+                     region: "Florida", country: "United States",
+                     label: "Magic Kingdom, Walt Disney World, Florida, United States", lat: 28.4187, lon: -81.5812,
+                     population: 0, kind: "amusement park" };
     search.mockResolvedValue({ places: [castle, PORT_OF_SPAIN, { ...PORT_OF_SPAIN, place_id: "geonames:2", matched: "Puerto España" }],
-                               credit: CREDIT });
+                               credit: null, credits: CREDITS, unavailable: [] });
     modal();
     fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "magic" } });
     expect(await screen.findByRole("button", { name: /^Magic Kingdom, Walt Disney World, Florida, United States\s*· amusement park$/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: PORT_OF_SPAIN.label })).toBeTruthy();  // a town: no kind
+    expect(screen.getByRole("button", { name: PORT_OF_SPAIN.label })).toBeTruthy();  // a town: no kind, one source: not said
     expect(screen.getByRole("button", { name: /^Port of Spain, Trinidad and Tobago\s*· Puerto España$/ })).toBeTruthy();
   });
 
-  it("offers place search while a newer list is fetched, the one before used meanwhile", async () => {
-    plugins.mockResolvedValue([{ ...GEONAMES, data: { ...GEONAMES.data, state: "fetching" as const,
-                                                      ready_at: "2026-10-18T10:00:00Z" } }]);
+  it("offers place search while the plug-in is still fetching its list (the server answers meanwhile, or says so)", async () => {
+    plugins.mockResolvedValue([{ ...GEONAMES, running: { state: "preparing" as const, detail: "Downloading", done: 12,
+                                                         total: 610, restarts: 0 } }]);
     modal();
     expect(await screen.findByRole("textbox", { name: "Place" })).toBeTruthy();
   });
 
-  it("finds places with an installed plug-in that finds them, says where each is from, and who couldn't answer", async () => {
+  it("finds places with every plug-in that finds them, says where each is from, and who couldn't answer", async () => {
     const FACTS = { plugin_id: "facts", title: "Facts", description: "", state: "on" as const, acknowledgment: null,
                     acknowledged: null, data: null, kind: "installed" as const, lookups: ["places"] };
-    plugins.mockResolvedValue([{ ...GEONAMES, state: "off" as const }, FACTS]);
+    plugins.mockResolvedValue([GEONAMES, FACTS]);
     const harbour = { place_id: "facts:harbour", name: "Harbour Point", region: "Testshire", country: "Testland",
                       label: "Harbour Point, Testshire, Testland", lat: 41.1, lon: -73.2, population: 0,
                       kind: "lighthouse", source: "facts", source_title: "Facts" };
-    search.mockResolvedValue({ places: [harbour], credit: null,
-                               credits: [{ source: "facts", text: "Facts' places", url: "https://example.org/facts" }],
+    search.mockResolvedValue({ places: [harbour, PORT_OF_SPAIN], credit: null,
+                               credits: [{ source: "facts", text: "Facts' places", url: "https://example.org/facts" },
+                                         ...CREDITS],
                                unavailable: [{ plugin_id: "atlas", title: "Atlas", why: "it's starting" }] });
     set.mockResolvedValueOnce({ updated: ["ast_1"], skipped: [] });
     const onClose = modal(["ast_1"]);
     fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "har" } });
+    expect(await screen.findByRole("button", { name: /^Port of Spain, Trinidad and Tobago\s*· from Place names \(GeoNames\)$/ })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: /^Harbour Point, Testshire, Testland\s*· lighthouse · from Facts$/ }));
     expect((screen.getByRole("link", { name: "Facts' places" }) as HTMLAnchorElement).href).toBe("https://example.org/facts");
-    expect(screen.queryByRole("link", { name: "CC BY 4.0" })).toBeNull(); // a credit that names no license links none
+    expect(screen.getAllByRole("link", { name: "CC BY 4.0" })).toHaveLength(1); // GeoNames' license: Facts names none
     search.mockResolvedValue({ places: [harbour], credit: null, unavailable: [], credits: [
       { source: "facts", text: "Facts' places", url: "https://example.org/facts",
         license: { text: "ODbL", url: "https://opendatacommons.org/licenses/odbl/" } }] });
     fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "harbo" } });
     expect(((await screen.findByRole("link", { name: "ODbL" })) as HTMLAnchorElement).href)
       .toBe("https://opendatacommons.org/licenses/odbl/");
+    expect(screen.getByRole("button", { name: /^Harbour Point, Testshire, Testland\s*· lighthouse$/ })).toBeTruthy();
     search.mockResolvedValue({ places: [harbour], credit: null,
                                credits: [{ source: "facts", text: "Facts' places", url: "https://example.org/facts" }],
                                unavailable: [{ plugin_id: "atlas", title: "Atlas", why: "it's starting" }] });
@@ -136,8 +142,8 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1"], replace: "none", place_id: "facts:harbour" });
   });
 
-  it("offers no place search while Place names is off or its list isn't fetched", async () => {
-    plugins.mockResolvedValue([{ ...GEONAMES, data: { ...GEONAMES.data, state: "fetching" as const } }]);
+  it("offers no place search while no plug-in that finds places is on", async () => {
+    plugins.mockResolvedValue([{ ...GEONAMES, state: "off" as const }, { ...GEONAMES, plugin_id: "other", lookups: [] }]);
     modal();
     await waitFor(() => expect(plugins).toHaveBeenCalled());
     expect(screen.queryByRole("radio", { name: "Place" })).toBeNull();

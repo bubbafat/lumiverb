@@ -120,7 +120,6 @@ def test_installing_shows_what_it_does_asks_and_copies_it_in_read_only(install, 
     assert listed["reads"] == ["each clip's location (a person's, else its GPS, else an applied guess)",
                                "each photo's preview image"]
     assert listed["internet"] is False and listed["downloads"] == [] and listed["data"] is None
-    assert _listed(client, robert)["geonames"]["kind"] == "built_in", "Lumiverb's own, beside it"
 
     assert cli.main(["plugins", "--env", env]) == 0
     assert "  hello 1  Hello: off by default" in capsys.readouterr().out
@@ -229,7 +228,6 @@ def test_what_isnt_a_plug_in_or_isnt_its_own_is_refused(install, machine, tmp_pa
     client, robert, _ = install
     env, data = machine
     for folder, why in (
-        (_hello(tmp_path, "geonames", id="geonames"), "geonames is one of Lumiverb's own plug-ins"),
         (tmp_path / "nowhere", "No folder at"),
         (_hello(tmp_path, "bad", id="Bad", protocol=7), "  • id: lowercase letters"),
     ):
@@ -239,7 +237,7 @@ def test_what_isnt_a_plug_in_or_isnt_its_own_is_refused(install, machine, tmp_pa
     assert "Say --on or --off" in capsys.readouterr().err
     data.mkdir(parents=True, exist_ok=True)
     assert cli.main(["plugins", "install", str(tmp_path), "--off", "--yes", "--env", env]) == 1
-    assert set(_listed(client, robert)) == {"geonames"}
+    assert set(_listed(client, robert)) == set()
 
 
 @pytest.mark.slow

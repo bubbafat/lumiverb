@@ -33,7 +33,7 @@ from src.server.api.dependencies import (
     require_editor,
     require_tenant_admin,
 )
-from src.server.api.errors import ApiError, DecisionRequiredError
+from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.api.library_access import names
 from src.server.api.limits import MAX_IDS
 from src.server.repository import locations
@@ -94,32 +94,44 @@ def _who(request: Request) -> str:
 
 
 def _place(session: Session, place: str) -> tuple[float, float, dict]:
-    """A place's point and what's kept of it: 409 plugin_off, 503 places_not_ready, 422 unknown_place; an
-    installed plug-in's (ADR-023 phase 2d) as it says it now, 503 plugin_unavailable when it can't."""
-    from src.server.api.routers.places import PLUGIN, require_places
+    """A place's point and what's kept of it (its id, label, source and credit, which stays with it whatever
+    becomes of the plug-in): the plug-in's that found it (ADR-023 phase 2d), as it says it now; 409 plugin_off
+    when that plug-in isn't on here, 503 plugin_unavailable when it can't answer, 422 unknown_place. GeoNames'
+    while it can't answer, from the list the built-in Place names left (until part 4), where it's on by the
+    account's own switch."""
+    from src.server.api.routers.places import PLUGIN, standing_in
     from src.server.database import get_control_session
+    from src.server.plugin_catalog import find
+    from src.server.plugin_lookups import PLACES, LookupUnavailableError, offering, one_place
     from src.server.repository.places import PlaceRepository, geonameid_of, label
 
-    if not place.startswith(f"{PLUGIN}:"):
-        from src.server.plugin_lookups import LookupUnavailableError, one_place
-
-        try:
-            found = one_place(session, place)
-        except LookupUnavailableError as exc:
+    plugin_id = place.partition(":")[0]
+    on = any(p.manifest.plugin_id == plugin_id for p in offering(session, PLACES))
+    stand_in = standing_in(session) if plugin_id == PLUGIN else None
+    found = None
+    try:
+        found = one_place(session, place) if on else None
+    except LookupUnavailableError as exc:
+        if stand_in is None:
             raise ApiError(503, "plugin_unavailable", f"The plug-in that found it can't answer now: {exc}.",
-                           {"plugin_id": place.partition(":")[0]}) from None
-        if found is None:
-            raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")
-        return found["lat"], found["lon"], {"id": place, "label": found["label"], "source": found["source"]}
-    require_places(session)
-    geonameid = geonameid_of(place)
-    row = None
-    if geonameid is not None:
+                           {"plugin_id": plugin_id}) from None
+        on = False
+    if found is not None:
+        return found["lat"], found["lon"], {"id": place, "label": found["label"], "source": found["source"],
+                                            "credit": found["credit"]}
+    if not on and stand_in is not None:
+        geonameid = geonameid_of(place)
         with get_control_session() as control:
-            row = PlaceRepository(control).get(geonameid)
-    if row is None or not is_fix(row["lat"], row["lon"]):
-        raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")
-    return float(row["lat"]), float(row["lon"]), {"id": place, "label": label(row), "source": "geonames"}
+            row = PlaceRepository(control).get(geonameid) if geonameid is not None else None
+        if row is not None and is_fix(row["lat"], row["lon"]):
+            return float(row["lat"]), float(row["lon"]), {"id": place, "label": label(row), "source": PLUGIN,
+                                                          "credit": stand_in["credit"]}
+    elif not on and (find(plugin_id) is not None or plugin_id == PLUGIN):
+        entry = find(plugin_id)
+        title = entry.spec.title if entry else plugin_id
+        raise ConflictError("plugin_off", f"{title} is off: an admin turns it on in Settings › Plug-ins.",
+                            {"plugin_id": plugin_id, "title": title})
+    raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")
 
 
 def _refresh(session: Session, asset_ids: list[str]) -> None:

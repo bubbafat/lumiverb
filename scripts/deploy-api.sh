@@ -439,6 +439,18 @@ sudo -u "$SVC_USER" --preserve-env=ALEMBIC_CONTROL_URL \
   "$APP_DIR/.venv/bin/python" -m alembic -c alembic-control.ini upgrade head
 ok "Control plane migrations applied"
 
+# Lumiverb's own plug-ins, as migrate.sh's last step installs them (src/server/own_plugins.py), into
+# DATA_DIR/plugins (made here, as the service user). One that can't be is said and tried again at the next start.
+export CONTROL_PLANE_DATABASE_URL="${DB_URL}/${PG_DB}" DATA_DIR
+LUMIVERB_GEONAMES_URL="$(_existing_val LUMIVERB_GEONAMES_URL)"
+export LUMIVERB_GEONAMES_URL
+if sudo -u "$SVC_USER" --preserve-env=CONTROL_PLANE_DATABASE_URL,DATA_DIR,LUMIVERB_GEONAMES_URL \
+    "$APP_DIR/.venv/bin/python" -m src.server.own_plugins; then
+  ok "Lumiverb's own plug-ins looked at"
+else
+  warn "Lumiverb's own plug-ins weren't looked at; the plug-in runner tries at its start"
+fi
+
 # ---------------------------------------------------------------------------
 # 9. systemd units
 # ---------------------------------------------------------------------------
