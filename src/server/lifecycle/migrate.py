@@ -28,11 +28,12 @@ class MigrationError(RuntimeError):
     pass
 
 
-def _upgrade(ini: str, variable: str, url: str, cwd: Path) -> list[str] | None:
-    """Alembic up to head; None when it worked, else everything it said (a
-    traceback's last line can lose the cause: migrate.sh prints the whole log)."""
+def _upgrade(ini: str, variable: str, url: str, cwd: Path, *, to: tuple[str, str] = ("upgrade", "head")
+             ) -> list[str] | None:
+    """Alembic up to head (or, to, another way: ("downgrade", a revision)); None when it worked, else
+    everything it said (a traceback's last line can lose the cause: migrate.sh prints the whole log)."""
     result = subprocess.run(
-        [sys.executable, "-m", "alembic", "-c", ini, "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "-c", ini, *to],
         cwd=cwd, env={**os.environ, variable: url}, capture_output=True, text=True,
     )
     if result.returncode == 0:
@@ -149,4 +150,67 @@ def migrate(control_url: str, *, cwd: Path = APP_DIR, say: Callable[[str], None]
             failed.append(f"{tenant_id}: {_cause(said)}")
     if failed:
         raise MigrationError(f"{len(failed)} of {len(tenants)} accounts' migrations failed: " + "; ".join(failed))
+    return len(tenants)
+
+
+def _way_to(url: str, scripts: Path, revision: str) -> str | None:
+    """How a database gets to this revision: "downgrade" (it's below where the database is), "upgrade", or None
+    (it's there). MigrationError for a revision these migrations don't have."""
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from alembic.util import CommandError
+
+    logging.getLogger("alembic").setLevel(logging.WARNING)
+    script = ScriptDirectory(str(scripts))
+    try:
+        script.get_revision(revision)
+    except CommandError as exc:
+        raise MigrationError(f"No revision {revision} in {scripts.name}'s migrations: {exc}") from None
+    engine = create_engine(url)
+    try:
+        with engine.connect() as conn:
+            current = tuple(MigrationContext.configure(conn).get_current_heads())
+    finally:
+        engine.dispose()
+    if current == (revision,):
+        return None
+    below = {r.revision for r in script.iterate_revisions(current, "base")} if current else set()
+    return "downgrade" if revision in below else "upgrade"
+
+
+def migrate_to(control_url: str, *, tenant: str | None, control: str | None = None, cwd: Path = APP_DIR,
+               say: Callable[[str], None] = print) -> int:
+    """Every account's database (tenant) and the control plane's (control) taken to these revisions, down or up:
+    a rollback, run by the newer code, which knows them (older code can't migrate down from revisions it
+    doesn't have). Each account tried even when another fails. Returns how many accounts it moved; raises
+    MigrationError saying which failed and why."""
+    if control is not None:
+        way = _way_to(control_url, cwd / "migrations/control", control)
+        said = _upgrade("alembic-control.ini", "ALEMBIC_CONTROL_URL", control_url, cwd, to=(way, control)) \
+            if way else None
+        if said:
+            say(f"Control plane ✗ {_cause(said)}")
+            _say_all(said, say)
+            raise MigrationError(f"The control plane's {way} to {control} failed: {_cause(said)}")
+        say(f"Control plane ✓ {'at ' + control if way is None else way + 'd to ' + control}")
+    if tenant is None:
+        return 0
+    tenants = tenant_databases(control_url)
+    say(f"Accounts' databases ({len(tenants)}), to {tenant}")
+    failed: list[str] = []
+    for number, (tenant_id, url) in enumerate(tenants, 1):
+        try:
+            way = _way_to(url, cwd / "migrations/tenant", tenant)
+        except (MigrationError, SQLAlchemyError) as exc:
+            failed.append(f"{tenant_id}: {exc}")
+            say(f"  [{number}/{len(tenants)}] {tenant_id} ✗ {exc}")
+            continue
+        said = _upgrade("alembic-tenant.ini", "ALEMBIC_TENANT_URL", url, cwd, to=(way, tenant)) if way else None
+        say(f"  [{number}/{len(tenants)}] {tenant_id} "
+            f"{'✗ ' + _cause(said) if said else '✓ ' + (way + 'd' if way else 'there already')}")
+        if said:
+            _say_all(said, say)
+            failed.append(f"{tenant_id}: {_cause(said)}")
+    if failed:
+        raise MigrationError(f"{len(failed)} of {len(tenants)} accounts didn't get to {tenant}: " + "; ".join(failed))
     return len(tenants)

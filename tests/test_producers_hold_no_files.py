@@ -98,6 +98,25 @@ def test_a_producer_that_doesnt_read_the_storage_is_refused_an_original():
     acct.inputs.original.assert_called_once_with(job.items[0])
 
 
+class _AsksPreview(_Asks):
+    def make(self, clip: dict) -> None:
+        self.inputs.preview_bytes(clip)
+
+
+def test_a_producer_is_handed_only_what_its_reads_name():
+    # ADR-024: a preview to a producer that reads lumiverb.preview, never to one that doesn't.
+    acct = MagicMock()
+    acct.stopping = threading.Event()
+    job = Job("t1", "transcript", 3, ({"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a.mov"},))
+    work = type("TranscriptAsks", (_AsksPreview,), {"artifact": "transcript"})(acct, job)
+    with pytest.raises(RuntimeError, match=r"transcript doesn't read lumiverb\.preview"):
+        work.make(job.items[0])
+    acct.inputs.preview_bytes.assert_not_called()
+    reads = type("ClipAsks", (_AsksPreview,), {"artifact": "clip"})(acct, job)
+    reads.make(job.items[0])
+    acct.inputs.preview_bytes.assert_called_once_with(job.items[0])
+
+
 def test_an_upload_is_handed_to_the_client_as_its_path_and_opened_for_the_request(tmp_path):
     frame = tmp_path / "frame-1.jpg"
     frame.write_bytes(b"jpg")

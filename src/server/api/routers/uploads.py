@@ -17,10 +17,11 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from sqlmodel import Session
 from starlette.concurrency import run_in_threadpool
 
+from src.producers.names import file_in
 from src.server import uploaded_video, uploads
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
@@ -31,8 +32,13 @@ from src.shared.utils import utcnow
 router = APIRouter(tags=["uploads"], dependencies=[Depends(require_editor)])
 
 
+def _file(value: Any) -> Any:
+    return file_in(value) if isinstance(value, str) else value
+
+
 class StartUpload(BaseModel):
-    artifact: Literal["video_preview", "analysis_proxy"]
+    # By today's kind or the file's name (lumiverb.video.preview, lumiverb.video.analysis_proxy: ADR-024).
+    artifact: Annotated[Literal["video_preview", "analysis_proxy"], BeforeValidator(_file)]
     size: int = Field(gt=0, le=64 * 1024**3)
     # The whole file's SHA-256, 64 lowercase hex digits: checked at the finish.
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

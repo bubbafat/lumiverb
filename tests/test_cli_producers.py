@@ -524,3 +524,52 @@ def test_a_yes_or_no_setting_refuses_anything_else(faces_client):
     result = _settings("faces", "merge_close_clusters=maybe")
     assert result.exit_code == 2 and "true or false" in result.output
     faces_client.raw.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# --compare: the gate around an upgrade (ADR-024 phase 1), two saved GET /v1/producers?counts=true answers
+# ---------------------------------------------------------------------------
+
+
+def _saved(tmp_path, name: str, *producers: dict):
+    import json
+
+    path = tmp_path / name
+    path.write_text(json.dumps({"producers": list(producers)}))
+    return str(path)
+
+
+def test_compare_says_nothing_changed_by_name_whatever_each_is_called(client, tmp_path):
+    # Before: today's ids; after: names (part 3), and a plug-in's work by its id. The same producers.
+    before = _saved(tmp_path, "before.json", _producer(), _producer("ocr"), _producer("plugin_geonames"))
+    after = _saved(tmp_path, "after.json", _producer("lumiverb.image.description"), _producer("lumiverb.image.text"),
+                   _producer("geonames"))
+    result = _run("--compare", before, after)
+    assert result.exit_code == 0, result.output
+    assert "Nothing changed." in result.output
+    client.get.assert_not_called()
+
+
+@pytest.mark.parametrize("change, says", [
+    ({"counts": {"applicable": 10, "current": 5, "stale": 4, "missing": 1, "failing": 0}}, "lumiverb.image.description counts"),
+    ({"settings": {"model": "other"}}, "lumiverb.image.description settings"),
+    ({"settings_hash": "h2"}, "lumiverb.image.description settings_hash: h → h2"),
+    ({"paused": True}, "lumiverb.image.description paused: False → True"),
+    ({"redo_stopped": True}, "lumiverb.image.description redo_stopped: False → True"),
+    ({"new_version": True}, "lumiverb.image.description new_version: None → True"),
+])
+def test_compare_says_each_change_and_exits_1(client, tmp_path, change, says):
+    before = _saved(tmp_path, "before.json", _producer())
+    after = _saved(tmp_path, "after.json", _producer("lumiverb.image.description", **change))
+    result = _run("--compare", before, after)
+    assert result.exit_code == 1, result.output
+    assert says in result.output and "1 changed." in result.output
+
+
+def test_compare_says_a_producer_gone_or_new(client, tmp_path):
+    from src.client.cli.commands.producers import compare
+
+    assert compare({"producers": [_producer(), _producer("ocr")]},
+                   {"producers": [_producer("lumiverb.image.description"), _producer("plugin_facts")]}) == [
+        "facts: new", "lumiverb.image.text: gone"]
+    assert compare({"producers": []}, {"producers": []}) == []

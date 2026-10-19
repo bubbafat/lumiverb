@@ -75,7 +75,7 @@ from tests.test_server_admins import (
 pytestmark = pytest.mark.slow
 
 PROBE = Path(__file__).parent / "plugins" / "probe"
-KIND = "plugin_probe"
+KIND = "plugin_prober"  # its id isn't probe: a word Lumiverb uses (ADR-024 phase 1)
 LICENSE = {"text": "CC0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}
 CREDIT = {"text": "Probe's places", "url": "https://example.org/probe", "license": LICENSE}
 
@@ -157,17 +157,17 @@ def probe(install, control, short_data, machine_python, tmp_path, monkeypatch): 
 
 
 def _running(f) -> dict:
-    return _listed(f.client, f.a)["probe"]["running"]
+    return _listed(f.client, f.a)["prober"]["running"]
 
 
 def _started(f) -> dict | None:
     """What the probe last said it was started with, None before it ever started."""
-    path = f.data / "plugins" / "probe" / "data" / "started.json"
+    path = f.data / "plugins" / "prober" / "data" / "started.json"
     return json.loads(path.read_text()) if path.exists() else None
 
 
 def _switch(f, who: dict, on: bool) -> None:
-    r = f.client.put("/v1/plugins/probe", json={"enabled": on}, headers=who)
+    r = f.client.put("/v1/plugins/prober", json={"enabled": on}, headers=who)
     assert r.status_code == 200, r.text
 
 
@@ -186,20 +186,20 @@ def test_part1_it_runs_while_any_account_has_it_on_under_this_machines_python(pr
     _until(f.runner, lambda: _running(f)["state"] == "off")
     _turns(f)
     assert _started(f) is None, "off in every account: never started"
-    assert f.runner.plugins["probe"].process is None
+    assert f.runner.plugins["prober"].process is None
 
     _switch(f, f.b, True)  # the other account, not the one asking
     _until(f.runner, lambda: _running(f)["state"] == "ready")
     started = _started(f)
     assert started["python"] == f.python, "run by this machine's python3, not the test's"
-    assert _listed(f.client, f.a)["probe"]["state"] == "off", "still off in this account"
+    assert _listed(f.client, f.a)["prober"]["state"] == "off", "still off in this account"
 
     _switch(f, f.b, False)
     _until(f.runner, lambda: _running(f)["state"] == "off")
-    assert f.runner.plugins["probe"].process is None
+    assert f.runner.plugins["prober"].process is None
 
     # On by default: running though nobody chose; this account turning it off leaves the other following it.
-    assert cli.main(["plugins", "default", "probe", "on", "--yes", "--env", str(f.env)]) == 0
+    assert cli.main(["plugins", "default", "prober", "on", "--yes", "--env", str(f.env)]) == 0
     _until(f.runner, lambda: _running(f)["state"] == "ready")
     _switch(f, f.a, False)
     _turns(f)
@@ -335,26 +335,26 @@ def test_part1_its_server_settings_are_a_private_file_at_start_and_a_change_rest
     _until(f.runner, lambda: _running(f)["state"] == "ready")
     started = _started(f)
     said = started["server_settings"]
-    data_folder = f.data / "plugins" / "probe" / "data"
-    assert Path(said["path"]).resolve().parent == (f.data / "plugins" / "probe").resolve()
+    data_folder = f.data / "plugins" / "prober" / "data"
+    assert Path(said["path"]).resolve().parent == (f.data / "plugins" / "prober").resolve()
     assert not Path(said["path"]).resolve().is_relative_to(data_folder.resolve()), "outside its data folder"
     assert said["mode"] == 0o600
     assert said["values"] == {"health": "ready", "mirror": "", "key": ""}, "the server's only, each its default"
 
     pid = started["pid"]
-    r = f.client.put("/v1/plugins/probe/settings", json={"settings": {"word": "Changed"}}, headers=f.a)
+    r = f.client.put("/v1/plugins/prober/settings", json={"settings": {"word": "Changed"}}, headers=f.a)
     assert r.status_code == 200, r.text
     _turns(f, 20)
     assert _started(f)["pid"] == pid, "an account's setting comes with each request: no restart"
 
-    r = f.client.put("/v1/plugins/probe/server-settings",
+    r = f.client.put("/v1/plugins/prober/server-settings",
                      json={"settings": {"mirror": "http://127.0.0.1:1/lists/", "key": "s3cret"}}, headers=f.a)
     assert r.status_code == 200, r.text
     _until(f.runner, lambda: (_started(f) or {}).get("pid") != pid and _running(f)["state"] == "ready")
     again = _started(f)["server_settings"]
     assert again["values"] == {"health": "ready", "mirror": "http://127.0.0.1:1/lists/", "key": "s3cret"}
     assert again["mode"] == 0o600
-    assert "s3cret" not in json.dumps(_listed(f.client, f.a)["probe"]), "a secret is never shown again"
+    assert "s3cret" not in json.dumps(_listed(f.client, f.a)["prober"]), "a secret is never shown again"
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +384,7 @@ def test_part1_its_environment_has_the_proxies_and_nothing_else_of_lumiverbs(pro
     # The closed proxies the suite hands every plug-in (conftest), with the test's own list reachable.
     assert env["HTTPS_PROXY"] == env["HTTP_PROXY"] == "http://127.0.0.1:9"
     assert "127.0.0.1" in env["NO_PROXY"].split(",")
-    assert env["HOME"] == str(f.data / "plugins" / "probe" / "data")
+    assert env["HOME"] == str(f.data / "plugins" / "prober" / "data")
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ def test_part1_its_environment_has_the_proxies_and_nothing_else_of_lumiverbs(pro
 
 
 def _health(f, value: str) -> None:
-    r = f.client.put("/v1/plugins/probe/server-settings", json={"settings": {"health": value}}, headers=f.a)
+    r = f.client.put("/v1/plugins/prober/server-settings", json={"settings": {"health": value}}, headers=f.a)
     assert r.status_code == 200, r.text
 
 
@@ -412,13 +412,13 @@ def test_part1_ready_with_background_work_answers_and_says_how_far(probe):
     running = _running(f)
     assert (running["state"], running["done"], running["total"]) == ("ready", 3, 10)
     found = _places(f)
-    assert [p["place_id"] for p in found["places"]] == ["probe:lab"] and found["unavailable"] == []
+    assert [p["place_id"] for p in found["places"]] == ["prober:lab"] and found["unavailable"] == []
 
     _health(f, "preparing")
     _until(f.runner, lambda: _running(f)["state"] == "preparing")
     assert (_running(f)["done"], _running(f)["total"], _running(f)["detail"]) == (1, 4, "Reading")
     found = _places(f)
-    assert found["places"] == [] and [u["plugin_id"] for u in found["unavailable"]] == ["probe"]
+    assert found["places"] == [] and [u["plugin_id"] for u in found["unavailable"]] == ["prober"]
 
     _health(f, "ready")
     _until(f.runner, lambda: _running(f)["state"] == "ready" and _running(f)["detail"] is None)
@@ -448,7 +448,7 @@ def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_c
     a = f.clips[0]
     r = f.client.get(f"/v1/assets/{a}", headers=f.a)
     assert r.status_code == 200, r.text
-    mine = [p for p in r.json()["facts"] if p["plugin_id"] == "probe"]
+    mine = [p for p in r.json()["facts"] if p["plugin_id"] == "prober"]
     assert len(mine) == 1 and (mine[0]["title"], mine[0]["credit"]) == ("Probe", CREDIT)
     seen, nothing = mine[0]["facts"]
     assert (seen["key"], seen["empty"]) == ("seen", False) and seen["text"] in ("Probed 1", "Probed 2")
@@ -457,7 +457,7 @@ def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_c
     assert _found(f, "probed") == set(f.clips), "a searchable fact is found"
     assert _found(f, "zzqx") == set(), "an empty line is never searched"
     found = _places(f)
-    assert [c for c in found["credits"] if c["source"] == "probe"] == [{"source": "probe", **CREDIT}]
+    assert [c for c in found["credits"] if c["source"] == "prober"] == [{"source": "prober", **CREDIT}]
 
 
 

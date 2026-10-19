@@ -23,7 +23,7 @@ from sqlalchemy import text
 from src.server.api import devices
 from src.server.api.main import app
 from src.server.api.middleware import _skip_tenant_middleware
-from tests.machine_lineage import made
+from tests.machine_lineage import made, made_json
 from tests.test_scans_api import (  # noqa: F401 — the shared fixture
     File,
     _error,
@@ -284,3 +284,32 @@ def test_a_device_says_nothing_of_who_it_is(env):
     _reads(env, library_id, device_id)
     assert _check_in(env, env.admin, library_id, reader=device_id).status_code == 422
     assert _ok(_check_in(env, env.admin, library_id))["gone"] == [library_id], "this server doesn't read it"
+
+
+@pytest.mark.slow
+def test_a_device_sends_by_id_or_by_name(env):
+    # ADR-024 phase 1: the gate takes an artifact's name and a file's (src/producers/names.py) as it takes the id.
+    import io
+
+    from PIL import Image
+
+    def jpeg() -> tuple:
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 36)).save(buf, format="JPEG")
+        return ("p.jpg", io.BytesIO(buf.getvalue()), "image/jpeg")
+
+    device_id, device = _register(env, "Names")
+    library_id = _library(env)
+    _reads(env, library_id, device_id)
+    run = _scan(env, library_id, [File("n/photo.jpg", "named photo"), File("n/clip.mov", "named clip")], headers=device)
+    photo, clip = run.uploaded["n/photo.jpg"], run.uploaded["n/clip.mov"]
+    for artifact in ("probe", "lumiverb.video.format"):
+        assert _ok(env.client.post("/v1/producers/failures", headers=device, json={"items": [
+            {"asset_id": clip, "artifact": artifact, "error": "unreadable"}]}))["recorded"] == 1, artifact
+    _not_for_devices(env.client.post("/v1/producers/failures", headers=device, json={"items": [
+        {"asset_id": photo, "artifact": "lumiverb.image.description", "error": "unreadable"}]}))
+    for kind in ("proxy", "lumiverb.preview"):
+        _ok(env.client.post(f"/v1/assets/{photo}/artifacts/{kind}", headers=device, files={"file": jpeg()},
+                            data={"lineage": made_json("proxy")}))
+    _not_for_devices(env.client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.scenes.picture", headers=device,
+                                     files={"file": jpeg()}))

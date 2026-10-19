@@ -12,6 +12,7 @@ its redo. An admin can stop a producer's redo and resume it. Pausing is
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Annotated
 
 import click
@@ -107,15 +108,51 @@ def _caught_up(eta: dict) -> str:
     return f"Caught up in {span if span in ('under a minute', 'over a month') else 'about ' + span}{except_}."
 
 
+# What --compare holds equal, of each producer GET /v1/producers?counts=true lists.
+COMPARED = ("counts", "settings", "settings_hash", "paused", "redo_stopped", "new_version")
+
+
+def _by_name(answer: dict) -> dict[str, dict]:
+    """A saved GET /v1/producers answer's producers by name (ADR-024: what each was called before, by RENAMED;
+    an installed plug-in's work by its plug-in's id), each with what --compare holds equal."""
+    from src.producers.names import ARTIFACTS
+
+    def name(artifact: str) -> str:
+        return ARTIFACTS.get(artifact) or artifact.removeprefix("plugin_")
+
+    return {name(p["artifact"]): {k: p.get(k) for k in COMPARED} for p in answer.get("producers", [])}
+
+
+def compare(before: dict, after: dict) -> list[str]:
+    """What changed from one saved GET /v1/producers?counts=true answer to the other, by name: each producer's
+    counts, settings, pause, stopped redo and new-version hold. Empty when nothing did."""
+    was, now = _by_name(before), _by_name(after)
+    out = [f"{n}: {'gone' if n not in now else 'new'}" for n in sorted(set(was) ^ set(now))]
+    for n in sorted(set(was) & set(now)):
+        out += [f"{n} {k}: {was[n][k]} → {now[n][k]}" for k in COMPARED if was[n][k] != now[n][k]]
+    return out
+
+
 @producers_app.callback()
 def producers_list(
     ctx: typer.Context,
     library: Annotated[str | None, typer.Option("--library", help="Count one library (name or id).")] = None,
     project: Annotated[str | None, typer.Option("--project", help="Count one project (name or id).")] = None,
+    compare_files: Annotated[tuple[Path, Path] | None, typer.Option(
+        "--compare", help="Compare two saved GET /v1/producers?counts=true answers, before and after an upgrade:"
+        " each producer's counts, settings, pauses and holds, by name (exits 1 when anything changed)")] = None,
 ) -> None:
     """Each producer's counts: current, missing, stale and failing, and whether its stale ones are being redone."""
     if ctx.invoked_subcommand is not None:
         return
+    if compare_files is not None:
+        import json
+
+        changed = compare(*(json.loads(f.read_text()) for f in compare_files))
+        for line in changed:
+            console.print(escape(line))
+        console.print("Nothing changed." if not changed else f"[red]{len(changed)} changed.[/red]")
+        raise typer.Exit(1 if changed else 0)
     client = LumiverbClient()
     params = _scope(client, library, project)
     producers = client.get("/v1/producers", params=params).json().get("producers", [])

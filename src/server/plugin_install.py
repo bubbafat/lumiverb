@@ -27,6 +27,7 @@ from typing import Any
 from sqlmodel import Session
 
 from src.plugins.manifest import MANIFEST, Manifest, asks_more, parse, read
+from src.producers.names import is_reserved
 from src.server.repository.installed_plugins import InstalledPluginRepository
 from src.server.repository.plugins import stands
 
@@ -98,6 +99,10 @@ def plan(folder: Path, session: Session, data: Path) -> Plan:
     if not folder.is_dir():
         raise PluginInstallError(f"No folder at {folder}")
     manifest = read(folder)
+    if is_reserved(manifest.plugin_id):
+        raise PluginInstallError(
+            f"A plug-in's id can't be {manifest.plugin_id!r}: Lumiverb uses that word (its work, pools and names share"
+            " the plug-ins' namespace, ADR-024). Give it another id in its manifest.")
     plugins = (data / "plugins").resolve()
     if data.resolve().is_relative_to(folder) or folder.is_relative_to(plugins):
         raise PluginInstallError(f"{folder} is Lumiverb's own folder, not a plug-in's")

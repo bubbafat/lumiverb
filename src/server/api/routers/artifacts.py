@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.producers.names import file_in
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
 from src.server.api.errors import ApiError
@@ -172,6 +173,7 @@ async def upload_artifact(
     """
     from src.server.api.routers.producers import require_lineage
 
+    artifact_type = file_in(artifact_type)  # by today's kind or the file's name (ADR-024)
     # Proxies, previews and analysis copies say how they were made, before
     # anything is saved; a thumbnail as the proxy's (one producer makes both).
     made = require_lineage(lineage, artifact_type) if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None
@@ -238,6 +240,10 @@ async def upload_artifacts_batch(
     proxy: UploadFile | None = File(default=None),
     thumbnail: UploadFile | None = File(default=None),
     video_preview: UploadFile | None = File(default=None),
+    # The same files by their names (ADR-024).
+    preview_named: UploadFile | None = File(default=None, alias="lumiverb.preview"),
+    thumbnail_named: UploadFile | None = File(default=None, alias="lumiverb.preview.thumbnail"),
+    video_preview_named: UploadFile | None = File(default=None, alias="lumiverb.video.preview"),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     # JSON: {"proxy": {...}, "video_preview": {...}}, how each was made (see LineageIn)
@@ -245,12 +251,16 @@ async def upload_artifacts_batch(
 ) -> BatchArtifactUploadResponse:
     """Upload multiple artifacts for an asset in a single request.
 
-    Accepts optional multipart fields: proxy, thumbnail, video_preview.
-    Each is kept as a single upload keeps it (_save_upload: a proxy or
-    thumbnail re-encoded), then the database updated.
+    Accepts optional multipart fields: proxy, thumbnail, video_preview (or
+    by their names: lumiverb.preview, lumiverb.preview.thumbnail,
+    lumiverb.video.preview). Each is kept as a single upload keeps it
+    (_save_upload: a proxy or thumbnail re-encoded), then the database updated.
     """
     from src.server.api.routers.ingest import _per_kind
     from src.server.api.routers.producers import require_lineage
+
+    proxy, thumbnail = proxy or preview_named, thumbnail or thumbnail_named
+    video_preview = video_preview or video_preview_named
 
     # Each proxy or preview sent says how it was made, before anything is saved.
     by_kind = _per_kind(lineage)
@@ -325,7 +335,9 @@ def download_artifact(
     changes nothing). video_preview within the playback cap: 503
     playback_preparing (Retry-After) while the capped copy is made.
     analysis_proxy answers Range requests and carries its SHA-256 as the ETag.
+    Each by today's kind or the file's name (lumiverb.preview, …: ADR-024).
     """
+    artifact_type = file_in(artifact_type)
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
         raise HTTPException(
             status_code=400,

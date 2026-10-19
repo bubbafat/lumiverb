@@ -2,7 +2,7 @@
 
 ## Status
 
-Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Part 1 built (2026-10-19). Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
@@ -276,7 +276,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
 - **What.** Sections 1 to 4: `Data`, `makes` and `reads`, `src/producers/names.py`, the page, the protocol 1 table, the registry checks and the SQL spelling.
   - Every route, form and lineage that takes an id today also takes its name, mapped to today's id, family by family; storage is untouched. That includes the files' names (`/v1/assets/{id}/artifacts/{kind}`, the batch upload's fields, `POST /v1/assets/{id}/uploads`' `artifact`, ingest's files, the CLI's `--size`) and lineage's `producer`. Part 2's apps, Resolve, device and scan send all of them, to a part 1 or part 2 server, and to part 1's again after part 2's rollback.
   - `lumiverb producers --compare BEFORE AFTER`, the gate's comparison of two saved `GET /v1/producers?counts=true` answers, through `RENAMED`.
-  - `lumiverb-server migrate --to <revision>`: every account (and the control database, given its revision), down or up. It's the rollback tool for parts 3 and 4, shipped and tested before they need it. It refuses while the install is running, checking before it touches anything (`run` is up: its API answers, or its lock is held). With the service stopped, it starts a Mac's own PostgreSQL for the while (`postgres.up_while`), as `backup` and `restore` do; today's `migrate` doesn't.
+  - `lumiverb-server migrate --to <revision>`: every account (and the control database, given its revision), down or up. It's the rollback tool for parts 3 and 4, shipped and tested before they need it. It refuses while the install is running, checking before it touches anything. As built, that's `restore`'s check (`backups.connected_elsewhere`): anything connected to its databases, the API and scheduler by name (`run` holds no lock of its own, and the check covers a Linux install's services too). With the service stopped, it starts a Mac's own PostgreSQL for the while (`postgres.up_while`), as `backup` and `restore` do; today's `migrate` doesn't.
   - The plug-in ids the machine uses refused at install.
   - No alembic revision.
 - **Gate.** The snapshot unchanged.

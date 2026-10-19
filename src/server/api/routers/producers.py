@@ -30,6 +30,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_serializer
 from sqlmodel import Session
 
+from src.producers import ADDED_PREFIX
+from src.producers.names import artifact_in, producer_in
 from src.server.api.content_hashes import ContentHash, why_not
 from src.server.api.dependencies import (
     get_current_user_id,
@@ -40,11 +42,10 @@ from src.server.api.dependencies import (
     require_tenant_admin,
 )
 from src.server.api.devices import may_call
-from src.server.api.routers.libraries import CheckedIn
 from src.server.api.errors import ConflictError
-from src.server.api.limits import MAX_IDS
 from src.server.api.library_access import edited, names, seen
-from src.producers import ADDED_PREFIX
+from src.server.api.limits import MAX_IDS
+from src.server.api.routers.libraries import CheckedIn
 from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
 from src.shared.producers import (
@@ -139,6 +140,7 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict
             f"A machine write must say how it was made ({producer.title.lower()}): lineage (producer, version, "
             "settings_hash), as GET /v1/producers gives them.",
             {"artifact": artifact, "expected": producer.producer})
+    made["producer"] = producer_in(artifact, made["producer"])  # by today's id or its name (ADR-024)
     if made["producer"] != producer.producer:
         raise InvalidChoiceError(
             "lineage_wrong_producer",
@@ -466,6 +468,7 @@ def set_settings(
     from src.producers import load
     from src.server.api.errors import InvalidChoiceError
 
+    artifact = artifact_in(artifact)
     p = producer_or_404(artifact)
     if p.plugin and artifact.startswith(ADDED_PREFIX):
         raise InvalidChoiceError("setting_fixed", f"{p.title}: {SET_IN_PLUGINS}", {"plugin_id": p.plugin})
@@ -567,6 +570,7 @@ def pause_switch(
     stale clips stay as they are until it's resumed (Remake), or a change of
     its settings or model says to remake them (what's missing is still made). What's running finishes. Again is
     fine: who paused first stays."""
+    target = artifact_in(target)
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.pause_everything(session, by=user_id)
     else:
@@ -578,6 +582,7 @@ def pause_switch(
 @router.post("/{target}/resume", status_code=204, dependencies=[Depends(require_tenant_admin)])
 def resume_switch(target: str, body: PauseIn, session: Annotated[Session, Depends(get_tenant_session)]) -> None:
     """Resume one switch (admins), or "all", in that scope, whatever the others are."""
+    target = artifact_in(target)
     if target == PAUSE_ALL and body.scope == lineage.WORK:
         lineage.resume_everything(session)  # a row for what's no longer a switch goes too
     elif body.scope == lineage.REDO and target != PAUSE_ALL and target in PRODUCERS:
@@ -595,7 +600,8 @@ class Failure(BaseModel):
     @field_validator("artifact")
     @classmethod
     def _a_producer(cls, value: str) -> str:
-        # As the producers are now: a plug-in's work can be added while Lumiverb runs.
+        # As the producers are now: a plug-in's work can be added while Lumiverb runs. By its id or its name.
+        value = artifact_in(value)
         if value not in PRODUCERS:
             raise ValueError(f"no producer makes {value!r}")
         return value
@@ -774,11 +780,10 @@ def scheduler_status(request: Request, session: Annotated[Session, Depends(get_t
     status = read_status(session, now)
     paused, admin = lineage.pauses(session), _admin(request)
     held = paused.work
-    from src.server.repository.libraries import LibraryRepository
-
     from src.server import check_ins
     from src.server.api.routers.libraries import checked_in_of
     from src.server.repository.devices import DeviceRepository
+    from src.server.repository.libraries import LibraryRepository
 
     visible = seen(request, session)  # what a person can see of the libraries (ADR-018 decision 8)
     libraries = [lib for lib in LibraryRepository(session).active_brief() if visible is None or lib[0] in visible]
@@ -820,9 +825,8 @@ def read_status(session: Session, now: datetime | None = None) -> SchedulerStatu
     import json
     from datetime import timedelta
 
-    from src.shared.utils import utcnow
-
     from src.server.repository.system_metadata import SystemMetadataRepository
+    from src.shared.utils import utcnow
 
     raw = SystemMetadataRepository(session).get_value("scheduler.status")
     status = SchedulerStatus()
@@ -900,6 +904,7 @@ def list_failures(
     """Clips in sight whose last try failed, newest failure first, with the
     error, how many tries and when the next one is (none once given up)."""
     if artifact is not None:
+        artifact = artifact_in(artifact)
         producer_or_404(artifact)
     rows = lineage.failures(session, artifact=artifact, library_id=library_id, limit=limit + 1, after=after,
                             within=seen(request, session))
@@ -922,6 +927,11 @@ class RetryIn(BaseModel):
     all: bool = False
     artifact: str | None = Field(default=None, max_length=64)
     library_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("artifact")
+    @classmethod
+    def _by_name_too(cls, value: str | None) -> str | None:
+        return artifact_in(value) if value is not None else None
 
 
 @router.post("/failures/retry", dependencies=[Depends(require_editor)])
@@ -951,6 +961,11 @@ class RunIn(BaseModel):
     # "new": what's missing, failing clips tried again at once; "redo": that,
     # and what's made made again (admins), as new settings would.
     scope: Literal["new", "redo"]
+
+    @field_validator("producer")
+    @classmethod
+    def _by_name_too(cls, value: str) -> str:
+        return artifact_in(value)
 
 
 class RunProducer(BaseModel):
@@ -1049,6 +1064,7 @@ def redo_below(artifact: str, body: BelowIn, request: Request,
     then, held while its redo is stopped or it's paused (each said)."""
     from src.server.api.limits import require_scope
 
+    artifact = artifact_in(artifact)
     p = producer_or_404(artifact)
     require_scope(body.asset_ids is not None, body.all, "asset_ids")
     if p.level is None or not lineage.redoable(artifact):
