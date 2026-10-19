@@ -10,7 +10,7 @@ Nothing here is built yet. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Lumiverb's own data named (Robert: "refactor builtins to align to the new naming schema"): each built-in producer's data and protocol 1's inputs get `lumiverb.*` names in plain words, documented, and every built-in producer declares by name what it reads and makes | Not started |
+| 1 | Lumiverb's own data named (Robert: "refactor builtins to align to the new naming schema"): each built-in producer's data and protocol 1's inputs get `lumiverb.*` names in plain words, documented, and every built-in producer declares by name what it reads and makes | Planning: `docs/adr/024-phase-1-plan.md`, revised for Robert's decision (2026-10-19: "Rename everything. I don't want half-baked."): every identifier family renamed to the names, in five parts |
 | 2 | Lumiverb's plug-ins renamed (Robert: "refactor existing plugins to use the new schema where they use the prefix that matches the plugin name"): GeoNames' `at` and `near` become `geonames.landmark` and `geonames.town`, the example's `example.caption`, `example.taken` and `example.shape` | Not started |
 | 3 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash; broken chains warned of on Settings › Plug-ins | Not started |
 | 4 | Search by what a clip has: `has:<name>`, and not | Not started |
