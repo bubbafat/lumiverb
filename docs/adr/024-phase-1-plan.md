@@ -28,33 +28,46 @@ The `missing_*` flags aren't search filters any more: `GET /v1/filters/capabilit
 
 ### The list
 
-Each built-in producer makes one name. A few names are made by Lumiverb itself, not by a producer: the scan (what the file says), a person (a location they set), or Lumiverb combining others (`lumiverb.location`).
+Each built-in producer makes one name. A few names are made by Lumiverb itself, not by a producer: the scan (what the file says), a person (a location they set, a person they named), or Lumiverb combining others (`lumiverb.location`).
 
-| Name | What it is | Type | Made by | Today's id | Protocol 1 input |
-|------|-----------|------|---------|-----------|------------------|
-| `lumiverb.original` | The file itself, in its library. Never handed to a plug-in (the API serves no originals) | file | the library | — | — |
-| `lumiverb.metadata` | Its media type, size, length, camera and lens | record | the scan | — | `metadata` |
-| `lumiverb.capture_time` | When it was taken (UTC) and its time zone's offset, as the file says | time | the capture producer (or the scan, which says so) | `capture` | `capture_time` |
-| `lumiverb.preview` | Its preview image and thumbnail (a video's: a still) | image | the scan | `proxy` | `preview` (photos) |
-| `lumiverb.location` | Where it was: a person's location, else the file's GPS, else an applied guess (never a suggestion), with how sure | point | Lumiverb, from the three below | — | `location` |
-| `lumiverb.location.person` | A location a person set: a point, a place, or the same as another clip's | point | a person | — | — |
-| `lumiverb.location.gps` | The file's own GPS, with its accuracy when the file says | point | the scan (the capture producer reads the accuracy for older clips) | — | — |
-| `lumiverb.location.guess` | Where it probably was, from the clips taken around the same time (a guess or a suggestion, with its radius) | point | the location producer | `location` | — |
-| `lumiverb.video.format` | A video's container, codecs, size, rotation, frame rate, timecode and audio | record | the probe producer | `probe` | — |
-| `lumiverb.video.preview` | Its short preview video (the first seconds) | video | the scan | `video_preview` | — |
-| `lumiverb.video.analysis_proxy` | The copy of a video Lumiverb analyses (smaller, the browser plays it) | video | the analysis proxy producer | `analysis_proxy` | — |
-| `lumiverb.video.scenes` | Where its scenes start and end, each with its picture | list of scenes | the scenes producer | `scenes` | — |
-| `lumiverb.video.scene_descriptions` | Each scene described, with tags | list of texts | the scene descriptions producer | `scene_vision` | — |
-| `lumiverb.video.transcript` | What's said in it, with times | text | the transcripts producer | `transcript` | — |
-| `lumiverb.video.faces` | The people seen in it: one face each, when they're seen | list of faces | the video faces producer | `video_faces` | — |
-| `lumiverb.image.description` | A photo described, with tags | text | the descriptions producer | `vision` | — |
-| `lumiverb.image.text` | The text read in a photo | text | the OCR producer | `ocr` | — |
-| `lumiverb.image.visual_signature` | What visual search and "Find similar" compare: the photo's CLIP vector | vector | the visual search producer | `clip` | — |
-| `lumiverb.image.faces` | The faces found in a photo, each with its box and who it is | list of faces | the faces producer | `faces` | — |
+| Name | What it is | Fields (version 1) | Made by | Today's id | Protocol 1 input |
+|------|-----------|--------------------|---------|-----------|------------------|
+| `lumiverb.original` | The file itself, in its library. Never handed to a plug-in (the API serves no originals) | a file | the library | — | — |
+| `lumiverb.metadata` | Its media type, size, length, camera and lens | `media_type`, `width`, `height`, `duration_sec`, `camera_make`, `camera_model`, `lens` | the scan (a video's length, its probe) | — | `metadata` |
+| `lumiverb.capture_time` | When it was taken, and its time zone's offset, as the file says | `utc`, `offset_min` | the capture producer (or the scan, which says so) | `capture` | `capture_time` |
+| `lumiverb.preview` | Its preview image and thumbnail: a still, for a video too | an image (and its thumbnail) | the scan | `proxy` | `preview` (photos) |
+| `lumiverb.location` | Where it was: a person's location, else the file's GPS, else an applied guess (never a suggestion), with how sure | `lat`, `lon`, `sure_m`, `source` (`person`, `file` or `guess`) | Lumiverb, from the three below | — | `location` |
+| `lumiverb.location.person` | A location a person set: a point, a place, or the same as another clip's | `lat`, `lon`, `place` (its id, label and credit, when set from one) | a person | — | — |
+| `lumiverb.location.gps` | The file's own GPS | `lat`, `lon`, `accuracy_m` (when the file says) | the scan (the capture producer reads the accuracy for older clips) | — | — |
+| `lumiverb.location.guess` | Where it probably was, from the clips taken around the same time: applied, or a suggestion to take | `lat`, `lon`, `radius_m`, `applied` | the location producer | `location` | — |
+| `lumiverb.video.format` | A video's container, codecs, size, rotation, frame rate, timecode and audio | `duration_sec`, `container`, `video_codec`, `width`, `height`, `rotation`, `frame_rate`, `start_timecode`, `drop_frame`, `audio_codec`, `audio_channels`, `audio_sample_rate` | the probe producer | `probe` | — |
+| `lumiverb.video.preview` | Its short preview video (the first seconds): moving, where `lumiverb.preview` is a still | a video | the scan | `video_preview` | — |
+| `lumiverb.video.analysis_proxy` | The copy of a video Lumiverb analyses (smaller; the browser plays it) | a video | the analysis proxy producer | `analysis_proxy` | — |
+| `lumiverb.video.scenes` | Where its scenes start and end, each with its picture | a list of `start_ms`, `end_ms`, `picture` (an image) | the scenes producer | `scenes` | — |
+| `lumiverb.video.scene_descriptions` | Each scene described, with tags | a list of `start_ms`, `end_ms`, `description`, `tags` | the scene descriptions producer | `scene_vision` | — |
+| `lumiverb.video.transcript` | What's said in it, with times | `language`, and a list of `start_ms`, `end_ms`, `text` | the transcripts producer, or a person (a transcript they uploaded) | `transcript` | — |
+| `lumiverb.video.faces` | The faces seen in it: one for each person seen, and when | a list of `box`, `frame_ms`, `seen_ms` (a list of times), `vector`, `crop` (an image) | the video faces producer | `video_faces` | — |
+| `lumiverb.image.description` | A photo described, with tags | `description`, `tags` (a list of texts) | the descriptions producer, or a person | `vision` | — |
+| `lumiverb.image.text` | The text read in a photo | `text` | the OCR producer, or a person | `ocr` | — |
+| `lumiverb.image.visual_signature` | What visual search and "Find similar" compare: the photo's CLIP vector | `vector`, `model` | the visual search producer | `clip` | — |
+| `lumiverb.image.faces` | The faces found in a photo | a list of `box`, `vector`, `crop` (an image) | the faces producer | `faces` | — |
+| `lumiverb.people` | Who's in it, photo or video: the people its faces are named as | a list of `person` (their id and name), `confirmed` (a person said so, or Lumiverb matched them) | a person, or Lumiverb (a face matched to a person) | — | — |
+
+### What a reader is handed is what the clip shows
+
+A name hands what the clip shows now. Where a person wrote it, that's theirs: a description, tags, the text read, a transcript, a location. What a person writes is the one copy (`src/server/repository/corrections.py`), and machine output never replaces it. So "made by" says "or a person" where one can, and the page says which fields a person writes.
+
+Who a face is belongs to `lumiverb.people`, not to the faces names. A face is found by a producer; who it is is a person's naming, or Lumiverb's match of it to someone already named. The faces names keep what was found: the box, the vector, the crop.
+
+### Fields and versions
 
 Every name is version 1. A name's version is its shape's: it goes up only when what a reader is handed changes shape (decision 7). It isn't the producer's version, which goes up when the producer makes something better and asks for a remake.
 
-Types are the words decision 7 proposes (text, number, point, time, list), with `record` (named fields, listed on the page), `vector`, and files (`image`, `video`). Phase 1 only writes them down. Phase 3 checks them, when a plug-in reads a name.
+The fields above are version 1's, written now as the contract the page states. They're a draft until phase 3 first hands a name to a plug-in. Until then a field can still be corrected without a new version; from then on a change of shape is a new major version. Each field's type is in decision 7's words (text, number, point, time, list), plus `vector` and files (an image, a video). The page gives each field's type, and phase 3 checks them.
+
+### Left for later, on purpose
+
+What a person keeps about a clip that no producer makes and no reader needs yet isn't named in phase 1: its file name and path, its rating and favorite, its note, its projects, and whether it's archived or in the trash. A later phase names one when a reader needs it, by the same rules.
 
 ### The words that weren't obvious
 
@@ -64,32 +77,38 @@ Types are the words decision 7 proposes (text, number, point, time, list), with 
 - **`location` (the producer) → `lumiverb.location.guess`.** "Guess" is the word the Lightbox uses. A suggestion is a guess not applied yet; the page says so.
 - **`proxy` → `lumiverb.preview`.** "Proxy" in Lumiverb means two things (the preview, and the analysis proxy). The screens call it the preview.
 - **`thumbnail` and `scene_rep`** (upload types, not producers) are parts of `lumiverb.preview` and `lumiverb.video.scenes`, not names of their own.
+- **`image`, not `photo`.** A photo is `image` everywhere a clip's media is said (`media_type`, the manifest's `media`), so the names say the same. The page says so, for a reader who'd look for `photo`.
 
-The ADR's first list had no name for the original, a person's location or `capture`. These are added. Its `lumiverb.image.clip_vector`, `lumiverb.video.probe` and `lumiverb.capture_time` are worded as above.
+The ADR's first list had no name for the original, a person's location, the people in a clip or `capture`. These are added. Its `lumiverb.image.clip_vector` and `lumiverb.video.probe` are worded as above, and `lumiverb.capture_time` is kept.
 
 ## 2. Each producer declares what it reads and makes
 
 `ProducerSpec` gains:
 
-- `makes`: a `Data` (`src/producers/contract.py`): its `name`, `about` (the page's "What it is"), `type` and `version`;
-- `reads`: the names it's made from.
+- `makes`: a `Data` (`src/producers/contract.py`): its `name`, `about` (the page's "What it is"), its fields with their types, its `version`, and `stored`: the tables and columns it's kept in (`video_facets`; `assets.taken_at` and `assets.taken_at_offset_min`);
+- `reads`: every name it's made from or chosen by, from its own clip: what its `applies`, `made` and `recheck` SQL read, and what its work is handed;
+- `reads_others`: the names it reads of other clips. Only location guesses do: the times and locations of the clips taken around each one.
 
-`needs` stops being declared. It's worked out from `reads`: each name read that a producer makes is a need, through its artifact. So the queue's waits, Processing's "N wait for Scenes" and `redo_also` behave exactly as now. What `reads` adds is what isn't a producer's: probe, capture and analysis proxies read `lumiverb.original`; location guesses read `lumiverb.capture_time`, `lumiverb.location.gps` and `lumiverb.location.person`. That's why `lumiverb.location.person` is a name: a guess can't read `lumiverb.location`, which includes guesses (a circle).
+`needs` stops being declared. It's worked out from `reads`: each name read that a producer makes is a need, through its artifact. So the queue's waits, Processing's "N wait for Scenes" and `redo_also` behave exactly as now. A name read that the scan, a person or Lumiverb makes adds no need. It's there or not when the clip is listed, and `applies` says what a clip without it is: not one the producer applies to (scenes and transcripts without a length, location guesses without a capture time).
 
-| Producer | Reads | Needs (worked out, as today) |
-|----------|-------|------------------------------|
+| Producer | Reads (its own clip) | Needs (worked out, as today) |
+|----------|----------------------|------------------------------|
 | probe | original | — |
 | capture | original | — |
 | proxy, video_preview | original (at the scan) | — |
 | analysis_proxy | original | — |
-| scenes | video.analysis_proxy | analysis_proxy |
+| scenes | video.analysis_proxy, metadata (its length) | analysis_proxy |
 | scene_vision | video.analysis_proxy, video.scenes | analysis_proxy, scenes |
 | vision, ocr, clip, faces | preview | proxy |
-| video_faces | video.analysis_proxy, video.scenes | analysis_proxy, scenes |
-| transcript | video.analysis_proxy | analysis_proxy |
-| location | capture_time, location.gps, location.person | capture |
+| video_faces | video.analysis_proxy, video.scenes, metadata (its length) | analysis_proxy, scenes |
+| transcript | video.analysis_proxy, metadata (its length) | analysis_proxy |
+| location | capture_time, location.gps, location.person (a clip with either isn't guessed) | capture |
 
-(`lumiverb.` left off.) Lumiverb's names no producer makes are one list beside the producers (`src/producers/names.py`), each a `Data` with who makes it.
+(`lumiverb.` left off.) Location guesses also read the clips around each one (`reads_others`): their `capture_time`, `location.gps` and `location.person`. That's why `lumiverb.location.person` is a name: a guess can't read `lumiverb.location`, which includes guesses (a circle). What a producer reads that isn't a clip's data isn't a name: its own settings (`producer.<artifact>`), its library's (Infer location), the clip's id, library and media type, and lineage.
+
+Lumiverb's names no producer makes are one list beside the producers (`src/producers/names.py`), each a `Data` with who makes it. `lumiverb.location` and `lumiverb.people` say what they're made from too, so the graph has no gaps.
+
+**Held by a test.** `reads` and `stored` are declared by hand, so a test holds them to the SQL that runs. It reads each producer's `applies`, `made` and `recheck`, and finds every table, and every column of the clip (`a.<column>`), they read. Each must be stored by a name the producer reads or makes, or be on the short list of what isn't data (above). A producer reading a column no name of its reads is stored in fails it, naming the column. What a producer's work is handed is its `Work.inputs` (`src/server/scheduler/inputs.py`: the preview, the analysis proxy, the original), and a second test holds those to `reads` the same way.
 
 The registry check (`src/producers/__init__.py`) refuses what isn't so:
 - a name not in the grammar, or not `lumiverb.*`, or under the wrong media;
@@ -99,7 +118,7 @@ The registry check (`src/producers/__init__.py`) refuses what isn't so:
 
 An installed plug-in's producer reads the names of its protocol 1 inputs (section 3). Its `needs` come out as now (`proxy` when it reads the preview). It makes nothing named in phase 1: its outputs are named in phase 2.
 
-`GET /v1/producers` gains each producer's `makes` (its name) and `reads` (names), beside `artifact` and `needs`, which stay. `GET /v1/plugins`' `reads` stays the words a person reads on its card.
+`GET /v1/producers` gains each producer's `makes` (its name), `reads` and `reads_others` (names), beside `artifact` and `needs`, which stay. `GET /v1/plugins`' `reads` stays the words a person reads on its card.
 
 ## 3. Protocol 1's inputs
 
@@ -107,13 +126,16 @@ Protocol 1 stays as it is. A manifest still says `"inputs": ["location"]`, and t
 
 Phase 3's `reads` takes the names, and a protocol 1 manifest's `inputs` are read as those names. A plug-in written for protocol 1 keeps working, as decision 2 and the ADR's design say.
 
+For phase 3, written down now: the hash a plug-in's output is kept with (`clip_inputs.hash_sql`) labels each input with protocol 1's word (`'location'`, `'capture_time'`, `'metadata'`). Those labels stay. Hashing under the names would change every clip's hash and make every plug-in's output due again.
+
 ## 4. The page
 
 `docs/data-names.md` lists every `lumiverb.*` name. It is written from the producers and `src/producers/names.py` by `uv run python -m src.producers.names --write`, never by hand. For each name it gives:
-- what it is, its type and version;
+- what it is, its fields with their types, and its version;
+- which fields a person can write;
 - what clips have it (photos, videos, both);
 - who makes it (the producer's title, the scan, a person, Lumiverb);
-- what reads it;
+- what reads it (of its own clip, or of others);
 - the protocol 1 input it stands for;
 - its id in today's API (section 5).
 
@@ -123,7 +145,7 @@ The page is linked from cursor-api.md (the Plug-ins API, and "Writing a client")
 
 ## 5. Robert's decision: rename what's stored and sent, or name beside it
 
-Either way, sections 1 to 4 are built, and a client using today's ids keeps working. The question is whether today's ids go.
+Robert's phase 1 is "refactor builtins to align to the new naming schema". Read literally, that's (a): the built-ins renamed to the names. Read lightly, it's (b): the built-ins declared and documented under the names, which is what aligns them to the schema, and today's ids kept as storage keys underneath. Either way, sections 1 to 4 are built, and a client using today's ids keeps working. The question is whether today's ids go.
 
 ### (a) One name for each thing, everywhere
 
@@ -176,7 +198,9 @@ Today's ids stay what's stored and sent. They're documented as storage keys, kep
 
 What Robert asked for is readable names and a contract to build on, not new storage. (a) touches every account's lineage and most of the server for no change anyone sees. Because old clients can't all be upgraded together, it still keeps today's ids at the edge, and needs a second spelling inside the code for SQL. So (a) ends with two names too, at far more cost and risk.
 
-(b) gives every reader one name per thing now, in the places names are read. If keeping two ids ever costs more than it saves, a later phase can retire the old ones on its own terms: a client version in the check-in first, then the rename.
+(b) gives every reader one name per thing now, in the places names are read: every producer declares its data by name, the names are the documented contract, and everything new speaks them. That is what aligning the built-ins to the schema has to deliver for phases 2 to 5.
+
+If keeping two ids ever costs more than it saves, a later phase can retire the old ones on its own terms: a client version in the check-in first, then the rename. Retiring them then costs about what (a) costs now: the migrations, the code and the aliases. It doesn't get cheaper by waiting, except that older clients will have gone by then.
 
 ## 6. What a person sees
 
@@ -187,10 +211,12 @@ Nothing changes on screen. The page `docs/data-names.md` is new, linked from the
 Every test calls the real registry, producers and routes (none reimplements a rule), and none asserts speed.
 
 - The rules in section 2, each refusing a made-up producer that breaks it (the registry check, as `tests/test_producer_contract.py` does for producers' other rules).
+- `reads` held to what runs: every table and clip column each producer's `applies`, `made` and `recheck` read is stored by a name it reads or makes (or is on the not-data list); every input its work is handed (`Work.inputs`) is a name it reads. Each fails on a made-up producer reading a column it doesn't declare.
+- What a reader would be handed is what the clip shows: for `lumiverb.image.description`, `lumiverb.image.text` and `lumiverb.video.transcript`, a clip a person corrected states the person's value (a test on `stored` and `corrections.FIELDS`, so a field a person can write is on the page as theirs).
 - `needs` from `reads`, every built-in's equal to today's list (written into the test from today's specs before the change).
 - The page: written by the command, equal to the file; and a change to a producer's name fails it.
 - The protocol 1 table: each input's name, and `tests/test_plugin_work.py` unchanged (what a plug-in is handed).
-- `GET /v1/producers`: each producer's `makes` and `reads`, an installed plug-in's `reads` (its inputs' names) and its `makes` empty.
+- `GET /v1/producers`: each producer's `makes`, `reads` and `reads_others`; an installed plug-in's `reads` (its inputs' names) and its `makes` empty.
 - Option (a), if Robert chooses it: section 5's list.
 
 ## 8. Parts
@@ -205,7 +231,7 @@ Under (b), one PR: the names, the declarations, the page, the API's fields, thei
 
 ## 10. Question for Robert (through the coordinator)
 
-1. **Rename what's stored and sent, or name beside it?** (a) renames today's ids to the names everywhere. That's a migration of every account, most of the server, aliases kept for older devices, the apps and other readers, and three parts. (b) adds the names beside the ids. That's no migration, nothing broken, one part. Recommended: (b).
+1. **Rename what's stored and sent, or name beside it?** His "refactor builtins to align to the new naming schema" read literally is (a); (b) is the lighter reading, and meets it by declaring and documenting every built-in under the names. (a) renames today's ids to the names everywhere. That's a migration of every account, most of the server, aliases kept for older devices, the apps and other readers, and three parts. (b) adds the names beside the ids. That's no migration, nothing broken, one part. Recommended: (b).
 
 The names themselves (section 1) are for the reviewer and the tester to agree. Robert can change any word; the two that took the most thought are `lumiverb.video.format` (probe) and `lumiverb.image.visual_signature` (CLIP).
 
