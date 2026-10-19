@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer
 from sqlmodel import Session
 
 from src.server.api.content_hashes import ContentHash, why_not
@@ -57,8 +57,6 @@ from src.shared.producers import (
 from src.shared.waits import HELD
 
 logger = logging.getLogger(__name__)
-
-PRODUCER_ARTIFACTS = tuple(PRODUCERS)
 
 router = APIRouter(prefix="/v1/producers", tags=["producers"])
 
@@ -568,8 +566,16 @@ def resume_switch(target: str, body: PauseIn, session: Annotated[Session, Depend
 
 class Failure(BaseModel):
     asset_id: str = Field(min_length=1, max_length=64)
-    artifact: Literal[PRODUCER_ARTIFACTS]  # type: ignore[valid-type]
+    artifact: str = Field(max_length=100)
     error: str = Field(max_length=10_000)
+
+    @field_validator("artifact")
+    @classmethod
+    def _a_producer(cls, value: str) -> str:
+        # As the producers are now: a plug-in's work can be added while Lumiverb runs.
+        if value not in PRODUCERS:
+            raise ValueError(f"no producer makes {value!r}")
+        return value
 
 
 class FailuresIn(BaseModel):

@@ -16,9 +16,11 @@ transcripts the transcript machines'.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from src.producers.contract import FIND, PREPARE, REDO, SEE  # noqa: F401 — the tiers
+from src.producers.live import LiveMap, LiveSeq
 from src.producers.pools import SCANS
 from src.server.scheduler.dispatch import KindSpec
 from src.shared.producers import MISSING_FLAGS, PRODUCERS
@@ -49,14 +51,16 @@ class Kind:
         return self.spec.same_as or self.name
 
 
-# A kind per producer the scheduler runs (src/producers/<artifact>/), and the scan.
-_FIRST: dict[str, Kind] = {k.name: k for k in (
-    Kind("scan", KindSpec(SEE, SCANS.name, retake_after=SCAN_EVERY_SEC)),
-    *(Kind(p.kind, KindSpec(p.tier, p.pool.name, batch=p.batch, per_account=p.pool.per_account,
-                            by_seconds=p.unit == "second"),
-           p.flag, storage=p.storage)
-      for p in PRODUCERS.values() if p.scheduled),
-)}
+# A kind per producer the scheduler runs (src/producers/<artifact>/, and a
+# plug-in's work: added while it runs), and the scan.
+def _first() -> dict[str, Kind]:
+    return {k.name: k for k in (
+        Kind("scan", KindSpec(SEE, SCANS.name, retake_after=SCAN_EVERY_SEC)),
+        *(Kind(p.kind, KindSpec(p.tier, p.pool.name, batch=p.batch, per_account=p.pool.per_account,
+                                by_seconds=p.unit == "second"),
+               p.flag, storage=p.storage)
+          for p in PRODUCERS.values() if p.scheduled),
+    )}
 
 
 def _redo(kind: Kind) -> Kind:
@@ -70,11 +74,19 @@ def _redoable(kind: Kind) -> bool:
     return bool(kind.flag) and redoable(kind.artifact)
 
 
-KINDS: dict[str, Kind] = {**_FIRST, **{f"redo_{k.name}": _redo(k) for k in _FIRST.values() if _redoable(k)}}
+def _kinds() -> dict[str, Kind]:
+    first = _first()
+    return {**first, **{f"redo_{k.name}": _redo(k) for k in first.values() if _redoable(k)}}
+
+
+# Each kind by name, and the tables below, as the producers are now
+# (src/producers/live.py): the scheduler takes up a kind added (Scheduler.tick).
+KINDS: Mapping[str, Kind] = LiveMap(_kinds)
 
 # The kinds the database lists (all but scans).
-QUEUED = tuple(k for k in KINDS.values() if k.flag)
-# Kinds that need an AI job's machines (Settings → AI), by job.
+QUEUED: tuple[Kind, ...] = LiveSeq(lambda: [k for k in KINDS.values() if k.flag])  # type: ignore[assignment]
+# Kinds that need an AI job's machines (Settings → AI), by job: Lumiverb's own
+# producers' (an added one uses no AI job).
 AI_JOB_KINDS: dict[str, tuple[str, ...]] = {
     job: tuple(k.name for k in KINDS.values() if k.base in {p.kind for p in PRODUCERS.values() if p.job == job})
     for job in dict.fromkeys(p.job for p in PRODUCERS.values() if p.job and p.scheduled)

@@ -31,7 +31,7 @@ made). Both live in producer_pauses and are read in one go (`pauses`).
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -39,6 +39,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers.live import LiveMap, LiveSet, Made
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
     MADE_AT_SCAN,
@@ -67,10 +68,11 @@ def _applies(p) -> str:
     return f"({on_sql(p.plugin)}) AND ({p.applies})"
 
 
-APPLIES: dict[str, str] = {a: _applies(p) for a, p in PRODUCERS.items()}
-MADE: dict[str, str] = {a: p.made for a, p in PRODUCERS.items()}
+# Each, and the tables below, as the producers are now (src/producers/live.py).
+APPLIES: Mapping[str, str] = LiveMap(lambda: {a: _applies(p) for a, p in PRODUCERS.items()})
+MADE: Mapping[str, str] = LiveMap(lambda: {a: p.made for a, p in PRODUCERS.items()})
 # Made, but due to be checked again (location guesses): "false" for the rest.
-RECHECK: dict[str, str] = {a: p.recheck or "false" for a, p in PRODUCERS.items()}
+RECHECK: Mapping[str, str] = LiveMap(lambda: {a: p.recheck or "false" for a, p in PRODUCERS.items()})
 
 _OVERRIDES = "producer.{}"
 
@@ -156,18 +158,19 @@ def _lineage_cols() -> str:
 # Each clip's lineage, looked at once for all the rules below and joined as
 # `la`: per artifact the scheduler is handed, the file it was made from and
 # whether a failure is waiting its turn. A query using due(), outstanding(),
-# source_changed(), waiting() or redo_due() puts LINEAGE_JOIN right after
+# source_changed(), waiting() or redo_due() puts lineage_join() right after
 # `FROM active_assets a`. (One index lookup per clip: the repair summary of
 # 100k clips takes about 1.4 s, against 0.75 s before lineage; a grouped
 # pass over the table was slower.)
-LINEAGE_JOIN = (f"LEFT JOIN LATERAL (SELECT {_lineage_cols()} FROM artifact_lineage l"
-                " WHERE l.asset_id = a.asset_id) la ON TRUE")
+lineage_join = Made(lambda: f"LEFT JOIN LATERAL (SELECT {_lineage_cols()} FROM artifact_lineage l"
+                            " WHERE l.asset_id = a.asset_id) la ON TRUE").now
 
 
 # Not handed out again when their clip's file changes (each producer's
 # redo_on_source_change). A different file at a path is a new clip, so a
 # file seldom changes under one.
-NOT_REDONE_ON_SOURCE_CHANGE = frozenset(a for a, p in PRODUCERS.items() if not p.redo_on_source_change)
+NOT_REDONE_ON_SOURCE_CHANGE: Set[str] = LiveSet(
+    lambda: {a for a, p in PRODUCERS.items() if not p.redo_on_source_change})
 
 
 def source_changed(artifact: str) -> str:
@@ -219,7 +222,7 @@ def queued(artifact: str, *, redo: bool = False) -> str:
     library's reader is given (src/server/reader_work.py). Due or rechecking
     (handed_out), or for its redo made another way than now (redo_due, with
     redo_params); either only once what it's made from is (made_first). On
-    active_assets a, after LINEAGE_JOIN."""
+    active_assets a, after lineage_join()."""
     return f"(({redo_due(artifact) if redo else handed_out(artifact)}) AND ({made_first(artifact)}))"
 
 
@@ -372,7 +375,8 @@ def work_left(session: Session, artifact: str, want: dict[str, Any], *, redo: bo
 # ---------------------------------------------------------------------------
 
 # Producers whose artifact can't be made again in place yet, and why: they
-# show as stale and wait.
+# show as stale and wait. These two are Lumiverb's own producers': one added
+# (a plug-in's work) can always be made again and uses no AI job.
 CANT_REDO: dict[str, str] = {a: p.cant_redo for a, p in PRODUCERS.items() if p.cant_redo}
 # What each AI job's model makes (Settings → AI): a new model makes these stale.
 JOB_ARTIFACTS: dict[str, tuple[str, ...]] = {
@@ -399,7 +403,7 @@ def redo_due(artifact: str) -> str:
     (made before its hash was: stale, as counts has it), from the file as it
     is: what a redo makes again. A person's is never redone; one missing, or
     made from a file that has since changed, is due as missing instead; a
-    failure waits its turn. On active_assets a, after LINEAGE_JOIN."""
+    failure waits its turn. On active_assets a, after lineage_join()."""
     assert redoable(artifact), artifact
     return (f"(({APPLIES[artifact]}) AND ({MADE[artifact]}) AND NOT {source_changed(artifact)}"
             f" AND NOT {waiting(artifact)} AND NOT ({RECHECK[artifact]})"

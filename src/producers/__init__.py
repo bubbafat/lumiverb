@@ -1,24 +1,44 @@
-"""The producers: one folder each, found here (ADR-016 phase 4).
+"""The producers: one folder each, found here (ADR-016 phase 4), and those
+added while Lumiverb runs (each installed plug-in's work, ADR-023).
 
 Each subpackage of this one is a producer: its ``__init__`` sets
 ``PRODUCER`` to a ProducerSpec (src/producers/contract.py), and only
 declares; its work is a Work in work.py (src/producers/runner.py). Everything
 that lists producers, their pools or their AI jobs reads them from here.
+
+A plug-in the server admin installs brings its work while the API and the
+scheduler run, so the list can change: ``use_added`` puts in place those added,
+and ``registry()`` hands out a new dict each time it changes (never one
+changed in place, so a caller holding one sees one list throughout). What's
+worked out from the list is worked out again when it changes
+(src/producers/live.py). An added producer is a plug-in's work and nothing
+else (``_check_added``): it reads no original, makes nothing at a scan and
+uses no AI job, so what's worked out from those once, at import (a reader's
+work, the AI jobs), stays true.
 """
 
 from __future__ import annotations
 
 import importlib
 import pkgutil
+import threading
+from collections.abc import Iterable
 
 from src.producers.contract import AiJob, Pool, ProducerSpec
 from src.producers.pools import SCANS
 
-_registry: dict[str, ProducerSpec] | None = None
+# An added producer's artifact starts with this; none of Lumiverb's own does.
+ADDED_PREFIX = "plugin_"
+
+_registry: dict[str, ProducerSpec] | None = None  # Lumiverb's own, found in this package
+_added: dict[str, ProducerSpec] = {}  # added while running
+# The list handed out, and what it was made from: made again when either changes.
+_listed: tuple[dict[str, ProducerSpec], dict[str, ProducerSpec], dict[str, ProducerSpec]] | None = None
+_adding = threading.Lock()
 
 
-def registry() -> dict[str, ProducerSpec]:
-    """Every producer by its artifact, in list order. Found on first use."""
+def _own() -> dict[str, ProducerSpec]:
+    """Lumiverb's own producers by artifact, in list order. Found on first use."""
     global _registry
     if _registry is None:
         found: list[ProducerSpec] = []
@@ -36,12 +56,62 @@ def registry() -> dict[str, ProducerSpec]:
     return _registry
 
 
-def _check(found: list[ProducerSpec]) -> None:
+def registry() -> dict[str, ProducerSpec]:
+    """Every producer by its artifact, in list order: Lumiverb's own and those
+    added. A new dict when that changes; never change the one handed out."""
+    global _listed
+    own, added = _own(), _added
+    listed = _listed
+    if listed is None or listed[0] is not own or listed[1] is not added:
+        ordered = sorted((*own.values(), *added.values()), key=lambda p: (p.order, p.artifact))
+        listed = _listed = (own, added, {p.artifact: p for p in ordered})
+    return listed[2]
+
+
+def use_added(specs: Iterable[ProducerSpec]) -> bool:
+    """These producers added (each installed plug-in's work), in place of
+    those added before: the list changes only when they differ. Each is
+    checked with Lumiverb's own as they are at start (ValueError, and the list
+    stays as it was). Whether it changed."""
+    global _added
+    with _adding:
+        new = {p.artifact: p for p in specs}
+        if new == _added:
+            return False
+        own = _own()
+        for p in new.values():
+            _check_added(p, own)
+        _check([*own.values(), *new.values()], added=frozenset(new))
+        _added = new
+        return True
+
+
+def _check_added(p: ProducerSpec, own: dict[str, ProducerSpec]) -> None:
+    """An added producer is a plug-in's work, which the scheduler runs from
+    what Lumiverb keeps: it reads no original, makes nothing at a scan, uses no
+    AI job, can always be made again and is no part of another."""
+    if not p.artifact.startswith(ADDED_PREFIX) or p.artifact in own:
+        raise ValueError(f"{p.artifact}: an added producer's artifact starts with {ADDED_PREFIX!r}"
+                         " and is none of Lumiverb's own")
+    if not p.scheduled or p.storage or p.made_at_scan or p.job or p.cant_redo or p.part_of or p.regroup \
+            or p.uniform or p.redo_also:
+        raise ValueError(f"{p.artifact}: an added producer is run by the scheduler from what Lumiverb keeps"
+                         " (no storage, made_at_scan, AI job, cant_redo, part_of, regroup, uniform or redo_also)")
+    if p.pool is None or p.pool.name in pools_of(own.values()) or p.pool.sized_by or p.pool.gpu_hold:
+        raise ValueError(f"{p.artifact}: an added producer's pool is its own, so many jobs at once"
+                         " (none of Lumiverb's, no sized_by or gpu_hold)")
+
+
+def _check(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> None:
     """What would otherwise go wrong quietly: two producers making one thing,
     one the scheduler runs missing what it needs to queue and run it, or two
-    declaring one pool or AI job differently."""
+    declaring one pool or AI job differently. added: those added while
+    running (a plug-in's work), whose plug-in is an installed one."""
     from src.processing.machine import Machine
 
+    for p in found:
+        if p.artifact.startswith(ADDED_PREFIX) and p.artifact not in added:
+            raise ValueError(f"{p.artifact}: {ADDED_PREFIX!r} starts only a plug-in's work's artifact")
     for field in ("artifact", "kind", "flag"):
         values = [getattr(p, field) for p in found if getattr(p, field)]
         if len(set(values)) != len(values):
@@ -69,7 +139,7 @@ def _check(found: list[ProducerSpec]) -> None:
                     or len(stands_for) != 1 or set(next(iter(stands_for))) & others:
                 raise ValueError(f"{p.artifact}: its notch {s.key!r} is in the hash (remakes=True), its default"
                                  " among its choices, each choice meaning the same keys, none another setting's")
-        if p.plugin:
+        if p.plugin and p.artifact not in added:
             from src.plugins import plugin
 
             if plugin(p.plugin) is None:
@@ -97,8 +167,12 @@ def _check(found: list[ProducerSpec]) -> None:
 
 def pools() -> dict[str, Pool]:
     """Every pool by name: the scan pass's, then each producer's."""
+    return pools_of(registry().values())
+
+
+def pools_of(producers: Iterable[ProducerSpec]) -> dict[str, Pool]:
     out: dict[str, Pool] = {SCANS.name: SCANS}
-    for p in registry().values():
+    for p in producers:
         if p.pool is not None:
             out.setdefault(p.pool.name, p.pool)
     return out

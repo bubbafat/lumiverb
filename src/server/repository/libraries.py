@@ -147,13 +147,13 @@ class LibraryRepository:
         (no preview, or anything a producer still needs, failures waiting
         their turn included). A library with no clips isn't listed."""
         from src.server.repository.assets import OUTSTANDING_CONDITIONS
-        from src.server.repository.lineage import LINEAGE_JOIN
+        from src.server.repository.lineage import lineage_join
 
         pending = "a.proxy_key IS NULL OR " + " OR ".join(f"({cond})" for cond in OUTSTANDING_CONDITIONS.values())
         rows = self._session.execute(text(f"""
             SELECT a.library_id, COUNT(*) FILTER (WHERE {pending}) AS pending
             FROM active_assets a
-            {LINEAGE_JOIN}
+            {lineage_join()}
             JOIN libraries l ON l.library_id = a.library_id
             WHERE l.status != 'trashed'
             GROUP BY a.library_id

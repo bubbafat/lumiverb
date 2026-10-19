@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 from sqlmodel import Session
 
 from src.server.after_commit import AfterCommit
@@ -244,8 +244,10 @@ def page_assets() -> None:
 # each producer the scheduler runs still needs, by its missing_* flag
 # (MISSING_CONDITIONS, the rule its queue lists from), and face embeddings,
 # stale search entries, and failures waiting their turn (not in the counts
-# above).
-RepairSummary = create_model("RepairSummary", total_assets=(int, 0), missing_proxy=(int, 0), missing_exif=(int, 0),
+# above). A plug-in's work, added while Lumiverb runs, counts as one more
+# missing_* field.
+RepairSummary = create_model("RepairSummary", __config__=ConfigDict(extra="allow"), total_assets=(int, 0),
+                             missing_proxy=(int, 0), missing_exif=(int, 0),
                              **{flag: (int, 0) for flag in MISSING_CONDITIONS}, stale_search_sync=(int, 0),
                              waiting_failures=(int, 0))
 
@@ -262,8 +264,7 @@ def repair_summary(
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
     row = AssetRepository(session).repair_counts(library_id)
-    return RepairSummary(total_assets=row["total"], missing_proxy=row["missing_proxy"],
-                         missing_exif=row["missing_exif"], **{f: row[f] for f in MISSING_CONDITIONS},
+    return RepairSummary(total_assets=row["total"], **{f: n for f, n in row.items() if f.startswith("missing_")},
                          waiting_failures=row["waiting_failures"], stale_search_sync=row["stale_search_sync"])
 
 

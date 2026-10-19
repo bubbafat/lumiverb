@@ -40,7 +40,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.server.repository import lineage
-from src.server.repository.lineage import APPLIES, LINEAGE_JOIN, MADE
+from src.server.repository.lineage import APPLIES, MADE, lineage_join
 from src.shared.producers import MADE_AT_SCAN as SCANNED
 from src.shared.producers import PRODUCERS
 
@@ -96,7 +96,7 @@ def page(session: Session, library_id: str, *, after: str | None, limit: int) ->
     rows = session.execute(text(
         "SELECT a.asset_id, a.rel_path, a.media_type, a.file_size, a.content_hash, "
         + ", ".join(f"{sql} AS {name}" for name, sql in columns.items())
-        + f" FROM active_assets a {LINEAGE_JOIN}"
+        + f" FROM active_assets a {lineage_join()}"
         " WHERE a.library_id = :lib AND (CAST(:after AS text) IS NULL OR a.asset_id > :after)"
         f"   AND ({' OR '.join(columns.values())})"
         " ORDER BY a.asset_id LIMIT :n"

@@ -37,6 +37,8 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
+from src.producers import registry
+from src.producers.live import LiveSeq
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
@@ -141,10 +143,15 @@ class Scheduler:
         self._paced: set[str] = set()
         self._seeded: dict[str, Any] = {}
         self._runners = dict(runners or runner_mod.runners())
+        self._own_runners = runners is None  # loaded here: a kind taken up later has its runner loaded too
         self._scan = scan or runner_mod.scan
         self._clock = clock
         self._wall = wall
-        self.dispatcher = Dispatcher({k.name: k.spec for k in KINDS.values()}, capacity, clock=clock)
+        # Every kind it has handed out, taken up as the producers change (_take_up_kinds): never one less,
+        # so a job of a kind taken away since finishes as it would have.
+        self._kinds_from = registry()
+        self._kinds: dict[str, Any] = dict(KINDS)
+        self.dispatcher = Dispatcher({k.name: k.spec for k in self._kinds.values()}, capacity, clock=clock)
         self._pool = ThreadPoolExecutor(max_workers=max_threads, thread_name_prefix="job")
         self._running: dict[Future, Job] = {}
         self._flushed_at = clock()
@@ -178,6 +185,7 @@ class Scheduler:
     def tick(self) -> int:
         """Top up the queue, start what fits, collect what's done. Returns the jobs started."""
         accounts = dict(self._accounts())
+        self._take_up_kinds(accounts)
         for tenant_id, acct in accounts.items():
             self._read_hold_soon(tenant_id)
             self._refill_soon(tenant_id, acct)
@@ -204,6 +212,35 @@ class Scheduler:
                 elif (flushing := self._flushing.get(acct_id)) is None or flushing.done():
                     self._flushing[acct_id] = self._refill_pool.submit(acct.failures.flush)
         return started
+
+    def _take_up_kinds(self, accounts: Mapping[str, Any]) -> None:
+        """The kinds of producers added since (a plug-in's work, installed
+        while it runs: src/producers/__init__.py), each handed to the
+        dispatcher with its pool's slots and its runner. A kind taken away (its
+        plug-in removed) is listed no more and what's waiting of it goes; a job
+        of it still running finishes."""
+        from src.producers import pools
+        from src.server.scheduler import runners as runner_mod
+
+        if registry() is self._kinds_from:
+            return
+        self._kinds_from = registry()
+        now = dict(KINDS)
+        added = {name: kind for name, kind in now.items() if self._kinds.get(name) != kind}
+        for name in [n for n in self._kinds if n not in now]:
+            for tenant_id in accounts:
+                self.dispatcher.clear(tenant_id, name)
+        self._kinds = {**self._kinds, **now}
+        if not added:
+            return
+        if self._own_runners:
+            self._runners = {**runner_mod.runners(), **self._runners}
+        # An added producer's pool is a plain one (so many jobs at once): its slots are its own.
+        slots = {p.name: p.slots for p in pools().values() if not p.per_account and not p.sized_by}
+        self.dispatcher.add_kinds({name: kind.spec for name, kind in added.items()},
+                                  {kind.spec.pool: slots[kind.spec.pool] for kind in added.values()
+                                   if kind.spec.pool in slots})
+        logger.info("scheduler: taking up %s", ", ".join(sorted(added)))
 
     def _prune_models_soon(self, accounts: Mapping[str, Any]) -> None:
         """Once a day, off this thread, the AI models no account's settings
@@ -431,7 +468,7 @@ class Scheduler:
         failures = getattr(acct, "failures", None)
         mark = failures.mark() if hasattr(failures, "mark") else None
         outcome = self._run(acct, job)
-        kind = KINDS.get(job.kind)
+        kind = self._kinds.get(job.kind)
         if mark is None or kind is None or not kind.flag:
             return outcome, set()
         try:
@@ -449,7 +486,7 @@ class Scheduler:
         from src.producers.runner import NOT_TRIED, Crashed, Stopped, whose
         from src.shared.waits import Waiting
 
-        kind = KINDS[job.kind]
+        kind = self._kinds[job.kind]
         try:
             if job.kind == "scan":
                 self._scan(acct, job, now=self._wall())
@@ -487,7 +524,7 @@ class Scheduler:
         those that reached CRASHES_BEFORE_CHARGE. Returns those charged."""
         from src.server.repository.lineage import CRASHES_BEFORE_CHARGE
 
-        artifact = KINDS[job.kind].artifact
+        artifact = self._kinds[job.kind].artifact
         error = str(cause).strip() or type(cause).__name__
         try:
             reached = self._crashed(job.tenant_id, artifact, asset_ids, error)
@@ -649,7 +686,8 @@ def _from_database(tenant_id: str, kind: Any, libraries: list[str] | None,
 
 # The producers whose redo the scheduler lists (a redo kind each).
 # Each producer made again: the scheduler's redo kinds, and what scans remake (src/server/scans.py).
-REDONE = tuple(dict.fromkeys([*(k.artifact for k in KINDS.values() if k.redo), *MADE_AT_SCAN]))
+REDONE: tuple[str, ...] = LiveSeq(  # type: ignore[assignment]
+    lambda: dict.fromkeys([*(k.artifact for k in KINDS.values() if k.redo), *MADE_AT_SCAN]))
 
 
 def _hold_new_versions_in_database(tenant_id: str) -> None:

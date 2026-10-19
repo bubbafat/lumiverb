@@ -130,6 +130,14 @@ class Dispatcher:
         self._started: dict[int, tuple[Job, float]] = {}
         self._paces: dict[tuple[str, str], deque[tuple[float, float]]] = {}
 
+    def add_kinds(self, kinds: Mapping[str, KindSpec], capacity: Mapping[str, int]) -> None:
+        """Kinds taken up since it started (a plug-in's work, added while the
+        scheduler runs), and the slots of pools it hadn't. A new dict, never
+        one changed in place: what's reading the old one goes on."""
+        with self._lock:
+            self._kinds = {**self._kinds, **kinds}
+            self._capacity = {**{p: max(0, n) for p, n in capacity.items()}, **self._capacity}
+
     # -- capacity -----------------------------------------------------------
 
     def set_capacity(self, pool: str, slots: int) -> None:
