@@ -15,6 +15,9 @@ plug-in going wrong in each way it might (tests/test_plugin_runner.py):
   big-file    tries to write a 20 MB file (more than its disk_mb lets one file be), says what happened
   fill        writes 9 MB files into its data folder, one every half second
   env         writes the environment it was given to its data folder (env.json)
+
+Whatever it does, it checks new settings (POST /v1/settings/check): a
+greeting of "rude" isn't one it takes.
 """
 
 import json
@@ -49,6 +52,15 @@ class Handler(BaseHTTPRequestHandler):
             self._answer(200, {"state": "failed", "error": "Its list is broken"})
         else:
             self._answer(200, {"state": "ready"})
+
+    def do_POST(self) -> None:  # noqa: N802 — http.server's name
+        sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path != "/v1/settings/check":
+            self._answer(404, {"error": "not found"})
+        elif sent.get("settings", {}).get("greeting") == "rude":
+            self._answer(200, {"errors": {"greeting": "Not a nice greeting"}})
+        else:
+            self._answer(200, {"errors": {}})
 
     def _answer(self, status: int, body: dict) -> None:
         raw = json.dumps(body).encode()

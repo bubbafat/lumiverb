@@ -64,6 +64,35 @@ export interface Plugin {
   internet?: boolean;
   /** An installed one's process, as the plug-in runner last said; null for Lumiverb's own. */
   running?: PluginRunning | null;
+  /** An installed one's settings, from its manifest: the account's, and the server's for a server admin. */
+  settings?: PluginSetting[];
+  /** Saving settings: why the plug-in's own check didn't run (they were saved). */
+  unchecked?: string | null;
+}
+
+/** An installed plug-in's setting: its schema, as its manifest declares it, and its value here (ADR-023). */
+export interface PluginSetting {
+  key: string;
+  type: "int" | "float" | "bool" | "text" | "choice" | "secret";
+  label: string;
+  help: string;
+  /** null for a secret, which is never shown again: only whether it's set. */
+  default: number | boolean | string | null;
+  value: number | boolean | string | null;
+  /** Chosen here rather than its default (a secret: set at all). */
+  set: boolean;
+  minimum?: number | null;
+  maximum?: number | null;
+  unit?: string | null;
+  pattern?: string | null;
+  max_length?: number | null;
+  choices: { value: string; label: string }[];
+  /** account: each account's admin sets it; server: the server admin does. */
+  scope: "account" | "server";
+  advanced: boolean;
+  remakes: boolean;
+  /** Whether you may change it. */
+  editable: boolean;
 }
 
 export interface PluginRunning {

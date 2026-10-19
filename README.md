@@ -287,6 +287,29 @@ Then, as an admin, in the Lumiverb it should help:
 The server's own **Built in** machine keeps doing them too, unless you
 untick them there. Each machine works on one photo at a time on its GPU.
 
+## Plug-ins
+
+A plug-in is a program of its own, in any language, that Lumiverb runs
+outside itself (ADR-023). It's a folder with a `lumiverb-plugin.json` that
+says what it reads, what it downloads, whether it uses the internet, and its
+settings. Lumiverb shows you all of that before you install it, and builds
+its settings form in **Settings › Plug-ins** from it. Each plug-in runs in a
+process of its own, below Lumiverb's priority, given none of Lumiverb's
+settings or keys, held to its own memory and disk, and started again if it
+stops. One that keeps stopping is left stopped, and Settings says why.
+
+The server admin installs one on the machine, on or off by default for
+every account (each account's admin can still turn it on or off there):
+
+```bash
+lumiverb-server plugins install FOLDER --off --env /opt/homebrew/etc/lumiverb/env
+```
+
+To try it, Lumiverb comes with an example that does nothing with your
+photos but has one setting of every kind. `lumiverb-server plugins` lists
+what's installed and says where the example is. `lumiverb-server plugins
+uninstall example` takes it away again.
+
 ---
 
 ## Architecture Overview

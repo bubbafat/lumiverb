@@ -272,3 +272,93 @@ def test_the_api_says_what_the_runner_says(install, control, short_data, tmp_pat
         _until(runner, lambda: runner.plugins == {})
     finally:
         runner.stop_all()
+
+
+def _settings(listed: dict) -> dict:
+    return {s["key"]: s for s in listed["settings"]}
+
+
+@pytest.mark.fast
+def test_a_change_names_what_it_changes_and_the_plug_in_is_handed_every_value() -> None:
+    from src.plugins.manifest import read
+    from src.server.plugin_settings import changed, values
+
+    m = read(HELLO)
+    chosen, errors = changed(m, "account", {"times": 2, "gone": 1}, {"greeting": "Hi", "loud": None})
+    assert (chosen, errors) == ({"times": 2, "greeting": "Hi"}, {}), "others stay; one it no longer has goes"
+    _, errors = changed(m, "account", {}, {"times": 9, "language": "de", "token": "x", "colour": "red"})
+    assert errors == {"times": "Times is from 1 to 5", "language": "Language is one of English, French",
+                      "token": "The server's: the server admin sets it", "colour": "Not one of its settings"}
+    assert values(m, {"times": 3}, {"token": "t"}) == {"greeting": "Hello", "times": 3, "loud": False,
+                                                       "language": "en", "token": "t"}
+
+
+@pytest.mark.slow
+def test_its_settings_are_shown_from_its_manifest_and_checked_before_they_are_saved(install, machine, tmp_path):  # noqa: F811
+    from tests.real_account import someone
+
+    client, robert, tenant_id = install
+    env, _ = machine
+    assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--on", "--yes", "--env", env]) == 0
+    shown = _settings(_listed(client, robert)["hello"])
+    assert list(shown) == ["greeting", "times", "loud", "language", "token"]
+    times = shown["times"]
+    assert (times["type"], times["value"], times["default"], times["minimum"], times["maximum"], times["set"]) == (
+        "int", 1, 1, 1, 5, False)
+    assert times["help"] == "How many times it says it." and times["editable"] is True
+    assert shown["language"]["choices"] == [{"value": "en", "label": "English"}, {"value": "fr", "label": "French"}]
+    assert (shown["token"]["scope"], shown["token"]["value"], shown["token"]["advanced"]) == ("server", None, True)
+
+    # An account's admin who isn't a server admin: the account's settings only.
+    other = someone(client, tenant_id, "admin")
+    assert "token" not in _settings(_listed(client, other)["hello"])
+    r = client.put("/v1/plugins/hello/server-settings", json={"settings": {"token": "t"}}, headers=other)
+    assert (r.status_code, r.json()["error"]["code"]) == (403, "server_admin_required")
+
+    r = client.put("/v1/plugins/hello/settings", json={"settings": {"times": 9, "language": "de", "token": "x"}},
+                   headers=robert)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_settings", r.text
+    assert r.json()["error"]["details"]["errors"] == {
+        "times": "Times is from 1 to 5", "language": "Language is one of English, French",
+        "token": "The server's: the server admin sets it"}
+    r = client.put("/v1/plugins/hello/settings", json={"settings": {"times": 3, "greeting": "Hi"}}, headers=robert)
+    assert r.status_code == 200, r.text
+    assert r.json()["unchecked"] == "Hello isn't running: its own check didn't run", "saved, unchecked"
+    shown = _settings(_listed(client, other)["hello"])
+    assert (shown["times"]["value"], shown["times"]["set"], shown["greeting"]["value"]) == (3, True, "Hi")
+    r = client.put("/v1/plugins/hello/settings", json={"settings": {"times": None}}, headers=robert)
+    assert _settings(r.json())["times"]["value"] == 1 and _settings(r.json())["times"]["set"] is False
+
+    r = client.put("/v1/plugins/hello/server-settings", json={"settings": {"token": "s3cret"}}, headers=robert)
+    assert r.status_code == 200, r.text
+    assert (_settings(r.json())["token"]["set"], _settings(r.json())["token"]["value"]) == (True, None)
+    assert "s3cret" not in client.get("/v1/plugins", headers=robert).text, "a secret is never shown again"
+    viewer = someone(client, tenant_id, "viewer")
+    assert client.put("/v1/plugins/hello/settings", json={"settings": {"times": 2}}, headers=viewer).status_code == 403
+    assert _settings(_listed(client, viewer)["hello"])["times"]["editable"] is False
+    for path in ("/v1/plugins/geonames/settings", "/v1/plugins/nope/settings"):
+        assert client.put(path, json={"settings": {}}, headers=robert).status_code == 404
+
+
+@pytest.mark.slow
+def test_a_plug_in_that_checks_its_settings_is_asked_while_it_runs(install, control, short_data, tmp_path,  # noqa: F811
+                                                                  monkeypatch):
+    from src.server.plugin_runner import Runner
+
+    client, robert, _ = install
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={short_data}\n")
+    monkeypatch.setenv("DATA_DIR", str(short_data))
+    get_settings.cache_clear()
+    assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--on", "--yes", "--env", str(env)]) == 0
+    runner = Runner(short_data)
+    try:
+        _until(runner, lambda: _listed(client, robert)["hello"]["running"]["state"] == "ready")
+        r = client.put("/v1/plugins/hello/settings", json={"settings": {"greeting": "rude"}}, headers=robert)
+        assert r.status_code == 422, r.text
+        assert r.json()["error"]["details"] == {"errors": {"greeting": "Not a nice greeting"}, "by_plugin": True}
+        assert _settings(_listed(client, robert)["hello"])["greeting"]["value"] == "Hello", "not saved"
+        r = client.put("/v1/plugins/hello/settings", json={"settings": {"greeting": "Hi"}}, headers=robert)
+        assert r.status_code == 200 and r.json()["unchecked"] is None, r.text
+    finally:
+        runner.stop_all()

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, getCurrentUser, listPlugins, setPlugin } from "../../api/client";
 import type { Plugin, PluginAcknowledgment, PluginData } from "../../api/types";
+import { InstalledDetails } from "./InstalledPlugin";
 
 export const PLUGINS_QUERY_KEY = ["plugins"];
 
@@ -13,7 +14,8 @@ function day(at: string): string {
   return new Date(at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-/** Optional parts of Lumiverb an account turns on (ADR-021). Turning on one that asks an acknowledgment (a license,
+/** Optional parts of Lumiverb an account turns on: Lumiverb's own (ADR-021) and those the server admin installed
+ * (ADR-023), each shown from its manifest with its settings. Turning on one that asks an acknowledgment (a license,
  * say) shows it in full: OK accepts it and turns the plug-in on, Cancel turns the switch back off. Account admins
  * turn them on; everyone else sees which are on. */
 export default function PluginsSection() {
@@ -23,8 +25,13 @@ export default function PluginsSection() {
   const { data: plugins, isLoading, error } = useQuery({
     queryKey: PLUGINS_QUERY_KEY,
     queryFn: listPlugins,
-    // While what a plug-in keeps for the server is fetched: how far, every second.
-    refetchInterval: (query) => (query.state.data?.some((p) => p.data?.state === "fetching") ? 1000 : false),
+    // While what a plug-in keeps for the server is fetched: how far, every second; while one starts, gets ready or
+    // restarts, every two.
+    refetchInterval: (query) => {
+      const plugins = query.state.data ?? [];
+      if (plugins.some((p) => p.data?.state === "fetching")) return 1000;
+      return plugins.some((p) => ["starting", "preparing", "restarting"].includes(p.running?.state ?? "")) ? 2000 : false;
+    },
   });
   // The plug-in being turned on and what it asks, while that's shown.
   const [asking, setAsking] = useState<{ plugin: Plugin; acknowledgment: PluginAcknowledgment } | null>(null);
@@ -56,7 +63,8 @@ export default function PluginsSection() {
       <div>
         <h2 className="text-lg font-semibold text-gray-100">Plug-ins</h2>
         <p className="mt-1 text-sm text-gray-400">
-          Optional parts of Lumiverb, off until turned on for this account.
+          Optional parts of Lumiverb. Lumiverb&apos;s own are off until turned on for this account; those installed on
+          this server are on or off as installed, until turned on or off here.
           {!admin && user && " An admin turns them on."}
         </p>
       </div>
@@ -69,7 +77,8 @@ export default function PluginsSection() {
           {(plugins ?? []).map((p) => (
             <PluginRow key={p.plugin_id} plugin={p} admin={admin} busy={change.isPending}
                        turningOn={asking?.plugin.plugin_id === p.plugin_id} onToggle={(on) => toggle(p, on)}
-                       onRetry={() => change.mutate({ plugin: p, on: true })} />
+                       onRetry={() => change.mutate({ plugin: p, on: true })}
+                       onSaved={() => queryClient.invalidateQueries({ queryKey: PLUGINS_QUERY_KEY })} />
           ))}
         </ul>
       )}
@@ -88,7 +97,7 @@ export default function PluginsSection() {
   );
 }
 
-function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry }: {
+function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry, onSaved }: {
   plugin: Plugin;
   admin: boolean;
   busy: boolean;
@@ -97,6 +106,8 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry }: {
   onToggle: (on: boolean) => void;
   // Fetch what it keeps for the server again, after it failed.
   onRetry: () => void;
+  // Its settings were saved.
+  onSaved: () => void;
 }) {
   const on = plugin.state === "on" || turningOn;
   const accepted = plugin.acknowledged;
@@ -126,6 +137,7 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry }: {
       {plugin.state === "on" && plugin.data && (
         <DataLine data={plugin.data} admin={admin} busy={busy} onRetry={onRetry} />
       )}
+      {plugin.kind === "installed" && <InstalledDetails plugin={plugin} onSaved={onSaved} />}
       {plugin.state === "on" && accepted && (
         <p className="text-xs text-gray-500">
           {plugin.acknowledgment?.title ?? "Its terms"} accepted {day(accepted.at)}

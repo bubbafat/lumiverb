@@ -8,6 +8,7 @@
   "run": ["python3", "hello.py"],
   "memory_mb": 256,
   "disk_mb": 10,
+  "check_settings": true,
   "settings": [
     {"key": "greeting", "type": "text", "default": "Hello", "max_length": 40, "label": "Greeting",
      "help": "What it says."},

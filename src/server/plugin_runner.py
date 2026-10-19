@@ -50,9 +50,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Any
 
-import httpx
-
 from src.plugins.manifest import Manifest
+from src.server.plugin_client import PluginAnswerError, ask, socket_path, sockets_dir
 from src.server.plugin_install import install_mark, plugin_dir, program_dir
 from src.shared.utils import utcnow
 
@@ -60,9 +59,6 @@ logger = logging.getLogger(__name__)
 
 LAUNCH = Path(__file__).with_name("plugin_launch.py")
 STATE_FILE = "runner.json"
-SOCKET = "plugin.sock"
-# A Unix socket's path, at most (macOS: 104 bytes with its end).
-SOCKET_PATH_MAX = 100
 
 STARTING, READY, PREPARING, FAILING, RESTARTING, STOPPED = (
     "starting", "ready", "preparing", "failing", "restarting", "stopped")
@@ -82,7 +78,6 @@ RESTART_MAX_SEC = 600.0
 GIVE_UP_AFTER = 6  # stops soon after starting, in a row, before it's left stopped
 LIST_EVERY_SEC = 10.0  # what's installed, read again
 HEARTBEAT_SEC = 10.0  # the state file is written at least this often
-ANSWER_MAX_BYTES = 64 * 1024
 LINE_MAX = 2000
 LINES_PER_MINUTE = 600
 
@@ -126,10 +121,6 @@ def state_file(data: Path) -> Path:
     return data / "plugins" / STATE_FILE
 
 
-def socket_path(data: Path, plugin_id: str) -> Path:
-    return plugin_dir(data, plugin_id) / "run" / SOCKET
-
-
 def group_memory_mb() -> dict[int, int]:
     """Each process group's memory (resident), in MB: `ps`, on a Mac and on Linux alike."""
     out = subprocess.run(["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, timeout=10,
@@ -151,21 +142,9 @@ def folder_mb(path: Path) -> int:
     return total // (1024 * 1024)
 
 
-def ask_health(sock: Path, timeout: float = HEALTH_TIMEOUT_SEC) -> dict[str, Any]:
-    """Its answer to GET /v1/health, read up to ANSWER_MAX_BYTES. Raises httpx.HTTPError, OSError or ValueError."""
-    with httpx.Client(transport=httpx.HTTPTransport(uds=str(sock)), timeout=timeout) as client, \
-            client.stream("GET", "http://plugin/v1/health") as r:
-        body = b""
-        for chunk in r.iter_bytes():
-            body += chunk
-            if len(body) > ANSWER_MAX_BYTES:
-                raise ValueError(f"its answer is over {ANSWER_MAX_BYTES // 1024} KB")
-        if r.status_code != 200:
-            raise ValueError(f"it answered HTTP {r.status_code}")
-    answer = json.loads(body)
-    if not isinstance(answer, dict):
-        raise ValueError("its answer isn't an object")
-    return answer
+def ask_health(sock: Path, timeout: float | None = None) -> dict[str, Any]:
+    """Its answer to GET /v1/health. Raises PluginAnswerError."""
+    return ask(sock, "GET", "/v1/health", timeout=HEALTH_TIMEOUT_SEC if timeout is None else timeout)
 
 
 def _signal_group(process: subprocess.Popen, sig: int) -> None:
@@ -278,13 +257,15 @@ class Runner:
 
     def _start(self, p: Plugin, now: float) -> None:
         home, program = plugin_dir(self.data, p.plugin_id), program_dir(self.data, p.plugin_id)
-        sock = socket_path(self.data, p.plugin_id)
         p.restart_at = p.ending = p.kill_at = p.memory_mb = None
         p.stay_stopped = False
         p.misses = 0
-        if len(os.fsencode(sock)) > SOCKET_PATH_MAX:
-            self._left_stopped(p, f"Its socket's path ({sock}) is too long for this system: Lumiverb's data "
-                                  "folder is too deep for plug-ins")
+        try:
+            sockets_dir(self.data).mkdir(parents=True, exist_ok=True)
+            os.chmod(sockets_dir(self.data), 0o700)
+            sock = socket_path(self.data, p.plugin_id)
+        except OSError as exc:
+            self._left_stopped(p, f"Its socket can't be made: {exc.strerror or exc}")
             return
         env = self._environment(p)
         command = p.manifest.run[0]
@@ -293,9 +274,8 @@ class Runner:
             self._left_stopped(p, f"Its program, {command}, isn't on this machine")
             return
         try:
-            for folder in (home / "run", home / "data"):
-                folder.mkdir(parents=True, exist_ok=True)
-                os.chmod(folder, 0o700)
+            (home / "data").mkdir(parents=True, exist_ok=True)
+            os.chmod(home / "data", 0o700)
             if (home / "tmp").exists():
                 shutil.rmtree(home / "tmp", ignore_errors=True)
             (home / "tmp").mkdir(mode=0o700)
@@ -391,7 +371,7 @@ class Runner:
             state = answer.get("state")
             if state not in ("ready", "preparing", "failed"):
                 raise ValueError("its health isn't ready, preparing or failed")
-        except (httpx.HTTPError, OSError, ValueError) as exc:
+        except (PluginAnswerError, ValueError) as exc:
             if p.state == STARTING:
                 return  # not listening yet
             p.misses += 1
