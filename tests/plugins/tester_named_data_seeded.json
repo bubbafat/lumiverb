@@ -1,0 +1,3552 @@
+{
+ "about": "An account as v0.1.104 kept it, built through its code paths, every table and key holding a producer's id: its library, clips and every row of theirs, each value as Postgres's text with its column's type, in an order to insert them; and what the API, the queue and the scheduler's due lists said of it then (tests/test_named_data_acceptance.py's rename test).",
+ "account": "ten_01M5B2ACM38XCWBM03B1ZTWCN2",
+ "clips": {
+  "ast_01M5B2AE71GD1382BHDFPCWKFQ": "a.jpg",
+  "ast_01M5B2AE7B3R6RRXV423K5PH39": "b.jpg",
+  "ast_01M5B2AE7FF4E95PHJ1N4DKSNB": "c.jpg",
+  "ast_01M5B2AE7H14KX3CHJX9CAQM70": "d.jpg",
+  "ast_01M5B2AE7KX7P9DEGSXK8RH4PS": "e.jpg",
+  "ast_01M5B2AE7N1N7Z23N49H01NJSV": "v1.mp4",
+  "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F": "v2.mp4",
+  "ast_01M5B2AE7S368EZB71P67TSM7H": "v3.mp4"
+ },
+ "revision": "f8c4a2e6d0b5",
+ "said": {
+  "due": {
+   "capture": [
+    "b.jpg",
+    "c.jpg",
+    "d.jpg",
+    "e.jpg",
+    "v2.mp4",
+    "v3.mp4"
+   ],
+   "clip": [
+    "b.jpg",
+    "c.jpg",
+    "d.jpg",
+    "e.jpg"
+   ],
+   "faces": [
+    "a.jpg",
+    "b.jpg",
+    "c.jpg",
+    "d.jpg",
+    "e.jpg"
+   ],
+   "location": [],
+   "ocr": [
+    "b.jpg",
+    "c.jpg",
+    "d.jpg",
+    "e.jpg"
+   ],
+   "probe": [
+    "v2.mp4",
+    "v3.mp4"
+   ],
+   "redo_capture": [],
+   "redo_clip": [],
+   "redo_faces": [],
+   "redo_location": [],
+   "redo_ocr": [],
+   "redo_probe": [],
+   "redo_render": [
+    "v1.mp4"
+   ],
+   "redo_scene_vision": [],
+   "redo_scenes": [
+    "v1.mp4"
+   ],
+   "redo_transcript": [],
+   "redo_video_faces": [],
+   "redo_vision": [],
+   "render": [
+    "v3.mp4"
+   ],
+   "scan": [],
+   "scene_vision": [],
+   "scenes": [],
+   "transcript": [
+    "v1.mp4"
+   ],
+   "video_faces": [
+    "v1.mp4"
+   ],
+   "vision": [
+    "c.jpg",
+    "d.jpg",
+    "e.jpg"
+   ]
+  },
+  "failures": {
+   "items": [
+    {
+     "artifact": "analysis_proxy",
+     "asset_id": "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "attempts": 1,
+     "error": "ffmpeg said no",
+     "failed_at": "2026-10-19T21:50:42.703733Z",
+     "given_up": false,
+     "library_id": "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "library_name": "Named",
+     "media_type": "video",
+     "rel_path": "v2.mp4",
+     "retry_at": "2026-10-19T21:55:42.703733Z",
+     "title": "Analysis proxies"
+    },
+    {
+     "artifact": "vision",
+     "asset_id": "ast_01M5B2AE7B3R6RRXV423K5PH39",
+     "attempts": 3,
+     "error": "it failed",
+     "failed_at": "2026-10-19T21:50:42.702961Z",
+     "given_up": false,
+     "library_id": "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "library_name": "Named",
+     "media_type": "image",
+     "rel_path": "b.jpg",
+     "retry_at": "2026-10-19T22:10:42.702961Z",
+     "title": "Descriptions and tags"
+    }
+   ],
+   "next_cursor": null
+  },
+  "producers": [
+   {
+    "artifact": "probe",
+    "counts": {
+     "applicable": 3,
+     "below": 0,
+     "current": 1,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 2,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [],
+    "level": null,
+    "media": [
+     "video"
+    ],
+    "needs": [],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "ffprobe",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {},
+    "settings_hash": "44136fa355b3678a",
+    "title": "Video facts (probe)",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 2,
+      "reason": "scheduler",
+      "why": "not_running"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "capture",
+    "counts": {
+     "applicable": 8,
+     "below": 0,
+     "current": 2,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 6,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [],
+    "level": null,
+    "media": [
+     "image",
+     "video"
+    ],
+    "needs": [],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "exiftool",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {},
+    "settings_hash": "44136fa355b3678a",
+    "title": "Capture time and GPS accuracy",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 6,
+      "reason": "scheduler",
+      "why": "not_running"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "proxy",
+    "counts": {
+     "applicable": 8,
+     "below": 0,
+     "current": 8,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 0,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 2048,
+      "fixed": "Made at the scan with this; changing it isn't offered yet.",
+      "key": "long_edge",
+      "kind": "int",
+      "label": "Longest edge",
+      "maximum": 4096.0,
+      "minimum": 512.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 2048
+     },
+     {
+      "advanced": false,
+      "choices": [
+       "good",
+       "better",
+       "best"
+      ],
+      "default": "better",
+      "fixed": null,
+      "key": "quality",
+      "kind": "notch",
+      "label": "Quality",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "better"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 512,
+      "fixed": "Made at the scan with this; changing it isn't offered yet.",
+      "key": "thumbnail_edge",
+      "kind": "int",
+      "label": "Thumbnail edge",
+      "maximum": 1024.0,
+      "minimum": 128.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 512
+     }
+    ],
+    "level": null,
+    "media": [
+     "image",
+     "video"
+    ],
+    "needs": [],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "proxy",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": false,
+    "settings": {
+     "jpeg_quality": 75,
+     "long_edge": 2048,
+     "thumbnail_edge": 512,
+     "webp_quality": 80
+    },
+    "settings_hash": "8baa5eb52e86ea80",
+    "title": "Proxies and thumbnails",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [],
+    "why_not": null
+   },
+   {
+    "artifact": "video_preview",
+    "counts": {
+     "applicable": 3,
+     "below": 0,
+     "current": 3,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 0,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 10,
+      "fixed": "Made at the scan with this; changing it isn't offered yet.",
+      "key": "seconds",
+      "kind": "int",
+      "label": "Length",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "remakes": true,
+      "unit": "s",
+      "value": 10
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 720,
+      "fixed": "Made at the scan with this; changing it isn't offered yet.",
+      "key": "max_height",
+      "kind": "int",
+      "label": "Height",
+      "maximum": 2160.0,
+      "minimum": 144.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 720
+     },
+     {
+      "advanced": false,
+      "choices": [
+       "good",
+       "better",
+       "best"
+      ],
+      "default": "better",
+      "fixed": null,
+      "key": "quality",
+      "kind": "notch",
+      "label": "Quality",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "better"
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 128,
+      "fixed": "Made at the scan with this; changing it isn't offered yet.",
+      "key": "audio_kbps",
+      "kind": "int",
+      "label": "Audio",
+      "maximum": 320.0,
+      "minimum": 32.0,
+      "remakes": true,
+      "unit": "kbps",
+      "value": 128
+     }
+    ],
+    "level": null,
+    "media": [
+     "video"
+    ],
+    "needs": [],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "preview",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": false,
+    "settings": {
+     "audio_kbps": 128,
+     "crf": 28,
+     "max_height": 720,
+     "seconds": 10
+    },
+    "settings_hash": "4f627804650c7f23",
+    "title": "Video previews",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [],
+    "why_not": null
+   },
+   {
+    "artifact": "analysis_proxy",
+    "counts": {
+     "applicable": 3,
+     "below": 0,
+     "current": 0,
+     "failing": 1,
+     "given_up": 0,
+     "missing": 2,
+     "rechecking": 0,
+     "stale": 1
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 960,
+      "fixed": null,
+      "key": "max_edge",
+      "kind": "int",
+      "label": "Longest edge",
+      "maximum": 1920.0,
+      "minimum": 320.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 720
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 30,
+      "fixed": null,
+      "key": "fps_max",
+      "kind": "int",
+      "label": "Most frames a second",
+      "maximum": 60.0,
+      "minimum": 1.0,
+      "remakes": true,
+      "unit": "",
+      "value": 30
+     },
+     {
+      "advanced": false,
+      "choices": [
+       "good",
+       "better",
+       "best"
+      ],
+      "default": "better",
+      "fixed": null,
+      "key": "quality",
+      "kind": "notch",
+      "label": "Quality",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "better"
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 48,
+      "fixed": null,
+      "key": "audio_kbps_per_channel",
+      "kind": "int",
+      "label": "Audio per channel",
+      "maximum": 128.0,
+      "minimum": 16.0,
+      "remakes": true,
+      "unit": "kbps",
+      "value": 48
+     }
+    ],
+    "level": null,
+    "media": [
+     "video"
+    ],
+    "needs": [],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "analysis-proxy",
+    "redo_stopped": true,
+    "redo_stopped_at": "2026-10-19T21:50:42.739624Z",
+    "redo_stopped_by": "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "audio_kbps_per_channel": 48,
+     "crf": 28,
+     "fps_max": 30,
+     "max_edge": 720
+    },
+    "settings_hash": "3e802b77e85924b0",
+    "title": "Analysis proxies",
+    "uniform": false,
+    "unit": "second",
+    "version": "2",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 1,
+      "reason": "scheduler",
+      "why": "not_running"
+     },
+     {
+      "clips": 1,
+      "reason": "redo_stopped"
+     },
+     {
+      "clips": 1,
+      "reason": "retry_later"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "scenes",
+    "counts": {
+     "applicable": 1,
+     "below": 0,
+     "current": 0,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 0,
+     "rechecking": 0,
+     "stale": 1
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [
+       "low",
+       "normal",
+       "high"
+      ],
+      "default": "normal",
+      "fixed": null,
+      "key": "detail",
+      "kind": "level",
+      "label": "Detail",
+      "maximum": null,
+      "minimum": null,
+      "remakes": false,
+      "unit": "",
+      "value": "normal"
+     }
+    ],
+    "level": 1,
+    "media": [
+     "video"
+    ],
+    "needs": [
+     "analysis_proxy"
+    ],
+    "new_version": true,
+    "part_of": "scene_vision",
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "scene-detect",
+    "redo_stopped": true,
+    "redo_stopped_at": "2026-10-19T21:50:42.706738Z",
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {},
+    "settings_hash": "44136fa355b3678a",
+    "title": "Scenes",
+    "uniform": false,
+    "unit": "second",
+    "version": "4",
+    "waiting": null,
+    "waits": [
+     {
+      "artifact": "analysis_proxy",
+      "clips": 2,
+      "paused": false,
+      "reason": "needs"
+     },
+     {
+      "clips": 1,
+      "reason": "new_version"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "scene_vision",
+    "counts": {
+     "applicable": 1,
+     "below": 0,
+     "current": 1,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 0,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "",
+      "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": ""
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+      "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+      "key": "prompt",
+      "kind": "text",
+      "label": "Prompt",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 1280,
+      "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+      "key": "max_edge",
+      "kind": "int",
+      "label": "Image size sent",
+      "maximum": 1280.0,
+      "minimum": 256.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 1280
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 0.2,
+      "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+      "key": "temperature",
+      "kind": "float",
+      "label": "Temperature",
+      "maximum": 2.0,
+      "minimum": 0.0,
+      "remakes": true,
+      "unit": "",
+      "value": 0.2
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 500,
+      "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+      "key": "max_tokens",
+      "kind": "int",
+      "label": "Longest answer",
+      "maximum": 4000.0,
+      "minimum": 50.0,
+      "remakes": true,
+      "unit": "tokens",
+      "value": 500
+     }
+    ],
+    "level": null,
+    "media": [
+     "video"
+    ],
+    "needs": [
+     "analysis_proxy",
+     "scenes"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "scene-vision",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "max_edge": 1280,
+     "max_tokens": 500,
+     "model": "",
+     "prompt": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+     "temperature": 0.2
+    },
+    "settings_hash": "2a615d001a163177",
+    "title": "Scene descriptions",
+    "uniform": false,
+    "unit": "second",
+    "version": "1",
+    "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+    "waits": [
+     {
+      "clips": 0,
+      "job": "vision",
+      "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+      "reason": "ai_machines",
+      "why": "off"
+     },
+     {
+      "artifact": "analysis_proxy",
+      "clips": 2,
+      "paused": false,
+      "reason": "needs"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "vision",
+    "counts": {
+     "applicable": 5,
+     "below": 0,
+     "current": 1,
+     "failing": 1,
+     "given_up": 0,
+     "missing": 4,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "",
+      "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": ""
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+      "fixed": null,
+      "key": "prompt",
+      "kind": "text",
+      "label": "Prompt",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 1280,
+      "fixed": null,
+      "key": "max_edge",
+      "kind": "int",
+      "label": "Image size sent",
+      "maximum": 1280.0,
+      "minimum": 256.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 1280
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 0.2,
+      "fixed": null,
+      "key": "temperature",
+      "kind": "float",
+      "label": "Temperature",
+      "maximum": 2.0,
+      "minimum": 0.0,
+      "remakes": true,
+      "unit": "",
+      "value": 0.2
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 500,
+      "fixed": null,
+      "key": "max_tokens",
+      "kind": "int",
+      "label": "Longest answer",
+      "maximum": 4000.0,
+      "minimum": 50.0,
+      "remakes": true,
+      "unit": "tokens",
+      "value": 500
+     }
+    ],
+    "level": null,
+    "media": [
+     "image"
+    ],
+    "needs": [
+     "proxy"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": true,
+    "paused_at": "2026-10-19T21:50:42.762299Z",
+    "paused_by": "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+    "plugin": null,
+    "producer": "vision",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "max_edge": 1280,
+     "max_tokens": 500,
+     "model": "",
+     "prompt": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+     "temperature": 0.2
+    },
+    "settings_hash": "2a615d001a163177",
+    "title": "Descriptions and tags",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+    "waits": [
+     {
+      "clips": 3,
+      "reason": "paused"
+     },
+     {
+      "clips": 3,
+      "reason": "scheduler",
+      "why": "not_running"
+     },
+     {
+      "clips": 3,
+      "job": "vision",
+      "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+      "reason": "ai_machines",
+      "why": "off"
+     },
+     {
+      "clips": 1,
+      "reason": "retry_later"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "ocr",
+    "counts": {
+     "applicable": 5,
+     "below": 0,
+     "current": 1,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 4,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "",
+      "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": ""
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE.",
+      "fixed": null,
+      "key": "prompt",
+      "kind": "text",
+      "label": "Prompt",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE."
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 1280,
+      "fixed": null,
+      "key": "max_edge",
+      "kind": "int",
+      "label": "Image size sent",
+      "maximum": 1280.0,
+      "minimum": 256.0,
+      "remakes": true,
+      "unit": "px",
+      "value": 1280
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 0.2,
+      "fixed": null,
+      "key": "temperature",
+      "kind": "float",
+      "label": "Temperature",
+      "maximum": 2.0,
+      "minimum": 0.0,
+      "remakes": true,
+      "unit": "",
+      "value": 0.2
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 500,
+      "fixed": null,
+      "key": "max_tokens",
+      "kind": "int",
+      "label": "Longest answer",
+      "maximum": 4000.0,
+      "minimum": 50.0,
+      "remakes": true,
+      "unit": "tokens",
+      "value": 500
+     }
+    ],
+    "level": null,
+    "media": [
+     "image"
+    ],
+    "needs": [
+     "proxy"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "ocr",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "max_edge": 1280,
+     "max_tokens": 500,
+     "model": "",
+     "prompt": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE.",
+     "temperature": 0.2
+    },
+    "settings_hash": "3fee99a9a8ee14b7",
+    "title": "Text in images (OCR)",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+    "waits": [
+     {
+      "clips": 4,
+      "reason": "scheduler",
+      "why": "not_running"
+     },
+     {
+      "clips": 4,
+      "job": "vision",
+      "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+      "reason": "ai_machines",
+      "why": "off"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "clip",
+    "counts": {
+     "applicable": 5,
+     "below": 0,
+     "current": 1,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 4,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "ViT-B-32",
+      "fixed": "Another model makes every photo's vectors again; not offered yet.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "ViT-B-32"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "openai",
+      "fixed": "Another model makes every photo's vectors again; not offered yet.",
+      "key": "pretrained",
+      "kind": "text",
+      "label": "Weights",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "openai"
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 1280,
+      "fixed": "Not read by this producer yet: changing it would change nothing it makes.",
+      "key": "input_edge",
+      "kind": "int",
+      "label": "Image size",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "px",
+      "value": 1280
+     }
+    ],
+    "level": null,
+    "media": [
+     "image"
+    ],
+    "needs": [
+     "proxy"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "clip",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "input_edge": 1280,
+     "model": "ViT-B-32",
+     "pretrained": "openai"
+    },
+    "settings_hash": "c34fd145303f354e",
+    "title": "Visual search (CLIP)",
+    "uniform": true,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 4,
+      "reason": "scheduler",
+      "why": "not_running"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "faces",
+    "counts": {
+     "applicable": 5,
+     "below": 0,
+     "current": 0,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 5,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "buffalo_l",
+      "fixed": "buffalo_l is the one face model installed.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "buffalo_l"
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 640,
+      "fixed": "The detector's input, 640 × 640, as buffalo_l was trained.",
+      "key": "det_size",
+      "kind": "int",
+      "label": "Detection size",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "px",
+      "value": 640
+     },
+     {
+      "advanced": false,
+      "choices": [
+       "off",
+       "low",
+       "normal",
+       "high"
+      ],
+      "default": "normal",
+      "fixed": null,
+      "key": "detail",
+      "kind": "level",
+      "label": "Photos",
+      "maximum": null,
+      "minimum": null,
+      "remakes": false,
+      "unit": "",
+      "value": "high"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": true,
+      "fixed": null,
+      "key": "merge_close_clusters",
+      "kind": "bool",
+      "label": "Merge close groups",
+      "maximum": null,
+      "minimum": null,
+      "remakes": false,
+      "unit": "",
+      "value": true
+     },
+     {
+      "advanced": true,
+      "choices": [],
+      "default": 0.4,
+      "fixed": null,
+      "key": "merge_distance",
+      "kind": "float",
+      "label": "Merge distance (cosine)",
+      "maximum": 0.6,
+      "minimum": 0.05,
+      "remakes": false,
+      "unit": "",
+      "value": 0.4
+     }
+    ],
+    "level": 3,
+    "media": [
+     "image"
+    ],
+    "needs": [
+     "proxy"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "insightface",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "det_size": 640,
+     "model": "buffalo_l"
+    },
+    "settings_hash": "4324e081b9ed3c27",
+    "title": "Faces",
+    "uniform": true,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 5,
+      "reason": "scheduler",
+      "why": "not_running"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "video_faces",
+    "counts": {
+     "applicable": 1,
+     "below": 0,
+     "current": 0,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 1,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "buffalo_l",
+      "fixed": "buffalo_l is the one face model installed.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "buffalo_l"
+     },
+     {
+      "advanced": false,
+      "choices": [
+       "off",
+       "low",
+       "normal",
+       "high"
+      ],
+      "default": "low",
+      "fixed": null,
+      "key": "detail",
+      "kind": "level",
+      "label": "Videos",
+      "maximum": null,
+      "minimum": null,
+      "remakes": false,
+      "unit": "",
+      "value": "low"
+     }
+    ],
+    "level": 1,
+    "media": [
+     "video"
+    ],
+    "needs": [
+     "analysis_proxy",
+     "scenes"
+    ],
+    "new_version": false,
+    "part_of": "faces",
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "insightface-video",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "model": "buffalo_l"
+    },
+    "settings_hash": "d76cf8414b216951",
+    "title": "Faces in videos",
+    "uniform": false,
+    "unit": "second",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 1,
+      "reason": "scheduler",
+      "why": "not_running"
+     },
+     {
+      "artifact": "analysis_proxy",
+      "clips": 2,
+      "paused": false,
+      "reason": "needs"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "transcript",
+    "counts": {
+     "applicable": 1,
+     "below": 0,
+     "current": 0,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 1,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": "small",
+      "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+      "key": "model",
+      "kind": "text",
+      "label": "Model",
+      "maximum": null,
+      "minimum": null,
+      "remakes": true,
+      "unit": "",
+      "value": "small"
+     },
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 500,
+      "fixed": null,
+      "key": "vad_min_silence_ms",
+      "kind": "int",
+      "label": "Shortest silence skipped",
+      "maximum": 2000.0,
+      "minimum": 100.0,
+      "remakes": true,
+      "unit": "ms",
+      "value": 500
+     }
+    ],
+    "level": null,
+    "media": [
+     "video"
+    ],
+    "needs": [
+     "analysis_proxy"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "whisper",
+    "redo_stopped": true,
+    "redo_stopped_at": "2026-10-19T21:50:42.770626Z",
+    "redo_stopped_by": "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+    "redoable": true,
+    "scheduled": true,
+    "settings": {
+     "model": "small",
+     "vad_min_silence_ms": 500
+    },
+    "settings_hash": "82c28198e6c0a481",
+    "title": "Transcripts",
+    "uniform": false,
+    "unit": "second",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "clips": 1,
+      "reason": "scheduler",
+      "why": "not_running"
+     },
+     {
+      "artifact": "analysis_proxy",
+      "clips": 2,
+      "paused": false,
+      "reason": "needs"
+     }
+    ],
+    "why_not": null
+   },
+   {
+    "artifact": "location",
+    "counts": {
+     "applicable": 0,
+     "below": 0,
+     "current": 0,
+     "failing": 0,
+     "given_up": 0,
+     "missing": 0,
+     "rechecking": 0,
+     "stale": 0
+    },
+    "fields": [
+     {
+      "advanced": false,
+      "choices": [],
+      "default": 360,
+      "fixed": null,
+      "key": "inference_minutes",
+      "kind": "int",
+      "label": "Inference window",
+      "maximum": 1440.0,
+      "minimum": 5.0,
+      "remakes": false,
+      "unit": "min",
+      "value": 360
+     }
+    ],
+    "level": null,
+    "media": [
+     "image",
+     "video"
+    ],
+    "needs": [
+     "capture"
+    ],
+    "new_version": false,
+    "part_of": null,
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "plugin": null,
+    "producer": "location",
+    "redo_stopped": false,
+    "redo_stopped_at": null,
+    "redo_stopped_by": null,
+    "redoable": true,
+    "scheduled": true,
+    "settings": {},
+    "settings_hash": "44136fa355b3678a",
+    "title": "Location guesses",
+    "uniform": false,
+    "unit": "clip",
+    "version": "1",
+    "waiting": null,
+    "waits": [
+     {
+      "artifact": "capture",
+      "clips": 6,
+      "paused": false,
+      "reason": "needs"
+     }
+    ],
+    "why_not": null
+   }
+  ],
+  "switches": [
+   {
+    "paused": true,
+    "paused_at": "2026-10-19T21:50:42.776322Z",
+    "paused_by": "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+    "target": "upkeep",
+    "title": "Upkeep",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "probe",
+    "title": "Video facts (probe)",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "capture",
+    "title": "Capture time and GPS accuracy",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "analysis_proxy",
+    "title": "Analysis proxies",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "scenes",
+    "title": "Scenes",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "scene_vision",
+    "title": "Scene descriptions",
+    "waits": []
+   },
+   {
+    "paused": true,
+    "paused_at": "2026-10-19T21:50:42.762299Z",
+    "paused_by": "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+    "target": "vision",
+    "title": "Descriptions and tags",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "ocr",
+    "title": "Text in images (OCR)",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "clip",
+    "title": "Visual search (CLIP)",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "faces",
+    "title": "Faces",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "video_faces",
+    "title": "Faces in videos",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "transcript",
+    "title": "Transcripts",
+    "waits": []
+   },
+   {
+    "paused": false,
+    "paused_at": null,
+    "paused_by": null,
+    "target": "location",
+    "title": "Location guesses",
+    "waits": []
+   }
+  ]
+ },
+ "tables": [
+  {
+   "columns": [
+    [
+     "library_id",
+     "varchar"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "root_path",
+     "varchar"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ],
+    [
+     "updated_at",
+     "timestamptz"
+    ],
+    [
+     "last_scan_at",
+     "timestamptz"
+    ],
+    [
+     "last_scan_error",
+     "varchar"
+    ],
+    [
+     "status",
+     "varchar"
+    ],
+    [
+     "is_public",
+     "bool"
+    ],
+    [
+     "revision",
+     "int4"
+    ],
+    [
+     "cover_asset_id",
+     "varchar"
+    ],
+    [
+     "trashed_at",
+     "timestamptz"
+    ],
+    [
+     "reader",
+     "varchar"
+    ],
+    [
+     "scans_paused_at",
+     "timestamptz"
+    ],
+    [
+     "scans_paused_by",
+     "varchar"
+    ],
+    [
+     "reader_mark",
+     "int8"
+    ],
+    [
+     "scan_requested_at",
+     "timestamptz"
+    ],
+    [
+     "private",
+     "bool"
+    ],
+    [
+     "infer_location",
+     "bool"
+    ]
+   ],
+   "rows": [
+    [
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "Named",
+     "/Volumes/named",
+     "2026-10-19 21:50:42.392281+00",
+     "2026-10-19 21:50:42.392288+00",
+     "2026-10-19 21:50:42.593001+00",
+     null,
+     "active",
+     "false",
+     "4",
+     null,
+     null,
+     "server",
+     null,
+     null,
+     "10",
+     null,
+     "false",
+     "false"
+    ]
+   ],
+   "table": "libraries"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "library_id",
+     "varchar"
+    ],
+    [
+     "rel_path",
+     "varchar"
+    ],
+    [
+     "content_hash",
+     "varchar"
+    ],
+    [
+     "file_size",
+     "int8"
+    ],
+    [
+     "media_type",
+     "varchar"
+    ],
+    [
+     "width",
+     "int4"
+    ],
+    [
+     "height",
+     "int4"
+    ],
+    [
+     "proxy_key",
+     "varchar"
+    ],
+    [
+     "thumbnail_key",
+     "varchar"
+    ],
+    [
+     "availability",
+     "varchar"
+    ],
+    [
+     "status",
+     "varchar"
+    ],
+    [
+     "error_message",
+     "varchar"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ],
+    [
+     "updated_at",
+     "timestamptz"
+    ],
+    [
+     "file_mtime",
+     "timestamptz"
+    ],
+    [
+     "exif",
+     "json"
+    ],
+    [
+     "exif_extracted_at",
+     "timestamptz"
+    ],
+    [
+     "camera_make",
+     "text"
+    ],
+    [
+     "camera_model",
+     "text"
+    ],
+    [
+     "taken_at",
+     "timestamptz"
+    ],
+    [
+     "gps_lat",
+     "float8"
+    ],
+    [
+     "gps_lon",
+     "float8"
+    ],
+    [
+     "duration_sec",
+     "float8"
+    ],
+    [
+     "video_indexed",
+     "bool"
+    ],
+    [
+     "video_preview_key",
+     "text"
+    ],
+    [
+     "video_preview_last_accessed_at",
+     "timestamptz"
+    ],
+    [
+     "video_preview_generated_at",
+     "timestamptz"
+    ],
+    [
+     "deleted_at",
+     "timestamptz"
+    ],
+    [
+     "proxy_sha256",
+     "text"
+    ],
+    [
+     "thumbnail_sha256",
+     "text"
+    ],
+    [
+     "iso",
+     "int4"
+    ],
+    [
+     "aperture",
+     "float8"
+    ],
+    [
+     "focal_length",
+     "float8"
+    ],
+    [
+     "focal_length_35mm",
+     "float8"
+    ],
+    [
+     "lens_model",
+     "text"
+    ],
+    [
+     "flash_fired",
+     "bool"
+    ],
+    [
+     "orientation",
+     "int4"
+    ],
+    [
+     "exposure_time_us",
+     "int8"
+    ],
+    [
+     "search_synced_at",
+     "timestamptz"
+    ],
+    [
+     "face_count",
+     "int4"
+    ],
+    [
+     "transcript_srt",
+     "text"
+    ],
+    [
+     "transcript_text",
+     "text"
+    ],
+    [
+     "transcript_language",
+     "varchar"
+    ],
+    [
+     "transcribed_at",
+     "timestamptz"
+    ],
+    [
+     "note",
+     "text"
+    ],
+    [
+     "note_author",
+     "varchar"
+    ],
+    [
+     "note_updated_at",
+     "timestamptz"
+    ],
+    [
+     "has_transcript",
+     "bool"
+    ],
+    [
+     "deleted_reason",
+     "varchar"
+    ],
+    [
+     "transcript_source",
+     "varchar"
+    ],
+    [
+     "analysis_proxy_key",
+     "varchar"
+    ],
+    [
+     "analysis_proxy_sha256",
+     "varchar"
+    ],
+    [
+     "analysis_proxy_generated_at",
+     "timestamptz"
+    ],
+    [
+     "trashed_from",
+     "varchar"
+    ],
+    [
+     "transcript_synced_at",
+     "timestamptz"
+    ],
+    [
+     "taken_at_offset_min",
+     "int4"
+    ],
+    [
+     "gps_accuracy_m",
+     "float8"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "a.jpg",
+     null,
+     "1000",
+     "image",
+     null,
+     null,
+     "proxies/ast_01M5B2AE71GD1382BHDFPCWKFQ.jpg",
+     "thumbnails/ast_01M5B2AE71GD1382BHDFPCWKFQ.jpg",
+     "online",
+     "described",
+     null,
+     "2026-10-19 21:50:42.401917+00",
+     "2026-10-19 21:50:42.523197+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "2026-10-19 21:50:42.55713+00",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7B3R6RRXV423K5PH39",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "b.jpg",
+     null,
+     "1000",
+     "image",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7B3R6RRXV423K5PH39.jpg",
+     "thumbnails/ast_01M5B2AE7B3R6RRXV423K5PH39.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.411803+00",
+     "2026-10-19 21:50:42.411811+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7FF4E95PHJ1N4DKSNB",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "c.jpg",
+     null,
+     "1000",
+     "image",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7FF4E95PHJ1N4DKSNB.jpg",
+     "thumbnails/ast_01M5B2AE7FF4E95PHJ1N4DKSNB.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.415722+00",
+     "2026-10-19 21:50:42.415735+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7H14KX3CHJX9CAQM70",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "d.jpg",
+     null,
+     "1000",
+     "image",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7H14KX3CHJX9CAQM70.jpg",
+     "thumbnails/ast_01M5B2AE7H14KX3CHJX9CAQM70.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.418022+00",
+     "2026-10-19 21:50:42.41803+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7KX7P9DEGSXK8RH4PS",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "e.jpg",
+     null,
+     "1000",
+     "image",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7KX7P9DEGSXK8RH4PS.jpg",
+     "thumbnails/ast_01M5B2AE7KX7P9DEGSXK8RH4PS.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.420011+00",
+     "2026-10-19 21:50:42.42002+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "v1.mp4",
+     null,
+     "1000",
+     "video",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7N1N7Z23N49H01NJSV.jpg",
+     "thumbnails/ast_01M5B2AE7N1N7Z23N49H01NJSV.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.421776+00",
+     "2026-10-19 21:50:42.643294+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "12",
+     "true",
+     "previews/ast_01M5B2AE7N1N7Z23N49H01NJSV.mp4",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "analysis/ast_01M5B2AE7N1N7Z23N49H01NJSV.mp4",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "v2.mp4",
+     null,
+     "1000",
+     "video",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7Q9Y32TGM6TNTFCN3F.jpg",
+     "thumbnails/ast_01M5B2AE7Q9Y32TGM6TNTFCN3F.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.42339+00",
+     "2026-10-19 21:50:42.423394+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     "previews/ast_01M5B2AE7Q9Y32TGM6TNTFCN3F.mp4",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7S368EZB71P67TSM7H",
+     "lib_01M5B2AE6R1SA0SFWGASDF6M1V",
+     "v3.mp4",
+     null,
+     "1000",
+     "video",
+     null,
+     null,
+     "proxies/ast_01M5B2AE7S368EZB71P67TSM7H.jpg",
+     "thumbnails/ast_01M5B2AE7S368EZB71P67TSM7H.jpg",
+     "online",
+     "pending",
+     null,
+     "2026-10-19 21:50:42.425116+00",
+     "2026-10-19 21:50:42.425122+00",
+     "2025-01-01 12:00:00+00",
+     "null",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "false",
+     "previews/ast_01M5B2AE7S368EZB71P67TSM7H.mp4",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null
+    ]
+   ],
+   "table": "assets"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "artifact",
+     "varchar"
+    ],
+    [
+     "producer",
+     "varchar"
+    ],
+    [
+     "producer_version",
+     "varchar"
+    ],
+    [
+     "settings_hash",
+     "varchar"
+    ],
+    [
+     "source_hash",
+     "varchar"
+    ],
+    [
+     "produced_at",
+     "timestamptz"
+    ],
+    [
+     "outcome",
+     "varchar"
+    ],
+    [
+     "error",
+     "varchar"
+    ],
+    [
+     "attempts",
+     "int4"
+    ],
+    [
+     "retry_at",
+     "timestamptz"
+    ],
+    [
+     "failed_at",
+     "timestamptz"
+    ],
+    [
+     "level",
+     "int2"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "capture",
+     "exiftool",
+     "1",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.431413+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "clip",
+     "clip",
+     "1",
+     "c34fd145303f354e",
+     null,
+     "2026-10-19 21:50:42.572907+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "faces",
+     "insightface",
+     "1",
+     "4324e081b9ed3c27",
+     null,
+     "2026-10-19 21:50:42.43814+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     "2"
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "location",
+     "location",
+     "1",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.439146+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "ocr",
+     "ocr",
+     "1",
+     "3fee99a9a8ee14b7",
+     null,
+     "2026-10-19 21:50:42.556105+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "plugin_facts",
+     "plugin_facts",
+     "1",
+     "h",
+     null,
+     "2026-10-19 21:50:42.709524+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.433735+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "vision",
+     "vision",
+     "1",
+     "2a615d001a163177",
+     null,
+     "2026-10-19 21:50:42.524141+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7B3R6RRXV423K5PH39",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.440133+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7B3R6RRXV423K5PH39",
+     "vision",
+     "",
+     "",
+     "",
+     null,
+     "2026-10-19 21:50:42.700655+00",
+     "failed",
+     "it failed",
+     "3",
+     "2026-10-19 22:10:42.702961+00",
+     "2026-10-19 21:50:42.702961+00",
+     null
+    ],
+    [
+     "ast_01M5B2AE7FF4E95PHJ1N4DKSNB",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.441091+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7FF4E95PHJ1N4DKSNB",
+     "vision",
+     "vision",
+     "1",
+     "2a615d001a163177",
+     null,
+     "2026-10-19 21:50:42.695825+00",
+     "empty",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7H14KX3CHJX9CAQM70",
+     "ocr",
+     "ocr",
+     "0",
+     "3fee99a9a8ee14b7",
+     null,
+     "2026-10-19 21:50:42.698675+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7H14KX3CHJX9CAQM70",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.442012+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7H14KX3CHJX9CAQM70",
+     "vision",
+     "vision",
+     "1",
+     "settings-of-before",
+     null,
+     "2026-10-19 21:50:42.697479+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7KX7P9DEGSXK8RH4PS",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.443064+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "analysis_proxy",
+     "analysis-proxy",
+     "2",
+     "b63de287be1aa99f",
+     null,
+     "2026-10-19 21:50:42.448673+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "capture",
+     "exiftool",
+     "1",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.445156+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "location",
+     "location",
+     "1",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.45604+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "probe",
+     "ffprobe",
+     "1",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.589898+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.446361+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "scene_vision",
+     "scene-vision",
+     "1",
+     "2a615d001a163177",
+     null,
+     "2026-10-19 21:50:42.690855+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "scenes",
+     "scene-detect",
+     "0",
+     "44136fa355b3678a",
+     null,
+     "2026-10-19 21:50:42.699692+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     "1"
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "transcript",
+     "whisper",
+     "1",
+     "82c28198e6c0a481",
+     null,
+     "2026-10-19 21:50:42.454817+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "video_faces",
+     "insightface-video",
+     "1",
+     "d76cf8414b216951",
+     null,
+     "2026-10-19 21:50:42.453158+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     "1"
+    ],
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "video_preview",
+     "preview",
+     "1",
+     "4f627804650c7f23",
+     null,
+     "2026-10-19 21:50:42.44752+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "analysis_proxy",
+     "",
+     "",
+     "",
+     null,
+     "2026-10-19 21:50:42.703733+00",
+     "failed",
+     "ffmpeg said no",
+     "1",
+     "2026-10-19 21:55:42.703733+00",
+     "2026-10-19 21:50:42.703733+00",
+     null
+    ],
+    [
+     "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.45766+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "video_preview",
+     "preview",
+     "1",
+     "4f627804650c7f23",
+     null,
+     "2026-10-19 21:50:42.459076+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7S368EZB71P67TSM7H",
+     "proxy",
+     "proxy",
+     "1",
+     "8baa5eb52e86ea80",
+     null,
+     "2026-10-19 21:50:42.46019+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ],
+    [
+     "ast_01M5B2AE7S368EZB71P67TSM7H",
+     "video_preview",
+     "preview",
+     "1",
+     "4f627804650c7f23",
+     null,
+     "2026-10-19 21:50:42.461288+00",
+     "ok",
+     null,
+     "0",
+     null,
+     null,
+     null
+    ]
+   ],
+   "table": "artifact_lineage"
+  },
+  {
+   "columns": [
+    [
+     "embedding_id",
+     "varchar"
+    ],
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "model_id",
+     "varchar"
+    ],
+    [
+     "model_version",
+     "varchar"
+    ],
+    [
+     "embedding_vector",
+     "vector"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "emb_01M5B2AECACHNCQBEB8XFK5MPR",
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "clip",
+     "ViT-B-32",
+     "[0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01,0.01]",
+     "2026-10-19 21:50:42.570107+00"
+    ]
+   ],
+   "table": "asset_embeddings"
+  },
+  {
+   "columns": [
+    [
+     "metadata_id",
+     "text"
+    ],
+    [
+     "asset_id",
+     "text"
+    ],
+    [
+     "model_id",
+     "text"
+    ],
+    [
+     "model_version",
+     "text"
+    ],
+    [
+     "generated_at",
+     "timestamptz"
+    ],
+    [
+     "data",
+     "jsonb"
+    ]
+   ],
+   "rows": [
+    [
+     "meta_01M5B2AEAPS5DKX7XD6M4YPP0V",
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "moondream2",
+     "2024-08-26",
+     "2026-10-19 21:50:42.51805+00",
+     "{\"tags\": [\"barn\", \"sunset\"], \"description\": \"A red barn at sunset\"}"
+    ]
+   ],
+   "table": "asset_metadata"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "text",
+     "text"
+    ],
+    [
+     "has_text",
+     "bool"
+    ],
+    [
+     "model_id",
+     "text"
+    ],
+    [
+     "generated_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "EXIT ONLY",
+     "true",
+     "tesseract",
+     "2026-10-19 21:50:42.555475+00"
+    ]
+   ],
+   "table": "asset_ocr"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "described",
+     "text"
+    ],
+    [
+     "note",
+     "text"
+    ],
+    [
+     "ocr_text",
+     "text"
+    ],
+    [
+     "transcript_text",
+     "text"
+    ],
+    [
+     "path_words",
+     "text"
+    ],
+    [
+     "snippet",
+     "text"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE71GD1382BHDFPCWKFQ",
+     "A red barn at sunset barn sunset",
+     "",
+     "EXIT ONLY",
+     "",
+     "a jpg",
+     "A red barn at sunset"
+    ]
+   ],
+   "table": "asset_search"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "artifact",
+     "varchar"
+    ],
+    [
+     "crashes",
+     "int4"
+    ],
+    [
+     "error",
+     "text"
+    ],
+    [
+     "updated_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE7B3R6RRXV423K5PH39",
+     "faces",
+     "1",
+     "it crashed",
+     "2026-10-19 21:50:42.703939+00"
+    ]
+   ],
+   "table": "producer_crashes"
+  },
+  {
+   "columns": [
+    [
+     "upload_id",
+     "text"
+    ],
+    [
+     "asset_id",
+     "text"
+    ],
+    [
+     "artifact",
+     "text"
+    ],
+    [
+     "size",
+     "int8"
+    ],
+    [
+     "sha256",
+     "text"
+    ],
+    [
+     "lineage",
+     "jsonb"
+    ],
+    [
+     "received",
+     "int8"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ],
+    [
+     "expires_at",
+     "timestamptz"
+    ],
+    [
+     "finished_at",
+     "timestamptz"
+    ],
+    [
+     "answer",
+     "jsonb"
+    ]
+   ],
+   "rows": [
+    [
+     "upl_01M5B2AEK5N6NB05N6KN75YF3X",
+     "ast_01M5B2AE7Q9Y32TGM6TNTFCN3F",
+     "analysis_proxy",
+     "1000",
+     "0000000000000000000000000000000000000000000000000000000000000000",
+     "{\"version\": \"2\", \"producer\": \"analysis-proxy\", \"source_hash\": null, \"settings_hash\": \"3e802b77e85924b0\"}",
+     "0",
+     "2026-10-19 21:50:42.789304+00",
+     "2026-10-20 21:50:42.789304+00",
+     null,
+     null
+    ]
+   ],
+   "table": "uploads"
+  },
+  {
+   "columns": [
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "duration_sec",
+     "float8"
+    ],
+    [
+     "container",
+     "varchar"
+    ],
+    [
+     "video_codec",
+     "varchar"
+    ],
+    [
+     "width",
+     "int4"
+    ],
+    [
+     "height",
+     "int4"
+    ],
+    [
+     "rotation",
+     "int4"
+    ],
+    [
+     "frame_rate_num",
+     "int4"
+    ],
+    [
+     "frame_rate_den",
+     "int4"
+    ],
+    [
+     "start_timecode",
+     "varchar"
+    ],
+    [
+     "drop_frame",
+     "bool"
+    ],
+    [
+     "audio_codec",
+     "varchar"
+    ],
+    [
+     "audio_channels",
+     "int4"
+    ],
+    [
+     "audio_sample_rate",
+     "int4"
+    ],
+    [
+     "probed_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "12",
+     "mov,mp4",
+     "h264",
+     "640",
+     "360",
+     "0",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     "2026-10-19 21:50:42.585313+00"
+    ]
+   ],
+   "table": "video_facets"
+  },
+  {
+   "columns": [
+    [
+     "chunk_id",
+     "text"
+    ],
+    [
+     "asset_id",
+     "text"
+    ],
+    [
+     "chunk_index",
+     "int4"
+    ],
+    [
+     "start_ms",
+     "int4"
+    ],
+    [
+     "end_ms",
+     "int4"
+    ],
+    [
+     "status",
+     "text"
+    ],
+    [
+     "worker_id",
+     "text"
+    ],
+    [
+     "claimed_at",
+     "timestamptz"
+    ],
+    [
+     "lease_expires_at",
+     "timestamptz"
+    ],
+    [
+     "completed_at",
+     "timestamptz"
+    ],
+    [
+     "error_message",
+     "text"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ],
+    [
+     "run",
+     "jsonb"
+    ]
+   ],
+   "rows": [
+    [
+     "chk_01M5B2AEDQND652A5NZ8XGW2EM",
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "0",
+     "0",
+     "12000",
+     "completed",
+     "vid_67d9b7cb187b",
+     "2026-10-19 21:50:42.627669+00",
+     "2026-10-19 21:55:42.627669+00",
+     "2026-10-19 21:50:42.645711+00",
+     null,
+     "2026-10-19 21:50:42.61582+00",
+     "null"
+    ]
+   ],
+   "table": "video_index_chunks"
+  },
+  {
+   "columns": [
+    [
+     "scene_id",
+     "varchar"
+    ],
+    [
+     "asset_id",
+     "varchar"
+    ],
+    [
+     "scene_index",
+     "int4"
+    ],
+    [
+     "start_ms",
+     "int4"
+    ],
+    [
+     "end_ms",
+     "int4"
+    ],
+    [
+     "rep_frame_ms",
+     "int4"
+    ],
+    [
+     "proxy_key",
+     "varchar"
+    ],
+    [
+     "thumbnail_key",
+     "varchar"
+    ],
+    [
+     "created_at",
+     "timestamptz"
+    ],
+    [
+     "description",
+     "text"
+    ],
+    [
+     "tags",
+     "jsonb"
+    ],
+    [
+     "sharpness_score",
+     "float8"
+    ],
+    [
+     "keep_reason",
+     "text"
+    ],
+    [
+     "phash",
+     "text"
+    ],
+    [
+     "rep_frame_sha256",
+     "text"
+    ],
+    [
+     "lineage",
+     "jsonb"
+    ],
+    [
+     "staged",
+     "text"
+    ]
+   ],
+   "rows": [
+    [
+     "scn_01M5B2AEEP9ST90ZRYMN7TET1X",
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "0",
+     "0",
+     "6000",
+     "0",
+     null,
+     null,
+     "2026-10-19 21:50:42.645711+00",
+     "A test card",
+     "[\"card\"]",
+     null,
+     null,
+     null,
+     null,
+     "{\"version\": \"1\", \"producer\": \"scene-vision\", \"settings_hash\": \"2a615d001a163177\"}",
+     null
+    ],
+    [
+     "scn_01M5B2AEEQKV2D2V341NVPD1CC",
+     "ast_01M5B2AE7N1N7Z23N49H01NJSV",
+     "1",
+     "6000",
+     "12000",
+     "6000",
+     null,
+     null,
+     "2026-10-19 21:50:42.645711+00",
+     "Colour bars",
+     "[\"bars\"]",
+     null,
+     null,
+     null,
+     null,
+     "{\"version\": \"1\", \"producer\": \"scene-vision\", \"settings_hash\": \"2a615d001a163177\"}",
+     null
+    ]
+   ],
+   "table": "video_scenes"
+  },
+  {
+   "columns": [
+    [
+     "target",
+     "varchar"
+    ],
+    [
+     "scope",
+     "varchar"
+    ],
+    [
+     "paused_by",
+     "text"
+    ],
+    [
+     "paused_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "analysis_proxy",
+     "redo",
+     "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+     "2026-10-19 21:50:42.739624+00"
+    ],
+    [
+     "plugin_facts",
+     "work",
+     "usr_robert",
+     "2026-10-19 21:50:42.709524+00"
+    ],
+    [
+     "scenes",
+     "redo",
+     null,
+     "2026-10-19 21:50:42.706738+00"
+    ],
+    [
+     "transcript",
+     "redo",
+     "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+     "2026-10-19 21:50:42.770626+00"
+    ],
+    [
+     "upkeep",
+     "work",
+     "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+     "2026-10-19 21:50:42.776322+00"
+    ],
+    [
+     "vision",
+     "work",
+     "usr_01M5B2ACMQ7DH8KQF6C7VQG9ZZ",
+     "2026-10-19 21:50:42.762299+00"
+    ]
+   ],
+   "table": "producer_pauses"
+  },
+  {
+   "columns": [
+    [
+     "key",
+     "varchar"
+    ],
+    [
+     "value",
+     "varchar"
+    ],
+    [
+     "updated_at",
+     "timestamptz"
+    ]
+   ],
+   "rows": [
+    [
+     "artifacts.missing",
+     "[\"ast_01M5B2AE7KX7P9DEGSXK8RH4PS:proxy\"]",
+     "2026-10-19 21:50:42.708355+00"
+    ],
+    [
+     "producer.analysis_proxy",
+     "{\"max_edge\": 720}",
+     "2026-10-19 21:50:42.729665+00"
+    ],
+    [
+     "producer.faces",
+     "{\"detail\": \"high\"}",
+     "2026-10-19 21:50:42.747385+00"
+    ],
+    [
+     "producer.scenes.version_seen",
+     "4",
+     "2026-10-19 21:50:42.704882+00"
+    ]
+   ],
+   "table": "system_metadata"
+  }
+ ],
+ "written_at": "2026-10-19T21:50:42.792698+00:00"
+}
