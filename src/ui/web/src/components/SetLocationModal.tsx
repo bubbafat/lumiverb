@@ -6,8 +6,9 @@ import { Modal } from "./Modal";
 import { clipCount } from "./ProjectUsageList";
 
 /** "Set location…" for a selection (ADR-017): a place found by name (with the
- * Place names plug-in on and its list fetched, ADR-021), a point, or the same
- * place as one of the selected clips. Replacing a location the file or a
+ * Place names plug-in on and its list fetched, ADR-021, or an installed
+ * plug-in on that finds places, ADR-023), a point, or the same place as one
+ * of the selected clips. Replacing a location the file or a
  * person gave asks first, as the API requires (409 location_exists). */
 
 type Ask = { count: number; person: number; file: number };
@@ -35,8 +36,10 @@ export function SetLocationModal({
   const queryClient = useQueryClient();
   const { data: plugins } = useQuery({ queryKey: ["plugins"], queryFn: listPlugins });
   const geonames = plugins?.find((p) => p.plugin_id === "geonames");
-  // A list fetched, even while a newer one is fetched (the server searches what it has meanwhile).
-  const places = geonames?.state === "on" && (geonames.data?.state === "ready" || !!geonames.data?.ready_at);
+  // A list fetched, even while a newer one is fetched (the server searches what it has meanwhile); or a plug-in
+  // on here that finds places.
+  const places = (geonames?.state === "on" && (geonames.data?.state === "ready" || !!geonames.data?.ready_at))
+    || !!plugins?.some((p) => p.state === "on" && p.lookups?.includes("places"));
   const [picked, setPicked] = useState<"place" | "point" | "same" | null>(null);
   const mode = picked ?? (places ? "place" : "point");
   const setMode = setPicked;
@@ -156,8 +159,9 @@ export function SetLocationModal({
   );
 }
 
-/** A place by name (the Place names plug-in): what's typed, the places it starts, the one chosen; GeoNames'
- * credit beside them, as its license asks. */
+/** A place by name (the Place names plug-in, and installed plug-ins that find places): what's typed, the places
+ * it starts, each from where, the one chosen; each source's credit beside them (GeoNames' license asks it), and
+ * which plug-ins couldn't answer now. */
 function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoose: (p: Place | null) => void;
                                                     input: string }) {
   const [typed, setTyped] = useState(chosen?.label ?? "");
@@ -197,8 +201,12 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
                   className="w-full px-3 py-1.5 text-left text-sm text-gray-200 hover:bg-gray-800"
                 >
                   {p.label}
-                  {(p.kind || p.matched) && (
-                    <span className="text-gray-500"> · {[p.kind, p.matched].filter(Boolean).join(" · ")}</span>
+                  {(p.kind || p.matched || (p.source && p.source !== "geonames")) && (
+                    <span className="text-gray-500">
+                      {" · "}
+                      {[p.kind, p.matched, p.source && p.source !== "geonames" ? `from ${p.source_title ?? p.source}` : null]
+                        .filter(Boolean).join(" · ")}
+                    </span>
                   )}
                 </button>
               </li>
@@ -207,13 +215,24 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
         )
       )}
       {error && <p role="alert" className="text-sm text-red-300">{error instanceof Error ? error.message : String(error)}</p>}
-      <p className="text-xs text-gray-500">
-        Place names from{" "}
-        <a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer" className="hover:underline">GeoNames</a>
-        ,{" "}
-        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer"
-           className="hover:underline">CC BY 4.0</a>
-      </p>
+      {searching && data?.unavailable?.map((u) => (
+        <p key={u.plugin_id} className="text-xs text-amber-300">{u.title} couldn&apos;t answer: {u.why}.</p>
+      ))}
+      {(data?.credits ?? (data?.credit ? [{ source: "geonames", text: "GeoNames", url: data.credit.url }] : [])).map((c) => (
+        <p key={c.source} className="text-xs text-gray-500">
+          {c.source === "geonames" ? "Place names from " : "Places from "}
+          {c.url ? (
+            <a href={c.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{c.text}</a>
+          ) : c.text}
+          {c.source === "geonames" && (
+            <>
+              ,{" "}
+              <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer"
+                 className="hover:underline">CC BY 4.0</a>
+            </>
+          )}
+        </p>
+      ))}
     </div>
   );
 }

@@ -48,8 +48,8 @@ class SetLocationRequest(BaseModel):
     lat: float | None = Field(default=None, allow_inf_nan=False)
     lon: float | None = Field(default=None, allow_inf_nan=False)
     same_as: str | None = None  # another clip: its location (a person's, else the file's)
-    # A place from GET /v1/places ("geonames:<id>"): its point, the place kept with it (Place names plug-in).
-    place_id: str | None = Field(default=None, max_length=64)
+    # A place from GET /v1/places ("geonames:<id>", "<plugin_id>:<id>"): its point, the place kept with it.
+    place_id: str | None = Field(default=None, max_length=160)
     # What may be replaced: "none", a person's location ("person"), or the file's too ("all").
     replace: Literal["none", "person", "all"] = "none"
 
@@ -94,11 +94,23 @@ def _who(request: Request) -> str:
 
 
 def _place(session: Session, place: str) -> tuple[float, float, dict]:
-    """A place's point and what's kept of it: 409 plugin_off, 503 places_not_ready, 422 unknown_place."""
-    from src.server.api.routers.places import require_places
+    """A place's point and what's kept of it: 409 plugin_off, 503 places_not_ready, 422 unknown_place; an
+    installed plug-in's (ADR-023 phase 2d) as it says it now, 503 plugin_unavailable when it can't."""
+    from src.server.api.routers.places import PLUGIN, require_places
     from src.server.database import get_control_session
     from src.server.repository.places import PlaceRepository, geonameid_of, label
 
+    if not place.startswith(f"{PLUGIN}:"):
+        from src.server.plugin_lookups import LookupUnavailableError, one_place
+
+        try:
+            found = one_place(session, place)
+        except LookupUnavailableError as exc:
+            raise ApiError(503, "plugin_unavailable", f"The plug-in that found it can't answer now: {exc}.",
+                           {"plugin_id": place.partition(":")[0]}) from None
+        if found is None:
+            raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")
+        return found["lat"], found["lon"], {"id": place, "label": found["label"], "source": found["source"]}
     require_places(session)
     geonameid = geonameid_of(place)
     row = None

@@ -1,8 +1,12 @@
 """Places by name (ADR-021's Place names plug-in; ADR-017 phase 4), for
 setting a location: GET /v1/places?q=Port of Spain, towns and landmarks.
-Signed in, with the plug-in on in the account (409 plugin_off) and its list
-fetched (503 places_not_ready). The names are GeoNames', under CC BY 4.0:
-every answer carries the credit to show beside them.
+Signed in. GeoNames' (Lumiverb's own plug-in, its list fetched), and every
+installed plug-in's on in the account that answers place searches
+(ADR-023 phase 2d, src/server/plugin_lookups.py), each place labelled with
+where it's from and every answer carrying the credits to show beside them
+(GeoNames' names are under CC BY 4.0). None on here: 409 plugin_off; only
+GeoNames, its list not fetched yet: 503 places_not_ready. A plug-in that
+can't answer now is said in `unavailable`, and the others' places stand.
 
 The plug-in's producer (src/producers/place/, the scheduler's key; admins):
 POST /v1/places/nearest   each clip's location, the nearest town within a radius and the landmark it's at
@@ -37,7 +41,7 @@ CREDIT = {"text": "Place names from GeoNames, CC BY 4.0", "url": "https://www.ge
 
 
 class Place(BaseModel):
-    place_id: str  # "geonames:<id>": what PUT /v1/assets/locations takes as place_id
+    place_id: str  # "geonames:<id>", "<plugin_id>:<its id>": what PUT /v1/assets/locations takes as place_id
     name: str
     region: str | None = None
     country: str | None = None
@@ -48,6 +52,9 @@ class Place(BaseModel):
     kind: str | None = None  # a landmark's ("amusement park"); None: a town
     # The name in another language it was found by, when not its own ("Eiffel Tower" for Tour Eiffel).
     matched: str | None = None
+    # Who found it: "geonames", or an installed plug-in's id (and its title).
+    source: str = PLUGIN
+    source_title: str | None = None
 
 
 class Credit(BaseModel):
@@ -56,9 +63,26 @@ class Credit(BaseModel):
     license_url: str
 
 
+class SourceCredit(BaseModel):
+    source: str  # who found the places it's for: "geonames", or a plug-in's id
+    text: str
+    url: str | None = None
+
+
+class Unavailable(BaseModel):
+    plugin_id: str
+    title: str
+    why: str  # it isn't running, didn't answer, or answered what the protocol doesn't say
+
+
 class PlaceList(BaseModel):
     places: list[Place]
-    credit: Credit
+    # GeoNames' (its license's link too) when its places are among them.
+    credit: Credit | None = None
+    # Each source's whose places are among them, to show beside them.
+    credits: list[SourceCredit] = []
+    # Plug-ins that find places but couldn't answer now.
+    unavailable: list[Unavailable] = []
 
 
 def place_out(row: dict) -> Place:
@@ -88,12 +112,34 @@ def search_places(
     q: Annotated[str, Query(min_length=1, max_length=200, description="A name's start; \"name, region or country\"")],
     limit: Annotated[int, Query(ge=1, le=25)] = 10,
 ) -> PlaceList:
-    """Places whose name starts with q, the exact name first, then the most
-    populous; "Name, where" narrows it to a region or country."""
-    require_places(session)
-    with get_control_session() as control:
-        rows = PlaceRepository(control).search(q, limit)
-    return PlaceList(places=[place_out(r) for r in rows], credit=Credit(**CREDIT))
+    """Places whose name starts with q: GeoNames' (the exact name first, then the most populous; "Name,
+    where" narrows it to a region or country), then each installed plug-in's that finds places, as it ranks
+    them, up to limit each."""
+    from src.plugins import plugin as own_plugin
+    from src.server.plugin_lookups import PLACES, find_places, offering
+    from src.server.repository.plugins import PluginRepository
+
+    theirs = offering(session, PLACES)
+    out = PlaceList(places=[])
+    if PluginRepository(session).is_on(PLUGIN) or not theirs:
+        try:
+            require_places(session)
+        except ApiError as exc:
+            if not theirs or exc.code != "places_not_ready":
+                raise
+            out.unavailable.append(Unavailable(plugin_id=PLUGIN, title=own_plugin(PLUGIN).title, why=exc.message))
+        else:
+            with get_control_session() as control:
+                rows = PlaceRepository(control).search(q, limit)
+            out.places = [place_out(r) for r in rows]
+            out.credit = Credit(**CREDIT)
+            out.credits.append(SourceCredit(source=PLUGIN, text="GeoNames", url=CREDIT["url"]))
+    if theirs:
+        found, credits, unavailable = find_places(session, q, limit)
+        out.places += [Place(**p) for p in found]
+        out.credits += [SourceCredit(**c) for c in credits]
+        out.unavailable += [Unavailable(**u) for u in unavailable]
+    return out
 
 
 # ---------------------------------------------------------------------------

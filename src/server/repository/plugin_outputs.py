@@ -71,7 +71,7 @@ def facts_of(session: Session, asset_id: str) -> list[dict[str, Any]]:
         facts = [{"key": o.key, "label": o.label, "text": fact["text"], "url": fact.get("url")}
                  for o in m.work.outputs if isinstance(fact := outputs.get(o.key), dict) and fact.get("text")]
         if facts:
-            credit = {"text": m.credit.text, "url": m.credit.url or None} if m.credit else None
+            credit = {"text": m.credit.label, "url": m.credit.url or None} if m.credit else None
             out.append({"plugin_id": m.plugin_id, "title": m.title, "credit": credit, "facts": facts})
     return out
 

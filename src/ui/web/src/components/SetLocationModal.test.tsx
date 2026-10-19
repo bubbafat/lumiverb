@@ -103,6 +103,30 @@ describe("SetLocationModal", () => {
     expect(await screen.findByRole("textbox", { name: "Place" })).toBeTruthy();
   });
 
+  it("finds places with an installed plug-in that finds them, says where each is from, and who couldn't answer", async () => {
+    const FACTS = { plugin_id: "facts", title: "Facts", description: "", state: "on" as const, acknowledgment: null,
+                    acknowledged: null, data: null, kind: "installed" as const, lookups: ["places"] };
+    plugins.mockResolvedValue([{ ...GEONAMES, state: "off" as const }, FACTS]);
+    const harbour = { place_id: "facts:harbour", name: "Harbour Point", region: "Testshire", country: "Testland",
+                      label: "Harbour Point, Testshire, Testland", lat: 41.1, lon: -73.2, population: 0,
+                      kind: "lighthouse", source: "facts", source_title: "Facts" };
+    search.mockResolvedValue({ places: [harbour], credit: null,
+                               credits: [{ source: "facts", text: "Facts' places", url: "https://example.org/facts" }],
+                               unavailable: [{ plugin_id: "atlas", title: "Atlas", why: "it's starting" }] });
+    set.mockResolvedValueOnce({ updated: ["ast_1"], skipped: [] });
+    const onClose = modal(["ast_1"]);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "har" } });
+    fireEvent.click(await screen.findByRole("button", { name: /^Harbour Point, Testshire, Testland\s*· lighthouse · from Facts$/ }));
+    expect((screen.getByRole("link", { name: "Facts' places" }) as HTMLAnchorElement).href).toBe("https://example.org/facts");
+    expect(screen.queryByRole("link", { name: "CC BY 4.0" })).toBeNull();
+    fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "harb" } });
+    expect(await screen.findByText("Atlas couldn't answer: it's starting.")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /^Harbour Point/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Set location" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1"], replace: "none", place_id: "facts:harbour" });
+  });
+
   it("offers no place search while Place names is off or its list isn't fetched", async () => {
     plugins.mockResolvedValue([{ ...GEONAMES, data: { ...GEONAMES.data, state: "fetching" as const } }]);
     modal();

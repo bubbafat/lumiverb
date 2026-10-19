@@ -310,14 +310,16 @@ handed only what it declares (a clip's location, when it was taken, its
 size and camera, a photo's preview) and gives back short facts that
 Lumiverb checks and keeps with the clip. They show in the clip's details
 (the Lightbox), under the plug-in's name, and search finds a clip by those
-the plug-in marks searchable. Its work shows in **Settings ›
+the plug-in marks searchable. A plug-in can also find places by name for
+**Set location**, beside GeoNames' (each place says where it's from). Its
+work shows in **Settings ›
 Processing** like any other: how many clips it has made, what's left and
 why anything waits (its plug-in not running, say). Within half a minute of
 installing one, it starts on every clip in the accounts where it's on.
 
 To try it, Lumiverb comes with an example that gives each photo and video a
-caption you choose, when it was taken and its shape, and has one setting of
-every kind. `lumiverb-server plugins` lists what's installed and says where
+caption you choose, when it was taken and its shape, finds a few famous
+places in Set location, and has one setting of every kind. `lumiverb-server plugins` lists what's installed and says where
 the example is. `lumiverb-server plugins uninstall example` takes it away
 again.
 

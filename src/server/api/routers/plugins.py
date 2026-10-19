@@ -167,6 +167,8 @@ class PluginOut(BaseModel):
     # An installed one's, in words: what it reads, what it answers.
     reads: list[str] = Field(default_factory=list)
     answers: list[str] = Field(default_factory=list)
+    # The lookups it answers, by name ("places": Set location's Place search).
+    lookups: list[str] = Field(default_factory=list)
     downloads: list[DownloadOut] = Field(default_factory=list)
     internet: bool = False
     # An installed one's process, as the runner last said (None for Lumiverb's own).
@@ -252,7 +254,7 @@ def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool,
             "kind": "installed", "version": m.version, "author": m.author or None, "homepage": m.homepage or None,
             "on_by_default": installed.on_by_default, "follows_default": row is None,
             "reads": [INPUTS[i] for i in (m.work.inputs if m.work else ())],
-            "answers": [LOOKUPS[name] for name in m.lookups],
+            "answers": [LOOKUPS[name] for name in m.lookups], "lookups": list(m.lookups),
             "downloads": [DownloadOut(url=d.url, title=d.title, about_mb=d.about_mb) for d in m.downloads],
             "internet": m.internet, "running": _running(spec.plugin_id, said),
             "settings": [SettingOut(**setting_shown(s, (server_chosen or {}) if s.scope == SERVER else (chosen or {}),

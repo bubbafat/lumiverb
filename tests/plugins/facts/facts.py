@@ -1,8 +1,9 @@
 """A plug-in for Lumiverb's tests (ADR-023 phase 2), written against the
 protocol alone: Python's standard library, nothing of Lumiverb's. Its work
-(POST /v1/work) gives each clip a fact or two from what it's handed, and
-its "behave" setting says how it answers, so the tests can try each way a
-plug-in's work can go wrong:
+(POST /v1/work) gives each clip a fact or two from what it's handed, its
+place lookup (POST /v1/lookups/places) finds a few places by name or id,
+and its "behave" setting says how it answers, so the tests can try each way
+a plug-in's work or lookup can go wrong:
 
   well        where (with a link), when, what; nothing to say where an input is missing
   clip-error  each clip's error, the clip's
@@ -12,7 +13,8 @@ plug-in's work can go wrong:
   leave-out   says nothing of the first clip
   slow        takes a minute (longer than the test lets it)
 
-It writes the last request it was handed to its data folder (last-work.json).
+It writes the last request it was handed to its data folder (last-work.json,
+last-lookup.json).
 """
 
 import json
@@ -35,6 +37,25 @@ def facts(clip: dict, word: str) -> dict:
         "what": {"text": f"{word}: {what.get('media_type')} {what.get('width')}x{what.get('height')}"}
         if what.get("media_type") else None,
     }
+
+
+PLACES = [
+    {"id": "harbour", "name": "Harbour Point", "region": "Testshire", "country": "Testland", "lat": 41.1,
+     "lon": -73.2, "kind": "lighthouse"},
+    {"id": "hill", "name": "Hill Top", "country": "Testland", "lat": 41.3, "lon": -73.4, "population": 120},
+]
+
+
+def lookup(sent: dict) -> dict:
+    behave = (sent.get("settings") or {}).get("behave", "well")
+    if behave == "slow":
+        time.sleep(60)
+    if behave == "nonsense":
+        return {"places": [{"id": "x", "name": "Nowhere", "lat": 999, "lon": 0}]}
+    if "id" in sent:
+        return {"places": [p for p in PLACES if p["id"] == sent["id"]]}
+    q = str(sent.get("q", "")).lower()
+    return {"places": [p for p in PLACES if p["name"].lower().startswith(q)][: int(sent.get("limit", 10))]}
 
 
 def work(sent: dict) -> dict:
@@ -71,6 +92,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 — http.server's name
         sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/v1/lookups/places":
+            with open(os.path.join(DATA, "last-lookup.json"), "w") as f:
+                json.dump(sent, f)
+            self._answer(200, lookup(sent))
+            return
         if self.path != "/v1/work":
             self._answer(404, {"error": "not found"})
             return
