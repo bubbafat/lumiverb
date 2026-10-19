@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft (2026-10-19), for the builder, the reviewer and the tester to agree before any code, and for Robert to make one decision (section 5). Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Agreed (2026-10-19) by the builder, the reviewer and the tester; waiting for Robert's one decision (section 5) before any code. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
@@ -143,7 +143,7 @@ For phase 3, written down now: the hash a plug-in's output is kept with (`clip_i
 
 A fast test fails when the page isn't what the code would write, and says the command. Another test fails when a producer is added without a name, or its name has no `about`.
 
-The page is linked from cursor-api.md (the Plug-ins API, and "Writing a client"), from ADR-024, and from CLAUDE.md's producers row. Two lists kept by hand have drifted from the producers: cursor-api's job kinds (`GET /v1/producers/queue`) and the web's job labels (`ProcessingSection.tsx` `KIND_LABELS`) leave out `capture`, `location` and `video_faces`. Phase 1 adds them, and a test holds the doc's kinds to the scheduler's.
+The page is linked from cursor-api.md (the Plug-ins API, and "Writing a client"), from ADR-024, and from CLAUDE.md's producers row. Two lists kept by hand have drifted from the producers: cursor-api's job kinds (`GET /v1/producers/queue`) and the web's job labels (`ProcessingSection.tsx` `KIND_LABELS`) leave out `capture`, `location` and `video_faces`. Phase 1 adds them, and tests hold both to the scheduler's kinds: the doc's as the client contract's test reads it, the web's labels as `tests/test_no_silent_waits.py` holds `lib/waits.ts`.
 
 ## 5. Robert's decision: rename what's stored and sent, or name beside it
 
@@ -196,7 +196,7 @@ Today's artifact ids are renamed to the names wherever they're stored or sent.
 Today's ids stay what's stored and sent. They're documented as storage keys, kept for every client. The names are the public, documented layer: the page, `GET /v1/producers`' `makes` and `reads`, and everything new (phase 3's manifests, phase 4's `has:`). One table in the registry maps each to the other. It's held by a test: each producer has exactly one name and each name at most one id.
 
 - **Migrations.** None: the PR adds no alembic revision. Rolling back to v0.1.104 is installing it.
-- **Code.** `ProducerSpec.makes` and `reads`, `src/producers/names.py`, the protocol 1 table, the page and its writer, two fields on `GET /v1/producers`, and the registry check. About ten files besides tests and docs.
+- **Code.** `ProducerSpec.makes` and `reads`, `src/producers/names.py`, the protocol 1 table, the page and its writer, three fields on `GET /v1/producers`, and the registry check. About ten files besides tests and docs.
 - **Clients.** Nothing they send or read changes. Nothing breaks.
 - **Cost.** One part. Two identifiers for each built-in: the id, which people never see (Processing shows titles), and the name, which they read. The page puts them side by side. New API takes names; the existing API keeps its ids, as cursor-api says.
 - **Tests.**
@@ -217,7 +217,7 @@ If keeping two ids ever costs more than it saves, a later phase can retire the o
 
 ## 6. What a person sees
 
-Nothing changes on screen. The page `docs/data-names.md` is new, linked from the docs a plug-in author or client writer reads. `GET /v1/producers` has two more fields.
+Nothing changes on screen. The page `docs/data-names.md` is new, linked from the docs a plug-in author or client writer reads. `GET /v1/producers` has three more fields (`makes`, `reads`, `reads_others`).
 
 ## 7. Tests
 
@@ -225,7 +225,7 @@ Every test calls the real registry, producers and routes (none reimplements a ru
 
 - The rules in section 2, each refusing a made-up producer that breaks it (the registry check, as `tests/test_producer_contract.py` does for producers' other rules).
 - `reads` held to what runs: every table and clip column each producer's `applies`, `made` and `recheck` read is stored by a name it reads or makes (or is on the not-data list); every input its work is handed (`Work.inputs`) is a name it reads. Each fails on a made-up producer reading a column it doesn't declare.
-- What a reader would be handed is what the clip shows: for `lumiverb.image.description`, `lumiverb.image.text` and `lumiverb.video.transcript`, a clip a person corrected states the person's value (a test on `stored` and `corrections.FIELDS`, so a field a person can write is on the page as theirs).
+- What a reader would be handed is what the clip shows: a field a person can write is on the page as theirs. For `lumiverb.image.description` and `lumiverb.image.text`, by `corrections.FIELDS`; for `lumiverb.video.transcript`, by the rule that shows a person's transcript (lineage producer `person`, `source` `manual`: `assets.py` `_persons_transcript`).
 - Nothing else moves: the whole registry as the code works it out, every value written into the test from main before the change. Each producer's `needs` (now from `reads`), `part_of`, `redo_also`, tier, kind, flag and pool; the scheduler's `KINDS`, its `redo_` kinds too; the pause targets; `MISSING_FLAGS`; lineage's tables (`APPLIES`, `MADE`, `RECHECK`).
 - The page: written by the command, equal to the file; and a change to a producer's name fails it.
 - The protocol 1 table: each input's name, and `tests/test_plugin_work.py` unchanged (what a plug-in is handed).
@@ -255,5 +255,5 @@ The names themselves (section 1) are for the reviewer and the tester to agree. R
 | Who | Says |
 |-----|------|
 | geonames-builder | Proposed |
-| geonames-reviewer | |
-| geonames-tester | |
+| geonames-reviewer | AGREE (on 2f4c896c), three nits folded in after it (text only): three fields on `GET /v1/producers`, the web's kind labels held like `lib/waits.ts`, a person's transcript by its own rule |
+| geonames-tester | AGREE (on 2f4c896c), its note folded in after it (text only): "two fields" made three, as section 2 says |
