@@ -244,3 +244,59 @@ def test_what_the_runner_says_goes_stale_when_it_stops_saying_it(data) -> None:
         assert read_state(data, fresh_within=1) is None, "not said for a while: the runner isn't running"
     finally:
         runner.stop_all()
+
+
+def test_lumiverbs_example_runs_and_checks_its_own_settings(data) -> None:
+    from src.plugins.manifest import read
+    from src.server.plugin_client import ask
+    from src.server.plugin_install import EXAMPLE
+
+    manifest = read(EXAMPLE)
+    assert {s.type for s in manifest.settings} == {"int", "float", "bool", "text", "choice", "secret"}
+    assert manifest.check_settings and any(s.advanced for s in manifest.settings)
+    assert [s.key for s in manifest.settings if s.scope == "server"] == ["service_key"]
+    program = program_dir(data, "example")
+    shutil.copytree(EXAMPLE, program)
+    (program / INSTALL_MARK).write_text(uuid.uuid4().hex)
+    runner = Runner(data, installed=lambda: {"example": SimpleNamespace(manifest=manifest)})
+    try:
+        _until(runner, lambda: _state(runner, "example") == READY)
+        sock = socket_path(data, "example")
+        assert ask(sock, "POST", "/v1/settings/check", body={"scope": "account", "settings": {"caption": "nothing"}}) == {
+            "errors": {"caption": "The example won't say nothing: write something"}}
+        assert ask(sock, "POST", "/v1/settings/check", body={"scope": "account", "settings": {"caption": "Hi"}}) == {
+            "errors": {}}
+    finally:
+        runner.stop_all()
+
+
+def test_a_data_folder_too_deep_for_a_socket_is_reached_through_a_short_link(data, tmp_path) -> None:
+    from src.server.plugin_client import ask, sockets_dir
+
+    deep = tmp_path / ("a-folder-deep-in-a-drive-" * 4) / "data"
+    assert len(str(deep / "plugins" / "run" / "hello.sock")) > 104, "too long for a socket's path"
+    runner, installs = _runner(deep)
+    installs.add("hello")
+    sock = socket_path(deep, "hello")
+    try:
+        assert len(str(sock)) <= 100 and sock.parent.is_symlink()
+        assert os.readlink(sock.parent) == str(sockets_dir(deep).absolute())
+        _until(runner, lambda: _state(runner, "hello") == READY)
+        assert ask(sock, "GET", "/v1/health") == {"state": "ready"}, "and the API reaches it the same way"
+    finally:
+        runner.stop_all()
+        sock.parent.unlink()
+
+
+def test_a_short_link_that_isnt_lumiverbs_is_refused(tmp_path) -> None:
+    from src.server.plugin_client import socket_path as path_of
+
+    deep = tmp_path / ("a-folder-deep-in-a-drive-" * 4) / "data"
+    link = path_of(deep, "hello").parent
+    link.unlink()
+    link.mkdir()  # someone's folder where the link goes
+    try:
+        with pytest.raises(OSError, match="isn't Lumiverb's link"):
+            path_of(deep, "hello")
+    finally:
+        link.rmdir()

@@ -336,6 +336,20 @@ export async function setPlugin(pluginId: string, enabled: boolean, acknowledged
   });
 }
 
+/** An installed plug-in's settings (ADR-023): each one named, a value or null for its default (a secret: cleared).
+ * scope "account" is this account's (its admins'), "server" the whole server's (server admins'). 422
+ * invalid_settings (details.errors: by key) for any its schema refuses, or the plug-in does. */
+export async function setPluginSettings(
+  pluginId: string,
+  settings: Record<string, number | boolean | string | null>,
+  scope: "account" | "server",
+): Promise<Plugin> {
+  return apiFetch<Plugin>(`/plugins/${pluginId}/${scope === "server" ? "server-settings" : "settings"}`, {
+    method: "PUT",
+    body: { settings },
+  });
+}
+
 /** Whether a library's clips' locations are guessed (ADR-017; its admin's). Turning it off removes its guesses:
  * 409 guesses_exist (details.clips) until removeGuesses says so. */
 export async function setLibraryInferLocation(

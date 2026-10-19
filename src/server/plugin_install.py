@@ -34,6 +34,8 @@ from src.server.repository.plugins import stands
 # Written into each installed copy: which install it is, so the runner starts a new one afresh (a folder's
 # inode isn't: a filesystem may give a new folder the number of one just removed).
 INSTALL_MARK = ".lumiverb-install"
+# Lumiverb's example plug-in (every kind of setting, its own check): to try Settings › Plug-ins with.
+EXAMPLE = Path(__file__).resolve().parents[1] / "plugin_examples" / "example"
 # A plug-in's folder, at most: more is a mistake (the wrong folder named).
 MAX_BYTES = 4 * 1024**3
 MAX_FILES = 100_000

@@ -151,6 +151,10 @@ def _list(session) -> int:
             print(f"  {row['plugin_id']} {row['version']}  {title}: "
                   f"{'on' if row['on_by_default'] else 'off'} by default")
     print("Lumiverb's own: " + ", ".join(f"{p.plugin_id} ({p.title})" for p in registry().values()))
+    from src.server.plugin_install import EXAMPLE
+
+    if EXAMPLE.is_dir() and not any(row["plugin_id"] == "example" for row in rows):
+        print(f"To try Settings › Plug-ins, install Lumiverb's example: lumiverb-server plugins install {EXAMPLE} --off")
     return 0
 
 
