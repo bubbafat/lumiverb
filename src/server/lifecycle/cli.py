@@ -325,6 +325,8 @@ def _init(args: argparse.Namespace) -> int:
 
 def _migrate(args: argparse.Namespace) -> int:
     env, url = _env_and_url(args)
+    if getattr(args, "to", None) or getattr(args, "control_to", None):
+        return _migrate_to(args, env, url)
     try:
         count = migrate(url)
     except MigrationError as exc:
@@ -332,6 +334,31 @@ def _migrate(args: argparse.Namespace) -> int:
         return 1
     print(f"✓ Migrated the control plane and {count} account(s)")
     _install_own(env, url, say=print, fail=lambda line: print(line, file=sys.stderr))
+    return 0
+
+
+def _migrate_to(args: argparse.Namespace, env: dict[str, str], url: str) -> int:
+    """`migrate --to`: the databases taken to the revisions named, down or up (migrate.migrate_to). Refused
+    while Lumiverb runs (connected to its databases, as a restore is refused: its API and scheduler would go on
+    writing what the newer code writes, and a Mac's `run` would migrate up again at its next start); a Mac's own
+    PostgreSQL started for the while, as backup and restore do."""
+    from src.server import backups
+    from src.server.lifecycle.migrate import migrate_to, tenant_databases
+
+    data = data_dir(env)
+    pg_bin = env.get("PG_BIN") or None
+    try:
+        with up_while(Path(pg_bin) if pg_bin else None, data, url, env):
+            busy = backups.connected_elsewhere([url, *(u for _, u in tenant_databases(url))])
+            if busy:
+                print("✗ Lumiverb is still running (connected: " + ", ".join(busy) + "). Stop it first:"
+                      " brew services stop lumiverb, or its systemd services.", file=sys.stderr)
+                return 1
+            moved = migrate_to(url, tenant=args.to, control=args.control_to)
+    except (MigrationError, PostgresError) as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    print(f"✓ {moved} account(s) at {args.to}" if args.to else "✓ The control plane moved")
     return 0
 
 
@@ -930,8 +957,13 @@ def main(argv: list[str] | None = None) -> int:
     for port in ("pg", "api", "web"):
         init_command.add_argument(f"--{port}-port", type=int, help="for a new env file")
     init_command.add_argument("--app-host", help="the URL people reach it at, for a new env file")
-    _env_option(commands.add_parser("migrate", help="migrate the control plane and every account's database"),
-                argparse.SUPPRESS)
+    migrate_command = commands.add_parser("migrate", help="migrate the control plane and every account's database")
+    _env_option(migrate_command, argparse.SUPPRESS)
+    migrate_command.add_argument(
+        "--to", metavar="REVISION", help="every account's database to this revision instead, down or up: a rollback,"
+        " with the service stopped, by the newer release (the release notes name the revision)")
+    migrate_command.add_argument("--control-to", metavar="REVISION",
+                                 help="the control plane's database to this revision too")
     _env_option(commands.add_parser(
         "run", help="migrate, then run the API, the scheduler and upkeep until stopped (a Mac's service)"),
         argparse.SUPPRESS)

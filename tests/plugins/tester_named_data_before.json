@@ -1,0 +1,1432 @@
+{
+ "handed": {
+  "clips": [
+   {
+    "capture_time": {
+     "offset_min": null,
+     "utc": "2024-05-01T12:00:00Z"
+    },
+    "id": "1",
+    "location": {
+     "lat": 41.0,
+     "lon": -73.0,
+     "source": "file",
+     "sure_m": 0.0
+    },
+    "metadata": {
+     "camera_make": null,
+     "camera_model": null,
+     "duration_sec": null,
+     "height": 36,
+     "lens": null,
+     "media_type": "image",
+     "width": 64
+    }
+   },
+   {
+    "capture_time": {
+     "offset_min": null,
+     "utc": "2024-05-01T12:00:00Z"
+    },
+    "id": "2",
+    "location": {
+     "lat": 41.0,
+     "lon": -73.0,
+     "source": "file",
+     "sure_m": 0.0
+    },
+    "metadata": {
+     "camera_make": null,
+     "camera_model": null,
+     "duration_sec": null,
+     "height": 36,
+     "lens": null,
+     "media_type": "image",
+     "width": 64
+    }
+   }
+  ],
+  "settings": {
+   "behave": "well",
+   "token": "",
+   "word": "Seen"
+  }
+ },
+ "inputs_hash": [
+  "cf479fd206000ac16f2b1d14fde2f060",
+  "cf479fd206000ac16f2b1d14fde2f060"
+ ],
+ "producers": [
+  {
+   "artifact": "probe",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [],
+   "level": null,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "ffprobe",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {},
+   "settings_hash": "44136fa355b3678a",
+   "title": "Video facts (probe)",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "capture",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [],
+   "level": null,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "exiftool",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {},
+   "settings_hash": "44136fa355b3678a",
+   "title": "Capture time and GPS accuracy",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [
+    {
+     "clips": 3,
+     "reason": "scheduler",
+     "why": "not_running"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "proxy",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 2048,
+     "fixed": "Made at the scan with this; changing it isn't offered yet.",
+     "key": "long_edge",
+     "kind": "int",
+     "label": "Longest edge",
+     "maximum": 4096.0,
+     "minimum": 512.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 2048
+    },
+    {
+     "advanced": false,
+     "choices": [
+      "good",
+      "better",
+      "best"
+     ],
+     "default": "better",
+     "fixed": null,
+     "key": "quality",
+     "kind": "notch",
+     "label": "Quality",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "better"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 512,
+     "fixed": "Made at the scan with this; changing it isn't offered yet.",
+     "key": "thumbnail_edge",
+     "kind": "int",
+     "label": "Thumbnail edge",
+     "maximum": 1024.0,
+     "minimum": 128.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 512
+    }
+   ],
+   "level": null,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "proxy",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": false,
+   "settings": {
+    "jpeg_quality": 75,
+    "long_edge": 2048,
+    "thumbnail_edge": 512,
+    "webp_quality": 80
+   },
+   "settings_hash": "8baa5eb52e86ea80",
+   "title": "Proxies and thumbnails",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "video_preview",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 10,
+     "fixed": "Made at the scan with this; changing it isn't offered yet.",
+     "key": "seconds",
+     "kind": "int",
+     "label": "Length",
+     "maximum": 60.0,
+     "minimum": 1.0,
+     "remakes": true,
+     "unit": "s",
+     "value": 10
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 720,
+     "fixed": "Made at the scan with this; changing it isn't offered yet.",
+     "key": "max_height",
+     "kind": "int",
+     "label": "Height",
+     "maximum": 2160.0,
+     "minimum": 144.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 720
+    },
+    {
+     "advanced": false,
+     "choices": [
+      "good",
+      "better",
+      "best"
+     ],
+     "default": "better",
+     "fixed": null,
+     "key": "quality",
+     "kind": "notch",
+     "label": "Quality",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "better"
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 128,
+     "fixed": "Made at the scan with this; changing it isn't offered yet.",
+     "key": "audio_kbps",
+     "kind": "int",
+     "label": "Audio",
+     "maximum": 320.0,
+     "minimum": 32.0,
+     "remakes": true,
+     "unit": "kbps",
+     "value": 128
+    }
+   ],
+   "level": null,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "preview",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": false,
+   "settings": {
+    "audio_kbps": 128,
+    "crf": 28,
+    "max_height": 720,
+    "seconds": 10
+   },
+   "settings_hash": "4f627804650c7f23",
+   "title": "Video previews",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "analysis_proxy",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 960,
+     "fixed": null,
+     "key": "max_edge",
+     "kind": "int",
+     "label": "Longest edge",
+     "maximum": 1920.0,
+     "minimum": 320.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 960
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 30,
+     "fixed": null,
+     "key": "fps_max",
+     "kind": "int",
+     "label": "Most frames a second",
+     "maximum": 60.0,
+     "minimum": 1.0,
+     "remakes": true,
+     "unit": "",
+     "value": 30
+    },
+    {
+     "advanced": false,
+     "choices": [
+      "good",
+      "better",
+      "best"
+     ],
+     "default": "better",
+     "fixed": null,
+     "key": "quality",
+     "kind": "notch",
+     "label": "Quality",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "better"
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 48,
+     "fixed": null,
+     "key": "audio_kbps_per_channel",
+     "kind": "int",
+     "label": "Audio per channel",
+     "maximum": 128.0,
+     "minimum": 16.0,
+     "remakes": true,
+     "unit": "kbps",
+     "value": 48
+    }
+   ],
+   "level": null,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "analysis-proxy",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "audio_kbps_per_channel": 48,
+    "crf": 28,
+    "fps_max": 30,
+    "max_edge": 960
+   },
+   "settings_hash": "b63de287be1aa99f",
+   "title": "Analysis proxies",
+   "uniform": false,
+   "unit": "second",
+   "version": "2",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "scenes",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [
+      "low",
+      "normal",
+      "high"
+     ],
+     "default": "normal",
+     "fixed": null,
+     "key": "detail",
+     "kind": "level",
+     "label": "Detail",
+     "maximum": null,
+     "minimum": null,
+     "remakes": false,
+     "unit": "",
+     "value": "normal"
+    }
+   ],
+   "level": 1,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy"
+   ],
+   "new_version": false,
+   "part_of": "scene_vision",
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "scene-detect",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {},
+   "settings_hash": "44136fa355b3678a",
+   "title": "Scenes",
+   "uniform": false,
+   "unit": "second",
+   "version": "4",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "scene_vision",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "",
+     "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": ""
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+     "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+     "key": "prompt",
+     "kind": "text",
+     "label": "Prompt",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 1280,
+     "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+     "key": "max_edge",
+     "kind": "int",
+     "label": "Image size sent",
+     "maximum": 1280.0,
+     "minimum": 256.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 1280
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 0.2,
+     "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+     "key": "temperature",
+     "kind": "float",
+     "label": "Temperature",
+     "maximum": 2.0,
+     "minimum": 0.0,
+     "remakes": true,
+     "unit": "",
+     "value": 0.2
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 500,
+     "fixed": "Scenes are described with these settings; changing them isn't offered yet.",
+     "key": "max_tokens",
+     "kind": "int",
+     "label": "Longest answer",
+     "maximum": 4000.0,
+     "minimum": 50.0,
+     "remakes": true,
+     "unit": "tokens",
+     "value": 500
+    }
+   ],
+   "level": null,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy",
+    "scenes"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "scene-vision",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "max_edge": 1280,
+    "max_tokens": 500,
+    "model": "",
+    "prompt": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+    "temperature": 0.2
+   },
+   "settings_hash": "2a615d001a163177",
+   "title": "Scene descriptions",
+   "uniform": false,
+   "unit": "second",
+   "version": "1",
+   "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+   "waits": [
+    {
+     "clips": 0,
+     "job": "vision",
+     "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+     "reason": "ai_machines",
+     "why": "off"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "vision",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "",
+     "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": ""
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+     "fixed": null,
+     "key": "prompt",
+     "kind": "text",
+     "label": "Prompt",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 1280,
+     "fixed": null,
+     "key": "max_edge",
+     "kind": "int",
+     "label": "Image size sent",
+     "maximum": 1280.0,
+     "minimum": 256.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 1280
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 0.2,
+     "fixed": null,
+     "key": "temperature",
+     "kind": "float",
+     "label": "Temperature",
+     "maximum": 2.0,
+     "minimum": 0.0,
+     "remakes": true,
+     "unit": "",
+     "value": 0.2
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 500,
+     "fixed": null,
+     "key": "max_tokens",
+     "kind": "int",
+     "label": "Longest answer",
+     "maximum": 4000.0,
+     "minimum": 50.0,
+     "remakes": true,
+     "unit": "tokens",
+     "value": 500
+    }
+   ],
+   "level": null,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "vision",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "max_edge": 1280,
+    "max_tokens": 500,
+    "model": "",
+    "prompt": "Describe this image in 2-3 sentences, being specific about the subject, setting, and mood. Then provide 5-10 descriptive tags. Respond only with valid JSON in this exact format:\n{\"description\": \"...\", \"tags\": [\"tag1\", \"tag2\", ...]}",
+    "temperature": 0.2
+   },
+   "settings_hash": "2a615d001a163177",
+   "title": "Descriptions and tags",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+   "waits": [
+    {
+     "clips": 3,
+     "reason": "scheduler",
+     "why": "not_running"
+    },
+    {
+     "clips": 3,
+     "job": "vision",
+     "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+     "reason": "ai_machines",
+     "why": "off"
+    },
+    {
+     "artifact": "proxy",
+     "clips": 3,
+     "paused": false,
+     "reason": "needs"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "ocr",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "",
+     "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": ""
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE.",
+     "fixed": null,
+     "key": "prompt",
+     "kind": "text",
+     "label": "Prompt",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE."
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 1280,
+     "fixed": null,
+     "key": "max_edge",
+     "kind": "int",
+     "label": "Image size sent",
+     "maximum": 1280.0,
+     "minimum": 256.0,
+     "remakes": true,
+     "unit": "px",
+     "value": 1280
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 0.2,
+     "fixed": null,
+     "key": "temperature",
+     "kind": "float",
+     "label": "Temperature",
+     "maximum": 2.0,
+     "minimum": 0.0,
+     "remakes": true,
+     "unit": "",
+     "value": 0.2
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 500,
+     "fixed": null,
+     "key": "max_tokens",
+     "kind": "int",
+     "label": "Longest answer",
+     "maximum": 4000.0,
+     "minimum": 50.0,
+     "remakes": true,
+     "unit": "tokens",
+     "value": 500
+    }
+   ],
+   "level": null,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "ocr",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "max_edge": 1280,
+    "max_tokens": 500,
+    "model": "",
+    "prompt": "What text is visible in this image? Include text from signs, labels, products, screens, documents, or watermarks. If none, say NONE.",
+    "temperature": 0.2
+   },
+   "settings_hash": "3fee99a9a8ee14b7",
+   "title": "Text in images (OCR)",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": "Descriptions & text are off: no model is chosen in Settings → AI.",
+   "waits": [
+    {
+     "clips": 3,
+     "reason": "scheduler",
+     "why": "not_running"
+    },
+    {
+     "clips": 3,
+     "job": "vision",
+     "message": "Descriptions & text are off: no model is chosen in Settings → AI.",
+     "reason": "ai_machines",
+     "why": "off"
+    },
+    {
+     "artifact": "proxy",
+     "clips": 3,
+     "paused": false,
+     "reason": "needs"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "clip",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "ViT-B-32",
+     "fixed": "Another model makes every photo's vectors again; not offered yet.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "ViT-B-32"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "openai",
+     "fixed": "Another model makes every photo's vectors again; not offered yet.",
+     "key": "pretrained",
+     "kind": "text",
+     "label": "Weights",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "openai"
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 1280,
+     "fixed": "Not read by this producer yet: changing it would change nothing it makes.",
+     "key": "input_edge",
+     "kind": "int",
+     "label": "Image size",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "px",
+     "value": 1280
+    }
+   ],
+   "level": null,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "clip",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "input_edge": 1280,
+    "model": "ViT-B-32",
+    "pretrained": "openai"
+   },
+   "settings_hash": "c34fd145303f354e",
+   "title": "Visual search (CLIP)",
+   "uniform": true,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [
+    {
+     "clips": 3,
+     "reason": "scheduler",
+     "why": "not_running"
+    },
+    {
+     "artifact": "proxy",
+     "clips": 3,
+     "paused": false,
+     "reason": "needs"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "faces",
+   "counts": {
+    "applicable": 3,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 3,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "buffalo_l",
+     "fixed": "buffalo_l is the one face model installed.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "buffalo_l"
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 640,
+     "fixed": "The detector's input, 640 × 640, as buffalo_l was trained.",
+     "key": "det_size",
+     "kind": "int",
+     "label": "Detection size",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "px",
+     "value": 640
+    },
+    {
+     "advanced": false,
+     "choices": [
+      "off",
+      "low",
+      "normal",
+      "high"
+     ],
+     "default": "normal",
+     "fixed": null,
+     "key": "detail",
+     "kind": "level",
+     "label": "Photos",
+     "maximum": null,
+     "minimum": null,
+     "remakes": false,
+     "unit": "",
+     "value": "normal"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": true,
+     "fixed": null,
+     "key": "merge_close_clusters",
+     "kind": "bool",
+     "label": "Merge close groups",
+     "maximum": null,
+     "minimum": null,
+     "remakes": false,
+     "unit": "",
+     "value": true
+    },
+    {
+     "advanced": true,
+     "choices": [],
+     "default": 0.4,
+     "fixed": null,
+     "key": "merge_distance",
+     "kind": "float",
+     "label": "Merge distance (cosine)",
+     "maximum": 0.6,
+     "minimum": 0.05,
+     "remakes": false,
+     "unit": "",
+     "value": 0.4
+    }
+   ],
+   "level": 2,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "insightface",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "det_size": 640,
+    "model": "buffalo_l"
+   },
+   "settings_hash": "4324e081b9ed3c27",
+   "title": "Faces",
+   "uniform": true,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [
+    {
+     "clips": 3,
+     "reason": "scheduler",
+     "why": "not_running"
+    },
+    {
+     "artifact": "proxy",
+     "clips": 3,
+     "paused": false,
+     "reason": "needs"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "video_faces",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "buffalo_l",
+     "fixed": "buffalo_l is the one face model installed.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "buffalo_l"
+    },
+    {
+     "advanced": false,
+     "choices": [
+      "off",
+      "low",
+      "normal",
+      "high"
+     ],
+     "default": "low",
+     "fixed": null,
+     "key": "detail",
+     "kind": "level",
+     "label": "Videos",
+     "maximum": null,
+     "minimum": null,
+     "remakes": false,
+     "unit": "",
+     "value": "low"
+    }
+   ],
+   "level": 1,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy",
+    "scenes"
+   ],
+   "new_version": false,
+   "part_of": "faces",
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "insightface-video",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "model": "buffalo_l"
+   },
+   "settings_hash": "d76cf8414b216951",
+   "title": "Faces in videos",
+   "uniform": false,
+   "unit": "second",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "transcript",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "small",
+     "fixed": "Chosen in Settings → AI, for every producer its machines run.",
+     "key": "model",
+     "kind": "text",
+     "label": "Model",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "small"
+    },
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 500,
+     "fixed": null,
+     "key": "vad_min_silence_ms",
+     "kind": "int",
+     "label": "Shortest silence skipped",
+     "maximum": 2000.0,
+     "minimum": 100.0,
+     "remakes": true,
+     "unit": "ms",
+     "value": 500
+    }
+   ],
+   "level": null,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "whisper",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "model": "small",
+    "vad_min_silence_ms": 500
+   },
+   "settings_hash": "82c28198e6c0a481",
+   "title": "Transcripts",
+   "uniform": false,
+   "unit": "second",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  },
+  {
+   "artifact": "location",
+   "counts": {
+    "applicable": 0,
+    "below": 0,
+    "current": 0,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": 360,
+     "fixed": null,
+     "key": "inference_minutes",
+     "kind": "int",
+     "label": "Inference window",
+     "maximum": 1440.0,
+     "minimum": 5.0,
+     "remakes": false,
+     "unit": "min",
+     "value": 360
+    }
+   ],
+   "level": null,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [
+    "capture"
+   ],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": null,
+   "producer": "location",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {},
+   "settings_hash": "44136fa355b3678a",
+   "title": "Location guesses",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [
+    {
+     "artifact": "capture",
+     "clips": 3,
+     "paused": false,
+     "reason": "needs"
+    }
+   ],
+   "why_not": null
+  },
+  {
+   "artifact": "plugin_facts",
+   "counts": {
+    "applicable": 2,
+    "below": 0,
+    "current": 2,
+    "failing": 0,
+    "given_up": 0,
+    "missing": 0,
+    "rechecking": 0,
+    "stale": 0
+   },
+   "fields": [
+    {
+     "advanced": false,
+     "choices": [],
+     "default": "Seen",
+     "fixed": "Set in Settings › Plug-ins",
+     "key": "word",
+     "kind": "text",
+     "label": "Word",
+     "maximum": null,
+     "minimum": null,
+     "remakes": true,
+     "unit": "",
+     "value": "Seen"
+    }
+   ],
+   "level": null,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [],
+   "new_version": false,
+   "part_of": null,
+   "paused": false,
+   "paused_at": null,
+   "paused_by": null,
+   "plugin": {
+    "on": true,
+    "plugin_id": "facts",
+    "title": "Facts"
+   },
+   "producer": "plugin_facts",
+   "redo_stopped": false,
+   "redo_stopped_at": null,
+   "redo_stopped_by": null,
+   "redoable": true,
+   "scheduled": true,
+   "settings": {
+    "word": "Seen"
+   },
+   "settings_hash": "86f268a0ee3733c5",
+   "title": "Facts",
+   "uniform": false,
+   "unit": "clip",
+   "version": "1",
+   "waiting": null,
+   "waits": [],
+   "why_not": null
+  }
+ ]
+}

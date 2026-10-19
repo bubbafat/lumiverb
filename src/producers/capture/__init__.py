@@ -9,13 +9,21 @@ scanned before ADR-017 phase 1, and clips a scanner sent without saying
 camera's wall clock (src/processing/workers/exif_extract.py parse_taken_at).
 Nothing about location is worked out here."""
 
-from src.producers.contract import ALL, PREPARE, Pool, ProducerSpec
+from src.producers import names
+from src.producers.contract import ALL, PREPARE, Data, Field, Pool, ProducerSpec
 
 # One exiftool at a time, a job's files read in one go; apart from the probes
 # so a backfill of the whole library doesn't hold up new videos' probes.
 EXIF = Pool("exif")
 
+MAKES = Data(
+    names.CAPTURE_TIME, "When it was taken, in UTC, and its time zone's offset when known, as the file says.",
+    (Field("utc", "time"), Field("offset_min", "number")),
+    stored=("assets.taken_at", "assets.taken_at_offset_min"),
+)
+
 PRODUCER = ProducerSpec(
+    makes=MAKES, reads=(names.ORIGINAL,),
     artifact="capture", producer="exiftool", version="1", media=ALL, title="Capture time and GPS accuracy", order=15,
     applies="true",
     # Made once its lineage says so: the facts themselves can be empty (a PNG says nothing).

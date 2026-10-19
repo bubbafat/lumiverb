@@ -5,7 +5,8 @@ run by work.py), merged where they look alike once the whole video is found
 setting, Detail (src/producers/scenes/detail.py). Found again, a clip's old
 scenes go with their descriptions (POST /v1/video/{id}/chunks with redo)."""
 
-from src.producers.contract import VIDEO, ProducerSpec, Setting
+from src.producers import names
+from src.producers.contract import VIDEO, Data, Field, ProducerSpec, Setting
 from src.producers.pools import SCENES
 from src.producers.scenes.detail import DEFAULT, DETAILS
 
@@ -16,7 +17,14 @@ from src.producers.scenes.detail import DEFAULT, DETAILS
 # Detail (windows scaled to the video's length, cuts within them, alike
 # neighbours merged). 2: scenes at the video's own time. 1 timed each 30 s
 # chunk from where it was scanned, and scanned every chunk to the clip's end.
+MAKES = Data(
+    names.SCENES, "Where its scenes start and end, each with its picture.",
+    (Field("start_ms", "number"), Field("end_ms", "number"), Field("picture", "image")),
+    stored=("video_scenes", "assets.video_indexed"), many=True,
+)
+
 PRODUCER = ProducerSpec(
+    makes=MAKES, reads=(names.ANALYSIS_PROXY, names.METADATA),
     artifact="scenes", producer="scene-detect", version="4", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
@@ -26,7 +34,6 @@ PRODUCER = ProducerSpec(
         # "below" (counted, made again when asked); at it or above, current.
         Setting("detail", DEFAULT, "Detail", kind="level", choices=DETAILS, remakes=False),
     ),
-    needs=("analysis_proxy",),
     # Found again, a clip's scenes are new ones: their descriptions go with the old.
     redo_also=("scene_vision",),
     redo_on_source_change=False,

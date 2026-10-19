@@ -51,6 +51,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src.producers.names import ANALYSIS_PROXY, ORIGINAL, PREVIEW
 from src.shared.waits import HELD, Waiting, reasons_of
 
 if TYPE_CHECKING:
@@ -229,17 +230,31 @@ def _opened(files: Any, opened: contextlib.ExitStack) -> Any:
     return [(name, one(value)) for name, value in files]
 
 
+# What each of the inputs hands, by name (ADR-024): a producer's work is handed only what its reads name.
+_INPUT_NAMES = {"stored_preview": PREVIEW, "preview_bytes": PREVIEW, "analysis_proxy": ANALYSIS_PROXY}
+
+
 class _ProducerInputs:
     """The account's inputs (src/server/scheduler/inputs.py) as one producer's
-    work has them: a clip's original only when it reads the storage
-    (storage=True), the only producers whose jobs go just where it's reachable."""
+    work has them: only what its reads name (a preview, an analysis proxy),
+    and a clip's original only when it reads the storage (storage=True), the
+    only producers whose jobs go just where it's reachable."""
 
     def __init__(self, inputs: Any, artifact: str) -> None:
         self.__inputs = inputs
         self.__artifact = artifact
 
     def __getattr__(self, name: str) -> Any:
+        if name in _INPUT_NAMES:
+            self._reads(_INPUT_NAMES[name])
         return getattr(self.__inputs, name)
+
+    def _reads(self, name: str) -> None:
+        from src.shared.producers import PRODUCERS
+
+        spec = PRODUCERS.get(self.__artifact)
+        if spec is not None and name not in spec.reads:
+            raise RuntimeError(f"{self.__artifact} doesn't read {name} (its reads)")
 
     def _reads_storage(self) -> None:
         from src.shared.producers import PRODUCERS
@@ -247,6 +262,7 @@ class _ProducerInputs:
         spec = PRODUCERS.get(self.__artifact)
         if spec is None or not spec.storage:
             raise RuntimeError(f"{self.__artifact or 'this work'} doesn't read the originals (storage=True)")
+        self._reads(ORIGINAL)
 
     def original(self, clip: dict) -> Any:
         self._reads_storage()

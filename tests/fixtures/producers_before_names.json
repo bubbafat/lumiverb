@@ -1,0 +1,594 @@
+{
+ "ai_job_kinds": {
+  "clip": [
+   "clip",
+   "redo_clip"
+  ],
+  "faces": [
+   "faces",
+   "video_faces",
+   "redo_faces",
+   "redo_video_faces"
+  ],
+  "transcripts": [
+   "transcript",
+   "redo_transcript"
+  ],
+  "vision": [
+   "scene_vision",
+   "vision",
+   "ocr",
+   "redo_scene_vision",
+   "redo_vision",
+   "redo_ocr"
+  ]
+ },
+ "applies": {
+  "analysis_proxy": "a.media_type = 'video'",
+  "capture": "true",
+  "clip": "a.media_type = 'image'",
+  "faces": "a.media_type = 'image' AND COALESCE((SELECT CAST(sm.value AS jsonb) ->> 'detail' FROM system_metadata sm WHERE sm.key = 'producer.faces'), 'normal') <> 'off'",
+  "location": "EXISTS (SELECT 1 FROM libraries il WHERE il.library_id = a.library_id AND il.infer_location) AND a.taken_at IS NOT NULL AND (a.gps_lat IS NULL OR a.gps_lon IS NULL) AND NOT EXISTS (SELECT 1 FROM asset_location pl WHERE pl.asset_id = a.asset_id AND pl.source = 'person')",
+  "ocr": "a.media_type = 'image'",
+  "probe": "a.media_type = 'video'",
+  "proxy": "true",
+  "scene_vision": "a.media_type = 'video' AND a.video_indexed AND EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id AND s.staged IS DISTINCT FROM 'finding')",
+  "scenes": "a.media_type = 'video' AND a.duration_sec IS NOT NULL",
+  "transcript": "a.media_type = 'video' AND a.duration_sec IS NOT NULL",
+  "video_faces": "a.media_type = 'video' AND a.video_indexed AND COALESCE((SELECT CAST(sm.value AS jsonb) ->> 'detail' FROM system_metadata sm WHERE sm.key = 'producer.video_faces'), 'low') <> 'off'",
+  "video_preview": "a.media_type = 'video'",
+  "vision": "a.media_type = 'image'"
+ },
+ "kinds": {
+  "capture": {
+   "batch": 50,
+   "by_seconds": false,
+   "flag": "missing_capture",
+   "pool": "exif",
+   "redo": false,
+   "same_as": "",
+   "storage": true,
+   "tier": 2
+  },
+  "clip": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_embeddings",
+   "pool": "clip",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "faces": {
+   "batch": 25,
+   "by_seconds": false,
+   "flag": "missing_faces",
+   "pool": "faces",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "location": {
+   "batch": 200,
+   "by_seconds": false,
+   "flag": "missing_location",
+   "pool": "cpu",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "ocr": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_ocr",
+   "pool": "vision",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "probe": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_probe",
+   "pool": "probe",
+   "redo": false,
+   "same_as": "",
+   "storage": true,
+   "tier": 1
+  },
+  "redo_capture": {
+   "batch": 50,
+   "by_seconds": false,
+   "flag": "missing_capture",
+   "pool": "exif",
+   "redo": true,
+   "same_as": "capture",
+   "storage": true,
+   "tier": 4
+  },
+  "redo_clip": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_embeddings",
+   "pool": "clip",
+   "redo": true,
+   "same_as": "clip",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_faces": {
+   "batch": 25,
+   "by_seconds": false,
+   "flag": "missing_faces",
+   "pool": "faces",
+   "redo": true,
+   "same_as": "faces",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_location": {
+   "batch": 200,
+   "by_seconds": false,
+   "flag": "missing_location",
+   "pool": "cpu",
+   "redo": true,
+   "same_as": "location",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_ocr": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_ocr",
+   "pool": "vision",
+   "redo": true,
+   "same_as": "ocr",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_probe": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_probe",
+   "pool": "probe",
+   "redo": true,
+   "same_as": "probe",
+   "storage": true,
+   "tier": 4
+  },
+  "redo_render": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_analysis_proxy",
+   "pool": "render",
+   "redo": true,
+   "same_as": "render",
+   "storage": true,
+   "tier": 4
+  },
+  "redo_scene_vision": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_scene_vision",
+   "pool": "vision",
+   "redo": true,
+   "same_as": "scene_vision",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_scenes": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_video_scenes",
+   "pool": "scenes",
+   "redo": true,
+   "same_as": "scenes",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_transcript": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_transcription",
+   "pool": "transcripts",
+   "redo": true,
+   "same_as": "transcript",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_video_faces": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_video_faces",
+   "pool": "faces",
+   "redo": true,
+   "same_as": "video_faces",
+   "storage": false,
+   "tier": 4
+  },
+  "redo_vision": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_vision",
+   "pool": "vision",
+   "redo": true,
+   "same_as": "vision",
+   "storage": false,
+   "tier": 4
+  },
+  "render": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_analysis_proxy",
+   "pool": "render",
+   "redo": false,
+   "same_as": "",
+   "storage": true,
+   "tier": 2
+  },
+  "scan": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "",
+   "pool": "scan",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 1
+  },
+  "scene_vision": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_scene_vision",
+   "pool": "vision",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "scenes": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_video_scenes",
+   "pool": "scenes",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "transcript": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_transcription",
+   "pool": "transcripts",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "video_faces": {
+   "batch": 1,
+   "by_seconds": true,
+   "flag": "missing_video_faces",
+   "pool": "faces",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  },
+  "vision": {
+   "batch": 1,
+   "by_seconds": false,
+   "flag": "missing_vision",
+   "pool": "vision",
+   "redo": false,
+   "same_as": "",
+   "storage": false,
+   "tier": 3
+  }
+ },
+ "made": {
+  "analysis_proxy": "a.analysis_proxy_key IS NOT NULL",
+  "capture": "EXISTS (SELECT 1 FROM artifact_lineage cl WHERE cl.asset_id = a.asset_id AND cl.artifact = 'capture' AND cl.producer <> '')",
+  "clip": "EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id AND ae.model_id = 'clip')",
+  "faces": "a.face_count IS NOT NULL",
+  "location": "EXISTS (SELECT 1 FROM artifact_lineage ll WHERE ll.asset_id = a.asset_id AND ll.artifact = 'location' AND ll.producer = 'location')",
+  "ocr": "EXISTS (SELECT 1 FROM asset_ocr o WHERE o.asset_id = a.asset_id)",
+  "probe": "EXISTS (SELECT 1 FROM video_facets vf WHERE vf.asset_id = a.asset_id)",
+  "proxy": "a.proxy_key IS NOT NULL",
+  "scene_vision": "NOT EXISTS (SELECT 1 FROM video_scenes s WHERE s.asset_id = a.asset_id AND s.description IS NULL AND s.staged IS DISTINCT FROM 'finding')",
+  "scenes": "a.video_indexed",
+  "transcript": "a.has_transcript IS NOT NULL",
+  "video_faces": "a.face_count IS NOT NULL",
+  "video_preview": "a.video_preview_key IS NOT NULL",
+  "vision": "EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)"
+ },
+ "missing_flags": {
+  "missing_analysis_proxy": "analysis_proxy",
+  "missing_capture": "capture",
+  "missing_embeddings": "clip",
+  "missing_faces": "faces",
+  "missing_location": "location",
+  "missing_ocr": "ocr",
+  "missing_probe": "probe",
+  "missing_scene_vision": "scene_vision",
+  "missing_transcription": "transcript",
+  "missing_video_faces": "video_faces",
+  "missing_video_scenes": "scenes",
+  "missing_vision": "vision"
+ },
+ "pause_targets": [
+  "upkeep",
+  "probe",
+  "capture",
+  "analysis_proxy",
+  "scenes",
+  "scene_vision",
+  "vision",
+  "ocr",
+  "clip",
+  "faces",
+  "video_faces",
+  "transcript",
+  "location"
+ ],
+ "producers": {
+  "analysis_proxy": {
+   "flag": "missing_analysis_proxy",
+   "kind": "render",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "part_of": "",
+   "pool": "render",
+   "producer": "analysis-proxy",
+   "redo_also": [],
+   "storage": true,
+   "tier": 2
+  },
+  "capture": {
+   "flag": "missing_capture",
+   "kind": "capture",
+   "made_at_scan": false,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [],
+   "part_of": "",
+   "pool": "exif",
+   "producer": "exiftool",
+   "redo_also": [
+    "location"
+   ],
+   "storage": true,
+   "tier": 2
+  },
+  "clip": {
+   "flag": "missing_embeddings",
+   "kind": "clip",
+   "made_at_scan": false,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "part_of": "",
+   "pool": "clip",
+   "producer": "clip",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "faces": {
+   "flag": "missing_faces",
+   "kind": "faces",
+   "made_at_scan": false,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "part_of": "",
+   "pool": "faces",
+   "producer": "insightface",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "location": {
+   "flag": "missing_location",
+   "kind": "location",
+   "made_at_scan": false,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [
+    "capture"
+   ],
+   "part_of": "",
+   "pool": "cpu",
+   "producer": "location",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "ocr": {
+   "flag": "missing_ocr",
+   "kind": "ocr",
+   "made_at_scan": false,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "part_of": "",
+   "pool": "vision",
+   "producer": "ocr",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "probe": {
+   "flag": "missing_probe",
+   "kind": "probe",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "part_of": "",
+   "pool": "probe",
+   "producer": "ffprobe",
+   "redo_also": [],
+   "storage": true,
+   "tier": 1
+  },
+  "proxy": {
+   "flag": "",
+   "kind": "",
+   "made_at_scan": true,
+   "media": [
+    "image",
+    "video"
+   ],
+   "needs": [],
+   "part_of": "",
+   "pool": null,
+   "producer": "proxy",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "scene_vision": {
+   "flag": "missing_scene_vision",
+   "kind": "scene_vision",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy",
+    "scenes"
+   ],
+   "part_of": "",
+   "pool": "vision",
+   "producer": "scene-vision",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "scenes": {
+   "flag": "missing_video_scenes",
+   "kind": "scenes",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy"
+   ],
+   "part_of": "scene_vision",
+   "pool": "scenes",
+   "producer": "scene-detect",
+   "redo_also": [
+    "scene_vision"
+   ],
+   "storage": false,
+   "tier": 3
+  },
+  "transcript": {
+   "flag": "missing_transcription",
+   "kind": "transcript",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy"
+   ],
+   "part_of": "",
+   "pool": "transcripts",
+   "producer": "whisper",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "video_faces": {
+   "flag": "missing_video_faces",
+   "kind": "video_faces",
+   "made_at_scan": false,
+   "media": [
+    "video"
+   ],
+   "needs": [
+    "analysis_proxy",
+    "scenes"
+   ],
+   "part_of": "faces",
+   "pool": "faces",
+   "producer": "insightface-video",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "video_preview": {
+   "flag": "",
+   "kind": "",
+   "made_at_scan": true,
+   "media": [
+    "video"
+   ],
+   "needs": [],
+   "part_of": "",
+   "pool": null,
+   "producer": "preview",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  },
+  "vision": {
+   "flag": "missing_vision",
+   "kind": "vision",
+   "made_at_scan": false,
+   "media": [
+    "image"
+   ],
+   "needs": [
+    "proxy"
+   ],
+   "part_of": "",
+   "pool": "vision",
+   "producer": "vision",
+   "redo_also": [],
+   "storage": false,
+   "tier": 3
+  }
+ },
+ "recheck": {
+  "analysis_proxy": "false",
+  "capture": "false",
+  "clip": "false",
+  "faces": "false",
+  "location": "EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id AND rl.recheck IS NOT NULL)",
+  "ocr": "false",
+  "probe": "false",
+  "proxy": "false",
+  "scene_vision": "false",
+  "scenes": "false",
+  "transcript": "false",
+  "video_faces": "false",
+  "video_preview": "false",
+  "vision": "false"
+ }
+}

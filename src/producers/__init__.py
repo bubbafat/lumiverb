@@ -23,8 +23,10 @@ import importlib
 import pkgutil
 import threading
 from collections.abc import Iterable
+from dataclasses import replace
 
 from src.producers.contract import AiJob, Pool, ProducerSpec
+from src.producers.names import FILES, LUMIVERB, NAME, ORIGINAL, needs_of, sql_spelling
 from src.producers.pools import SCANS
 
 # An added producer's artifact starts with this; none of Lumiverb's own does.
@@ -50,9 +52,15 @@ def _own() -> dict[str, ProducerSpec]:
                     # Half-loaded (it imported what imports the registry) or not a producer:
                     # left out quietly, it would never run and nothing would say why.
                     raise ValueError(f"src/producers/{module.name} declares no PRODUCER (a ProducerSpec)")
+                if spec.needs:
+                    raise ValueError(f"{spec.artifact}: what a producer is made from is its reads (names), never"
+                                     " its needs, which are worked out from them")
                 found.append(spec)
         found.sort(key=lambda p: (p.order, p.artifact))
+        made_by = {p.makes.name: p.artifact for p in found if p.makes is not None}
+        found = [replace(p, needs=needs_of(p.reads, made_by)) for p in found]
         _check(found)
+        _check_names(found)
         _registry = {p.artifact: p for p in found}
     return _registry
 
@@ -80,17 +88,24 @@ def use_added(specs: Iterable[ProducerSpec], by: str = INSTALLED) -> bool:
     added (ValueError, and the list stays as it was). Whether it changed."""
     global _added, _added_by
     with _adding:
-        mine = {p.artifact: p for p in specs}
+        own = _own()
+        made_by = {p.makes.name: p.artifact for p in own.values() if p.makes is not None}
+        specs = list(specs)
+        if any(p.needs for p in specs):
+            raise ValueError("An added producer's needs are worked out from its reads, never declared")
+        # A plug-in is handed its other inputs as the clip has them now (its inputs' hash): it waits only for
+        # the files it's handed (a photo's preview), as before names.
+        mine = {p.artifact: replace(p, needs=needs_of([n for n in p.reads if n in FILES], made_by)) for p in specs}
         if mine == _added_by.get(by, {}):
             return False
         everyone = {**_added_by, by: mine}
         new = {a: p for who in everyone.values() for a, p in who.items()}
         if len(new) != sum(len(who) for who in everyone.values()):
             raise ValueError(f"Two producers added share an artifact: {sorted(mine)}")
-        own = _own()
         for p in mine.values():
             _check_added(p, own)
         _check([*own.values(), *new.values()], added=frozenset(new))
+        _check_names([*own.values(), *new.values()], added=frozenset(new))
         _added_by = {who: added for who, added in everyone.items() if added}
         _added = new
         return True
@@ -170,6 +185,52 @@ def _check(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> No
                 raise ValueError(f"{p.artifact}: the AI job {job.name!r} has one pool (its machines)")
             if p.setting("model") is None:
                 raise ValueError(f"{p.artifact}: a producer an AI job makes takes its model (a setting \"model\")")
+
+
+def _check_names(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> None:
+    """ADR-024's rules for names: each of Lumiverb's own producers makes one, `lumiverb.` then words, under its
+    media (`lumiverb.image.*`, `lumiverb.video.*`, or neither for both); no name made twice; every name read
+    is made (by a producer, or by Lumiverb itself: names.LUMIVERB); no circle; one that reads the originals
+    says so; and no two names spelt alike for SQL (names.sql_spelling). added: those added while running (a
+    plug-in's work), which name nothing they make in phase 1, only what they read."""
+    made: dict[str, str] = {d.name: "Lumiverb" for d in LUMIVERB}
+    reads: dict[str, tuple[str, ...]] = {d.name: d.reads for d in LUMIVERB}
+    for p in found:
+        if p.artifact in added:
+            continue
+        if p.makes is None:
+            raise ValueError(f"{p.artifact}: one of Lumiverb's own producers names what it makes (makes)")
+        name = p.makes.name
+        if not NAME.match(name):
+            raise ValueError(f"{p.artifact}: {name!r} isn't a name: lumiverb, then words, dots between")
+        level = name.split(".")[1]
+        want = {("image",): "image", ("video",): "video"}.get(tuple(p.media), "")
+        if (level in ("image", "video") or want) and level != want:
+            raise ValueError(f"{p.artifact}: {name} is under its media's level only when one kind of clip has it"
+                             f" ({'lumiverb.' + want + '.*' if want else 'no media level'})")
+        if name in made:
+            raise ValueError(f"{p.artifact}: {name} is made by {made[name]} already")
+        if p.storage and ORIGINAL not in p.reads:
+            raise ValueError(f"{p.artifact}: it reads the originals (storage=True): its reads say {ORIGINAL}")
+        made[name] = p.artifact
+        reads[name] = p.reads
+    for p in found:
+        missing = [n for n in (*p.reads, *p.reads_others) if n not in made]
+        if missing:
+            raise ValueError(f"{p.artifact} reads what nothing makes: {missing}")
+    spelt: dict[str, str] = {}
+    for name in made:
+        if spelt.setdefault(sql_spelling(name), name) != name:
+            raise ValueError(f"{name} and {spelt[sql_spelling(name)]} are spelt alike in SQL")
+
+    def visit(name: str, path: tuple[str, ...]) -> None:
+        if name in path:
+            raise ValueError(f"A circle: {' → '.join((*path[path.index(name):], name))}")
+        for n in reads.get(name, ()):
+            visit(n, (*path, name))
+
+    for name in made:
+        visit(name, ())
 
 
 def pools() -> dict[str, Pool]:

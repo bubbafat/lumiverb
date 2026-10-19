@@ -2,7 +2,9 @@
 steps, as a function a Mac's service runs before it starts. On real Postgres:
 from nothing to head, again with nothing to do, and an account whose
 database fails is named while the others are still migrated. A failure is
-named by its exception line, not by whatever alembic printed after it."""
+named by its exception line, not by whatever alembic printed after it.
+`migrate --to`, the rollback (ADR-024 phase 1): every account down and up
+again, what's in each kept, and refused while Lumiverb is connected."""
 
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ from src.server.lifecycle.migrate import (
     MigrationError,
     create_database_if_missing,
     migrate,
+    migrate_to,
 )
 from tests.conftest import PG_IMAGE, _ensure_psycopg2
 
@@ -28,6 +31,14 @@ def _head(ini: str) -> str:
     config = Config(str(APP_DIR / ini))
     config.set_main_option("script_location", str(APP_DIR / config.get_main_option("script_location")))
     return ScriptDirectory.from_config(config).get_current_head()
+
+
+def _before(ini: str) -> str:
+    """The revision before head: where a rollback goes."""
+    config = Config(str(APP_DIR / ini))
+    config.set_main_option("script_location", str(APP_DIR / config.get_main_option("script_location")))
+    script = ScriptDirectory.from_config(config)
+    return script.get_revision(script.get_current_head()).down_revision
 
 
 def _version(url: str) -> str | None:
@@ -149,3 +160,118 @@ def test_a_missing_control_database_is_made_once(databases):
 def test_a_server_it_cant_reach_is_a_migration_error():
     with pytest.raises(MigrationError, match=r"^Can't create the database nothing: "):
         create_database_if_missing("postgresql+psycopg2://nobody:x@127.0.0.1:1/nothing")
+
+
+def _note(url: str, value: str | None = None) -> str | None:
+    """A row of the account's own, there through a rollback: written when value is given, else read."""
+    engine = create_engine(url)
+    try:
+        with engine.begin() as conn:
+            if value is not None:
+                conn.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('note', :v, now())"),
+                             {"v": value})
+            return conn.execute(text("SELECT value FROM system_metadata WHERE key = 'note'")).scalar()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.slow
+def test_migrate_to_takes_every_account_down_and_up_again(databases):
+    control_url, one_url, two_url = databases
+    migrate(control_url, say=lambda _: None)
+    _add_tenant(control_url, "ten_one", one_url)
+    _add_tenant(control_url, "ten_two", two_url)
+    migrate(control_url, say=lambda _: None)
+    _note(one_url, "one's")
+    _note(two_url, "two's")
+    tenant_head, back = _head("alembic-tenant.ini"), _before("alembic-tenant.ini")
+
+    said: list[str] = []
+    assert migrate_to(control_url, tenant=back, say=said.append) == 2
+    assert _version(one_url) == back and _version(two_url) == back
+    assert _version(control_url) == _head("alembic-control.ini"), "the control plane only when named"
+    assert "  [2/2] ten_two ✓ downgraded" in said
+    assert _note(one_url) == "one's" and _note(two_url) == "two's"
+
+    said.clear()
+    assert migrate_to(control_url, tenant=back, say=said.append) == 2  # again: there already
+    assert "  [1/2] ten_one ✓ there already" in said
+    assert migrate_to(control_url, tenant=tenant_head, say=said.append) == 2
+    assert _version(one_url) == tenant_head and _version(two_url) == tenant_head
+    assert "  [2/2] ten_two ✓ upgraded" in said
+    assert _note(one_url) == "one's"
+
+    control_head, control_back = _head("alembic-control.ini"), _before("alembic-control.ini")
+    assert migrate_to(control_url, tenant=None, control=control_back, say=lambda _: None) == 0
+    assert _version(control_url) == control_back and _version(one_url) == tenant_head
+    migrate_to(control_url, tenant=None, control=control_head, say=lambda _: None)
+    assert _version(control_url) == control_head
+
+
+@pytest.mark.slow
+def test_a_revision_these_migrations_dont_have_is_refused_and_moves_nothing(databases):
+    control_url, one_url, _ = databases
+    migrate(control_url, say=lambda _: None)
+    _add_tenant(control_url, "ten_one", one_url)
+    migrate(control_url, say=lambda _: None)
+    with pytest.raises(MigrationError, match=r"1 of 1 accounts didn't get to f00dfeed0000: ten_one: No revision"):
+        migrate_to(control_url, tenant="f00dfeed0000", say=lambda _: None)
+    with pytest.raises(MigrationError, match=r"No revision f00dfeed0000 in control's migrations"):
+        migrate_to(control_url, tenant=None, control="f00dfeed0000", say=lambda _: None)
+    assert _version(one_url) == _head("alembic-tenant.ini")
+
+
+@pytest.mark.slow
+def test_a_database_newer_than_this_code_is_said_so_and_moves_nothing(databases):
+    # A rollback run with the older release: only the release that made the revision knows the way down.
+    control_url, one_url, _ = databases
+    migrate(control_url, say=lambda _: None)
+    _add_tenant(control_url, "ten_one", one_url)
+    migrate(control_url, say=lambda _: None)
+    engine = create_engine(one_url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num = '0a1b2c3d4e5f'"))
+    engine.dispose()
+    with pytest.raises(MigrationError, match=r"ten_one: The database is at 0a1b2c3d4e5f, which tenant's migrations "
+                                             r"here don't have: it's newer than this release\. Run migrate --to with "
+                                             r"the release that made it"):
+        migrate_to(control_url, tenant=_before("alembic-tenant.ini"), say=lambda _: None)
+    assert _version(one_url) == "0a1b2c3d4e5f"
+    engine = create_engine(control_url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num = '0a1b2c3d4e5f'"))
+    engine.dispose()
+    with pytest.raises(MigrationError, match=r"The database is at 0a1b2c3d4e5f, which control's migrations"):
+        migrate_to(control_url, tenant=None, control=_before("alembic-control.ini"), say=lambda _: None)
+
+
+@pytest.mark.slow
+def test_the_command_is_refused_while_lumiverb_is_connected(databases, tmp_path, monkeypatch, capsys):
+    from src.server import backups
+
+    monkeypatch.setattr(backups, "CLOSING_GRACE_SEC", 0.5)
+    control_url, one_url, _ = databases
+    migrate(control_url, say=lambda _: None)
+    _add_tenant(control_url, "ten_one", one_url)
+    migrate(control_url, say=lambda _: None)
+    monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
+    env_file = tmp_path / "env"
+    env_file.write_text(f"CONTROL_PLANE_DATABASE_URL={control_url}\nDATA_DIR={tmp_path / 'data'}\n")
+    back = _before("alembic-tenant.ini")
+
+    engine = create_engine(one_url, connect_args={"application_name": "lumiverb-api"})
+    try:
+        with engine.connect():
+            assert cli.main(["--env", str(env_file), "migrate", "--to", back]) == 1
+    finally:
+        engine.dispose()
+    err = capsys.readouterr().err
+    assert "Lumiverb is still running (connected: " in err and "(lumiverb-api)" in err, err
+    assert "Stop it first" in err
+    assert _version(one_url) == _head("alembic-tenant.ini"), "checked before anything moved"
+
+    assert cli.main(["--env", str(env_file), "migrate", "--to", back]) == 0
+    assert "✓ 1 account(s) at " + back in capsys.readouterr().out
+    assert _version(one_url) == back
+    assert cli.main(["--env", str(env_file), "migrate"]) == 0  # and up again, as run does at its start
+    assert _version(one_url) == _head("alembic-tenant.ini")

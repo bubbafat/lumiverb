@@ -40,6 +40,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.producers import ADDED_PREFIX
+from src.producers.names import producer_in
 from src.producers.live import LiveMap, LiveSet, Made
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
@@ -659,7 +660,8 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
     handed out before the swap is still of this content.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}
-    producer = PERSON if person else str(lineage.get("producer") or UNKNOWN)
+    # Its producer by today's id or its name (ADR-024 phase 1): kept as today's until part 3.
+    producer = PERSON if person else producer_in(artifact, str(lineage.get("producer") or UNKNOWN))
     if not person and producer != PRODUCERS[artifact].producer:
         # Another kind's producer can't make this one, and a client can't
         # claim a person made it: whatever it is, it isn't current.

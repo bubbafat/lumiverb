@@ -185,6 +185,38 @@ class Pool:
         return self.job is not None
 
 
+# A field's type (ADR-024 decision 7's words, and files): what a reader of a name would be handed.
+TYPES = ("text", "number", "time", "yes or no", "vector", "image", "video", "file", "list", "record")
+
+
+@dataclass(frozen=True)
+class Field:
+    """One field of a name's data: its key, its type, and for a list or a record, the fields it has."""
+
+    key: str
+    type: str
+    items: tuple[Field, ...] = ()
+
+
+@dataclass(frozen=True)
+class Data:
+    """A name for data (ADR-024): what a producer makes, or what Lumiverb itself keeps (the scan, a person,
+    Lumiverb from other names: src/producers/names.py). Its name is `lumiverb.` then words, in plain words
+    (decision 12); docs/data-names.md is written from these."""
+
+    name: str
+    about: str  # what it is, for the page
+    fields: tuple[Field, ...]
+    # Where it's kept: tables, or a table's columns ("video_facets", "assets.taken_at"). What a producer's SQL
+    # reads is held to what it reads and makes (tests/test_data_names.py).
+    stored: tuple[str, ...] = ()
+    version: int = 1  # its shape's (decision 7): not the producer's version
+    many: bool = False  # a list, each item with these fields
+    person: tuple[str, ...] = ()  # the fields a person can write: what the clip shows is theirs then
+    made_by: str = ""  # for one no producer makes: "the scan", "a person", "Lumiverb"
+    reads: tuple[str, ...] = ()  # for one Lumiverb makes from others: what it's made from
+
+
 @dataclass(frozen=True)
 class ProducerSpec:
     artifact: str  # the one artifact kind it makes
@@ -198,8 +230,15 @@ class ProducerSpec:
     # what's missing, yet counted apart ("rechecking"), not as missing.
     recheck: str = ""
     settings: tuple[Setting, ...] = ()  # output-affecting
+    # What it makes, by name (ADR-024): every one of Lumiverb's own makes one.
+    makes: Data | None = None
+    # The names it's made from or chosen by, of its own clip: what its applies, made and recheck read, and
+    # what its work is handed (Work.inputs). And those it reads of other clips.
+    reads: tuple[str, ...] = ()
+    reads_others: tuple[str, ...] = ()
     # The artifacts it's made from: the queue waits until a clip has them,
-    # and Settings → Processing says how many clips wait for each.
+    # and Settings → Processing says how many clips wait for each. Worked out
+    # from reads (src/producers/__init__.py), never declared.
     needs: tuple[str, ...] = ()
     # Its output must come from one model across the library (an embedding
     # space): an upgrade can't be partial.

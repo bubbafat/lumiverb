@@ -20,10 +20,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from src.producers.names import artifact_in
 from src.server import preview_image
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
 from src.server.api.devices import may_call
+from src.server.api.errors import ApiError
 from src.server.api.library_access import names
 from src.server.repository.assets import (
     AssetEmbeddingRepository,
@@ -99,12 +101,20 @@ def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] 
 
 
 def _per_kind(raw: str | None) -> dict:
-    """The lineage form field: a JSON object by artifact kind, or {}."""
+    """The lineage form field: a JSON object by artifact kind (its id, or its name: ADR-024), or {}."""
     try:
         value = json.loads(raw) if raw else {}
     except ValueError:
         return {}
-    return value if isinstance(value, dict) else {}
+    return {artifact_in(k): v for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def preview_sent(proxy: UploadFile | None, named: UploadFile | None) -> UploadFile:
+    """The preview a client sent, as `proxy` or by its name (`lumiverb.preview`, ADR-024): 422 without one."""
+    sent = proxy or named
+    if sent is None:
+        raise ApiError(422, "preview_required", "Send the clip's preview: the file proxy (or lumiverb.preview).")
+    return sent
 
 
 def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data: list[dict] | None,
@@ -352,7 +362,8 @@ def _parse_video_facet(raw: str | None, media_type: str) -> dict | None:
 async def create_and_ingest(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    proxy: UploadFile = File(...),
+    proxy: UploadFile | None = File(default=None),
+    preview: UploadFile | None = File(default=None, alias="lumiverb.preview"),
     library_id: str = Form(...),
     rel_path: str = Form(...),
     file_size: int = Form(...),
@@ -394,6 +405,7 @@ async def create_and_ingest(
         raise HTTPException(status_code=400, detail="width out of range")
     if height is not None and (height < 1 or height > 100_000):
         raise HTTPException(status_code=400, detail="height out of range")
+    proxy = preview_sent(proxy, preview)
     if proxy.content_type and not proxy.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Proxy must be an image file")
 
@@ -597,7 +609,8 @@ async def ingest_asset(
     asset_id: str,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
-    proxy: UploadFile = File(...),
+    proxy: UploadFile | None = File(default=None),
+    preview: UploadFile | None = File(default=None, alias="lumiverb.preview"),
     width: int | None = Form(default=None),
     height: int | None = Form(default=None),
     exif: str | None = Form(default=None),
@@ -606,7 +619,7 @@ async def ingest_asset(
     lineage: str | None = Form(default=None),  # JSON by artifact kind, as for POST /v1/ingest
 ) -> IngestResponse:
     """Ingest proxy + metadata into an existing asset record."""
-    raw_proxy = await proxy.read()
+    raw_proxy = await preview_sent(proxy, preview).read()
     if len(raw_proxy) > MAX_PROXY_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Proxy upload too large (10 MB max)")
     if not raw_proxy:

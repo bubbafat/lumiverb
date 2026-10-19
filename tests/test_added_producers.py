@@ -103,7 +103,8 @@ def test_the_list_handed_out_never_changes_under_whoever_holds_it():
     ({"pool": Pool(NAME, sized_by="renders")}, "pool is its own"),
     ({"kind": "probe"}, "Two producers share a kind"),
     ({"flag": "missing_probe"}, "Two producers share a flag"),
-    ({"needs": ("teleport",)}, "names what no producer makes"),
+    ({"reads": ("lumiverb.teleport",)}, "reads what nothing makes"),
+    ({"needs": ("proxy",)}, "worked out from its reads, never declared"),
 ])
 def test_a_producer_added_is_a_plugins_work_and_nothing_else(changes, says):
     use_added([_spec("plugin_kept")])

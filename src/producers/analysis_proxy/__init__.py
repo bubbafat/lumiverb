@@ -1,12 +1,29 @@
 """Analysis copies: a small video and its audio that transcripts and scenes
 are made from (src/processing/video/analysis_proxy.py)."""
 
-from src.producers.contract import PREPARE, QUALITY, VIDEO, X264_CRF, ProducerSpec, Setting
+from src.producers import names
+from src.producers.contract import (
+             PREPARE,
+             QUALITY,
+             VIDEO,
+             X264_CRF,
+             Data,
+             Field,
+             ProducerSpec,
+             Setting,
+)
 from src.producers.pools import RENDERS
 
 # 2: a keyframe every 2 s of video and nowhere else (analysis_proxy.KEYFRAME_SEC).
 # 1 let the encoder add them at changes of picture, and spaced them by frames.
+MAKES = Data(
+    names.ANALYSIS_PROXY, "The copy of a video Lumiverb analyses: smaller, and the browser plays it.",
+    (Field("video", "video"),),
+    stored=("assets.analysis_proxy_key",),
+)
+
 PRODUCER = ProducerSpec(
+    makes=MAKES, reads=(names.ORIGINAL,),
     artifact="analysis_proxy", producer="analysis-proxy", version="2", media=VIDEO, unit="second", title="Analysis proxies",
     order=40,
     applies="a.media_type = 'video'",

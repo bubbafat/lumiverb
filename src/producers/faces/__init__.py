@@ -5,7 +5,8 @@ job, saved together (work.py). How many it finds
 is its level (levels.py: Off / Low / Normal / High), as videos' is
 (src/producers/video_faces)."""
 
-from src.producers.contract import IMAGE, ProducerSpec, Setting
+from src.producers import names
+from src.producers.contract import IMAGE, Data, Field, ProducerSpec, Setting
 from src.producers.faces.levels import DETAILS, on
 from src.producers.pools import FACES
 
@@ -20,7 +21,14 @@ MODELS = frozenset({"buffalo_l"})
 # Venus and Serena Williams become one group. 0.40 keeps that margin.
 MERGE_DISTANCE = 0.40
 
+MAKES = Data(
+    names.FACES, "The faces found in a photo: each one's box, vector and crop. Who each is: lumiverb.people.",
+    (names.BOX, Field("vector", "vector"), Field("crop", "image")),
+    stored=("faces", "assets.face_count"), many=True,
+)
+
 PRODUCER = ProducerSpec(
+    makes=MAKES, reads=(names.PREVIEW,),
     artifact="faces", producer="insightface", version="1", media=IMAGE, title="Faces", order=100,
     applies=f"a.media_type = 'image' AND {on('faces', DEFAULT)}",
     made="a.face_count IS NOT NULL",
@@ -40,7 +48,7 @@ PRODUCER = ProducerSpec(
         Setting("merge_distance", MERGE_DISTANCE, "Merge distance (cosine)", kind="float",
                 minimum=0.05, maximum=0.6, advanced=True, remakes=False),
     ),
-    uniform=True, needs=("proxy",),
+    uniform=True,
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
     regroup="src.server.repository.faces:regroup_faces",

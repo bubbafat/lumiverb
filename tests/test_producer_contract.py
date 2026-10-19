@@ -59,14 +59,15 @@ def test_the_scheduler_waits_for_what_a_producer_is_made_from():
 
 
 _EXAMPLE = """
-from src.producers.contract import IMAGE, WHILE_RUNNING, AiJob, Pool, ProducerSpec, Setting
+from src.producers.contract import IMAGE, WHILE_RUNNING, AiJob, Data, Field, Pool, ProducerSpec, Setting
 
 # A new AI job, with machines of its own, and a pool of the producer's own.
 GEO = AiJob("geo", "Places", guard="src.producers.example.work:GeoGuard", default_model="geo-1", per_request=3)
 
 PRODUCER = ProducerSpec(
     artifact="example", producer="example", version="1", media=IMAGE, title="An example", order=999,
-    applies="a.media_type = 'image'", made="false", needs=("proxy",), redo_also=("vision",),
+    makes=Data("lumiverb.image.example", "An example", (Field("place", "text"),)), reads=("lumiverb.preview",),
+    applies="a.media_type = 'image'", made="false", redo_also=("vision",),
     settings=(Setting("strength", 3, "Strength"), Setting("model", "", "Model", kind="text", fixed="Settings → AI")),
     kind="example", flag="missing_example", run="src.producers.example.work:Example",
     pool=Pool("example", job=GEO),
@@ -99,9 +100,10 @@ class Example(Work):
 
 # A producer with a shared GPU-holding pool, sized by a slot count, no AI job.
 _OTHER = """
-from src.producers.contract import VIDEO, WHILE_RUNNING, Pool, ProducerSpec
+from src.producers.contract import VIDEO, WHILE_RUNNING, Data, Field, Pool, ProducerSpec
 
 PRODUCER = ProducerSpec(
+    makes=Data("lumiverb.video.other", "Another", (Field("other", "text"),)),
     artifact="other", producer="other", version="1", media=VIDEO, title="Another", order=998,
     applies="a.media_type = 'video'", made="false",
     kind="other", flag="missing_other", run="src.producers.other.work:Other",
@@ -212,7 +214,19 @@ def test_a_producer_is_one_folder(tmp_path):
     (('artifact="example"', 'artifact="clip"'), "Two producers share a artifact"),
     (('kind="example"', 'kind="clip"'), "Two producers share a kind"),
     (('run="src.producers.example.work:Example",', ''), "needs a flag, a run and a pool"),
-    (('needs=("proxy",)', 'needs=("teleport",)'), "names what no producer makes"),
+    (('reads=("lumiverb.preview",)', 'reads=("lumiverb.teleport",)'), "reads what nothing makes"),
+    # ADR-024's rules for names (src/producers/__init__.py _check_names).
+    (('reads=("lumiverb.preview",)', 'reads=("lumiverb.preview",), needs=("proxy",)'), "never its needs"),
+    (('makes=Data("lumiverb.image.example", "An example", (Field("place", "text"),)), ', ''), "names what it makes"),
+    (('Data("lumiverb.image.example"', 'Data("example.place"'), "isn't a name"),
+    (('Data("lumiverb.image.example"', 'Data("lumiverb.video.example"'), "under its media's level"),
+    (('Data("lumiverb.image.example"', 'Data("lumiverb.example"'), "under its media's level"),
+    (('Data("lumiverb.image.example"', 'Data("lumiverb.image.description"'), "is made by vision already"),
+    (('media=IMAGE, title="An example", order=999,\n    makes=Data("lumiverb.image.example"',
+      'media=("image", "video"), title="An example", order=999,\n    makes=Data("lumiverb.metadata"'),
+     "is made by Lumiverb already"),
+    (('reads=("lumiverb.preview",)', 'reads=("lumiverb.image.example",)'), "A circle"),
+    (('pool=Pool("example", job=GEO),', 'pool=Pool("example", job=GEO), storage=True,'), "reads the originals"),
     (('pool=Pool("example", job=GEO),', 'pool=Pool("example", job=GEO), unit="minute",'), "unit is a second"),
     (('flag="missing_example"', 'flag="example_missing"'), "its flag is a missing_* filter"),
     # A pool or AI job shared by name is declared alike, or its slots would depend on who's read first.

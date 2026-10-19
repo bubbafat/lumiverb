@@ -421,6 +421,7 @@ function WaitLine({ wait, say }: { wait: ProducerWait; say: WaitContext }) {
   );
 }
 
+// Each of the scheduler's kinds (src/server/scheduler/kinds.py), held to them by tests/test_data_names.py.
 const KIND_LABELS: Record<string, [string, string]> = {
   scan: ["scan", "scans"],
   probe: ["video probe", "video probes"],
@@ -432,6 +433,9 @@ const KIND_LABELS: Record<string, [string, string]> = {
   faces: ["face batch", "face batches"],
   transcript: ["transcript", "transcripts"],
   scenes: ["scene detection", "scene detections"],
+  capture: ["capture time read", "capture times read"],
+  location: ["location guess", "location guesses"],
+  video_faces: ["video's faces", "videos' faces"],
 };
 
 /** "2 descriptions", "1 redo of transcripts". */

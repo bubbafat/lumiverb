@@ -17,7 +17,8 @@ Its spec, from the manifest:
   the remakes for an admin to start, as for any producer;
 - the settings in its lineage are its settings that remake (an account's,
   kept in plugin_settings): changing one asks what becomes of what was made;
-- a photo's preview, when it reads it, is made first (its needs);
+- what it reads is its inputs' names (manifest.INPUT_NAMES): a photo's preview, when it reads it, is
+  made first (its needs, worked out from them);
 - its work is src/producers/plugin_work.py's, a pool of its own, one job at
   a time (a plug-in is one process), its manifest's batch of clips a job.
 
@@ -33,6 +34,7 @@ import logging
 import threading
 import time
 
+from src.plugins.manifest import INPUT_NAMES
 from src.producers import ADDED_PREFIX, INSTALLED, use_added
 from src.producers.contract import FIND, Pool, ProducerSpec, Setting
 from src.server.plugin_catalog import Installed, installed
@@ -67,7 +69,7 @@ def spec_for(plugin: Installed) -> ProducerSpec:
         settings=tuple(Setting(s.key, s.default, s.label, kind=_KIND[s.type], minimum=s.minimum,
                                maximum=s.maximum, unit=s.unit, advanced=s.advanced)
                        for s in m.settings if s.remakes),
-        needs=("proxy",) if "preview" in work.inputs else (), plugin=m.plugin_id, order=900,
+        reads=tuple(INPUT_NAMES[i] for i in work.inputs), plugin=m.plugin_id, order=900,
         kind=artifact, flag=f"missing_{artifact}", run=WORK, tier=FIND, pool=Pool(artifact, slots=1),
         batch=work.batch,
     )

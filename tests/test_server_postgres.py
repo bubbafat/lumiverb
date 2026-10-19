@@ -36,6 +36,17 @@ def postgres_bin() -> Path | None:
 NO_POSTGRES = pytest.mark.skipif(postgres_bin() is None, reason="no PostgreSQL (initdb) on this machine")
 
 
+def _has_vector(pg_bin: Path | None) -> bool:
+    """Whether that PostgreSQL has pgvector, which an account's database needs."""
+    if pg_bin is None or not (pg_bin / "pg_config").exists():
+        return False
+    share = subprocess.run([str(pg_bin / "pg_config"), "--sharedir"], capture_output=True, text=True).stdout.strip()
+    return bool(share) and (Path(share) / "extension" / "vector.control").exists()
+
+
+NO_VECTOR = pytest.mark.skipif(not _has_vector(postgres_bin()), reason="no pgvector for this machine's PostgreSQL")
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -103,3 +114,43 @@ def test_initdb_failing_is_one_line(tmp_path):
     (tmp_path / "postgres" / "not-empty").write_text("someone's")  # initdb wants an empty folder
     with pytest.raises(PostgresError, match=r"^Couldn't make Lumiverb's database in "):
         make_cluster_if_missing(postgres_bin(), tmp_path, "postgresql+psycopg2://lumiverb:pw@127.0.0.1:1/x")
+
+
+@pytest.mark.slow
+@NO_POSTGRES
+@NO_VECTOR
+def test_migrate_to_starts_a_stopped_install_s_own_postgresql_for_the_while(tmp_path, monkeypatch, capsys):
+    # A Mac's rollback (ADR-024 phase 1): with the service stopped, its PostgreSQL is too. migrate --to starts it,
+    # takes the accounts down (or up), and stops it again, as backup and restore do.
+    from src.server.lifecycle import cli
+    from src.server.lifecycle.migrate import create_database_if_missing, migrate
+    from src.server.lifecycle.postgres import answers, up_while
+    from tests.test_server_migrate import _add_tenant, _before, _head, _version, _with_vector
+
+    pg_bin, port = postgres_bin(), free_port()
+    data = tmp_path / "data"
+    server = f"postgresql+psycopg2://lumiverb:pw@127.0.0.1:{port}"
+    control_url, tenant_url = f"{server}/control_plane", f"{server}/ten_one"
+    make_cluster_if_missing(pg_bin, data, control_url)
+    with up_while(pg_bin, data, control_url, dict(os.environ)):
+        for url in (control_url, tenant_url):
+            create_database_if_missing(url)
+            _with_vector(url)
+        migrate(control_url, say=lambda _: None)
+        _add_tenant(control_url, "ten_one", tenant_url)
+        migrate(control_url, say=lambda _: None)
+    assert not answers(control_url), "stopped, as a stopped service's is"
+    monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
+    env_file = tmp_path / "env"
+    env_file.write_text(f"CONTROL_PLANE_DATABASE_URL={control_url}\nDATA_DIR={data}\nPG_BIN={pg_bin}\n")
+    back, head = _before("alembic-tenant.ini"), _head("alembic-tenant.ini")
+
+    assert cli.main(["--env", str(env_file), "migrate", "--to", back]) == 0, capsys.readouterr().err
+    assert "✓ 1 account(s) at " + back in capsys.readouterr().out
+    assert not answers(control_url), "stopped again"
+    with up_while(pg_bin, data, control_url, dict(os.environ)):
+        assert _version(tenant_url) == back
+    assert cli.main(["--env", str(env_file), "migrate", "--to", head]) == 0, capsys.readouterr().err
+    assert not answers(control_url)
+    with up_while(pg_bin, data, control_url, dict(os.environ)):
+        assert _version(tenant_url) == head

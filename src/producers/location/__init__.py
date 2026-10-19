@@ -6,7 +6,8 @@ work.py asks the server for the fixes and saves what it found
 (PUT /v1/assets/locations/guess/{id}). Only in the libraries where Infer
 location is on (each library's, libraries.infer_location: off by default)."""
 
-from src.producers.contract import ALL, FIND, Pool, ProducerSpec, Setting
+from src.producers import names
+from src.producers.contract import ALL, FIND, Data, Field, Pool, ProducerSpec, Setting
 
 # Its library infers location: SQL, so the clips it applies to are none in a library where it's off.
 INFER_ON = "EXISTS (SELECT 1 FROM libraries il WHERE il.library_id = a.library_id AND il.infer_location)"
@@ -14,7 +15,18 @@ INFER_ON = "EXISTS (SELECT 1 FROM libraries il WHERE il.library_id = a.library_i
 # Arithmetic over rows the database hands it: no GPU, no storage.
 CPU = Pool("cpu", slots=2)
 
+MAKES = Data(
+    names.LOCATION_GUESS, "Where it probably was, from the clips taken around the same time: applied, or a "
+    "suggestion to take.",
+    (*names.POINT, Field("radius_m", "number"), Field("applied", "yes or no")),
+    stored=("asset_location",),
+)
+
 PRODUCER = ProducerSpec(
+    # Made from the clip's capture time and zone (read again from the file first), for a clip with neither
+    # the file's GPS nor a person's location: from the clips taken around it.
+    makes=MAKES, reads=(names.CAPTURE_TIME, names.LOCATION_GPS, names.LOCATION_PERSON),
+    reads_others=(names.CAPTURE_TIME, names.LOCATION_GPS, names.LOCATION_PERSON),
     artifact="location", producer="location", version="1", media=ALL, title="Location guesses", order=120,
     # No location from the file or a person, and a time to go by.
     applies=(f"{INFER_ON} AND a.taken_at IS NOT NULL AND (a.gps_lat IS NULL OR a.gps_lon IS NULL)"
@@ -33,8 +45,6 @@ PRODUCER = ProducerSpec(
         Setting("inference_minutes", 360, "Inference window", minimum=5, maximum=1440, unit="min",
                 remakes=False),
     ),
-    # Made from the clip's capture time and zone, read again from the file first.
-    needs=("capture",),
     # Its own file changing changes nothing here; its capture time does (which remakes it).
     redo_on_source_change=False,
     regroup="src.server.repository.locations:window_changed",

@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from src.plugins import version_key
 from src.plugins.contract import Acknowledgment, Link, PluginSpec
+from src.producers.names import CAPTURE_TIME, LOCATION, METADATA, PREVIEW
 
 MANIFEST = "lumiverb-plugin.json"
 PROTOCOLS = (1,)
@@ -35,6 +36,9 @@ INPUTS = {
     "metadata": "each clip's media type, size, duration, camera and lens",
     "preview": "each photo's preview image",
 }
+# The name each input stands for (ADR-024, docs/data-names.md). Protocol 1 keeps its words: what a plug-in is
+# handed, the hash its outputs are kept with and what its install accepted are all in them.
+INPUT_NAMES = {"location": LOCATION, "capture_time": CAPTURE_TIME, "metadata": METADATA, "preview": PREVIEW}
 OUTPUT_KINDS = ("fact",)
 LOOKUPS = {"places": "answers place searches (Set location's Place)"}
 MEDIA = ("image", "video")
