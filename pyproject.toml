@@ -171,6 +171,12 @@ filterwarnings = [
 target-version = "py312"
 line-length = 100
 
+# Run with the machine's python3, 3.9 or later: Lumiverb's own plug-ins, and what the tests run under it.
+[tool.ruff.per-file-target-version]
+"src/own_plugins/**" = "py39"
+"tests/plugins/geonames_lists.py" = "py39"
+"tests/plugins/geonames_ask.py" = "py39"
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501"]  # line length handled by formatter

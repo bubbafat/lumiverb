@@ -1,0 +1,1830 @@
+{
+ "about": "Today's Place names' answers (src/server/repository/places.py over src/plugins/geonames/data.py's fetch, in Postgres) to tests/plugins/geonames_lists.py's questions on its files: the GeoNames plug-in is held to them. Written by tests/plugins/geonames_golden.py.",
+ "answers": {
+  "nearest": [
+   {
+    "geonameid": 3573890,
+    "name": "Port of Spain",
+    "region": "Port of Spain",
+    "country": "Trinidad and Tobago",
+    "population": 49031,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 3573890,
+    "name": "Port of Spain",
+    "region": "Port of Spain",
+    "country": "Trinidad and Tobago",
+    "population": 49031,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 2988507,
+    "name": "Paris",
+    "region": "Île-de-France",
+    "country": "France",
+    "population": 2138551,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 2988507,
+    "name": "Paris",
+    "region": "Île-de-France",
+    "country": "France",
+    "population": 2138551,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 2657896,
+    "name": "Zürich",
+    "region": "Zurich",
+    "country": "Switzerland",
+    "population": 415367,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 2657896,
+    "name": "Zürich",
+    "region": "Zurich",
+    "country": "Switzerland",
+    "population": 415367,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 3448439,
+    "name": "São Paulo",
+    "region": "São Paulo",
+    "country": "Brazil",
+    "population": 10021295,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 3448439,
+    "name": "São Paulo",
+    "region": "São Paulo",
+    "country": "Brazil",
+    "population": 10021295,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 4717560,
+    "name": "Paris",
+    "region": "Texas",
+    "country": "United States",
+    "population": 24171,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 4717560,
+    "name": "Paris",
+    "region": "Texas",
+    "country": "United States",
+    "population": 24171,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 2988507,
+    "name": "Paris",
+    "region": "Île-de-France",
+    "country": "France",
+    "population": 2138551,
+    "distance_m": 4999.999999999913
+   },
+   null,
+   {
+    "geonameid": 2988507,
+    "name": "Paris",
+    "region": "Île-de-France",
+    "country": "France",
+    "population": 2138551,
+    "distance_m": 12000.000000000106
+   },
+   null,
+   {
+    "geonameid": 3573890,
+    "name": "Port of Spain",
+    "region": "Port of Spain",
+    "country": "Trinidad and Tobago",
+    "population": 49031,
+    "distance_m": 6477.915715102437
+   },
+   {
+    "geonameid": 9100001,
+    "name": "Twinton",
+    "region": "Lombardia",
+    "country": "Italy",
+    "population": 5000,
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9100003,
+    "name": "Bigtown",
+    "region": "Lombardia",
+    "country": "Italy",
+    "population": 9000,
+    "distance_m": 3474.8414576424607
+   },
+   {
+    "geonameid": 9100003,
+    "name": "Bigtown",
+    "region": "Lombardia",
+    "country": "Italy",
+    "population": 9000,
+    "distance_m": 3449.8414576425953
+   },
+   {
+    "geonameid": 2657896,
+    "name": "Zürich",
+    "region": "Zurich",
+    "country": "Switzerland",
+    "population": 415367,
+    "distance_m": 850.8991824356261
+   },
+   {
+    "geonameid": 9100010,
+    "name": "Eastside",
+    "region": "Central",
+    "country": "Fiji",
+    "population": 3000,
+    "distance_m": 533.0794504059904
+   },
+   {
+    "geonameid": 9100011,
+    "name": "Westside",
+    "region": "Central",
+    "country": "Fiji",
+    "population": 2000,
+    "distance_m": 959.5430106751621
+   },
+   null,
+   {
+    "geonameid": 9100012,
+    "name": "Polar Station",
+    "region": null,
+    "country": "Antarctica",
+    "population": 1000,
+    "distance_m": 14709.705347529285
+   },
+   {
+    "geonameid": 9100012,
+    "name": "Polar Station",
+    "region": null,
+    "country": "Antarctica",
+    "population": 1000,
+    "distance_m": 12216.074996349544
+   },
+   {
+    "geonameid": 9100013,
+    "name": "South Station",
+    "region": null,
+    "country": "Antarctica",
+    "population": 1000,
+    "distance_m": 15994.886627127577
+   },
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "landmark_at": [
+   {
+    "geonameid": 6254976,
+    "name": "Tour Eiffel",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "monument",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 6254976,
+    "name": "Tour Eiffel",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "monument",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 6254976,
+    "name": "Tour Eiffel",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "monument",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 6618997,
+    "name": "Champ de Mars",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "park",
+    "distance_m": 354.13112513243993
+   },
+   {
+    "geonameid": 6618997,
+    "name": "Champ de Mars",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "park",
+    "distance_m": 556.0863981937567
+   },
+   {
+    "geonameid": 6618997,
+    "name": "Champ de Mars",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "park",
+    "distance_m": 557.8625046110466
+   },
+   {
+    "geonameid": 6618997,
+    "name": "Champ de Mars",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "park",
+    "distance_m": 256.10081072113826
+   },
+   {
+    "geonameid": 9200001,
+    "name": "Castle  Rock",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "castle",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200001,
+    "name": "Castle  Rock",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "castle",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200001,
+    "name": "Castle  Rock",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "castle",
+    "distance_m": 0.0
+   },
+   null,
+   {
+    "geonameid": 9200001,
+    "name": "Castle  Rock",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "castle",
+    "distance_m": 498.99999999999665
+   },
+   null,
+   {
+    "geonameid": 9200001,
+    "name": "Castle  Rock",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "castle",
+    "distance_m": 498.99999999999665
+   },
+   {
+    "geonameid": 9200002,
+    "name": "Mount Test",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "mountain",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200002,
+    "name": "Mount Test",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "mountain",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200002,
+    "name": "Mount Test",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "mountain",
+    "distance_m": 0.0
+   },
+   null,
+   {
+    "geonameid": 9200002,
+    "name": "Mount Test",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "mountain",
+    "distance_m": 998.9999999996718
+   },
+   null,
+   {
+    "geonameid": 9200002,
+    "name": "Mount Test",
+    "region": "England",
+    "country": "United Kingdom",
+    "kind": "mountain",
+    "distance_m": 998.9999999996718
+   },
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "distance_m": 0.0
+   },
+   null,
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "distance_m": 1499.0000000001373
+   },
+   null,
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "distance_m": 1499.0000000001373
+   },
+   {
+    "geonameid": 9200003,
+    "name": "Pair Monument A",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": "monument",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200003,
+    "name": "Pair Monument A",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": "monument",
+    "distance_m": 100.00000000025108
+   },
+   {
+    "geonameid": 9200006,
+    "name": "Ratio Park",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": "park",
+    "distance_m": 299.9999999999631
+   },
+   {
+    "geonameid": 9200006,
+    "name": "Ratio Park",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": "park",
+    "distance_m": 299.9999999999631
+   },
+   {
+    "geonameid": 9200007,
+    "name": "Star Watch",
+    "region": "Cairo",
+    "country": "Egypt",
+    "kind": "observatory",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 9200008,
+    "name": "Lion Zoo",
+    "region": "Cairo",
+    "country": "Egypt",
+    "kind": "zoo",
+    "distance_m": 0.0
+   },
+   {
+    "geonameid": 6254976,
+    "name": "Tour Eiffel",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "monument",
+    "distance_m": 13.310281160468739
+   },
+   {
+    "geonameid": 6618997,
+    "name": "Champ de Mars",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "park",
+    "distance_m": 457.678516736054
+   },
+   null,
+   null
+  ],
+  "search": [
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    }
+   ],
+   [
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    },
+    {
+     "geonameid": 2657897,
+     "name": "Zürich (Kreis 7)",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.37,
+     "lon": 8.56,
+     "population": 37000
+    }
+   ],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    },
+    {
+     "geonameid": 2657897,
+     "name": "Zürich (Kreis 7)",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.37,
+     "lon": 8.56,
+     "population": 37000
+    }
+   ],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    },
+    {
+     "geonameid": 2657897,
+     "name": "Zürich (Kreis 7)",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.37,
+     "lon": 8.56,
+     "population": 37000
+    }
+   ],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    },
+    {
+     "geonameid": 2657897,
+     "name": "Zürich (Kreis 7)",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": null,
+     "lat": 47.37,
+     "lon": 8.56,
+     "population": 37000
+    }
+   ],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": "Zurigo",
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    }
+   ],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": "Zurigo",
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    }
+   ],
+   [],
+   [
+    {
+     "geonameid": 2657896,
+     "name": "Zürich",
+     "region": "Zurich",
+     "country": "Switzerland",
+     "kind": null,
+     "matched": "Zurigo",
+     "lat": 47.36667,
+     "lon": 8.55,
+     "population": 415367
+    }
+   ],
+   [],
+   [],
+   [],
+   [],
+   [
+    {
+     "geonameid": 3448439,
+     "name": "São Paulo",
+     "region": "São Paulo",
+     "country": "Brazil",
+     "kind": null,
+     "matched": null,
+     "lat": -23.5475,
+     "lon": -46.63611,
+     "population": 10021295
+    }
+   ],
+   [
+    {
+     "geonameid": 3448439,
+     "name": "São Paulo",
+     "region": "São Paulo",
+     "country": "Brazil",
+     "kind": null,
+     "matched": null,
+     "lat": -23.5475,
+     "lon": -46.63611,
+     "population": 10021295
+    }
+   ],
+   [
+    {
+     "geonameid": 2294768,
+     "name": "Sampa",
+     "region": null,
+     "country": "Ghana",
+     "kind": null,
+     "matched": null,
+     "lat": 8.0,
+     "lon": -2.7,
+     "population": 20000
+    },
+    {
+     "geonameid": 3448439,
+     "name": "São Paulo",
+     "region": "São Paulo",
+     "country": "Brazil",
+     "kind": null,
+     "matched": "Sampa",
+     "lat": -23.5475,
+     "lon": -46.63611,
+     "population": 10021295
+    }
+   ],
+   [
+    {
+     "geonameid": 2294768,
+     "name": "Sampa",
+     "region": null,
+     "country": "Ghana",
+     "kind": null,
+     "matched": null,
+     "lat": 8.0,
+     "lon": -2.7,
+     "population": 20000
+    },
+    {
+     "geonameid": 3448439,
+     "name": "São Paulo",
+     "region": "São Paulo",
+     "country": "Brazil",
+     "kind": null,
+     "matched": "Sampa",
+     "lat": -23.5475,
+     "lon": -46.63611,
+     "population": 10021295
+    }
+   ],
+   [
+    {
+     "geonameid": 3573890,
+     "name": "Port of Spain",
+     "region": "Port of Spain",
+     "country": "Trinidad and Tobago",
+     "kind": null,
+     "matched": null,
+     "lat": 10.66668,
+     "lon": -61.51889,
+     "population": 49031
+    }
+   ],
+   [
+    {
+     "geonameid": 3573890,
+     "name": "Port of Spain",
+     "region": "Port of Spain",
+     "country": "Trinidad and Tobago",
+     "kind": null,
+     "matched": null,
+     "lat": 10.66668,
+     "lon": -61.51889,
+     "population": 49031
+    }
+   ],
+   [
+    {
+     "geonameid": 3573740,
+     "name": "San Juan",
+     "region": "Port of Spain",
+     "country": "Trinidad and Tobago",
+     "kind": null,
+     "matched": null,
+     "lat": 10.65,
+     "lon": -61.4,
+     "population": 54000
+    }
+   ],
+   [
+    {
+     "geonameid": 4164161,
+     "name": "Magic Kingdom, Walt Disney World",
+     "region": "Florida",
+     "country": "United States",
+     "kind": "amusement park",
+     "matched": null,
+     "lat": 28.4187,
+     "lon": -81.5812,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 4164161,
+     "name": "Magic Kingdom, Walt Disney World",
+     "region": "Florida",
+     "country": "United States",
+     "kind": "amusement park",
+     "matched": "Reino Mágico",
+     "lat": 28.4187,
+     "lon": -81.5812,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": "Eiffel Tower",
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    },
+    {
+     "geonameid": 9999994,
+     "name": "Eiffel Peak",
+     "region": null,
+     "country": "United States",
+     "kind": "peak",
+     "matched": null,
+     "lat": 46.3,
+     "lon": -122.4,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": "Eiffelturm",
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": "Eiffel Tower",
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": null,
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6618997,
+     "name": "Champ de Mars",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "park",
+     "matched": null,
+     "lat": 48.8561,
+     "lon": 2.298,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 6618997,
+     "name": "Champ de Mars",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "park",
+     "matched": null,
+     "lat": 48.8561,
+     "lon": 2.298,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200001,
+     "name": "Castle  Rock",
+     "region": "England",
+     "country": "United Kingdom",
+     "kind": "castle",
+     "matched": null,
+     "lat": 51.0,
+     "lon": -1.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200001,
+     "name": "Castle  Rock",
+     "region": "England",
+     "country": "United Kingdom",
+     "kind": "castle",
+     "matched": "Rock Castle",
+     "lat": 51.0,
+     "lon": -1.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200001,
+     "name": "Castle  Rock",
+     "region": "England",
+     "country": "United Kingdom",
+     "kind": "castle",
+     "matched": "Felsenburg",
+     "lat": 51.0,
+     "lon": -1.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200002,
+     "name": "Mount Test",
+     "region": "England",
+     "country": "United Kingdom",
+     "kind": "mountain",
+     "matched": null,
+     "lat": 52.0,
+     "lon": -1.5,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200002,
+     "name": "Mount Test",
+     "region": "England",
+     "country": "United Kingdom",
+     "kind": "mountain",
+     "matched": "Mont Test",
+     "lat": 52.0,
+     "lon": -1.5,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9100001,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    },
+    {
+     "geonameid": 9100002,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100003,
+     "name": "Bigtown",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.03125,
+     "lon": 10.0,
+     "population": 9000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100004,
+     "name": "Smalltown",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.96875,
+     "lon": 10.0,
+     "population": 1000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100005,
+     "name": "Oldtown",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.00008993216059,
+     "lon": 10.0,
+     "population": 50000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100006,
+     "name": "Lostville",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.00017986432118,
+     "lon": 10.0,
+     "population": 50000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100008,
+     "name": "Exton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.000359728642366,
+     "lon": 10.0,
+     "population": 50000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100010,
+     "name": "Eastside",
+     "region": "Central",
+     "country": "Fiji",
+     "kind": null,
+     "matched": null,
+     "lat": -16.5,
+     "lon": 179.99,
+     "population": 3000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100011,
+     "name": "Westside",
+     "region": "Central",
+     "country": "Fiji",
+     "kind": null,
+     "matched": null,
+     "lat": -16.5,
+     "lon": -179.99,
+     "population": 2000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100012,
+     "name": "Polar Station",
+     "region": null,
+     "country": "Antarctica",
+     "kind": null,
+     "matched": null,
+     "lat": 89.9,
+     "lon": 0.0,
+     "population": 1000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100013,
+     "name": "South Station",
+     "region": null,
+     "country": "Antarctica",
+     "kind": null,
+     "matched": null,
+     "lat": -89.9,
+     "lon": 45.0,
+     "population": 1000
+    }
+   ],
+   [
+    {
+     "geonameid": 9100014,
+     "name": "100% Town",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 30.0,
+     "lon": 30.0,
+     "population": 1500
+    }
+   ],
+   [
+    {
+     "geonameid": 9100014,
+     "name": "100% Town",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 30.0,
+     "lon": 30.0,
+     "population": 1500
+    }
+   ],
+   [],
+   [],
+   [],
+   [
+    {
+     "geonameid": 9100015,
+     "name": "Under_score",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 30.1,
+     "lon": 30.1,
+     "population": 1400
+    }
+   ],
+   [],
+   [
+    {
+     "geonameid": 9100016,
+     "name": "Back\\slash",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 30.2,
+     "lon": 30.2,
+     "population": 1300
+    }
+   ],
+   [
+    {
+     "geonameid": 9100017,
+     "name": "Tiedtown",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 31.0,
+     "lon": 31.0,
+     "population": 1200
+    }
+   ],
+   [
+    {
+     "geonameid": 9100017,
+     "name": "Tiedtown",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": "Tiedorf",
+     "lat": 31.0,
+     "lon": 31.0,
+     "population": 1200
+    }
+   ],
+   [
+    {
+     "geonameid": 9100017,
+     "name": "Tiedtown",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": "Tiedorf",
+     "lat": 31.0,
+     "lon": 31.0,
+     "population": 1200
+    }
+   ],
+   [
+    {
+     "geonameid": 9200003,
+     "name": "Pair Monument A",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": "monument",
+     "matched": null,
+     "lat": 40.0,
+     "lon": 20.0,
+     "population": 0
+    },
+    {
+     "geonameid": 9200004,
+     "name": "Pair Monument B",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": "monument",
+     "matched": null,
+     "lat": 40.0,
+     "lon": 20.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200005,
+     "name": "Ratio Monument",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": "monument",
+     "matched": null,
+     "lat": 41.001798643211835,
+     "lon": 20.0,
+     "population": 0
+    },
+    {
+     "geonameid": 9200006,
+     "name": "Ratio Park",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": "park",
+     "matched": null,
+     "lat": 40.997302035182244,
+     "lon": 20.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200007,
+     "name": "Star Watch",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": "observatory",
+     "matched": null,
+     "lat": 33.0,
+     "lon": 33.0,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9200008,
+     "name": "Lion Zoo",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": "zoo",
+     "matched": null,
+     "lat": 33.1,
+     "lon": 33.1,
+     "population": 0
+    }
+   ],
+   [],
+   [],
+   [],
+   [],
+   [],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": "Parizo",
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    }
+   ],
+   [],
+   [
+    {
+     "geonameid": 9100008,
+     "name": "Exton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.000359728642366,
+     "lon": 10.0,
+     "population": 50000
+    },
+    {
+     "geonameid": 9100010,
+     "name": "Eastside",
+     "region": "Central",
+     "country": "Fiji",
+     "kind": null,
+     "matched": null,
+     "lat": -16.5,
+     "lon": 179.99,
+     "population": 3000
+    },
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": "Eiffel Tower",
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    },
+    {
+     "geonameid": 9999994,
+     "name": "Eiffel Peak",
+     "region": null,
+     "country": "United States",
+     "kind": "peak",
+     "matched": null,
+     "lat": 46.3,
+     "lon": -122.4,
+     "population": 0
+    }
+   ],
+   [
+    {
+     "geonameid": 9100001,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    },
+    {
+     "geonameid": 9100002,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    },
+    {
+     "geonameid": 9100017,
+     "name": "Tiedtown",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 31.0,
+     "lon": 31.0,
+     "population": 1200
+    },
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": null,
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    }
+   ],
+   [],
+   [],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    },
+    {
+     "geonameid": 9999991,
+     "name": "Parisot",
+     "region": "Occitanie",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 44.26,
+     "lon": 1.85,
+     "population": 1100
+    }
+   ],
+   [],
+   [],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    }
+   ],
+   [
+    {
+     "geonameid": 2988507,
+     "name": "Paris",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": null,
+     "matched": null,
+     "lat": 48.85341,
+     "lon": 2.3488,
+     "population": 2138551
+    },
+    {
+     "geonameid": 4717560,
+     "name": "Paris",
+     "region": "Texas",
+     "country": "United States",
+     "kind": null,
+     "matched": null,
+     "lat": 33.66094,
+     "lon": -95.55551,
+     "population": 24171
+    }
+   ],
+   [
+    {
+     "geonameid": 9100001,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    },
+    {
+     "geonameid": 9100002,
+     "name": "Twinton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 45.0,
+     "lon": 10.0,
+     "population": 5000
+    },
+    {
+     "geonameid": 9100017,
+     "name": "Tiedtown",
+     "region": "Cairo",
+     "country": "Egypt",
+     "kind": null,
+     "matched": null,
+     "lat": 31.0,
+     "lon": 31.0,
+     "population": 1200
+    }
+   ],
+   [
+    {
+     "geonameid": 9100008,
+     "name": "Exton",
+     "region": "Lombardia",
+     "country": "Italy",
+     "kind": null,
+     "matched": null,
+     "lat": 46.000359728642366,
+     "lon": 10.0,
+     "population": 50000
+    },
+    {
+     "geonameid": 9100010,
+     "name": "Eastside",
+     "region": "Central",
+     "country": "Fiji",
+     "kind": null,
+     "matched": null,
+     "lat": -16.5,
+     "lon": 179.99,
+     "population": 3000
+    },
+    {
+     "geonameid": 6254976,
+     "name": "Tour Eiffel",
+     "region": "Île-de-France",
+     "country": "France",
+     "kind": "monument",
+     "matched": "Eiffel Tower",
+     "lat": 48.8583,
+     "lon": 2.2945,
+     "population": 0
+    },
+    {
+     "geonameid": 9999994,
+     "name": "Eiffel Peak",
+     "region": null,
+     "country": "United States",
+     "kind": "peak",
+     "matched": null,
+     "lat": 46.3,
+     "lon": -122.4,
+     "population": 0
+    }
+   ]
+  ],
+  "get": [
+   {
+    "geonameid": 3573890,
+    "name": "Port of Spain",
+    "region": "Port of Spain",
+    "country": "Trinidad and Tobago",
+    "kind": null,
+    "lat": 10.66668,
+    "lon": -61.51889,
+    "population": 49031
+   },
+   {
+    "geonameid": 2988507,
+    "name": "Paris",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": null,
+    "lat": 48.85341,
+    "lon": 2.3488,
+    "population": 2138551
+   },
+   {
+    "geonameid": 2657896,
+    "name": "Zürich",
+    "region": "Zurich",
+    "country": "Switzerland",
+    "kind": null,
+    "lat": 47.36667,
+    "lon": 8.55,
+    "population": 415367
+   },
+   {
+    "geonameid": 2657897,
+    "name": "Zürich (Kreis 7)",
+    "region": "Zurich",
+    "country": "Switzerland",
+    "kind": null,
+    "lat": 47.37,
+    "lon": 8.56,
+    "population": 37000
+   },
+   {
+    "geonameid": 4164161,
+    "name": "Magic Kingdom, Walt Disney World",
+    "region": "Florida",
+    "country": "United States",
+    "kind": "amusement park",
+    "lat": 28.4187,
+    "lon": -81.5812,
+    "population": 0
+   },
+   {
+    "geonameid": 6254976,
+    "name": "Tour Eiffel",
+    "region": "Île-de-France",
+    "country": "France",
+    "kind": "monument",
+    "lat": 48.8583,
+    "lon": 2.2945,
+    "population": 0
+   },
+   {
+    "geonameid": 9200004,
+    "name": "Pair Monument B",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": "monument",
+    "lat": 40.0,
+    "lon": 20.0,
+    "population": 0
+   },
+   null,
+   null,
+   {
+    "geonameid": 9100005,
+    "name": "Oldtown",
+    "region": "Lombardia",
+    "country": "Italy",
+    "kind": null,
+    "lat": 46.00008993216059,
+    "lon": 10.0,
+    "population": 50000
+   }
+  ],
+  "facts": [
+   {
+    "at": "Tour Eiffel",
+    "near": "Paris, Île-de-France, France"
+   },
+   {
+    "at": "Magic Kingdom, Walt Disney World, Florida, United States",
+    "near": null
+   },
+   {
+    "at": null,
+    "near": "Paris, Île-de-France, France"
+   },
+   {
+    "at": null,
+    "near": null
+   },
+   {
+    "at": "Champ de Mars",
+    "near": "Paris, Île-de-France, France"
+   },
+   {
+    "at": null,
+    "near": null
+   },
+   {
+    "at": null,
+    "near": "Paris, Île-de-France, France"
+   },
+   {
+    "at": "Castle  Rock, England, United Kingdom",
+    "near": null
+   },
+   {
+    "at": "Pair Monument A, Lombardia, Italy",
+    "near": null
+   },
+   {
+    "at": "Ratio Park, Lombardia, Italy",
+    "near": null
+   }
+  ]
+ }
+}

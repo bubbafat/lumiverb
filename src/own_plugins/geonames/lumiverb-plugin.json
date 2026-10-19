@@ -1,0 +1,52 @@
+{
+  "id": "geonames",
+  "version": "1",
+  "protocol": 1,
+  "title": "Place names (GeoNames)",
+  "description": "Find a place by name when setting a location, and see the nearest town and the landmark each photo or video was taken at. Lumiverb keeps a list of the world's towns of 1,000 people or more and its landmarks on this server, from GeoNames.",
+  "author": "Lumiverb",
+  "homepage": "https://www.geonames.org/",
+  "run": ["python3", "-I", "geonames.py"],
+  "acknowledgment": {
+    "version": "3",
+    "reaccept_from": "1",
+    "title": "GeoNames: Creative Commons Attribution 4.0",
+    "text": "Place names come from GeoNames (geonames.org), which licenses them under the Creative Commons Attribution 4.0 International license (CC BY 4.0).\n\nTurning this on downloads, once for this server, GeoNames' list of towns of 1,000 people or more with their regions and countries, its list of every place and which of them have a Wikipedia article (about 600 MB in all, deleted once read), from download.geonames.org. Lumiverb keeps a changed copy: the towns, and landmarks such as parks, museums, monuments and mountains, each place's name and its names in other languages, point, kind, region, country and population. Nothing about your photos, videos or account is sent to GeoNames.\n\nThe license lets the data be used, commercially too, as long as GeoNames is credited with a link, the license is linked and changes are noted. Lumiverb shows that credit wherever place names appear.\n\nGeoNames provides the data as is, without warranty of its accuracy, timeliness or completeness.",
+    "links": [
+      {"label": "GeoNames", "url": "https://www.geonames.org/"},
+      {"label": "The license (CC BY 4.0)", "url": "https://creativecommons.org/licenses/by/4.0/"},
+      {"label": "GeoNames' terms", "url": "https://www.geonames.org/export/"}
+    ]
+  },
+  "credit": {"text": "GeoNames", "url": "https://www.geonames.org/",
+             "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}},
+  "downloads": [
+    {"url": "https://download.geonames.org/export/dump/cities1000.zip", "about_mb": 11, "title": "Towns of 1,000 people or more"},
+    {"url": "https://download.geonames.org/export/dump/admin1CodesASCII.txt", "about_mb": 1, "title": "Regions"},
+    {"url": "https://download.geonames.org/export/dump/countryInfo.txt", "about_mb": 1, "title": "Countries"},
+    {"url": "https://download.geonames.org/export/dump/alternateNamesV2.zip", "about_mb": 205, "title": "Names in other languages, and which places have a Wikipedia article"},
+    {"url": "https://download.geonames.org/export/dump/allCountries.zip", "about_mb": 422, "title": "Every place, for its landmarks"}
+  ],
+  "internet": false,
+  "memory_mb": 512,
+  "disk_mb": 1500,
+  "settings": [
+    {"key": "radius_km", "type": "int", "default": 25, "minimum": 1, "maximum": 200, "unit": "km", "remakes": true,
+     "label": "Nearest town within", "help": "How far away a town can be and still name where a clip was."},
+    {"key": "mirror", "type": "text", "scope": "server", "default": "", "pattern": "^(https?://\\S+)?$", "max_length": 500,
+     "advanced": true, "label": "Download from",
+     "help": "A copy of download.geonames.org/export/dump/ to fetch the lists from, if this server can't reach it. Empty: GeoNames itself."}
+  ],
+  "work": {
+    "title": "Place names",
+    "version": "1",
+    "media": ["image", "video"],
+    "inputs": ["location"],
+    "batch": 200,
+    "outputs": [
+      {"key": "at", "kind": "fact", "label": "At"},
+      {"key": "near", "kind": "fact", "label": "Near", "searchable": true, "empty": "Not near a town"}
+    ]
+  },
+  "lookups": ["places"]
+}

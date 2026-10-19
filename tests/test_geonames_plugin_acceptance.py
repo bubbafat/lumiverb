@@ -15,6 +15,15 @@ ready with work in the background; an output's empty line and a credit's
 license show, and the empty line isn't searched. An account whose database
 can't be read, or hangs (never answers, or drops every packet: part 1b),
 holds up no other.
+
+Part 2, the GeoNames program (src/own_plugins/geonames/), on the tester's
+own made-up GeoNames files (tests/tester_geonames_lists.py, apart from the
+builder's), run by the real runner and asked through Lumiverb's own client:
+its facts, searches and places by id equal today's code's on the same
+files (but for a place at no real point, which it leaves out), every answer
+passing Lumiverb's checks; killed, it's started again with its list and
+fetches nothing; a file missing from the mirror fails naming it; a download
+cut off is fetched again, the finished ones aren't.
 """
 
 from __future__ import annotations
@@ -84,6 +93,10 @@ def _interpreters() -> list[tuple[str, str]]:
 
 
 INTERPRETERS = _interpreters()
+
+# For what doesn't depend on the plug-in's own Python (Lumiverb's side of it): one of them, so the file stays quick.
+ONE_PYTHON = pytest.mark.parametrize("machine_python", INTERPRETERS[-1:], ids=[f"python{INTERPRETERS[-1][1]}"],
+                                     indirect=True)
 
 
 @pytest.fixture(params=INTERPRETERS, ids=[f"python{v}" for _, v in INTERPRETERS])
@@ -184,6 +197,7 @@ def test_part1_it_runs_while_any_account_has_it_on_under_this_machines_python(pr
     _until(f.runner, lambda: _running(f)["state"] == "off")
 
 
+@ONE_PYTHON
 def test_part1_one_unreadable_account_doesnt_keep_another_from_turning_it_on(probe):
     """An active account whose database can't be read (dropped, its server away) must not freeze what the
     runner runs for every other account. A second plug-in on nowhere (hello) makes the runner read every
@@ -231,7 +245,7 @@ class _Silent:
             conn.close()
 
 
-@pytest.mark.parametrize("machine_python", INTERPRETERS[-1:], ids=[f"python{INTERPRETERS[-1][1]}"], indirect=True)
+@ONE_PYTHON
 @pytest.mark.parametrize("hang", ["never answers", "drops packets"])
 def test_part1b_an_account_database_that_hangs_doesnt_stall_the_runner(probe, hang, monkeypatch):
     """An active account whose database server takes the connection and never answers, or whose address drops
@@ -303,6 +317,7 @@ def test_part1b_an_account_database_that_hangs_doesnt_stall_the_runner(probe, ha
 # ---------------------------------------------------------------------------
 
 
+@ONE_PYTHON
 def test_part1_its_server_settings_are_a_private_file_at_start_and_a_change_restarts_it(probe):
     f = probe
     _switch(f, f.a, True)
@@ -377,6 +392,7 @@ def _places(f) -> dict:
     return r.json()
 
 
+@ONE_PYTHON
 def test_part1_ready_with_background_work_answers_and_says_how_far(probe):
     f = probe
     _switch(f, f.a, True)
@@ -408,6 +424,7 @@ def _found(f, words: str) -> set[str]:
     return {item["asset_id"] for item in r.json()["items"]}
 
 
+@ONE_PYTHON
 def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_credit(probe):
     f = probe
     _switch(f, f.a, True)
@@ -430,3 +447,264 @@ def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_c
     assert _found(f, "zzqx") == set(), "an empty line is never searched"
     found = _places(f)
     assert [c for c in found["credits"] if c["source"] == "probe"] == [{"source": "probe", **CREDIT}]
+
+
+
+# ---------------------------------------------------------------------------
+# Part 2: the GeoNames program (src/own_plugins/geonames/), against today's code on the tester's own lists
+# ---------------------------------------------------------------------------
+
+GEONAMES = Path(__file__).resolve().parents[1] / "src" / "own_plugins" / "geonames"
+
+
+class _Site:
+    """A stand-in for download.geonames.org: these files, each request counted ("GET name", "HEAD name"); a file
+    can be missing (404), or held half sent until let go."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        import collections
+        import http.server
+
+        self.files, self.counts = dict(files), collections.Counter()
+        self.missing: set[str] = set()
+        self.hold: str | None = None
+        self.held, self.release = threading.Event(), threading.Event()
+        site = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_a) -> None:
+                pass
+
+            def _head(self) -> bytes | None:
+                name = self.path.lstrip("/")
+                site.counts[f"{self.command} {name}"] += 1
+                if name in site.missing or name not in site.files:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
+                body = site.files[name]
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Last-Modified", "Mon, 19 Oct 2026 09:00:00 GMT")
+                self.end_headers()
+                return body
+
+            def do_HEAD(self) -> None:  # noqa: N802 — http.server's name
+                self._head()
+
+            def do_GET(self) -> None:  # noqa: N802 — http.server's name
+                body = self._head()
+                if body is None:
+                    return
+                if self.path.lstrip("/") == site.hold:
+                    self.wfile.write(body[: len(body) // 2])
+                    self.wfile.flush()
+                    site.held.set()
+                    site.release.wait(60)
+                    return  # the connection ends short: a download cut off
+                self.wfile.write(body)
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def gets(self) -> dict[str, int]:
+        return {k[4:]: v for k, v in self.counts.items() if k.startswith("GET ")}
+
+    def close(self) -> None:
+        self.release.set()
+        self.server.shutdown()
+
+
+@pytest.fixture
+def lists_():
+    from tests.tester_geonames_lists import lists
+
+    return lists()
+
+
+@pytest.fixture
+def site(lists_):
+    s = _Site(lists_.files())
+    yield s
+    s.close()
+
+
+@pytest.fixture
+def today(control, site, tmp_path, monkeypatch):  # noqa: F811
+    """Today's Place names on the tester's lists: today's fetch into the control database (the site's requests
+    then forgotten), and its repository."""
+    from src.plugins.geonames import data as geonames_data
+    from src.server.database import get_control_session
+    from src.server.repository.places import PlaceRepository
+
+    monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", site.url)
+    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path / "lumiverb"))
+    geonames_data.fetch(lambda *a, **k: None)
+    site.counts.clear()
+    with get_control_session() as session:
+        yield PlaceRepository(session)
+
+
+class _GeoNames:
+    """The program installed as the runner sees it (a copy in its program folder, marked as an install marks it),
+    on, with the site as its mirror, run by the real runner; asked through Lumiverb's own client."""
+
+    def __init__(self, data: Path, mirror: str) -> None:
+        import uuid
+
+        from src.plugins.manifest import read
+        from src.server.plugin_client import socket_path
+        from src.server.plugin_install import INSTALL_MARK, program_dir
+        from src.server.plugin_runner import Runner
+        from src.server.plugin_settings import server_values
+
+        program = program_dir(data, "geonames")
+        shutil.copytree(GEONAMES, program)
+        (program / INSTALL_MARK).write_text(uuid.uuid4().hex)
+        self.manifest = read(GEONAMES)
+        entry = SimpleNamespace(manifest=self.manifest)
+        self.runner = Runner(data, installed=lambda: {"geonames": entry}, wanted=lambda found: set(found),
+                             server_settings=lambda pid, m: server_values(m, {"mirror": mirror}))
+        self.sock = socket_path(data, "geonames")
+        self.data = data
+
+    def said(self) -> dict:
+        p = self.runner.plugins.get("geonames")
+        return p.said() if p else {"state": "absent"}
+
+    def until(self, state: str, within: float = 120, **more) -> dict:
+        _until(self.runner, lambda: self.said()["state"] == state
+               and all(self.said().get(k) == v for k, v in more.items()), within=within)
+        return self.said()
+
+    def ask(self, path: str, body: dict) -> dict:
+        from src.server.plugin_client import ask
+
+        return ask(self.sock, "POST", path, body=body, timeout=30)
+
+    def kill(self) -> None:
+        import signal
+
+        os.killpg(self.runner.plugins["geonames"].process.pid, signal.SIGKILL)
+
+    def stop(self) -> None:
+        self.runner.stop_all()
+
+
+def _settings(g: _GeoNames, radius_km: int, mirror: str) -> dict:
+    from src.server.plugin_settings import values
+
+    return values(g.manifest, {"radius_km": radius_km}, {"mirror": mirror})
+
+
+def test_part2_the_program_answers_as_today_on_the_testers_lists(today, site, lists_, short_data, machine_python):  # noqa: F811
+    """Its facts (at, near) for every point at radii of 1, 5 and 25 km, its searches and its places by id, from
+    its own socket, against today's repository on the same files: equal to the character, and every answer passes
+    Lumiverb's own checks (manifest.checked_outputs, plugin_lookups.checked_place)."""
+    from src.plugins.manifest import checked_outputs
+    from src.server.plugin_lookups import checked_place
+    from src.server.repository.places import label
+    from src.shared.location import is_fix
+
+    g = _GeoNames(short_data, site.url)
+    try:
+        g.until("ready", detail=None)
+        plugin = SimpleNamespace(manifest=g.manifest)
+        differences = []
+        points = lists_.points()
+        for km in (1, 5, 25):
+            for start in range(0, len(points), 200):
+                batch = points[start:start + 200]
+                clips = [{"id": str(n), "location": {"lat": la, "lon": lo, "sure_m": sure, "source": "file"}}
+                         for n, (la, lo, sure) in enumerate(batch, 1)]
+                said = g.ask("/v1/work", {"settings": _settings(g, km, site.url), "clips": clips})["clips"]
+                for n, (la, lo, sure) in enumerate(batch, 1):
+                    outputs = said[str(n)]["outputs"]
+                    checked_outputs(g.manifest.work, outputs)  # raises: what Lumiverb would refuse
+                    town, mark = today.nearest(la, lo, km * 1000), today.landmark_at(la, lo, sure)
+                    want = {"at": (mark["name"] if town else label(mark)) if mark else None,
+                            "near": label(town) if town else None}
+                    got = {k: (v or {}).get("text") for k, v in outputs.items()}
+                    if got != want:
+                        differences.append(("work", km, la, lo, sure, want, got))
+        fields = ("name", "region", "country", "kind", "matched", "population", "lat", "lon")
+        for q in lists_.queries():
+            got = g.ask("/v1/lookups/places", {"q": q, "limit": 10, "settings": _settings(g, 25, site.url)})["places"]
+            for raw in got:
+                checked_place(plugin, raw)
+            # Today's, but for a place at no real point, which the plug-in leaves out (plan section 1: what it keeps
+            # passes Lumiverb's checks, plugin_lookups.checked_place).
+            real = [r for r in today.search(q, 50) if is_fix(r["lat"], r["lon"])][:10]
+            want = [{"id": str(r["geonameid"]), **{k: r.get(k) for k in fields}} for r in real]
+            mine = [{"id": p["id"], **{k: p.get(k) for k in fields}} for p in got]
+            if mine != want:
+                differences.append(("search", q, want, mine))
+        for row in lists_.towns[:30] + lists_.landmarks[:30]:
+            gid = row[0]
+            want = today.get(gid)
+            got = g.ask("/v1/lookups/places", {"id": str(gid), "settings": _settings(g, 25, site.url)})["places"]
+            if want is None:
+                if got:
+                    differences.append(("id", gid, None, got))
+            elif [(p["id"], p["name"], p["lat"], p["lon"], p["kind"]) for p in got] != [
+                    (str(gid), want["name"], want["lat"], want["lon"], want["kind"])]:
+                differences.append(("id", gid, want, got))
+        assert differences == [], f"{len(differences)} differences, the first: {differences[:3]}"
+    finally:
+        g.stop()
+
+
+@ONE_PYTHON
+def test_part2_killed_its_restarted_and_uses_its_list_without_fetching_again(
+        today, site, short_data, machine_python):  # noqa: F811
+    g = _GeoNames(short_data, site.url)
+    try:
+        g.until("ready", detail=None)
+        assert set(site.gets()) == {"cities1000.zip", "admin1CodesASCII.txt", "countryInfo.txt",
+                                    "alternateNamesV2.zip", "allCountries.zip"}
+        assert set(site.gets().values()) == {1}, f"each file fetched once: {site.gets()}"
+        before = dict(site.counts)
+        g.kill()
+        g.until("ready", restarts=1)
+        assert dict(site.counts) == before, "restarted with its list: nothing asked of the site"
+        assert not (short_data / "plugins" / "geonames" / "data" / "building").exists()
+    finally:
+        g.stop()
+
+
+@ONE_PYTHON
+def test_part2_a_missing_file_fails_naming_it_and_its_ready_once_its_there(today, site, short_data, machine_python):  # noqa: F811
+    site.missing = {"alternateNamesV2.zip"}
+    g = _GeoNames(short_data, site.url)
+    try:
+        said = g.until("failing")
+        assert "alternateNamesV2.zip" in (said["why"] or ""), said
+        site.missing = set()
+        g.kill()  # started again: it tries again at once
+        g.until("ready", detail=None)
+        assert site.gets().get("alternateNamesV2.zip") == 1
+    finally:
+        g.stop()
+
+
+@ONE_PYTHON
+def test_part2_cut_off_mid_download_it_keeps_what_it_finished(today, site, short_data, machine_python):  # noqa: F811
+    """The last file (allCountries.zip) held half sent and the program killed: started again, the files it had
+    finished aren't fetched again, the one cut off is, and the list is built."""
+    site.hold = "allCountries.zip"
+    g = _GeoNames(short_data, site.url)
+    try:
+        _until(g.runner, lambda: site.held.is_set(), within=60)
+        g.kill()
+        site.hold = None
+        site.release.set()
+        g.until("ready", detail=None, restarts=1)
+        gets = site.gets()
+        assert gets.pop("allCountries.zip") == 2, "the one cut off is fetched again"
+        assert set(gets.values()) == {1}, f"each finished file fetched once: {gets}"
+        part = list((short_data / "plugins" / "geonames" / "data").rglob("*.part"))
+        assert part == [], f"no partial download left: {part}"
+    finally:
+        g.stop()
