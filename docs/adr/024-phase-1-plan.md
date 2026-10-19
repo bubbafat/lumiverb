@@ -2,13 +2,13 @@
 
 ## Status
 
-Agreed (2026-10-19) by the builder, the reviewer and the tester; waiting for Robert's one decision (section 5) before any code. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Revised (2026-10-19) after Robert's decision (section 5): rename everything. For the builder, the reviewer and the tester to agree again before any code; then the coordinator's go for part 1. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
-It names Lumiverb's own data in plain words, `lumiverb.*`, and makes every built-in producer declare by name what it reads and what it makes. It writes those names into a page generated from the producers. It maps protocol 1's inputs to them.
+It names Lumiverb's own data in plain words, `lumiverb.*`, and makes every built-in producer declare by name what it reads and what it makes. It writes those names into a page generated from the producers, and maps protocol 1's inputs to them. Then it renames everything to those names: every identifier family Lumiverb stores or sends for its producers and their files (section 6), in five parts, each released and checked on Robert's Mac before the next (section 9).
 
-It doesn't change what a person sees, how any clip is made, or what any plug-in is handed. It doesn't rename our plug-ins' outputs (`geonames.town`, `example.*`: phase 2). It doesn't let plug-ins read each other's data, or check installs against the graph (phase 3), or add `has:` (phase 4).
+It doesn't change what a person sees on screen, how any clip is made, or what any plug-in is handed. It doesn't rename our plug-ins' outputs (`geonames.town`, `example.*`: phase 2). It doesn't let plug-ins read each other's data, or check installs against the graph (phase 3), or add `has:` (phase 4).
 
 ## Where it starts
 
@@ -30,7 +30,7 @@ The `missing_*` flags aren't search filters any more: `GET /v1/filters/capabilit
 
 Each built-in producer makes one name. A few names are made by Lumiverb itself, not by a producer: the scan (what the file says), a person (a location they set, a person they named), or Lumiverb combining others (`lumiverb.location`).
 
-| Name | What it is | Fields (version 1) | Made by | Today's id | Protocol 1 input |
+| Name | What it is | Fields (version 1) | Made by | Renamed from | Protocol 1 input |
 |------|-----------|--------------------|---------|-----------|------------------|
 | `lumiverb.original` | The file itself, in its library. Never handed to a plug-in (the API serves no originals) | a file | the library | — | — |
 | `lumiverb.metadata` | Its media type, size, length, camera and lens | `media_type`, `width`, `height`, `duration_sec`, `camera_make`, `camera_model`, `lens` | the scan (a video's length, its probe) | — | `metadata` |
@@ -52,6 +52,18 @@ Each built-in producer makes one name. A few names are made by Lumiverb itself, 
 | `lumiverb.image.likeness` | What visual search and "Find similar" compare: the photo's CLIP vector | `vector`, `model` | the visual search producer | `clip` | — |
 | `lumiverb.image.faces` | The faces found in a photo | a list of `box`, `vector`, `crop` (an image) | the faces producer | `faces` | — |
 | `lumiverb.people` | Who's in it, photo or video: the people its faces are named as | a list of `person` (their id and name), `confirmed` (a person said so, or Lumiverb matched them) | a person, or Lumiverb (a face matched to a person) | — | — |
+
+### Files
+
+Each file a name has is named too: the name itself for its main file, and a part under it for another. These are the file kinds in URLs (`/v1/assets/{id}/artifacts/{kind}`), uploads, ingest's files and playback's `source` (section 6):
+
+| File | Renamed from |
+|------|--------------|
+| `lumiverb.preview` | `proxy` |
+| `lumiverb.preview.thumbnail` | `thumbnail` |
+| `lumiverb.video.preview` | `video_preview` (playback's `preview`) |
+| `lumiverb.video.analysis_proxy` | `analysis_proxy` |
+| `lumiverb.video.scenes.picture` | `scene_rep` |
 
 ### What a reader is handed is what the clip shows
 
@@ -91,7 +103,7 @@ The ADR's first list had no name for the original, a person's location, the peop
 
 `needs` stops being declared. It's worked out from `reads`: each name read that a producer makes is a need, through its artifact. So the queue's waits, Processing's "N wait for Scenes" and `redo_also` behave exactly as now. A name read that the scan, a person or Lumiverb makes adds no need. It's there or not when the clip is listed, and `applies` says what a clip without it is: not one the producer applies to (scenes and transcripts without a length, location guesses without a capture time).
 
-`part_of` and `redo_also` stay declared, not worked out from `reads`: they're choices, not data. Scenes remade remake their descriptions but not the faces in the video, though both read scenes. Worked out from `reads`, every scene remake would remake video faces too. Nothing else about a producer changes: its kind, tier, flag and pool stay as declared.
+`part_of` and `redo_also` stay declared, not worked out from `reads`: they're choices, not data. Scenes remade remake their descriptions but not the faces in the video, though both read scenes. Worked out from `reads`, every scene remake would remake video faces too. Its `artifact` becomes its name, and `producer`, `kind` and `flag` go: a producer is named by what it makes, and its name stands for its job's kind and its work list (section 6). Its tier and pool stay as declared.
 
 | Producer | Reads (its own clip) | Needs (worked out, as today) |
 |----------|----------------------|------------------------------|
@@ -120,7 +132,7 @@ The registry check (`src/producers/__init__.py`) refuses what isn't so:
 
 An installed plug-in's producer reads the names of its protocol 1 inputs (section 3). Its `needs` come out as now (`proxy` when it reads the preview). It makes nothing named in phase 1: its outputs are named in phase 2.
 
-`GET /v1/producers` gains each producer's `makes` (its name), `reads` and `reads_others` (names), beside `artifact` and `needs`, which stay. `GET /v1/plugins`' `reads` stays the words a person reads on its card.
+`GET /v1/producers` gains each producer's `reads` and `reads_others` (names) in part 3, when its `artifact`, `needs`, `part_of` and waits become names. `GET /v1/plugins`' `reads` stays the words a person reads on its card.
 
 ## 3. Protocol 1's inputs
 
@@ -139,121 +151,225 @@ For phase 3, written down now: the hash a plug-in's output is kept with (`clip_i
 - who makes it (the producer's title, the scan, a person, Lumiverb);
 - what reads it (of its own clip, or of others);
 - the protocol 1 input it stands for;
-- its id in today's API (section 5).
+- what it was called before (renamed from), kept as the page's history.
 
 A fast test fails when the page isn't what the code would write, and says the command. Another test fails when a producer is added without a name, or its name has no `about`.
 
 The page is linked from cursor-api.md (the Plug-ins API, and "Writing a client"), from ADR-024, and from CLAUDE.md's producers row. Two lists kept by hand have drifted from the producers: cursor-api's job kinds (`GET /v1/producers/queue`) and the web's job labels (`ProcessingSection.tsx` `KIND_LABELS`) leave out `capture`, `location` and `video_faces`. Phase 1 adds them, and tests hold both to the scheduler's kinds: the doc's as the client contract's test reads it, the web's labels as `tests/test_no_silent_waits.py` holds `lib/waits.ts`.
 
-## 5. Robert's decision: rename what's stored and sent, or name beside it
+## 5. Robert's decision: rename everything
 
-Robert's phase 1 is "refactor builtins to align to the new naming schema". Read literally, that's (a): the built-ins renamed to the names. Read lightly, it's (b): the built-ins declared and documented under the names, which is what aligns them to the schema, and today's ids kept as storage keys underneath. Either way, sections 1 to 4 are built, and a client using today's ids keeps working. The question is whether today's ids go.
+Asked whether to rename what's stored and sent to the names (a), or keep today's ids as storage keys with the names beside them (b, recommended), Robert chose (a), 2026-10-19: "Rename everything. I don't want half-baked. We can split this up into multiple PRs to do the migration first, etc if that is easier."
 
-### (a) One name for each thing, everywhere
+So every identifier family is renamed to the names, or is a different thing and says why (section 6). The server ends up storing and sending only the names. What clients send under the old spellings is taken for a stated window that ends with part 5 (section 8).
 
-Today's artifact ids are renamed to the names wherever they're stored or sent.
+The road not taken: (b) added the names beside the ids, with no migration and one part. It would have left two identifiers for each built-in for as long as the ids stayed.
 
-- **Migrations.** One per account, renaming in place:
-  - `artifact_lineage.artifact` (a row for each thing made for each clip);
-  - `producer_pauses.target` (pauses, and stopped redos);
-  - `producer_crashes.artifact`;
-  - `system_metadata`'s `producer.<artifact>` settings and `producer.<artifact>.version_seen`;
-  - `uploads.artifact` and its CHECK (`video_preview`, `analysis_proxy`);
-  - `system_metadata`'s `artifacts.missing` (`asset_id:kind` entries: an unknown kind is skipped silently, so pending repairs of missing files would be lost);
-  - the triggers on `producer_pauses` and on `producer.%` keys, and the partial index `ix_artifact_lineage_failing`, held to the new names;
-  - an installed plug-in's work (`plugin_geonames` in lineage and pauses): left as it is in phase 1, its naming being phase 2's.
+## 6. Every identifier family
 
-  The scheduler's learned paces (`scheduler.status`) are only cosmetic: relearned. Older migrations whose downgrades assume today's names would need checking too. A downgrade renames them back. Missing `version_seen` alone would stop every producer's remakes as "a new version" (`hold_new_version`). The producer ids in lineage (`ffprobe`, `whisper`, …) stay: they say who made it, which is a different thing, and renaming them would make every clip stale.
-- **Code.**
-  - Every place an id is written as text: the producers' own SQL (`'capture'`, `'location'`), the faces levels' `producer.faces`, 13 `require_lineage(…, "<artifact>")` calls, ingest's lineage form (`proxy`, `capture`, `probe`, `vision`, `clip`), the artifact and upload types, the reader-work and check-in lists, the device's order (`probe`, `capture`, `analysis_proxy`), and the web app's matches (`"location"`, `"faces"`, `"video_faces"`).
-  - Ids are put into SQL as bind and column names (`src_<artifact>`, `:p_<artifact>`, `:remake_<artifact>`). A dotted name isn't one, so a second, safe spelling is needed inside the code anyway.
-- **Clients.** What a client sends can be taken under either spelling. What the server sends can't be both:
-  - A device on another machine running an older Lumiverb reads its work as `probe`, `capture` and `analysis_proxy`. Sent new names, it would do nothing, with nothing said, until it's upgraded.
-  - The Mac and iPhone apps fetch `artifacts/proxy`, `/thumbnail` and `/video_preview`, and match a playback source of `analysis_proxy`.
-  - A reader someone wrote for themselves (ADR-020 decision 9) sends lineage keyed by today's ids.
-  - An older device's failures report would be refused whole (422) once `artifact` is checked against the new names.
-  - An older CLI scanning from another machine sends ingest's lineage keyed `proxy`, `capture`, `probe`, `vision`, `clip`.
-  - What people and scripts type: `lumiverb pause vision`, `lumiverb enrich faces`, `lumiverb producers settings transcript`, `lumiverb-server pause <producer>`.
-  - The file kinds in URLs (`proxy`, `thumbnail`, `video_preview`, `analysis_proxy`, `scene_rep`) are tied to registry keys (`require_lineage`, `READER_ARTIFACTS`) and fetched by the apps, Resolve, the web, the CLI's downloads and the scan's caches.
-  - A browser tab left open across the upgrade.
+### Renamed
 
-  So the server takes today's ids for good: we can't know when the last old client has gone. It also keeps sending today's ids where an older client reads them, or it needs clients to say which they speak and old ones to be upgraded. For devices and scanners that lever exists already: the check-in's protocol (`check_ins.PROTOCOL`, `OLDEST_PROTOCOL`, 426 `reader_too_old`), so it's a bump, not new work. The apps, Resolve, scripts and people typing have none.
-- **Breaks, and for how long.** With aliases on everything sent to the server and today's ids kept in what it sends, nothing breaks. But then two spellings exist at the edge for as long as old clients do, and one inside the code for SQL. Without them, older devices stall silently until upgraded, the apps lose their previews until rebuilt, and other readers fail until they're changed.
-- **Rolling back.** Older code can't migrate down: v0.1.102's `lumiverb-server migrate` on part 4's revisions says "Can't locate revision identified by 'd7f3b9e1c5a2'" and changes nothing (the tester tried). So a rollback past (a) means downgrading with the newer code before installing the older one, or restoring the backup taken before the upgrade, which loses what was made since.
-- **Cost.** About three parts: storage and aliases; the clients (web, CLI, device, Swift); then taking out the literals. Most files under `src/server`, `src/processing` and `src/producers` are touched. It is a migration of every account's lineage. A missed rename shows as a mass remake or a silent hold.
+| Family | Where it's stored or sent | Renamed to | Part |
+|--------|---------------------------|------------|------|
+| **Artifact ids** (`probe`, `capture`, `proxy`, …) | The registry's keys; `artifact_lineage.artifact`; `producer_crashes.artifact`; `GET /v1/producers`' `artifact`, `needs`, `part_of` and waits; failures and retry; Run; the settings and redo paths; 409 details; the queue's `switches`, `eta` and `not_counted`; the CLI | The names (section 1) | 3 |
+| **Lineage's producer** (`ffprobe`, `exiftool`, `preview`, `analysis-proxy`, `scene-detect`, `scene-vision`, `insightface`, `insightface-video`, `whisper`, `vision`, `ocr`, `clip`, `proxy`, `location`) | `artifact_lineage.producer`; the JSON lineage kept with scenes (`video_scenes.lineage`), uploads and the other tables that keep one; what every machine write sends (`lineage.producer`); `require_lineage` | The producer's name: a producer is named by what it makes. The migration renames every row and every JSON lineage in the same transaction as the artifacts, and the code's producer is the name at the same release, so no clip goes stale | 3 |
+| **Job kinds** (`render`, `probe`, …, and `redo_<kind>`) | The scheduler's `KINDS`, the dispatcher, `scheduler.status`, `GET /v1/producers/queue` (`running`, `waiting`, `jobs`, `held`, `unlisted`, `pace`), the web's labels, cursor-api | A producer's kind is its name; its remakes' kind is `redo:<name>`. The scan's job stays `scan`: it isn't a producer's | 3 |
+| **Flags** (`missing_*`) | `ProducerSpec.flag`, `MISSING_FLAGS`, `MISSING_CONDITIONS`, `GET /v1/assets/repair-summary`'s fields | Gone: the scheduler's work lists and the repair summary are keyed by name (`"missing": {name: count}`), the summary's own counts (`missing_proxy`, `missing_exif`, `missing_face_embeddings`) under the names they count. No client reads the summary | 3 |
+| **Pause targets** | `producer_pauses.target` (work, and stopped redos: `keep_made`'s and `hold_new_version`'s); `/v1/producers/{target}/pause` and `/resume`; both CLIs | The names | 3 |
+| **Settings keys** | `system_metadata`'s `producer.<artifact>` and `producer.<artifact>.version_seen`; the faces levels' SQL (`producer.faces`) | `producer.<name>` and `producer.<name>.version_seen`, both renamed in the migration, so no new-version hold is tripped. The reader-mark triggers match `producer.%` and still do | 3 |
+| **Reader-work and check-in lists** (`previews`, `probe`, `capture`, `analysis_proxy`; `made_with`; `paused`) | `routers/scans.py`, `routers/readers.py`, `src/server/check_ins.py`; the device's `ORDER`; ingest's lineage keys | The names, at check-in protocol 2 | 3 |
+| **Plug-in work ids** (`plugin_<id>`) | Lineage, pauses, settings keys, kinds, pools and flags of an installed plug-in's work | The plug-in's id (`geonames`): a plug-in's work is named by its plug-in, as a built-in's by what it makes. Ids the machine uses (`all`, `upkeep`, `scans`, `scan`, `person`, `unknown`, and any starting `lumiverb`) are refused at install from part 1 | 3 |
+| **File kinds** (`proxy`, `thumbnail`, `video_preview`, `analysis_proxy`, `scene_rep`) | `/v1/assets/{id}/artifacts/{kind}`; the batch upload's fields; `POST /v1/assets/{id}/uploads` and `uploads.artifact` with its CHECK; ingest's files; `artifacts.missing`'s entries; playback's `source`; the CLI's `--size`; the apps, Resolve, the web and the caches | The files' names (section 1) | 4 |
+| **CLI and `lumiverb-server` words** | `lumiverb pause` and `resume`, `enrich`, `producers settings`, `redo` and `failures`, `scan --size`; `lumiverb-server pause` and `resume` | The names, typed with or without `lumiverb.` (`lumiverb pause image.description`): a name typed is the same name either way | 2 (both taken), 5 (names only) |
+| **The web's literals** | `ProcessingSection.tsx` (`"location"`, `"faces"`, `"video_faces"`), `WelcomePage.tsx` (`faces`, `video_faces`), `KIND_LABELS`, the image and playback kinds | The names, with each part's server (it serves the web) | 3, 4 |
+| **The apps' and Resolve's literals** | `artifacts/proxy`, `/thumbnail`, `/video_preview`; playback's `analysis_proxy`; Resolve's `thumbnail` | The files' names, reading either spelling the server sends | 2 |
+
+The column `producer` in `GET /v1/producers` equals `artifact` once every producer is named by what it makes. It goes in part 5, with the aliases. Lineage's `producer` column stays: it says who made each clip's, and a person can be the maker.
+
+### Kept, because each is a different thing
+
+| Kept | Why |
+|------|-----|
+| AI job names (`vision`, `transcripts`, `clip`, `faces`) | A job is what an AI machine does, chosen per account with a model (Settings › AI), and several producers share one: descriptions, the text read and scene descriptions all use the vision job. Job names are the AI machines' protocol (`/v1/ai/jobs`, the AI worker's `/v1/lumiverb/clip`), not data |
+| Models (`ViT-B-32-openai`, Whisper's `large-v3`, `buffalo_l`), and the apps' `model_id` `clip` | Their makers' names for them |
+| Pools (`probe`, `exif`, `render`, `scenes`, `vision`, `clip`, `faces`, `transcripts`, `cpu`) | A pool is a resource several producers share (one vision pool for descriptions, text read and scene descriptions), so no one name fits it |
+| The switches `all`, `upkeep`, `scans`, and the scan's job `scan` | They pause or are the machine's own work, not a producer's |
+| `person` and `unknown` in lineage | Makers that aren't producers: a person, or a save that didn't say |
+| Search's hit types (`asset`, `scene`, `transcript`) | Which part of the search index matched (the clip as a whole, a scene, a moment of its transcript): where a hit is, not what was made |
+| Protocol 1's input words (`location`, `capture_time`, `metadata`, `preview`) | A published protocol. Every installed plug-in's manifest, the hash its outputs are kept with (`hash_sql`) and what its install accepted (`installed_plugins.permissions`) are in those words. Renaming them would redo every plug-in's work and ask every install again. Protocol 2 (phase 3) takes the names (section 3) |
+| Tables, columns and storage keys (`assets.proxy_key`, `video_facets`, `has_transcript`, a file's key) | Where a name's data is kept (`Data.stored`), never sent as a name. Renaming them would rewrite the schema and move every file on disk with no reader the better for it |
+| The API's field names (`artifact`, `producer`, `kind`, `target`) | A field names its value's role (which data; who made it; which job); the value becomes the name. Renaming the fields would change every client's shape for no new meaning |
+
+## 7. The SQL spelling
+
+A dotted name can't be a bind parameter, a column alias or an identifier in SQL. Where the code builds one from a name (`src_`, `wait_`, `:p_`, `:v_`, `:h_`, `:remake_`, `w_`, `r_`), it uses one mechanical spelling: the name with each dot and dash an underscore (`lumiverb.video.transcript` → `lumiverb_video_transcript`, a plug-in `my-tool` → `my_tool`). One function makes it (`src/producers/names.py` `sql_spelling`). It's documented as a spelling, never a second name: it's never stored, never sent, and never typed.
+
+Held by tests:
+- every name on the install spells differently (`a.b_c` and `a_b.c` would collide): the registry check, and the install of a plug-in;
+- every stored and sent name has its dots: after the migration, every value in lineage, pauses, crashes and settings keys, and every name in the API's answers, is in the name grammar, never a spelling;
+- the spelling appears in `src` only from `sql_spelling`.
+
+## 8. Old clients, and when their window ends
+
+From part 1 the server takes the names wherever it takes an id. From part 3 it stores and sends only the names, and still takes the old spellings on what clients send, mapped to the names, until part 5. Each client's window:
+
+| Client | How it changes | Its old spellings end |
+|--------|----------------|----------------------|
+| Devices (`lumiverb device run`) and the scheduler's own check-in | Part 2's speak check-in protocol 2 (names) when the server offers it, else 1. Part 3's server is protocol 2 only (`check_ins.PROTOCOL` and `OLDEST_PROTOCOL` 2) | At part 3: a device older than part 2 is told to upgrade, 426 `reader_too_old`, never left silent |
+| The Mac and iPhone apps | Part 2's fetch files by their names and read playback's source in either spelling; Robert rebuilds both at part 2 | An app from before part 2 plays previews instead of analysis proxies from part 4, and its fetches stop at part 5 (404, naming the file's name) |
+| Resolve's plug-in | Part 2's fetches thumbnails as `lumiverb.preview.thumbnail` | At part 5 |
+| The CLI, on this machine or another | Part 2's takes and sends names | An older CLI's words and lineage are taken until part 5, then refused (422, naming the new name) |
+| Scripts and people typing (`lumiverb pause vision`) | From part 2 the CLIs take names (`lumiverb.` optional) and old words with a warning naming the new one | At part 5: an old word is refused, saying the name to type |
+| The web app | Served by the server, so it changes with each part. A tab left open across an upgrade sends what it loaded: taken until part 5 | At part 5 |
+| Readers someone wrote (ADR-020 decision 9) | cursor-api says the names from part 1, and the old spellings' end at part 5 | At part 5 |
+
+Every alias is in one table (`src/producers/names.py` `RENAMED`, old to new), which part 5 deletes. Nothing is taken "for good".
+
+## 9. Parts
+
+Five PRs, each released and checked on Robert's Mac (the gate) before the next starts. The order keeps each release working on its own:
+- the server takes the names before any client sends them;
+- every client reads both spellings before the server sends only names;
+- storage and what's sent change together, in one release, per family;
+- the aliases go last, once every client speaks names.
+
+Robert's "migration first" is part 3. Before it come the two parts that make the migration safe: without part 1 nothing could send a name, and without part 2 the first release that sends names would break the apps and devices.
+
+**The gate, for every part** (run by the coordinator on Robert's Mac, before and after the upgrade):
+- a snapshot from `lumiverb producers --json` (part 1 adds it): every producer's counts (current, stale, missing, failing), settings, paused, redo stopped and `new_version`, keyed by name, the old ids written in names through `RENAMED`;
+- the snapshot after equals the one before;
+- nothing remade (no current count down, no remake held that wasn't), and `new_version` nowhere it wasn't;
+- pauses, stopped redos and settings kept (GeoNames' radius among them);
+- the Admin page as before, and the log without errors.
+
+### Part 1: the names, and the server taking them
+
+- **What.** Sections 1 to 4: `Data`, `makes` and `reads`, `src/producers/names.py`, the page, the protocol 1 table, the registry checks and the SQL spelling.
+  - Every route, form and lineage that takes an id today also takes its name, mapped to today's id; storage is untouched.
+  - `lumiverb producers --json`, the gate's snapshot.
+  - `lumiverb-server migrate --to <revision>`: the control database and every account, down or up, the rollback tool for parts 3 and 4, shipped and tested before they need it.
+  - The plug-in ids the machine uses refused at install.
+  - No alembic revision.
+- **Gate.** The snapshot unchanged.
+- **Rollback.** Install v0.1.104.
 - **Tests.**
-  - The migration up and down on an account seeded with every table and key, `version_seen` included.
-  - Every route under both spellings.
-  - Today's device code (a copy pinned in the tests) against the new server.
-  - The apps' artifact URLs.
-  - The upload CHECK.
-  - The suite with every literal gone (a test that no artifact id is written as text outside the registry).
-  - A rollback: upgrade, work done, downgrade with the newer code, the older code installed. Nothing remade, pauses and settings kept, open uploads finished.
-- **Left alone either way**, a different namespace: AI job names (`vision`, `transcripts`, `clip`, `faces` in `ai_job_models`, `/v1/ai/jobs`, `/v1/lumiverb/clip`), the CLIP `model_id` `clip` the apps send, search's `hit_type` `transcript`, storage keys and the env file's names.
-
-### (b) Names beside today's ids
-
-Today's ids stay what's stored and sent. They're documented as storage keys, kept for every client. The names are the public, documented layer: the page, `GET /v1/producers`' `makes` and `reads`, and everything new (phase 3's manifests, phase 4's `has:`). One table in the registry maps each to the other. It's held by a test: each producer has exactly one name and each name at most one id.
-
-- **Migrations.** None: the PR adds no alembic revision. Rolling back to v0.1.104 is installing it.
-- **Code.** `ProducerSpec.makes` and `reads`, `src/producers/names.py`, the protocol 1 table, the page and its writer, three fields on `GET /v1/producers`, and the registry check. About ten files besides tests and docs.
-- **Clients.** Nothing they send or read changes. Nothing breaks.
-- **Cost.** One part. Two identifiers for each built-in: the id, which people never see (Processing shows titles), and the name, which they read. The page puts them side by side. New API takes names; the existing API keeps its ids, as cursor-api says.
-- **Tests.**
-  - The rules (grammar, `lumiverb.*`, media level, one maker, every read made, no circle).
-  - `needs` worked out from `reads` equal to today's for every producer.
+  - The rules of section 2, each refusing a made-up producer that breaks it.
+  - `reads` held to the SQL and inputs that run.
+  - The whole registry as the code works it out, equal to main's values written into the test: needs, `part_of`, `redo_also`, tier, kind, flag, pool, `KINDS` with the `redo_` kinds, the pause targets, `MISSING_FLAGS`, `APPLIES`, `MADE`, `RECHECK`.
   - The page current.
-  - The protocol 1 table complete (every `INPUTS` key has a name, and each name is one a producer or Lumiverb makes).
-  - A plug-in still handed exactly what it was.
-  - `GET /v1/producers`' `makes` and `reads`.
+  - The protocol 1 table, a plug-in handed exactly what it was.
+  - Every route under each id and each name, the same answer.
+  - `migrate --to` down and up on a seeded install.
+  - Reserved plug-in ids refused.
+  - The spelling tests.
+  - No alembic revision.
 
-### Recommendation: (b)
+### Part 2: the clients speak the names
 
-What Robert asked for is readable names and a contract to build on, not new storage. (a) touches every account's lineage and most of the server for no change anyone sees. Because old clients can't all be upgraded together, it still keeps today's ids at the edge, and needs a second spelling inside the code for SQL. So (a) ends with two names too, at far more cost and risk.
+- **What.**
+  - The CLI and `lumiverb-server` take names (`lumiverb.` optional) and old words with a warning.
+  - The device and the scan send names in lineage, failures, uploads and ingest (taken since part 1). They read the server's lists in either spelling, and speak check-in protocol 2 when it's offered.
+  - The Mac and iPhone apps, and Resolve, fetch files by their names and read playback's source in either spelling. Robert rebuilds both apps.
+  - No alembic revision.
+- **Gate.** The snapshot unchanged. The rebuilt apps show previews, thumbnails and video previews, and play videos. A scan finds and sends a new file.
+- **Rollback.** Install part 1's release, which takes what part 2's clients send.
+- **Tests.**
+  - The CLI's words: names, with and without `lumiverb.`, and old words with their warning.
+  - The device against a server at protocol 1 and at 2: both lists done.
+  - The scan's names taken by part 1's server.
+  - LumiverbKit: both playback spellings, and the files' names in URLs.
+  - Resolve's thumbnail.
 
-(b) gives every reader one name per thing now, in the places names are read: every producer declares its data by name, the names are the documented contract, and everything new speaks them. That is what aligning the built-ins to the schema has to deliver for phases 2 to 5.
+### Part 3: the rename, stored and sent
 
-If keeping two ids ever costs more than it saves, a later phase can retire the old ones on its own terms: the check-in's protocol bumped first, then the rename. Retiring them then costs about what (a) costs now: the migrations, the code and the aliases. It doesn't get cheaper by waiting, except that older clients will have gone by then.
+- **What.**
+  - One tenant migration, one transaction per account, renaming:
+    - artifact ids, and producer ids in lineage's column and every JSON lineage;
+    - pause targets (work and redo);
+    - crash rows;
+    - settings keys and `version_seen`;
+    - plug-in work ids (`plugin_geonames` → `geonames`).
+  - The registry keyed by names: `artifact` the name; `producer`, `kind` and `flag` gone.
+  - Every literal in `src`, the web and the tests renamed.
+  - What's sent is names only: `GET /v1/producers` (with `reads` and `reads_others`), the queue, failures, reader work, check-ins, 409 details, the repair summary keyed by name.
+  - Check-in protocol 2 only.
+  - The old spellings still taken on input, through `RENAMED`.
+  - cursor-api, CLAUDE.md and ADR-024.
+  - The file kinds wait for part 4, so this part is one family's.
+- **Gate.** The snapshot before (part 2's, in names) equals the one after. Nothing remade, no new-version hold, pauses and settings kept. A device, if there is one, checks in at protocol 2.
+- **Rollback.** `lumiverb-server migrate --to <part 2's revision>` with part 3's code, then install part 2's release. Or restore the backup taken before the upgrade (`backups.py`'s before an upgrade), which loses what was made since.
+- **Tests.**
+  - The migration up and down on an account seeded with every table and key: lineage made, empty and failed with JSON lineage; pauses of work and redo, `keep_made`'s and `hold_new_version`'s among them; crashes; settings and `version_seen`; a plug-in's work.
+  - The gate in a test: `GET /v1/producers` before and after, compared by name.
+  - The scheduler's due lists equal before and after (nothing remade).
+  - `hold_new_version` not tripped.
+  - Every route takes both spellings and sends names.
+  - A protocol 1 device gets 426.
+  - The no-old-id test for this family: no old artifact, producer, kind or flag id is written as text in `src`, the web or the apps, outside `RENAMED`.
+  - The tester's rollback on a throwaway: upgrade, work done, `migrate --to` with part 3's code, part 2's release installed; nothing remade or lost.
 
-## 6. What a person sees
+### Part 4: the files' names
 
-Nothing changes on screen. The page `docs/data-names.md` is new, linked from the docs a plug-in author or client writer reads. `GET /v1/producers` has three more fields (`makes`, `reads`, `reads_others`).
+- **What.**
+  - A tenant migration: `uploads.artifact` and its CHECK, and `artifacts.missing`'s entries.
+  - The files' names in URLs, uploads, the batch fields, ingest, playback's source, the CLI's `--size` and the caches.
+  - Old kinds still taken until part 5.
+- **Gate.** The snapshot unchanged. Previews, thumbnails, video previews and playback on the web and both apps. An upload begun before the upgrade finishes after it. A missing-file repair pending before is still pending.
+- **Rollback.** As part 3's: `migrate --to <part 3's revision>` with part 4's code, then install part 3's release; or the backup.
+- **Tests.**
+  - The migration up and down with an open upload and pending repairs.
+  - An upload begun before the migration finished after it.
+  - Old and new URLs both answered.
+  - The no-old-id test for file kinds.
 
-## 7. Tests
+### Part 5: the old spellings end
 
-Every test calls the real registry, producers and routes (none reimplements a rule), and none asserts speed.
+- **What.**
+  - `RENAMED` deleted: an old spelling on input is refused, saying its name (422, or 404 for a URL), and the CLIs say the name to type.
+  - `GET /v1/producers`' `producer` field goes.
+  - cursor-api's note on the window says it closed, and in which release.
+  - No alembic revision.
+- **When.** Once part 4 is checked on Robert's Mac, his apps are part 2's or later, and no device is on protocol 1 (part 3 already refuses those).
+- **Gate.** The snapshot unchanged. The web, both apps, Resolve, a scan and the CLI work.
+- **Rollback.** Install part 4's release.
+- **Tests.**
+  - Each old spelling refused, naming the new.
+  - The no-old-id test over `src`, the web, the apps, Resolve and the docs, with only the page's history and cursor-api's note allowed.
+  - The web's, the apps' and Resolve's suites.
 
-- The rules in section 2, each refusing a made-up producer that breaks it (the registry check, as `tests/test_producer_contract.py` does for producers' other rules).
-- `reads` held to what runs: every table and clip column each producer's `applies`, `made` and `recheck` read is stored by a name it reads or makes (or is on the not-data list); every input its work is handed (`Work.inputs`) is a name it reads. Each fails on a made-up producer reading a column it doesn't declare.
-- What a reader would be handed is what the clip shows: a field a person can write is on the page as theirs. For `lumiverb.image.description` and `lumiverb.image.text`, by `corrections.FIELDS`; for `lumiverb.video.transcript`, by the rule that shows a person's transcript (lineage producer `person`, `source` `manual`: `assets.py` `_persons_transcript`).
-- Nothing else moves: the whole registry as the code works it out, every value written into the test from main before the change. Each producer's `needs` (now from `reads`), `part_of`, `redo_also`, tier, kind, flag and pool; the scheduler's `KINDS`, its `redo_` kinds too; the pause targets; `MISSING_FLAGS`; lineage's tables (`APPLIES`, `MADE`, `RECHECK`).
-- The page: written by the command, equal to the file; and a change to a producer's name fails it.
-- The protocol 1 table: each input's name, and `tests/test_plugin_work.py` unchanged (what a plug-in is handed).
-- `GET /v1/producers`: each producer's `makes`, `reads` and `reads_others`; an installed plug-in's `reads` (its inputs' names) and its `makes` empty.
-- No alembic revision in the PR (b).
-- The tester's, in their acceptance file, at READY: every `GET /v1/producers` row equal to today's but for the new fields, on a seeded account with a plug-in (expected values written from main now); a protocol 1 plug-in's work request byte for byte as today's; end to end on throwaway installs, v0.1.104's CLI, `lumiverb device run` and web app against the phase 1 server, GeoNames' outputs not due after the upgrade, and a rollback to v0.1.104 on the same databases with nothing remade or lost; LumiverbKit's and Resolve's tests (on main: 338 Swift tests, 0 failures; Resolve 42 passed).
-- Option (a), if Robert chooses it: section 5's list.
+## 10. What a person sees
 
-## 8. Parts
+On screen, nothing (Processing shows titles). The page `docs/data-names.md` is new. Commands take the names: `lumiverb pause image.description`. Old words are warned of from part 2, then refused from part 5, saying the name to type. Robert rebuilds the Mac and iPhone apps at part 2.
 
-Under (b), one PR, with no alembic revision (rolling back to v0.1.104 is installing it): the names, the declarations, the page, the API's fields, their tests and docs (ADR-024's progress, CLAUDE.md's producers and plug-ins rows, cursor-api.md). Under (a), three, each released before the next, with section 5's rollback procedure in the release notes.
+## 11. Tests
 
-## 9. Risks
+Every test calls the real registry, producers, migrations and routes (none reimplements a rule), and none asserts speed. Each part's are in section 9. The tester adds acceptance tests of their own at each READY, from main's values written now:
+- every `GET /v1/producers` row equal to today's through the names;
+- a protocol 1 plug-in's work request byte for byte;
+- end to end on throwaway installs:
+  - the previous release's CLI, `lumiverb device run` and web app against the new server;
+  - GeoNames' outputs not due after the upgrade;
+  - each part's rollback with nothing remade or lost;
+- LumiverbKit's and Resolve's tests (on main: 338 Swift tests, 0 failures; Resolve 42 passed).
 
-- **Names are hard to change once plug-ins read them** (phase 3). Phase 1's list is the one to get right: the reviewer, the tester and Robert read section 1 for words they'd look for and not find.
-- **Two identifiers** (b): someone writes code against the wrong one. The page shows both side by side, cursor-api says which an API takes, and new API takes names only.
+## 12. Risks
+
+- **Names are hard to change once plug-ins read them** (phase 3), and now they're in every account's data. The list in section 1 is the one to get right: the reviewer, the tester and Robert read it for words they'd look for and not find.
+- **A missed rename** shows as a mass remake, a silent hold or a refused save. The gate checks each part on Robert's Mac. The no-old-id tests fail on an old id left as text, and the migration's tests seed every table and key that holds one.
+- **Part 3 is big.** Every literal in the server changes at once. It's mechanical (`RENAMED` drives the migration and the aliases alike), and the whole-registry test holds every value the code works out to main's, through the names.
 - **A name that hides two things** (`lumiverb.capture_time` also brings the GPS's accuracy; `lumiverb.preview` is two files). The page says what each holds.
 
-## 10. Question for Robert (through the coordinator)
+## 13. Decided here, for Robert to overrule if he'd rather
 
-1. **Rename what's stored and sent, or name beside it?** His "refactor builtins to align to the new naming schema" read literally is (a); (b) is the lighter reading, and meets it by declaring and documenting every built-in under the names. (a) renames today's ids to the names everywhere. That's a migration of every account, most of the server, aliases kept for older devices, the apps and other readers, and three parts. (b) adds the names beside the ids. That's no migration, nothing broken, one part. Recommended: (b).
-
-The names themselves (section 1) are for the reviewer and the tester to agree. Robert can change any word; the two that took the most thought are `lumiverb.video.format` (probe) and `lumiverb.image.likeness` (CLIP).
+- The API's field names stay; their values become names (section 6).
+- A name may be typed without `lumiverb.`.
+- A producer's remakes run as the kind `redo:<name>`.
+- A plug-in's work is named by the plug-in's id.
 
 ## Agreement
 
 | Who | Says |
 |-----|------|
-| geonames-builder | Proposed |
-| geonames-reviewer | AGREE (on 2f4c896c), three nits folded in after it (text only): three fields on `GET /v1/producers`, the web's kind labels held like `lib/waits.ts`, a person's transcript by its own rule |
-| geonames-tester | AGREE (on 2f4c896c), its note folded in after it (text only): "two fields" made three, as section 2 says |
+| geonames-builder | Proposed, for (a) |
+| geonames-reviewer | AGREE on 2f4c896c (the plan for (b)); on this revision: |
+| geonames-tester | AGREE on 2f4c896c (the plan for (b)); on this revision: |
