@@ -234,7 +234,7 @@ def test_hashing_keeps_at_most_twice_its_concurrency_waiting(tmp_path: Path) -> 
 
     def slow(path: Path) -> str:
         started.append(path.name)
-        release.wait(5)
+        release.wait(60)
         return _sha(path.name)
 
     files = [{"rel_path": f"f{n:02}.jpg"} for n in range(20)]

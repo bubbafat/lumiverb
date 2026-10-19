@@ -887,13 +887,13 @@ def test_stopping_the_api_kills_a_running_cut(tmp_path, monkeypatch):
     t = threading.Thread(target=cut)
     t.start()
     try:
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 60
         while not playback._procs and time.monotonic() < deadline:
             time.sleep(0.01)
         assert playback._procs
         started = time.monotonic()
         playback.stop_cuts()
-        t.join(10)
+        t.join(60)
         assert not t.is_alive() and time.monotonic() - started < 30, "the 60 s cut wasn't waited for"
         assert failed and not playback._procs
         # One asked for while it stops doesn't start.

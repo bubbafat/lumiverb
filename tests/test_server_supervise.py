@@ -27,8 +27,8 @@ log = sys.argv[1]
 def note(what):
     with open(log, "a") as f:
         f.write(f"{what} {os.getpid()} {time.monotonic()}\\n")
-note("start")
 signal.signal(signal.SIGTERM, lambda *_: (note("term"), sys.exit(0)))
+note("start")  # once its log is there, it hears a stop
 while True:
     time.sleep(0.05)
 """
@@ -77,7 +77,7 @@ def _child(tmp_path: Path, name: str, code: str, *args: str, **kwargs) -> Child:
     script = tmp_path / f"{name}.py"
     script.write_text(code)
     return Child(name, [sys.executable, str(script), *args], dict(os.environ), tmp_path,
-                 restart_after=kwargs.pop("restart_after", 0.1), stop_within=kwargs.pop("stop_within", 5), **kwargs)
+                 restart_after=kwargs.pop("restart_after", 0.1), stop_within=kwargs.pop("stop_within", 60), **kwargs)
 
 
 def _running(supervisor: Supervisor):
@@ -87,7 +87,7 @@ def _running(supervisor: Supervisor):
     return stop, thread
 
 
-def _until(condition, timeout: float = 10.0) -> None:
+def _until(condition, timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     while not condition():
         assert time.monotonic() < deadline, "timed out"
@@ -108,7 +108,7 @@ def test_a_child_that_dies_is_started_again_after_its_delay(tmp_path):
     stop, thread = _running(Supervisor([child]))
     _until(lambda: marker.exists() and "again" in marker.read_text())
     stop.set()
-    thread.join(10)
+    thread.join(60)
     assert not thread.is_alive()
 
 
@@ -145,7 +145,7 @@ def test_a_child_in_a_crash_loop_is_started_less_and_less_often(tmp_path):
     stop, thread = _running(Supervisor([child]))
     _until(lambda: starts.exists() and len(starts.read_text().split()) >= 4)
     stop.set()
-    thread.join(10)
+    thread.join(60)
     times = [float(line) for line in starts.read_text().split()]
     gaps = [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
     # At least 0.2, 0.4, 0.8 s: each start waits twice the last.
@@ -159,7 +159,7 @@ def test_a_stop_goes_in_reverse_order_and_each_child_hears_sigterm(tmp_path):
     stop, thread = _running(Supervisor([api, scheduler]))
     _until(lambda: api_log.exists() and scheduler_log.exists())
     stop.set()
-    thread.join(15)
+    thread.join(60)
 
     def term_time(log: Path) -> float:
         line = next(line for line in log.read_text().splitlines() if line.startswith("term"))
@@ -177,9 +177,9 @@ def test_only_the_schedulers_main_process_hears_the_stop_and_whats_left_is_kille
     _until(lambda: Path(f"{log}.pid").exists())
     grandchild = int(Path(f"{log}.pid").read_text())
     stop.set()
-    thread.join(15)
+    thread.join(60)
     assert not Path(f"{log}.term").exists(), "the grandchild got no SIGTERM"
-    _until(lambda: not _alive(grandchild), timeout=5)
+    _until(lambda: not _alive(grandchild))
 
 
 def _group_left_exiting(monkeypatch) -> list[int]:
@@ -207,7 +207,7 @@ def test_a_stop_finishes_when_whats_left_of_a_group_is_exiting(tmp_path, monkeyp
     stop, thread = _running(Supervisor([api, scheduler]))
     _until(lambda: api_log.exists() and scheduler_log.exists())
     stop.set()
-    thread.join(15)
+    thread.join(60)
     assert not thread.is_alive()
     assert refused, "the kill of what's left was answered EPERM"
     assert "term" in api_log.read_text() and "term" in scheduler_log.read_text(), "both were stopped"
@@ -220,7 +220,7 @@ def test_a_child_that_dies_is_started_again_when_whats_left_of_its_group_is_exit
     stop, thread = _running(Supervisor([child]))
     _until(lambda: marker.exists() and "again" in marker.read_text())
     stop.set()
-    thread.join(10)
+    thread.join(60)
     assert not thread.is_alive()
     assert refused
 
@@ -234,7 +234,7 @@ def test_a_child_that_ignores_sigterm_is_killed_when_its_time_is_up(tmp_path):
     pid = child.process.pid
     started = time.monotonic()
     stop.set()
-    thread.join(10)
+    thread.join(60)
     assert not _alive(pid)
     # It got its time (0.5 s) and no more than a while: killed, not left running (never how fast).
     assert 0.4 < time.monotonic() - started < 30
@@ -250,7 +250,7 @@ def test_its_temp_folder_is_emptied_before_it_starts(tmp_path):
     _until(log.exists)
     assert list(spool.iterdir()) == []
     stop.set()
-    thread.join(10)
+    thread.join(60)
 
 
 def test_a_child_waits_for_its_start_after_and_a_stop_before_it_starts_nothing(tmp_path):
@@ -266,14 +266,14 @@ def test_a_child_waits_for_its_start_after_and_a_stop_before_it_starts_nothing(t
     migrated.set()
     _until(later_log.exists)
     stop.set()
-    thread.join(15)
+    thread.join(60)
     assert not thread.is_alive()
 
     never = _child(tmp_path, "scheduler", _POLITE, str(tmp_path / "never.log"), start_after=threading.Event())
     stop, thread = _running(Supervisor([never]))
     time.sleep(0.2)
     stop.set()
-    thread.join(10)
+    thread.join(60)
     assert not thread.is_alive() and never.process is None and not (tmp_path / "never.log").exists()
 
 
@@ -301,7 +301,7 @@ def test_a_child_hears_its_own_stop_signal(tmp_path, stop_signal, main_only):
     stop, thread = _running(Supervisor([child]))
     _until(Path(f"{log}.up").exists)
     stop.set()
-    thread.join(10)
+    thread.join(60)
     assert log.read_text() == stop_signal.name
 
 
@@ -324,5 +324,5 @@ def test_a_restart_asked_for_stops_it_as_a_stop_does_and_starts_it_at_once(tmp_p
         assert [line.split()[0] for line in api_log.read_text().splitlines()] == ["start"], "the others keep running"
     finally:
         stop.set()
-        thread.join(10)
+        thread.join(60)
     assert not thread.is_alive()

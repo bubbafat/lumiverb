@@ -482,7 +482,7 @@ def test_a_rating_in_flight_on_the_copy_keeps_it(env, monkeypatch):
     monkeypatch.setattr(AssetRepository, "lock_copy", rating_in_flight_then_lock)
     _archive(env, original)
     for thread in threads:
-        thread.join(10)
+        thread.join(60)
     engine.dispose()
     assert _get(env, copy)["rel_path"] == "race/copy/R001.mov"
     with _db(env) as session:  # usr_x's rating: the lookup only shows the caller's own
@@ -528,7 +528,7 @@ def test_a_person_confirmed_on_the_copy_during_the_handover_isnt_lost_silently(e
     monkeypatch.setattr(AssetRepository, "lock_copy", lock_then_confirm)
     _archive(env, original)
     assert "thread" in outcome, "the handover never locked the copy"
-    outcome["thread"].join(15)
+    outcome["thread"].join(60)
     assert outcome["waited"], "the confirmation didn't wait for the handover"
     engine.dispose()
     with _db(env) as session:
@@ -593,7 +593,7 @@ def test_a_person_s_action_on_the_copy_during_the_handover_wins(env, monkeypatch
 
     monkeypatch.setattr(AssetRepository, "has_human_data", check_then_act)
     _archive(env, original)
-    outcome["thread"].join(15)
+    outcome["thread"].join(60)
     engine.dispose()
     assert "error" not in outcome, outcome
     assert "ok" in outcome, outcome

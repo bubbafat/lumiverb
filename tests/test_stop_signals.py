@@ -73,8 +73,10 @@ def test_a_stream_of_stop_signals_never_stops_the_main_thread_for_good():
         assert proc.poll() is None, "a signal killed it: the handler wasn't in place"
         time.sleep(0.5)
         before = int(said[-1])
-        time.sleep(0.5)
-        assert int(said[-1]) > before, "the main thread stopped making progress"
+        deadline = time.monotonic() + 60
+        while int(said[-1]) <= before:
+            assert time.monotonic() < deadline, "the main thread stopped making progress"
+            time.sleep(0.05)
     finally:
         proc.kill()
         proc.wait()
@@ -84,8 +86,10 @@ def test_a_stop_signal_sets_the_event():
     proc, said = _start(STOPS)
     try:
         os.kill(proc.pid, signal.SIGTERM)
-        assert proc.wait(timeout=10) == 0
-        time.sleep(0.1)
+        assert proc.wait(timeout=60) == 0
+        deadline = time.monotonic() + 60  # its last line read
+        while said[-1] != "stopped" and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert said[-1] == "stopped"
     finally:
         if proc.poll() is None:

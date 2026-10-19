@@ -125,7 +125,7 @@ def test_a_hung_mount_times_out(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     release = threading.Event()
 
     def hang(path: Path, require_entries: bool) -> Path:
-        release.wait(5)
+        release.wait(60)
         return path
 
     monkeypatch.setattr(roots, "_probe", hang)
@@ -143,7 +143,7 @@ def test_a_hung_mount_gets_one_stuck_probe_not_one_per_look(monkeypatch: pytest.
 
     def hang(path: Path, require_entries: bool) -> Path:
         probes.append(path)
-        release.wait(5)
+        release.wait(60)
         return path
 
     monkeypatch.setattr(roots, "_probe", hang)
@@ -177,9 +177,9 @@ def test_a_folder_looked_at_twice_at_once_is_reachable_for_both(monkeypatch: pyt
     first: list[Path | None] = []
     looking = threading.Thread(target=lambda: first.append(reachable_root(lib, root_map={}, require_entries=True)))
     looking.start()
-    assert listing.wait(5)
+    assert listing.wait(60)
     second = reachable_root(lib, root_map={}, require_entries=True)
-    looking.join(5)
+    looking.join(60)
     assert first == [tmp_path.resolve()] and second == tmp_path.resolve()
 
 

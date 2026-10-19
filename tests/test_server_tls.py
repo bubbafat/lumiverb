@@ -48,12 +48,12 @@ def _handshake(served: tls.Served, ca: Path, hostname: str) -> None:
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw, \
+        with socket.create_connection(("127.0.0.1", port), timeout=30) as raw, \
                 client_context.wrap_socket(raw, server_hostname=hostname) as conn:
             conn.sendall(b"x")
     finally:
         listener.close()
-        thread.join(5)
+        thread.join(60)
 
 
 def test_lumiverb_s_own_certificate_is_trusted_by_a_device_that_trusts_its_authority(tmp_path):

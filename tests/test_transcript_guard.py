@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import contextlib
 import threading
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -168,13 +167,16 @@ def test_clips_go_to_every_online_machine_as_many_at_once_as_they_take(library):
     busy = {"all": 0, BuiltInWhisper: 0, OpenAITranscriber: 0}
     most = dict.fromkeys(busy, 0)
     preparing = [0]
+    full = threading.Event()  # every machine's slots taken at once, however slow this machine
 
     def hear(self, wav):
         with lock:
             for k in ("all", type(self)):
                 busy[k] += 1
                 most[k] = max(most[k], busy[k])
-        time.sleep(0.15)
+            if busy["all"] == 3:
+                full.set()
+        full.wait(60)
         with lock:
             for k in ("all", type(self)):
                 busy[k] -= 1

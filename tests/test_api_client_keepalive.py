@@ -43,7 +43,7 @@ def server():
         time.sleep(0.01)
     yield f"http://127.0.0.1:{port}", config
     srv.should_exit = True
-    thread.join(10)
+    thread.join(60)
 
 
 def test_it_lets_go_of_an_idle_connection_well_before_the_server_does(server):

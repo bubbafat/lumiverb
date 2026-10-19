@@ -228,7 +228,7 @@ def test_two_ingests_cant_claim_the_same_archived_asset(env):
         waiting = _waiting(second.find_missing_by_hash, library_id, sha)
         first_session.commit()
         # Claimed meanwhile: the second file gets an asset of its own.
-        assert waiting.result(timeout=10) is None
+        assert waiting.result(timeout=60) is None
 
 
 @pytest.mark.slow
@@ -243,7 +243,7 @@ def test_a_file_back_at_its_path_locks_out_a_copy_claiming_it_by_content(env):
         waiting = _waiting(by_content.find_missing_by_hash, library_id, sha)
         by_path.clear_trash(found)
         path_session.commit()
-        assert waiting.result(timeout=10) is None
+        assert waiting.result(timeout=60) is None
 
 
 @pytest.mark.slow
@@ -258,7 +258,7 @@ def test_a_lock_from_other_work_doesnt_split_the_asset(env):
         other_session.execute(text("UPDATE assets SET search_synced_at = NULL WHERE asset_id = :a"), {"a": asset})
         waiting = _waiting(ingest.find_missing_by_hash, library_id, sha)
         other_session.commit()
-        assert waiting.result(timeout=10).asset_id == asset
+        assert waiting.result(timeout=60).asset_id == asset
 
 
 @pytest.mark.slow

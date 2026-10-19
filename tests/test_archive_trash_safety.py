@@ -163,7 +163,7 @@ def test_restoring_a_library_waits_for_a_purge_in_progress(env):
         assert LibraryRepository(session).lock_trashed(lib_env[2])
         waiting = _waiting(lambda: client.post(f"/v1/libraries/{lib_env[2]}/restore", headers=headers))
         LibraryRepository(session).hard_delete(lib_env[2])
-    assert waiting.result(timeout=10).status_code == 404
+    assert waiting.result(timeout=60).status_code == 404
 
 
 @pytest.mark.slow

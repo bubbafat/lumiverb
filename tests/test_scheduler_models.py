@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -101,18 +102,18 @@ def test_clip_loads_without_holding_up_the_dispatching_thread() -> None:
 
     def slow(model, pretrained):
         loading.set()
-        release.wait(5)
+        release.wait(60)
         return object()
 
     models = Models(clip_factory=slow)
     t = threading.Thread(target=models.clip, args=("ViT-B-32", "openai"), daemon=True)
     t.start()
-    assert loading.wait(5)
+    assert loading.wait(60)
     done = threading.Event()
     threading.Thread(target=lambda: (models.let_go_of_idle(), done.set()), daemon=True).start()
-    assert done.wait(1)  # the tick's look isn't held up by the load
+    assert done.wait(60) and t.is_alive()  # the tick's look isn't held up by the load: done while it loads
     release.set()
-    t.join(5)
+    t.join(60)
 
 
 def test_the_face_process_does_so_many_jobs_photos_before_a_fresh_one() -> None:
@@ -185,13 +186,12 @@ def test_a_call_ends_as_soon_as_its_process_is_let_go_of() -> None:
 
     t = threading.Thread(target=call, daemon=True)
     t.start()
-    for _ in range(500):
-        if pool.apply_async.called:
-            break
+    deadline = time.monotonic() + 60
+    while not pool.apply_async.called and time.monotonic() < deadline:
         threading.Event().wait(0.01)
     assert not detector.idle
     assert detector.close() is True
-    t.join(2)
+    t.join(60)
     assert out == ["let go"] and detector.idle
     assert detector.close() is False  # nothing left to let go of
 

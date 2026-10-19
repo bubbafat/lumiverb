@@ -33,6 +33,20 @@ def _point(opt: Path, keg_bin: Path) -> None:
     os.replace(swap, opt)
 
 
+def _looked(monkeypatch) -> threading.Event:
+    """Set once the watcher has read the install it starts from: an upgrade
+    before that (a slow start on a busy machine) would be where it started."""
+    looked, read = threading.Event(), cli.install_identity
+
+    def install_identity(command):
+        found = read(command)
+        looked.set()
+        return found
+
+    monkeypatch.setattr(cli, "install_identity", install_identity)
+    return looked
+
+
 @pytest.fixture
 def homebrew(tmp_path: Path) -> dict[str, Path]:
     cellar, opt = tmp_path / "Cellar" / "lumiverb", tmp_path / "opt" / "lumiverb"
@@ -63,21 +77,22 @@ def test_mid_upgrade_with_the_link_gone_it_waits(homebrew):
     watcher = threading.Thread(target=cli.watch_for_upgrade, args=(homebrew["command"], stop, upgraded),
                                kwargs={"every": 0.01})
     watcher.start()
-    watcher.join(1)
+    watcher.join(60)
     assert not watcher.is_alive() and not upgraded.is_set(), "nothing to compare with: it doesn't watch"
 
 
-def test_an_upgrade_stops_it_once_the_link_points_elsewhere(homebrew):
+def test_an_upgrade_stops_it_once_the_link_points_elsewhere(homebrew, monkeypatch):
     stop, upgraded = threading.Event(), threading.Event()
+    looked = _looked(monkeypatch)
     watcher = threading.Thread(target=cli.watch_for_upgrade, args=(homebrew["command"], stop, upgraded),
                                kwargs={"every": 0.01})
     watcher.start()
-    time.sleep(0.05)
+    assert looked.wait(60)
     homebrew["opt"].unlink()  # mid-upgrade: not yet
     time.sleep(0.05)
     assert not upgraded.is_set()
     _point(homebrew["opt"], homebrew["new"])
-    watcher.join(2)
+    watcher.join(60)
     assert upgraded.is_set() and stop.is_set()
 
 
@@ -91,7 +106,7 @@ def test_run_stops_everything_then_starts_the_new_install(homebrew, tmp_path, mo
             pass
 
         def run(self, stop):
-            stop.wait(10)
+            stop.wait(60)
             stopped.append(stop.is_set())
 
     execs: list[tuple] = []
@@ -100,7 +115,8 @@ def test_run_stops_everything_then_starts_the_new_install(homebrew, tmp_path, mo
     monkeypatch.setattr(cli, "UPGRADE_CHECK_SEC", 0.01)
     monkeypatch.setattr(cli.os, "execv", lambda path, argv: execs.append((path, argv)))
     monkeypatch.setattr(sys, "argv", [str(homebrew["command"]), "run", "--env", str(env_file)])
-    threading.Timer(0.1, _point, args=(homebrew["opt"], homebrew["new"])).start()
+    looked = _looked(monkeypatch)
+    threading.Thread(target=lambda: looked.wait(60) and _point(homebrew["opt"], homebrew["new"]), daemon=True).start()
 
     assert cli.main(["run", "--env", str(env_file)]) == 0
     assert stopped == [True], "everything stopped first"

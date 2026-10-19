@@ -497,22 +497,26 @@ def test_decoding_on_the_cpu_never_asks_for_the_gpu(tmp_path: Path, monkeypatch:
     assert ran and not any("-hwaccel" in cmd for cmd in ran)
 
 
-def _fake_renders(monkeypatch: pytest.MonkeyPatch, seconds: float = 0.3) -> tuple[list, list]:
-    """_run records whether each render decoded on the GPU, and how many did at once."""
+def _fake_renders(monkeypatch: pytest.MonkeyPatch, together: int = 1) -> tuple[list, list]:
+    """_run records whether each render decoded on the GPU, and how many did at once:
+    each is held until `together` have started, so they're at once however slow the machine."""
     import threading
 
     used: list[str | None] = []
     most = [0]
     now = [0]
     lock = threading.Lock()
+    started = threading.Event()
 
     def run(source, part, settings, tracks, stall_after, hwaccel=None):
         with lock:
             used.append(hwaccel)
+            if len(used) >= together:
+                started.set()
             if hwaccel:
                 now[0] += 1
                 most[0] = max(most[0], now[0])
-        time.sleep(seconds)
+        assert started.wait(60), f"{len(used)} of {together} renders started"
         with lock:
             if hwaccel:
                 now[0] -= 1
@@ -529,7 +533,7 @@ def test_one_gpu_decode_at_a_time_and_the_rest_on_the_cpu(tmp_path: Path, monkey
     # vision model and Whisper need: the others decode on the CPU meanwhile.
     from concurrent.futures import ThreadPoolExecutor
 
-    used, most = _fake_renders(monkeypatch)
+    used, most = _fake_renders(monkeypatch, together=3)
     with ThreadPoolExecutor(3) as pool:
         list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4",
                                                       AnalysisProxySettings(decoder="vulkan")), range(3)))
@@ -546,7 +550,7 @@ def test_how_many_decode_on_the_gpu_at_once_is_this_machines_choice(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slots: int) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    used, most = _fake_renders(monkeypatch)
+    used, most = _fake_renders(monkeypatch, together=3)
     settings = AnalysisProxySettings(decoder="vulkan", gpu_decodes=slots)
     with ThreadPoolExecutor(3) as pool:
         list(pool.map(lambda i: render_analysis_proxy(tmp_path / f"{i}.mov", tmp_path / f"{i}.mp4", settings), range(3)))
@@ -560,7 +564,7 @@ def test_a_macs_media_engine_takes_every_render(tmp_path: Path, monkeypatch: pyt
     # so no turns, and every render decodes there.
     from concurrent.futures import ThreadPoolExecutor
 
-    used, most = _fake_renders(monkeypatch)
+    used, most = _fake_renders(monkeypatch, together=3)
     monkeypatch.setattr(AP, "_gpu_has_room", lambda: False)  # no GPU's memory to ask about
     settings = AnalysisProxySettings(decoder="videotoolbox", gpu_decodes=1)
     with ThreadPoolExecutor(3) as pool:
@@ -574,7 +578,7 @@ def test_a_macs_media_engine_takes_every_render(tmp_path: Path, monkeypatch: pyt
 
 @pytest.mark.fast
 def test_without_room_on_the_gpu_the_cpu_decodes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    used, _ = _fake_renders(monkeypatch, seconds=0)
+    used, _ = _fake_renders(monkeypatch)
     monkeypatch.setattr(AP, "_gpu_has_room", lambda: False)
     render_analysis_proxy(tmp_path / "a.mov", tmp_path / "a.mp4", AnalysisProxySettings(decoder="vulkan"))
     assert used == [None]

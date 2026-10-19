@@ -248,10 +248,10 @@ def test_it_keeps_checking_in_during_a_pass_and_a_failed_one_is_tried_again():
     beat = threading.Thread(target=reader.keep_checking_in, kwargs={"every": 0.01}, daemon=True)
     beat.start()
     try:
-        assert server.checked.wait(10), f"checked in {server.posts} time(s)"
+        assert server.checked.wait(60), f"checked in {server.posts} time(s)"
     finally:
         reader.stopping.set()
-        beat.join(5)
+        beat.join(60)
     assert not beat.is_alive()
     assert server.posts >= 3, "it went on after a check-in failed"
 

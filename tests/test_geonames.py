@@ -160,7 +160,8 @@ def _data(env, headers=None) -> dict:  # noqa: F811
 
 def _wait_quiet() -> None:
     """Until no fetch is running (a test's background thread)."""
-    for _ in range(200):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         with get_control_session() as session:
             if not session.execute(text("SELECT 1 FROM plugin_data WHERE state = 'fetching'")).first():
                 return
@@ -176,7 +177,8 @@ def _turn_on(env, headers=None) -> dict:  # noqa: F811
 
 
 def _until(env, state: str, headers=None) -> dict:  # noqa: F811
-    for _ in range(300):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         data = _data(env, headers)
         if data["state"] == state:
             return data
@@ -359,9 +361,8 @@ def test_a_list_from_an_older_release_is_fetched_again_while_it_is_used(env) -> 
     clip = _scan(env, lib, [File("there.jpg", f"there {lib}")], headers=env.admin).uploaded["there.jpg"]
     r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
     assert r.status_code == 503 and r.json()["error"]["code"] == "places_not_ready", r.text
-    for _ in range(300):
-        if plugin_data.status(GEONAMES)["current"]:
-            break
+    deadline = time.monotonic() + 60
+    while not plugin_data.status(GEONAMES)["current"] and time.monotonic() < deadline:
         time.sleep(0.05)
     data = _until(env, "ready")
     assert data["count"] == COUNT

@@ -77,15 +77,14 @@ def _worker(made: list) -> Iterator[str]:
                                            log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    for _ in range(200):
-        if server.started:
-            break
+    deadline = time.monotonic() + 60
+    while not server.started and time.monotonic() < deadline:
         time.sleep(0.025)
     try:
         yield f"http://127.0.0.1:{port}/v1"
     finally:
         server.should_exit = True
-        thread.join(10)
+        thread.join(60)
 
 
 @contextmanager

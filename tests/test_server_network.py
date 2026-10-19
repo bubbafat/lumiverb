@@ -215,7 +215,7 @@ def _watching(tmp_path, monkeypatch, stop: threading.Event, restarts: list, **kw
     watcher = threading.Thread(target=network.watch, args=(tmp_path, DEFAULTS, stop, lambda: restarts.append(1)),
                                kwargs=kwargs)
     watcher.start()
-    assert started.wait(5), "the watcher read where it starts from"
+    assert started.wait(60), "the watcher read where it starts from"
     return watcher
 
 
@@ -233,7 +233,7 @@ def test_a_port_nginx_doesn_t_start_listening_on_goes_back_to_the_one_before(tmp
     watcher = _watching(tmp_path, monkeypatch, stop, restarts, every=0.02, answers=answers)
     try:
         network.set_ports(tmp_path, network.Ports(8080, 6465))
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while len(restarts) < 2:
             assert time.monotonic() < deadline, restarts
             time.sleep(0.02)
@@ -249,7 +249,7 @@ def test_a_port_nginx_doesn_t_start_listening_on_goes_back_to_the_one_before(tmp
         assert network.ports(tmp_path, DEFAULTS) == network.Ports(8081, 6465), "it answers: kept"
     finally:
         stop.set()
-        watcher.join(5)
+        watcher.join(60)
 
 
 def test_https_nginx_doesn_t_start_listening_on_is_turned_off_again(tmp_path, monkeypatch):
@@ -267,14 +267,14 @@ def test_https_nginx_doesn_t_start_listening_on_is_turned_off_again(tmp_path, mo
     watcher = _watching(tmp_path, monkeypatch, stop, restarts, every=0.02, answers=answers)
     try:
         network.set_choice(tmp_path, WITH_HTTPS)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while len(restarts) < 2:
             assert time.monotonic() < deadline, restarts
             time.sleep(0.02)
         time.sleep(0.1)
     finally:
         stop.set()
-        watcher.join(5)
+        watcher.join(60)
     assert asked == [6465], "HTTPS's port, new: 6464 was listened on before"
     assert network.choice(tmp_path) == OTHERS, "back as it was"
     assert "ssl" not in network.listen_file(tmp_path).read_text()
@@ -317,7 +317,7 @@ def test_a_change_rewrites_the_lines_and_restarts_nginx_once(tmp_path, monkeypat
         time.sleep(0.1)
         assert restarts == [], "nothing changed"
         network.set_choice(tmp_path, WITH_HTTPS)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 60
         while not restarts:
             assert time.monotonic() < deadline
             time.sleep(0.02)
@@ -326,7 +326,7 @@ def test_a_change_rewrites_the_lines_and_restarts_nginx_once(tmp_path, monkeypat
         assert "listen 6465 ssl default_server;" in network.listen_file(tmp_path).read_text()
     finally:
         stop.set()
-        watcher.join(5)
+        watcher.join(60)
     assert not watcher.is_alive()
 
 

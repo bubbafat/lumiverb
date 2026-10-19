@@ -108,7 +108,8 @@ def test_the_worker_restarts_into_an_upgraded_install(tmp_path, monkeypatch):
         def run(self) -> None:
             import time
 
-            for _ in range(200):  # until the stop reaches it
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:  # until the stop reaches it
                 if self.should_exit:
                     return
                 time.sleep(0.01)
