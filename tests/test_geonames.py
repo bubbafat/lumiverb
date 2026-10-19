@@ -280,7 +280,8 @@ def test_a_location_set_by_place_keeps_the_place_and_its_credit(env) -> None:  #
     location = env.client.get(f"/v1/assets/{clip}", headers=env.admin).json()["location"]
     assert (location["lat"], location["lon"]) == (pytest.approx(10.66668), pytest.approx(-61.51889))
     assert location["source"] == "person" and location["basis_summary"] == "Port of Spain, Trinidad and Tobago"
-    assert location["credit"] == {"text": "GeoNames", "url": "https://www.geonames.org/"}
+    assert location["credit"] == {"text": "GeoNames", "url": "https://www.geonames.org/",
+                                  "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
     public = env.client.get(f"/v1/assets/{clip}", params={"public_library_id": lib})
     assert "Port of Spain" not in public.text
 

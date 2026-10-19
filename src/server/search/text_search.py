@@ -144,16 +144,21 @@ def clips(session: Session, q: Query, library_ids: list[str] | None, limit: int,
 
 
 def facts(session: Session, q: Query, library_ids: list[str] | None, limit: int,
-          plugin_ids: list[str]) -> list[Hit]:
+          plugins: dict[str, str]) -> list[Hit]:
     """The clips in sight with a fact of one of these plug-ins whose words match (best first), each with
-    those facts' text as the snippet."""
-    if not plugin_ids:
+    those facts' text as the snippet. plugins: each plug-in's id and the SQL on active_assets a for the
+    clips whose facts it shows (repository/plugin_outputs.py searched_plugins)."""
+    if not plugins:
         return []
-    params = {**q.params, "limit": limit, "plugins": list(plugin_ids)}
+    params = {**q.params, "limit": limit}
+    shown = []
+    for n, (plugin_id, where) in enumerate(sorted(plugins.items())):
+        params[f"plugin{n}"] = plugin_id
+        shown.append(f"(po.plugin_id = :plugin{n} AND {where})")
     rows = session.execute(text(f"""
         SELECT po.asset_id, po.search_text, {_score('po.words', q, loose=True)} AS score
         FROM plugin_outputs po JOIN active_assets a ON a.asset_id = po.asset_id
-        WHERE po.plugin_id = ANY(CAST(:plugins AS text[])) AND po.words @@ ({q.loose}){_in(library_ids, params)}
+        WHERE ({' OR '.join(shown)}) AND po.words @@ ({q.loose}){_in(library_ids, params)}
         ORDER BY score DESC, po.asset_id LIMIT :limit
     """), params).all()
     return [Hit(r.asset_id, float(r.score), r.search_text or None) for r in rows]

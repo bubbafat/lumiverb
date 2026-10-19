@@ -97,11 +97,13 @@ class DataOut(BaseModel):
 
 
 class RunningOut(BaseModel):
-    """What the plug-in runner last said of an installed one (ADR-023): starting, ready, preparing (done of
-    total, detail), failing (it says it can't work: why), restarting (it stopped: why; started again soon),
-    stopped (left stopped: why), or not_running (the runner itself isn't, or hasn't started it yet)."""
+    """What the plug-in runner last said of an installed one (ADR-023): starting, ready (perhaps with work in the
+    background: done of total, detail), preparing (done of total, detail), failing (it says it can't work: why),
+    restarting (it stopped: why; started again soon), stopped (left stopped: why), off (on in no account, so not
+    run: started when an account turns it on), or not_running (the runner itself isn't, or hasn't started it
+    yet)."""
 
-    state: Literal["starting", "ready", "preparing", "failing", "restarting", "stopped", "not_running"]
+    state: Literal["starting", "ready", "preparing", "failing", "restarting", "stopped", "off", "not_running"]
     why: str | None = None
     detail: str | None = None
     done: int | None = None

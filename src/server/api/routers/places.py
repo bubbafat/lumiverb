@@ -30,6 +30,7 @@ from src.server.api.limits import MAX_IDS
 from src.server.api.routers.plugins import require_on
 from src.server.database import get_control_session
 from src.server.repository import asset_places, lineage
+from src.server.repository.locations import CREDITS
 from src.server.repository.places import PlaceRepository, geonameid_of, label, place_id
 
 router = APIRouter(prefix="/v1/places", tags=["places"])
@@ -63,10 +64,16 @@ class Credit(BaseModel):
     license_url: str
 
 
+class License(BaseModel):
+    text: str  # "CC BY 4.0"
+    url: str
+
+
 class SourceCredit(BaseModel):
     source: str  # who found the places it's for: "geonames", or a plug-in's id
     text: str
     url: str | None = None
+    license: License | None = None  # the license its places are under, when its credit names one
 
 
 class Unavailable(BaseModel):
@@ -133,7 +140,7 @@ def search_places(
                 rows = PlaceRepository(control).search(q, limit)
             out.places = [place_out(r) for r in rows]
             out.credit = Credit(**CREDIT)
-            out.credits.append(SourceCredit(source=PLUGIN, text="GeoNames", url=CREDIT["url"]))
+            out.credits.append(SourceCredit(source=PLUGIN, **CREDITS[PLUGIN]))
     if theirs:
         found, credits, unavailable = find_places(session, q, limit)
         out.places += [Place(**p) for p in found]

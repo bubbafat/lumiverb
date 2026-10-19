@@ -805,13 +805,15 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
              within: list[str] | None = None) -> list[dict[str, Any]]:
     """Clips in sight whose last try failed, newest failure first: why, how
     many tries, and when the next one is (None when given up). after: the
-    cursor the last page ended with; within: only these libraries."""
+    cursor the last page ended with; within: only these libraries. Only the
+    producers this server has now: an uninstalled plug-in's or a removed
+    producer's rows are left out."""
     rows = session.execute(text(
         "SELECT l.asset_id, l.artifact, l.error, l.attempts, l.failed_at, l.retry_at,"
         " a.rel_path, a.library_id, a.media_type, lib.name AS library_name"
         " FROM artifact_lineage l JOIN active_assets a ON a.asset_id = l.asset_id"
         " JOIN libraries lib ON lib.library_id = a.library_id"
-        " WHERE l.error IS NOT NULL"
+        " WHERE l.error IS NOT NULL AND l.artifact = ANY(CAST(:known AS text[]))"
         "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
         "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
         "   AND (CAST(:ids AS text[]) IS NULL OR a.asset_id = ANY(CAST(:ids AS text[])))"
@@ -822,7 +824,7 @@ def failures(session: Session, *, artifact: str | None = None, library_id: str |
         " ORDER BY COALESCE(l.failed_at, l.produced_at) DESC, l.asset_id || '/' || l.artifact DESC"
         " LIMIT :n"
     ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "after": after, "n": limit,
-        "within": within}).mappings().all()
+        "within": within, "known": list(PRODUCERS)}).mappings().all()
     out = []
     for r in rows:
         given_up = r["retry_at"] is not None and r["retry_at"].year >= 9999
@@ -836,15 +838,16 @@ def retry(session: Session, *, artifact: str | None = None, library_id: str | No
           asset_ids: list[str] | None = None, within: list[str] | None = None) -> int:
     """Try these failing clips again now, given up or not (the back-off starts
     over). None for a part means every one (the caller has made sure it was
-    named so); within: only these libraries. Doesn't commit. Returns how many."""
+    named so); within: only these libraries. Only the producers this server
+    has now. Doesn't commit. Returns how many."""
     r = session.execute(text(
         "UPDATE artifact_lineage l SET retry_at = NULL, attempts = 0 FROM active_assets a"
-        " WHERE a.asset_id = l.asset_id AND l.error IS NOT NULL"
+        " WHERE a.asset_id = l.asset_id AND l.error IS NOT NULL AND l.artifact = ANY(CAST(:known AS text[]))"
         "   AND (CAST(:artifact AS text) IS NULL OR l.artifact = :artifact)"
         "   AND (CAST(:lib AS text) IS NULL OR a.library_id = :lib)"
         "   AND (CAST(:ids AS text[]) IS NULL OR l.asset_id = ANY(CAST(:ids AS text[])))"
         f"  AND {_WITHIN}"
-    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "within": within})
+    ), {"artifact": artifact, "lib": library_id, "ids": asset_ids, "within": within, "known": list(PRODUCERS)})
     if r.rowcount:
         nudge(session)
     return int(r.rowcount or 0)

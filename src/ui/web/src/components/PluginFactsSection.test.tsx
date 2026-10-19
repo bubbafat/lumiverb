@@ -27,4 +27,25 @@ describe("A clip's facts from its plug-ins", () => {
     expect(within(example).getByText("Caption").nextSibling?.textContent).toBe("Seen by the example");
     expect(within(example).queryByText(/^From/)).toBeNull();
   });
+
+  it("says its empty line where it had nothing to say, and links the license beside its credit", () => {
+    render(
+      <PluginFactsSection
+        plugins={[
+          { plugin_id: "places", title: "Place names",
+            credit: { text: "GeoNames", url: "https://www.geonames.org/",
+                      license: { text: "CC BY 4.0", url: "https://creativecommons.org/licenses/by/4.0/" } },
+            facts: [{ key: "near", label: "Near", text: "Not near a town", url: null, empty: true }] },
+        ]}
+      />,
+    );
+    const places = screen.getByRole("region", { name: "Place names" });
+    const empty = within(places).getByText("Not near a town");
+    expect(empty.closest("a")).toBeNull();
+    expect(empty.className).toContain("text-gray-500");
+    expect((within(places).getByRole("link", { name: "GeoNames" }) as HTMLAnchorElement).href).toBe("https://www.geonames.org/");
+    expect((within(places).getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
+      .toBe("https://creativecommons.org/licenses/by/4.0/");
+    expect(within(places).getByText(/^From/).textContent).toBe("From GeoNames · CC BY 4.0");
+  });
 });

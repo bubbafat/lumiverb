@@ -118,7 +118,16 @@ describe("SetLocationModal", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "har" } });
     fireEvent.click(await screen.findByRole("button", { name: /^Harbour Point, Testshire, Testland\s*· lighthouse · from Facts$/ }));
     expect((screen.getByRole("link", { name: "Facts' places" }) as HTMLAnchorElement).href).toBe("https://example.org/facts");
-    expect(screen.queryByRole("link", { name: "CC BY 4.0" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "CC BY 4.0" })).toBeNull(); // a credit that names no license links none
+    search.mockResolvedValue({ places: [harbour], credit: null, unavailable: [], credits: [
+      { source: "facts", text: "Facts' places", url: "https://example.org/facts",
+        license: { text: "ODbL", url: "https://opendatacommons.org/licenses/odbl/" } }] });
+    fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "harbo" } });
+    expect(((await screen.findByRole("link", { name: "ODbL" })) as HTMLAnchorElement).href)
+      .toBe("https://opendatacommons.org/licenses/odbl/");
+    search.mockResolvedValue({ places: [harbour], credit: null,
+                               credits: [{ source: "facts", text: "Facts' places", url: "https://example.org/facts" }],
+                               unavailable: [{ plugin_id: "atlas", title: "Atlas", why: "it's starting" }] });
     fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "harb" } });
     expect(await screen.findByText("Atlas couldn't answer: it's starting.")).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: /^Harbour Point/ }));
@@ -158,12 +167,15 @@ describe("LocationRow", () => {
     expect(screen.getByText("From the file: 40.00000, -74.00000")).toBeTruthy();
   });
 
-  it("credits a place's name where it shows", () => {
+  it("credits a place's name where it shows, with its license", () => {
     render(<LocationRow gpsLat={null} gpsLon={null} location={{
       ...person, basis_summary: "Port of Spain, Trinidad and Tobago",
-      credit: { text: "GeoNames", url: "https://www.geonames.org/" } }} />);
+      credit: { text: "GeoNames", url: "https://www.geonames.org/",
+                license: { text: "CC BY 4.0", url: "https://creativecommons.org/licenses/by/4.0/" } } }} />);
     expect(screen.getByText(/Port of Spain, Trinidad and Tobago/)).toBeTruthy();
     expect((screen.getByRole("link", { name: "GeoNames" }) as HTMLAnchorElement).href).toBe("https://www.geonames.org/");
+    expect((screen.getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
+      .toBe("https://creativecommons.org/licenses/by/4.0/");
   });
 
   it("says the nearest town to where it was, credited, or that there's none near", () => {

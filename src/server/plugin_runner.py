@@ -7,15 +7,24 @@ a good enough job. I don't want them taking down the server").
 run`, beside the API and the scheduler; on Linux its own unit,
 lumiverb-plugins.service. For each installed plug-in it:
 
+- runs it only while it's on somewhere: on by default, or turned on in an
+  account (plugin_catalog.on_somewhere, read with what's installed); one on
+  in no account isn't started ("off"), and is stopped when the last account
+  turns it off, so one with downloads fetches nothing until someone has
+  accepted what it asks;
 - starts its manifest's command from its installed folder
   (DATA_DIR/plugins/<id>/program/), through plugin_launch.py (a lower
   priority, no file bigger than its disk_mb, no core files), with a clean
   environment: its own folders and its socket (LUMIVERB_PLUGIN_SOCKET,
-  LUMIVERB_PLUGIN_DATA), the PATH, nothing of Lumiverb's settings, keys or
-  database addresses;
-- asks its health on its socket (GET /v1/health: ready, preparing with how
-  far, or failing with why), giving each answer a time limit, and restarts
-  one that stops answering;
+  LUMIVERB_PLUGIN_DATA), its server settings' file (LUMIVERB_PLUGIN_SETTINGS:
+  it fetches before anything has asked it anything), the PATH, the locale,
+  the proxy this machine reaches the internet through, if any (HANDED_ON),
+  nothing of Lumiverb's settings, keys or database addresses; started again
+  when the server admin changes its server settings;
+- asks its health on its socket (GET /v1/health: ready, perhaps with work
+  in the background and how far; preparing with how far; or failing with
+  why), giving each answer a time limit, and restarts one that stops
+  answering;
 - watches its processes' memory (more than its memory_mb: ended and started
   again) and its data folder's size (more than its disk_mb: ended and left
   stopped);
@@ -35,6 +44,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -44,7 +54,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -59,10 +69,19 @@ logger = logging.getLogger(__name__)
 
 LAUNCH = Path(__file__).with_name("plugin_launch.py")
 STATE_FILE = "runner.json"
+SETTINGS_FILE = "server-settings.json"  # in its folder, beside its data folder: LUMIVERB_PLUGIN_SETTINGS
 
-STARTING, READY, PREPARING, FAILING, RESTARTING, STOPPED = (
-    "starting", "ready", "preparing", "failing", "restarting", "stopped")
-STATES = (STARTING, READY, PREPARING, FAILING, RESTARTING, STOPPED)
+STARTING, READY, PREPARING, FAILING, RESTARTING, STOPPED, OFF = (
+    "starting", "ready", "preparing", "failing", "restarting", "stopped", "off")
+STATES = (STARTING, READY, PREPARING, FAILING, RESTARTING, STOPPED, OFF)
+OFF_WHY = "It's off in every account: it starts when an account turns it on"
+
+# What of this process's environment each plug-in is handed (besides its own variables): where programs are, the
+# locale and time zone, and the proxy this machine reaches the internet through, when it has one.
+HANDED_ON = ("PATH", "LANG", "LC_ALL", "TZ", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+             "http_proxy", "https_proxy", "all_proxy", "no_proxy")
+# Where those are read from: this process's environment (tests hand plug-ins closed proxies here: conftest).
+ENVIRON: Mapping[str, str] = os.environ
 
 START_WITHIN_SEC = 60.0  # answers its health within this of starting, or it's ended
 HEALTH_EVERY_SEC = 15.0
@@ -88,8 +107,10 @@ class Plugin:
 
     plugin_id: str
     manifest: Manifest
-    program: tuple[str, str]  # its version and which install it is: a new install changes it
+    # Its version, which install it is and its server settings' hash: a new install or new settings change it.
+    program: tuple[str, str, str]
     since: datetime
+    settings: dict[str, Any] = field(default_factory=dict)  # its server settings, as it was started with them
     state: str = STARTING
     why: str | None = None
     detail: str | None = None
@@ -162,14 +183,20 @@ def _count(value: Any) -> int | None:
 
 class Runner:
     def __init__(self, data: Path, *, installed: Callable[[], dict[str, Any]] | None = None,
+                 wanted: Callable[[dict[str, Any]], set[str]] | None = None,
+                 server_settings: Callable[[str, Manifest], dict[str, Any]] | None = None,
                  clock: Callable[[], float] = time.monotonic,
                  memory: Callable[[], dict[int, int]] = group_memory_mb) -> None:
-        """installed: what's installed now, {plugin_id: plugin_catalog.Installed} (the control database's)."""
-        if installed is None:
-            from src.server.plugin_catalog import installed
+        """installed: what's installed now, {plugin_id: plugin_catalog.Installed} (the control database's);
+        wanted: of those, the ids on somewhere (plugin_catalog.on_somewhere: each account's switch);
+        server_settings: a plug-in's server settings as it's handed them (plugin_catalog.server_settings)."""
+        from src.server import plugin_catalog
+
         self.data = data
         self.plugins: dict[str, Plugin] = {}
-        self._installed = installed
+        self._installed = installed or plugin_catalog.installed
+        self._wanted = wanted or plugin_catalog.on_somewhere
+        self._server_settings = server_settings or plugin_catalog.server_settings
         self._clock = clock
         self._memory = memory
         self._next_list = 0.0
@@ -213,47 +240,75 @@ class Runner:
     def _sync(self, now: float) -> None:
         try:
             installed = self._installed()
+            on = self._wanted(installed)
+            settings = {pid: self._server_settings(pid, entry.manifest) for pid, entry in installed.items()}
         except Exception as exc:  # noqa: BLE001 — the database away: what runs goes on
-            logger.warning("plug-ins: can't read what's installed (%s); those running go on", exc)
+            logger.warning("plug-ins: can't read what's installed and on (%s); those running go on", exc)
             return
         for pid in list(self.plugins):
             if pid not in installed:
                 logger.info("plug-in %s: uninstalled, stopping it", pid)
                 self._stop_now(self.plugins.pop(pid))
         for pid, entry in installed.items():
-            program = self._program(pid, entry.manifest)
+            program = self._program(pid, entry.manifest, settings[pid])
             if program is None:
                 continue
             p = self.plugins.get(pid)
-            if p is not None and p.program == program:
+            if pid not in on:
+                if p is not None and p.state == OFF:
+                    p.manifest, p.program, p.settings = entry.manifest, program, settings[pid]
+                    continue
+                if p is not None:
+                    logger.info("plug-in %s: off in every account now, stopping it", pid)
+                    self._stop_now(p)
+                self.plugins[pid] = p = Plugin(pid, entry.manifest, program, utcnow(), settings[pid])
+                p.state, p.why = OFF, OFF_WHY
                 continue
-            if p is not None:
-                logger.info("plug-in %s: version %s installed, starting it afresh", pid, entry.manifest.version)
+            if p is not None and p.program == program and p.state != OFF:
+                continue
+            if p is not None and p.state != OFF:
+                if p.program[:2] != program[:2]:
+                    logger.info("plug-in %s: version %s installed, starting it afresh", pid, entry.manifest.version)
+                else:
+                    logger.info("plug-in %s: its server settings changed, starting it again with them", pid)
                 self._stop_now(p)
-            self.plugins[pid] = p = Plugin(pid, entry.manifest, program, utcnow())
+            elif p is not None:
+                logger.info("plug-in %s: on in an account now, starting it", pid)
+            self.plugins[pid] = p = Plugin(pid, entry.manifest, program, utcnow(), settings[pid])
             self._start(p, now)
 
-    def _program(self, plugin_id: str, manifest: Manifest) -> tuple[str, str] | None:
-        """Its version and which install it is; None while its folder isn't there (mid-install or
-        mid-uninstall: seen at the next look)."""
+    def _program(self, plugin_id: str, manifest: Manifest, settings: dict[str, Any]) -> tuple[str, str, str] | None:
+        """Its version, which install it is and its server settings' hash; None while its folder isn't there
+        (mid-install or mid-uninstall: seen at the next look)."""
         program = program_dir(self.data, plugin_id)
         if not program.is_dir():
             return None
-        return manifest.version, install_mark(program) or ""
+        said = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
+        return manifest.version, install_mark(program) or "", said
 
     # --- starting and stopping ----------------------------------------------------
 
     def _environment(self, p: Plugin) -> dict[str, str]:
         home = plugin_dir(self.data, p.plugin_id)
-        env = {"PATH": os.environ.get("PATH") or "/usr/local/bin:/usr/bin:/bin",
-               "HOME": str(home / "data"), "TMPDIR": str(home / "tmp"), "PYTHONUNBUFFERED": "1",
-               "LUMIVERB_PLUGIN_ID": p.plugin_id, "LUMIVERB_PLUGIN_PROTOCOL": str(p.manifest.protocol),
-               "LUMIVERB_PLUGIN_SOCKET": str(socket_path(self.data, p.plugin_id)),
-               "LUMIVERB_PLUGIN_DATA": str(home / "data")}
-        for name in ("LANG", "LC_ALL", "TZ"):
-            if os.environ.get(name):
-                env[name] = os.environ[name]
+        env = {name: ENVIRON[name] for name in HANDED_ON if ENVIRON.get(name)}
+        env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+        env.update({"HOME": str(home / "data"), "TMPDIR": str(home / "tmp"), "PYTHONUNBUFFERED": "1",
+                    "LUMIVERB_PLUGIN_ID": p.plugin_id, "LUMIVERB_PLUGIN_PROTOCOL": str(p.manifest.protocol),
+                    "LUMIVERB_PLUGIN_SOCKET": str(socket_path(self.data, p.plugin_id)),
+                    "LUMIVERB_PLUGIN_DATA": str(home / "data"),
+                    "LUMIVERB_PLUGIN_SETTINGS": str(home / SETTINGS_FILE)})
         return env
+
+    def _write_settings(self, p: Plugin) -> None:
+        """Its server settings, where LUMIVERB_PLUGIN_SETTINGS says: JSON, only Lumiverb's user can read it (a
+        secret may be among them), never half written."""
+        path = plugin_dir(self.data, p.plugin_id) / SETTINGS_FILE
+        part = path.with_name(f".{SETTINGS_FILE}.{os.getpid()}")
+        part.unlink(missing_ok=True)
+        fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(p.settings, f)
+        os.replace(part, path)
 
     def _start(self, p: Plugin, now: float) -> None:
         home, program = plugin_dir(self.data, p.plugin_id), program_dir(self.data, p.plugin_id)
@@ -279,6 +334,7 @@ class Runner:
             if (home / "tmp").exists():
                 shutil.rmtree(home / "tmp", ignore_errors=True)
             (home / "tmp").mkdir(mode=0o700)
+            self._write_settings(p)
             sock.unlink(missing_ok=True)
             largest = p.manifest.disk_mb * 1024 * 1024
             p.process = subprocess.Popen(
@@ -380,7 +436,9 @@ class Runner:
             return
         p.misses = 0
         if state == "ready":
-            p.state, p.why, p.detail, p.done, p.total = READY, None, None, None, None
+            # Ready, perhaps with work in the background (a newer list fetched while the old one answers): how far.
+            p.state, p.why = READY, None
+            p.detail, p.done, p.total = _text(answer.get("detail")), _count(answer.get("done")), _count(answer.get("total"))
         elif state == "preparing":
             p.state, p.why = PREPARING, None
             p.detail, p.done, p.total = _text(answer.get("detail")), _count(answer.get("done")), _count(answer.get("total"))
@@ -459,7 +517,7 @@ class Runner:
 
 
 _DOING = {STARTING: "it's starting", PREPARING: "it's preparing its data", RESTARTING: "it's restarting",
-          FAILING: "it isn't answering", STOPPED: "it stopped"}
+          FAILING: "it isn't answering", STOPPED: "it stopped", OFF: "it's off in every account"}
 
 
 def not_ready(said: dict[str, Any] | None, plugin_id: str) -> str | None:
@@ -472,7 +530,7 @@ def not_ready(said: dict[str, Any] | None, plugin_id: str) -> str | None:
     if mine.get("state") == READY:
         return None
     doing = _DOING.get(mine.get("state"), "it isn't running")
-    return f"{doing} ({mine['why']})" if mine.get("why") else doing
+    return f"{doing} ({mine['why']})" if mine.get("why") and mine.get("state") != OFF else doing
 
 
 def read_state(data: Path, *, fresh_within: float = 60.0) -> dict[str, Any] | None:

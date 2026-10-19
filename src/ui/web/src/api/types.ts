@@ -98,9 +98,10 @@ export interface PluginSetting {
 }
 
 export interface PluginRunning {
-  state: "starting" | "ready" | "preparing" | "failing" | "restarting" | "stopped" | "not_running";
+  /** off: on in no account, so not run (started when an account turns it on). */
+  state: "starting" | "ready" | "preparing" | "failing" | "restarting" | "stopped" | "off" | "not_running";
   why?: string | null;
-  /** Preparing: done of total, and what it says it's doing. */
+  /** Preparing, or ready with work in the background: done of total, and what it says it's doing. */
   detail?: string | null;
   done?: number | null;
   total?: number | null;
@@ -158,8 +159,21 @@ export interface PlaceSearch {
   places: Place[];
   /** GeoNames' (with its license) when its places are among them. */
   credit: PlaceCredit | null;
-  credits?: { source: string; text: string; url: string | null }[];
+  credits?: { source: string; text: string; url: string | null; license?: License | null }[];
   unavailable?: { plugin_id: string; title: string; why: string }[];
+}
+
+/** The license a source's data is under, linked beside its credit ("CC BY 4.0"). */
+export interface License {
+  text: string;
+  url: string;
+}
+
+/** Who to credit for what a plug-in shows or finds, and its license when it names one. */
+export interface Credit {
+  text: string;
+  url: string | null;
+  license?: License | null;
 }
 
 /** A role on one library (ADR-018 decision 8): "none" means they don't see it. */
@@ -381,8 +395,9 @@ export interface AssetDetail {
 export interface PluginFacts {
   plugin_id: string;
   title: string;
-  credit: { text: string; url: string | null } | null;
-  facts: { key: string; label: string; text: string; url: string | null }[];
+  credit: Credit | null;
+  /** empty: it had nothing to say, and text is the line its manifest declares for that ("Not near a town"). */
+  facts: { key: string; label: string; text: string; url: string | null; empty?: boolean }[];
 }
 
 /** The nearest town to where a clip was (the Place names plug-in's producer), with who to credit for the name. */
@@ -394,7 +409,7 @@ export interface AssetPlace {
   /** The landmark it's at (within its kind's reach); null: at none. label is the name with its region
    * and country, for when no town is near. */
   landmark?: { place_id: string; name: string; label: string; distance_m: number | null } | null;
-  credit: { text: string; url: string };
+  credit: { text: string; url: string; license?: License | null };
 }
 
 /** A clip's location beyond the file's: a person's, a guess, or a suggestion. */
@@ -414,8 +429,8 @@ export interface AssetLocation {
   /** Who set it, for a person's: looked up when a signed-in person reads it (null for an API key). */
   set_by?: string | null;
   set_at?: string | null;
-  /** Who a place name in basis_summary is from, to show beside it (GeoNames); null without one. */
-  credit?: { text: string; url: string } | null;
+  /** Who a place name in basis_summary is from, to show beside it with its license; null without one. */
+  credit?: Credit | null;
 }
 
 export interface SimilarHit {

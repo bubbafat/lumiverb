@@ -30,6 +30,7 @@ from src.server import plugin_runner
 from src.server.plugin_install import INSTALL_MARK, program_dir
 from src.server.plugin_runner import (
     FAILING,
+    OFF,
     PREPARING,
     READY,
     RESTARTING,
@@ -64,10 +65,21 @@ def data(monkeypatch) -> Iterator[Path]:
 
 
 class Installs:
-    """What's installed, as the runner reads it: each a copy of the test plug-in in its program folder."""
+    """What's installed, as the runner reads it: each a copy of the test plug-in in its program folder; which
+    of them are on in no account (off), and the server's settings chosen for each (server)."""
 
     def __init__(self, data: Path) -> None:
         self.data, self.now = data, {}
+        self.off: set[str] = set()
+        self.server: dict[str, dict] = {}
+
+    def on(self, found: dict) -> set[str]:
+        return set(found) - self.off
+
+    def settings(self, plugin_id: str, manifest) -> dict:
+        from src.server.plugin_settings import server_values
+
+        return server_values(manifest, self.server.get(plugin_id, {}))
 
     def add(self, plugin_id: str, mode: str = "", **change) -> None:
         program = program_dir(self.data, plugin_id)
@@ -85,7 +97,7 @@ class Installs:
 
 def _runner(data: Path) -> tuple[Runner, Installs]:
     installs = Installs(data)
-    return Runner(data, installed=installs), installs
+    return Runner(data, installed=installs, wanted=installs.on, server_settings=installs.settings), installs
 
 
 def _answer_within(monkeypatch, seconds: float) -> None:
@@ -135,8 +147,78 @@ def test_it_gets_none_of_lumiverbs_settings_and_runs_below_lumiverb(data, monkey
         assert given["LUMIVERB_PLUGIN_SOCKET"] == str(socket_path(data, "hello"))
         assert given["LUMIVERB_PLUGIN_DATA"] == str(data / "plugins" / "hello" / "data")
         assert given["HOME"] == given["LUMIVERB_PLUGIN_DATA"] and given["LUMIVERB_PLUGIN_ID"] == "hello"
+        assert given["LUMIVERB_PLUGIN_SETTINGS"] == str(data / "plugins" / "hello" / "server-settings.json")
+        # The tests' closed proxy (conftest): no plug-in a test starts reaches the internet.
+        assert (given["HTTPS_PROXY"], given["http_proxy"], given["NO_PROXY"]) == (
+            "http://127.0.0.1:9", "http://127.0.0.1:9", "127.0.0.1,localhost")
+        assert os.environ.get("HTTPS_PROXY") != "http://127.0.0.1:9", "only the plug-ins have it, not the test process"
         pid = runner.plugins["hello"].process.pid
         assert os.getpriority(os.PRIO_PROCESS, pid) >= os.getpriority(os.PRIO_PROCESS, 0) + 10
+    finally:
+        runner.stop_all()
+
+
+def test_it_gets_this_machines_proxy_and_nothing_else_of_its_environment(data, monkeypatch) -> None:
+    monkeypatch.setattr(plugin_runner, "ENVIRON", {
+        "PATH": os.environ["PATH"], "TZ": "Europe/Paris", "HTTPS_PROXY": "http://proxy.example:3128",
+        "no_proxy": "nas.local", "PYTHONPATH": "/somewhere", "SOMETHING_ELSE": "x"})
+    runner, installs = _runner(data)
+    installs.add("hello", "env")
+    try:
+        _until(runner, lambda: _state(runner, "hello") == READY)
+        given = json.loads((data / "plugins" / "hello" / "data" / "env.json").read_text())
+        assert (given["HTTPS_PROXY"], given["no_proxy"], given["TZ"]) == (
+            "http://proxy.example:3128", "nas.local", "Europe/Paris")
+        assert not {"PYTHONPATH", "SOMETHING_ELSE", "HTTP_PROXY", "ALL_PROXY"} & set(given)
+    finally:
+        runner.stop_all()
+
+
+def test_its_server_settings_are_handed_to_it_at_start_and_a_change_starts_it_again(data) -> None:
+    runner, installs = _runner(data)
+    installs.server["hello"] = {"token": "s3cret", "greeting": "an account's: never here"}
+    installs.add("hello", "env")
+    seen = data / "plugins" / "hello" / "data" / "settings.json"
+    try:
+        _until(runner, lambda: _state(runner, "hello") == READY)
+        assert json.loads(seen.read_text()) == {"token": "s3cret"}, "its server settings alone"
+        given = data / "plugins" / "hello" / "server-settings.json"
+        assert given.stat().st_mode & 0o777 == 0o600, "only Lumiverb's user reads it: a secret may be among them"
+        first = runner.plugins["hello"].process
+        seen.unlink()
+        installs.server["hello"] = {"token": "changed"}
+        _until(runner, lambda: seen.exists() and _state(runner, "hello") == READY)
+        assert json.loads(seen.read_text()) == {"token": "changed"}
+        assert first.poll() is not None and runner.plugins["hello"].process is not first, "started again"
+        installs.server["hello"] = {}
+        _until(runner, lambda: runner.plugins["hello"].settings == {"token": ""})
+    finally:
+        runner.stop_all()
+
+
+def test_one_on_in_no_account_isnt_run_and_is_stopped_when_the_last_turns_it_off(data) -> None:
+    runner, installs = _runner(data)
+    installs.off.add("hello")
+    installs.add("hello")
+    try:
+        _until(runner, lambda: _state(runner, "hello") == OFF)
+        assert runner.plugins["hello"].process is None
+        said = read_state(data)["hello"]
+        assert (said["state"], said["why"]) == ("off", "It's off in every account: it starts when an account turns it on")
+        assert plugin_runner.not_ready(read_state(data), "hello") == "it's off in every account"
+        time.sleep(0.5)
+        runner.turn()
+        assert _state(runner, "hello") == OFF and not socket_path(data, "hello").exists(), "never started"
+
+        installs.off.clear()  # an account turned it on
+        _until(runner, lambda: _state(runner, "hello") == READY)
+        running = runner.plugins["hello"].process
+        installs.off.add("hello")  # the last account turned it off
+        _until(runner, lambda: _state(runner, "hello") == OFF)
+        assert running.poll() is not None and runner.plugins["hello"].process is None
+        installs.add("hello", version="2")  # updated while off: still not run, its version said
+        _until(runner, lambda: read_state(data)["hello"]["version"] == "2")
+        assert _state(runner, "hello") == OFF
     finally:
         runner.stop_all()
 
@@ -210,10 +292,15 @@ def test_preparing_and_failing_are_said_as_it_says_them(data) -> None:
     runner, installs = _runner(data)
     installs.add("slow", "preparing")
     installs.add("broken", "failing")
+    installs.add("busy", "busy")
     try:
-        _until(runner, lambda: _state(runner, "slow") == PREPARING and _state(runner, "broken") == FAILING)
+        _until(runner, lambda: _state(runner, "slow") == PREPARING and _state(runner, "broken") == FAILING
+               and _state(runner, "busy") == READY)
         slow = read_state(data)["slow"]
         assert (slow["done"], slow["total"], slow["detail"]) == (3, 10, "Reading the list")
+        busy = read_state(data)["busy"]  # ready, with work in the background: asked as any ready one is
+        assert (busy["state"], busy["done"], busy["total"], busy["detail"]) == ("ready", 4, 9, "Fetching a newer list")
+        assert plugin_runner.not_ready(read_state(data), "busy") is None
         assert read_state(data)["broken"]["why"] == "Its list is broken"
         assert runner.plugins["broken"].process.poll() is None, "it says it can't work: still asked"
     finally:
@@ -280,7 +367,8 @@ def test_lumiverbs_example_runs_and_checks_its_own_settings(data) -> None:
     program = program_dir(data, "example")
     shutil.copytree(EXAMPLE, program)
     (program / INSTALL_MARK).write_text(uuid.uuid4().hex)
-    runner = Runner(data, installed=lambda: {"example": SimpleNamespace(manifest=manifest)})
+    runner = Runner(data, installed=lambda: {"example": SimpleNamespace(manifest=manifest)}, wanted=set,
+                    server_settings=lambda plugin_id, m: {})
     try:
         _until(runner, lambda: _state(runner, "example") == READY)
         sock = socket_path(data, "example")

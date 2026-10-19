@@ -136,11 +136,28 @@ class Download:
 
 
 @dataclass(frozen=True)
+class Credit:
+    """Who to credit for what it shows or finds (a data source), and the license that asks it, if any: shown
+    beside its facts and its places, and kept with a place a person picked."""
+
+    text: str
+    url: str = ""
+    license: Link | None = None
+
+    def shown(self) -> dict[str, Any]:
+        """As the API says it: {text, url, license: {text, url} | None}."""
+        return {"text": self.text, "url": self.url or None,
+                "license": {"text": self.license.label, "url": self.license.url} if self.license else None}
+
+
+@dataclass(frozen=True)
 class Output:
     key: str
     kind: str  # OUTPUT_KINDS
     label: str
     searchable: bool = False
+    # What's shown under its label when it has nothing to say for a clip ("Not near a town"): never searched.
+    empty: str = ""
 
 
 @dataclass(frozen=True)
@@ -166,7 +183,7 @@ class Manifest:
     author: str = ""
     homepage: str = ""
     acknowledgment: Acknowledgment | None = None
-    credit: Link | None = None
+    credit: Credit | None = None
     downloads: tuple[Download, ...] = ()
     data_version: int = 1
     internet: bool = False
@@ -206,8 +223,16 @@ class Manifest:
 
 
 FACT_MAX = 200  # characters
+EMPTY_MAX = 80  # an output's empty line
 URL_MAX = 2000
 _TAG = re.compile(r"<[A-Za-z/!?]")
+
+
+def plain(words: str, most: int) -> bool:
+    """Whether a fact's text is shown as it is: plain text (no control character, no HTML tag), 1 to most
+    characters."""
+    return 0 < len(words) <= most and not any(ord(c) < 32 or 127 <= ord(c) < 160 for c in words) \
+        and not _TAG.search(words)
 
 
 def checked_outputs(work: WorkSpec, outputs: Any) -> dict[str, dict[str, str] | None]:
@@ -230,8 +255,7 @@ def checked_outputs(work: WorkSpec, outputs: Any) -> dict[str, dict[str, str] | 
         if not isinstance(value, dict) or set(value) - {"text", "url"} or not isinstance(value.get("text"), str):
             raise ValueError(f"outputs.{key}: a fact, {{\"text\", \"url\"?}}, or null")
         words = " ".join(value["text"].split())
-        if not words or len(words) > FACT_MAX or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in words) \
-                or _TAG.search(words):
+        if not plain(words, FACT_MAX):
             raise ValueError(f"outputs.{key}.text: plain text (no HTML), 1 to {FACT_MAX} characters")
         fact = {"text": words}
         if value.get("url") is not None:
@@ -445,7 +469,7 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
         f.bad("inputs", "preview is a photo's: its media is [\"image\"]")
     outputs: list[Output] = []
     for at, item in f.items("outputs", most=20):
-        o = _Fields(item, at, problems, ("key", "kind", "label", "searchable"))
+        o = _Fields(item, at, problems, ("key", "kind", "label", "searchable", "empty"))
         key = o.text("key", required=True, most=40)
         if key and not _KEY.match(key):
             o.bad("key", "lowercase letters, digits and underscores, starting with a letter")
@@ -454,7 +478,11 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
             o.bad("kind", f"one of {', '.join(OUTPUT_KINDS)} (protocol 1)")
         if key in [x.key for x in outputs]:
             problems.append(f"{at}: {key} twice")
-        outputs.append(Output(key, kind, o.text("label", required=True, most=80), o.boolean("searchable")))
+        said = o.text("empty", most=EMPTY_MAX)
+        empty = " ".join(said.split())
+        if said and not plain(empty, EMPTY_MAX):
+            o.bad("empty", f"plain text (no HTML), up to {EMPTY_MAX} characters")
+        outputs.append(Output(key, kind, o.text("label", required=True, most=80), o.boolean("searchable"), empty))
     if not outputs:
         f.bad("outputs", "at least one")
     return WorkSpec(title=f.text("title", required=True, most=80), version=f.version("version"), media=media,
@@ -492,8 +520,12 @@ def parse(data: Any, folder: Path | None = None) -> Manifest:
     ack = _acknowledgment(f.data["acknowledgment"], "acknowledgment", problems) if f.has("acknowledgment") else None
     credit = None
     if f.has("credit"):
-        c = _Fields(f.data["credit"], "credit", problems, ("text", "url"))
-        credit = Link(c.text("text", required=True, most=100), c.url("url"))
+        c = _Fields(f.data["credit"], "credit", problems, ("text", "url", "license"))
+        license_ = None
+        if c.has("license"):
+            lic = _Fields(c.data["license"], "credit.license", problems, ("text", "url"))
+            license_ = Link(lic.text("text", required=True, most=100), lic.url("url", required=True))
+        credit = Credit(c.text("text", required=True, most=100), c.url("url"), license_)
     downloads = []
     for at, item in f.items("downloads", most=20):
         d = _Fields(item, at, problems, ("url", "title", "about_mb"))

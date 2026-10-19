@@ -63,6 +63,35 @@ def installed() -> dict[str, Installed]:
     return out
 
 
+def on_somewhere(found: dict[str, Installed]) -> set[str]:
+    """Of these installed plug-ins, those on in at least one active account: turned on there, or following a
+    default that's on (the plug-in runner runs only these). Raises when an account can't be read: whoever
+    asks keeps what it had."""
+    from src.server.database import get_tenant_session
+    from src.server.repository.control_plane import TenantRepository
+    from src.server.repository.plugins import ON, PluginRepository, state_of
+
+    with get_control_session() as session:
+        accounts = [t.tenant_id for t in TenantRepository(session).list_all() if t.status == "active"]
+    on: set[str] = set()
+    for tenant_id in accounts:
+        if on == set(found):
+            break
+        with get_tenant_session(tenant_id) as session:
+            rows = PluginRepository(session).rows()
+        on |= {pid for pid, p in found.items() if state_of(p.manifest.spec(), rows.get(pid), p.default) == ON}
+    return on
+
+
+def server_settings(plugin_id: str, manifest: Manifest) -> dict[str, Any]:
+    """Its server-scope settings as it's handed them at its start: each as the server admin chose it, or its
+    default (plugin_settings.server_values)."""
+    from src.server.plugin_settings import SERVER, PluginSettingsRepository, server_values
+
+    with get_control_session() as session:
+        return server_values(manifest, PluginSettingsRepository(session, SERVER).get(plugin_id))
+
+
 def entries() -> list[Entry]:
     """Every plug-in: Lumiverb's own first (their order), then the installed ones by title."""
     own = [Entry(spec) for spec in registry().values()]

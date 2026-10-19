@@ -6,6 +6,7 @@ What it does is its command's argument, so the runner's tests can try a
 plug-in going wrong in each way it might (tests/test_plugin_runner.py):
 
   (none)      ready
+  busy        ready, with work in the background: 4 of 9
   preparing   preparing, 3 of 10
   failing     failed, with why
   crash       says why and exits 3 at once
@@ -15,7 +16,8 @@ plug-in going wrong in each way it might (tests/test_plugin_runner.py):
   memory      takes 300 MB first
   big-file    tries to write a 20 MB file (more than its disk_mb lets one file be), says what happened
   fill        writes 9 MB files into its data folder, one every half second
-  env         writes the environment it was given to its data folder (env.json)
+  env         writes the environment it was given to its data folder (env.json), and the server
+              settings it was started with (LUMIVERB_PLUGIN_SETTINGS's file) to settings.json
 
 Whatever it does, it checks new settings (POST /v1/settings/check): a
 greeting of "rude" isn't one it takes.
@@ -51,6 +53,8 @@ class Handler(BaseHTTPRequestHandler):
             self._answer(200, {"state": "ready"})
         elif MODE == "garbage":
             self._answer(200, {"state": "dancing"})
+        elif MODE == "busy":
+            self._answer(200, {"state": "ready", "done": 4, "total": 9, "detail": "Fetching a newer list"})
         elif MODE == "preparing":
             self._answer(200, {"state": "preparing", "done": 3, "total": 10, "detail": "Reading the list"})
         elif MODE == "failing":
@@ -100,6 +104,8 @@ def main() -> int:
     if MODE == "env":
         with open(os.path.join(DATA, "env.json"), "w") as f:
             json.dump(dict(os.environ), f)
+        with open(os.environ["LUMIVERB_PLUGIN_SETTINGS"]) as given, open(os.path.join(DATA, "settings.json"), "w") as f:
+            f.write(given.read())
     if MODE == "memory":
         held = bytearray(300 * 1024 * 1024)
         for i in range(0, len(held), 4096):

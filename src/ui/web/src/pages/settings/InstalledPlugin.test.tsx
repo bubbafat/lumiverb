@@ -119,6 +119,9 @@ describe("An installed plug-in in Settings › Plug-ins", () => {
     [{ state: "failing", why: "Its list is broken" }, "Not working: Its list is broken"],
     [{ state: "not_running", why: "The plug-in runner isn't running" }, "The plug-in runner isn't running"],
     [{ state: "preparing", detail: "Reading the list", done: 3, total: 10 }, "Getting ready: Reading the list (3 of 10)"],
+    [{ state: "ready", detail: "Fetching a newer list", done: 120, total: 610 }, "Fetching a newer list (120 of 610)"],
+    [{ state: "off", why: "It's off in every account: it starts when an account turns it on" },
+     "Not running: It's off in every account: it starts when an account turns it on"],
   ] as [PluginRunning, string][])("says what its process is doing: %o", async (state, said) => {
     running = { restarts: 0, ...state };
     renderSection();

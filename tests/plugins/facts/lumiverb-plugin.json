@@ -15,7 +15,7 @@
      "choices": [{"value": "well", "label": "Well"}, {"value": "clip-error", "label": "The clip's error"},
                  {"value": "own-error", "label": "Its own error"}, {"value": "nonsense", "label": "Nonsense"},
                  {"value": "html", "label": "HTML"}, {"value": "leave-out", "label": "Leaves a clip out"},
-                 {"value": "slow", "label": "Slowly"}]},
+                 {"value": "slow", "label": "Slowly"}, {"value": "quiet", "label": "Nothing to say of where"}]},
     {"key": "token", "type": "secret", "default": "", "scope": "server", "label": "Token",
      "help": "Handed with each request, never shown again."}
   ],
@@ -26,11 +26,12 @@
     "inputs": ["location", "capture_time", "metadata"],
     "batch": 20,
     "outputs": [
-      {"key": "where", "kind": "fact", "label": "Where"},
+      {"key": "where", "kind": "fact", "label": "Where", "empty": "Nowhere it knows"},
       {"key": "when", "kind": "fact", "label": "When", "searchable": true},
       {"key": "what", "kind": "fact", "label": "What"}
     ]
   },
   "lookups": ["places"],
-  "credit": {"text": "Facts' places", "url": "https://example.org/facts"}
+  "credit": {"text": "Facts' places", "url": "https://example.org/facts",
+             "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
 }

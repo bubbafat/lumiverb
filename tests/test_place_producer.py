@@ -126,7 +126,8 @@ def test_clips_with_a_location_are_named_with_the_nearest_town(env) -> None:  # 
     named = _place(env, near)
     assert named["label"] == "Port of Spain, Trinidad and Tobago" and named["place_id"] == "geonames:3573890"
     assert 0 < named["distance_m"] < 3000
-    assert named["credit"] == {"text": "GeoNames", "url": "https://www.geonames.org/"}
+    assert named["credit"] == {"text": "GeoNames", "url": "https://www.geonames.org/",
+                                  "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
     assert _place(env, placed)["label"] == "Paris, Île-de-France, France"  # a person's location, named too
     assert _place(env, sea)["label"] is None  # no town within 25 km
     assert _place(env, nowhere) is None

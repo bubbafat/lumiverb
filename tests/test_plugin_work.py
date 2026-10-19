@@ -42,6 +42,8 @@ from tests.test_server_admins import install  # noqa: F401 (a fixture)
 
 FACTS = Path(__file__).parent / "plugins" / "facts"
 ARTIFACT = "plugin_facts"
+CREDIT = {"text": "Facts' places", "url": "https://example.org/facts",
+          "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +300,57 @@ def test_installed_its_work_is_a_producer_and_uninstalled_it_isnt(facts):
     assert ARTIFACT not in {p["artifact"] for p in r.json()["producers"]}
 
 
+@pytest.mark.slow
+def test_what_an_uninstalled_plug_ins_work_left_breaks_nothing(facts):
+    """Its lineage (made, made with nothing to say, failed), its settings and its pause stay in the account once
+    it's gone (as a removed producer's do): every list, retry and run leaves them out."""
+    f = facts
+    a, b, _ = f.clips
+    assert _set(f, {"word": "Kept"}).status_code == 200
+    _job(f)  # a and b made
+    with get_tenant_session(f.tenant_id) as session:
+        session.execute(text("UPDATE assets SET gps_lat = 42.5 WHERE asset_id = :b"), {"b": b})
+        session.commit()
+    r = f.client.post("/v1/producers/failures", json={"items": [
+        {"asset_id": clip, "artifact": ARTIFACT, "error": "it couldn't"} for clip in (a, b)]}, headers=f.robert)
+    assert r.status_code == 200 and r.json() == {"recorded": 2}, r.text
+    assert f.client.post(f"/v1/producers/{ARTIFACT}/pause", json={"scope": "work"}, headers=f.robert).status_code == 204
+    failing = f.client.get("/v1/producers/failures", headers=f.robert).json()["items"]
+    assert [i["artifact"] for i in failing] == [ARTIFACT, ARTIFACT]
+    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 0
+    refresh()
+    assert ARTIFACT not in PRODUCERS
+
+    r = f.client.get("/v1/producers", params={"library_id": f.library_id}, headers=f.robert)
+    assert r.status_code == 200 and ARTIFACT not in {p["artifact"] for p in r.json()["producers"]}, r.text
+    r = f.client.get("/v1/producers/queue", headers=f.robert)
+    assert r.status_code == 200 and ARTIFACT not in {s["target"] for s in r.json()["switches"]}, r.text
+    r = f.client.get("/v1/producers/failures", params={"limit": 1}, headers=f.robert)
+    assert r.status_code == 200 and r.json() == {"items": [], "next_cursor": None}, "no page of nothing pointing on"
+    r = f.client.post("/v1/producers/failures/retry", json={"all": True}, headers=f.robert)
+    assert r.status_code == 200 and r.json() == {"retried": 0}, r.text
+    for scope in ("new", "redo"):
+        r = f.client.post("/v1/producers/run", json={"producer": "all", "all": True, "scope": scope}, headers=f.robert)
+        assert r.status_code == 200 and ARTIFACT not in {p["artifact"] for p in r.json()["producers"]}, r.text
+    r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
+    assert r.status_code == 200 and r.json()["facts"] == [], "uninstalled: what it made isn't shown"
+
+
+@pytest.mark.slow
+def test_it_runs_only_while_its_on_in_some_account(facts):
+    """Installed on by default, it runs; turned off by default with no account having chosen, it's on nowhere
+    and stopped; an account turning it on starts it again (the runner reads each account's switch)."""
+    f = facts
+    assert cli.main(["plugins", "default", "facts", "off", "--yes", "--env", str(f.env)]) == 0
+    _until(f.runner, lambda: _listed(f.client, f.robert)["facts"]["running"]["state"] == "off")
+    assert _listed(f.client, f.robert)["facts"]["running"]["why"] == (
+        "It's off in every account: it starts when an account turns it on")
+    assert f.runner.plugins["facts"].process is None
+    r = f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert)
+    assert r.status_code == 200, r.text
+    _until(f.runner, lambda: _listed(f.client, f.robert)["facts"]["running"]["state"] == "ready")
+
+
 # ---------------------------------------------------------------------------
 # What it made, shown with the clip and searched (phase 2c)
 # ---------------------------------------------------------------------------
@@ -317,12 +370,11 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     _job(f)
     r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
     assert r.status_code == 200, r.text
-    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts",
-                                  "credit": {"text": "Facts' places", "url": "https://example.org/facts"}, "facts": [
+    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts", "credit": CREDIT, "facts": [
         {"key": "where", "label": "Where", "text": "Zanzibar at 41.000, -73.000 (file)",
-         "url": "https://www.openstreetmap.org/?mlat=41.0&mlon=-73.0"},
-        {"key": "when", "label": "When", "text": "Zanzibar 2024-05-01T12:00:00Z", "url": None},
-        {"key": "what", "label": "What", "text": "Zanzibar: image 64x36", "url": None}]}]
+         "url": "https://www.openstreetmap.org/?mlat=41.0&mlon=-73.0", "empty": False},
+        {"key": "when", "label": "When", "text": "Zanzibar 2024-05-01T12:00:00Z", "url": None, "empty": False},
+        {"key": "what", "label": "What", "text": "Zanzibar: image 64x36", "url": None, "empty": False}]}]
     assert f.client.get(f"/v1/assets/{nowhere}", headers=f.robert).json()["facts"] == []
 
     assert _found(f, "zanzibar") == {a, b}, "its searchable fact (when) finds them"
@@ -336,6 +388,42 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     assert _outputs(f, a) is not None, "and kept"
     assert f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert).status_code == 200
     assert _found(f, "zanzibar") == {a, b}, "on again: found again, nothing made again"
+
+
+@pytest.mark.slow
+def test_a_fact_is_shown_and_found_only_while_its_clip_has_what_it_was_made_from(facts):
+    """A clip whose location a person clears no longer has an input the plug-in reads: what it made is kept but
+    neither shown nor searched (it would never be made again); the location back, it shows again."""
+    f = facts
+    a, b, _ = f.clips
+    assert _set(f, {"word": "Zanzibar"}).status_code == 200
+    _job(f)
+    with get_tenant_session(f.tenant_id) as session:
+        session.execute(text("UPDATE assets SET gps_lat = NULL, gps_lon = NULL WHERE asset_id = :a"), {"a": a})
+        session.commit()
+    assert f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"] == []
+    assert _found(f, "zanzibar") == {b}
+    assert _outputs(f, a) is not None, "kept"
+    assert _due(f) == [], "and not one it applies to now"
+    with get_tenant_session(f.tenant_id) as session:
+        session.execute(text("UPDATE assets SET gps_lat = 41.0, gps_lon = -73.0 WHERE asset_id = :a"), {"a": a})
+        session.commit()
+    assert [x["text"] for x in f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"][0]["facts"]][0] == (
+        "Zanzibar at 41.000, -73.000 (file)")
+    assert _found(f, "zanzibar") == {a, b}
+
+
+@pytest.mark.slow
+def test_an_output_with_nothing_to_say_shows_its_empty_line_and_isnt_searched(facts):
+    f = facts
+    a, _, _ = f.clips
+    assert _set(f, {"behave": "quiet", "word": "Zanzibar"}).status_code == 200
+    _job(f)
+    assert _outputs(f, a)["where"] is None, "nothing to say is what's kept"
+    [shown] = f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"]
+    assert shown["facts"][0] == {"key": "where", "label": "Where", "text": "Nowhere it knows", "url": None,
+                                 "empty": True}
+    assert _found(f, "nowhere") == set(), "an empty line is never searched"
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +447,7 @@ def test_place_search_asks_each_plug_in_that_finds_places_and_says_which_couldnt
         "place_id": "facts:harbour", "name": "Harbour Point", "region": "Testshire", "country": "Testland",
         "label": "Harbour Point, Testshire, Testland", "lat": 41.1, "lon": -73.2, "population": 0,
         "kind": "lighthouse", "matched": None, "source": "facts", "source_title": "Facts"}],
-        "credit": None, "credits": [{"source": "facts", "text": "Facts' places", "url": "https://example.org/facts"}],
-        "unavailable": []}
+        "credit": None, "credits": [{"source": "facts", **CREDIT}], "unavailable": []}
     asked = json.loads((f.data / "plugins" / "facts" / "data" / "last-lookup.json").read_text())
     assert asked == {"q": "har", "limit": 10, "settings": {"word": "Seen", "behave": "well", "token": ""}}
 
@@ -392,7 +479,7 @@ def test_a_location_set_from_a_plug_ins_place_says_where_it_came_from(facts):
     location = f.client.get(f"/v1/assets/{nowhere}", headers=f.robert).json()["location"]
     assert (location["lat"], location["lon"], location["source"]) == (41.3, -73.4, "person")
     assert location["basis_summary"] == "Hill Top, Testland"
-    assert location["credit"] == {"text": "Facts' places", "url": "https://example.org/facts"}
+    assert location["credit"] == CREDIT
     for unknown in ("facts:nope", "elsewhere:hill", "facts:"):
         r = put(unknown)
         assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_place", (unknown, r.text)
