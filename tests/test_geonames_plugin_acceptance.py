@@ -18,10 +18,12 @@ holds up no other.
 
 Part 2, the GeoNames program (src/own_plugins/geonames/), on the tester's
 own made-up GeoNames files (tests/tester_geonames_lists.py, apart from the
-builder's), run by the real runner and asked through Lumiverb's own client
-(its facts, searches and places by id were held to the built-in Place
-names' on the same files until part 4 removed that code): killed, it's
-started again with its list and
+builder's), run by the real runner and asked through Lumiverb's own client:
+its facts, searches and places by id equal what the built-in Place names
+answered on the same files (but for a place at no real point, which it
+leaves out: tests/plugins/tester_geonames_golden.json, written from the
+built-in's code while it existed), every answer passing Lumiverb's checks;
+killed, it's started again with its list and
 fetches nothing; a file missing from the mirror fails naming it; a download
 cut off is fetched again, the finished ones aren't.
 
@@ -455,7 +457,7 @@ def test_part1_an_empty_line_shows_isnt_searched_and_the_license_is_beside_the_c
 
 
 # ---------------------------------------------------------------------------
-# Part 2: the GeoNames program (src/own_plugins/geonames/), on the tester's own lists
+# Part 2: the GeoNames program (src/own_plugins/geonames/), against the built-in's answers on the tester's lists
 # ---------------------------------------------------------------------------
 
 GEONAMES = Path(__file__).resolve().parents[1] / "src" / "own_plugins" / "geonames"
@@ -535,6 +537,36 @@ def site(lists_):
     s.close()
 
 
+# What the built-in Place names answered on the tester's lists, written from its code while it existed (part 3's
+# head, v0.1.103); its "about" says how it's laid out.
+TESTER_GOLDEN = Path(__file__).parent / "plugins" / "tester_geonames_golden.json"
+
+
+def _sha(value) -> str:
+    import hashlib
+
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()
+
+
+def _files_sha(files: dict[str, bytes]) -> dict[str, str]:
+    """Each file's SHA-256, a zip's of what it holds (its own bytes carry the time it was made)."""
+    import hashlib
+    import io
+    import zipfile
+
+    out = {}
+    for name, body in sorted(files.items()):
+        h = hashlib.sha256()
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(io.BytesIO(body)) as z:
+                for member in sorted(z.namelist()):
+                    h.update(member.encode() + b"\0" + z.read(member))
+        else:
+            h.update(body)
+        out[name] = h.hexdigest()
+    return out
+
+
 class _GeoNames:
     """The program installed as the runner sees it (a copy in its program folder, marked as an install marks it),
     on, with the site as its mirror, run by the real runner; asked through Lumiverb's own client."""
@@ -585,6 +617,65 @@ def _settings(g: _GeoNames, radius_km: int, mirror: str) -> dict:
     from src.server.plugin_settings import values
 
     return values(g.manifest, {"radius_km": radius_km}, {"mirror": mirror})
+
+
+def test_part2_the_program_answers_as_the_built_in_did_on_the_testers_lists(site, lists_, short_data, machine_python):  # noqa: F811
+    """Its facts (at, near) for every point at radii of 1, 5 and 25 km, its searches and its places by id, from
+    its own socket, against what the built-in Place names answered on the same files (the tester's golden file,
+    written from its code while it existed): equal to the character, and every answer passes Lumiverb's own
+    checks (manifest.checked_outputs, plugin_lookups.checked_place)."""
+    from src.plugins.manifest import checked_outputs
+    from src.server.plugin_lookups import checked_place
+
+    golden = json.loads(TESTER_GOLDEN.read_text())
+    points, queries = lists_.points(), lists_.queries()
+    asked = {"files": _files_sha(lists_.files()), "points": _sha(points), "queries": _sha(queries)}
+    assert asked == {k: golden[k] for k in asked}, "the golden file was written on these lists and questions"
+    names = golden["names"]
+    g = _GeoNames(short_data, site.url)
+    try:
+        g.until("ready", detail=None)
+        plugin = SimpleNamespace(manifest=g.manifest)
+        differences = []
+        for km in (1, 5, 25):
+            for start in range(0, len(points), 200):
+                batch = points[start:start + 200]
+                clips = [{"id": str(n), "location": {"lat": la, "lon": lo, "sure_m": sure, "source": "file"}}
+                         for n, (la, lo, sure) in enumerate(batch, 1)]
+                said = g.ask("/v1/work", {"settings": _settings(g, km, site.url), "clips": clips})["clips"]
+                for n, (la, lo, sure) in enumerate(batch, 1):
+                    outputs = said[str(n)]["outputs"]
+                    checked_outputs(g.manifest.work, outputs)  # raises: what Lumiverb would refuse
+                    at, near = golden["work"][str(km)][start + n - 1]
+                    want = {"at": names[at] if at >= 0 else None, "near": names[near] if near >= 0 else None}
+                    got = {k: (v or {}).get("text") for k, v in outputs.items()}
+                    if got != want:
+                        differences.append(("work", km, la, lo, sure, want, got))
+        fields = ("name", "region", "country", "kind", "matched", "population", "lat", "lon")
+        for q, answer in zip(queries, golden["search"], strict=True):
+            got = g.ask("/v1/lookups/places", {"q": q, "limit": 10, "settings": _settings(g, 25, site.url)})["places"]
+            for raw in got:
+                checked_place(plugin, raw)
+            # The built-in's, but for a place at no real point, which the plug-in leaves out (plan section 1: what
+            # it keeps passes Lumiverb's checks, plugin_lookups.checked_place); the golden file has left them out.
+            want = []
+            for one in answer:
+                gid, matched = (one, None) if isinstance(one, str) else one
+                want.append({"id": gid, **golden["places"][gid], "matched": matched})
+            mine = [{"id": p["id"], **{k: p.get(k) for k in fields}} for p in got]
+            if mine != want:
+                differences.append(("search", q, want, mine))
+        for gid, want in golden["ids"]:
+            got = g.ask("/v1/lookups/places", {"id": str(gid), "settings": _settings(g, 25, site.url)})["places"]
+            if want is None:
+                if got:
+                    differences.append(("id", gid, None, got))
+            elif [(p["id"], p["name"], p["lat"], p["lon"], p["kind"]) for p in got] != [
+                    (str(gid), want["name"], want["lat"], want["lon"], want["kind"])]:
+                differences.append(("id", gid, want, got))
+        assert differences == [], f"{len(differences)} differences, the first: {differences[:3]}"
+    finally:
+        g.stop()
 
 
 @ONE_PYTHON
@@ -671,3 +762,156 @@ def test_part3_place_names_work_can_be_paused_and_resumed_on_the_machine(install
         assert said.returncode == 0, f"{verb}: {said.stdout}{said.stderr}"
         mine = {scope for target, scope in pauses() if target == "plugin_geonames"}
         assert ("work" in mine) if verb == "pause" else (mine == set()), f"after {verb}: {pauses()}"
+
+
+# ---------------------------------------------------------------------------
+# Part 4: the removal; a landmark's name is searched, for the clips named before it too (Robert's Q2)
+# ---------------------------------------------------------------------------
+
+QUILLSTONE = "Quillstone Abbey"  # a church (CH, 250 m) with a Wikipedia link, among Paris's made-up towns
+BRINDLEMOOR = "Brindlemoor Peak"  # a mountain (MT, 1 km) with a link, far from any town: no town near it
+
+
+@pytest.fixture
+def landmark_lists():
+    """The tester's lists with two landmarks of their own, whose names are in no town's: (lists, {name: point})."""
+    from tests.tester_geonames_lists import _offset, lists
+
+    made = lists()
+    gid = max(row[0] for row in made.towns + made.landmarks)
+    aid = max(row[0] for row in made.names)
+    points = {}
+    for name, code, (lat0, lon0), meters in ((QUILLSTONE, "CH", (48.85, 2.35), 3000),
+                                            (BRINDLEMOOR, "MT", (-77.85, 166.67), 150_000)):
+        gid, aid = gid + 1, aid + 1
+        lat, lon = (round(v, 6) for v in _offset(lat0, lon0, meters, 1.0))
+        made.landmarks.append((gid, name, name, lat, lon, code, "FR" if code == "CH" else "AQ",
+                               "11" if code == "CH" else "00", True))
+        made.names.append((aid, gid, "link", f"https://en.wikipedia.org/wiki/L{gid}", "", ""))
+        points[name] = (lat, lon)
+    return made, points
+
+
+def _part3s(folder: Path) -> Path:
+    """GeoNames as v0.1.103 shipped it, for an install that named its clips then: the program as shipped now,
+    its manifest as part 3's (its version then; At not searchable)."""
+    from src.plugins.manifest import MANIFEST
+
+    old = folder / "geonames"
+    shutil.copytree(GEONAMES, old)
+    manifest = json.loads((old / MANIFEST).read_text())
+    manifest["version"] = "1"
+    for output in manifest["work"]["outputs"]:
+        if output["key"] == "at":
+            output.pop("searchable", None)
+    (old / MANIFEST).write_text(json.dumps(manifest, indent=2))
+    return old
+
+
+def _sweep(client) -> int:
+    """Upkeep's search sweep, as its timer asks it (every account, the install's key): the facts written again."""
+    r = client.post("/v1/upkeep/search-sync?tenants=all", headers={"Authorization": f"Bearer {INSTALL_KEY}"})
+    assert r.status_code == 200, r.text
+    assert r.json()["failed"] == 0, r.json()
+    return r.json()["facts_synced"]
+
+
+def test_part4_a_landmarks_name_finds_its_clips_named_before_the_upgrade_and_after(
+        install, control, short_data, landmark_lists, tmp_path, monkeypatch):  # noqa: F811
+    """Robert: people search by landmarks more than towns, so At is searched as Near is. An install that named
+    its clips under part 3 (At not searched) and is upgraded as an install is (`lumiverb-server migrate`, a
+    process of its own: migrations, then Lumiverb's own plug-ins updated; the runner started again; whatever
+    work is due then run; upkeep's search sweep, every 5 minutes) finds those clips by their landmark's name,
+    with what each shows kept throughout and nothing made again; and a clip named after the upgrade too. A
+    landmark with no town near (its fact its label) too."""
+    from src.server import own_plugins
+    from src.server.plugin_runner import Runner
+
+    client, robert, tenant_id = install
+    made, points = landmark_lists
+    site = _Site(made.files())
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={short_data}\nLUMIVERB_GEONAMES_URL={site.url}\n")
+    monkeypatch.setenv("DATA_DIR", str(short_data))
+    get_settings.cache_clear()
+    shipped_at = own_plugins.OWN
+    monkeypatch.setattr(own_plugins, "OWN", _part3s(tmp_path / "v0.1.103").parent)
+    own_plugins.shipped.cache_clear()
+    own_plugins.install_own(control, short_data, environ={"LUMIVERB_GEONAMES_URL": site.url}, say=lambda line: None)
+    refresh()
+    r = client.put("/v1/plugins/geonames", json={"enabled": True, "acknowledged": "3"}, headers=robert)
+    assert r.status_code == 200, r.text
+    r = client.post("/v1/libraries", json={"name": "Landmarks", "root_path": "/Volumes/landmarks"}, headers=robert)
+    assert r.status_code == 200, r.text
+    library_id = r.json()["library_id"]
+    acct = FakeAccount(scheduler_client(tenant_id))
+    acct.tenant_id = tenant_id
+
+    def clips_at(name: str, *files: str) -> list[str]:
+        lat, lon = points[name]
+        with get_tenant_session(tenant_id) as session:
+            made_ = [make_clip(session, library_id, f) for f in files]
+            session.execute(text("UPDATE assets SET gps_lat = :lat, gps_lon = :lon WHERE asset_id = ANY(:ids)"),
+                            {"lat": lat, "lon": lon, "ids": made_})
+            session.commit()
+        return made_
+
+    def name_whats_due() -> None:
+        items = due(tenant_database_url(tenant_id), "plugin_geonames", [library_id])
+        if items:
+            run_job(PluginWork, acct, tenant_id, "plugin_geonames", items)
+        assert acct.failures.charged == []
+
+    def shown(clip: str) -> dict:
+        r = client.get(f"/v1/assets/{clip}", headers=robert)
+        assert r.status_code == 200, r.text
+        section = next(p for p in r.json()["facts"] if p["plugin_id"] == "geonames")
+        return {f["key"]: f["text"] for f in section["facts"]}
+
+    def found(words: str) -> set[str]:
+        r = client.get(f"/v1/query?f=query:{words}&f=library:{library_id}", headers=robert)
+        assert r.status_code == 200, r.text
+        return {item["asset_id"] for item in r.json()["items"]}
+
+    runner = Runner(short_data)
+    try:
+        _until(runner, lambda: _listed(client, robert)["geonames"]["running"]["state"] == "ready", within=120)
+        before = clips_at(QUILLSTONE, "q1.jpg", "q2.jpg") + clips_at(BRINDLEMOOR, "b1.jpg")
+        name_whats_due()
+        then = {clip: shown(clip) for clip in before}
+        assert [then[c]["at"] for c in before[:2]] == [QUILLSTONE] * 2, then
+        assert then[before[2]]["at"].startswith(f"{BRINDLEMOOR}, ") and then[before[2]]["near"] == "Not near a town"
+        assert found("Quillstone") == found("Brindlemoor") == set(), "part 3: At isn't searched"
+        near = then[before[0]]["near"].split(",")[0]
+        assert set(before[:2]) <= found(near), "Near is"
+    finally:
+        runner.stop_all()  # the upgrade: the services stopped
+
+    monkeypatch.setattr(own_plugins, "OWN", shipped_at)
+    own_plugins.shipped.cache_clear()
+    said = subprocess.run([str(Path(sys.executable).with_name("lumiverb-server")), "migrate", "--env", str(env)],
+                          capture_output=True, text=True, timeout=300)
+    assert said.returncode == 0, said.stdout + said.stderr
+    assert {clip: shown(clip) for clip in before} == then, "what each shows is kept through the upgrade"
+    refresh()
+    runner = Runner(short_data)
+    try:
+        _until(runner, lambda: _listed(client, robert)["geonames"]["running"]["state"] == "ready", within=120)
+        assert {clip: shown(clip) for clip in before} == then, "and while the plug-in starts again"
+        name_whats_due()
+        assert {clip: shown(clip) for clip in before} == then, "and once what's due is done"
+        assert _sweep(client) == 3, "the sweep writes the search text of the facts saved before"
+        assert _sweep(client) == 0, "once"
+        assert {clip: shown(clip) for clip in before} == then, "and after it"
+        assert found("Quillstone") == set(before[:2]), "the clips named before the upgrade are found by it"
+        assert found("Brindlemoor") == {before[2]}, "a landmark with no town near too"
+        assert found(QUILLSTONE.replace(" ", "%20")) == set(before[:2])
+        after = clips_at(QUILLSTONE, "q3.jpg")
+        name_whats_due()
+        assert shown(after[0]) == then[before[0]]
+        assert found("Quillstone") == set(before[:2] + after), "and one named after it"
+        assert set(before[:2] + after) <= found(near), "Near is still searched"
+    finally:
+        runner.stop_all()
+        use_added((), by=INSTALLED)
+        site.close()
