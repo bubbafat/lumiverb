@@ -169,8 +169,9 @@ class Account:
         within the minute. The scan pass checks in first too."""
         from datetime import UTC
 
-        from src.server.check_ins import PROTOCOL, waiting
+        from src.server.check_ins import waiting
         from src.server.version import running
+        from src.shared.readers import PROTOCOL
 
         with self._lock:
             said = [{"library_id": i, "state": self._state(lib), "mark": self.marks.get(i, 0),

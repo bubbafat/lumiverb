@@ -76,6 +76,19 @@ def test_the_scan_it_describes_waits_for_files_as_lumiverb_s_does():
     assert FUTURE_MTIME_SEC // 60 >= 2 and "A modified time minutes ahead is a camera's clock" in said
 
 
+def test_what_it_sends_by_name_is_what_lumiverb_s_scan_sends():
+    # ADR-024 phase 1 part 2: the preview, each lineage and the video preview by their names, at protocol 2.
+    from src.producers.names import file_named, name_of
+    from src.shared.readers import PROTOCOL
+
+    said = _section()
+    assert f"Speak `protocol` {PROTOCOL}" in said
+    assert f"   - `{file_named('proxy')}`: its preview" in said
+    for artifact in ("proxy", "capture", "probe"):
+        assert f"`{name_of(artifact)}`" in said, artifact
+    assert f"`POST /v1/assets/{{id}}/artifacts/{file_named('video_preview')}`" in said
+
+
 def test_a_change_to_the_code_would_fail_it(monkeypatch):
     from src.shared import file_extensions
 

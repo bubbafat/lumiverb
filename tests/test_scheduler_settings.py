@@ -172,15 +172,22 @@ def test_the_env_helper_carries_the_clis_settings_over_once_and_maps_roots(tmp_p
 # ---------------------------------------------------------------------------
 
 
-def _enrich(monkeypatch, *args: str, answer: dict | None = None):
+def _enrich(monkeypatch, *args: str, answer: dict | None = None, listed: tuple[str, ...] = ("faces", "vision")):
+    """listed: the producers the server lists, as it spells them (ids before ADR-024 part 3, names after)."""
     from typer.testing import CliRunner
 
     import importlib
 
     cli = importlib.import_module("src.client.cli.main")
 
+    def get(path, params=None):
+        r = MagicMock()
+        r.json.return_value = ({"producers": [{"artifact": a} for a in listed]} if path == "/v1/producers"
+                               else [{"library_id": "lib_1", "name": "Footage"}])
+        return r
+
     client = MagicMock()
-    client.get.return_value.json.return_value = [{"library_id": "lib_1", "name": "Footage"}]
+    client.get.side_effect = get
     client.raw.return_value = MagicMock(status_code=200, json=lambda: answer or {"producers": []})
     monkeypatch.setattr("src.client.cli.commands.enrich.LumiverbClient", lambda: client)
     monkeypatch.setattr("src.client.cli.commands.archive.LumiverbClient", lambda: client, raising=False)
@@ -204,6 +211,21 @@ def test_enrich_asks_the_scheduler_and_says_what_it_has_to_do(monkeypatch) -> No
     assert "Faces: 3 to make, 120 to make again, 1 tried again (redo stopped)" in result.output
     result, client = _enrich(monkeypatch, "all", "--all")
     assert client.raw.call_args.kwargs["json"] == {"producer": "all", "scope": "new", "all": True}
+
+
+@pytest.mark.parametrize("listed, sent", [(("faces", "vision"), "faces"),
+                                          (("lumiverb.image.faces", "lumiverb.image.description"), "lumiverb.image.faces")])
+def test_enrich_takes_a_name_and_sends_it_as_the_server_lists_it(monkeypatch, listed, sent) -> None:
+    # ADR-024 phase 1 part 2: a server before part 3 lists today's ids, one from part 3 the names.
+    for typed in ("image.faces", "lumiverb.image.faces", "faces"):
+        result, client = _enrich(monkeypatch, typed, "--all", listed=listed)
+        assert result.exit_code == 0, result.output
+        assert client.raw.call_args.kwargs["json"]["producer"] == sent, typed
+        assert ("faces is called image.faces now" in result.output) == (typed == "faces"), typed
+    result, client = _enrich(monkeypatch, "teleport", "--all", listed=listed)
+    assert result.exit_code == 2 and "No producer is called teleport: one of all, image.faces, image.description" in \
+        result.output.replace("\n", " ")
+    client.raw.assert_not_called()
 
 
 def test_an_error_that_stops_the_scheduler_is_said_before_it_goes(tmp_path) -> None:

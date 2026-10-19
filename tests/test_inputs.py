@@ -203,7 +203,7 @@ def test_elsewhere_an_analysis_proxy_is_downloaded_into_the_cache_once(tmp_path)
     for _ in range(2):
         with inputs.analysis_proxy(_video()) as path:
             assert path.parent == tmp_path / "analysis" and path.read_bytes() == b"downloaded"
-    assert acct.client.calls == ["/v1/assets/ast_2/artifacts/analysis_proxy"]
+    assert acct.client.calls == ["/v1/assets/ast_2/artifacts/lumiverb.video.analysis_proxy"]  # by its name
 
 
 def test_elsewhere_a_render_is_kept_in_the_cache(tmp_path):

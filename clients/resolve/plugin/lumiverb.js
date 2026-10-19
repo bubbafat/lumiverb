@@ -276,10 +276,12 @@ class LumiverbClient {
         return this.roots;
     }
 
-    // The clip's thumbnail as a data URL, or null when it isn't made yet.
+    // The clip's thumbnail as a data URL, or null when it isn't made yet. Asked for by its name (ADR-024:
+    // every server from v0.1.105 serves it so).
     async thumbnail(assetId) {
         try {
-            const response = await this.request(`/v1/assets/${encodeURIComponent(assetId)}/artifacts/thumbnail`);
+            const response = await this.request(
+                `/v1/assets/${encodeURIComponent(assetId)}/artifacts/lumiverb.preview.thumbnail`);
             const type = response.headers.get('content-type') || 'image/webp';
             const bytes = Buffer.from(await response.arrayBuffer());
             return `data:${type};base64,${bytes.toString('base64')}`;

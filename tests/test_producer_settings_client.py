@@ -91,7 +91,7 @@ def test_it_uses_the_servers_settings_and_says_so():
     ps = ProducerSettings(_client({"transcript": {"model": "medium"}}))
     assert ps.settings("transcript")["model"] == "medium"
     lin = ps.lineage("transcript", "sha256:" + "ab" * 32)
-    assert lin == {"producer": "whisper", "version": "1",
+    assert lin == {"producer": "lumiverb.video.transcript", "version": "1",
                    "settings_hash": P.settings_hash({**P.effective_settings("transcript"), "model": "medium"}),
                    "source_hash": "sha256:" + "ab" * 32}
 
@@ -146,9 +146,11 @@ def test_a_scanned_image_says_how_its_proxy_was_made(tmp_path):
     ):
         scan._scan_one(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
+    # Each by its name (ADR-024 phase 1 part 2: a server takes them from part 1), the preview too.
     assert json.loads(call.kwargs["data"]["lineage"]) == {
-        "proxy": P.lineage("proxy", P.effective_settings("proxy"), SHA),
-        "capture": P.lineage("capture", {}, SHA)}
+        "lumiverb.preview": P.lineage("proxy", P.effective_settings("proxy"), SHA),
+        "lumiverb.capture_time": P.lineage("capture", {}, SHA)}
+    assert set(call.kwargs["files"]) == {"lumiverb.preview"}
 
 
 def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path):
@@ -170,10 +172,10 @@ def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path
         scan._scan_one_video(**args)
     posts = {c.args[0]: c for c in args["client"].post.call_args_list}
     assert json.loads(posts["/v1/ingest"].kwargs["data"]["lineage"]) == {
-        "proxy": P.lineage("proxy", P.effective_settings("proxy"), SHA),
-        "capture": P.lineage("capture", {}, SHA),
-        "probe": P.lineage("probe", {}, SHA)}
-    assert json.loads(posts["/v1/assets/ast_a/artifacts/video_preview"].kwargs["data"]["lineage"]) == P.lineage(
+        "lumiverb.preview": P.lineage("proxy", P.effective_settings("proxy"), SHA),
+        "lumiverb.capture_time": P.lineage("capture", {}, SHA),
+        "lumiverb.video.format": P.lineage("probe", {}, SHA)}
+    assert json.loads(posts["/v1/assets/ast_a/artifacts/lumiverb.video.preview"].kwargs["data"]["lineage"]) == P.lineage(
         "video_preview", P.effective_settings("video_preview"), SHA)
 
 
@@ -193,7 +195,7 @@ def test_a_failed_probe_isnt_claimed(tmp_path):
     ):
         scan._scan_one_video(**args)
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
-    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"proxy", "capture"}
+    assert set(json.loads(call.kwargs["data"]["lineage"])) == {"lumiverb.preview", "lumiverb.capture_time"}
 
 
 def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_cant_say():

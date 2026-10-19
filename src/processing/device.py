@@ -53,6 +53,14 @@ ORDER = ("probe", "capture", "analysis_proxy")
 PAGE = 500  # reader-work's clips a page
 
 
+def _ids(words: list[str] | None) -> set[str]:
+    """What the server lists (what's paused, a clip's work), whichever spelling it answers in (ADR-024: today's
+    ids before part 3, the names after), as the producers' ids here."""
+    from src.producers.names import artifact_in
+
+    return {artifact_in(w) for w in words or []}
+
+
 class Device:
     """A device's reading of its libraries: what a producer's work asks of
     its account (client, stopping, inputs, producers, failures, machine),
@@ -113,8 +121,9 @@ class Device:
     def check_in(self) -> list[str]:
         """Check in (decision 4): the libraries it reads now, and what
         changed in those whose mark moved. Returns those it no longer reads."""
-        from src.server.check_ins import PROTOCOL, waiting
+        from src.server.check_ins import waiting
         from src.server.version import running
+        from src.shared.readers import PROTOCOL
 
         with self._checking_in:
             self.checked_in_at = self._clock()  # tried: one that fails is tried again in a minute
@@ -206,15 +215,14 @@ class Device:
                 if self.reached.get(library_id) is None:
                     continue
                 paused = (self.told.get(library_id) or {}).get("paused") or {}
-                held = set(paused.get("work") or []) | (set(paused.get("remakes") or []) if field == "remakes"
-                                                         else set())
+                held = _ids(paused.get("work")) | (_ids(paused.get("remakes")) if field == "remakes" else set())
                 for page in self._pages(library_id):
                     for artifact in ORDER:
                         if self.stopping.is_set():
                             return done
                         if artifact in held:
                             continue
-                        clips = [c for c in page if artifact in (c.get(field) or [])]
+                        clips = [c for c in page if artifact in _ids(c.get(field))]
                         done += self._make(library_id, artifact, clips,
                                            stop=remaking.stop if field == "remakes" else None)
                         if remaking.stopped:

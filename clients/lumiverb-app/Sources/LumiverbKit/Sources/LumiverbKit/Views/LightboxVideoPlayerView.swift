@@ -8,7 +8,7 @@ import AVKit
 /// 2. The server's stream via `GET /v1/assets/{id}/playback` — a signed link
 ///    AVPlayer streams: the whole video once its analysis proxy exists (up
 ///    to the account's cap), else the scan's 10-second clip
-/// 3. Server preview via `GET /v1/assets/{id}/artifacts/video_preview` — 10-second clip, downloaded to temp file (an older server)
+/// 3. Server preview via `GET /v1/assets/{id}/artifacts/lumiverb.video.preview` — 10-second clip, downloaded to temp file (an older server)
 /// 4. Static proxy image if none is available
 ///
 /// `start` (a person's moment) is where it plays from: once the source
@@ -263,7 +263,7 @@ final class VideoPlayerViewModel: ObservableObject {
     static func previewData(_ client: APIClient, assetId: String) async throws -> Data? {
         for _ in 0..<15 {
             do {
-                return try await client.getData("/v1/assets/\(assetId)/artifacts/video_preview")
+                return try await client.getData(ClipFile.videoPreview.path(assetId))
             } catch APIError.serverError(statusCode: 503, _) {
                 try await Task.sleep(for: .seconds(2))
             }

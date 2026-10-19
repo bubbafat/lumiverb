@@ -61,7 +61,8 @@ def test_transcripts_made_with_small_stay_current():
 def test_lineage_names_the_producer_version_settings_and_source():
     settings = P.effective_settings("transcript")
     assert P.lineage("transcript", settings, "sha256:" + "ab" * 32) == {
-        "producer": "whisper", "version": "1", "settings_hash": P.settings_hash(settings),
+        # The producer by the name of what it makes (ADR-024 phase 1 part 2: servers take it from part 1).
+        "producer": "lumiverb.video.transcript", "version": "1", "settings_hash": P.settings_hash(settings),
         "source_hash": "sha256:" + "ab" * 32,
     }
 

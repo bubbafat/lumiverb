@@ -87,8 +87,10 @@ class AnalysisProxyCache:
             yield path
 
     def _download(self, asset_id: str, key: str) -> bool:
+        from src.producers.names import file_named
+
         try:
-            with self._client.stream(f"/v1/assets/{asset_id}/artifacts/analysis_proxy") as resp:
+            with self._client.stream(f"/v1/assets/{asset_id}/artifacts/{file_named('analysis_proxy')}") as resp:
                 if resp.status_code == 404:
                     return False
                 with self._files.writing(key, ".mp4") as partial, open(partial, "wb") as f:

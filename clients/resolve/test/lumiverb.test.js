@@ -219,7 +219,8 @@ test('a thumbnail that is not made yet is null', async () => {
     const fetch = fakeFetch(() => reply(404, { error: { code: 'artifact_not_ready', message: 'Not ready.' } }));
     const { client } = signedInClient(fetch, 'jwt');
     assert.equal(await client.thumbnail('a1'), null);
-    assert.equal(fetch.calls[0].url, 'http://media/v1/assets/a1/artifacts/thumbnail');
+    // By its name (ADR-024 phase 1 part 2).
+    assert.equal(fetch.calls[0].url, 'http://media/v1/assets/a1/artifacts/lumiverb.preview.thumbnail');
 });
 
 test('libraryRoots maps each library to its root, read once', async () => {

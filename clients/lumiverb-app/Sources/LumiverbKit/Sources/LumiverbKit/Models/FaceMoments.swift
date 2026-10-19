@@ -103,7 +103,8 @@ public struct PlaybackLink: Decodable, Sendable {
     /// "/v1/stream/<token>", relative to the server.
     public let url: String
     public let expiresAt: String?
-    /// "analysis_proxy" (the whole video, up to `maxSeconds`) or "preview" (the scan's 10-second clip).
+    /// The analysis proxy (the whole video, up to `maxSeconds`) or the video
+    /// preview (the scan's 10-second clip), in either spelling (`ClipFile(said:)`).
     public let source: String
     public let maxSeconds: Int?
     /// False while the capped copy is made: ask again shortly.
@@ -113,5 +114,5 @@ public struct PlaybackLink: Decodable, Sendable {
     public let whole: Bool?
 
     /// Whether what plays is the whole clip (a short clip's preview is).
-    public var isWhole: Bool { whole ?? (source == "analysis_proxy") }
+    public var isWhole: Bool { whole ?? (ClipFile(said: source) == .analysisProxy) }
 }

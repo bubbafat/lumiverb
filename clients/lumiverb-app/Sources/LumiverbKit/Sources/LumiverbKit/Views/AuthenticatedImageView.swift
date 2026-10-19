@@ -30,10 +30,11 @@ public struct AuthenticatedImageView: View {
         case thumbnail
         case proxy
 
-        var path: String {
+        /// The file it shows, by its name (`ClipFile`).
+        var file: ClipFile {
             switch self {
-            case .thumbnail: return "artifacts/thumbnail"
-            case .proxy: return "artifacts/proxy"
+            case .thumbnail: return .thumbnail
+            case .proxy: return .preview
             }
         }
     }
@@ -44,7 +45,7 @@ public struct AuthenticatedImageView: View {
 
     @Environment(\.cacheBundle) private var cacheBundle
 
-    private var cacheKey: String { "\(type.path)-\(assetId)" }
+    private var cacheKey: String { "artifacts/\(type.file.rawValue)-\(assetId)" }
 
     public init(assetId: String, client: APIClient?, type: ImageType) {
         self.assetId = assetId
@@ -140,7 +141,7 @@ public struct AuthenticatedImageView: View {
             // does its thing, control returns here on the detached task's
             // executor — still off main.
             do {
-                guard let data = try await client.getData("/v1/assets/\(assetId)/\(type.path)") else {
+                guard let data = try await client.getData(type.file.path(assetId)) else {
                     return nil
                 }
                 guard let decoded = PlatformImage.from(data: data) else {

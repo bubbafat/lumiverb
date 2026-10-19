@@ -777,11 +777,14 @@ def _pausing(args: argparse.Namespace) -> int:
     """pause|resume: a switch (upkeep, a producer, an installed plug-in's work), every library's scans
     or one's, or all, as Settings › Processing and `lumiverb pause|resume`
     do (the same routes' code, without a key: on the machine itself), in
-    every account or the one named. Then each account's state."""
+    every account or the one named. A producer by the name of what it makes,
+    with or without `lumiverb.`, or its old word, warned of (ADR-024). Then
+    each account's state."""
     from fastapi import HTTPException
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
+    from src.producers.names import said, short, typed
     from src.server.api.errors import ApiError
     from src.server.api.routers import libraries as library_routes
     from src.server.api.routers import producers as producer_routes
@@ -802,9 +805,13 @@ def _pausing(args: argparse.Namespace) -> int:
     try:
         refresh()  # an installed plug-in's work is a producer too, as the API's requests read them (ADR-023)
         names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
-        if args.name not in names:
-            print(f"✗ Nothing here is called {args.name}: {', '.join(names)}", file=sys.stderr)
+        target, warning = typed(args.name, names)
+        if target is None:
+            print(f"✗ Nothing here is called {args.name}: {', '.join(short(said(n)) for n in names)}",
+                  file=sys.stderr)
             return 2
+        if warning:
+            print(f"! {warning}", file=sys.stderr)
         with get_control_session() as ctrl:
             accounts = [(t.tenant_id, t.name) for t in TenantRepository(ctrl).list_all()
                         if args.account in (None, t.tenant_id, t.name)]
@@ -815,7 +822,7 @@ def _pausing(args: argparse.Namespace) -> int:
         acted = 0
         for tenant_id, name in accounts:
             with get_tenant_session(tenant_id) as session:
-                if args.name == PAUSE_SCANS:
+                if target == PAUSE_SCANS:
                     libraries = session.execute(text(
                         "SELECT library_id FROM libraries WHERE library_id = :l OR name = :l"),
                         {"l": args.library}).scalars().all() if args.library else None
@@ -829,9 +836,9 @@ def _pausing(args: argparse.Namespace) -> int:
                 else:
                     work = producer_routes.PauseIn(scope=lineage.WORK)
                     if pausing:
-                        producer_routes.pause_switch(args.name, work, session, None)
+                        producer_routes.pause_switch(target, work, session, None)
                     else:
-                        producer_routes.resume_switch(args.name, work, session)
+                        producer_routes.resume_switch(target, work, session)
                 acted += 1
                 held = lineage.pauses(session)
                 active = session.execute(text("SELECT library_id FROM libraries WHERE status = 'active'")).scalars().all()
@@ -1006,8 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
         command = commands.add_parser(
             verb, help=f"{does}: all, scans, upkeep or a producer, in every account (no API key: on this machine)")
         _env_option(command, argparse.SUPPRESS)
-        command.add_argument("name", help="all, scans, upkeep or a producer (e.g. vision, or a plug-in's work:"
-                                          " plugin_<its id>)")
+        command.add_argument("name", help="all, scans, upkeep or a producer by what it makes (e.g."
+                                          " image.description, or a plug-in's work by its id)")
         command.add_argument("--library", help="with scans: this library's only (its name or id)")
         command.add_argument("--account", help="this account's only (its name or id)")
     args = parser.parse_args(argv)

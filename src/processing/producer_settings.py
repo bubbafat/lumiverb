@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.producers.names import artifact_in
 from src.shared.producers import PRODUCERS, effective_settings, level_of, lineage, use_settings
 
 logger = logging.getLogger(__name__)
@@ -43,12 +44,13 @@ class ProducerSettings:
                 self._settings = fresh
             return False
         for p in data.get("producers", []):
-            if p.get("artifact") in fresh and isinstance(p.get("settings"), dict):
-                fresh[p["artifact"]] = dict(p["settings"])
+            artifact = artifact_in(str(p.get("artifact")))  # whichever spelling the server answers in (ADR-024)
+            if artifact in fresh and isinstance(p.get("settings"), dict):
+                fresh[artifact] = dict(p["settings"])
             # Settings that don't remake (not in lineage) are among its fields.
             for f in p.get("fields") or []:
-                if p.get("artifact") in uses and f.get("key") in uses[p["artifact"]] and f.get("remakes") is False:
-                    uses[p["artifact"]][f["key"]] = f.get("value")
+                if artifact in uses and f.get("key") in uses[artifact] and f.get("remakes") is False:
+                    uses[artifact][f["key"]] = f.get("value")
         self._settings, self._uses = fresh, uses
         return True
 
@@ -56,7 +58,8 @@ class ProducerSettings:
         """What a library's reader is told each one it makes is made with
         (reader-changes' made_with: GET /v1/producers is no device's)."""
         fresh = dict(self._settings)
-        for artifact, made in made_with.items():
+        for said, made in made_with.items():
+            artifact = artifact_in(said)  # whichever spelling the server answers in (ADR-024)
             if artifact in fresh and isinstance(made.get("settings"), dict):
                 fresh[artifact] = dict(made["settings"])
         self._settings = fresh

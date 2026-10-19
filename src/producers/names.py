@@ -12,6 +12,12 @@ sent, the server takes either spelling of what a client sends and keeps
 today's; each family's mapping applies only where that family is taken (one old
 word can be several things: `clip` is an artifact, an AI job and a model's id).
 Part 5 deletes it.
+
+From part 2 the clients send the names (`name_of`, `file_named`), and read what
+a server answers in either spelling, as the server reads what's sent
+(`artifact_in`, `file_in`, `producer_in`): a server before part 3 answers
+today's ids, one from part 3 the names. A person types a name, with or without
+`lumiverb.`, or an old word, which is warned of (`typed`).
 """
 
 from __future__ import annotations
@@ -133,22 +139,73 @@ def _artifact_of(name: str) -> str | None:
 
 
 def artifact_in(value: str) -> str:
-    """An artifact as a client sent it, by its id or its name: today's id (until part 3)."""
+    """An artifact as a client sent it or a server answered it, by its id or its name: today's id (until
+    part 3)."""
     return _artifact_of(value) or value
 
 
 def file_in(value: str) -> str:
-    """A file's kind as a client sent it, by today's kind or its name: today's kind (until part 4)."""
+    """A file's kind as a client sent it or a server answered it, by today's kind or its name: today's kind
+    (until part 4)."""
     return FILES.get(value, value)
 
 
 def producer_in(artifact: str, producer: str) -> str:
-    """Lineage's producer as a client sent it for this artifact (today's id), by today's id or its name:
-    today's id. Any other (another producer, a person) is left as it is."""
+    """Lineage's producer for this artifact (by its id or its name), as a client sent it or a server answered
+    it, by today's id or its name: today's id. Any other (another producer, a person) is left as it is."""
+    artifact = artifact_in(artifact)
     for (art, old), new in PRODUCERS.items():
         if art == artifact and producer == new:
             return old
     return producer
+
+
+def name_of(artifact: str) -> str:
+    """An artifact by its name, as a client sends it (today's id or its name, to its name). A plug-in's work
+    is as it is: `plugin_<id>` until part 3."""
+    return ARTIFACTS.get(artifact, artifact)
+
+
+_FILE_NAMES: Mapping[str, str] = {old: new for new, old in FILES.items()}
+
+
+def file_named(kind: str) -> str:
+    """A file by its name, as a client asks for or sends it (`proxy` to `lumiverb.preview`)."""
+    return _FILE_NAMES.get(kind, kind)
+
+
+# The part of a name a person may leave out (`lumiverb pause image.description`).
+PREFIX = "lumiverb."
+_ADDED = "plugin_"
+
+
+def short(name: str) -> str:
+    """A name as a person types it: without `lumiverb.`."""
+    return name.removeprefix(PREFIX)
+
+
+def said(value: str) -> str:
+    """What a server's word means, whichever spelling it answers in: an artifact's name (a plug-in's work, its
+    plug-in's id); any other word (`all`, `upkeep`, `scans`) as it is."""
+    if value in ARTIFACTS:
+        return ARTIFACTS[value]
+    return value.removeprefix(_ADDED) if value.startswith(_ADDED) else value
+
+
+def typed(word: str, listed: Iterable[str]) -> tuple[str | None, str | None]:
+    """What a person typed for a producer or switch: a name (with or without `lumiverb.`), a plug-in's id, or
+    an old word (`vision`, `plugin_<id>`). Returns how the server lists it (listed: the server's own words,
+    whichever spelling it answers in), or None when nothing listed is called that; and a warning naming what
+    to type instead when it was an old word (from part 5 an old word is refused)."""
+    by_meaning = {said(x): x for x in listed}
+    if word in by_meaning:
+        return by_meaning[word], None
+    if PREFIX + word in by_meaning:
+        return by_meaning[PREFIX + word], None
+    meant = ARTIFACTS.get(word) or (word.removeprefix(_ADDED) if word.startswith(_ADDED) else None)
+    if meant in by_meaning:
+        return by_meaning[meant], f"{word} is called {short(meant)} now: type that (the old word goes in a later release)"
+    return None, None
 
 
 def is_reserved(plugin_id: str) -> bool:

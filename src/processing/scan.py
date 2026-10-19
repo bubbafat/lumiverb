@@ -70,6 +70,7 @@ from src.processing.ingest import (
 from src.processing.originals import Originals, reach, where
 from src.processing.proxy.proxy_cache import ProxyCache
 from src.processing.video.probe import probe_video
+from src.producers.names import artifact_in, file_named, name_of, producer_in
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
@@ -216,10 +217,14 @@ class Previews:
 
     @classmethod
     def told(cls, made_with: Mapping[str, dict]) -> Previews:
+        # Whichever spelling the server answers in (ADR-024: today's ids before part 3, the names after).
+        made_with = {artifact_in(a): made for a, made in made_with.items()}
+
         def settings(artifact: str) -> dict:
             spec, said = PRODUCERS[artifact], made_with.get(artifact) or {}
             ours = effective_settings(artifact)
-            if (said.get("producer"), said.get("version")) != (spec.producer, spec.version) \
+            producer = producer_in(artifact, str(said.get("producer")))
+            if (producer, said.get("version")) != (spec.producer, spec.version) \
                     or not isinstance(said.get("settings"), dict) or set(said["settings"]) != set(ours):
                 return ours
             return dict(said["settings"])
@@ -271,8 +276,8 @@ def _scan_one(
             # 3. Convert to WebP for server upload
             webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
-            # 4. POST /v1/ingest — create or update asset
-            upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            # 4. POST /v1/ingest — create or update asset (the preview, and each lineage, by its name: ADR-024)
+            upload = {file_named("proxy"): ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
             del webp_bytes
             data: dict[str, str] = {
                 "library_id": library_id,
@@ -286,8 +291,8 @@ def _scan_one(
             if f.get("file_mtime") is not None:
                 data["file_mtime"] = f["file_mtime"].isoformat()
             # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
-            data["lineage"] = json.dumps({"proxy": previews.lineage("proxy", f.get("content_hash")),
-                                          "capture": previews.lineage("capture", f.get("content_hash"))})
+            data["lineage"] = json.dumps({name_of("proxy"): previews.lineage("proxy", f.get("content_hash")),
+                                          name_of("capture"): previews.lineage("capture", f.get("content_hash"))})
 
             resp = client.post("/v1/ingest", files=upload, data=data)
             result = resp.json()
@@ -351,8 +356,8 @@ def _scan_one_video(
             # 4. Convert poster to WebP for upload
             webp_bytes = _jpeg_to_webp(jpeg_bytes, previews.proxy["webp_quality"])
 
-            # 5. POST /v1/ingest — create asset with poster frame as proxy
-            upload = {"proxy": ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
+            # 5. POST /v1/ingest — create asset with poster frame as its preview
+            upload = {file_named("proxy"): ("proxy.webp", io.BytesIO(webp_bytes), "image/webp")}
             del webp_bytes
             data: dict[str, str] = {
                 "library_id": library_id,
@@ -366,13 +371,12 @@ def _scan_one_video(
             if f.get("file_mtime") is not None:
                 data["file_mtime"] = f["file_mtime"].isoformat()
             # Frame rate, timecode, audio layout for editor exports. A failed
-            # probe doesn't block ingest; `lumiverb enrich --job-type probe`
-            # backfills it.
-            made = {"proxy": previews.lineage("proxy", f.get("content_hash")),
-                    "capture": previews.lineage("capture", f.get("content_hash"))}
+            # probe doesn't block ingest: the scheduler's probe makes it.
+            made = {name_of("proxy"): previews.lineage("proxy", f.get("content_hash")),
+                    name_of("capture"): previews.lineage("capture", f.get("content_hash"))}
             try:
                 data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
-                made["probe"] = previews.lineage("probe", f.get("content_hash"))
+                made[name_of("probe")] = previews.lineage("probe", f.get("content_hash"))
             except Exception as exc:  # noqa: BLE001 — any ffprobe failure
                 logger.warning("Probe failed for %s: %s", rel_path, exc)
             data["lineage"] = json.dumps(made)
@@ -383,7 +387,7 @@ def _scan_one_video(
             # 6. Upload video preview
             if asset_id and preview_bytes:
                 client.post(
-                    f"/v1/assets/{asset_id}/artifacts/video_preview",
+                    f"/v1/assets/{asset_id}/artifacts/{file_named('video_preview')}",
                     files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
                     data={"lineage": json.dumps(previews.lineage("video_preview", f.get("content_hash")))},
                 )
@@ -442,7 +446,7 @@ def _populate_cache_for_unchanged(
             asset_id = f["asset_id"]
             try:
                 resp = client._client.get(
-                    client._url(f"/v1/assets/{asset_id}/artifacts/proxy"),
+                    client._url(f"/v1/assets/{asset_id}/artifacts/{file_named('proxy')}"),
                 )
                 if resp.status_code == 200:
                     proxy_cache.put_scan(asset_id, resp.content, f.get("content_hash") or "")
