@@ -384,6 +384,41 @@ def test_an_account_that_cant_be_read_holds_up_no_other(facts, control, caplog):
     assert len(said) == 1, "said once, not at every look"
 
 
+@pytest.mark.slow
+def test_an_account_whose_database_never_answers_holds_up_no_other(facts, control, caplog, monkeypatch):  # noqa: F811
+    """Another active account whose database host takes the connection and never answers: the runner's
+    connections give up after their time limit (its main sets it, CONNECT_WITHIN_SEC), so each read of the
+    accounts ends, the account away is said once, and the account it can read is followed."""
+    import logging
+    import socket
+
+    from sqlalchemy.engine import make_url
+
+    from src.server import database, plugin_catalog
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantDbRoutingRepository, TenantRepository
+
+    caplog.set_level(logging.INFO, logger=plugin_catalog.__name__)
+    monkeypatch.setattr(database, "CONNECT_TIMEOUT_SEC", 2)  # as the runner's main sets it (2: libpq's least)
+    f = facts
+    silent = socket.socket()
+    silent.bind(("127.0.0.1", 0))
+    silent.listen(64)  # takes connections, never answers
+    try:
+        with get_control_session() as session:
+            away = TenantRepository(session).create(name="Away").tenant_id
+            TenantDbRoutingRepository(session).create(tenant_id=away, connection_string=make_url(control).set(
+                host="127.0.0.1", port=silent.getsockname()[1], database="away").render_as_string(hide_password=False))
+        assert cli.main(["plugins", "default", "facts", "off", "--yes", "--env", str(f.env)]) == 0
+        _until(f.runner, lambda: f.runner.plugins["facts"].state == "off")
+        assert f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert).status_code == 200
+        _until(f.runner, lambda: f.runner.plugins["facts"].state == "ready")
+    finally:
+        silent.close()
+    said = [r.getMessage() for r in caplog.records if f"account {away} can't be read" in r.getMessage()]
+    assert len(said) == 1 and "timeout expired" in said[0], said
+
+
 # ---------------------------------------------------------------------------
 # What it made, shown with the clip and searched (phase 2c)
 # ---------------------------------------------------------------------------
