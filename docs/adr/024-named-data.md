@@ -10,10 +10,11 @@ Nothing here is built. ADR-023 phase 3 (GeoNames moved out) doesn't anticipate i
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Names for what exists: Lumiverb's data listed and documented as `lumiverb.*` names, every built-in producer declaring by name what it reads and makes, protocol 1's inputs as names | Not started |
-| 2 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash; broken chains warned of on Settings › Plug-ins | Not started |
-| 3 | Search by what a clip has: `has:<name>`, and not | Not started |
-| 4 | Search by value, by a name's type | Not started |
+| 1 | Lumiverb's own data named (Robert: "refactor builtins to align to the new naming schema"): each built-in producer's data and protocol 1's inputs get `lumiverb.*` names in plain words, documented, and every built-in producer declares by name what it reads and makes | Not started |
+| 2 | Lumiverb's plug-ins renamed (Robert: "refactor existing plugins to use the new schema where they use the prefix that matches the plugin name"): GeoNames' `at` and `near` become `geonames.landmark` and `geonames.town`, the example's `example.caption`, `example.taken` and `example.shape` | Not started |
+| 3 | Plug-ins read each other's data: names, types, versions and contract in the manifest; the checks at install, upgrade and removal; waiting and the inputs' hash; broken chains warned of on Settings › Plug-ins | Not started |
+| 4 | Search by what a clip has: `has:<name>`, and not | Not started |
+| 5 | Search by value, by a name's type | Not started |
 
 ## How producers coordinate today
 
@@ -48,12 +49,13 @@ And on privacy: "I think it's less about enforced privacy and more about documen
 | 9 | How are clips found by their data? | **Robert.** By what they have, and don't: "has `lumiverb.video.analysis_proxy` but not `lumiverb.location.gps`". A filter `has:<name>`, negated by the filter algebra's `not` (`src/server/models/query_filter.py`); "has" is what the clip shows now. By value later, by the name's type: text matched as search matches it, numbers and times by range, points by distance. The `missing_*` filters each producer has today become `not has:`. |
 | 10 | Workflows ("When any video has a location.gps applied to it, perform action X")? | **Robert.** Not now: "100% forward looking and NOT something to build now." Contract names are what such a screen would list, which is a reason to keep the contract documented from the start. |
 | 11 | How does a person see a broken chain? | **Robert.** Settings › Plug-ins looks for broken dependency chains whenever it's loaded and shows each as a warning: "The plugin UI should explicitly look for broken dependency chains and report them when the page is loaded as a warning." Proposed: the server works them out when asked (`GET /v1/plugins`, each plug-in's `broken`), never kept apart, and follows the whole chain: a plug-in whose reading reaches, through others, a name nothing makes now, or one whose maker is off in this account or isn't running, each shown with its chain ("Fancy B reads Fancy A's metadata_a: Fancy A isn't installed"). A reader held by decision 5 is among them. The Admin page's plug-ins row counts them. |
+| 12 | How are names worded? | **Robert.** For people reading them: "Bias towards readability - so things like "town" or "landmark" are preferable to "municipality" or "nearest_historical_landmark"." Lumiverb's own plug-ins name their data under the plug-in's name (`geonames.town`, `geonames.landmark`). |
 
 ## Design
 
 ### Names for what exists
 
-A first list, to be settled in phase 1. Each built-in producer's artifact, and each protocol 1 input, gets a name:
+A first list, to be settled in phase 1 in plain words (decision 12). Each built-in producer's artifact, and each protocol 1 input, gets a name:
 
 | Today | Name |
 |-------|------|
@@ -71,7 +73,7 @@ A first list, to be settled in phase 1. Each built-in producer's artifact, and e
 | `vision`, `ocr`, `clip`, `faces` | `lumiverb.image.description`, `lumiverb.image.text`, `lumiverb.image.clip_vector`, `lumiverb.image.faces` |
 | `location` (guesses) | `lumiverb.location.guess` |
 
-A page lists them, each with its type, version and what it is, written from the producers (never a list kept apart). Protocol 1's input names stay as they are, so GeoNames and the example plug-in change nothing.
+A page lists them, each with its type, version and what it is, written from the producers (never a list kept apart). Phase 1's plan settles whether what's stored and sent under today's names (lineage's artifacts, `GET /v1/producers`' `artifact`, the `missing_*` filters) takes these names too, one name everywhere, or these stand beside them; either way a client using today's names is answered as before. Protocol 1's input names are still taken, so a plug-in written for it keeps working.
 
 ### The manifest
 
@@ -87,7 +89,7 @@ A page lists them, each with its type, version and what it is, written from the 
 }
 ```
 
-It makes `fancy.metadata_a`, a name its author chose. Another plug-in reads it as `"reads": ["fancy.metadata_a@1"]`. Protocol 1's outputs, named without a dot, are read as the plug-in's id and their key (`geonames.near`). A reader is handed each clip's values of the names it reads, as inputs are handed today, and still never learns which account it is or anything of other clips. Files (an analysis proxy) are handed as a read-only copy once a plug-in can read files (ADR-023's "later").
+It makes `fancy.metadata_a`, a name its author chose. Another plug-in reads it as `"reads": ["fancy.metadata_a@1"]`. Lumiverb's own plug-ins' outputs are renamed in phase 2 (GeoNames' `near` becomes `geonames.town`); a plug-in still on protocol 1, its outputs named without a dot, is read as its id and their key. A reader is handed each clip's values of the names it reads, as inputs are handed today, and still never learns which account it is or anything of other clips. Files (an analysis proxy) are handed as a read-only copy once a plug-in can read files (ADR-023's "later").
 
 ### Checks
 
