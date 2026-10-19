@@ -296,3 +296,42 @@ def test_installed_its_work_is_a_producer_and_uninstalled_it_isnt(facts):
     assert ARTIFACT not in PRODUCERS
     r = f.client.get("/v1/producers", headers=f.robert)
     assert ARTIFACT not in {p["artifact"] for p in r.json()["producers"]}
+
+
+# ---------------------------------------------------------------------------
+# What it made, shown with the clip and searched (phase 2c)
+# ---------------------------------------------------------------------------
+
+
+def _found(f, words: str) -> set[str]:
+    r = f.client.get(f"/v1/query?f=query:{words}&f=library:{f.library_id}", headers=f.robert)
+    assert r.status_code == 200, r.text
+    return {item["asset_id"] for item in r.json()["items"]}
+
+
+@pytest.mark.slow
+def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(facts):
+    f = facts
+    a, b, nowhere = f.clips
+    assert _set(f, {"word": "Zanzibar"}).status_code == 200  # nothing made yet: nothing to ask
+    _job(f)
+    r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
+    assert r.status_code == 200, r.text
+    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts", "credit": None, "facts": [
+        {"key": "where", "label": "Where", "text": "Zanzibar at 41.000, -73.000 (file)",
+         "url": "https://www.openstreetmap.org/?mlat=41.0&mlon=-73.0"},
+        {"key": "when", "label": "When", "text": "Zanzibar 2024-05-01T12:00:00Z", "url": None},
+        {"key": "what", "label": "What", "text": "Zanzibar: image 64x36", "url": None}]}]
+    assert f.client.get(f"/v1/assets/{nowhere}", headers=f.robert).json()["facts"] == []
+
+    assert _found(f, "zanzibar") == {a, b}, "its searchable fact (when) finds them"
+    r = f.client.get(f"/v1/query?f=query:zanzibar&f=library:{f.library_id}", headers=f.robert)
+    assert {i["search_context"]["snippet"] for i in r.json()["items"]} == {"Zanzibar 2024-05-01T12:00:00Z"}
+    assert _found(f, "file") == set(), "a fact that isn't searchable (where) finds nothing"
+
+    assert f.client.put("/v1/plugins/facts", json={"enabled": False}, headers=f.robert).status_code == 200
+    assert f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"] == [], "off: hidden"
+    assert _found(f, "zanzibar") == set(), "off: not searched"
+    assert _outputs(f, a) is not None, "and kept"
+    assert f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert).status_code == 200
+    assert _found(f, "zanzibar") == {a, b}, "on again: found again, nothing made again"

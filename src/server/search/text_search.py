@@ -11,7 +11,10 @@ is kept beside what it's made from, in the account's database:
   transcript either);
 - a scene's: `video_scenes.words`, computed with the row (its description and
   tags), for the scenes a clip shows (not a redo's staged ones);
-- a transcript's: `transcript_segments`, one row a segment, with its times.
+- a transcript's: `transcript_segments`, one row a segment, with its times;
+- a plug-in's facts (ADR-023): `plugin_outputs.words`, the text of the
+  facts its manifest says are searchable, for the plug-ins on in the account
+  (the caller says which: never on a public page).
 
 The words are English: stemmed, so "dogs" finds "dog", a path's words too
 (a folder "Family" is found by "family", whose stem is "famili"), as typed
@@ -20,8 +23,8 @@ person typed). Unquoted words: any of them
 matches, more of them ranks higher, and all of them in a row higher still.
 A quoted phrase must match, its words in order. Words of three letters or
 more match as a prefix too ("disney" finds "Disneyland"), ranked at half.
-Matches in a description, tags or a note weigh most, then the text read in a
-picture and a transcript, then a path. Several search terms (filters) must
+Matches in a description, tags or a note weigh most, then a plug-in's
+facts, then the text read in a picture and a transcript, then a path. Several search terms (filters) must
 each match.
 """
 
@@ -138,6 +141,22 @@ def clips(session: Session, q: Query, library_ids: list[str] | None, limit: int,
         ORDER BY score DESC, s.asset_id LIMIT :limit
     """), params).all()
     return [Hit(r.asset_id, float(r.score), r.snippet or None) for r in rows]
+
+
+def facts(session: Session, q: Query, library_ids: list[str] | None, limit: int,
+          plugin_ids: list[str]) -> list[Hit]:
+    """The clips in sight with a fact of one of these plug-ins whose words match (best first), each with
+    those facts' text as the snippet."""
+    if not plugin_ids:
+        return []
+    params = {**q.params, "limit": limit, "plugins": list(plugin_ids)}
+    rows = session.execute(text(f"""
+        SELECT po.asset_id, po.search_text, {_score('po.words', q, loose=True)} AS score
+        FROM plugin_outputs po JOIN active_assets a ON a.asset_id = po.asset_id
+        WHERE po.plugin_id = ANY(CAST(:plugins AS text[])) AND po.words @@ ({q.loose}){_in(library_ids, params)}
+        ORDER BY score DESC, po.asset_id LIMIT :limit
+    """), params).all()
+    return [Hit(r.asset_id, float(r.score), r.search_text or None) for r in rows]
 
 
 def scenes(session: Session, q: Query, library_ids: list[str] | None, limit: int, *,

@@ -359,6 +359,16 @@ export interface AssetDetail {
   /** The nearest town to the location it shows (the Place names plug-in): label null when there's none that
    * near; null until named. */
   place?: AssetPlace | null;
+  /** What installed plug-ins' work says of it (ADR-023): each plug-in on here that made it a fact. Signed-in only. */
+  facts?: PluginFacts[] | null;
+}
+
+/** One plug-in's facts about a clip, in its manifest's order, and who to credit for them. */
+export interface PluginFacts {
+  plugin_id: string;
+  title: string;
+  credit: { text: string; url: string | null } | null;
+  facts: { key: string; label: string; text: string; url: string | null }[];
 }
 
 /** The nearest town to where a clip was (the Place names plug-in's producer), with who to credit for the name. */

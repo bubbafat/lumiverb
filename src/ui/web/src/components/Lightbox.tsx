@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getAsset, findSimilar, listFaces, listPeople, getNearestPeopleForFace, searchPeople, assignFace, unassignFace, updateNote, deleteNote, correctAsset, clearLocations, acceptLocations } from "../api/client";
 import { LocationRow } from "./LocationRow";
+import { PluginFactsSection } from "./PluginFactsSection";
 import { CorrectableTags, CorrectableText } from "./CorrectableFields";
 import { NoTranscript, TranscriptActions } from "./TranscriptActions";
 import { useCanEdit } from "../lib/useCanEdit";
@@ -1715,6 +1716,8 @@ export function Lightbox({
                   </dl>
                 )}
               </div>
+
+              {detail?.facts && detail.facts.length > 0 && <PluginFactsSection plugins={detail.facts} />}
 
               {onAddToProject && (
                 <>

@@ -138,7 +138,8 @@ def _run_text_search(
     `public_cap_ms`: for a public page that plays only so much of each
     video, search what it shows: no whole-transcript words, and no scene or
     transcript hits from past that point. `public`: a public page's search
-    never reads notes (the team's working notes) or paths.
+    never reads notes (the team's working notes) or paths. Nor a plug-in's
+    facts, which the account's own search reads for the plug-ins on in it.
 
     Returns:
       - scores: {asset_id: best_score}
@@ -165,6 +166,15 @@ def _run_text_search(
         if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
             scores[hit.asset_id] = hit.score
             contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet)
+    if not public and public_cap_ms is None:
+        from src.server.repository.plugin_outputs import searched_plugins
+
+        # A plug-in's facts are the clip's own words too, shown as what matched when they score higher.
+        for hit in full("facts", text_search.facts(session, q, library_ids, limit, searched_plugins(session)),
+                        limit):
+            if hit.asset_id not in scores or hit.score > scores[hit.asset_id]:
+                scores[hit.asset_id] = hit.score
+                contexts[hit.asset_id] = SearchContext(score=hit.score, hit_type="asset", snippet=hit.snippet)
 
     # A scene or transcript segment: kept for its richer context (where in
     # the video) even when the clip's own words scored higher.
