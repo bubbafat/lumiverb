@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed (2026-10-19). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation, his answers to its questions included ("Robert's answers"); the rest are proposed. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
+Accepted (2026-10-19, Robert: he answered its questions and set its phases). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation, his answers to its questions included ("Robert's answers"); the rest are proposals that each phase's plan settles. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
 
-Nothing here is built. ADR-023 phase 3 (GeoNames moved out) doesn't anticipate it.
+Nothing here is built yet. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104) didn't anticipate it.
 
 ## Progress
 
