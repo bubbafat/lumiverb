@@ -279,7 +279,8 @@ function ProducerRow({
       <CountsBar producer={producer} />
       {producer.plugin && (
         <p className="text-xs text-gray-500">
-          Part of the {producer.plugin.title} plug-in
+          Part of the {producer.plugin.title}
+          {/plug-in$/i.test(producer.plugin.title) ? "" : " plug-in"}
           {producer.plugin.on === false ? ": off, so nothing is made. Turn it on in Settings › Plug-ins." : "."}
         </p>
       )}

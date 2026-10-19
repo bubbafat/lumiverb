@@ -44,11 +44,12 @@ def state_of(spec: PluginSpec, row: dict[str, Any] | None, default: dict[str, An
     return ON
 
 
-def on_sql(plugin_id: str) -> str:
+def on_sql(plugin_id: str, *, spec: PluginSpec | None = None, default: dict[str, Any] | None = None) -> str:
     """SQL true while the plug-in is on in the account: enabled, and the version of its acknowledgment
-    accepted still stands (what state_of says), versions compared as numbers. The id and versions are
-    the registry's (checked there)."""
-    spec = plugin_spec(plugin_id)
+    accepted still stands (what state_of says), versions compared as numbers. spec: an installed one's (its
+    manifest's), and default its default for an account without a row (it hasn't chosen). The id and
+    versions are checked where they come from (the registry, the manifest)."""
+    spec = spec or plugin_spec(plugin_id)
     if spec is None:
         raise ValueError(f"No plug-in {plugin_id!r}")
     ack, accepted = spec.acknowledgment, ""
@@ -58,7 +59,12 @@ def on_sql(plugin_id: str) -> str:
         accepted = (" AND CASE WHEN pg.acknowledged_version ~ '^[0-9]{1,6}(\\.[0-9]{1,6}){0,3}$' THEN "
                     + (f"string_to_array(pg.acknowledged_version, '.')::int[] >= ARRAY[{since}]" if since
                        else "true") + " ELSE false END")
-    return f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}' AND pg.enabled{accepted})"
+    chosen = f"EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}' AND pg.enabled{accepted})"
+    if default is None:
+        return chosen
+    follows = "true" if state_of(spec, None, default) == ON else "false"
+    return (f"(CASE WHEN EXISTS (SELECT 1 FROM plugins pg WHERE pg.plugin_id = '{spec.plugin_id}') THEN {chosen}"
+            f" ELSE {follows} END)")
 
 
 class PluginRepository:

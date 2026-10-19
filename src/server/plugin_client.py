@@ -63,16 +63,16 @@ class PluginAnswerError(Exception):
 
 
 def ask(sock: Path, method: str, path: str, *, body: dict[str, Any] | None = None,
-        timeout: float = 5.0) -> dict[str, Any]:
-    """Its answer (a JSON object, HTTP 200); PluginAnswerError with why otherwise."""
+        timeout: float = 5.0, max_bytes: int = ANSWER_MAX_BYTES) -> dict[str, Any]:
+    """Its answer (a JSON object, HTTP 200, at most max_bytes); PluginAnswerError with why otherwise."""
     try:
         with httpx.Client(transport=httpx.HTTPTransport(uds=str(sock)), timeout=timeout) as client, \
                 client.stream(method, f"http://plugin{path}", json=body) as r:
             raw = b""
             for chunk in r.iter_bytes():
                 raw += chunk
-                if len(raw) > ANSWER_MAX_BYTES:
-                    raise PluginAnswerError(f"its answer is over {ANSWER_MAX_BYTES // 1024} KB")
+                if len(raw) > max_bytes:
+                    raise PluginAnswerError(f"its answer is over {max_bytes // 1024:,} KB")
             if r.status_code != 200:
                 raise PluginAnswerError(f"it answered HTTP {r.status_code}")
     except (httpx.HTTPError, OSError) as exc:

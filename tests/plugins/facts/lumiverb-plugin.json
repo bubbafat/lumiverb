@@ -1,0 +1,34 @@
+{
+  "id": "facts",
+  "version": "1",
+  "protocol": 1,
+  "title": "Facts",
+  "description": "A plug-in for Lumiverb's tests: a fact or two about each clip, from what it's handed.",
+  "author": "Lumiverb's tests",
+  "run": ["python3", "facts.py"],
+  "memory_mb": 128,
+  "disk_mb": 10,
+  "settings": [
+    {"key": "word", "type": "text", "default": "Seen", "max_length": 40, "label": "Word",
+     "help": "What each fact starts with.", "remakes": true},
+    {"key": "behave", "type": "choice", "default": "well", "label": "Behave", "help": "How it answers.",
+     "choices": [{"value": "well", "label": "Well"}, {"value": "clip-error", "label": "The clip's error"},
+                 {"value": "own-error", "label": "Its own error"}, {"value": "nonsense", "label": "Nonsense"},
+                 {"value": "html", "label": "HTML"}, {"value": "leave-out", "label": "Leaves a clip out"},
+                 {"value": "slow", "label": "Slowly"}]},
+    {"key": "token", "type": "secret", "default": "", "scope": "server", "label": "Token",
+     "help": "Handed with each request, never shown again."}
+  ],
+  "work": {
+    "title": "Facts",
+    "version": "1",
+    "media": ["image", "video"],
+    "inputs": ["location", "capture_time", "metadata"],
+    "batch": 20,
+    "outputs": [
+      {"key": "where", "kind": "fact", "label": "Where"},
+      {"key": "when", "kind": "fact", "label": "When", "searchable": true},
+      {"key": "what", "kind": "fact", "label": "What"}
+    ]
+  }
+}

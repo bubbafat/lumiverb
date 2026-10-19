@@ -90,6 +90,7 @@ from src.server.api.routers.system import router as system_router
 from src.server.api.routers.locations import router as locations_router
 from src.server.api.routers.places import router as places_router
 from src.server.api.routers.plugins import router as plugins_router
+from src.server.api.routers.plugin_work import router as plugin_work_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -187,6 +188,7 @@ app.include_router(facets_router)
 app.include_router(playback_router)
 app.include_router(locations_router)  # before /v1/assets/{asset_id}
 app.include_router(plugins_router)
+app.include_router(plugin_work_router)
 app.include_router(places_router)
 app.include_router(assets.router)
 app.include_router(projects.router, prefix="/v1/projects", tags=["projects"])

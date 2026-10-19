@@ -7,6 +7,7 @@ export const WAIT_REASONS = [
   "paused",
   "scheduler",
   "ai_machines",
+  "plugin_down",
   "needs",
   "storage",
   "device",
@@ -67,6 +68,11 @@ export const WAIT_SENTENCES: Record<WaitReason, (w: ProducerWait, c: WaitContext
     const s = some(w, c);
     const why = w.message ?? "Its AI machines can't be used. Settings → AI shows why.";
     return w.clips > 0 ? `${s.count} ${s.wait}. ${why}` : why;
+  },
+  // An installed plug-in's work: the plug-in isn't running, or didn't answer (the server says why).
+  plugin_down: (w, c) => {
+    const s = some(w, c);
+    return `${s.count} ${s.wait} for its plug-in${w.message ? `: ${w.message}` : ", which isn't running or didn't answer"}.`;
   },
   needs: (w, c) => {
     const s = some(w, c);
@@ -134,5 +140,6 @@ export function waitSentence(w: ProducerWait, c: WaitContext): string {
 /** Reasons that stop its work until someone acts (shown amber); the rest only take a while. */
 export function waitIsLoud(w: ProducerWait): boolean {
   if (w.reason === "needs" || w.reason === "scan") return !!w.paused;
-  return ["paused", "scheduler", "ai_machines", "storage", "new_version", "given_up", "scan_failing"].includes(w.reason);
+  return ["paused", "scheduler", "ai_machines", "plugin_down", "storage", "new_version", "given_up", "scan_failing"]
+    .includes(w.reason);
 }

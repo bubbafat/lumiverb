@@ -15,15 +15,10 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from src.producers.place import located
+from src.server.repository.clip_inputs import SOURCE_SQL as _SOURCE
+from src.server.repository.clip_inputs import SURE_SQL as _SURE
 from src.server.repository.locations import CREDITS
 from src.shared.utils import utcnow
-
-_SOURCE = ("CASE WHEN l.source = 'person' THEN 'person' WHEN a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL"
-           " THEN 'file' WHEN l.source = 'time' AND l.status = 'applied' THEN 'guess' END")
-# How sure that location is, in meters: a person's its radius (0), the file's its GPS accuracy when it
-# says (else taken as exact), a guess's its radius.
-_SURE = ("CASE WHEN l.source = 'person' THEN l.radius_m WHEN a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL"
-         " THEN COALESCE(a.gps_accuracy_m, 0) WHEN l.source = 'time' AND l.status = 'applied' THEN l.radius_m END")
 
 
 def locations(session: Session, asset_ids: list[str]) -> dict[str, dict[str, Any]]:

@@ -305,10 +305,19 @@ every account (each account's admin can still turn it on or off there):
 lumiverb-server plugins install FOLDER --off --env /opt/homebrew/etc/lumiverb/env
 ```
 
-To try it, Lumiverb comes with an example that does nothing with your
-photos but has one setting of every kind. `lumiverb-server plugins` lists
-what's installed and says where the example is. `lumiverb-server plugins
-uninstall example` takes it away again.
+A plug-in that works on each photo and video (its manifest's `work`) is
+handed only what it declares (a clip's location, when it was taken, its
+size and camera, a photo's preview) and gives back short facts that
+Lumiverb checks and keeps with the clip. Its work shows in **Settings ›
+Processing** like any other: how many clips it has made, what's left and
+why anything waits (its plug-in not running, say). Within half a minute of
+installing one, it starts on every clip in the accounts where it's on.
+
+To try it, Lumiverb comes with an example that gives each photo and video a
+caption you choose, when it was taken and its shape, and has one setting of
+every kind. `lumiverb-server plugins` lists what's installed and says where
+the example is. `lumiverb-server plugins uninstall example` takes it away
+again.
 
 ---
 

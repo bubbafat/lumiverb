@@ -50,12 +50,17 @@ GIVEN_UP = "given_up"
 # A library's scans' (Scans, each library's row): they keep failing (the
 # scan itself, not a file): tried again after a minute, doubling up to half an hour.
 SCAN_FAILING = "scan_failing"
+# An installed plug-in's work (ADR-023): the plug-in isn't running (starting,
+# preparing its data, stopped after it kept stopping, the runner not running)
+# or didn't answer: its clips wait, uncharged.
+PLUGIN_DOWN = "plugin_down"
 
 # Every code, in the order a row shows them, with what it means.
 REASONS: dict[str, str] = {
     PAUSED: "its switch is paused, or all processing is",
     SCHEDULER: "the scheduler isn't running, is starting, or couldn't list its work",
     AI_MACHINES: "its AI job has no machine the scheduler can use",
+    PLUGIN_DOWN: "its plug-in isn't running, or didn't answer",
     NEEDS: "what it's made from isn't made yet",
     STORAGE: "a library's drive can't be reached, or hasn't been looked at since the scheduler started",
     DEVICE: "a device reads the library: the device makes it from its originals",

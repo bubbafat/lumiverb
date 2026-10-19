@@ -129,6 +129,7 @@ function WhatItDoes({ plugin }: { plugin: Plugin }) {
 }
 
 type Raw = string | boolean;
+type Sent = Record<string, number | boolean | string | null>;
 
 function rawOf(s: PluginSetting): Raw {
   if (s.type === "bool") return s.value === true;
@@ -155,14 +156,18 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
   const [raw, setRaw] = useState<Record<string, Raw>>(() => Object.fromEntries(settings.map((s) => [s.key, rawOf(s)])));
   const [wrong, setWrong] = useState<Record<string, string>>({});
   const [note, setNote] = useState<string | null>(null);
+  // 409 redo_on_change: the API asks what becomes of what the old settings made (ADR-018 decision 6), and the
+  // change waits for the answer.
+  const [redoing, setRedoing] = useState<{ message: string; sent: Sent } | null>(null);
   const editable = settings.some((s) => s.editable);
   const changed = settings.filter((s) => s.editable && raw[s.key] !== rawOf(s));
   const save = useMutation({
-    mutationFn: (sent: Record<string, number | boolean | string | null>) =>
-      setPluginSettings(plugin.plugin_id, sent, scope),
+    mutationFn: ({ sent, redo }: { sent: Sent; redo?: boolean }) =>
+      setPluginSettings(plugin.plugin_id, sent, scope, redo),
     onMutate: () => {
       setWrong({});
       setNote(null);
+      setRedoing(null);
     },
     onSuccess: (saved) => {
       const fresh = (saved.settings ?? []).filter((s) => s.scope === scope);
@@ -170,9 +175,10 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
       setNote(saved.unchecked ? `Saved. ${saved.unchecked}.` : "Saved.");
       onSaved();
     },
-    onError: (e) => {
+    onError: (e, { sent }) => {
       const errors = e instanceof ApiError ? (e.details?.errors as Record<string, string> | undefined) : undefined;
-      if (errors) setWrong(errors);
+      if (e instanceof ApiError && e.code === "redo_on_change") setRedoing({ message: e.message, sent });
+      else if (errors) setWrong(errors);
       else setNote(e instanceof ApiError ? e.message : "Couldn't reach the server. Try again.");
     },
   });
@@ -183,7 +189,7 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
       <>
         <p className="text-xs text-gray-500">
           {s.help}
-          {s.remakes && " Changing it makes what it made again."}
+          {s.remakes && " Changing it asks what becomes of what it made."}
         </p>
         {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
       </>
@@ -224,7 +230,7 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
                    maxLength={s.max_length ?? undefined} onChange={(e) => set(e.target.value)} />
             {s.set && s.editable && (
               <button type="button" disabled={save.isPending} className="text-sm text-indigo-300 hover:underline"
-                      onClick={() => save.mutate({ [s.key]: null })}>
+                      onClick={() => save.mutate({ sent: { [s.key]: null } })}>
                 Clear
               </button>
             )}
@@ -247,7 +253,7 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
       className="space-y-3 rounded-md border border-gray-800 p-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (changed.length) save.mutate(Object.fromEntries(changed.map((s) => [s.key, sentOf(s, raw[s.key])])));
+        if (changed.length) save.mutate({ sent: Object.fromEntries(changed.map((s) => [s.key, sentOf(s, raw[s.key])])) });
       }}
     >
       <h4 className="text-sm font-medium text-gray-200">{title}</h4>
@@ -259,6 +265,24 @@ function SettingsForm({ plugin, settings, scope, title, onSaved }: {
         </details>
       )}
       {note && <p role="status" className="text-sm text-gray-400">{note}</p>}
+      {redoing && (
+        <div role="alert" className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+          <p className="text-amber-100">{redoing.message}</p>
+          <div className="flex flex-wrap gap-4">
+            <button type="button" className="text-indigo-300 hover:underline" disabled={save.isPending}
+                    onClick={() => save.mutate({ sent: redoing.sent, redo: false })}>
+              New ones only
+            </button>
+            <button type="button" className="text-indigo-300 hover:underline" disabled={save.isPending}
+                    onClick={() => save.mutate({ sent: redoing.sent, redo: true })}>
+              Also remake them
+            </button>
+            <button type="button" className="text-indigo-300 hover:underline" onClick={() => setRedoing(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {editable && (
         <button type="submit" disabled={!changed.length || save.isPending}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50">

@@ -67,6 +67,8 @@ LOCK_CHECK_SEC = 0.0
 # Each account's new producer versions are looked for this often (and at
 # its first refill, before any redo is listed).
 NEW_VERSIONS_EVERY_SEC = 60.0
+# What the plug-in runner says of each plug-in is read this often (it writes it every few seconds).
+PLUGINS_EVERY_SEC = 5.0
 # The AI models no account's settings name go this often (models_dir.prune),
 # the first time this long after the scheduler starts.
 PRUNE_MODELS_EVERY_SEC = 24 * 3600.0
@@ -122,6 +124,7 @@ class Scheduler:
         models: Any = None,
         new_versions: Callable[[str], Any] | None = None,
         prune_models: Callable[[list[Any]], Any] | None = None,
+        plugins_said: Callable[[], dict | None] | None = None,
     ) -> None:
         from src.server.scheduler import runners as runner_mod
 
@@ -179,6 +182,11 @@ class Scheduler:
         self._prune_models = prune_models
         self._prune_due = clock() + PRUNE_MODELS_FIRST_SEC
         self._pruning: Future | None = None
+        # What the plug-in runner says of each plug-in (plugin_runner.read_state): one that isn't running
+        # has its work held back (plugin_down), read again after PLUGINS_EVERY_SEC.
+        self._plugins_said = plugins_said or _plugins_from_runner
+        self._plugins_down: dict[str, str] = {}
+        self._plugins_at = float("-inf")
 
     # -- one tick -----------------------------------------------------------
 
@@ -397,10 +405,15 @@ class Scheduler:
         # (src/shared/waits.py): its AI machines (ai_waits), a pause, its
         # libraries' storage (storage_waits), a listing that failed (unlisted).
         unlisted = self._unlisted.setdefault(tenant_id, {})
+        down = self._plugins_not_running()
         for kind in QUEUED:
             job = _JOB_OF.get(kind.name)
             if job is not None and not acct.capacity(job):
                 unlisted.pop(kind.name, None)
+                continue
+            if kind.artifact in down:  # its plug-in isn't running: nothing to ask (plugin_down)
+                unlisted.pop(kind.name, None)
+                self.dispatcher.clear(tenant_id, kind.name)
                 continue
             if kind.name in held:
                 unlisted.pop(kind.name, None)
@@ -430,18 +443,41 @@ class Scheduler:
                 acct.follow_settings(kind.artifact, items[0].get("settings_hash"))
             self.dispatcher.offer(tenant_id, kind.name, items, complete=len(items) < BUFFER)
 
+    def _plugins_not_running(self) -> dict[str, str]:
+        """Each installed plug-in's work whose plug-in isn't running, and why (plugin_runner.not_ready), by
+        artifact: what the runner said at most PLUGINS_EVERY_SEC ago."""
+        from src.producers import ADDED_PREFIX
+        from src.server.plugin_runner import not_ready
+
+        theirs = {a: p.plugin for a, p in registry().items() if a.startswith(ADDED_PREFIX) and p.plugin}
+        if not theirs:
+            return {}
+        if self._clock() - self._plugins_at >= PLUGINS_EVERY_SEC:
+            self._plugins_at = self._clock()
+            try:
+                said = self._plugins_said()
+            except Exception:  # noqa: BLE001 — as if the runner said nothing
+                logger.exception("scheduler: reading what the plug-in runner said failed")
+                said = None
+            self._plugins_down = {a: why for a, plugin_id in theirs.items()
+                                  if (why := not_ready(said, plugin_id)) is not None}
+        return {a: why for a, why in self._plugins_down.items() if a in theirs}
+
     def _why_nothing(self, tenant_id: str, acct: Any) -> dict[str, Any]:
         """What its status says of work it hands out none of, for Processing
         to say why (src/shared/waits.py): whether it has read the account's
         settings (no job goes until then), each AI job whose machines it can't
-        use and why (ai_waits), each kind whose listing failed (unlisted), and
-        each library whose scans keep failing (scans_failing: tried again later)."""
+        use and why (ai_waits), each plug-in's work whose plug-in isn't
+        running and why (plugin_waits), each kind whose listing failed
+        (unlisted), and each library whose scans keep failing (scans_failing:
+        tried again later)."""
         from src.server.scheduler.scans import failing_now
 
         return {
             "settings_ready": bool(acct.settings_ready),
             "ai_waits": {pool.job.name: acct.job_error(pool.job.name)
                          for pool in account_pools() if not acct.capacity(pool.job.name)},
+            "plugin_waits": self._plugins_not_running(),
             "unlisted": dict(self._unlisted.get(tenant_id, {})),
             "scans_failing": failing_now(getattr(acct, "scan_state", None), acct.library_ids(storage=False)),
         }
@@ -662,6 +698,14 @@ def forget_preview_copies() -> tuple[int, int] | None:
     return files, sizes
 
 
+def _plugins_from_runner() -> dict | None:
+    """What the plug-in runner last said of each plug-in (it runs on this machine, writing it in DATA_DIR)."""
+    from src.server.config import get_settings
+    from src.server.plugin_runner import read_state
+
+    return read_state(Path(get_settings().data_dir))
+
+
 def _from_database(tenant_id: str, kind: Any, libraries: list[str] | None,
                    skip: list[str] | None = None) -> list[dict] | None:
     """The kind's due clips, oldest first (libraries None: every active one); None when it was paused (or its
@@ -863,6 +907,13 @@ class Accounts:
 
         with get_control_session() as ctrl:
             active = [t.tenant_id for t in TenantRepository(ctrl).list_all() if t.status == "active"]
+        try:
+            # The producers as installed now: an installed plug-in's work is one (src/server/plugin_producers.py).
+            from src.server.plugin_producers import refresh
+
+            refresh()
+        except Exception:  # noqa: BLE001 — its work goes on as it was; read again at the next listing
+            logger.exception("scheduler: reading the installed plug-ins failed")
         for tenant_id in list(self._accounts):
             if tenant_id not in active:
                 self._accounts.pop(tenant_id).close()

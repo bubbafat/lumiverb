@@ -31,7 +31,8 @@ from src.producers.pools import SCANS
 ADDED_PREFIX = "plugin_"
 
 _registry: dict[str, ProducerSpec] | None = None  # Lumiverb's own, found in this package
-_added: dict[str, ProducerSpec] = {}  # added while running
+_added: dict[str, ProducerSpec] = {}  # added while running, by artifact
+_added_by: dict[str, dict[str, ProducerSpec]] = {}  # the same, by who added them (use_added's by)
 # The list handed out, and what it was made from: made again when either changes.
 _listed: tuple[dict[str, ProducerSpec], dict[str, ProducerSpec], dict[str, ProducerSpec]] | None = None
 _adding = threading.Lock()
@@ -68,20 +69,29 @@ def registry() -> dict[str, ProducerSpec]:
     return listed[2]
 
 
-def use_added(specs: Iterable[ProducerSpec]) -> bool:
-    """These producers added (each installed plug-in's work), in place of
-    those added before: the list changes only when they differ. Each is
-    checked with Lumiverb's own as they are at start (ValueError, and the list
-    stays as it was). Whether it changed."""
-    global _added
+# Who adds producers: the installed plug-ins (src/server/plugin_producers.py).
+INSTALLED = "installed"
+
+
+def use_added(specs: Iterable[ProducerSpec], by: str = INSTALLED) -> bool:
+    """These producers added, in place of those this one added before (by:
+    who adds them; the installed plug-ins, or a test): the list changes only
+    when they differ. Each is checked with Lumiverb's own and the others
+    added (ValueError, and the list stays as it was). Whether it changed."""
+    global _added, _added_by
     with _adding:
-        new = {p.artifact: p for p in specs}
-        if new == _added:
+        mine = {p.artifact: p for p in specs}
+        if mine == _added_by.get(by, {}):
             return False
+        everyone = {**_added_by, by: mine}
+        new = {a: p for who in everyone.values() for a, p in who.items()}
+        if len(new) != sum(len(who) for who in everyone.values()):
+            raise ValueError(f"Two producers added share an artifact: {sorted(mine)}")
         own = _own()
-        for p in new.values():
+        for p in mine.values():
             _check_added(p, own)
         _check([*own.values(), *new.values()], added=frozenset(new))
+        _added_by = {who: added for who, added in everyone.items() if added}
         _added = new
         return True
 

@@ -458,6 +458,23 @@ class Runner:
         self._said, self._said_at = said, now
 
 
+_DOING = {STARTING: "it's starting", PREPARING: "it's preparing its data", RESTARTING: "it's restarting",
+          FAILING: "it isn't answering", STOPPED: "it stopped"}
+
+
+def not_ready(said: dict[str, Any] | None, plugin_id: str) -> str | None:
+    """Why a plug-in can't be asked now, in words (None: it's running), from what the runner said (read_state)."""
+    if said is None:
+        return "the plug-in runner isn't running"
+    mine = said.get(plugin_id)
+    if not isinstance(mine, dict):
+        return "it isn't started yet"
+    if mine.get("state") == READY:
+        return None
+    doing = _DOING.get(mine.get("state"), "it isn't running")
+    return f"{doing} ({mine['why']})" if mine.get("why") else doing
+
+
 def read_state(data: Path, *, fresh_within: float = 60.0) -> dict[str, Any] | None:
     """What the runner last said, {plugin_id: {state, version, why, …}}; None when it hasn't said anything
     within fresh_within seconds (it isn't running)."""

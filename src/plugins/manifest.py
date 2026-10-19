@@ -205,6 +205,45 @@ class Manifest:
         return lines
 
 
+FACT_MAX = 200  # characters
+URL_MAX = 2000
+_TAG = re.compile(r"<[A-Za-z/!?]")
+
+
+def checked_outputs(work: WorkSpec, outputs: Any) -> dict[str, dict[str, str] | None]:
+    """What a plug-in gave back for one clip, as Lumiverb keeps it: each output it declares, a fact
+    ({"text", "url"?}: plain text up to FACT_MAX characters, an http(s) link) or None (nothing to say; one
+    it left out is that too). ValueError saying why for anything else: a key it didn't declare, a control
+    character, HTML (a tag), a link that isn't http(s)."""
+    if not isinstance(outputs, dict):
+        raise ValueError("outputs: an object, by output key")
+    declared = {o.key: o for o in work.outputs}
+    unknown = sorted(k for k in outputs if k not in declared)
+    if unknown:
+        raise ValueError(f"outputs: {', '.join(map(str, unknown))[:200]} isn't one it declares")
+    out: dict[str, dict[str, str] | None] = {}
+    for key in declared:
+        value = outputs.get(key)
+        if value is None:
+            out[key] = None
+            continue
+        if not isinstance(value, dict) or set(value) - {"text", "url"} or not isinstance(value.get("text"), str):
+            raise ValueError(f"outputs.{key}: a fact, {{\"text\", \"url\"?}}, or null")
+        words = " ".join(value["text"].split())
+        if not words or len(words) > FACT_MAX or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in words) \
+                or _TAG.search(words):
+            raise ValueError(f"outputs.{key}.text: plain text (no HTML), 1 to {FACT_MAX} characters")
+        fact = {"text": words}
+        if value.get("url") is not None:
+            url = value["url"]
+            if not isinstance(url, str) or len(url) > URL_MAX or urlsplit(url).scheme not in ("http", "https") \
+                    or not urlsplit(url).netloc or any(c.isspace() or ord(c) < 32 for c in url):
+                raise ValueError(f"outputs.{key}.url: an http or https link, up to {URL_MAX:,} characters")
+            fact["url"] = url
+        out[key] = fact
+    return out
+
+
 def asks_more(before: dict[str, Any], now: dict[str, Any]) -> list[str]:
     """What a newer version reads or reaches that the one accepted didn't, in words (empty: nothing more)."""
     more = [f"Reads {INPUTS.get(i, i)}" for i in now.get("inputs", []) if i not in before.get("inputs", [])]
@@ -383,6 +422,9 @@ def _setting(data: Any, where: str, problems: list[str]) -> PluginSetting | None
                             unit=f.text("unit", most=20) if numeric else "", pattern=pattern, max_length=max_length,
                             choices=tuple(choices), scope=scope, advanced=f.boolean("advanced"),
                             remakes=f.boolean("remakes"))
+    if setting.remakes and (scope != "account" or kind == "secret"):
+        # What a remake is made with is kept with what it made (its lineage), each account's.
+        f.bad("remakes", "only an account's setting, and never a secret")
     if not f.has("default"):
         f.bad("default", "required")
     elif kind == "secret" and setting.default != "":
