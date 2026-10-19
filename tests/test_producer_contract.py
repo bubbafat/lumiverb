@@ -178,7 +178,7 @@ def test_a_producer_is_one_folder(tmp_path):
             "due": "a.media_type = 'image'" in lineage.due("example"),
             "redo": lineage.redoable("example") and bool(lineage.redo_due("example")),
             "made_from": list(lineage.made_from("example")),
-            "joined": "src_example" in lineage.LINEAGE_JOIN,
+            "joined": "src_example" in lineage.lineage_join(),
             "missing": "missing_example" in MISSING_CONDITIONS,
             "summary": "missing_example" in RepairSummary.model_fields,
             "kind": [KINDS["example"].spec.tier, KINDS["example"].spec.pool, KINDS["example"].spec.per_account,

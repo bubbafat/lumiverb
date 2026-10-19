@@ -30,6 +30,7 @@ from typing import Any
 from src.producers import registry
 from src.producers.clip import CLIP_MODEL_ID  # noqa: F401 — the vectors' model_id
 from src.producers.contract import ALL, IMAGE, VIDEO, ProducerSpec  # noqa: F401
+from src.producers.live import LiveMap, LiveSeq
 from src.producers.prompts import (  # noqa: F401 — output-affecting settings
     OCR_PROMPT,
     VISION_PROMPT,
@@ -38,8 +39,11 @@ from src.producers.prompts import (  # noqa: F401 — output-affecting settings
 # A producer, as each one declares itself (src/producers/<artifact>/).
 Producer = ProducerSpec
 
-PRODUCERS: dict[str, Producer] = registry()
-ARTIFACTS: tuple[str, ...] = tuple(PRODUCERS)
+# Every producer by its artifact, as the list is now (a plug-in's work can be
+# added while Lumiverb runs: src/producers/__init__.py). These and the tables
+# below are worked out again when it changes (src/producers/live.py).
+PRODUCERS: Mapping[str, Producer] = LiveMap(registry)
+ARTIFACTS: tuple[str, ...] = LiveSeq(registry)  # type: ignore[assignment]
 
 # Pause switches (Robert, Oct 9): one per processing action, each paused
 # and resumed on its own: Upkeep (the trash purge, file cleanup, spreading
@@ -74,10 +78,11 @@ def pause_state(paused: set[str] | frozenset[str], *, libraries_paused: int = 0,
 
 # The repair summary's counts and page filters (what the scheduler is
 # handed) and the artifact each is about.
-MISSING_FLAGS: dict[str, str] = {p.flag: p.artifact for p in PRODUCERS.values() if p.flag}
+MISSING_FLAGS: Mapping[str, str] = LiveMap(lambda: {p.flag: p.artifact for p in registry().values() if p.flag})
 # What a scan makes of each file it reads and uploads with its clip, and
 # remakes (src/server/scans.py): the preview and thumbnail, a video's preview.
-MADE_AT_SCAN: tuple[str, ...] = tuple(a for a, p in PRODUCERS.items() if p.made_at_scan)
+# Lumiverb's own: an added producer makes nothing at a scan.
+MADE_AT_SCAN: tuple[str, ...] = tuple(a for a, p in registry().items() if p.made_at_scan)
 
 # Lineage a write carries when nothing says who made it (an old client, the
 # macOS app today): never current, so the server makes it again.

@@ -5,6 +5,7 @@ it, a machine's description and tags, its vectors. What each producer still need
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 
 from sqlalchemy import and_, bindparam, column, text
@@ -13,6 +14,7 @@ from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.sql import text as sa_text
 from sqlmodel import Session, select
 
+from src.producers.live import LiveMap
 from src.shared.io_utils import normalize_path_prefix, normalize_rel_path
 from src.shared.utils import escape_like, utcnow
 from src.shared import asset_status
@@ -33,22 +35,25 @@ ACTIVE_ASSETS = "active_assets"
 # summary counts it), from the reconciler (repository/lineage.py): missing,
 # or made from a file whose content has since changed, less failures
 # waiting their turn. OUTSTANDING includes those failures (the library
-# health dot). missing_face_embeddings counts faces found without one.
-def _reconciled() -> tuple[dict[str, str], dict[str, str]]:
+# health dot). missing_face_embeddings counts faces found without one. Both
+# as the producers are now (src/producers/live.py).
+_FACE_EMBEDDINGS = (
+    "a.face_count > 0 AND a.media_type = 'image'"
+    " AND EXISTS (SELECT 1 FROM faces f WHERE f.asset_id = a.asset_id AND f.embedding_vector IS NULL)"
+)
+
+
+def _reconciled(rule: str) -> dict[str, str]:
     from src.server.repository import lineage
     from src.shared.producers import MISSING_FLAGS
 
-    face_embeddings = (
-        "a.face_count > 0 AND a.media_type = 'image'"
-        " AND EXISTS (SELECT 1 FROM faces f WHERE f.asset_id = a.asset_id AND f.embedding_vector IS NULL)"
-    )
-    due = {flag: lineage.due(artifact) for flag, artifact in MISSING_FLAGS.items()}
-    outstanding = {flag: lineage.outstanding(artifact) for flag, artifact in MISSING_FLAGS.items()}
-    return ({**due, "missing_face_embeddings": face_embeddings},
-            {**outstanding, "missing_face_embeddings": face_embeddings})
+    of = getattr(lineage, rule)
+    return {**{flag: of(artifact) for flag, artifact in MISSING_FLAGS.items()},
+            "missing_face_embeddings": _FACE_EMBEDDINGS}
 
 
-MISSING_CONDITIONS, OUTSTANDING_CONDITIONS = _reconciled()
+MISSING_CONDITIONS: Mapping[str, str] = LiveMap(lambda: _reconciled("due"))
+OUTSTANDING_CONDITIONS: Mapping[str, str] = LiveMap(lambda: _reconciled("outstanding"))
 
 
 def _active_assets_subquery():
@@ -196,7 +201,7 @@ class AssetRepository:
         from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
         from src.shared.producers import MISSING_FLAGS
 
-        counts = ",\n".join(f"COUNT(*) FILTER (WHERE {MISSING_CONDITIONS[f]}) AS {f}" for f in MISSING_CONDITIONS)
+        counts = ",\n".join(f"COUNT(*) FILTER (WHERE {cond}) AS {f}" for f, cond in MISSING_CONDITIONS.items())
         # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
         waiting = " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
                              for a in MISSING_FLAGS.values())
@@ -209,7 +214,7 @@ class AssetRepository:
                 COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
                 {waiting} AS waiting_failures
             FROM active_assets a
-            {lineage.LINEAGE_JOIN}
+            {lineage.lineage_join()}
             WHERE library_id = :library_id
         """), {"library_id": library_id}).mappings().one())
 

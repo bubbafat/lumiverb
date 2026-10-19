@@ -34,7 +34,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str] | None, limi
     hand or just tried: they mustn't fill the answer). A redo kind needs
     want: what its producer makes now (lineage.desired)."""
     from src.server.repository import lineage
-    from src.server.repository.lineage import LINEAGE_JOIN
+    from src.server.repository.lineage import lineage_join
 
     if not kind.flag or library_ids == []:
         return []
@@ -50,7 +50,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str] | None, limi
     rows = session.execute(text(
         "SELECT a.asset_id, a.library_id, a.rel_path, a.media_type, a.content_hash, a.duration_sec,"
         " a.created_at, a.proxy_key, a.analysis_proxy_key, a.analysis_proxy_key IS NOT NULL AS has_analysis_proxy"
-        f" FROM active_assets a {LINEAGE_JOIN}"
+        f" FROM active_assets a {lineage_join()}"
         " WHERE (CASE WHEN CAST(:libs AS text[]) IS NULL"
         "             THEN a.library_id IN (SELECT library_id FROM libraries WHERE status = 'active')"
         "             ELSE a.library_id = ANY(CAST(:libs AS text[])) END)"
