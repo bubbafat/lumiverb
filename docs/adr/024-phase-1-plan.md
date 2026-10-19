@@ -1,0 +1,218 @@
+# ADR-024 phase 1: Lumiverb's own data named (the plan)
+
+## Status
+
+Draft (2026-10-19), for the builder, the reviewer and the tester to agree before any code, and for Robert to make one decision (section 5). Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+
+## What phase 1 does, and doesn't
+
+It names Lumiverb's own data in plain words, `lumiverb.*`, and makes every built-in producer declare by name what it reads and what it makes. It writes those names into a page generated from the producers. It maps protocol 1's inputs to them.
+
+It doesn't change what a person sees, how any clip is made, or what any plug-in is handed. It doesn't rename our plug-ins' outputs (`geonames.town`, `example.*`: phase 2). It doesn't let plug-ins read each other's data, or check installs against the graph (phase 3), or add `has:` (phase 4).
+
+## Where it starts
+
+Each built-in producer is a `ProducerSpec` (`src/producers/<artifact>/__init__.py`), keyed by its artifact id. The id is everywhere: lineage, pauses, settings, the API, the scheduler's queue, the device and scan protocol, the web app. Its other ids don't match it in places: the `producer` recorded in lineage (`ffprobe`, `exiftool`, `preview`, `analysis-proxy`, `scene-detect`, `scene-vision`, `insightface`, `insightface-video`, `whisper`), the job `kind` (`render` for analysis proxies), the `flag` (`missing_video_scenes`, `missing_embeddings`, `missing_transcription`). What a producer is made from is `needs`, artifact ids. Protocol 1's inputs are four words (`src/plugins/manifest.py` `INPUTS`: `location`, `capture_time`, `metadata`, `preview`).
+
+The `missing_*` flags aren't search filters any more: `GET /v1/filters/capabilities` lists none and the old asset page answers 410. They're the scheduler's work lists (`MISSING_FLAGS`) and `GET /v1/assets/repair-summary`'s fields. Phase 4's `has:` is where they'd become names.
+
+## 1. The names
+
+### The rules
+
+- `lumiverb.` then words, dots between: each word lowercase letters, digits and underscores, starting with a letter (an output key's grammar, `manifest._KEY`). 
+- A name that only one kind of clip has says which: `lumiverb.image.*` or `lumiverb.video.*`. One both have has no media level (ADR-024 decision 2). A test holds each producer's name to its `media`.
+- Plain words first (decision 12): what a person would call it, the word Lumiverb's own screens use where there is one.
+- One name for each thing a reader could want. A name can sit under another (`lumiverb.location.gps` under `lumiverb.location`): the longer is a part or a source of the shorter, and both are names.
+- A name says what the data is, not who makes it: `lumiverb.video.transcript`, never `lumiverb.whisper`. The producer that makes it can change (another engine) and the name stays.
+
+### The list
+
+Each built-in producer makes one name. A few names are made by Lumiverb itself, not by a producer: the scan (what the file says), a person (a location they set), or Lumiverb combining others (`lumiverb.location`).
+
+| Name | What it is | Type | Made by | Today's id | Protocol 1 input |
+|------|-----------|------|---------|-----------|------------------|
+| `lumiverb.original` | The file itself, in its library. Never handed to a plug-in (the API serves no originals) | file | the library | — | — |
+| `lumiverb.metadata` | Its media type, size, length, camera and lens | record | the scan | — | `metadata` |
+| `lumiverb.capture_time` | When it was taken (UTC) and its time zone's offset, as the file says | time | the capture producer (or the scan, which says so) | `capture` | `capture_time` |
+| `lumiverb.preview` | Its preview image and thumbnail (a video's: a still) | image | the scan | `proxy` | `preview` (photos) |
+| `lumiverb.location` | Where it was: a person's location, else the file's GPS, else an applied guess (never a suggestion), with how sure | point | Lumiverb, from the three below | — | `location` |
+| `lumiverb.location.person` | A location a person set: a point, a place, or the same as another clip's | point | a person | — | — |
+| `lumiverb.location.gps` | The file's own GPS, with its accuracy when the file says | point | the scan (the capture producer reads the accuracy for older clips) | — | — |
+| `lumiverb.location.guess` | Where it probably was, from the clips taken around the same time (a guess or a suggestion, with its radius) | point | the location producer | `location` | — |
+| `lumiverb.video.format` | A video's container, codecs, size, rotation, frame rate, timecode and audio | record | the probe producer | `probe` | — |
+| `lumiverb.video.preview` | Its short preview video (the first seconds) | video | the scan | `video_preview` | — |
+| `lumiverb.video.analysis_proxy` | The copy of a video Lumiverb analyses (smaller, the browser plays it) | video | the analysis proxy producer | `analysis_proxy` | — |
+| `lumiverb.video.scenes` | Where its scenes start and end, each with its picture | list of scenes | the scenes producer | `scenes` | — |
+| `lumiverb.video.scene_descriptions` | Each scene described, with tags | list of texts | the scene descriptions producer | `scene_vision` | — |
+| `lumiverb.video.transcript` | What's said in it, with times | text | the transcripts producer | `transcript` | — |
+| `lumiverb.video.faces` | The people seen in it: one face each, when they're seen | list of faces | the video faces producer | `video_faces` | — |
+| `lumiverb.image.description` | A photo described, with tags | text | the descriptions producer | `vision` | — |
+| `lumiverb.image.text` | The text read in a photo | text | the OCR producer | `ocr` | — |
+| `lumiverb.image.visual_signature` | What visual search and "Find similar" compare: the photo's CLIP vector | vector | the visual search producer | `clip` | — |
+| `lumiverb.image.faces` | The faces found in a photo, each with its box and who it is | list of faces | the faces producer | `faces` | — |
+
+Every name is version 1. A name's version is its shape's: it goes up only when what a reader is handed changes shape (decision 7). It isn't the producer's version, which goes up when the producer makes something better and asks for a remake.
+
+Types are the words decision 7 proposes (text, number, point, time, list), with `record` (named fields, listed on the page), `vector`, and files (`image`, `video`). Phase 1 only writes them down. Phase 3 checks them, when a plug-in reads a name.
+
+### The words that weren't obvious
+
+- **`probe` → `lumiverb.video.format`.** What it keeps is the video's technical format (`video_facets`). The screens say "Video facts", but a fact is what a plug-in's output is (ADR-023), so "format" doesn't collide. Also considered: `lumiverb.video.technical`, `lumiverb.video.streams`.
+- **`clip` → `lumiverb.image.visual_signature`.** Plain words for a CLIP vector: what visual search compares. "Embedding" is jargon and "clip" is the model's name and a word for a video. Also considered: `lumiverb.image.likeness`, `lumiverb.image.visual_search` (the screen's title, but it names a use, not data).
+- **`capture` → `lumiverb.capture_time`.** It also reads the GPS's accuracy, which is part of `lumiverb.location.gps`. Its name is what readers want of it.
+- **`location` (the producer) → `lumiverb.location.guess`.** "Guess" is the word the Lightbox uses. A suggestion is a guess not applied yet; the page says so.
+- **`proxy` → `lumiverb.preview`.** "Proxy" in Lumiverb means two things (the preview, and the analysis proxy). The screens call it the preview.
+- **`thumbnail` and `scene_rep`** (upload types, not producers) are parts of `lumiverb.preview` and `lumiverb.video.scenes`, not names of their own.
+
+The ADR's first list had no name for the original, a person's location or `capture`. These are added. Its `lumiverb.image.clip_vector`, `lumiverb.video.probe` and `lumiverb.capture_time` are worded as above.
+
+## 2. Each producer declares what it reads and makes
+
+`ProducerSpec` gains:
+
+- `makes`: a `Data` (`src/producers/contract.py`): its `name`, `about` (the page's "What it is"), `type` and `version`;
+- `reads`: the names it's made from.
+
+`needs` stops being declared. It's worked out from `reads`: each name read that a producer makes is a need, through its artifact. So the queue's waits, Processing's "N wait for Scenes" and `redo_also` behave exactly as now. What `reads` adds is what isn't a producer's: probe, capture and analysis proxies read `lumiverb.original`; location guesses read `lumiverb.capture_time`, `lumiverb.location.gps` and `lumiverb.location.person`. That's why `lumiverb.location.person` is a name: a guess can't read `lumiverb.location`, which includes guesses (a circle).
+
+| Producer | Reads | Needs (worked out, as today) |
+|----------|-------|------------------------------|
+| probe | original | — |
+| capture | original | — |
+| proxy, video_preview | original (at the scan) | — |
+| analysis_proxy | original | — |
+| scenes | video.analysis_proxy | analysis_proxy |
+| scene_vision | video.analysis_proxy, video.scenes | analysis_proxy, scenes |
+| vision, ocr, clip, faces | preview | proxy |
+| video_faces | video.analysis_proxy, video.scenes | analysis_proxy, scenes |
+| transcript | video.analysis_proxy | analysis_proxy |
+| location | capture_time, location.gps, location.person | capture |
+
+(`lumiverb.` left off.) Lumiverb's names no producer makes are one list beside the producers (`src/producers/names.py`), each a `Data` with who makes it.
+
+The registry check (`src/producers/__init__.py`) refuses what isn't so:
+- a name not in the grammar, or not `lumiverb.*`, or under the wrong media;
+- two producers making one name;
+- a name read that nothing makes;
+- a circle.
+
+An installed plug-in's producer reads the names of its protocol 1 inputs (section 3). Its `needs` come out as now (`proxy` when it reads the preview). It makes nothing named in phase 1: its outputs are named in phase 2.
+
+`GET /v1/producers` gains each producer's `makes` (its name) and `reads` (names), beside `artifact` and `needs`, which stay. `GET /v1/plugins`' `reads` stays the words a person reads on its card.
+
+## 3. Protocol 1's inputs
+
+Protocol 1 stays as it is. A manifest still says `"inputs": ["location"]`, and the plug-in is still handed `{"location": {"lat", "lon", "sure_m", "source"}}`. Each input stands for a name: `location` → `lumiverb.location`, `capture_time` → `lumiverb.capture_time`, `metadata` → `lumiverb.metadata`, `preview` → `lumiverb.preview`. That's one table in `src/plugins/manifest.py` beside `INPUTS`, and the page shows it.
+
+Phase 3's `reads` takes the names, and a protocol 1 manifest's `inputs` are read as those names. A plug-in written for protocol 1 keeps working, as decision 2 and the ADR's design say.
+
+## 4. The page
+
+`docs/data-names.md` lists every `lumiverb.*` name. It is written from the producers and `src/producers/names.py` by `uv run python -m src.producers.names --write`, never by hand. For each name it gives:
+- what it is, its type and version;
+- what clips have it (photos, videos, both);
+- who makes it (the producer's title, the scan, a person, Lumiverb);
+- what reads it;
+- the protocol 1 input it stands for;
+- its id in today's API (section 5).
+
+A fast test fails when the page isn't what the code would write, and says the command. Another test fails when a producer is added without a name, or its name has no `about`.
+
+The page is linked from cursor-api.md (the Plug-ins API, and "Writing a client"), from ADR-024, and from CLAUDE.md's producers row.
+
+## 5. Robert's decision: rename what's stored and sent, or name beside it
+
+Either way, sections 1 to 4 are built, and a client using today's ids keeps working. The question is whether today's ids go.
+
+### (a) One name for each thing, everywhere
+
+Today's artifact ids are renamed to the names wherever they're stored or sent.
+
+- **Migrations.** One per account, renaming in place:
+  - `artifact_lineage.artifact` (a row for each thing made for each clip);
+  - `producer_pauses.target` (pauses, and stopped redos);
+  - `producer_crashes.artifact`;
+  - `system_metadata`'s `producer.<artifact>` settings and `producer.<artifact>.version_seen`;
+  - `uploads.artifact` and its CHECK (`video_preview`, `analysis_proxy`).
+
+  A downgrade renames them back. Missing `version_seen` alone would stop every producer's remakes as "a new version" (`hold_new_version`). The producer ids in lineage (`ffprobe`, `whisper`, …) stay: they say who made it, which is a different thing, and renaming them would make every clip stale.
+- **Code.**
+  - Every place an id is written as text: the producers' own SQL (`'capture'`, `'location'`), the faces levels' `producer.faces`, 13 `require_lineage(…, "<artifact>")` calls, ingest's lineage form (`proxy`, `capture`, `probe`, `vision`, `clip`), the artifact and upload types, the reader-work and check-in lists, the device's order (`probe`, `capture`, `analysis_proxy`), and the web app's matches (`"location"`, `"faces"`, `"video_faces"`).
+  - Ids are put into SQL as bind and column names (`src_<artifact>`, `:p_<artifact>`, `:remake_<artifact>`). A dotted name isn't one, so a second, safe spelling is needed inside the code anyway.
+- **Clients.** What a client sends can be taken under either spelling. What the server sends can't be both:
+  - A device on another machine running an older Lumiverb reads its work as `probe`, `capture` and `analysis_proxy`. Sent new names, it would do nothing, with nothing said, until it's upgraded.
+  - The Mac and iPhone apps fetch `artifacts/proxy`, `/thumbnail` and `/video_preview`, and match a playback source of `analysis_proxy`.
+  - A reader someone wrote for themselves (ADR-020 decision 9) sends lineage keyed by today's ids.
+
+  So the server takes today's ids for good: we can't know when the last old client has gone. It also keeps sending today's ids where an older client reads them, or it needs clients to say which they speak (a version in the check-in) and old ones to be upgraded.
+- **Breaks, and for how long.** With aliases on everything sent to the server and today's ids kept in what it sends, nothing breaks. But then two spellings exist at the edge for as long as old clients do, and one inside the code for SQL. Without them, older devices stall silently until upgraded, the apps lose their previews until rebuilt, and other readers fail until they're changed.
+- **Cost.** About three parts: storage and aliases; the clients (web, CLI, device, Swift); then taking out the literals. Most files under `src/server`, `src/processing` and `src/producers` are touched. It is a migration of every account's lineage. A missed rename shows as a mass remake or a silent hold.
+- **Tests.**
+  - The migration up and down on an account seeded with every table and key, `version_seen` included.
+  - Every route under both spellings.
+  - Today's device code (a copy pinned in the tests) against the new server.
+  - The apps' artifact URLs.
+  - The upload CHECK.
+  - The suite with every literal gone (a test that no artifact id is written as text outside the registry).
+
+### (b) Names beside today's ids
+
+Today's ids stay what's stored and sent. They're documented as storage keys, kept for every client. The names are the public, documented layer: the page, `GET /v1/producers`' `makes` and `reads`, and everything new (phase 3's manifests, phase 4's `has:`). One table in the registry maps each to the other. It's held by a test: each producer has exactly one name and each name at most one id.
+
+- **Migrations.** None.
+- **Code.** `ProducerSpec.makes` and `reads`, `src/producers/names.py`, the protocol 1 table, the page and its writer, two fields on `GET /v1/producers`, and the registry check. About ten files besides tests and docs.
+- **Clients.** Nothing they send or read changes. Nothing breaks.
+- **Cost.** One part. Two identifiers for each built-in: the id, which people never see (Processing shows titles), and the name, which they read. The page puts them side by side. New API takes names; the existing API keeps its ids, as cursor-api says.
+- **Tests.**
+  - The rules (grammar, `lumiverb.*`, media level, one maker, every read made, no circle).
+  - `needs` worked out from `reads` equal to today's for every producer.
+  - The page current.
+  - The protocol 1 table complete (every `INPUTS` key has a name, and each name is one a producer or Lumiverb makes).
+  - A plug-in still handed exactly what it was.
+  - `GET /v1/producers`' `makes` and `reads`.
+
+### Recommendation: (b)
+
+What Robert asked for is readable names and a contract to build on, not new storage. (a) touches every account's lineage and most of the server for no change anyone sees. Because old clients can't all be upgraded together, it still keeps today's ids at the edge, and needs a second spelling inside the code for SQL. So (a) ends with two names too, at far more cost and risk.
+
+(b) gives every reader one name per thing now, in the places names are read. If keeping two ids ever costs more than it saves, a later phase can retire the old ones on its own terms: a client version in the check-in first, then the rename.
+
+## 6. What a person sees
+
+Nothing changes on screen. The page `docs/data-names.md` is new, linked from the docs a plug-in author or client writer reads. `GET /v1/producers` has two more fields.
+
+## 7. Tests
+
+Every test calls the real registry, producers and routes (none reimplements a rule), and none asserts speed.
+
+- The rules in section 2, each refusing a made-up producer that breaks it (the registry check, as `tests/test_producer_contract.py` does for producers' other rules).
+- `needs` from `reads`, every built-in's equal to today's list (written into the test from today's specs before the change).
+- The page: written by the command, equal to the file; and a change to a producer's name fails it.
+- The protocol 1 table: each input's name, and `tests/test_plugin_work.py` unchanged (what a plug-in is handed).
+- `GET /v1/producers`: each producer's `makes` and `reads`, an installed plug-in's `reads` (its inputs' names) and its `makes` empty.
+- Option (a), if Robert chooses it: section 5's list.
+
+## 8. Parts
+
+Under (b), one PR: the names, the declarations, the page, the API's fields, their tests and docs (ADR-024's progress, CLAUDE.md's producers and plug-ins rows, cursor-api.md). Under (a), three, each released before the next.
+
+## 9. Risks
+
+- **Names are hard to change once plug-ins read them** (phase 3). Phase 1's list is the one to get right: the reviewer, the tester and Robert read section 1 for words they'd look for and not find.
+- **Two identifiers** (b): someone writes code against the wrong one. The page shows both side by side, cursor-api says which an API takes, and new API takes names only.
+- **A name that hides two things** (`lumiverb.capture_time` also brings the GPS's accuracy; `lumiverb.preview` is two files). The page says what each holds.
+
+## 10. Question for Robert (through the coordinator)
+
+1. **Rename what's stored and sent, or name beside it?** (a) renames today's ids to the names everywhere. That's a migration of every account, most of the server, aliases kept for older devices, the apps and other readers, and three parts. (b) adds the names beside the ids. That's no migration, nothing broken, one part. Recommended: (b).
+
+The names themselves (section 1) are for the reviewer and the tester to agree. Robert can change any word; the two that took the most thought are `lumiverb.video.format` (probe) and `lumiverb.image.visual_signature` (CLIP).
+
+## Agreement
+
+| Who | Says |
+|-----|------|
+| geonames-builder | Proposed |
+| geonames-reviewer | |
+| geonames-tester | |
