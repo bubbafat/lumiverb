@@ -351,6 +351,39 @@ def test_it_runs_only_while_its_on_in_some_account(facts):
     _until(f.runner, lambda: _listed(f.client, f.robert)["facts"]["running"]["state"] == "ready")
 
 
+@pytest.mark.slow
+def test_an_account_that_cant_be_read_holds_up_no_other(facts, control, caplog):  # noqa: F811
+    """Another active account whose database can't be read: what it had on stands (here nothing, never read),
+    said once, and the runner goes on following the account it can read: a default changed, an account's
+    switch, an install and an uninstall all take effect."""
+    import logging
+
+    from sqlalchemy.engine import make_url
+
+    from src.server import plugin_catalog
+    from src.server.database import get_control_session
+    from src.server.repository.control_plane import TenantDbRoutingRepository, TenantRepository
+
+    caplog.set_level(logging.INFO, logger=plugin_catalog.__name__)
+    f = facts
+    with get_control_session() as session:
+        away = TenantRepository(session).create(name="Away").tenant_id
+        TenantDbRoutingRepository(session).create(
+            tenant_id=away,
+            connection_string=make_url(control).set(database="no_such_database").render_as_string(hide_password=False))
+    assert cli.main(["plugins", "default", "facts", "off", "--yes", "--env", str(f.env)]) == 0
+    _until(f.runner, lambda: f.runner.plugins["facts"].state == "off")
+    assert f.client.put("/v1/plugins/facts", json={"enabled": True}, headers=f.robert).status_code == 200
+    _until(f.runner, lambda: f.runner.plugins["facts"].state == "ready")
+    hello = Path(__file__).parent / "plugins" / "hello"
+    assert cli.main(["plugins", "install", str(hello), "--on", "--yes", "--env", str(f.env)]) == 0
+    _until(f.runner, lambda: "hello" in f.runner.plugins and f.runner.plugins["hello"].state == "ready")
+    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 0
+    _until(f.runner, lambda: "facts" not in f.runner.plugins)
+    said = [r.getMessage() for r in caplog.records if f"account {away} can't be read" in r.getMessage()]
+    assert len(said) == 1, "said once, not at every look"
+
+
 # ---------------------------------------------------------------------------
 # What it made, shown with the clip and searched (phase 2c)
 # ---------------------------------------------------------------------------

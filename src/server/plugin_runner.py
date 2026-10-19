@@ -8,10 +8,11 @@ run`, beside the API and the scheduler; on Linux its own unit,
 lumiverb-plugins.service. For each installed plug-in it:
 
 - runs it only while it's on somewhere: on by default, or turned on in an
-  account (plugin_catalog.on_somewhere, read with what's installed); one on
-  in no account isn't started ("off"), and is stopped when the last account
-  turns it off, so one with downloads fetches nothing until someone has
-  accepted what it asks;
+  account (plugin_catalog.OnSomewhere: every account's switches read every
+  LIST_EVERY_SEC with what's installed; one whose database can't be read
+  keeps what it said last); one on in no account isn't started ("off"), and
+  is stopped when the last account turns it off, so one with downloads
+  fetches nothing until someone has accepted what it asks;
 - starts its manifest's command from its installed folder
   (DATA_DIR/plugins/<id>/program/), through plugin_launch.py (a lower
   priority, no file bigger than its disk_mb, no core files), with a clean
@@ -188,14 +189,14 @@ class Runner:
                  clock: Callable[[], float] = time.monotonic,
                  memory: Callable[[], dict[int, int]] = group_memory_mb) -> None:
         """installed: what's installed now, {plugin_id: plugin_catalog.Installed} (the control database's);
-        wanted: of those, the ids on somewhere (plugin_catalog.on_somewhere: each account's switch);
+        wanted: of those, the ids on somewhere (plugin_catalog.OnSomewhere: each account's switch);
         server_settings: a plug-in's server settings as it's handed them (plugin_catalog.server_settings)."""
         from src.server import plugin_catalog
 
         self.data = data
         self.plugins: dict[str, Plugin] = {}
         self._installed = installed or plugin_catalog.installed
-        self._wanted = wanted or plugin_catalog.on_somewhere
+        self._wanted = wanted or plugin_catalog.OnSomewhere()
         self._server_settings = server_settings or plugin_catalog.server_settings
         self._clock = clock
         self._memory = memory

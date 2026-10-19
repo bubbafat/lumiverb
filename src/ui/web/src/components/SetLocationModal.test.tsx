@@ -180,10 +180,13 @@ describe("LocationRow", () => {
 
   it("says the nearest town to where it was, credited, or that there's none near", () => {
     const place = { label: "Port of Spain, Trinidad and Tobago", place_id: "geonames:3573890", distance_m: 1200,
-                    credit: { text: "GeoNames", url: "https://www.geonames.org/" } };
+                    credit: { text: "GeoNames", url: "https://www.geonames.org/",
+                              license: { text: "CC BY 4.0", url: "https://creativecommons.org/licenses/by/4.0/" } } };
     render(<LocationRow gpsLat={10.66} gpsLon={-61.52} location={null} place={place} />);
     expect(screen.getByText(/Near Port of Spain, Trinidad and Tobago/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "GeoNames" })).toBeTruthy();
+    expect((screen.getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
+      .toBe("https://creativecommons.org/licenses/by/4.0/");
     cleanup();
     render(<LocationRow gpsLat={20} gpsLon={-40} location={null} place={{ ...place, label: null, place_id: null }} />);
     expect(screen.getByText(/Not near a town/)).toBeTruthy();

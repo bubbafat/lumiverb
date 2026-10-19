@@ -140,8 +140,7 @@ export function LocationRow({
               {i === placeLines.length - 1 && (
                 <>
                   {" · "}
-                  <a href={place.credit.url} target="_blank" rel="noopener noreferrer"
-                     className="text-gray-500 hover:text-gray-300 hover:underline">{place.credit.text}</a>
+                  <CreditLinks credit={place.credit} className="text-gray-500 hover:text-gray-300 hover:underline" />
                 </>
               )}
             </div>
