@@ -2,7 +2,7 @@
 
 ## Status
 
-Revised (2026-10-19) after Robert's decision (section 5): rename everything. For the builder, the reviewer and the tester to agree again before any code; then the coordinator's go for part 1. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
@@ -252,7 +252,7 @@ A plug-in installed before part 1 could have a reserved id (none on Robert's Mac
 
 The schema-wide net (part 3's tests) allows `plugin_<id>` only for such a plug-in.
 
-**Caches.** The Mac app's proxy and thumbnail caches (up to 1 GB and 500 MB) and the iPhone's are kept by URL. After part 4 each file is fetched again once, under its name, and the old entries age out.
+**Caches.** The Mac app's proxy and thumbnail caches (up to 1 GB and 500 MB) and the iPhone's are kept by URL. Once part 2's rebuilt apps ask for files by their names, each file is fetched again once, under its name, and the old entries age out.
 
 ## 9. Parts
 
@@ -334,7 +334,16 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   3. install part 2's release, from the tap's formula at its commit (never by switching the live tap checkout's branch);
   4. start it.
 
-  Or restore the backup taken before the upgrade (`backups.py`'s before an upgrade), which loses what was made since. The tester writes the exact Homebrew commands against their throwaway Mac install and runs this rollback there before the part ships; they go in the release notes.
+  Or restore the backup taken before the upgrade (`backups.py`'s before an upgrade), which loses what was made since.
+
+  Before the part ships, the tester rehearses every step but Homebrew's for real, on throwaway installs (which run from checkouts):
+  - stop;
+  - `migrate --to` refused while the install runs;
+  - `migrate --to f8c4a2e6d0b5` with the newer code;
+  - the previous release's code started on that database, with nothing remade or lost;
+  - then up again.
+
+  They do this for part 3, and for part 4 with an open upload and a pending repair. The Homebrew step is written by whoever upgrades Robert's Mac (the coordinator), from Homebrew's own way of installing a formula at a commit. The release notes mark it as not rehearsed on a throwaway: Homebrew on this Mac is Robert's, and no throwaway uses it.
 - **Tests.**
   - The migration's own mapping equal to `RENAMED`, while both exist.
   - The migration up and down on an account seeded with every table and key:
@@ -361,7 +370,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
 ### Part 4: the files' names
 
 - **What.**
-  - A tenant migration: `uploads.artifact` and its CHECK, and `artifacts.missing`'s entries.
+  - A tenant migration: `uploads.artifact` and its CHECK, and `artifacts.missing`'s entries, with its own mapping written into its file (as part 3's), and a test holding it equal to `RENAMED` while both exist.
   - The files' names in URLs, uploads, the batch fields, ingest, playback's source, the CLI's `--size` and the caches.
   - Old kinds still taken until part 5.
 - **Gate.** The snapshot unchanged. Previews, thumbnails, video previews and playback on the web and both apps. An upload begun before the upgrade finishes after it. A missing-file repair pending before is still pending.
@@ -424,5 +433,5 @@ Every test calls the real registry, producers, migrations and routes (none reimp
 | Who | Says |
 |-----|------|
 | geonames-builder | Proposed, for (a) |
-| geonames-reviewer | AGREE on 2f4c896c (the plan for (b)); on this revision: |
-| geonames-tester | AGREE on 2f4c896c (the plan for (b)); on this revision: |
+| geonames-reviewer | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), two nits folded in after it (text only): part 4's migration's own mapping, the caches fetched again at part 2 |
+| geonames-tester | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), its line folded in after it (text only): the rollback rehearsed on throwaways but for Homebrew's step, which the coordinator writes |
