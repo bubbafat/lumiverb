@@ -222,6 +222,30 @@ def test_a_revision_these_migrations_dont_have_is_refused_and_moves_nothing(data
 
 
 @pytest.mark.slow
+def test_a_database_newer_than_this_code_is_said_so_and_moves_nothing(databases):
+    # A rollback run with the older release: only the release that made the revision knows the way down.
+    control_url, one_url, _ = databases
+    migrate(control_url, say=lambda _: None)
+    _add_tenant(control_url, "ten_one", one_url)
+    migrate(control_url, say=lambda _: None)
+    engine = create_engine(one_url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num = '0a1b2c3d4e5f'"))
+    engine.dispose()
+    with pytest.raises(MigrationError, match=r"ten_one: The database is at 0a1b2c3d4e5f, which tenant's migrations "
+                                             r"here don't have: it's newer than this release\. Run migrate --to with "
+                                             r"the release that made it"):
+        migrate_to(control_url, tenant=_before("alembic-tenant.ini"), say=lambda _: None)
+    assert _version(one_url) == "0a1b2c3d4e5f"
+    engine = create_engine(control_url)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE alembic_version SET version_num = '0a1b2c3d4e5f'"))
+    engine.dispose()
+    with pytest.raises(MigrationError, match=r"The database is at 0a1b2c3d4e5f, which control's migrations"):
+        migrate_to(control_url, tenant=None, control=_before("alembic-control.ini"), say=lambda _: None)
+
+
+@pytest.mark.slow
 def test_the_command_is_refused_while_lumiverb_is_connected(databases, tmp_path, monkeypatch, capsys):
     from src.server import backups
 

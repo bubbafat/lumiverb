@@ -158,6 +158,7 @@ def _way_to(url: str, scripts: Path, revision: str) -> str | None:
     (it's there). MigrationError for a revision these migrations don't have."""
     from alembic.runtime.migration import MigrationContext
     from alembic.script import ScriptDirectory
+    from alembic.script.revision import RevisionError
     from alembic.util import CommandError
 
     logging.getLogger("alembic").setLevel(logging.WARNING)
@@ -174,7 +175,18 @@ def _way_to(url: str, scripts: Path, revision: str) -> str | None:
         engine.dispose()
     if current == (revision,):
         return None
-    below = {r.revision for r in script.iterate_revisions(current, "base")} if current else set()
+    for head in current:
+        try:
+            script.get_revision(head)
+        except CommandError:
+            # Newer than this code: only the release that made it knows the way down.
+            raise MigrationError(f"The database is at {head}, which {scripts.name}'s migrations here don't have:"
+                                 " it's newer than this release. Run migrate --to with the release that made it")\
+                from None
+    try:
+        below = {r.revision for r in script.iterate_revisions(current, "base")} if current else set()
+    except RevisionError as exc:
+        raise MigrationError(f"Can't find the way from {', '.join(current)} to {revision}: {exc}") from None
     return "downgrade" if revision in below else "upgrade"
 
 

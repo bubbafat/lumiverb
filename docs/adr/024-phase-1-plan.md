@@ -392,6 +392,7 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
 - **What.**
   - `RENAMED` deleted: an old spelling on input is refused, saying its name (422, or 404 for a URL), and the CLIs say the name to type.
   - `GET /v1/producers`' `producer` field goes.
+  - `lumiverb producers --compare` keeps its own copy of the artifacts' old ids (it reads `RENAMED`'s now), so an answer saved before part 3 still compares.
   - cursor-api's note on the window says it closed, and in which release.
   - No alembic revision.
 - **When.** Once part 4 is checked on Robert's Mac, his apps are part 2's or later, and no device is on protocol 1 (part 3 already refuses those).

@@ -18,7 +18,8 @@ import pytest
 from PIL import Image
 from sqlalchemy import create_engine, inspect
 
-from src.producers.names import ARTIFACTS, FILES, makers
+from src.producers import registry
+from src.producers.names import ARTIFACTS, FILES, PRODUCERS, makers
 from tests.derived import saved
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _ingest_with, _row, _sha, _state, _want
@@ -94,6 +95,28 @@ def test_a_lineage_by_name_leaves_nothing_due(env, artifact):
     assert _due(lib, artifact) == []
     assert _counts(lib, artifact)["current"] == 1
     assert _row(lib, clip, artifact).producer == {"vision": "vision", "ocr": "ocr", "clip": "clip"}[artifact]
+
+
+@pytest.mark.parametrize("artifact, producer", sorted(PRODUCERS))
+def test_each_producer_by_name_is_kept_as_today_s_and_current(env, artifact, producer):
+    # Every machine write goes through require_lineage, then lineage.record: a name kept as anything but
+    # today's id would be an unknown producer's, stale, and made again.
+    from sqlmodel import Session
+
+    from src.server.api.routers.producers import require_lineage
+    from src.server.database import get_engine_for_url
+    from src.server.repository import lineage
+
+    lib = _library(env, f"NamesEach_{artifact}")
+    sha = _sha()
+    media = "image" if "image" in registry()[artifact].media else "video"
+    clip = _ingest_with(lib, "a.jpg" if media == "image" else "a.mov", sha, media_type=media)
+    named = _named(lib, artifact, sha)
+    assert require_lineage(named, artifact)["producer"] == producer
+    with Session(get_engine_for_url(env[-1])) as session:
+        lineage.record(session, clip, artifact, named)
+    assert _row(lib, clip, artifact).producer == producer
+    assert _state(lib, clip, artifact) == "current"
 
 
 def test_a_model_id_is_never_a_name(env):

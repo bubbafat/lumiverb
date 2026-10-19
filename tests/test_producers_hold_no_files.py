@@ -76,6 +76,24 @@ def test_only_a_producer_that_reads_the_storage_asks_for_originals():
     assert {a for a in asking if not PRODUCERS[a].storage} == set()
 
 
+def test_each_work_asks_its_inputs_only_for_what_its_reads_name():
+    # ADR-024: the runner refuses the rest at a job (runner._ProducerInputs); this finds a drift in the suite first.
+    from src.producers.names import ORIGINAL
+
+    handed = {**runner._INPUT_NAMES, "original": ORIGINAL, "originals": ORIGINAL}
+    checked = set()
+    for path in _sources():
+        artifact = path.relative_to(PRODUCERS_DIR).parts[0]
+        if artifact not in PRODUCERS:
+            continue
+        code = "\n".join(line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines())
+        for asked in re.findall(r"\binputs\.(\w+)\(", code):
+            if asked in handed:
+                assert handed[asked] in PRODUCERS[artifact].reads, (artifact, asked, PRODUCERS[artifact].reads)
+                checked.add(artifact)
+    assert {"clip", "probe", "scenes", "capture"} <= checked, "the check finds the ones that ask"
+
+
 class _Asks(runner.Work):
     def make(self, clip: dict) -> None:
         with self.inputs.original(clip):
