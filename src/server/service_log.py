@@ -40,6 +40,7 @@ Level = Literal["error", "warning", "info"]
 UNITS = {
     "lumiverb-api.service": "api",
     "lumiverb-scheduler.service": "scheduler",
+    "lumiverb-plugins.service": "plugins",  # the plug-in runner and each plug-in's lines (ADR-023)
     "lumiverb-worker.service": "scheduler",  # what the scheduler replaced
     "lumiverb-quickwit.service": "quickwit",  # gone (ADR-019): its old lines
     "lumiverb-upkeep.service": "upkeep",

@@ -193,9 +193,9 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
                     cwd: Path = APP_DIR, config_dir: Path | None = None, env_file: Path | None = None,
                     log_file: Path | None = None) -> list[Child]:
     """What the env file names to run (PostgreSQL, nginx), then the
-    API and the scheduler (once `migrated`), with a Linux install's units'
-    environment, restart delays and stop times (deploy-api.sh). They stop in
-    reverse: the scheduler first, PostgreSQL last. The scheduler never reads
+    API, the scheduler and the plug-in runner (once `migrated`), with a Linux
+    install's units' environment, restart delays and stop times
+    (deploy-api.sh). They stop in reverse: the plug-ins first, PostgreSQL last. The scheduler never reads
     the install's own settings (config_dir: the env file's folder, its secrets).
     The API is told which env file is the install's (env_file), to say how to
     restore a backup, and where the service's log is (log_file: launchd's, for
@@ -249,7 +249,15 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         restart_after=30, stop_within=40, term_main_only=True, empty_first=data / "worker-tmp",
         start_after=migrated,
     )
-    return [*started_first, api, scheduler]
+    # Every installed plug-in, a process of its own (ADR-023): the runner reads what's installed from the
+    # control database, and what it starts gets none of Lumiverb's settings. It stops them within 10 s.
+    plugins = Child(
+        "plugins",
+        [python, "-m", "src.server.plugin_runner"],
+        without_secrets(base, keep=SCHEDULER_SECRETS), cwd,
+        restart_after=10, stop_within=20, term_main_only=True, start_after=migrated,
+    )
+    return [*started_first, api, scheduler, plugins]
 
 
 def migrate_when_ready(url: str, stop: threading.Event, *, migrate_fn: Callable[[str], int] = migrate,

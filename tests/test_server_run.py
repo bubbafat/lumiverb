@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 @pytest.mark.fast
 def test_the_children_are_linux_s_units(tmp_path):
     env = {"DATA_DIR": str(tmp_path), "API_PORT": "8100", "API_LISTEN_HOST": "0.0.0.0", "ADMIN_KEY": "k"}
-    api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
+    api, scheduler, plugins = cli.server_children(env, python="/py", cwd=tmp_path)
 
     assert api.argv == ["/py", "-m", "uvicorn", "src.server.api.main:app", "--no-access-log",
                         "--host", "0.0.0.0", "--port", "8100", "--workers", "2"]
@@ -48,13 +48,16 @@ def test_the_children_are_linux_s_units(tmp_path):
     assert api.env["PYTHONUNBUFFERED"] == scheduler.env["PYTHONUNBUFFERED"] == "1"
     assert api.env["ADMIN_KEY"] == "k" and "ADMIN_KEY" not in scheduler.env  # each part only its secrets
     assert "LUMIVERB_LOG_FILE" not in api.env, "not launchd's: started from a terminal"
+    assert plugins.argv == ["/py", "-m", "src.server.plugin_runner"]
+    assert (plugins.restart_after, plugins.stop_within, plugins.term_main_only) == (10, 20, True)
+    assert "ADMIN_KEY" not in plugins.env and plugins.env["PYTHONUNBUFFERED"] == "1"
 
 
 @pytest.mark.fast
 def test_the_api_is_told_where_launchds_log_is(tmp_path):
     # Admin › Logs reads it (src/server/service_log.py); the scheduler needn't.
     log_file = tmp_path / "lumiverb.log"
-    api, scheduler = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path, log_file=log_file)
+    api, scheduler, _ = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path, log_file=log_file)
     assert api.env["LUMIVERB_LOG_FILE"] == str(log_file)
     assert "LUMIVERB_LOG_FILE" not in scheduler.env
 
@@ -67,9 +70,9 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
            # An older install's env file names Quickwit: never started (ADR-019: search is in PostgreSQL).
            "QUICKWIT_BIN": "/qw/quickwit", "QUICKWIT_CONFIG": "/etc/quickwit.yaml"}
     children = cli.server_children(env, migrated=migrated, python="/py", cwd=tmp_path)
-    # Stopped in reverse: the scheduler first, PostgreSQL (its clients gone) last.
-    assert [c.name for c in children] == ["postgres", "nginx", "api", "scheduler"]
-    postgres, nginx, api, scheduler = children
+    # Stopped in reverse: the plug-ins first, PostgreSQL (its clients gone) last.
+    assert [c.name for c in children] == ["postgres", "nginx", "api", "scheduler", "plugins"]
+    postgres, nginx, api, scheduler, plugins = children
     assert postgres.argv == ["/pg/bin/postgres", "-D", str(tmp_path / "postgres"), "-p", "6468",
                              "-c", "listen_addresses=127.0.0.1", "-c", "unix_socket_directories="]
     assert postgres.term_main_only, "the postmaster stops its own backends"
@@ -77,7 +80,7 @@ def test_what_the_env_file_names_runs_first_and_the_api_waits_for_migrations(tmp
     assert postgres.env["LC_ALL"] == "C", "macOS's postmaster won't start without a locale"
     assert nginx.argv == ["/nginx/nginx", "-p", f"{tmp_path / 'nginx'}/", "-c", "/etc/nginx.conf", "-e", "stderr"]
     assert all(c.start_after is None for c in (postgres, nginx))
-    assert api.start_after is migrated and scheduler.start_after is migrated
+    assert api.start_after is migrated and scheduler.start_after is migrated and plugins.start_after is migrated
 
 
 @pytest.mark.fast
@@ -87,12 +90,14 @@ def test_each_part_gets_only_the_secrets_it_needs(tmp_path):
                "ADMIN_KEY": "a", "API_SECRET_KEY": "b", "JWT_SECRET": "c", "SMTP_PASSWORD": "d"}
     env = {"DATA_DIR": str(tmp_path), "PG_BIN": "/pg/bin", "NGINX_BIN": "/n", "NGINX_CONFIG": "/c",
            "HOME": "/Users/x", "PATH": "/usr/bin", **secrets}
-    postgres, nginx, api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
+    postgres, nginx, api, scheduler, plugins = cli.server_children(env, python="/py", cwd=tmp_path)
     for child in (postgres, nginx):
         assert not set(secrets) & set(child.env), child.name
         assert (child.env["HOME"], child.env["PATH"]) == ("/Users/x", "/usr/bin")
     # It reads the database, no more (the template: the server's settings require it, the same credentials).
     assert set(secrets) & set(scheduler.env) == {"CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE"}
+    # The plug-in runner reads what's installed: the same, and it drops them before it starts a plug-in.
+    assert set(secrets) & set(plugins.env) == {"CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE"}
     assert set(secrets) <= set(api.env)  # it signs people in, checks keys, sends mail
     assert postgres.argv[postgres.argv.index("-p") + 1] == "6468"  # its port, from the URL it isn't given
 
@@ -159,18 +164,18 @@ def test_stopping_everything_fits_in_the_formula_s_stop_timeout(tmp_path):
 
 @pytest.mark.fast
 def test_which_folders_the_scheduler_reads_is_the_env_file_s_never_assumed(tmp_path):
-    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
+    *_, scheduler, _ = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
     assert "LUMIVERB_ROOT_MAP" not in scheduler.env, "no map: it reads nothing"
     local = '{"/": "/"}'
-    *_, scheduler = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_ROOT_MAP": local},
-                                        python="/py", cwd=tmp_path)
+    *_, scheduler, _ = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_ROOT_MAP": local},
+                                           python="/py", cwd=tmp_path)
     assert scheduler.env["LUMIVERB_ROOT_MAP"] == local
 
 
 @pytest.mark.fast
 def test_the_scheduler_never_reads_the_install_s_settings(tmp_path):
     env = {"DATA_DIR": str(tmp_path), "LUMIVERB_REFUSED_ROOTS": '["/elsewhere"]'}
-    *_, scheduler = cli.server_children(env, python="/py", cwd=tmp_path, config_dir=Path("/opt/homebrew/etc/lumiverb"))
+    *_, scheduler, _ = cli.server_children(env, python="/py", cwd=tmp_path, config_dir=Path("/opt/homebrew/etc/lumiverb"))
     assert json.loads(scheduler.env["LUMIVERB_REFUSED_ROOTS"]) == ["/elsewhere", "/opt/homebrew/etc/lumiverb"]
 
 
@@ -186,16 +191,16 @@ def test_refused_folders_it_can_t_read_stop_it_before_anything_starts(tmp_path, 
 
 
 @pytest.mark.fast
-def test_nothing_named_is_the_api_and_the_scheduler_only(tmp_path):
+def test_nothing_named_is_the_api_the_scheduler_and_the_plug_ins_only(tmp_path):
     assert [c.name for c in cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)] == [
-        "api", "scheduler"]
+        "api", "scheduler", "plugins"]
 
 
 @pytest.mark.fast
 def test_api_defaults_and_workers_setting(tmp_path):
-    api, _ = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
+    api, *_ = cli.server_children({"DATA_DIR": str(tmp_path)}, python="/py", cwd=tmp_path)
     assert api.argv[-6:] == ["--host", "127.0.0.1", "--port", "8000", "--workers", "2"]
-    api, _ = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_API_WORKERS": "4"}, python="/py", cwd=tmp_path)
+    api, *_ = cli.server_children({"DATA_DIR": str(tmp_path), "LUMIVERB_API_WORKERS": "4"}, python="/py", cwd=tmp_path)
     assert api.argv[-1] == "4"
 
 

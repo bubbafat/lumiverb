@@ -20,6 +20,7 @@ Each acceptance is kept for good (who, which version, when).
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,8 +32,10 @@ from src.plugins.manifest import INPUTS, LOOKUPS
 from src.server import plugin_data
 from src.server.api.dependencies import get_tenant_session, require_signed_in, require_tenant_admin
 from src.server.api.errors import ConflictError, DecisionRequiredError
+from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.server.plugin_catalog import Entry, entries, find
+from src.server.plugin_runner import STATES, read_state
 from src.server.repository.control_plane import UserRepository
 from src.server.repository.plugins import ON, PluginRepository, state_of
 from src.shared.utils import utcnow
@@ -74,6 +77,21 @@ class DataOut(BaseModel):
     ready_at: datetime | None = None
 
 
+class RunningOut(BaseModel):
+    """What the plug-in runner last said of an installed one (ADR-023): starting, ready, preparing (done of
+    total, detail), failing (it says it can't work: why), restarting (it stopped: why; started again soon),
+    stopped (left stopped: why), or not_running (the runner itself isn't, or hasn't started it yet)."""
+
+    state: Literal["starting", "ready", "preparing", "failing", "restarting", "stopped", "not_running"]
+    why: str | None = None
+    detail: str | None = None
+    done: int | None = None
+    total: int | None = None
+    since: datetime | None = None
+    memory_mb: int | None = None  # what it uses, as last seen
+    restarts: int = 0
+
+
 class DownloadOut(BaseModel):
     url: str
     title: str
@@ -105,6 +123,8 @@ class PluginOut(BaseModel):
     answers: list[str] = Field(default_factory=list)
     downloads: list[DownloadOut] = Field(default_factory=list)
     internet: bool = False
+    # An installed one's process, as the runner last said (None for Lumiverb's own).
+    running: RunningOut | None = None
 
 
 class PluginList(BaseModel):
@@ -132,7 +152,25 @@ def _email(user_id: str | None) -> str | None:
         return user.email if user else None
 
 
-def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool) -> PluginOut:
+NOT_RUNNING = "The plug-in runner isn't running"
+
+
+def _running(plugin_id: str, said: dict | None) -> RunningOut:
+    mine = (said or {}).get(plugin_id)
+    if not isinstance(mine, dict) or mine.get("state") not in STATES:
+        return RunningOut(state="not_running", why=NOT_RUNNING if said is None else "Not started yet")
+    try:
+        return RunningOut(**{k: mine.get(k) for k in RunningOut.model_fields if mine.get(k) is not None})
+    except ValueError:
+        return RunningOut(state="not_running", why="What the runner said isn't readable")
+
+
+def _said() -> dict | None:
+    return read_state(Path(get_settings().data_dir))
+
+
+def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool,
+         said: dict | None = None) -> PluginOut:
     spec, installed = entry.spec, entry.installed
     state = state_of(spec, row, installed.default if installed else None)
     shown = None
@@ -157,7 +195,7 @@ def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool) 
             "reads": [INPUTS[i] for i in (m.work.inputs if m.work else ())],
             "answers": [LOOKUPS[name] for name in m.lookups],
             "downloads": [DownloadOut(url=d.url, title=d.title, about_mb=d.about_mb) for d in m.downloads],
-            "internet": m.internet})
+            "internet": m.internet, "running": _running(spec.plugin_id, said)})
     return out
 
 
@@ -182,8 +220,9 @@ def list_plugins(
     """Every plug-in, its state in this account and what turning it on asks."""
     repo = PluginRepository(session)
     rows, accepted = repo.rows(), repo.accepted()
+    said = _said()
     return PluginList(plugins=[_out(e, rows.get(e.spec.plugin_id), accepted.get(e.spec.plugin_id),
-                                    admin=_admin(request)) for e in entries()])
+                                    admin=_admin(request), said=said) for e in entries()])
 
 
 @router.put("/{plugin_id}", response_model=PluginOut, dependencies=[Depends(require_tenant_admin)])
@@ -225,4 +264,4 @@ def set_plugin(
     session.commit()
     if body.enabled and entry.installed is None:
         plugin_data.ensure(plugin_id, retry_now=True)
-    return _out(entry, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True)
+    return _out(entry, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True, said=_said())

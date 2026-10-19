@@ -149,6 +149,11 @@ if systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1; then
   systemctl stop lumiverb-scheduler
   ok "Scheduler stopped for the migrations"
 fi
+# The plug-in runner too: it reads what's installed from the control database.
+if systemctl is-enabled lumiverb-plugins >/dev/null 2>&1; then
+  systemctl stop lumiverb-plugins
+  ok "Plug-in runner stopped for the migrations"
+fi
 
 DB_URL="$(grep '^CONTROL_PLANE_DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)"
 [[ -n "$DB_URL" ]] || fail "CONTROL_PLANE_DATABASE_URL not found in ${ENV_FILE}"
@@ -333,6 +338,56 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "Installing the plug-in runner"
+DATA_DIR="$(grep '^DATA_DIR=' "$ENV_FILE" | cut -d= -f2- || true)"
+if [[ -n "$DATA_DIR" ]]; then
+  mkdir -p "$DATA_DIR"/plugins
+  chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/plugins
+  # Every plug-in the server admin installs (ADR-023), a process of its own:
+  # the runner reads what's installed from the control database, and what it
+  # starts gets none of the env file's settings, runs below the API and the
+  # scheduler, and writes only its own folder (DATA_DIR/plugins).
+  # Rewritten each update: everything it needs is known here.
+  cat > /etc/systemd/system/lumiverb-plugins.service <<UNIT
+[Unit]
+Description=Lumiverb plug-ins (each installed plug-in, a process of its own)
+After=network-online.target lumiverb-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SVC_USER}
+Group=${SVC_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=${SVC_HOME}
+ExecStart=${APP_DIR}/.venv/bin/python -m src.server.plugin_runner
+Restart=always
+RestartSec=10s
+# Only the runner hears the stop: it stops its plug-ins within 10 s; what's
+# left is killed at the end.
+KillMode=mixed
+TimeoutStopSec=20s
+# Every plug-in at once, at most (each is held to its own memory_mb by the runner).
+MemoryMax=4G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${DATA_DIR}/plugins
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable lumiverb-plugins >/dev/null 2>&1
+  ok "lumiverb-plugins installed"
+else
+  warn "No DATA_DIR in ${ENV_FILE}: no plug-in runner (plug-ins keep their folders on the data disk)"
+fi
+
+# ---------------------------------------------------------------------------
 step "Installing upkeep timers"
 cat > /etc/systemd/system/lumiverb-upkeep.service <<UPKEEP_SVC
 [Unit]
@@ -431,7 +486,9 @@ for i in {1..10}; do
   sleep 1
 done
 [[ "$ANSWERS" == true ]] || fail "API server not responding after 10 s — check: journalctl -u lumiverb-api -n 50"
-# The scheduler last, once the API answers: its jobs save through the API.
+# The plug-ins once the API answers (its migrations are done), the scheduler
+# last: its jobs save through the API.
+systemctl is-enabled lumiverb-plugins >/dev/null 2>&1 && systemctl restart lumiverb-plugins
 systemctl is-enabled lumiverb-scheduler >/dev/null 2>&1 && systemctl start lumiverb-scheduler
 
 systemctl status --no-pager lumiverb-api || true

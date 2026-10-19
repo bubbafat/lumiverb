@@ -91,10 +91,11 @@ def test_neither_the_api_nor_the_scheduler_gets_the_superuser(env_file, tmp_path
     env = {**roles.with_app_role(env_file, read_env_file(env_file), password="new-pw", now=NOW),
            "DATA_DIR": str(tmp_path)}
     env.pop("PG_BIN")
-    api, scheduler = cli.server_children(env, python="/py", cwd=tmp_path)
-    for child in (api, scheduler):
+    children = cli.server_children(env, python="/py", cwd=tmp_path)
+    for child in children:
         assert roles.SUPERUSER_URL not in child.env
         assert all("old-pw" not in value for value in child.env.values()), child.name
+    api = next(c for c in children if c.name == "api")
     assert make_url(api.env["CONTROL_PLANE_DATABASE_URL"]).username == roles.APP_ROLE
 
 

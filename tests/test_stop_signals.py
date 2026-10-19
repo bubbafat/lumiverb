@@ -94,7 +94,9 @@ def test_a_stop_signal_sets_the_event():
 
 
 def test_every_stop_signal_goes_through_it():
+    # A signal ignored, not handled, sets nothing (the plug-in launcher's SIGXFSZ: a write past its size fails).
     handlers = [f"{path.relative_to(REPO)}:{n}" for path in (REPO / "src").rglob("*.py")
                 if path.name != "stop_signals.py"
-                for n, line in enumerate(path.read_text(errors="ignore").splitlines(), 1) if "signal.signal(" in line]
+                for n, line in enumerate(path.read_text(errors="ignore").splitlines(), 1)
+                if "signal.signal(" in line and not ("signal.SIG_IGN)" in line and "SIGXFSZ" in line)]
     assert handlers == []
