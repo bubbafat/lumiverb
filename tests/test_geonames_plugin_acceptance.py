@@ -24,6 +24,10 @@ files (but for a place at no real point, which it leaves out), every answer
 passing Lumiverb's checks; killed, it's started again with its list and
 fetches nothing; a file missing from the mirror fails naming it; a download
 cut off is fetched again, the finished ones aren't.
+
+Part 3, the switch-over: what the built-in's producer could be (paused and
+resumed on the machine, `lumiverb-server pause|resume`), the plug-in's work
+can be.
 """
 
 from __future__ import annotations
@@ -708,3 +712,35 @@ def test_part2_cut_off_mid_download_it_keeps_what_it_finished(today, site, short
         assert part == [], f"no partial download left: {part}"
     finally:
         g.stop()
+
+
+
+# ---------------------------------------------------------------------------
+# Part 3: the switch-over
+# ---------------------------------------------------------------------------
+
+
+def test_part3_place_names_work_can_be_paused_and_resumed_on_the_machine(install, control, tmp_path):  # noqa: F811
+    """`lumiverb-server pause|resume <producer>` (on the machine, no key) takes the GeoNames plug-in's work, as it
+    took the built-in Place names' (place): the switch-over carries a pause of place over to plugin_geonames, so
+    whoever paused it there must be able to resume it there. Run as the server admin runs it: a process of its
+    own, which reads what's installed itself."""
+    client, robert, tenant_id = install
+    data = tmp_path / "data"
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={data}\n")
+    command = Path(sys.executable).with_name("lumiverb-server")
+    said = subprocess.run([str(command), "plugins", "install", str(GEONAMES), "--on", "--yes", "--env", str(env)],
+                          capture_output=True, text=True, timeout=120)
+    assert said.returncode == 0, said.stdout + said.stderr
+
+    def pauses() -> set[tuple[str, str]]:
+        with get_tenant_session(tenant_id) as session:
+            return {tuple(r) for r in session.execute(text("SELECT target, scope FROM producer_pauses"))}
+
+    for verb in ("pause", "resume"):
+        said = subprocess.run([str(command), verb, "plugin_geonames", "--env", str(env)], capture_output=True, text=True,
+                              timeout=120)
+        assert said.returncode == 0, f"{verb}: {said.stdout}{said.stderr}"
+        mine = {scope for target, scope in pauses() if target == "plugin_geonames"}
+        assert ("work" in mine) if verb == "pause" else (mine == set()), f"after {verb}: {pauses()}"
