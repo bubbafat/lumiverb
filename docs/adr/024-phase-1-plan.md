@@ -334,6 +334,8 @@ Robert's "migration first" is part 3. Before it come the two parts that make the
   3. point Homebrew's opt link at part 2's kept keg (the service runs `/opt/homebrew/opt/lumiverb/bin/lumiverb-server run`, and every upgrade keeps the old keg), then `brew pin lumiverb`, so the next `brew upgrade` doesn't move it back. The coordinator writes this step's exact commands from Homebrew's own linking code before the part ships, and the release notes mark them not rehearsed: it's never tried on Robert's install, and no throwaway uses Homebrew;
   4. `brew services start lumiverb`, then the gate: counts identical, nothing remade.
 
+  Step 3 needs part 2's keg still in the Cellar, and by default Homebrew doesn't keep it. `brew upgrade` uninstalls the upgraded formula's old versions, and a fuller cleanup runs every 30 days, unless `HOMEBREW_NO_INSTALL_CLEANUP` or `HOMEBREW_NO_CLEANUP_FORMULAE=lumiverb` is set. So the upgrades to parts 3 and 4, and every `brew` command on Robert's Mac until part 5 has shipped, run with `HOMEBREW_NO_CLEANUP_FORMULAE=lumiverb`. The gate checks that the previous keg is still in the Cellar after the upgrade (`brew list --versions lumiverb`). If it isn't, restoring the backup is the only rollback.
+
   Or restore the backup taken before the upgrade (`backups.py`'s before an upgrade), which loses what was made since.
 
   Before the part ships, the tester rehearses every step but Homebrew's for real, on throwaway installs (which run from checkouts):
@@ -433,5 +435,5 @@ Every test calls the real registry, producers, migrations and routes (none reimp
 | Who | Says |
 |-----|------|
 | geonames-builder | Proposed, for (a) |
-| geonames-reviewer | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), two nits folded in after it (text only): part 4's migration's own mapping, the caches fetched again at part 2 |
-| geonames-tester | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), its line folded in after it (text only): the rollback rehearsed on throwaways but for Homebrew's step, which the coordinator writes |
+| geonames-reviewer | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), two nits folded in after it (text only): part 4's migration's own mapping, the caches fetched again at part 2; AGREE on 7ccc1d21, its line folded in after it (text only): every `brew` command until part 5 with `HOMEBREW_NO_CLEANUP_FORMULAE=lumiverb`, and the previous keg checked by the gate |
+| geonames-tester | AGREE on 2f4c896c (the plan for (b)); AGREE on 4d581986 (for (a)), its line folded in after it (text only): the rollback rehearsed on throwaways but for Homebrew's step, which the coordinator writes; AGREE on 7ccc1d21, its caution folded in after it (text only): the previous keg kept through the upgrade, checked by the gate |
