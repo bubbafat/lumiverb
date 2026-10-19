@@ -49,7 +49,7 @@ def test_other_devices_are_served_plain_http_with_nothing_to_set_up(tmp_path):
     network.write_listen_file(tmp_path, 6464, OTHERS, tls_port=6465, served=_served(tmp_path))
     lines = network.listen_file(tmp_path).read_text()
     assert "listen 6464 default_server;\nlisten [::]:6464 default_server;\n" in lines
-    assert "ssl" not in lines and "301" not in lines and "lumiverb-ca.crt" not in lines
+    assert "ssl" not in lines and "return 301" not in lines and "lumiverb-ca.crt" not in lines
     assert not list(tmp_path.glob(".network.json*")), "written whole, through a file of its own"
 
 
@@ -65,7 +65,8 @@ def test_https_beside_plain_http(tmp_path):
                  f"ssl_certificate_key {served.key};", "ssl_protocols TLSv1.2 TLSv1.3;",
                  f"sha256 {served.fingerprint}", f"alias {tls.ca_certificate(tmp_path)};"):
         assert line in lines, line
-    assert "301" not in lines, "plain HTTP stays every device's"
+    # The redirect itself: the certificate's fingerprint, random hex, can hold "301".
+    assert "return 301" not in lines, "plain HTTP stays every device's"
     assert network.write_listen_file(tmp_path, 6464, WITH_HTTPS, tls_port=6465, served=served,
                                      ca=tls.ca_certificate(tmp_path)) is False, "unchanged: nothing to restart"
 
@@ -115,7 +116,7 @@ def test_without_https_other_devices_keep_plain_http(tmp_path):
     network.set_choice(tmp_path, HTTPS_ALONE)
     network.without_https(tmp_path, DEFAULTS)
     lines = network.listen_file(tmp_path).read_text()
-    assert "listen 6464 default_server;" in lines and "ssl" not in lines and "301" not in lines
+    assert "listen 6464 default_server;" in lines and "ssl" not in lines and "return 301" not in lines
     assert network.choice(tmp_path) == HTTPS_ALONE, "the choice kept"
 
 
