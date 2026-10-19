@@ -44,6 +44,7 @@ from src.server.api.routers.libraries import CheckedIn
 from src.server.api.errors import ConflictError
 from src.server.api.limits import MAX_IDS
 from src.server.api.library_access import edited, names, seen
+from src.producers import ADDED_PREFIX
 from src.server.reader_work import FROM_ORIGINALS
 from src.server.repository import lineage
 from src.shared.producers import (
@@ -364,14 +365,15 @@ def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> Prod
 def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict[str, Any]) -> ProducerItem:
     p = PRODUCERS[artifact]
     values = {**want["settings"], **want.get("notches", {}), **uses}  # a notch as chosen, not what it stands for
+    installed = bool(p.plugin) and artifact.startswith(ADDED_PREFIX)  # an installed plug-in's work
     job_wait = waits.get(p.job) if p.job else None
     return ProducerItem(
         artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
         fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=values.get(s.key, s.default),
                              default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
-                             advanced=s.advanced, fixed=s.fixed or None, remakes=s.remakes,
-                             choices=list(s.choices))
+                             advanced=s.advanced, fixed=(SET_IN_PLUGINS if installed else s.fixed) or None,
+                             remakes=s.remakes, choices=list(s.choices))
                 for s in p.settings],
         scheduled=p.scheduled, redoable=lineage.redoable(artifact), why_not=lineage.CANT_REDO.get(artifact),
         waiting=job_wait.message if job_wait else None, unit=p.unit, level=want.get("level"),
@@ -382,10 +384,52 @@ def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict
 def _plugin(plugin_id: str) -> dict[str, Any] | None:
     """The plug-in a producer belongs to, for its row: its id and title (on: whether it's on, added where
     the account is at hand)."""
-    from src.plugins import plugin
+    from src.server.plugin_catalog import find
 
-    spec = plugin(plugin_id) if plugin_id else None
-    return {"plugin_id": spec.plugin_id, "title": spec.title} if spec else None
+    entry = find(plugin_id) if plugin_id else None
+    return {"plugin_id": entry.spec.plugin_id, "title": entry.spec.title} if entry else None
+
+
+# Why an installed plug-in's work's settings aren't changed on its row: they're the plug-in's.
+SET_IN_PLUGINS = "Set in Settings › Plug-ins"
+
+
+def what_becomes_of_the_made(session: Session, artifact: str, before: dict[str, Any], after: dict[str, Any],
+                             redo: bool | None, user_id: str | None) -> None:
+    """New settings for a producer (what it's made with, before and after: lineage.desired) ask what
+    becomes of what the old ones made (ADR-018 decision 6): 409 redo_on_change with the count (question
+    "remake"), the session rolled back, until redo says. True remakes them too, after everything else (its
+    redo resumed if it was stopped); False is new files only: they stay as they are, its redo stopped by
+    this person (lineage.keep_made), until someone remakes them. Nothing made yet: nothing asked, its redo
+    resumed. Settings that make nothing another way ask nothing. Doesn't commit."""
+    from src.server.api.errors import DecisionRequiredError
+
+    if after["settings_hash"] == before["settings_hash"]:
+        return
+    p = PRODUCERS[artifact]
+    clips = lineage.would_redo(session, artifact, after)
+    if clips and redo is None:
+        paused = lineage.pauses(session)
+        stopped, held = artifact in paused.redo, artifact in paused.work
+        session.rollback()
+        also = " and ".join(PRODUCERS[a].title.lower() for a in lineage.made_from(artifact)[1:])
+        one = clips == 1
+        raise DecisionRequiredError(
+            "redo_on_change",
+            f"{clips:,} clip{'' if one else 's'} of {p.title.lower()} {'was' if one else 'were'} made with the "
+            "old settings. New files only, and they stay as they are until you remake them; or remake them "
+            "too" + (f", and their {also} with them" if also else "") + ", after everything else: until "
+            "that's done, results mix the old settings and the new."
+            + (f" {p.redo_note}" if p.redo_note else "")
+            + (" Its stopped redo starts again if they're remade." if stopped else "")
+            + (" It's paused: none of it is made until it's resumed." if held else ""),
+            {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
+             "question": "remake", "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
+        )
+    if clips and redo is False:
+        lineage.keep_made(session, [artifact], by=user_id)
+    else:
+        lineage.resume(session, [artifact], lineage.REDO)
 
 
 class SettingsIn(BaseModel):
@@ -420,9 +464,11 @@ def set_settings(
     regroup runs (the face groups are worked out again; location guesses
     are checked again)."""
     from src.producers import load
-    from src.server.api.errors import DecisionRequiredError, InvalidChoiceError
+    from src.server.api.errors import InvalidChoiceError
 
     p = producer_or_404(artifact)
+    if p.plugin and artifact.startswith(ADDED_PREFIX):
+        raise InvalidChoiceError("setting_fixed", f"{p.title}: {SET_IN_PLUGINS}", {"plugin_id": p.plugin})
     lineage.lock_settings(session, artifact)  # one change at a time per producer
     values = dict(lineage.overrides(session, artifact))
     for key, value in body.settings.items():
@@ -443,30 +489,7 @@ def set_settings(
     before, used = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
     lineage.set_overrides(session, artifact, values)
     after, uses = lineage.desired(session, artifact, models), lineage.uses(session, artifact)
-    if after["settings_hash"] != before["settings_hash"]:
-        clips = lineage.would_redo(session, artifact, after)
-        if clips and body.redo is None:
-            paused = lineage.pauses(session)
-            stopped, held = artifact in paused.redo, artifact in paused.work
-            session.rollback()
-            also = " and ".join(PRODUCERS[a].title.lower() for a in lineage.made_from(artifact)[1:])
-            one = clips == 1
-            raise DecisionRequiredError(
-                "redo_on_change",
-                f"{clips:,} clip{'' if one else 's'} of {p.title.lower()} {'was' if one else 'were'} made with the "
-                "old settings. New files only, and they stay as they are until you remake them; or remake them "
-                "too" + (f", and their {also} with them" if also else "") + ", after everything else: until "
-                "that's done, results mix the old settings and the new."
-                + (f" {p.redo_note}" if p.redo_note else "")
-                + (" Its stopped redo starts again if they're remade." if stopped else "")
-                + (" It's paused: none of it is made until it's resumed." if held else ""),
-                {"artifact": artifact, "clips": clips, "redo_stopped": stopped, "paused": held,
-                 "question": "remake", "artifacts": [{"artifact": artifact, "title": p.title, "clips": clips}]},
-            )
-        if clips and body.redo is False:
-            lineage.keep_made(session, [artifact], by=user_id)
-        else:
-            lineage.resume(session, [artifact], lineage.REDO)
+    what_becomes_of_the_made(session, artifact, before, after, body.redo, user_id)
     if uses != used and p.regroup:
         load(p.regroup)(session, used, uses)
     session.commit()
@@ -695,6 +718,8 @@ class SchedulerStatus(BaseModel):
     held: list[HeldClips] = Field(default_factory=list)
     # AI jobs whose machines it can't use now, and why (their work isn't handed out).
     ai_waits: dict[str, str] = Field(default_factory=dict)
+    # Installed plug-ins' work whose plug-in isn't running, and why, by artifact (not handed out).
+    plugin_waits: dict[str, str] = Field(default_factory=dict)
     # It has read the account's settings: until then it hands out nothing.
     settings_ready: bool = True
     # Kinds whose last listing failed, and the error (their work isn't handed out).

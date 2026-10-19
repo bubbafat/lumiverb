@@ -6,8 +6,8 @@ Processing needs to say it.
 Robert, Oct 12: work held back with no reason shown is a bug (analysis
 proxies stopped for hours and the page said nothing). Every gate the
 scheduler has is here, and tests/test_no_silent_waits.py holds each one to
-it: what's paused, what a clip is made from, its AI machines, its library's
-storage, a redo stopped by an admin or a new version, the clips the
+it: what's paused, what a clip is made from, its AI machines, its plug-in (an
+installed plug-in's work), its library's storage, a redo stopped by an admin or a new version, the clips the
 scheduler holds back after a try (a scan comes first, or the try couldn't
 finish), failures waiting their turn or given up, and the scheduler itself
 (not running, starting, or unable to list the work). Each library's
@@ -36,6 +36,7 @@ from src.shared.waits import (
     NEEDS,
     NEW_VERSION,
     PAUSED,
+    PLUGIN_DOWN,
     REASONS,
     REDO_STOPPED,
     RETRY_LATER,
@@ -105,6 +106,10 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
             ("unusable", status.ai_waits[p.job]) if live and p.job in status.ai_waits else (None, None))
         if why:
             out.append({"reason": AI_MACHINES, "clips": due, "job": p.job, "why": why, "message": message})
+    # An installed plug-in's work: the scheduler hands none out while its plug-in isn't running.
+    plugin_down = live and artifact in status.plugin_waits
+    if plugin_down:
+        add(PLUGIN_DOWN, due, message=status.plugin_waits[artifact])
     for need in p.needs:
         add(NEEDS, counts[need]["missing"] if need in counts else 0, artifact=need,
             paused=is_paused(need, paused, library_id))
@@ -134,11 +139,13 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
         scan_paused = False  # a library a scan comes first in has its scans paused
         for row in status.held:
             if row.kind == p.kind and shown(row.library_id):
-                why = row.why if row.why in (SCAN, HELD) else HELD  # a code it doesn't know: held
+                why = row.why if row.why in (SCAN, HELD, PLUGIN_DOWN) else HELD  # a code it doesn't know: held
                 held[why] = held.get(why, 0) + row.clips
                 scan_paused |= why == SCAN and row.clips > 0 and paused.scans_paused(row.library_id or None)
         add(SCAN, held.get(SCAN, 0), paused=scan_paused)
         add(HELD, held.get(HELD, 0))
+        if not plugin_down:  # a job found it down (or it didn't answer): counted once, above when it still is
+            add(PLUGIN_DOWN, held.get(PLUGIN_DOWN, 0))
     add(RETRY_LATER, c["retrying"])
     add(GIVEN_UP, c["given_up"])
     return sorted(out, key=lambda w: _ORDER[w["reason"]])

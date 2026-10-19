@@ -39,6 +39,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers import ADDED_PREFIX
 from src.producers.live import LiveMap, LiveSet, Made
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
@@ -60,8 +61,9 @@ from src.shared.utils import utcnow
 # (SQL on active_assets a; one made in parts exists once every part does).
 # Each producer declares both (src/producers/<artifact>/).
 def _applies(p) -> str:
-    """A producer's applies, and for one a plug-in brings, only while that plug-in is on in the account."""
-    if not p.plugin:
+    """A producer's applies, and for one a plug-in of Lumiverb's own brings, only while that plug-in is on
+    in the account (an installed plug-in's work says so in its own: src/server/plugin_producers.py)."""
+    if not p.plugin or p.artifact.startswith(ADDED_PREFIX):
         return p.applies
     from src.server.repository.plugins import on_sql
 
@@ -101,6 +103,13 @@ def account_settings(session: Session, job_models: Mapping[str, str] | None = No
 
 
 def overrides(session: Session, artifact: str) -> dict[str, Any]:
+    """The producer's settings an admin changed. An installed plug-in's work's are its settings the account
+    chose (Settings › Plug-ins, plugin_settings): those that remake are what its lineage holds."""
+    p = PRODUCERS.get(artifact)
+    if p is not None and p.plugin and artifact.startswith(ADDED_PREFIX):
+        from src.server.plugin_settings import ACCOUNT, PluginSettingsRepository
+
+        return PluginSettingsRepository(session, ACCOUNT).get(p.plugin)
     raw = _meta(session, _OVERRIDES.format(artifact))
     try:
         return json.loads(raw) if raw else {}

@@ -24,15 +24,17 @@ def located(coord: str, a: str = "a", loc: str = "l") -> str:
             f" WHEN {loc}.source = 'time' AND {loc}.status = 'applied' THEN {loc}.{coord} END)")
 
 
+# SQL on assets a: it shows a location: a person's, the file's GPS, or an applied guess (never a suggestion).
+SHOWS_LOCATION = ("(a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) OR EXISTS (SELECT 1 FROM asset_location pl"
+                  " WHERE pl.asset_id = a.asset_id AND (pl.source = 'person' OR (pl.source = 'time'"
+                  " AND pl.status = 'applied')))")
+
 # Arithmetic over rows the database hands it: no GPU, no storage (location guesses' pool).
 CPU = Pool("cpu", slots=2)
 
 PRODUCER = ProducerSpec(
     artifact="place", producer="place", version="2", media=ALL, title="Place names", order=125,
-    # A location it shows: a person's, the file's GPS, or an applied guess (never a suggestion).
-    applies=("(a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) OR EXISTS (SELECT 1 FROM asset_location pl"
-             " WHERE pl.asset_id = a.asset_id AND (pl.source = 'person' OR (pl.source = 'time'"
-             " AND pl.status = 'applied')))"),
+    applies=SHOWS_LOCATION,
     # Named from the location it shows now.
     made=("EXISTS (SELECT 1 FROM asset_place ap LEFT JOIN asset_location l ON l.asset_id = ap.asset_id"
           f" WHERE ap.asset_id = a.asset_id AND ap.lat = {located('lat')} AND ap.lon = {located('lon')})"),

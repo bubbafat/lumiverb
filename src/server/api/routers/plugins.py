@@ -39,6 +39,7 @@ from src.plugins.contract import Acknowledgment
 from src.plugins.manifest import INPUTS, LOOKUPS
 from src.server import plugin_data
 from src.server.api.dependencies import (
+    get_current_user_id,
     get_tenant_session,
     require_server_admin,
     require_signed_in,
@@ -52,8 +53,10 @@ from src.server.plugin_client import PluginAnswerError, ask, socket_path
 from src.server.plugin_runner import READY, STATES, read_state
 from src.server.plugin_settings import ACCOUNT, SERVER, PluginSettingsRepository, changed, values
 from src.server.plugin_settings import shown as setting_shown
+from src.server.repository import lineage
 from src.server.repository.control_plane import UserRepository
 from src.server.repository.plugins import ON, PluginRepository, state_of
+from src.shared.producers import PRODUCERS
 from src.shared.utils import utcnow
 
 router = APIRouter(prefix="/v1/plugins", tags=["plugins"])
@@ -177,6 +180,9 @@ class PluginOut(BaseModel):
 class SettingsChange(BaseModel):
     # Each setting it changes: its value, or null for its default (a secret: cleared). Others stay as they are.
     settings: dict[str, int | float | bool | str | None] = Field(max_length=100)
+    # A change of a setting that remakes (an account's): what becomes of what the old settings made, asked
+    # with 409 redo_on_change until this says: true remakes them too, false is new ones only.
+    redo: bool | None = None
 
 
 class PluginList(BaseModel):
@@ -388,13 +394,26 @@ def set_plugin_settings(
     body: SettingsChange,
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
+    user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> PluginOut:
     """An installed plug-in's settings for this account: each one named, a value or null (its default).
-    422 invalid_settings (details.errors by key) for any its schema refuses, or it does."""
+    422 invalid_settings (details.errors by key) for any its schema refuses, or it does. A change of a
+    setting that remakes (its work's) asks what becomes of what the old settings made, as a producer's
+    settings do: 409 redo_on_change with the count until redo says."""
+    from src.server.api.routers.producers import what_becomes_of_the_made
+    from src.server.plugin_producers import artifact_of
+
     entry = _installed(plugin_id)
     repo = PluginSettingsRepository(session, ACCOUNT)
     chosen, unchecked = _check(entry, ACCOUNT, repo.get(plugin_id), body, _server_chosen(plugin_id))
+    artifact = artifact_of(plugin_id)
+    work = artifact in PRODUCERS and entry.installed.manifest.work is not None
+    if work:
+        lineage.lock_settings(session, artifact)  # one change at a time
+        before = lineage.desired(session, artifact)
     repo.save(plugin_id, chosen, by=_by(request), now=utcnow())
+    if work:
+        what_becomes_of_the_made(session, artifact, before, lineage.desired(session, artifact), body.redo, user_id)
     session.commit()
     rows, accepted = PluginRepository(session).rows(), PluginRepository(session).accepted()
     server_admin = _server_admin(request)

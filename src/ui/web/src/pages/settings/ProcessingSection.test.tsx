@@ -843,6 +843,13 @@ describe("ProcessingSection settings", () => {
         .toContain("Part of the Place names (GeoNames) plug-in: off, so nothing is made");
     });
 
+    it("names an installed plug-in whose title says it's one once", async () => {
+      producers = [producer({ artifact: "plugin_example", title: "Example facts", fields: [],
+                              plugin: { plugin_id: "example", title: "Example plug-in", on: true } })];
+      renderSection();
+      expect((await row("Example facts")).textContent).toContain("Part of the Example plug-in.");
+    });
+
     it("counts guesses being checked again apart from missing", async () => {
       producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
                               counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];

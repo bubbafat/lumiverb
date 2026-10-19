@@ -25,6 +25,10 @@ def get_tenant_session(request: Request) -> Generator[Session, None, None]:
     connection_string = getattr(request.state, "connection_string", None)
     if not connection_string:
         raise HTTPException(status_code=500, detail="Tenant context missing")
+    # The producers as installed now: a plug-in's work is one (src/server/plugin_producers.py).
+    from src.server.plugin_producers import keep_current
+
+    keep_current()
     engine = get_engine_for_url(connection_string)
     with Session(engine) as session:
         # Whose database it is, for what's the account's rather than its database's (its AI jobs' models).

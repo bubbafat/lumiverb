@@ -12,6 +12,14 @@ answers:
   POST /v1/settings/check  {"scope", "settings"} -> {"errors": {key: why}}:
                            what only it can know (Lumiverb has checked each
                            value's type, bounds and form already)
+  POST /v1/work            {"settings", "clips": [{"id", <each input it
+                           declares>}]} -> {"clips": {id: {"outputs": {key:
+                           {"text", "url"?} or null}}}}, or for a clip
+                           {"error": {"whose": "clip" or "plugin", "message"}}
+
+Its work gives each clip three facts, from the inputs its manifest declares
+(when it was taken, its metadata): the caption chosen in its settings, when
+it was taken, and its shape.
 
 Its output goes to Lumiverb's log, a line at a time, named "plugin example".
 
@@ -19,10 +27,47 @@ Install it on the machine:
   lumiverb-server plugins install <this folder> --off
 """
 
+from __future__ import annotations  # it runs on whatever python3 the machine has (a Mac's is 3.9)
+
 import json
 import os
 import socketserver
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
+
+PARTS = ((5, "night"), (12, "morning"), (17, "afternoon"), (21, "evening"), (24, "night"))
+
+
+def taken(when: dict) -> str:
+    """"On a Sunday afternoon in May 2024", in the clip's own time when its offset is known."""
+    at = datetime.fromisoformat(when["utc"].replace("Z", "+00:00"))
+    if when.get("offset_min") is not None:
+        at = at.astimezone(timezone(timedelta(minutes=when["offset_min"])))
+    part = next(name for hour, name in PARTS if at.hour < hour)
+    return f"On a {at:%A} {part} in {at:%B %Y}"
+
+
+def shape(meta: dict) -> str | None:
+    width, height = meta.get("width"), meta.get("height")
+    if not width or not height:
+        return None
+    kind = "Square" if width == height else "Landscape" if width > height else "Portrait"
+    if meta.get("media_type") == "video":
+        seconds = round(meta.get("duration_sec") or 0)
+        return f"{kind} video, {width} × {height}, {seconds // 60}:{seconds % 60:02d}"
+    return f"{kind}, {width} × {height}"
+
+
+def work(settings: dict, clip: dict) -> dict:
+    caption = settings.get("caption") or "Seen by the example"
+    if settings.get("loud"):
+        caption = caption.upper()
+    if settings.get("tag"):
+        caption += f" #{settings['tag']}"
+    made = shape(clip.get("metadata") or {})
+    return {"outputs": {"caption": {"text": caption},
+                        "taken": {"text": taken(clip["capture_time"])} if clip.get("capture_time") else None,
+                        "shape": {"text": made} if made else None}}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -39,8 +84,13 @@ class Handler(BaseHTTPRequestHandler):
             self._answer(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802 — http.server's name
-        length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
-        sent = json.loads(self.rfile.read(length) or b"{}")
+        sent = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path == "/v1/work":
+            settings, clips = sent.get("settings") or {}, sent.get("clips") or []
+            self._answer(200, {"clips": {c["id"]: work(settings, c) for c in clips}})
+            if settings.get("verbose"):
+                print(f"made facts for {len(clips)} clip(s)", flush=True)
+            return
         if self.path != "/v1/settings/check":
             self._answer(404, {"error": "not found"})
             return

@@ -1,9 +1,9 @@
 {
   "id": "example",
-  "version": "1",
+  "version": "2",
   "protocol": 1,
   "title": "Example plug-in",
-  "description": "Lumiverb's example of a plug-in: it does nothing with your photos and videos yet, but shows how a plug-in runs, says what it reads, and how its settings look and are checked.",
+  "description": "Lumiverb's example of a plug-in: it adds a few facts to each photo and video (a caption you choose, when it was taken, its shape) and shows how a plug-in runs, says what it reads, and how its settings look and are checked.",
   "author": "Lumiverb",
   "homepage": "https://github.com/bubbafat/lumiverb/blob/main/docs/adr/023-plug-in-architecture.md",
   "run": ["python3", "example.py"],
@@ -11,15 +11,15 @@
   "disk_mb": 10,
   "check_settings": true,
   "settings": [
-    {"key": "caption", "type": "text", "default": "Seen by the example", "max_length": 60,
-     "label": "Caption", "help": "A line it would show with each clip. Anything but \"nothing\": the plug-in checks that itself."},
+    {"key": "caption", "type": "text", "default": "Seen by the example", "max_length": 60, "remakes": true,
+     "label": "Caption", "help": "The caption it gives each clip. Anything but \"nothing\": the plug-in checks that itself. Changing it asks what becomes of the captions already made."},
     {"key": "tag", "type": "text", "default": "", "pattern": "^[a-z0-9-]*$", "max_length": 30,
      "label": "Tag", "help": "Lowercase letters, digits and dashes, or nothing. Lumiverb checks the form before saving."},
     {"key": "radius_km", "type": "int", "default": 25, "minimum": 1, "maximum": 200, "unit": "km",
-     "label": "How far", "help": "A whole number from 1 to 200.", "remakes": true},
+     "label": "How far", "help": "A whole number from 1 to 200."},
     {"key": "confidence", "type": "float", "default": 0.5, "minimum": 0, "maximum": 1,
      "label": "Confidence", "help": "From 0 to 1."},
-    {"key": "loud", "type": "bool", "default": false, "label": "Shout", "help": "Yes or no."},
+    {"key": "loud", "type": "bool", "default": false, "label": "Shout", "help": "Its caption in capitals."},
     {"key": "size", "type": "choice", "default": "medium", "label": "Size", "help": "One of three.",
      "choices": [{"value": "small", "label": "Small"}, {"value": "medium", "label": "Medium"},
                  {"value": "large", "label": "Large"}]},
@@ -27,5 +27,17 @@
      "help": "Folded away under Advanced."},
     {"key": "service_key", "type": "secret", "default": "", "scope": "server", "label": "Service key",
      "help": "The server's, not an account's: only the server admin sees and sets it, and it's never shown again."}
-  ]
+  ],
+  "work": {
+    "title": "Example facts",
+    "version": "1",
+    "media": ["image", "video"],
+    "inputs": ["capture_time", "metadata"],
+    "batch": 100,
+    "outputs": [
+      {"key": "caption", "kind": "fact", "label": "Caption", "searchable": true},
+      {"key": "taken", "kind": "fact", "label": "Taken"},
+      {"key": "shape", "kind": "fact", "label": "Shape"}
+    ]
+  }
 }

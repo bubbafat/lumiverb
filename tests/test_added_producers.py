@@ -15,13 +15,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.producers import registry, use_added
+from src.producers import registry
+from src.producers import use_added as _use_added
 from src.producers.contract import FIND, IMAGE, REDO, AiJob, Pool, ProducerSpec
 from src.server.repository.lineage import Pauses
 
 pytestmark = pytest.mark.fast
 
 NAME = "plugin_example"
+BY = "test"  # what a test adds is its own: the installed plug-ins' come and go apart
+
+
+def use_added(specs) -> bool:
+    return _use_added(specs, by=BY)
 
 
 def _spec(name: str = NAME, **changes) -> ProducerSpec:

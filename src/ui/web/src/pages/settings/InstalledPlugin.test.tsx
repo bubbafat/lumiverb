@@ -61,6 +61,10 @@ beforeEach(() => {
         return json({ error: { code: "invalid_settings", message: "times: Times is from 1 to 5",
                                details: { errors: { times: "Times is from 1 to 5" } } } }, 422);
       }
+      if (settings.times === 4 && (body as { redo?: boolean }).redo === undefined) {
+        return json({ error: { code: "redo_on_change", message: "12 clips of hello were made with the old settings.",
+                               details: { clips: 12, question: "remake" } } }, 409);
+      }
       chosen = { ...chosen, ...settings };
       return json({ ...hello(), unchecked: "Hello isn't running: its own check didn't run" });
     }
@@ -127,7 +131,7 @@ describe("An installed plug-in in Settings › Plug-ins", () => {
     expect((within(form).getByLabelText("Greeting") as HTMLInputElement).value).toBe("Hello");
     const times = within(form).getByLabelText(/Times/) as HTMLInputElement;
     expect([times.type, times.min, times.max, times.step, times.value]).toEqual(["number", "1", "5", "1", "1"]);
-    expect(within(form).getByText("How many times it says it. Changing it makes what it made again.")).toBeTruthy();
+    expect(within(form).getByText("How many times it says it. Changing it asks what becomes of what it made.")).toBeTruthy();
     expect((within(form).getByLabelText("Loud") as HTMLInputElement).type).toBe("checkbox");
     const language = within(form).getByLabelText("Language") as HTMLSelectElement;
     expect(Array.from(language.options).map((o) => o.text)).toEqual(["English", "French"]);
@@ -153,6 +157,19 @@ describe("An installed plug-in in Settings › Plug-ins", () => {
       ["/plugins/hello/settings", { settings: { times: 3, language: "fr" } }],
     ]);
     expect(within(form).queryByText("Times is from 1 to 5")).toBeNull();
+  });
+
+  it("asks what becomes of what it made when a setting that remakes changes, and sends the answer", async () => {
+    renderSection();
+    const form = await screen.findByRole("form", { name: "Hello: its settings" });
+    fireEvent.change(within(form).getByLabelText(/Times/), { target: { value: "4" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+    const asked = await within(form).findByRole("alert");
+    expect(asked.textContent).toContain("12 clips of hello were made with the old settings.");
+    fireEvent.click(within(asked).getByRole("button", { name: "New ones only" }));
+    expect(await within(form).findByText(/^Saved\./)).toBeTruthy();
+    expect(puts().map((p) => p.body)).toEqual([{ settings: { times: 4 } }, { settings: { times: 4 }, redo: false }]);
+    expect(within(form).queryByRole("alert")).toBeNull();
   });
 
   it("sets a secret for the server, never shows it, and clears it", async () => {

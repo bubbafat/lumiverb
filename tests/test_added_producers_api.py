@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from src.producers import use_added
 from tests.clips import make_clip
 from tests.producer_fakes import due
-from tests.test_added_producers import NAME, _spec
+from tests.test_added_producers import NAME, _spec, use_added
 from tests.test_scans_api import env  # noqa: F401 — the shared fixture
 
 pytestmark = pytest.mark.slow

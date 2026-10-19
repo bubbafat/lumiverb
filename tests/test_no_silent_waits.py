@@ -207,6 +207,7 @@ class Harness:
         self.scan_library: dict | None = None
         self.scan_error: Exception | None = None
         self.scanned: list[str] = []
+        self.plugins_said: dict | None = {}  # what the plug-in runner says of each plug-in
         self._lock = threading.Lock()
 
         def candidates(tenant_id, kind, libraries, skip=None):
@@ -219,7 +220,8 @@ class Harness:
         self.scheduler = Scheduler(
             lambda: {tenant_id: self.acct}, capacity={p.name: SHARED_SLOTS for p in pools().values() if not p.per_account},
             candidates=candidates, runners={k: self._runner(k) for k in dict.fromkeys(q.base for q in QUEUED)},
-            scan=self._scan, inline_refill=True, clock=lambda: self.now, wall=lambda: WALL + self.now)
+            scan=self._scan, inline_refill=True, clock=lambda: self.now, wall=lambda: WALL + self.now,
+            plugins_said=lambda: self.plugins_said)
 
     def _scan(self, acct, job, *, now: float) -> None:
         """The scan job, as runners.scan runs it: the scan pass over the account's libraries."""
@@ -412,6 +414,42 @@ def _retry(case: Case) -> None:
     case.post("/v1/producers/failures/retry", {"asset_ids": [case.clip]})
 
 
+FACTS = ROOT / "tests" / "plugins" / "facts"
+
+
+def _add_facts() -> None:
+    """The facts test plug-in installed, on by default: its work a producer (added as a test adds one)."""
+    from datetime import UTC, datetime
+
+    from src.plugins.manifest import read
+    from src.producers import use_added
+    from src.server.plugin_catalog import Installed
+    from src.server.plugin_producers import spec_for
+
+    now = datetime.now(UTC)
+    use_added([spec_for(Installed(read(FACTS), True, None, now, now))], by="test")
+
+
+def _remove_facts(case: Case) -> None:
+    from src.producers import use_added
+
+    use_added((), by="test")
+
+
+def _located(lib) -> str:
+    """A photo with a location, when it was taken and its size: every input the facts plug-in reads."""
+    clip = _image(lib, "located.jpg")
+    with _db(lib) as session:
+        session.execute(text("UPDATE assets SET gps_lat = 41.0, gps_lon = -73.0, width = 64, height = 36,"
+                             " taken_at = '2024-05-01T12:00:00Z' WHERE asset_id = :a"), {"a": clip})
+        session.commit()
+    return clip
+
+
+def _plugin_says(state: str) -> Callable[[Case], None]:
+    return lambda case: setattr(case.h, "plugins_said", {"facts": {"state": state}})
+
+
 def _hold_scan_failing(case: Case) -> None:
     """The library's scan raises (the API answering 500, say): tried once,
     then not again until its back-off is over, though the scan job is
@@ -457,6 +495,8 @@ class Gate:
     said: Callable[[Case], dict[str, dict]] = lambda case: _reasons(case)
     # The wait says how many clips (some say a machine or a library instead).
     clips: bool = True
+    # Before anything else (its producer added: an installed plug-in's work).
+    setup: Callable[[], None] = lambda: None
 
 
 def _post(path: str, body: dict) -> Callable[[Case], None]:
@@ -474,6 +514,9 @@ GATES: dict[str, Gate] = {
                       lambda case: setattr(case.h.acct, "settings_ready", True)),
     "ai_machines": Gate("vision", _hold_machines, _lift_machines,
                         undo=lambda case: _set_vision(case.lib, "", machine=False), clips=False),
+    # An installed plug-in's work, the plug-in runner saying it's starting, then that it's running.
+    "plugin_down": Gate("plugin_facts", _plugin_says("starting"), _plugin_says("ready"), clip=_located,
+                        setup=_add_facts, undo=_remove_facts),
     "needs": Gate("vision", lambda case: _set_proxy(case, None), lambda case: _set_proxy(case, case.saved["proxy_key"])),
     "storage": Gate("capture", _hold_storage, _lift_storage),
     "device": Gate("capture", _hold_device, _lift_device),
@@ -510,6 +553,7 @@ def test_due_work_held_back_always_says_why(env, reason, tmp_path):
     producer's row says why (with how many clips). Opened: the clip is
     handed out, and the reason is gone."""
     gate = GATES[reason]
+    gate.setup()
     lib = _library(env, f"Gate_{reason}")
     case = Case(lib, Harness(env[4], lib[2], tmp_path), gate.artifact, gate.clip(lib), tmp_path)
     try:
