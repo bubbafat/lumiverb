@@ -66,7 +66,8 @@ def installed() -> dict[str, Installed]:
 class OnSomewhere:
     """Of the installed plug-ins, those on in at least one active account: turned on there, or following a
     default that's on (the plug-in runner runs only these). Every account is read each time it's asked (the
-    runner asks every LIST_EVERY_SEC). One whose database can't be read now keeps what it said last (nothing,
+    runner asks every LIST_EVERY_SEC, on a thread of its own, and gives up on a database that doesn't answer
+    within its CONNECT_WITHIN_SEC). One whose database can't be read now keeps what it said last (nothing,
     if it never said), said once in the log until it can be read again; the others count as they are. Raises
     only when the control database can't be read: whoever asks keeps what it had."""
 

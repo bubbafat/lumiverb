@@ -12,7 +12,9 @@ its server settings at start, in a file only Lumiverb's user can read, and
 started again when they change (an account's settings don't); its
 environment holds the proxies and nothing else of Lumiverb's; it may be
 ready with work in the background; an output's empty line and a credit's
-license show, and the empty line isn't searched.
+license show, and the empty line isn't searched. An account whose database
+can't be read, or hangs (never answers, or drops every packet: part 1b),
+holds up no other.
 """
 
 from __future__ import annotations
@@ -20,8 +22,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -198,6 +203,99 @@ def test_part1_one_unreadable_account_doesnt_keep_another_from_turning_it_on(pro
     engine.dispose()
     _switch(f, f.a, True)
     _until(f.runner, lambda: _running(f)["state"] == "ready", within=30)
+
+
+class _Silent:
+    """A TCP port that takes each connection and never says a word: a database server that's hung, or a network
+    dropping its packets once connected."""
+
+    def __init__(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(64)
+        self.port = self.sock.getsockname()[1]
+        self.held: list[socket.socket] = []
+        threading.Thread(target=self._take, daemon=True).start()
+
+    def _take(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            self.held.append(conn)
+
+    def close(self) -> None:
+        self.sock.close()
+        for conn in self.held:
+            conn.close()
+
+
+@pytest.mark.parametrize("machine_python", INTERPRETERS[-1:], ids=[f"python{INTERPRETERS[-1][1]}"], indirect=True)
+@pytest.mark.parametrize("hang", ["never answers", "drops packets"])
+def test_part1b_an_account_database_that_hangs_doesnt_stall_the_runner(probe, hang, monkeypatch):
+    """An active account whose database server takes the connection and never answers, or whose address drops
+    every packet (192.0.2.1, TEST-NET-1: nothing answers there): the runner still starts a plug-in another
+    account turns on, and keeps saying how its plug-ins are (its state file fresh, read by the API), sync after
+    sync, while that account hangs. The runner's connections give up as its main() makes them
+    (set_connect_timeout(CONNECT_WITHIN_SEC)), for the engines made from now on: the hung account's."""
+    from src.server import database, plugin_runner
+
+    monkeypatch.setattr(database, "CONNECT_TIMEOUT_SEC", database.CONNECT_TIMEOUT_SEC)  # put back afterwards
+    database.set_connect_timeout(plugin_runner.CONNECT_WITHIN_SEC)
+    f = probe
+    hello = Path(__file__).parent / "plugins" / "hello"
+    assert cli.main(["plugins", "install", str(hello), "--off", "--yes", "--env", str(f.env)]) == 0
+    r = f.client.post("/v1/admin/tenants", json={"name": "Hung", "plan": "free"},
+                      headers={"Authorization": f"Bearer {INSTALL_KEY}"})
+    assert r.status_code == 200, r.text
+    hung = r.json()["tenant_id"]
+    silent = _Silent()
+    where = f"127.0.0.1:{silent.port}" if hang == "never answers" else "192.0.2.1:5432"
+    engine = create_engine(f.control)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE tenant_db_routing SET connection_string = :u WHERE tenant_id = :t"),
+                     {"u": f"postgresql+psycopg2://lumiverb:x@{where}/{hung}", "t": hung})
+    engine.dispose()
+    _switch(f, f.a, True)
+    turns: list[float] = []
+    done = threading.Event()
+
+    def turning() -> None:
+        while not done.is_set():
+            started = time.monotonic()
+            f.runner.turn()
+            turns.append(time.monotonic() - started)
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=turning, daemon=True)
+    thread.start()
+    try:
+        end = time.monotonic() + 120
+        while time.monotonic() < end and _running(f)["state"] != "ready":
+            time.sleep(0.5)
+        assert _running(f)["state"] == "ready", (
+            f"never started while the account hung: {len(turns)} turns finished, the last {turns[-3:]}")
+        if hang == "never answers":
+            assert silent.held, "the runner did try the hung account"
+        # Sync after sync while it hangs (each look waiting out the hung account), the plug-in is still said to
+        # be ready, and what the runner says (runner.json, which the API calls stale after 60 s) is written again
+        # and again, never left for long.
+        state, seen, written = f.data / "plugins" / "runner.json", [], []
+        until = time.monotonic() + 15
+        while time.monotonic() < until:
+            seen.append(_running(f)["state"])
+            at = json.loads(state.read_text())["at"]
+            if not written or written[-1][1] != at:
+                written.append((time.monotonic(), at))
+            time.sleep(0.5)
+        gaps = [b[0] - a[0] for a, b in zip(written, written[1:], strict=False)]
+        assert set(seen) == {"ready"}, f"{seen.count('ready')} of {len(seen)} ready; turns took {sorted(turns)[-3:]}"
+        assert len(written) >= 5 and max(gaps) < 10, f"the state file written {len(written)} times, gaps {gaps}"
+    finally:
+        done.set()
+        silent.close()
+        thread.join(timeout=60)
 
 
 # ---------------------------------------------------------------------------

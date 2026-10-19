@@ -10,6 +10,7 @@ uninstalling takes it away. Everything kept in the install's log."""
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -108,10 +109,9 @@ def test_installing_shows_what_it_does_asks_and_copies_it_in_read_only(install, 
     assert capsys.readouterr().out.splitlines()[-1] == "✓ Installed hello 1: off until an account's admin turns it on"
     copy = program_dir(data, "hello")
     assert (copy / "hello.py").read_text() == (HELLO / "hello.py").read_text()
-    with pytest.raises(PermissionError):
-        (copy / "hello.py").write_text("changed")
-    with pytest.raises(PermissionError):
-        (copy / "new.py").write_text("added")
+    for root, _dirs, names in os.walk(copy):
+        for path in [root, *(os.path.join(root, n) for n in names if not os.path.islink(os.path.join(root, n)))]:
+            assert not os.lstat(path).st_mode & 0o222, f"{path} can be written"
 
     listed = _listed(client, robert)["hello"]
     assert (listed["kind"], listed["version"], listed["author"], listed["state"]) == (
@@ -124,6 +124,19 @@ def test_installing_shows_what_it_does_asks_and_copies_it_in_read_only(install, 
 
     assert cli.main(["plugins", "--env", env]) == 0
     assert "  hello 1  Hello: off by default" in capsys.readouterr().out
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes any file")
+def test_its_copy_cant_be_changed_or_added_to(machine, tmp_path):
+    env, data = machine
+    assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--off", "--yes", "--env", env]) == 0
+    copy = program_dir(data, "hello")
+    with pytest.raises(PermissionError):
+        (copy / "hello.py").write_text("changed")
+    with pytest.raises(PermissionError):
+        (copy / "new.py").write_text("added")
+    assert (copy / "hello.py").read_text() == (HELLO / "hello.py").read_text()
 
 
 @pytest.mark.slow

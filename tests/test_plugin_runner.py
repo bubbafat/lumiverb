@@ -15,8 +15,12 @@ import json
 import logging
 import os
 import shutil
+import signal
+import socket
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -353,6 +357,78 @@ def test_what_the_runner_says_goes_stale_when_it_stops_saying_it(data) -> None:
         assert read_state(data, fresh_within=1) is None, "not said for a while: the runner isn't running"
     finally:
         runner.stop_all()
+
+
+def test_a_read_of_the_databases_that_hangs_holds_up_neither_the_watching_nor_what_it_says(data, caplog) -> None:
+    """The read of what's installed and on is on a thread of its own: while one hangs (an account's database
+    host away), every turn still writes what the plug-ins are doing and starts one that stopped again; what
+    it finds is taken up once it's done, and a slow read is said once."""
+    caplog.set_level(logging.INFO, logger=plugin_runner.__name__)
+    installs = Installs(data)
+    hang, hung, let_go, returned = (threading.Event() for _ in range(4))
+
+    def wanted(found: dict) -> set[str]:
+        if hang.is_set():
+            hung.set()
+            let_go.wait(120)
+            returned.set()
+        return installs.on(found)
+
+    runner = Runner(data, installed=installs, wanted=wanted, server_settings=installs.settings)
+    installs.add("hello")
+    try:
+        _until(runner, lambda: _state(runner, "hello") == READY)
+        hang.set()
+        _until(runner, hung.is_set)
+        assert not returned.is_set(), "a turn waited for the read"
+        installs.off.add("hello")  # the last account turns it off while the read hangs
+        at = json.loads(plugin_runner.state_file(data).read_text())["at"]
+        _until(runner, lambda: json.loads(plugin_runner.state_file(data).read_text())["at"] != at)
+        first = runner.plugins["hello"].process
+        os.killpg(first.pid, signal.SIGKILL)
+        _until(runner, lambda: runner.plugins["hello"].restarts == 1 and _state(runner, "hello") == READY)
+        assert runner.plugins["hello"].process is not first and not returned.is_set(), "all while the read hangs"
+        slow = [r for r in caplog.records if "reading what's installed and on is slow" in r.getMessage()]
+        assert len(slow) == 1
+
+        let_go.set()
+        _until(runner, lambda: _state(runner, "hello") == OFF)
+        _until(runner, lambda: any("read quickly again" in r.getMessage() for r in caplog.records))
+    finally:
+        let_go.set()
+        runner.stop_all()
+
+
+def test_as_its_run_it_gives_up_on_a_database_that_never_answers_and_says_what_it_does_meanwhile(data, tmp_path):
+    """`python -m src.server.plugin_runner` with its control database's host taking the connection and never
+    answering: what it's doing is written all the while, the read gives up (its connections' time limit,
+    CONNECT_WITHIN_SEC) and says so in the log; SIGTERM stops it."""
+    silent = socket.socket()
+    silent.bind(("127.0.0.1", 0))
+    silent.listen(64)  # takes connections, never answers
+    url = f"postgresql://u:p@127.0.0.1:{silent.getsockname()[1]}/control"
+    env = {**os.environ, "CONTROL_PLANE_DATABASE_URL": url, "TENANT_DATABASE_URL_TEMPLATE": url, "DATA_DIR": str(data),
+           "LOG_LEVEL": "INFO"}
+    log = tmp_path / "runner.log"
+    with log.open("wb") as out:
+        runner = subprocess.Popen([sys.executable, "-m", "src.server.plugin_runner"], cwd=Path(__file__).parents[1],
+                                  env=env, stdout=out, stderr=subprocess.STDOUT)
+    try:
+        end = time.monotonic() + 60
+        while time.monotonic() < end and "can't read what's installed and on" not in log.read_text():
+            time.sleep(0.2)
+        said = log.read_text()
+        assert "plug-ins: can't read what's installed and on" in said and "timeout expired" in said, said
+        assert read_state(data) == {}, "written all the while: nothing it could read is installed"
+        assert json.loads(plugin_runner.state_file(data).read_text())["pid"] == runner.pid
+        runner.send_signal(signal.SIGTERM)
+        assert runner.wait(30) == 0
+        assert "plug-ins: the runner stopped" in log.read_text()
+    finally:
+        if runner.poll() is None:
+            runner.kill()
+            runner.wait()
+        silent.close()
 
 
 def test_lumiverbs_example_runs_and_checks_its_own_settings(data) -> None:

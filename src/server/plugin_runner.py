@@ -12,7 +12,10 @@ lumiverb-plugins.service. For each installed plug-in it:
   LIST_EVERY_SEC with what's installed; one whose database can't be read
   keeps what it said last); one on in no account isn't started ("off"), and
   is stopped when the last account turns it off, so one with downloads
-  fetches nothing until someone has accepted what it asks;
+  fetches nothing until someone has accepted what it asks. Those reads are
+  on a thread of their own, a connection given up on after
+  CONNECT_WITHIN_SEC: a database that doesn't answer holds up neither the
+  watching below nor what it says;
 - starts its manifest's command from its installed folder
   (DATA_DIR/plugins/<id>/program/), through plugin_launch.py (a lower
   priority, no file bigger than its disk_mb, no core files), with a clean
@@ -37,7 +40,8 @@ lumiverb-plugins.service. For each installed plug-in it:
   seconds) for the API to show; a newer install of one is started afresh,
   an uninstalled one stopped.
 
-Nothing here waits on a plug-in longer than a request's time limit.
+Nothing here waits on a plug-in longer than a request's time limit, nor on
+a database longer than LOOK_WAIT_SEC.
 """
 
 from __future__ import annotations
@@ -97,6 +101,8 @@ RESTART_FIRST_SEC = 2.0
 RESTART_MAX_SEC = 600.0
 GIVE_UP_AFTER = 6  # stops soon after starting, in a row, before it's left stopped
 LIST_EVERY_SEC = 10.0  # what's installed, read again
+LOOK_WAIT_SEC = 2.0  # a turn waits this long for that read; a slower one is taken up once it's done
+CONNECT_WITHIN_SEC = 5  # a database not answering within this is given up on (libpq's connect_timeout)
 HEARTBEAT_SEC = 10.0  # the state file is written at least this often
 LINE_MAX = 2000
 LINES_PER_MINUTE = 600
@@ -182,6 +188,35 @@ def _count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+@dataclass(frozen=True)
+class Look:
+    """What one read of the databases found: what's installed ({plugin_id: plugin_catalog.Installed}), the ids
+    on somewhere and each one's server settings."""
+
+    installed: dict[str, Any]
+    on: set[str]
+    settings: dict[str, dict[str, Any]]
+
+
+class _Looking:
+    """One read of the databases, on a thread of its own: nothing a database does (an account's host away, a
+    lock) holds up the turns that watch the plug-ins and say what they're doing. Its look is None when it
+    failed (said in the log)."""
+
+    def __init__(self, read: Callable[[], Look]) -> None:
+        self.done = threading.Event()
+        self.look: Look | None = None
+        threading.Thread(target=self._read, args=(read,), name="plugins-look", daemon=True).start()
+
+    def _read(self, read: Callable[[], Look]) -> None:
+        try:
+            self.look = read()
+        except Exception as exc:  # noqa: BLE001 — the database away: what runs goes on
+            logger.warning("plug-ins: can't read what's installed and on (%s); those running go on", exc)
+        finally:
+            self.done.set()
+
+
 class Runner:
     def __init__(self, data: Path, *, installed: Callable[[], dict[str, Any]] | None = None,
                  wanted: Callable[[dict[str, Any]], set[str]] | None = None,
@@ -201,16 +236,23 @@ class Runner:
         self._clock = clock
         self._memory = memory
         self._next_list = 0.0
+        self._looking: _Looking | None = None  # the read in flight: never more than one
+        self._slow = False  # a slow read said in the log, until one is quick again
         self._said: dict[str, Any] | None = None
         self._said_at = 0.0
 
     # --- one turn ---------------------------------------------------------------
 
     def turn(self) -> None:
+        if self._looking is None and self._clock() >= self._next_list:
+            self._next_list = self._clock() + LIST_EVERY_SEC
+            self._looking = _Looking(self._look)
+            self._waited(self._looking.done.wait(LOOK_WAIT_SEC))
         now = self._clock()
-        if now >= self._next_list:
-            self._next_list = now + LIST_EVERY_SEC
-            self._sync(now)
+        if self._looking is not None and self._looking.done.is_set():
+            look, self._looking = self._looking.look, None
+            if look is not None:
+                self._sync(look, now)
         groups: dict[int, int] | None = None
         for p in list(self.plugins.values()):
             if p.process is not None and p.ending is None and now >= p.next_memory and p.process.poll() is None:
@@ -238,14 +280,23 @@ class Runner:
 
     # --- what's installed -------------------------------------------------------
 
-    def _sync(self, now: float) -> None:
-        try:
-            installed = self._installed()
-            on = self._wanted(installed)
-            settings = {pid: self._server_settings(pid, entry.manifest) for pid, entry in installed.items()}
-        except Exception as exc:  # noqa: BLE001 — the database away: what runs goes on
-            logger.warning("plug-ins: can't read what's installed and on (%s); those running go on", exc)
-            return
+    def _look(self) -> Look:
+        """Read on its thread (_Looking); raises when the control database can't be read."""
+        installed = self._installed()
+        return Look(installed, self._wanted(installed),
+                    {pid: self._server_settings(pid, entry.manifest) for pid, entry in installed.items()})
+
+    def _waited(self, done: bool) -> None:
+        if not done and not self._slow:
+            self._slow = True
+            logger.warning("plug-ins: reading what's installed and on is slow; they're watched meanwhile, and "
+                           "what it finds is taken up once it's done")
+        elif done and self._slow:
+            self._slow = False
+            logger.info("plug-ins: what's installed and on is read quickly again")
+
+    def _sync(self, look: Look, now: float) -> None:
+        installed, on, settings = look.installed, look.on, look.settings
         for pid in list(self.plugins):
             if pid not in installed:
                 logger.info("plug-in %s: uninstalled, stopping it", pid)
@@ -551,7 +602,7 @@ def read_state(data: Path, *, fresh_within: float = 60.0) -> dict[str, Any] | No
 def main() -> int:
     """lumiverb-plugins: run every installed plug-in until stopped (SIGTERM)."""
     from src.server.config import get_settings
-    from src.server.database import set_application_name
+    from src.server.database import set_application_name, set_connect_timeout
     from src.shared import secrets_env
     from src.shared.stop_signals import set_on_signals
 
@@ -564,6 +615,7 @@ def main() -> int:
         logger.error("plug-ins: not starting: DATA_DIR must be a full path, not %s", data)
         return 1
     set_application_name("lumiverb-plugins")
+    set_connect_timeout(CONNECT_WITHIN_SEC)
     # Its settings read (and kept), its secrets leave the environment: nothing it starts has them.
     secrets_env.forget()
     (data / "plugins").mkdir(parents=True, exist_ok=True)

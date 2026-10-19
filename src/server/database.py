@@ -32,6 +32,18 @@ def set_application_name(name: str) -> None:
     APPLICATION_NAME = name
 
 
+# How long a connection may take to be made, in seconds (libpq's connect_timeout); None: no limit, so a
+# database host that drops what it's sent takes minutes and one that never answers takes forever. The
+# plug-in runner sets one (src/server/plugin_runner.py CONNECT_WITHIN_SEC).
+CONNECT_TIMEOUT_SEC: int | None = None
+
+
+def set_connect_timeout(seconds: int) -> None:
+    """Gives up on a connection not made within seconds, from now on (engines made after)."""
+    global CONNECT_TIMEOUT_SEC
+    CONNECT_TIMEOUT_SEC = seconds
+
+
 def _engine_kwargs() -> dict:
     """Return create_engine kwargs — uses NullPool when SQLALCHEMY_NULLPOOL is set (e.g. tests)."""
     if os.environ.get("SQLALCHEMY_NULLPOOL"):
@@ -43,7 +55,10 @@ def _create_engine(url: str) -> Engine:
     """An engine whose sessions run in UTC, whatever the server's default:
     Ubuntu's Postgres takes the machine's timezone (prod's is New York),
     and timestamps should read the same from every install."""
-    engine = create_engine(url, connect_args={"application_name": APPLICATION_NAME}, **_engine_kwargs())
+    connect_args: dict = {"application_name": APPLICATION_NAME}
+    if CONNECT_TIMEOUT_SEC is not None:
+        connect_args["connect_timeout"] = CONNECT_TIMEOUT_SEC
+    engine = create_engine(url, connect_args=connect_args, **_engine_kwargs())
 
     @event.listens_for(engine, "connect")
     def _utc(dbapi_conn, _record) -> None:
