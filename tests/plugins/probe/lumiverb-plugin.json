@@ -1,0 +1,37 @@
+{
+  "id": "probe",
+  "version": "1",
+  "protocol": 1,
+  "title": "Probe",
+  "description": "A plug-in for the tester's acceptance tests: it says what it was started with, and answers as its settings ask.",
+  "author": "Lumiverb's tests",
+  "run": ["python3", "probe.py"],
+  "memory_mb": 128,
+  "disk_mb": 10,
+  "credit": {"text": "Probe's places", "url": "https://example.org/probe",
+             "license": {"text": "CC0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}},
+  "settings": [
+    {"key": "word", "type": "text", "default": "Probed", "max_length": 40, "label": "Word",
+     "help": "What each fact starts with."},
+    {"key": "health", "type": "choice", "scope": "server", "default": "ready", "label": "Health",
+     "help": "What its health says.",
+     "choices": [{"value": "ready", "label": "Ready"}, {"value": "busy", "label": "Ready, busy"},
+                 {"value": "preparing", "label": "Preparing"}, {"value": "failed", "label": "Failed"}]},
+    {"key": "mirror", "type": "text", "scope": "server", "default": "", "pattern": "^(https?://\\S+)?$",
+     "max_length": 200, "label": "Mirror", "help": "Handed at start."},
+    {"key": "key", "type": "secret", "scope": "server", "default": "", "label": "Key",
+     "help": "A server secret."}
+  ],
+  "work": {
+    "title": "Probe",
+    "version": "1",
+    "media": ["image", "video"],
+    "inputs": ["location"],
+    "batch": 20,
+    "outputs": [
+      {"key": "seen", "kind": "fact", "label": "Seen", "searchable": true},
+      {"key": "nothing", "kind": "fact", "label": "Nothing", "searchable": true, "empty": "Nothing here zzqx"}
+    ]
+  },
+  "lookups": ["places"]
+}

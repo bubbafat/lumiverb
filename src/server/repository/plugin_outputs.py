@@ -6,7 +6,10 @@ and the text of those its manifest says are searchable (search_text: its
 words are indexed, src/server/search/text_search.py facts).
 
 What's shown and searched is only a plug-in's that's installed and on in the
-account: turned off, what it made stays and is hidden; on again, it shows.
+account, for a clip that's one of its media and still has every input its
+work reads (shown_sql): turned off, or a clip whose location a person
+cleared, what it made stays and is hidden; on again, or the input back, it
+shows.
 """
 
 from __future__ import annotations
@@ -17,12 +20,20 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.server.repository.clip_inputs import present_sql
 from src.shared.utils import utcnow
 
 
 def search_text(work: Any, outputs: dict[str, dict[str, str] | None]) -> str:
     """The text of the outputs its work says are searchable, in its manifest's order."""
     return " · ".join(fact["text"] for o in work.outputs if o.searchable and (fact := outputs.get(o.key)))
+
+
+def shown_sql(work: Any) -> str:
+    """SQL on active_assets a: what its work made for the clip is shown and searched: the clip is one of its
+    media and has every input it reads (the media and inputs are its manifest's, checked names)."""
+    media = ", ".join(f"'{m}'" for m in work.media)
+    return f"(a.media_type IN ({media}) AND ({present_sql(work.inputs)}))"
 
 
 class PluginOutputRepository:
@@ -47,6 +58,12 @@ class PluginOutputRepository:
                     "SELECT plugin_id, outputs, inputs_hash, made_at FROM plugin_outputs WHERE asset_id = :a"
                 ), {"a": asset_id}).mappings().all()}
 
+    def shown(self, asset_id: str, work: Any) -> bool:
+        """Whether what its work made for this clip in sight is shown now (shown_sql)."""
+        return self._session.execute(text(
+            f"SELECT 1 FROM active_assets a WHERE a.asset_id = :a AND {shown_sql(work)}"
+        ), {"a": asset_id}).first() is not None
+
 
 def _on_with_work(session: Session) -> list[Any]:
     """The installed plug-ins with work that are on in this account, each its Installed (manifest first)."""
@@ -58,24 +75,39 @@ def _on_with_work(session: Session) -> list[Any]:
             if p.manifest.work is not None and state_of(p.manifest.spec(), rows.get(pid), p.default) == ON]
 
 
+def _fact(output: Any, outputs: dict[str, Any]) -> dict[str, Any] | None:
+    """One output as the clip's detail shows it: its fact, or its empty line when it had nothing to say (and
+    declares one); None to leave it out (nothing to say, or not asked for: an output added since)."""
+    fact = outputs.get(output.key)
+    if isinstance(fact, dict) and fact.get("text"):
+        return {"key": output.key, "label": output.label, "text": fact["text"], "url": fact.get("url"),
+                "empty": False}
+    if output.empty and output.key in outputs and fact is None:
+        return {"key": output.key, "label": output.label, "text": output.empty, "url": None, "empty": True}
+    return None
+
+
 def facts_of(session: Session, asset_id: str) -> list[dict[str, Any]]:
     """What the clip's detail shows of what plug-ins made for it: each plug-in on here that made it a fact,
-    in title order, {plugin_id, title, credit: {text, url} | None, facts: [{key, label, text, url}]} in its
-    manifest's order (an output with nothing to say is left out). Made from inputs the clip has changed since,
-    it shows until the new ones are saved."""
-    made = PluginOutputRepository(session).of(asset_id)
+    in title order, {plugin_id, title, credit: {text, url, license} | None, facts: [{key, label, text, url,
+    empty}]} in its manifest's order (an output with nothing to say is its empty line, or left out). Made
+    from inputs the clip has changed since, it shows until the new ones are saved; for a clip that's lost an
+    input (its location cleared), it isn't shown."""
+    repo = PluginOutputRepository(session)
+    made = repo.of(asset_id)
     out = []
     for plugin in sorted(_on_with_work(session), key=lambda p: (p.manifest.title.lower(), p.manifest.plugin_id)):
         m = plugin.manifest
         outputs = (made.get(m.plugin_id) or {}).get("outputs") or {}
-        facts = [{"key": o.key, "label": o.label, "text": fact["text"], "url": fact.get("url")}
-                 for o in m.work.outputs if isinstance(fact := outputs.get(o.key), dict) and fact.get("text")]
-        if facts:
-            credit = {"text": m.credit.label, "url": m.credit.url or None} if m.credit else None
-            out.append({"plugin_id": m.plugin_id, "title": m.title, "credit": credit, "facts": facts})
+        facts = [fact for o in m.work.outputs if (fact := _fact(o, outputs)) is not None]
+        if facts and repo.shown(asset_id, m.work):
+            out.append({"plugin_id": m.plugin_id, "title": m.title,
+                        "credit": m.credit.shown() if m.credit else None, "facts": facts})
     return out
 
 
-def searched_plugins(session: Session) -> list[str]:
-    """The plug-ins whose facts a search in this account reads: on here, with a searchable output."""
-    return [p.manifest.plugin_id for p in _on_with_work(session) if any(o.searchable for o in p.manifest.work.outputs)]
+def searched_plugins(session: Session) -> dict[str, str]:
+    """The plug-ins whose facts a search in this account reads (on here, with a searchable output), each with
+    the SQL on active_assets a for the clips whose facts are shown (shown_sql)."""
+    return {p.manifest.plugin_id: shown_sql(p.manifest.work) for p in _on_with_work(session)
+            if any(o.searchable for o in p.manifest.work.outputs)}

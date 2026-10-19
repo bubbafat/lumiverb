@@ -78,6 +78,17 @@ def test_the_adrs_example_reads_as_written() -> None:
     assert (spec.plugin_id, spec.title, spec.acknowledgment) == ("geonames", m.title, m.acknowledgment)
 
 
+def test_an_outputs_empty_line_and_a_credits_license() -> None:
+    data = copy.deepcopy(EXAMPLE)
+    data["work"]["outputs"][1]["empty"] = "  Not near  a town "
+    data["credit"]["license"] = {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}
+    m = parse(data)
+    assert [(o.key, o.empty) for o in m.work.outputs] == [("at", ""), ("near", "Not near a town")]
+    assert m.credit.shown() == {"text": "GeoNames", "url": "https://www.geonames.org/", "license": {
+        "text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
+    assert parse(copy.deepcopy(EXAMPLE)).credit.shown()["license"] is None, "naming none is fine"
+
+
 def test_only_what_it_needs_is_required() -> None:
     m = parse({"id": "hello", "version": "1", "protocol": 1, "title": "Hello", "description": "Says hello.",
                "run": ["python3", "hello.py"]})
@@ -124,6 +135,12 @@ def test_only_what_it_needs_is_required() -> None:
     (lambda d: d["work"].update(version=""), "work.version: can't be empty"),
     (lambda d: d.update(lookups=["weather"]), "lookups[0]: one of places"),
     (lambda d: d.update(lookups=["places", "places"]), "lookups[1]: places twice"),
+    (lambda d: d["work"]["outputs"][1].update(empty="x" * 81), "work.outputs[1].empty: text, up to 80"),
+    (lambda d: d["work"]["outputs"][1].update(empty="<b>none</b>"), "work.outputs[1].empty: plain text (no HTML)"),
+    (lambda d: d["work"]["outputs"][1].update(empty="a\x07bell"), "work.outputs[1].empty: plain text"),
+    (lambda d: d["credit"].update(license={"text": "CC BY 4.0"}), "credit.license.url: required"),
+    (lambda d: d["credit"].update(license={"text": "CC BY", "url": "http://x.org"}), "credit.license.url: an https://"),
+    (lambda d: d["credit"].update(license={"url": "https://x.org", "version": 4}), "credit.license.version: not a field"),
 ])
 def test_each_mistake_is_refused_naming_its_field(change, names: str) -> None:
     problems = _problems(change)

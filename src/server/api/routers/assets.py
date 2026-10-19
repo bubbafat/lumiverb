@@ -124,7 +124,8 @@ class AssetResponse(BaseModel):
     # town that near), place_id, distance_m, credit}; None until named. Signed-in only.
     place: dict | None = None
     # What installed plug-ins' work says of it (ADR-023), each plug-in on here that made it a fact:
-    # [{plugin_id, title, credit: {text, url} | None, facts: [{key, label, text, url}]}]. Signed-in only.
+    # [{plugin_id, title, credit: {text, url, license} | None, facts: [{key, label, text, url, empty}]}].
+    # Signed-in only.
     facts: list[dict] | None = None
     gps_accuracy_m: float | None = None
     # Faces found in it (null: not looked for yet); a video's, the people seen.

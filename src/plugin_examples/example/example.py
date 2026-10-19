@@ -4,11 +4,16 @@ any language that can answer HTTP on a Unix socket would do.
 
 Lumiverb starts it from its installed folder with a clean environment:
 LUMIVERB_PLUGIN_SOCKET (where to listen), LUMIVERB_PLUGIN_DATA (its own
-folder, the only one it may write), LUMIVERB_PLUGIN_ID and _PROTOCOL. It
-answers:
+folder, the only one it may write), LUMIVERB_PLUGIN_SETTINGS (a JSON file of
+its server settings, for what it does before anything asks it anything:
+it's started again when they change), LUMIVERB_PLUGIN_ID and _PROTOCOL, and
+the machine's proxy if it has one. It's run only while it's on in some
+account. It answers:
 
-  GET  /v1/health          {"state": "ready"} (or "preparing" with done,
-                           total and detail, or "failed" with an error)
+  GET  /v1/health          {"state": "ready"} (ready may say what it's doing
+                           in the background, with detail, done and total;
+                           or "preparing" with done, total and detail, or
+                           "failed" with an error)
   POST /v1/settings/check  {"scope", "settings"} -> {"errors": {key: why}}:
                            what only it can know (Lumiverb has checked each
                            value's type, bounds and form already)
@@ -22,7 +27,8 @@ answers:
 
 Its work gives each clip three facts, from the inputs its manifest declares
 (when it was taken, its metadata): the caption chosen in its settings, when
-it was taken, and its shape.
+it was taken, and its shape (or, not knowing its size, nothing: its
+manifest's empty line says so).
 
 Its output goes to Lumiverb's log, a line at a time, named "plugin example".
 

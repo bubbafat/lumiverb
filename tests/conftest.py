@@ -26,6 +26,7 @@ import itertools
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -482,6 +483,36 @@ def _auth_limits_fresh():
 
     for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter):
         limiter._hits.clear()
+
+
+# A proxy nothing listens on, for every plug-in a test starts: one not pointed at the test's own list (a
+# mirror on 127.0.0.1) can't reach the internet (geonames.org) whatever it's told. Only the plug-ins'
+# processes get it (the runner hands them on, plugin_runner.HANDED_ON), never the test process, whose own
+# HTTP clients, and the opt-in ai tests' model downloads, it would break.
+CLOSED_PROXY = "http://127.0.0.1:9"
+PLUGIN_PROXIES = {name: CLOSED_PROXY for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                                                   "http_proxy", "https_proxy", "all_proxy")}
+PLUGIN_PROXIES.update(NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+
+
+class _PluginsEnviron(Mapping):
+    """This process's environment as it is now (a test's PATH too), with the closed proxies."""
+
+    def __getitem__(self, name: str) -> str:
+        return PLUGIN_PROXIES[name] if name in PLUGIN_PROXIES else os.environ[name]
+
+    def __iter__(self):
+        return iter({*os.environ, *PLUGIN_PROXIES})
+
+    def __len__(self) -> int:
+        return len({*os.environ, *PLUGIN_PROXIES})
+
+
+@pytest.fixture(autouse=True)
+def _plugins_reach_no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.server import plugin_runner
+
+    monkeypatch.setattr(plugin_runner, "ENVIRON", _PluginsEnviron())
 
 
 @pytest.fixture(autouse=True)

@@ -81,6 +81,13 @@ def values(manifest: Manifest, account: dict[str, Any], server: dict[str, Any]) 
     return out
 
 
+def server_values(manifest: Manifest, server: dict[str, Any]) -> dict[str, Any]:
+    """Its server-scope settings as it's handed them at its start (the runner's file, LUMIVERB_PLUGIN_SETTINGS):
+    each as the server admin chose it, or its default."""
+    every = values(manifest, {}, server)
+    return {s.key: every[s.key] for s in manifest.settings if s.scope == SERVER}
+
+
 def shown(setting: PluginSetting, chosen: dict[str, Any], *, editable: bool) -> dict[str, Any]:
     """One setting as Settings › Plug-ins draws it: its schema, its value (never a secret's), whether it's set."""
     value = chosen.get(setting.key, setting.default)

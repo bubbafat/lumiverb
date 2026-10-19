@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { AssetLocation, AssetPlace } from "../api/types";
+import { CreditLinks } from "./PluginFactsSection";
 
 /** Where a clip was shot (ADR-017): a person's, else the file's, else a
  * guess; a suggestion asks. Shown in the Lightbox's details. */
@@ -79,8 +80,7 @@ export function LocationRow({
                 {person.credit && (
                   <>
                     {" · "}
-                    <a href={person.credit.url} target="_blank" rel="noopener noreferrer"
-                       className="text-gray-500 hover:text-gray-300 hover:underline">{person.credit.text}</a>
+                    <CreditLinks credit={person.credit} className="text-gray-500 hover:text-gray-300 hover:underline" />
                   </>
                 )}
                 {canEdit && onClear && (
@@ -140,8 +140,7 @@ export function LocationRow({
               {i === placeLines.length - 1 && (
                 <>
                   {" · "}
-                  <a href={place.credit.url} target="_blank" rel="noopener noreferrer"
-                     className="text-gray-500 hover:text-gray-300 hover:underline">{place.credit.text}</a>
+                  <CreditLinks credit={place.credit} className="text-gray-500 hover:text-gray-300 hover:underline" />
                 </>
               )}
             </div>

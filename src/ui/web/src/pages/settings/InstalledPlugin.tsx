@@ -51,35 +51,53 @@ function MetaLine({ plugin }: { plugin: Plugin }) {
   );
 }
 
+/** How far, N of M, and a bar: while it prepares, or works in the background. */
+function HowFar({ running }: { running: PluginRunning }) {
+  const total = running.total ?? null;
+  const done = running.done ?? 0;
+  if (!total) return null;
+  return (
+    <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-sm bg-gray-800">
+      <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (100 * done) / total)}%` }} />
+    </div>
+  );
+}
+
+function ofTotal(running: PluginRunning): string {
+  return running.total ? ` (${(running.done ?? 0).toLocaleString()} of ${running.total.toLocaleString()})` : "";
+}
+
 /** What the plug-in runner last said of its process. */
 export function RunningLine({ running }: { running: PluginRunning }) {
   const why = running.why ? `: ${running.why}` : "";
   switch (running.state) {
     case "ready":
       return (
-        <p role="status" className="text-sm text-green-300">
-          Running{running.memory_mb != null && <span className="text-gray-500"> · {running.memory_mb} MB of memory</span>}
-        </p>
+        <div role="status" className="space-y-1">
+          <p className="text-sm text-green-300">
+            Running{running.memory_mb != null && <span className="text-gray-500"> · {running.memory_mb} MB of memory</span>}
+          </p>
+          {running.detail && (
+            <>
+              <p className="text-sm text-gray-400">{running.detail}{ofTotal(running)}</p>
+              <HowFar running={running} />
+            </>
+          )}
+        </div>
       );
     case "starting":
       return <p role="status" className="text-sm text-gray-400">Starting…</p>;
-    case "preparing": {
-      const total = running.total ?? null;
-      const done = running.done ?? 0;
+    case "preparing":
       return (
         <div role="status" className="space-y-1">
           <p className="text-sm text-gray-400">
-            Getting ready{running.detail ? `: ${running.detail}` : "…"}
-            {total ? ` (${done.toLocaleString()} of ${total.toLocaleString()})` : ""}
+            Getting ready{running.detail ? `: ${running.detail}` : "…"}{ofTotal(running)}
           </p>
-          {total ? (
-            <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-sm bg-gray-800">
-              <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (100 * done) / total)}%` }} />
-            </div>
-          ) : null}
+          <HowFar running={running} />
         </div>
       );
-    }
+    case "off":
+      return <p role="status" className="text-sm text-gray-500">Not running{why}</p>;
     case "failing":
       return <p role="alert" className="text-sm text-red-300">Not working{why}</p>;
     case "restarting":

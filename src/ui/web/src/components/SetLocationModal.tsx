@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, listPlugins, searchPlaces, setLocations, type LocationReplace } from "../api/client";
 import type { Place } from "../api/types";
 import { Modal } from "./Modal";
+import { CreditLinks } from "./PluginFactsSection";
 import { clipCount } from "./ProjectUsageList";
 
 /** "Set location…" for a selection (ADR-017): a place found by name (with the
@@ -218,21 +219,14 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
       {searching && data?.unavailable?.map((u) => (
         <p key={u.plugin_id} className="text-xs text-amber-300">{u.title} couldn&apos;t answer: {u.why}.</p>
       ))}
-      {(data?.credits ?? (data?.credit ? [{ source: "geonames", text: "GeoNames", url: data.credit.url }] : [])).map((c) => (
-        <p key={c.source} className="text-xs text-gray-500">
-          {c.source === "geonames" ? "Place names from " : "Places from "}
-          {c.url ? (
-            <a href={c.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{c.text}</a>
-          ) : c.text}
-          {c.source === "geonames" && (
-            <>
-              ,{" "}
-              <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer"
-                 className="hover:underline">CC BY 4.0</a>
-            </>
-          )}
-        </p>
-      ))}
+      {(data?.credits ?? (data?.credit ? [{ source: "geonames", text: "GeoNames", url: data.credit.url,
+                                             license: { text: "CC BY 4.0", url: data.credit.license_url } }] : []))
+        .map((c) => (
+          <p key={c.source} className="text-xs text-gray-500">
+            {c.source === "geonames" ? "Place names from " : "Places from "}
+            <CreditLinks credit={c} />
+          </p>
+        ))}
     </div>
   );
 }

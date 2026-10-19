@@ -132,13 +132,14 @@ def summary(session: Session, row: dict[str, Any]) -> str | None:
     return basis.get("summary") or None
 
 
-# A place name's source, shown beside it (its license asks for the credit).
-CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/"}}
+# A place name's source, shown beside it with its license (which asks for the credit).
+CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/",
+                        "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}}
 
 
 def credit(source: str | None) -> dict[str, Any] | None:
     """Who a place name is from, to show beside it: GeoNames, or the installed plug-in that found it (its
-    manifest's credit, else its title); None for no place, or a plug-in no longer installed."""
+    manifest's credit with its license, else its title); None for no place, or a plug-in no longer installed."""
     if not source:
         return None
     if source in CREDITS:

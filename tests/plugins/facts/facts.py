@@ -12,6 +12,7 @@ a plug-in's work or lookup can go wrong:
   html        a fact with a tag in it
   leave-out   says nothing of the first clip
   slow        takes a minute (longer than the test lets it)
+  quiet       well, but nothing to say of where (its manifest's empty line shows)
 
 It writes the last request it was handed to its data folder (last-work.json,
 last-lookup.json).
@@ -75,6 +76,8 @@ def work(sent: dict) -> dict:
             out[clip["id"]] = {"outputs": {"elsewhere": {"text": "not one it declares"}}}
         elif behave == "html":
             out[clip["id"]] = {"outputs": {"when": {"text": "<b>bold</b>"}}}
+        elif behave == "quiet":
+            out[clip["id"]] = {"outputs": {**facts(clip, word), "where": None}}
         else:
             out[clip["id"]] = {"outputs": facts(clip, word)}
     return {"clips": out}

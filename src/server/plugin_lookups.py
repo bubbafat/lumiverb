@@ -48,10 +48,11 @@ def offering(session: Session, lookup: str) -> list[Any]:
 
 
 def credit_of(manifest: Any) -> dict[str, Any]:
-    """Who to credit for what it answers: its manifest's credit, else its title (and its homepage)."""
+    """Who to credit for what it answers: its manifest's credit (with its license, if it names one), else its
+    title (and its homepage)."""
     if manifest.credit is not None:
-        return {"text": manifest.credit.label, "url": manifest.credit.url or None}
-    return {"text": manifest.title, "url": manifest.homepage or None}
+        return manifest.credit.shown()
+    return {"text": manifest.title, "url": manifest.homepage or None, "license": None}
 
 
 def _text(value: Any, *, most: int, required: bool = False) -> str | None:
