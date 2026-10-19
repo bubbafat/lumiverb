@@ -30,6 +30,11 @@ cut off is fetched again, the finished ones aren't.
 Part 3, the switch-over: what the built-in's producer could be (paused and
 resumed on the machine, `lumiverb-server pause|resume`), the plug-in's work
 can be.
+
+Part 4, the removal: a landmark's name finds its clips (At searched as Near
+is), those named before the upgrade too; and an install that skipped part 3,
+upgraded straight to the removal, loses nothing anyone made and is named
+again once the plug-in is ready and its work resumed.
 """
 
 from __future__ import annotations
@@ -911,6 +916,202 @@ def test_part4_a_landmarks_name_finds_its_clips_named_before_the_upgrade_and_aft
         assert shown(after[0]) == then[before[0]]
         assert found("Quillstone") == set(before[:2] + after), "and one named after it"
         assert set(before[:2] + after) <= found(near), "Near is still searched"
+    finally:
+        runner.stop_all()
+        use_added((), by=INSTALLED)
+        site.close()
+
+
+# ---------------------------------------------------------------------------
+# Part 4: an install that skipped part 3, upgraded straight to the removal (Robert's Q1: the gap is accepted)
+# ---------------------------------------------------------------------------
+
+BEFORE_PART3 = {"control": ("alembic-control.ini", "ALEMBIC_CONTROL_URL", "ebf45b3545aa"),  # v0.1.102's heads
+                "tenant": ("alembic-tenant.ini", "ALEMBIC_TENANT_URL", "552e1e291a91")}
+GEONAMES_CREDIT = {"text": "GeoNames", "url": "https://www.geonames.org/",
+                   "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
+
+
+def _alembic_to(tree: str, url: str, verb: str, revision: str) -> None:
+    ini, var, _ = BEFORE_PART3[tree]
+    said = subprocess.run([sys.executable, "-m", "alembic", "-c", ini, verb, revision],
+                          cwd=Path(__file__).resolve().parents[1], env={**os.environ, var: url},
+                          capture_output=True, text=True, timeout=300)
+    assert said.returncode == 0, said.stdout + said.stderr
+
+
+def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    import math
+
+    la1, lo1, la2, lo2 = map(math.radians, (*a, *b))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(math.sqrt(h))
+
+
+def _between(made, low_km: float, high_km: float) -> tuple[float, float]:
+    """A point whose nearest town (one GeoNames names) is between low_km and high_km away and no landmark within
+    5 km: Near a town at a 40 km radius, at 25 none."""
+    import math
+
+    from tests.tester_geonames_lists import NOT_A_TOWN, _offset
+
+    towns = [(la, lo) for _g, _n, _a, la, lo, code, *_ in made.towns
+             if code not in NOT_A_TOWN and -90 <= la <= 90 and -180 <= lo <= 180 and (la, lo) != (0.0, 0.0)]
+    marks = [(la, lo) for _g, _n, _a, la, lo, *_ in made.landmarks]
+    for town in towns:
+        for bearing in range(0, 360, 15):
+            point = _offset(*town, (low_km + high_km) / 2 * 1000, math.radians(bearing))
+            if low_km < min(_km(point, t) for t in towns) < high_km and min(_km(point, m) for m in marks) > 5:
+                return round(point[0], 6), round(point[1], 6)
+    raise AssertionError("no such point in the tester's lists")
+
+
+def test_part4_an_account_from_before_part_3_upgraded_straight_to_head_loses_nothing_and_is_named_again(
+        install, control, short_data, landmark_lists, tmp_path, monkeypatch):  # noqa: F811
+    """An install on v0.1.102 (before the switch-over) updated straight to the removal, as a Linux install
+    updating after a while is: its databases as v0.1.102 left them (taken back to its revisions, then seeded as it
+    left an account with GeoNames on: the built-in's names, its list, its radius of 40 km chosen, its producer's
+    work and redo paused, a person's location set from one of GeoNames' places), then `lumiverb-server migrate` (a
+    process of its own: every migration from there, in order, then Lumiverb's own plug-ins). Nothing anyone made
+    is lost: the radius is the plug-in's, the pauses its work's, the person's place kept with GeoNames' credit and
+    license. Until the plug-in names them the clips show no name (the gap Robert accepted) and Place search says
+    why; once it's ready and the work resumed, every located clip is named again (at 40 km), found by its
+    landmark's name too."""
+    from src.server.database import get_control_session
+    from src.server.plugin_runner import Runner
+    from src.server.repository.plugins import PluginRepository
+    from src.shared.utils import utcnow
+
+    client, robert, tenant_id = install
+    made, points = landmark_lists
+    far = _between(made, 28, 37)
+    quill = next(row for row in made.landmarks if row[1] == QUILLSTONE)
+    site = _Site(made.files())
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={short_data}\nLUMIVERB_GEONAMES_URL={site.url}\n")
+    monkeypatch.setenv("DATA_DIR", str(short_data))
+    get_settings.cache_clear()
+    command = Path(sys.executable).with_name("lumiverb-server")
+    account = tenant_database_url(tenant_id)
+    r = client.post("/v1/libraries", json={"name": "Old", "root_path": "/Volumes/old"}, headers=robert)
+    assert r.status_code == 200, r.text
+    library_id = r.json()["library_id"]
+    spots = {"q1": points[QUILLSTONE], "q2": points[QUILLSTONE], "b1": points[BRINDLEMOOR], "far": far,
+             "picked": points[QUILLSTONE]}
+    with get_tenant_session(tenant_id) as session:
+        clips = {name: make_clip(session, library_id, f"{name}.jpg") for name in spots}
+        for name, (lat, lon) in spots.items():
+            session.execute(text("UPDATE assets SET gps_lat = :lat, gps_lon = :lon WHERE asset_id = :a"),
+                            {"lat": lat, "lon": lon, "a": clips[name]})
+        PluginRepository(session).set("geonames", True, acknowledged_version="3", by="usr_robert", now=utcnow())
+        session.commit()
+
+    # v0.1.102's databases, as it left them.
+    _alembic_to("tenant", account, "downgrade", BEFORE_PART3["tenant"][2])
+    _alembic_to("control", control, "downgrade", BEFORE_PART3["control"][2])
+    picked = {"id": f"geonames:{quill[0]}", "label": f"{QUILLSTONE}, Île-de-France, France", "source": "geonames"}
+    engine = create_engine(account)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.place', :v, now())"),
+                     {"v": json.dumps({"radius_km": 40})})
+        for scope in ("work", "redo"):
+            conn.execute(text("INSERT INTO producer_pauses (target, scope, paused_by, paused_at)"
+                              " VALUES ('place', :s, 'usr_robert', now())"), {"s": scope})
+        for name in ("q1", "q2", "b1", "far"):
+            conn.execute(text(
+                "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
+                "   produced_at, outcome, attempts) VALUES (:a, 'place', 'place', '2', 'h', now(), 'ok', 0)"),
+                {"a": clips[name]})
+            lat, lon = spots[name]
+            conn.execute(text(
+                "INSERT INTO asset_place (asset_id, place_id, label, country_code, distance_m, lat, lon, named_at)"
+                " VALUES (:a, 'geonames:1', 'The old name', 'FR', 100, :lat, :lon, now())"),
+                {"a": clips[name], "lat": lat, "lon": lon})
+        conn.execute(text(
+            "INSERT INTO asset_location (asset_id, lat, lon, radius_m, source, status, basis, set_by, set_at)"
+            " VALUES (:a, :lat, :lon, 0, 'person', 'applied', CAST(:b AS jsonb), 'usr_robert', now())"),
+            {"a": clips["picked"], "lat": spots["picked"][0], "lon": spots["picked"][1],
+             "b": json.dumps({"place": picked})})
+    with create_engine(control).begin() as conn:
+        conn.execute(text("INSERT INTO plugin_data (plugin_id, state, done, count, version, updated_at)"
+                          " VALUES ('geonames', 'ready', 1, 1, 2, now())"))
+
+    # As on the install: its env file names the mirror (the suite's own stand-in, in this process's environment,
+    # would win over the file).
+    install_environ = {k: v for k, v in os.environ.items() if k != "LUMIVERB_GEONAMES_URL"}
+    said = subprocess.run([str(command), "migrate", "--env", str(env)], capture_output=True, text=True, timeout=300,
+                          env=install_environ)
+    assert said.returncode == 0, said.stdout + said.stderr
+    assert f"its mirror: {site.url} (LUMIVERB_GEONAMES_URL)" in said.stdout, said.stdout
+
+    # Nothing anyone made is lost; what the built-in left is gone.
+    with engine.connect() as conn:
+        tables = set(conn.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).scalars())
+        assert "asset_place" not in tables
+        assert conn.execute(text("SELECT chosen FROM plugin_settings WHERE plugin_id = 'geonames'")).scalar() == {
+            "radius_km": 40}
+        assert sorted(conn.execute(text("SELECT target, scope FROM producer_pauses")).all()) == [
+            ("plugin_geonames", "redo"), ("plugin_geonames", "work")]
+        assert conn.execute(text("SELECT count(*) FROM artifact_lineage WHERE artifact = 'place'")).scalar() == 0
+        row = conn.execute(text("SELECT lat, lon, source, basis FROM asset_location WHERE asset_id = :a"),
+                           {"a": clips["picked"]}).one()
+    engine.dispose()
+    assert (row.lat, row.lon, row.source) == (*spots["picked"], "person")
+    assert row.basis == {"place": {**picked, "credit": GEONAMES_CREDIT}}, "the person's place, credited"
+    with get_control_session() as session:
+        tables = set(session.execute(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")).scalars())
+        assert not {t for t in tables if t.startswith("geonames_")} | ({"plugin_data"} & tables)
+        installed = session.execute(text("SELECT version, installed_by FROM installed_plugins"
+                                         " WHERE plugin_id = 'geonames'")).one()
+        assert tuple(installed) == ("2", "lumiverb")
+    refresh()
+
+    def shown(clip: str) -> dict:
+        r = client.get(f"/v1/assets/{clip}", headers=robert)
+        assert r.status_code == 200, r.text
+        assert "place" not in r.json(), "no old name anywhere"
+        return {f["key"]: f["text"] for p in r.json()["facts"] if p["plugin_id"] == "geonames" for f in p["facts"]}
+
+    def found(words: str) -> set[str]:
+        r = client.get(f"/v1/query?f=query:{words}&f=library:{library_id}", headers=robert)
+        assert r.status_code == 200, r.text
+        return {item["asset_id"] for item in r.json()["items"]}
+
+    assert all(shown(c) == {} for c in clips.values()), "the gap: no names until the plug-in's"
+    r = client.get(f"/v1/assets/{clips['picked']}", headers=robert)
+    assert (r.json()["location"]["basis_summary"], r.json()["location"]["credit"]) == (picked["label"],
+                                                                                      GEONAMES_CREDIT)
+    r = client.get("/v1/places", params={"q": "Quillstone"}, headers=robert)
+    assert r.status_code == 200 and r.json()["places"] == [], r.text
+    assert [u["plugin_id"] for u in r.json()["unavailable"]] == ["geonames"], "Place search says why"
+
+    runner = Runner(short_data)
+    try:
+        _until(runner, lambda: _listed(client, robert)["geonames"]["running"]["state"] == "ready", within=120)
+        r = client.get("/v1/places", params={"q": "Quillstone"}, headers=robert)
+        assert [p["place_id"] for p in r.json()["places"]] == [picked["id"]], r.text
+        rows = client.get("/v1/producers", headers=robert).json()
+        mine = next(p for p in (rows.get("producers", rows) if isinstance(rows, dict) else rows)
+                    if p["artifact"] == "plugin_geonames")
+        assert mine["paused"] is True, "its work paused, as Place names' was: nothing named until resumed"
+        assert all(shown(c) == {} for c in clips.values())
+
+        resumed = subprocess.run([str(command), "resume", "plugin_geonames", "--env", str(env)],
+                                 capture_output=True, text=True, timeout=120)
+        assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+        acct = FakeAccount(scheduler_client(tenant_id))
+        acct.tenant_id = tenant_id
+        items = due(account, "plugin_geonames", [library_id])
+        assert {c["asset_id"] for c in items} == set(clips.values()), "every located clip is due"
+        run_job(PluginWork, acct, tenant_id, "plugin_geonames", items)
+        assert acct.failures.charged == []
+        named = {name: shown(clip) for name, clip in clips.items()}
+        assert [named[n]["at"] for n in ("q1", "q2", "picked")] == [QUILLSTONE] * 3, named
+        assert named["b1"]["at"].startswith(f"{BRINDLEMOOR}, ") and named["b1"]["near"] == "Not near a town", named
+        assert named["far"]["near"] != "Not near a town" and "at" not in named["far"], \
+            f"its town is 28 to 37 km away: named at the 40 km chosen before, not 25 ({named['far']})"
+        assert found("Quillstone") == {clips["q1"], clips["q2"], clips["picked"]}
+        assert found("Brindlemoor") == {clips["b1"]}
     finally:
         runner.stop_all()
         use_added((), by=INSTALLED)
