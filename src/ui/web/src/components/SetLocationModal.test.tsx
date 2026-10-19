@@ -142,19 +142,30 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1"], replace: "none", place_id: "facts:harbour" });
   });
 
-  it("offers Place with no plug-in on that finds places, Coordinates first, and says why it has none", async () => {
+  it("offers Place with no plug-in on that finds places, Coordinates first, and says why at once", async () => {
     plugins.mockResolvedValue([{ ...GEONAMES, state: "off" as const }, { ...GEONAMES, plugin_id: "other", lookups: [] }]);
-    const why = "No plug-in that finds places is on: an admin turns one on in Settings › Plug-ins (Place names (GeoNames)).";
+    const why = "No plug-in that finds places is on: an admin turns one on in Settings › Plug-ins: Place names (GeoNames).";
     search.mockRejectedValue(new ApiError(409, why, "plugin_off", { plugins: [{ plugin_id: "geonames", title: "Place names (GeoNames)" }] }));
     modal();
     await waitFor(() => expect(plugins).toHaveBeenCalled());
     expect(screen.getByLabelText("Latitude, longitude")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Place" }));
+    expect(screen.getByRole("status").textContent).toBe(why);  // before anything's typed
+    expect(search).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "par" } });
-    expect((await screen.findByRole("status")).textContent).toBe(why);
-    expect(search).toHaveBeenCalledTimes(1);  // what it says is the answer: not asked again
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status").textContent).toBe(why);  // the search's own answer: not asked again
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Set location" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("says no plug-in that finds places is installed, when none is", async () => {
+    plugins.mockResolvedValue([{ ...GEONAMES, plugin_id: "other", lookups: [] }]);
+    modal();
+    await waitFor(() => expect(plugins).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("radio", { name: "Place" }));
+    expect((await screen.findByRole("status")).textContent)
+      .toBe("No plug-in that finds places is installed on this server: the server admin installs one.");
   });
 
   it("says another error searching as one", async () => {

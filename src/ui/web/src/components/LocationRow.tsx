@@ -123,7 +123,7 @@ export function LocationRow({
               )}
             </div>
           )}
-          {error &&<div role="alert" className="text-xs text-red-300">{error}</div>}
+          {error && <div role="alert" className="text-xs text-red-300">{error}</div>}
         </dd>
       </div>
       {onNearbyClick && shown && (

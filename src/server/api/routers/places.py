@@ -89,7 +89,7 @@ def _none_on() -> ConflictError:
                              "admin installs one.", {"plugins": []})
     titles = ", ".join(p["title"] for p in would)
     return ConflictError("plugin_off", f"No plug-in that finds places is on: an admin turns one on in Settings ›"
-                         f" Plug-ins ({titles}).", {"plugins": would})
+                         f" Plug-ins: {titles}.", {"plugins": would})
 
 
 @router.get("", response_model=PlaceList, dependencies=[Depends(require_signed_in)])

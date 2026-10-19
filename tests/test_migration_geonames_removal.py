@@ -117,3 +117,33 @@ def test_each_accounts_old_names_go_and_what_a_person_made_stays() -> None:
                               " FROM asset_place"))
         _alembic(TENANT, url, "upgrade", "head")
         engine.dispose()
+
+
+def test_an_account_from_before_the_switch_over_upgrades_straight_to_head() -> None:
+    """Robert's question 1 (plain migrations): an install that jumps from before part 3 to the removal or later,
+    its account seeded as Robert's was (the switch-over test's), upgraded to head in one go: the radius and
+    pauses carried over, GeoNames' credit kept with every place a person picked, what the old producer left gone,
+    and its names gone too (the plug-in names the clips again)."""
+    from tests.test_migration_geonames_switch_over import BEFORE, _seeded
+
+    with PostgresContainer(PG_IMAGE) as pg:
+        url = _ensure_psycopg2(pg.get_connection_url())
+        engine = create_engine(url)
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        _alembic(TENANT, url, "upgrade", BEFORE)
+        clips = _seeded(url)
+        _alembic(TENANT, url, "upgrade", "head")
+        assert "asset_place" not in _tables(engine)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT chosen FROM plugin_settings WHERE plugin_id = 'geonames'")).scalar() == {
+                "radius_km": 40}
+            assert sorted(conn.execute(text("SELECT target, scope FROM producer_pauses")).all()) == [
+                ("plugin_geonames", "redo"), ("plugin_geonames", "work"), ("vision", "work")]
+            assert conn.execute(text("SELECT artifact FROM artifact_lineage")).scalars().all() == ["vision"]
+            basis = dict(conn.execute(text("SELECT asset_id, basis FROM asset_location")).all())
+        assert basis[clips["picked"]]["place"] == {"id": "geonames:3573890", "label": "Port of Spain, Trinidad and Tobago",
+                                                   "source": "geonames", "credit": CREDIT}
+        assert basis[clips["kept"]]["place"]["credit"] == {"text": "Kept as it was"}
+        assert basis[clips["point"]] == {"summary": "by hand"}
+        engine.dispose()

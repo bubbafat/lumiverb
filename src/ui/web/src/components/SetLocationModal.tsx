@@ -37,8 +37,13 @@ export function SetLocationModal({
 }) {
   const queryClient = useQueryClient();
   const { data: plugins } = useQuery({ queryKey: ["plugins"], queryFn: listPlugins });
-  // A plug-in on here that finds places: Place first. Without one, Coordinates first, and Place says why.
-  const places = !!plugins?.some((p) => p.state === "on" && p.lookups?.includes("places"));
+  // A plug-in on here that finds places: Place first. Without one, Coordinates first, and Place says why at once
+  // (as the search would: GET /v1/places' plugin_off).
+  const finders = plugins?.filter((p) => p.lookups?.includes("places")) ?? [];
+  const places = finders.some((p) => p.state === "on");
+  const why = !plugins || places ? null : finders.length === 0
+    ? "No plug-in that finds places is installed on this server: the server admin installs one."
+    : `No plug-in that finds places is on: an admin turns one on in Settings › Plug-ins: ${finders.map((p) => p.title).join(", ")}.`;
   const [picked, setPicked] = useState<"place" | "point" | "same" | null>(null);
   const mode = picked ?? (places ? "place" : "point");
   const setMode = setPicked;
@@ -120,7 +125,7 @@ export function SetLocationModal({
             )}
           </div>
           {mode === "place" ? (
-            <PlaceSearch chosen={place} onChoose={setPlace} input={input} />
+            <PlaceSearch chosen={place} onChoose={setPlace} input={input} why={why} />
           ) : mode === "point" ? (
             <input
               aria-label="Latitude, longitude"
@@ -158,10 +163,10 @@ export function SetLocationModal({
 
 /** A place by name (each plug-in on here that finds places): what's typed, the places it starts, each from where
  * when more than one plug-in found them, the one chosen; each source's credit beside them, its license too (a
- * license may ask it), and why it can't answer: no plug-in on finds places (the API's plugin_off says so and
- * which would), or which couldn't answer now. */
-function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoose: (p: Place | null) => void;
-                                                    input: string }) {
+ * license may ask it), and why it can't answer: no plug-in on finds places (why, from the plug-ins listed, until
+ * the API's plugin_off says so and which would), or which couldn't answer now. */
+function PlaceSearch({ chosen, onChoose, input, why }: { chosen: Place | null; onChoose: (p: Place | null) => void;
+                                                         input: string; why: string | null }) {
   const [typed, setTyped] = useState(chosen?.label ?? "");
   const [term, setTerm] = useState("");
   useEffect(() => {
@@ -171,7 +176,9 @@ function PlaceSearch({ chosen, onChoose, input }: { chosen: Place | null; onChoo
   const searching = term.length >= 2 && term !== chosen?.label;
   const { data, error } = useQuery({ queryKey: ["places", term], queryFn: () => searchPlaces(term),
                                      enabled: searching, retry: false });
-  const off = error instanceof ApiError && error.code === "plugin_off" ? error.message : null;
+  // Why it finds nothing: the search's own answer once it's asked, else what the plug-ins listed say.
+  const off = error instanceof ApiError && error.code === "plugin_off" ? error.message
+    : error || (searching && data) ? null : why;
   const fromMany = new Set(data?.places.map((p) => p.source) ?? []).size > 1;
   return (
     <div className="space-y-2">
