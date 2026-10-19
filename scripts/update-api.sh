@@ -389,7 +389,7 @@ UNIT
   ok "lumiverb-plugins installed"
 else
   warn "No DATA_DIR in ${ENV_FILE}: no plug-in runner (plug-ins keep their folders on the data disk)"
-  warn "Place names (GeoNames) is a plug-in now: without DATA_DIR it stops working once the old place list goes"
+  warn "Place names (GeoNames) is a plug-in: without DATA_DIR there are no place names or Place search"
 fi
 
 # ---------------------------------------------------------------------------

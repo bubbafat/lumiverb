@@ -1,5 +1,5 @@
 {
- "about": "Today's Place names' answers (src/server/repository/places.py over src/plugins/geonames/data.py's fetch, in Postgres) to tests/plugins/geonames_lists.py's questions on its files: the GeoNames plug-in is held to them. Written by tests/plugins/geonames_golden.py.",
+ "about": "The built-in Place names' answers (src/server/repository/places.py over src/plugins/geonames/data.py's fetch, in Postgres) to tests/plugins/geonames_lists.py's questions on its files, written from that code before ADR-023 phase 3 part 4 removed it: the GeoNames plug-in is held to them.",
  "answers": {
   "nearest": [
    {

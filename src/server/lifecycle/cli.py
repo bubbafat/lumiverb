@@ -344,7 +344,7 @@ def _install_own(env: dict[str, str], url: str, *, say, fail) -> None:
         data: Path | None = data_dir(env)
     except InstallError:
         data = None
-    install_own(url, data, geonames_url=env.get("LUMIVERB_GEONAMES_URL") or None, say=say, fail=fail)
+    install_own(url, data, environ=env, say=say, fail=fail)
 
 
 def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
@@ -975,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
             verb, help=f"{does}: all, scans, upkeep or a producer, in every account (no API key: on this machine)")
         _env_option(command, argparse.SUPPRESS)
         command.add_argument("name", help="all, scans, upkeep or a producer (e.g. vision, or a plug-in's work:"
-                                          " plugin_geonames)")
+                                          " plugin_<its id>)")
         command.add_argument("--library", help="with scans: this library's only (its name or id)")
         command.add_argument("--account", help="this account's only (its name or id)")
     args = parser.parse_args(argv)

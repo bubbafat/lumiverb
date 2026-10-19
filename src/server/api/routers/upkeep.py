@@ -7,8 +7,8 @@ must say so with ?tenants=all; without it the call is a 400, never
 
 POST /v1/upkeep                    — search sync, face names, expired trash, missing artifact files,
                                      empty dismissed people, face clusters when faces changed,
-                                     expired scans, plug-ins' data for the server (and, all accounts,
-                                     old revoked tokens and the nightly backup)
+                                     expired scans (and, all accounts, old revoked tokens and the
+                                     nightly backup)
 POST /v1/upkeep/search-sync        — search sync sweep only (force=true: every clip's and transcript's again)
 POST /v1/upkeep/cleanup            — orphaned files (dry_run=true by default; library_id or all=true);
                                      folders the database doesn't list are only reported
@@ -63,6 +63,8 @@ class SearchSyncResult(BaseModel):
     failed: int = 0
     transcripts_synced: int = 0
     transcripts_failed: int = 0
+    # Plug-ins' facts whose search text was written again: a newer version of the plug-in searches other outputs.
+    facts_synced: int = 0
 
 
 class OrphanFolder(BaseModel):
@@ -168,9 +170,6 @@ class UpkeepResult(BaseModel):
     # (src/server/storage/move.py): "started", "running", "waiting" (15 minutes
     # after an error) or "not moving"; None for one account.
     previews_move: str | None = None
-    # What plug-ins on in the accounts upkept keep for the server (src/server/plugin_data.py), by
-    # plug-in: "started" (a fetch that stopped, or failed an hour ago), "running", "ready" or "waiting".
-    plugin_data: dict[str, str] = Field(default_factory=dict)
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -454,7 +453,7 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     from src.server.repository.control_plane import TenantRepository
     from src.server.search.sync import run_search_sync_sweep
 
-    totals = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0}
+    totals = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0, "facts_synced": 0}
 
     with get_control_session() as control_session:
         tenants = TenantRepository(control_session).list_all()
@@ -545,7 +544,6 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     expired_uploads = _each_account(scope, "Expired uploads aren't deleted", _delete_expired_uploads,
                                     pausable=False, with_account=True)
     idle_keys = _each_account(scope, "Unused keys aren't ended", _end_idle_keys, pausable=False, with_account=True)
-    plugins = _plugin_data(scope)
     return UpkeepResult(
         search_sync=SearchSyncResult(**sync_result),
         face_propagate=FacePropagateResult(**prop_result),
@@ -556,7 +554,6 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         expired_scans=ExpiredScansResult(**expired),
         expired_uploads=ExpiredUploadsResult(**expired_uploads),
         idle_keys=IdleKeysResult(**idle_keys),
-        plugin_data=plugins,
         backup=backup,
         previews_move=previews_move,
     )
@@ -576,32 +573,6 @@ def _nightly_backup() -> str:
     except Exception as exc:  # noqa: BLE001 — said in the log and on the Admin page, not here
         logger.warning("The nightly backup didn't start: %s", exc)
         return "not started"
-
-
-def _plugin_data(scope: UpkeepScope) -> dict[str, str]:
-    """What the plug-ins on in these accounts keep for the server: a fetch
-    that stopped (the API restarted) goes on, one that failed is tried again
-    an hour later. Never fails upkeep."""
-    from src.plugins import registry
-    from src.server import plugin_data
-    from src.server.repository.plugins import PluginRepository
-
-    wanted: set[str] = set()
-
-    def look(session) -> dict:
-        repo = PluginRepository(session)
-        wanted.update(p.plugin_id for p in registry().values() if p.data and repo.is_on(p.plugin_id))
-        return {}
-
-    _each_account(scope, "Plug-ins' data isn't looked at", look, pausable=False)
-    out: dict[str, str] = {}
-    for plugin_id in sorted(wanted):
-        try:
-            out[plugin_id] = plugin_data.ensure(plugin_id)
-        except Exception as exc:  # noqa: BLE001 — said in the log; Settings › Plug-ins says its state
-            logger.warning("%s's data wasn't looked at: %s", plugin_id, exc)
-            out[plugin_id] = "not started"
-    return out
 
 
 def _previews_move() -> str:

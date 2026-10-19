@@ -59,19 +59,10 @@ from src.shared.utils import utcnow
 
 # Which clips each producer applies to, and whether a clip has its artifact
 # (SQL on active_assets a; one made in parts exists once every part does).
-# Each producer declares both (src/producers/<artifact>/).
-def _applies(p) -> str:
-    """A producer's applies, and for one a plug-in of Lumiverb's own brings, only while that plug-in is on
-    in the account (an installed plug-in's work says so in its own: src/server/plugin_producers.py)."""
-    if not p.plugin or p.artifact.startswith(ADDED_PREFIX):
-        return p.applies
-    from src.server.repository.plugins import on_sql
-
-    return f"({on_sql(p.plugin)}) AND ({p.applies})"
-
-
+# Each producer declares both (src/producers/<artifact>/; an installed
+# plug-in's work, only while it's on in the account: src/server/plugin_producers.py).
 # Each, and the tables below, as the producers are now (src/producers/live.py).
-APPLIES: Mapping[str, str] = LiveMap(lambda: {a: _applies(p) for a, p in PRODUCERS.items()})
+APPLIES: Mapping[str, str] = LiveMap(lambda: {a: p.applies for a, p in PRODUCERS.items()})
 MADE: Mapping[str, str] = LiveMap(lambda: {a: p.made for a, p in PRODUCERS.items()})
 # Made, but due to be checked again (location guesses): "false" for the rest.
 RECHECK: Mapping[str, str] = LiveMap(lambda: {a: p.recheck or "false" for a, p in PRODUCERS.items()})

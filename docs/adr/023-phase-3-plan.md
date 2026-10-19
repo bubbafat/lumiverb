@@ -2,9 +2,9 @@
 
 ## Status
 
-Draft (2026-10-19), for the builder, the reviewer and the tester to agree before any code; then the coordinator's go. Robert approved phase 3. His words: "Getting plugins 'right' is critical if we're going to split out more." GeoNames is the proof that a real plug-in can be built on the protocol alone.
+Agreed (2026-10-19) by the builder, the reviewer and the tester, and built in four parts (part 4, the removal, with Robert's answers to section 11 folded in). Drafted for the three to agree before any code; then the coordinator's go. Robert approved phase 3. His words: "Getting plugins 'right' is critical if we're going to split out more." GeoNames is the proof that a real plug-in can be built on the protocol alone.
 
-What's settled here is how. What only Robert can say is under "Questions for Robert", sent through the coordinator; the plan says what it does until he answers.
+What's settled here is how. What only Robert could say is under "Questions for Robert", with his answers.
 
 ## Where it starts
 
@@ -133,7 +133,7 @@ Proven by tests that run today's code and the plug-in on the same lists:
   "work": {
     "title": "Place names", "version": "1", "media": ["image", "video"], "inputs": ["location"], "batch": 200,
     "outputs": [
-      {"key": "at", "kind": "fact", "label": "At"},
+      {"key": "at", "kind": "fact", "label": "At", "searchable": true},
       {"key": "near", "kind": "fact", "label": "Near", "searchable": true, "empty": "Not near a town"}
     ]
   },
@@ -141,7 +141,7 @@ Proven by tests that run today's code and the plug-in on the same lists:
 }
 ```
 
-- `version` 1: its first release as a program. `work.version` 1: a new producer (`plugin_geonames`), so every located clip is due once, not held.
+- `version` 1: its first release as a program. `work.version` 1: a new producer (`plugin_geonames`), so every located clip is due once, not held. `version` 2 (part 4) searches `at` too (Robert's answer to question 2): `work.version` stays 1, so nothing is named again, and the search sweep writes the text of the clips named before again from their facts (`plugin_outputs.searched_again`, general: any plug-in's newer version that searches other outputs).
 - The acknowledgment is today's version 3, unchanged: every acceptance stands (`reaccept_from` 1) and nobody is asked again. What it says is still true: nothing is fetched until it's turned on, about 600 MB, kept on this server, nothing about anyone's photos sent.
 - `credit.license` and `outputs[].empty` are new to the manifest, for any plug-in (section 4).
 - The mirror takes `http://` as well as `https://`, as `LUMIVERB_GEONAMES_URL` does today (a mirror on the local network), and is how tests serve their own lists.
@@ -182,7 +182,7 @@ Robert's rule: existing data stays until its replacement is saved. Part 3 does t
 
 - **The Lightbox.** "At …" and "Near …" move from under Location into the plug-in's own section, "Place names (GeoNames)", as every plug-in's facts show (Robert accepted it): "At · Magic Kingdom", "Near · Horizon West, Florida, United States", "From GeoNames · CC BY 4.0". With no town near: "Near · Not near a town". Under Location, a place picked by name still says its name with its credit and license; the section may say the same place again (today's row hid that repetition): it reads fine as two sections (the reviewer agrees), so no hint is proposed.
 - Two small differences: a clip whose location was just moved shows its old name until it's named again (seconds to minutes), where today it shows none meanwhile (ADR-023's rule for every plug-in; a cleared location shows none, as today: section 4); and a landmark with no town near now has "Near · Not near a town" under it, where today's row left it out.
-- **Search** finds clips by the town they're near (`near` is searchable, as ADR-023's manifest has it). Not today: ADR-017 decision 9 left searching by place name for later (a heads-up below).
+- **Search** finds clips by the town they're near and the landmark they're at (`near` and `at` are searchable; Robert, question 2: `at` too). Not today: ADR-017 decision 9 left searching by place name for later.
 - **Set location.** Place search as now, from one generic path: "Places from GeoNames, CC BY 4.0" (today: "Place names from GeoNames, CC BY 4.0"). While its first list is fetched, today's list answers.
 - **Settings › Plug-ins.** GeoNames' card becomes an installed one's, like the example's: version, "Reads each clip's location", what it downloads and from where, "Doesn't use the internet", its state (preparing N of M while it fetches), its `radius_km` (moved from Settings › Processing) and, for the server admin, the mirror. Its switch and its acknowledgment work as now.
 - **Processing.** The old "Place names" row goes; the plug-in's "Place names" row comes, "Part of the Place names (GeoNames) plug-in", waiting (`plugin_down`: preparing its data) until its list is there, then naming every located clip once.
@@ -199,6 +199,8 @@ Once part 3 has run (the plug-in's list fetched, its names saved), these go, eac
 - migrations: the control database's `geonames_*` and `plugin_data` dropped; each account's `asset_place` dropped. The 410s for `/v1/places/nearest` and `/names` stay a while, as the API's other `gone` routes do.
 
 `tests/test_geonames.py` and `tests/test_place_producer.py` go with the code they test; what they proved of the answers is the golden file's and the plug-in's own tests by then.
+
+As built: what part 3 left for the switch-over goes too: `lumiverb-server plugins`' count of clips still showing an old name, config's `lumiverb_geonames_url` (an install's `LUMIVERB_GEONAMES_URL` still becomes the plug-in's mirror when Lumiverb first installs it, said in the plug-in's own folder, `lumiverb-own.json`, so Lumiverb's code names no plug-in's variable), and the tests that compared the plug-in with the code removed (the golden file holds it now; `tests/plugins/geonames_golden.py`, which wrote it, goes). `GET /v1/plugins`' `kind` is always `installed`.
 
 **When part 4 may ship.** Not only once part 3 is out: on Robert's Mac and on the tester's throwaway install, the plug-in says `ready` and no clip still shows an old name. Part 3's `lumiverb-server plugins` prints that count for each account (a line removed in part 4), the coordinator reading it on Robert's Mac:
 
@@ -219,7 +221,7 @@ On an install that steps through the releases, nothing is removed before its rep
 
 - **A clip not named by the plug-in yet** (the runner down, a download failing, a jump from before part 3: below) loses today's name until the plug-in names it. A place name is derived (from the clip's location and GeoNames' list): the plug-in makes it again by itself as soon as it can run, and nothing a person made is lost (their locations, their places and their places' credit stay).
 - **An account with GeoNames off** loses its hidden old names (hidden since part 3, as any turned-off plug-in's facts are); turned on again, the plug-in names its clips.
-- **Place search** answers from the plug-in alone: while it can't (its first list still being fetched), Set location says so and its other ways (a point, the same place as another clip) work.
+- **Place search** answers from the plug-in alone: while it can't (its first list still being fetched), Set location says so and its other ways (a point, the same place as another clip) work. As built, Set location always offers Place (the reviewer's note on part 3: a failed install hid it), and says why it finds nothing: `GET /v1/places`' 409 `plugin_off` names the plug-ins installed that would (none: the server admin installs one), and `unavailable` one that can't answer now.
 - **An install with no plug-in runner** (a Linux env file without `DATA_DIR`) has no GeoNames from part 4: no place names on clips, no Place search, until its env file names `DATA_DIR` and it's updated again (the update has warned since part 3). People's locations and their places' labels and credits stay.
 
 An install that steps through every release meets none of these but the first, and only while the runner is down. One that jumps from before part 3 to part 4 or later (a Linux install updating after a while) has no fallback: no place names on clips and no Place search until the plug-in has fetched its list and named them (minutes). See "Questions for Robert".
@@ -262,11 +264,11 @@ All call the real code: the real program over its socket, the real runner, the r
 
 The plan does what's written above until he says otherwise.
 
-1. **Jumping straight to the removal.** An install that upgrades from before part 3 straight to part 4 or later would have no place names or Place search for the minutes the plug-in takes to fetch and name, with nothing a person made lost. Plain migrations accept that (recommended: his Mac steps through every release). The alternative, dropping the old tables only once the plug-in says its replacement is there, keeps the old code (search and names from the old tables) in Lumiverb for as long as any install hasn't got there. Is the gap acceptable?
-2. **Searching by place.** ADR-023's manifest makes `near` searchable, so search finds clips by the town they're near (ADR-017 decision 9 had left that for later). Should `at` be searchable too (a search for "Magic Kingdom" finding the clips taken there)? The plan makes only `near` searchable, as the ADR does.
+1. **Jumping straight to the removal.** *Robert, 2026-10-19: the gap is accepted; plain migrations, as recommended.* An install that upgrades from before part 3 straight to part 4 or later would have no place names or Place search for the minutes the plug-in takes to fetch and name, with nothing a person made lost. Plain migrations accept that (recommended: his Mac steps through every release). The alternative, dropping the old tables only once the plug-in says its replacement is there, keeps the old code (search and names from the old tables) in Lumiverb for as long as any install hasn't got there. Is the gap acceptable?
+2. **Searching by place.** *Robert, 2026-10-19: `at` is searchable too, "agreed that people search by landmarks more than towns" (part 4).* ADR-023's manifest makes `near` searchable, so search finds clips by the town they're near (ADR-017 decision 9 had left that for later). Should `at` be searchable too (a search for "Magic Kingdom" finding the clips taken there)? The plan makes only `near` searchable, as the ADR does.
 3. ~~A one-off real run~~ Answered (the coordinator, 2026-10-19): yes, from the tester's copy of GeoNames' real files, read-only, in the builder's scratch area; no download again, never in a test, never near Robert's install.
 
-Questions 1 and 2 are with Robert.
+Robert answered questions 1 and 2 on 2026-10-19 (through the coordinator); part 4 builds both.
 
 ## Agreement
 

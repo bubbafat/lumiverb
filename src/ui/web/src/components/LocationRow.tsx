@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from "react";
-import type { AssetLocation, AssetPlace } from "../api/types";
+import type { AssetLocation } from "../api/types";
 import { CreditLinks } from "./PluginFactsSection";
 
 /** Where a clip was shot (ADR-017): a person's, else the file's, else a
- * guess; a suggestion asks. Shown in the Lightbox's details. */
+ * guess; a suggestion asks. Shown in the Lightbox's details (what a plug-in
+ * says of the place, its own section: PluginFactsSection). */
 
 const coords = (lat: number, lon: number) => `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
 
@@ -32,9 +33,6 @@ export interface LocationRowProps {
   gpsLat: number | null | undefined;
   gpsLon: number | null | undefined;
   location?: AssetLocation | null;
-  /** The nearest town to it and the landmark it's at (the Place names plug-in), shown under it with
-   * their source's credit. */
-  place?: AssetPlace | null;
   /** An editor or admin: shows Clear, Use this and No. */
   canEdit?: boolean;
   busy?: boolean;
@@ -47,7 +45,7 @@ export interface LocationRowProps {
 }
 
 export function LocationRow({
-  gpsLat, gpsLon, location, place, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
+  gpsLat, gpsLon, location, canEdit = false, busy = false, error, onNearbyClick, onClear, onAccept, onReject,
 }: LocationRowProps) {
   const [showBasis, setShowBasis] = useState(false);
   const file = gpsLat != null && gpsLon != null ? { lat: gpsLat, lon: gpsLon } : null;
@@ -56,15 +54,6 @@ export function LocationRow({
   const suggestion = location && location.status === "suggested" ? location : null;
   const shown = person ?? file ?? guess;
   if (!shown && !suggestion) return null;
-  // A place a person picked by name already says it (basis_summary): it isn't said twice.
-  const picked = person?.credit ? person.basis_summary : null;
-  const nearby = shown && place && !(picked && picked === place.label) ? place : null;
-  const landmark = shown && place?.landmark && !(picked && picked === place.landmark.label) ? place.landmark : null;
-  // "At Magic Kingdom, Walt Disney World" over "Near Horizon West, …"; at a landmark with no town near,
-  // its region and country say where, so "Not near a town" isn't said.
-  const placeLines: string[] = [];
-  if (landmark) placeLines.push(`At ${nearby?.label ? landmark.name : landmark.label}`);
-  if (nearby && (nearby.label || !landmark)) placeLines.push(nearby.label ? `Near ${nearby.label}` : "Not near a town");
 
   return (
     <>
@@ -134,17 +123,6 @@ export function LocationRow({
               )}
             </div>
           )}
-          {place && placeLines.map((line, i) => (
-            <div key={line} className="text-xs text-gray-300">
-              {line}
-              {i === placeLines.length - 1 && (
-                <>
-                  {" · "}
-                  <CreditLinks credit={place.credit} className="text-gray-500 hover:text-gray-300 hover:underline" />
-                </>
-              )}
-            </div>
-          ))}
           {error && <div role="alert" className="text-xs text-red-300">{error}</div>}
         </dd>
       </div>

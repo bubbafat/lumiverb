@@ -197,7 +197,7 @@ class Manifest:
     def spec(self) -> PluginSpec:
         """As an account's switch sees it (repository/plugins.py): its id, title, text and acknowledgment."""
         return PluginSpec(plugin_id=self.plugin_id, title=self.title, description=self.description,
-                          acknowledgment=self.acknowledgment, order=500)
+                          acknowledgment=self.acknowledgment)
 
     def setting(self, key: str) -> PluginSetting | None:
         return next((s for s in self.settings if s.key == key), None)

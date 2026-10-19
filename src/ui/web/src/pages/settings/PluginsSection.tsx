@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, getCurrentUser, listPlugins, setPlugin } from "../../api/client";
-import type { Plugin, PluginAcknowledgment, PluginData } from "../../api/types";
+import type { Plugin, PluginAcknowledgment } from "../../api/types";
 import { InstalledDetails } from "./InstalledPlugin";
 
 export const PLUGINS_QUERY_KEY = ["plugins"];
@@ -14,8 +14,8 @@ function day(at: string): string {
   return new Date(at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-/** Optional parts of Lumiverb an account turns on: Lumiverb's own (ADR-021) and those the server admin installed
- * (ADR-023), each shown from its manifest with its settings. Turning on one that asks an acknowledgment (a license,
+/** Optional parts of Lumiverb an account turns on: the plug-ins installed on this server, Lumiverb's own and the
+ * server admin's (ADR-023), each shown from its manifest with its settings. Turning on one that asks an acknowledgment (a license,
  * say) shows it in full: OK accepts it and turns the plug-in on, Cancel turns the switch back off. Account admins
  * turn them on; everyone else sees which are on. */
 export default function PluginsSection() {
@@ -25,11 +25,9 @@ export default function PluginsSection() {
   const { data: plugins, isLoading, error } = useQuery({
     queryKey: PLUGINS_QUERY_KEY,
     queryFn: listPlugins,
-    // While what a plug-in keeps for the server is fetched: how far, every second; while one starts, gets ready or
-    // restarts, every two.
+    // While one starts, gets ready or restarts: how far, every two seconds.
     refetchInterval: (query) => {
       const plugins = query.state.data ?? [];
-      if (plugins.some((p) => p.data?.state === "fetching")) return 1000;
       return plugins.some((p) => ["starting", "preparing", "restarting"].includes(p.running?.state ?? "")) ? 2000 : false;
     },
   });
@@ -63,8 +61,8 @@ export default function PluginsSection() {
       <div>
         <h2 className="text-lg font-semibold text-gray-100">Plug-ins</h2>
         <p className="mt-1 text-sm text-gray-400">
-          Optional parts of Lumiverb. Lumiverb&apos;s own are off until turned on for this account; those installed on
-          this server are on or off as installed, until turned on or off here.
+          Optional parts of Lumiverb, installed on this server: each is on or off as installed (Lumiverb&apos;s own,
+          off), until turned on or off here.
           {!admin && user && " An admin turns them on."}
         </p>
       </div>
@@ -77,7 +75,6 @@ export default function PluginsSection() {
           {(plugins ?? []).map((p) => (
             <PluginRow key={p.plugin_id} plugin={p} admin={admin} busy={change.isPending}
                        turningOn={asking?.plugin.plugin_id === p.plugin_id} onToggle={(on) => toggle(p, on)}
-                       onRetry={() => change.mutate({ plugin: p, on: true })}
                        onSaved={() => queryClient.invalidateQueries({ queryKey: PLUGINS_QUERY_KEY })} />
           ))}
         </ul>
@@ -97,15 +94,13 @@ export default function PluginsSection() {
   );
 }
 
-function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry, onSaved }: {
+function PluginRow({ plugin, admin, busy, turningOn, onToggle, onSaved }: {
   plugin: Plugin;
   admin: boolean;
   busy: boolean;
   // Its acknowledgment is shown: the switch is on until it's accepted or cancelled.
   turningOn: boolean;
   onToggle: (on: boolean) => void;
-  // Fetch what it keeps for the server again, after it failed.
-  onRetry: () => void;
   // Its settings were saved.
   onSaved: () => void;
 }) {
@@ -134,10 +129,7 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry, onSaved 
           {admin && " Turn it on to read and accept the new text."}
         </p>
       )}
-      {plugin.state === "on" && plugin.data && (
-        <DataLine data={plugin.data} admin={admin} busy={busy} onRetry={onRetry} />
-      )}
-      {plugin.kind === "installed" && <InstalledDetails plugin={plugin} onSaved={onSaved} />}
+      <InstalledDetails plugin={plugin} onSaved={onSaved} />
       {plugin.state === "on" && accepted && (
         <p className="text-xs text-gray-500">
           {plugin.acknowledgment?.title ?? "Its terms"} accepted {day(accepted.at)}
@@ -145,57 +137,6 @@ function PluginRow({ plugin, admin, busy, turningOn, onToggle, onRetry, onSaved 
         </p>
       )}
     </li>
-  );
-}
-
-function mb(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/** What a plug-in on keeps for the whole server, as it's fetched: how far, what's there, or why it failed. */
-function DataLine({ data, admin, busy, onRetry }: { data: PluginData; admin: boolean; busy: boolean;
-                                                     onRetry: () => void }) {
-  if (data.state === "ready") {
-    return (
-      <p className="text-sm text-gray-400">
-        {data.title}: {(data.count ?? 0).toLocaleString()} {data.unit}
-        {data.ready_at && `, fetched ${day(data.ready_at)}`}.
-      </p>
-    );
-  }
-  if (data.state === "missing" || data.state === "failed") {
-    return (
-      <p role={data.state === "failed" ? "alert" : undefined}
-         className={data.state === "failed" ? "text-sm text-red-300" : "text-sm text-gray-400"}>
-        {data.state === "failed"
-          ? <>Couldn&apos;t fetch {data.title.toLowerCase()}: {data.error}.</>
-          : <>{data.title} isn&apos;t fetched yet.</>}
-        {admin && (
-          <>
-            {" "}
-            <button type="button" disabled={busy} onClick={onRetry} className="text-indigo-300 hover:underline disabled:opacity-50">
-              Try again
-            </button>
-          </>
-        )}
-      </p>
-    );
-  }
-  const done = data.done ?? 0;
-  const total = data.total ?? null;
-  return (
-    <div className="space-y-1" role="status">
-      <p className="text-sm text-gray-400">
-        {data.detail ?? `Fetching ${data.title.toLowerCase()}`}
-        {total ? `: ${mb(done)} of ${mb(total)}` : done ? `: ${mb(done)}` : "…"}
-        {data.ready_at && ". The one fetched before is used meanwhile."}
-      </p>
-      {total ? (
-        <div className="h-1.5 w-full max-w-xs overflow-hidden rounded-sm bg-gray-800">
-          <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, (100 * done) / total)}%` }} />
-        </div>
-      ) : null}
-    </div>
   );
 }
 

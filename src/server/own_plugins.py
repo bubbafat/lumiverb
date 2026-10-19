@@ -16,13 +16,19 @@ is said, kept in plugin_install_log with why (the Admin page says it) and
 tried again at the next start: nothing here stops the server. A control
 database lock keeps two installs from running at once (a migrate run by
 hand beside a Mac's own).
+
+When one is first installed, it takes as its own what the install's
+settings (its env file) say for it, once: the server settings its folder's
+CARRIED names, each from the variable it names, unless the server admin
+chose it already.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -46,9 +52,9 @@ BY = "lumiverb"
 _LOCK = 0x4C564F57  # the control database's advisory lock while one installs ("LVOW")
 LOCK_WAIT_SEC = 120  # waiting longer than this for another install, this one gives up (the next start tries)
 NO_DATA_DIR = "There's no DATA_DIR in the env file, so no plug-in runner to run it: set DATA_DIR, then update again"
-# What an install's settings say that one of them takes as its own once, when it's first installed (unless the
-# server admin chose it already): GeoNames' mirror (LUMIVERB_GEONAMES_URL, when it isn't GeoNames' own).
-GEONAMES_DUMP = "https://download.geonames.org/export/dump/"
+# In an own plug-in's folder: {"server_settings": [{"key": its server setting, "from": the install's variable,
+# "unless": [values that mean its default]}]}, what it takes from the install's settings when first installed.
+CARRIED = "lumiverb-own.json"
 
 
 def folders() -> list[Path]:
@@ -69,11 +75,11 @@ def shipped(plugin_id: str) -> Manifest | None:
     return None
 
 
-def install_own(control_url: str, data: Path | None, *, geonames_url: str | None = None,
+def install_own(control_url: str, data: Path | None, *, environ: Mapping[str, str] | None = None,
                 say: Callable[[str], None] = print, fail: Callable[[str], None] | None = None) -> None:
     """Lumiverb's own plug-ins installed where they aren't, or updated where the one shipped is newer; data: the
-    install's DATA_DIR (None: there's none). Each one's install is said (say), and a failure (fail, else say):
-    nothing raises."""
+    install's DATA_DIR (None: there's none), environ its settings (the env file's: what one first installed
+    takes, CARRIED). Each one's install is said (say), and a failure (fail, else say): nothing raises."""
     from src.server import database
 
     fail = fail or say
@@ -88,7 +94,7 @@ def install_own(control_url: str, data: Path | None, *, geonames_url: str | None
             try:
                 with Session(engine) as session:
                     for folder in folders():
-                        _one(folder, session, data, geonames_url, say, fail)
+                        _one(folder, session, data, environ or {}, say, fail)
             finally:
                 lock.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _LOCK})
     except SQLAlchemyError as exc:
@@ -104,7 +110,7 @@ def _uninstalled(log: list[dict[str, Any]]) -> bool:
     return next((e["action"] for e in reversed(log) if e["action"] in (INSTALL, UNINSTALL)), None) == UNINSTALL
 
 
-def _one(folder: Path, session: Session, data: Path | None, geonames_url: str | None,
+def _one(folder: Path, session: Session, data: Path | None, environ: Mapping[str, str],
          say: Callable[[str], None], fail: Callable[[str], None]) -> None:
     from src.server.plugin_install import PluginInstallError, install, plan
 
@@ -131,7 +137,7 @@ def _one(folder: Path, session: Session, data: Path | None, geonames_url: str | 
                     session=session, by=BY, now=utcnow())
             say(f"✓ {title} {manifest.version} installed, off until an account's admin turns it on")
             if not any(e["action"] == INSTALL for e in log):
-                _carry_over(session, pid, geonames_url, say)
+                _carry_over(session, folder, manifest, environ, say)
         elif (version_key(manifest.version) or ()) > (version_key(row["version"]) or ()) and data is not None:
             p = plan(folder, session, data)
             install(p, on_by_default=row["on_by_default"], acknowledged=False, data=data, session=session, by=BY,
@@ -157,22 +163,46 @@ def _failed(session: Session, plugin_id: str, version: str | None, why: str, fai
         fail(f"✗ {plugin_id}'s failure couldn't be kept: {str(exc).strip().splitlines()[0]}")
 
 
-def _carry_over(session: Session, plugin_id: str, geonames_url: str | None, say: Callable[[str], None]) -> None:
-    """What the install's settings say that a newly installed one takes as its own, once."""
-    from src.server.plugin_settings import SERVER, PluginSettingsRepository
+def carried(folder: Path) -> list[dict[str, Any]]:
+    """What an own plug-in takes from the install's settings when first installed (its folder's CARRIED; none
+    without one). ValueError when it isn't what CARRIED says."""
+    try:
+        raw = json.loads((folder / CARRIED).read_text())
+    except FileNotFoundError:
+        return []
+    items = raw.get("server_settings") if isinstance(raw, dict) else None
+    if not isinstance(items, list) or not all(
+            isinstance(i, dict) and isinstance(i.get("key"), str) and isinstance(i.get("from"), str)
+            and isinstance(i.get("unless", []), list) for i in items):
+        raise ValueError(f"{CARRIED}: server_settings is a list of {{key, from, unless}}")
+    return items
 
-    if plugin_id != "geonames" or not geonames_url:
-        return
-    url = geonames_url.strip()
-    if url.rstrip("/") == GEONAMES_DUMP.rstrip("/") or not url.startswith(("http://", "https://")) or " " in url:
+
+def _carry_over(session: Session, folder: Path, manifest: Manifest, environ: Mapping[str, str],
+                say: Callable[[str], None]) -> None:
+    """What the install's settings say that a newly installed one takes as its own, once: each server setting
+    CARRIED names, from its variable, unless the server admin chose it already, it means the setting's default
+    (unless), or the setting's own check refuses it."""
+    from src.server.plugin_settings import SERVER, PluginSettingsRepository, changed
+
+    try:
+        items = carried(folder)
+    except (OSError, ValueError) as exc:
+        say(f"  nothing taken from the install's settings: {exc}")
         return
     settings = PluginSettingsRepository(session, SERVER)
-    chosen = settings.get(plugin_id)
-    if chosen.get("mirror"):
-        return
-    settings.save(plugin_id, {**chosen, "mirror": url}, by=BY, now=utcnow())
-    session.commit()
-    say(f"  its mirror: {url} (LUMIVERB_GEONAMES_URL)")
+    chosen = settings.get(manifest.plugin_id)
+    for item in items:
+        key, value = item["key"], (environ.get(item["from"]) or "").strip()
+        if not value or chosen.get(key) or value in item.get("unless", []):
+            continue
+        after, errors = changed(manifest, SERVER, chosen, {key: value})
+        if errors:
+            continue
+        chosen = after
+        settings.save(manifest.plugin_id, chosen, by=BY, now=utcnow())
+        session.commit()
+        say(f"  its {key}: {value} ({item['from']})")
 
 
 def status(session: Session) -> list[dict[str, Any]]:
@@ -199,8 +229,8 @@ def status(session: Session) -> list[dict[str, Any]]:
 
 def main() -> int:
     """`python -m src.server.own_plugins`: scripts/migrate.sh's last step (a Linux update's), with
-    CONTROL_PLANE_DATABASE_URL, DATA_DIR and LUMIVERB_GEONAMES_URL in the environment. Says what it did; a
-    failure is said, never this command's exit (the update goes on, and the next start tries again)."""
+    CONTROL_PLANE_DATABASE_URL, DATA_DIR and what the own plug-ins take (CARRIED) in the environment. Says what
+    it did; a failure is said, never this command's exit (the update goes on, and the next start tries again)."""
     url = os.environ.get("CONTROL_PLANE_DATABASE_URL", "")
     if not url:
         print("✗ CONTROL_PLANE_DATABASE_URL isn't set", file=sys.stderr)
@@ -208,8 +238,7 @@ def main() -> int:
     data = Path(os.environ["DATA_DIR"]) if os.environ.get("DATA_DIR") else None
     if data is not None and not data.is_absolute():
         data = None
-    install_own(url, data, geonames_url=os.environ.get("LUMIVERB_GEONAMES_URL") or None,
-                fail=lambda line: print(line, file=sys.stderr))
+    install_own(url, data, environ=os.environ, fail=lambda line: print(line, file=sys.stderr))
     return 0
 
 

@@ -35,7 +35,7 @@ from src.server.api.routers.plugins import require_on
 from src.server.plugin_catalog import Installed, find
 from src.server.repository import lineage
 from src.server.repository.clip_inputs import ClipInputsRepository
-from src.server.repository.plugin_outputs import PluginOutputRepository, search_text
+from src.server.repository.plugin_outputs import PluginOutputRepository
 from src.shared.producers import PRODUCERS
 
 router = APIRouter(prefix="/v1/plugins", tags=["plugins"])
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/v1/plugins", tags=["plugins"])
 def _work_of(plugin_id: str) -> tuple[Installed, str]:
     """An installed plug-in with work, and its producer's artifact (404 otherwise)."""
     entry = find(plugin_id)
-    if entry is None or entry.installed is None or entry.installed.manifest.work is None:
+    if entry is None or entry.installed.manifest.work is None:
         raise HTTPException(status_code=404, detail="No installed plug-in with work by that id")
     artifact = plugin_producers.artifact_of(plugin_id)
     if artifact not in PRODUCERS:  # installed since this API last looked
@@ -137,7 +137,7 @@ def save_plugin_outputs(
             stale.append(item.asset_id)
         else:
             facts = checked[item.asset_id]
-            outputs.save(item.asset_id, plugin_id, facts, item.inputs_hash, search_text(work, facts))
+            outputs.save(item.asset_id, plugin_id, work, facts, item.inputs_hash)
             lineage.record(session, item.asset_id, artifact, with_source(made, item.source_hash),
                            outcome="ok" if any(facts.values()) else "empty", commit=False)
             saved += 1

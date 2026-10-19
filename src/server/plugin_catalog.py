@@ -1,13 +1,13 @@
-"""Every plug-in this server has (ADR-023): Lumiverb's own, in its code
-(src/plugins/, ADR-021's registry), and those the server admin installed
-(the control database's installed_plugins, each with its manifest).
+"""Every plug-in this server has (ADR-023): those installed, Lumiverb's own
+(src/server/own_plugins.py) and the server admin's alike (the control
+database's installed_plugins, each with its manifest).
 
 An installed plug-in is there for every account. In an account whose admin
 hasn't turned it on or off, it's as its default says: on or off by default,
 with the acknowledgment the server admin accepted for those accounts
 (Robert, 2026-10-18: "allow the system admin to install them on or off by
-default to make one's config easier"). Lumiverb's own have no default: off
-until an account's admin turns one on.
+default to make one's config easier"). Lumiverb's own are installed off by
+default.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from src.plugins import registry
 from src.plugins.contract import PluginSpec
 from src.plugins.manifest import Manifest, ManifestError, parse
 from src.server.database import get_control_session
@@ -43,7 +42,7 @@ class Installed:
 @dataclass(frozen=True)
 class Entry:
     spec: PluginSpec
-    installed: Installed | None = None  # None: Lumiverb's own
+    installed: Installed
 
 
 def installed() -> dict[str, Installed]:
@@ -113,15 +112,11 @@ def server_settings(plugin_id: str, manifest: Manifest) -> dict[str, Any]:
 
 
 def entries() -> list[Entry]:
-    """Every plug-in: Lumiverb's own first (their order), then the installed ones by title."""
-    own = [Entry(spec) for spec in registry().values()]
-    theirs = sorted((Entry(i.manifest.spec(), i) for pid, i in installed().items() if pid not in registry()),
-                    key=lambda e: (e.spec.title.lower(), e.spec.plugin_id))
-    return [*own, *theirs]
+    """Every plug-in, by title."""
+    return sorted((Entry(i.manifest.spec(), i) for i in installed().values()),
+                  key=lambda e: (e.spec.title.lower(), e.spec.plugin_id))
 
 
 def find(plugin_id: str) -> Entry | None:
-    if plugin_id in registry():
-        return Entry(registry()[plugin_id])
     found = installed().get(plugin_id)
     return Entry(found.manifest.spec(), found) if found else None

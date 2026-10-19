@@ -36,8 +36,8 @@ export interface PluginAcknowledgment {
   links: { label: string; url: string }[];
 }
 
-/** An optional part of Lumiverb an account turns on: Lumiverb's own (ADR-021), or a program of its own the server
- * admin installed (ADR-023). */
+/** An optional part of Lumiverb an account turns on: a program of its own installed on this server, Lumiverb's own
+ * or the server admin's (ADR-023). */
 export interface Plugin {
   plugin_id: string;
   title: string;
@@ -47,10 +47,8 @@ export interface Plugin {
   acknowledgment: PluginAcknowledgment | null;
   /** The acceptance it's on by (or waiting with); who, for admins. */
   acknowledged: { version: string; by: string | null; at: string } | null;
-  /** What it keeps for the whole server (GeoNames' place list), as it's fetched; null: nothing. */
-  data?: PluginData | null;
-  /** built_in: Lumiverb's own; installed: the server admin installed it. The rest is an installed one's. */
-  kind?: "built_in" | "installed";
+  /** Every plug-in is installed since ADR-023 phase 3. */
+  kind?: "installed";
   version?: string | null;
   author?: string | null;
   homepage?: string | null;
@@ -64,9 +62,9 @@ export interface Plugin {
   lookups?: string[];
   downloads?: { url: string; title: string; about_mb: number }[];
   internet?: boolean;
-  /** An installed one's process, as the plug-in runner last said; null for Lumiverb's own. */
+  /** Its process, as the plug-in runner last said. */
   running?: PluginRunning | null;
-  /** An installed one's settings, from its manifest: the account's, and the server's for a server admin. */
+  /** Its settings, from its manifest: the account's, and the server's for a server admin. */
   settings?: PluginSetting[];
   /** Saving settings: why the plug-in's own check didn't run (they were saved). */
   unchecked?: string | null;
@@ -110,23 +108,7 @@ export interface PluginRunning {
   restarts?: number;
 }
 
-export interface PluginData {
-  /** What it is ("The place list") and what count counts ("places"). */
-  title: string;
-  unit: string;
-  state: "missing" | "fetching" | "ready" | "failed";
-  /** Bytes downloaded so far, of total (when known), while fetching. */
-  done?: number;
-  total?: number | null;
-  /** What it's doing now ("Downloading the place list"). */
-  detail?: string | null;
-  error?: string | null;
-  /** How many it keeps (places), once ready. */
-  count?: number | null;
-  ready_at?: string | null;
-}
-
-/** A place found by name (the Place names plug-in): what setting a location by place takes. */
+/** A place found by name (a plug-in that finds places): what setting a location by place takes. */
 export interface Place {
   place_id: string;
   name: string;
@@ -142,7 +124,7 @@ export interface Place {
   kind?: string | null;
   /** The name in another language it was found by, when not its own ("Eiffel Tower" for Tour Eiffel). */
   matched?: string | null;
-  /** Who found it: "geonames", or an installed plug-in's id, and its title. */
+  /** Who found it: the plug-in's id, and its title. */
   source?: string;
   source_title?: string | null;
 }
@@ -157,7 +139,7 @@ export interface PlaceCredit {
 /** What a place search found, from each source, and who to credit; the plug-ins that couldn't answer now. */
 export interface PlaceSearch {
   places: Place[];
-  /** GeoNames' (with its license) when its places are among them. */
+  /** Always null since every place is a plug-in's: credits says who to credit. */
   credit: PlaceCredit | null;
   credits?: { source: string; text: string; url: string | null; license?: License | null }[];
   unavailable?: { plugin_id: string; title: string; why: string }[];
@@ -384,9 +366,6 @@ export interface AssetDetail {
   face_count?: number | null;
   /** What the file doesn't say (ADR-017), beside the file's GPS. Signed-in only. */
   location?: AssetLocation | null;
-  /** The nearest town to the location it shows (the Place names plug-in): label null when there's none that
-   * near; null until named. */
-  place?: AssetPlace | null;
   /** What installed plug-ins' work says of it (ADR-023): each plug-in on here that made it a fact. Signed-in only. */
   facts?: PluginFacts[] | null;
 }
@@ -398,18 +377,6 @@ export interface PluginFacts {
   credit: Credit | null;
   /** empty: it had nothing to say, and text is the line its manifest declares for that ("Not near a town"). */
   facts: { key: string; label: string; text: string; url: string | null; empty?: boolean }[];
-}
-
-/** The nearest town to where a clip was (the Place names plug-in's producer), with who to credit for the name. */
-export interface AssetPlace {
-  /** "Port of Spain, Trinidad and Tobago"; null: no town within its radius. */
-  label: string | null;
-  place_id: string | null;
-  distance_m: number | null;
-  /** The landmark it's at (within its kind's reach); null: at none. label is the name with its region
-   * and country, for when no town is near. */
-  landmark?: { place_id: string; name: string; label: string; distance_m: number | null } | null;
-  credit: { text: string; url: string; license?: License | null };
 }
 
 /** A clip's location beyond the file's: a person's, a guess, or a suggestion. */

@@ -48,7 +48,7 @@ class SetLocationRequest(BaseModel):
     lat: float | None = Field(default=None, allow_inf_nan=False)
     lon: float | None = Field(default=None, allow_inf_nan=False)
     same_as: str | None = None  # another clip: its location (a person's, else the file's)
-    # A place from GET /v1/places ("geonames:<id>", "<plugin_id>:<id>"): its point, the place kept with it.
+    # A place from GET /v1/places ("<plugin_id>:<id>"): its point, the place kept with it.
     place_id: str | None = Field(default=None, max_length=160)
     # What may be replaced: "none", a person's location ("person"), or the file's too ("all").
     replace: Literal["none", "person", "all"] = "none"
@@ -96,39 +96,22 @@ def _who(request: Request) -> str:
 def _place(session: Session, place: str) -> tuple[float, float, dict]:
     """A place's point and what's kept of it (its id, label, source and credit, which stays with it whatever
     becomes of the plug-in): the plug-in's that found it (ADR-023 phase 2d), as it says it now; 409 plugin_off
-    when that plug-in isn't on here, 503 plugin_unavailable when it can't answer, 422 unknown_place. GeoNames'
-    while it can't answer, from the list the built-in Place names left (until part 4), where it's on by the
-    account's own switch."""
-    from src.server.api.routers.places import PLUGIN, standing_in
-    from src.server.database import get_control_session
+    when that plug-in isn't on here, 503 plugin_unavailable when it can't answer, 422 unknown_place."""
     from src.server.plugin_catalog import find
     from src.server.plugin_lookups import PLACES, LookupUnavailableError, offering, one_place
-    from src.server.repository.places import PlaceRepository, geonameid_of, label
 
     plugin_id = place.partition(":")[0]
-    on = any(p.manifest.plugin_id == plugin_id for p in offering(session, PLACES))
-    stand_in = standing_in(session) if plugin_id == PLUGIN else None
-    found = None
-    try:
-        found = one_place(session, place) if on else None
-    except LookupUnavailableError as exc:
-        if stand_in is None:
+    if any(p.manifest.plugin_id == plugin_id for p in offering(session, PLACES)):
+        try:
+            found = one_place(session, place)
+        except LookupUnavailableError as exc:
             raise ApiError(503, "plugin_unavailable", f"The plug-in that found it can't answer now: {exc}.",
                            {"plugin_id": plugin_id}) from None
-        on = False
-    if found is not None:
-        return found["lat"], found["lon"], {"id": place, "label": found["label"], "source": found["source"],
-                                            "credit": found["credit"]}
-    if not on and stand_in is not None:
-        geonameid = geonameid_of(place)
-        with get_control_session() as control:
-            row = PlaceRepository(control).get(geonameid) if geonameid is not None else None
-        if row is not None and is_fix(row["lat"], row["lon"]):
-            return float(row["lat"]), float(row["lon"]), {"id": place, "label": label(row), "source": PLUGIN,
-                                                          "credit": stand_in["credit"]}
-    elif not on and (find(plugin_id) is not None or plugin_id == PLUGIN):
-        entry = find(plugin_id)
-        title = entry.spec.title if entry else plugin_id
+        if found is not None:
+            return found["lat"], found["lon"], {"id": place, "label": found["label"], "source": found["source"],
+                                                "credit": found["credit"]}
+    elif (entry := find(plugin_id)) is not None:
+        title = entry.spec.title
         raise ConflictError("plugin_off", f"{title} is off: an admin turns it on in Settings › Plug-ins.",
                             {"plugin_id": plugin_id, "title": title})
     raise ApiError(422, "unknown_place", "No such place: give a place_id from GET /v1/places.")

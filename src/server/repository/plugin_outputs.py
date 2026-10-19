@@ -3,7 +3,10 @@ plugin_outputs, one row per clip and plug-in, its outputs by key as
 Lumiverb checked them (src/plugins/manifest.py checked_outputs), kept with
 the hash of the inputs they were made from (src/server/repository/clip_inputs.py),
 and the text of those its manifest says are searchable (search_text: its
-words are indexed, src/server/search/text_search.py facts).
+words are indexed, src/server/search/text_search.py facts). A newer version
+of the plug-in that searches other outputs has its saved ones' text written
+again by the search sweep (searched_again), from what they say: nothing is
+made again for it.
 
 What's shown and searched is only a plug-in's that's installed and on in the
 account, for a clip that's one of its media and still has every input its
@@ -24,9 +27,12 @@ from src.server.repository.clip_inputs import present_sql
 from src.shared.utils import utcnow
 
 
-def search_text(work: Any, outputs: dict[str, dict[str, str] | None]) -> str:
-    """The text of the outputs its work says are searchable, in its manifest's order."""
-    return " · ".join(fact["text"] for o in work.outputs if o.searchable and (fact := outputs.get(o.key)))
+def search_text_sql(work: Any, outputs: str) -> str:
+    """SQL for the text of the outputs its work says are searchable, from `outputs` (SQL for its outputs by key
+    as saved, jsonb): each fact's text in its manifest's order, " · " between; '' for none. The keys are its
+    manifest's, checked names."""
+    texts = [f"({outputs})->'{o.key}'->>'text'" for o in work.outputs if o.searchable]
+    return f"concat_ws(' · ', {', '.join(texts)})" if texts else "''"
 
 
 def shown_sql(work: Any) -> str:
@@ -40,16 +46,24 @@ class PluginOutputRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def save(self, asset_id: str, plugin_id: str, outputs: dict[str, Any], inputs_hash: str,
-             searched: str = "") -> None:
-        """The clip's outputs, in place of what it had from this plug-in. Doesn't commit."""
+    def save(self, asset_id: str, plugin_id: str, work: Any, outputs: dict[str, Any], inputs_hash: str) -> None:
+        """The clip's outputs from its work, in place of what it had from this plug-in, with the text of those
+        it searches (search_text_sql). Doesn't commit."""
         self._session.execute(text(
             "INSERT INTO plugin_outputs (asset_id, plugin_id, outputs, inputs_hash, made_at, search_text)"
-            " VALUES (:a, :p, CAST(:o AS jsonb), :h, :now, :s)"
+            f" VALUES (:a, :p, CAST(:o AS jsonb), :h, :now, {search_text_sql(work, 'CAST(:o AS jsonb)')})"
             " ON CONFLICT (asset_id, plugin_id) DO UPDATE SET outputs = EXCLUDED.outputs,"
             "   inputs_hash = EXCLUDED.inputs_hash, made_at = EXCLUDED.made_at, search_text = EXCLUDED.search_text"
-        ), {"a": asset_id, "p": plugin_id, "o": json.dumps(outputs), "h": inputs_hash, "now": utcnow(),
-            "s": searched})
+        ), {"a": asset_id, "p": plugin_id, "o": json.dumps(outputs), "h": inputs_hash, "now": utcnow()})
+
+    def searched_again(self, plugin_id: str, work: Any) -> int:
+        """Its saved outputs' search text, written again where its work now searches others (a newer version
+        of the plug-in): how many. Doesn't commit."""
+        again = search_text_sql(work, "outputs")
+        return self._session.execute(text(
+            f"UPDATE plugin_outputs SET search_text = {again}"
+            f" WHERE plugin_id = :p AND search_text IS DISTINCT FROM {again}"
+        ), {"p": plugin_id}).rowcount
 
     def of(self, asset_id: str) -> dict[str, dict[str, Any]]:
         """The clip's outputs by plug-in: {plugin_id: {outputs, inputs_hash, made_at}}."""

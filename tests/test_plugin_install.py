@@ -119,7 +119,7 @@ def test_installing_shows_what_it_does_asks_and_copies_it_in_read_only(install, 
     assert (listed["on_by_default"], listed["follows_default"]) == (False, True)
     assert listed["reads"] == ["each clip's location (a person's, else its GPS, else an applied guess)",
                                "each photo's preview image"]
-    assert listed["internet"] is False and listed["downloads"] == [] and listed["data"] is None
+    assert listed["internet"] is False and listed["downloads"] == [] and "data" not in listed
 
     assert cli.main(["plugins", "--env", env]) == 0
     assert "  hello 1  Hello: off by default" in capsys.readouterr().out

@@ -120,9 +120,6 @@ class AssetResponse(BaseModel):
     # ADR-017: what the file doesn't say (a person's location, a guess or a
     # suggestion), beside the file's GPS above. Signed-in only.
     location: dict | None = None
-    # The nearest town to the location it shows (the Place names plug-in's producer): {label (None: no
-    # town that near), place_id, distance_m, credit}; None until named. Signed-in only.
-    place: dict | None = None
     # What installed plug-ins' work says of it (ADR-023), each plug-in on here that made it a fact:
     # [{plugin_id, title, credit: {text, url, license} | None, facts: [{key, label, text, url, empty}]}].
     # Signed-in only.
@@ -309,13 +306,10 @@ def _asset_detail(session: Session, request: Request, asset: Asset) -> AssetResp
     response.video_facet = VideoFacetModel.model_construct(**facet) if facet else None
     _trim_public_transcript(request, session, response)
     if not getattr(request.state, "is_public_request", False):
-        from src.server.repository import asset_places
         from src.server.repository.locations import for_asset
-
         from src.server.repository.plugin_outputs import facts_of
 
         response.location = for_asset(session, asset.asset_id)
-        response.place = asset_places.for_asset(session, asset.asset_id)
         response.facts = facts_of(session, asset.asset_id)
     return response
 

@@ -1,14 +1,14 @@
-"""Each account's plug-ins (ADR-021): its switch for each one, and every
-acknowledgment its admins accepted.
+"""Each account's plug-ins (ADR-021, ADR-023): its switch for each one, and
+every acknowledgment its admins accepted.
 
 A plug-in is on when its row says enabled and, if it declares an
 acknowledgment, the version accepted when it was turned on still stands:
 any version, unless the plug-in says a newer one must be accepted again
 (its reaccept_from; Robert 2026-10-18). Enabled with one accepted before
-that is "waiting": off until an admin accepts the new text. No row: off,
-or for a plug-in the server admin installed (ADR-023), its default: on or
-off by default, with the acknowledgment the server admin accepted for the
-accounts that haven't chosen (src/server/plugin_catalog.py).
+that is "waiting": off until an admin accepts the new text. No row: its
+default, as installed: on or off by default, with the acknowledgment the
+server admin accepted for the accounts that haven't chosen
+(src/server/plugin_catalog.py).
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.plugins import plugin as plugin_spec
 from src.plugins import version_key
 from src.plugins.contract import Acknowledgment, PluginSpec
 
@@ -33,8 +32,8 @@ def stands(ack: Acknowledgment, accepted: str | None) -> bool:
 
 
 def state_of(spec: PluginSpec, row: dict[str, Any] | None, default: dict[str, Any] | None = None) -> str:
-    """on, off, or waiting (enabled, but its acknowledgment must be accepted again since). default: an
-    installed plug-in's, for an account without a row (it hasn't chosen)."""
+    """on, off, or waiting (enabled, but its acknowledgment must be accepted again since). default: its
+    default as installed, for an account without a row (it hasn't chosen)."""
     if row is None:
         row = default
     if row is None or not row["enabled"]:
@@ -44,14 +43,11 @@ def state_of(spec: PluginSpec, row: dict[str, Any] | None, default: dict[str, An
     return ON
 
 
-def on_sql(plugin_id: str, *, spec: PluginSpec | None = None, default: dict[str, Any] | None = None) -> str:
+def on_sql(spec: PluginSpec, default: dict[str, Any] | None = None) -> str:
     """SQL true while the plug-in is on in the account: enabled, and the version of its acknowledgment
-    accepted still stands (what state_of says), versions compared as numbers. spec: an installed one's (its
-    manifest's), and default its default for an account without a row (it hasn't chosen). The id and
-    versions are checked where they come from (the registry, the manifest)."""
-    spec = spec or plugin_spec(plugin_id)
-    if spec is None:
-        raise ValueError(f"No plug-in {plugin_id!r}")
+    accepted still stands (what state_of says), versions compared as numbers. spec: its manifest's, and
+    default its default for an account without a row (it hasn't chosen). The id and versions are checked
+    where they come from (the manifest)."""
     ack, accepted = spec.acknowledgment, ""
     if ack is not None:
         since = ",".join(str(n) for n in version_key(ack.reaccept_from)) if ack.reaccept_from else ""
@@ -93,8 +89,7 @@ class PluginRepository:
         row = self._session.execute(text(
             "SELECT plugin_id, enabled, acknowledged_version FROM plugins WHERE plugin_id = :p"
         ), {"p": plugin_id}).mappings().first()
-        default = entry.installed.default if entry.installed else None
-        return state_of(entry.spec, dict(row) if row else None, default) == ON
+        return state_of(entry.spec, dict(row) if row else None, entry.installed.default) == ON
 
     def set(self, plugin_id: str, enabled: bool, *, acknowledged_version: str | None, by: str | None,
             now: datetime) -> None:

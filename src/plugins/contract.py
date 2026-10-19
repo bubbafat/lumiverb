@@ -1,8 +1,6 @@
-"""What a plug-in declares (ADR-021): an optional part of Lumiverb that an
-account turns on or off, and what turning it on asks first, if anything.
-
-A plug-in is one folder under src/plugins/, its __init__.py setting
-PLUGIN = PluginSpec(...); src/plugins/__init__.py lists them.
+"""A plug-in as an account's switch sees it (ADR-021, ADR-023): what it is,
+and what turning it on asks first, if anything. Made from its manifest
+(src/plugins/manifest.py Manifest.spec).
 """
 
 from __future__ import annotations
@@ -44,15 +42,3 @@ class PluginSpec:
     # What it does, a sentence or two (Settings › Plug-ins).
     description: str
     acknowledgment: Acknowledgment | None = None
-    # What it keeps for the whole server, fetched once when an account turns it
-    # on (src/server/plugin_data.py): "module:function", called with a
-    # progress(done, total, detail) and returning how many things it keeps.
-    data: str = ""
-    # What that is and what it counts, for people: "The place list", "places".
-    data_title: str = ""
-    data_unit: str = ""
-    # Goes up when a release keeps something else (GeoNames' landmarks beside its towns): a server whose
-    # data is older fetches it again, using what it has until the new data is saved.
-    data_version: int = 1
-    # Where it shows in lists.
-    order: int = 1000

@@ -1,6 +1,6 @@
 {
   "id": "geonames",
-  "version": "1",
+  "version": "2",
   "protocol": 1,
   "title": "Place names (GeoNames)",
   "description": "Find a place by name when setting a location, and see the nearest town and the landmark each photo or video was taken at. Lumiverb keeps a list of the world's towns of 1,000 people or more and its landmarks on this server, from GeoNames.",
@@ -44,7 +44,7 @@
     "inputs": ["location"],
     "batch": 200,
     "outputs": [
-      {"key": "at", "kind": "fact", "label": "At"},
+      {"key": "at", "kind": "fact", "label": "At", "searchable": true},
       {"key": "near", "kind": "fact", "label": "Near", "searchable": true, "empty": "Not near a town"}
     ]
   },

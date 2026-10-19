@@ -33,7 +33,7 @@ function hello() {
   ];
   return {
     plugin_id: "hello", title: "Hello", description: "A plug-in for tests.", state: "on", acknowledgment: null,
-    acknowledged: null, data: null, kind: "installed", version: "2", author: "Lumiverb's tests",
+    acknowledged: null, kind: "installed", version: "2", author: "Lumiverb's tests",
     homepage: "https://example.org/hello", on_by_default: true, follows_default: true,
     reads: ["each clip's location (a person's, else its GPS, else an applied guess)"],
     answers: ["answers place searches (Set location's Place)"],

@@ -222,8 +222,8 @@ class ProducerSpec:
     # settings that don't remake change, as {key: value} (faces: the face
     # groups are worked out again; location: guesses are checked again).
     regroup: str = ""
-    # The plug-in it belongs to (src/plugins/, ADR-021): it applies only while
-    # that plug-in is on in the account (lineage wraps applies with it).
+    # The installed plug-in whose work it is (ADR-023: src/server/plugin_producers.py,
+    # its applies only while that plug-in is on in the account). Lumiverb's own have none.
     plugin: str = ""
     # Shown as a part of another producer (its artifact), not on its own:
     # Settings → Processing folds it into that producer's row.

@@ -17,7 +17,7 @@ const search = vi.mocked(searchPlaces);
 
 const GEONAMES = {
   plugin_id: "geonames", title: "Place names (GeoNames)", description: "", state: "on" as const,
-  acknowledgment: null, acknowledged: null, data: null, kind: "installed" as const, lookups: ["places"],
+  acknowledgment: null, acknowledged: null, kind: "installed" as const, lookups: ["places"],
 };
 const PORT_OF_SPAIN = { place_id: "geonames:3573890", name: "Port of Spain", region: "Port of Spain",
                         country: "Trinidad and Tobago", label: "Port of Spain, Trinidad and Tobago",
@@ -99,7 +99,7 @@ describe("SetLocationModal", () => {
     expect(screen.getByRole("button", { name: /^Port of Spain, Trinidad and Tobago\s*· Puerto España$/ })).toBeTruthy();
   });
 
-  it("offers place search while the plug-in is still fetching its list (the server answers meanwhile, or says so)", async () => {
+  it("offers place search while the plug-in is still fetching its list (the server says so)", async () => {
     plugins.mockResolvedValue([{ ...GEONAMES, running: { state: "preparing" as const, detail: "Downloading", done: 12,
                                                          total: 610, restarts: 0 } }]);
     modal();
@@ -108,7 +108,7 @@ describe("SetLocationModal", () => {
 
   it("finds places with every plug-in that finds them, says where each is from, and who couldn't answer", async () => {
     const FACTS = { plugin_id: "facts", title: "Facts", description: "", state: "on" as const, acknowledgment: null,
-                    acknowledged: null, data: null, kind: "installed" as const, lookups: ["places"] };
+                    acknowledged: null, kind: "installed" as const, lookups: ["places"] };
     plugins.mockResolvedValue([GEONAMES, FACTS]);
     const harbour = { place_id: "facts:harbour", name: "Harbour Point", region: "Testshire", country: "Testland",
                       label: "Harbour Point, Testshire, Testland", lat: 41.1, lon: -73.2, population: 0,
@@ -142,13 +142,38 @@ describe("SetLocationModal", () => {
     expect(set).toHaveBeenCalledWith({ asset_ids: ["ast_1"], replace: "none", place_id: "facts:harbour" });
   });
 
-  it("offers no place search while no plug-in that finds places is on", async () => {
+  it("offers Place with no plug-in on that finds places, Coordinates first, and says why at once", async () => {
     plugins.mockResolvedValue([{ ...GEONAMES, state: "off" as const }, { ...GEONAMES, plugin_id: "other", lookups: [] }]);
+    const why = "No plug-in that finds places is on: an admin turns one on in Settings › Plug-ins: Place names (GeoNames).";
+    search.mockRejectedValue(new ApiError(409, why, "plugin_off", { plugins: [{ plugin_id: "geonames", title: "Place names (GeoNames)" }] }));
     modal();
     await waitFor(() => expect(plugins).toHaveBeenCalled());
-    expect(screen.queryByRole("radio", { name: "Place" })).toBeNull();
     expect(screen.getByLabelText("Latitude, longitude")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Place" }));
+    expect(screen.getByRole("status").textContent).toBe(why);  // before anything's typed
     expect(search).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Place" }), { target: { value: "par" } });
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status").textContent).toBe(why);  // the search's own answer: not asked again
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Set location" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("says no plug-in that finds places is installed, when none is", async () => {
+    plugins.mockResolvedValue([{ ...GEONAMES, plugin_id: "other", lookups: [] }]);
+    modal();
+    await waitFor(() => expect(plugins).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("radio", { name: "Place" }));
+    expect((await screen.findByRole("status")).textContent)
+      .toBe("No plug-in that finds places is installed on this server: the server admin installs one.");
+  });
+
+  it("says another error searching as one", async () => {
+    plugins.mockResolvedValue([GEONAMES]);
+    search.mockRejectedValue(new ApiError(500, "The server broke", "internal_error"));
+    modal();
+    fireEvent.change(await screen.findByRole("textbox", { name: "Place" }), { target: { value: "par" } });
+    expect((await screen.findByRole("alert")).textContent).toBe("The server broke");
   });
 
   it("sets the same place as one of the selected clips", async () => {
@@ -182,50 +207,6 @@ describe("LocationRow", () => {
     expect((screen.getByRole("link", { name: "GeoNames" }) as HTMLAnchorElement).href).toBe("https://www.geonames.org/");
     expect((screen.getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
       .toBe("https://creativecommons.org/licenses/by/4.0/");
-  });
-
-  it("says the nearest town to where it was, credited, or that there's none near", () => {
-    const place = { label: "Port of Spain, Trinidad and Tobago", place_id: "geonames:3573890", distance_m: 1200,
-                    credit: { text: "GeoNames", url: "https://www.geonames.org/",
-                              license: { text: "CC BY 4.0", url: "https://creativecommons.org/licenses/by/4.0/" } } };
-    render(<LocationRow gpsLat={10.66} gpsLon={-61.52} location={null} place={place} />);
-    expect(screen.getByText(/Near Port of Spain, Trinidad and Tobago/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "GeoNames" })).toBeTruthy();
-    expect((screen.getByRole("link", { name: "CC BY 4.0" }) as HTMLAnchorElement).href)
-      .toBe("https://creativecommons.org/licenses/by/4.0/");
-    cleanup();
-    render(<LocationRow gpsLat={20} gpsLon={-40} location={null} place={{ ...place, label: null, place_id: null }} />);
-    expect(screen.getByText(/Not near a town/)).toBeTruthy();
-    cleanup();
-    // Picked by name: said once.
-    render(<LocationRow gpsLat={null} gpsLon={null} place={place} location={{
-      ...person, basis_summary: place.label, credit: place.credit }} />);
-    expect(screen.queryByText(/Near Port of Spain/)).toBeNull();
-    expect(screen.getAllByRole("link", { name: "GeoNames" })).toHaveLength(1);
-  });
-
-  it("says the landmark it's at over its town, or with its region and country when no town is near", () => {
-    const credit = { text: "GeoNames", url: "https://www.geonames.org/" };
-    const castle = { place_id: "geonames:4164161", name: "Magic Kingdom, Walt Disney World", distance_m: 556,
-                     label: "Magic Kingdom, Walt Disney World, Florida, United States" };
-    const place = { label: "Horizon West, Florida, United States", place_id: "geonames:1", distance_m: 4000,
-                    landmark: castle, credit };
-    render(<LocationRow gpsLat={28.41} gpsLon={-81.58} location={null} place={place} />);
-    expect(screen.getByText("At Magic Kingdom, Walt Disney World")).toBeTruthy();
-    expect(screen.getByText(/Near Horizon West, Florida, United States/)).toBeTruthy();
-    expect(screen.getAllByRole("link", { name: "GeoNames" })).toHaveLength(1);
-    cleanup();
-    render(<LocationRow gpsLat={28.41} gpsLon={-81.58} location={null}
-                        place={{ ...place, label: null, place_id: null }} />);
-    expect(screen.getByText(/At Magic Kingdom, Walt Disney World, Florida, United States/)).toBeTruthy();
-    expect(screen.queryByText(/Not near a town/)).toBeNull();
-    expect(screen.getByRole("link", { name: "GeoNames" })).toBeTruthy();
-    cleanup();
-    // Picked by its name: the landmark isn't said twice; its town still is.
-    render(<LocationRow gpsLat={null} gpsLon={null} place={place} location={{
-      ...person, basis_summary: castle.label, credit }} />);
-    expect(screen.queryByText(/At Magic Kingdom/)).toBeNull();
-    expect(screen.getByText(/Near Horizon West/)).toBeTruthy();
   });
 
   it("gives viewers no edit controls", () => {

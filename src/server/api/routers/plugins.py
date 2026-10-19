@@ -1,8 +1,8 @@
 """Plug-ins (ADR-021, ADR-023): optional parts of Lumiverb that an account
-turns on or off, and what turning one on asks first. Lumiverb's own (its
-code's) and those the server admin installed (programs of their own, each
-with its manifest: src/server/plugin_catalog.py), an installed one as its
-default says in an account whose admin hasn't chosen.
+turns on or off, and what turning one on asks first. Each a program of its
+own with its manifest, installed on this server (Lumiverb's own and the
+server admin's: src/server/plugin_catalog.py), as its default says in an
+account whose admin hasn't chosen.
 
 GET /v1/plugins                              — every plug-in, its state in this account, and what it asks (signed in)
 PUT /v1/plugins/{plugin_id}                  — turn one on or off (account admins)
@@ -14,12 +14,6 @@ each checked by its schema before it's saved, then by the plug-in itself
 when its manifest says it checks them (POST /v1/settings/check on its
 socket), each error said by key (422 invalid_settings). A secret's value is
 never shown again; the server's settings only to server admins.
-
-What one of Lumiverb's own (ADR-021) keeps for the whole server (its
-spec's data) is fetched in the background when an account turns it on
-(src/server/plugin_data.py); its state is each plug-in's `data`. None has
-any since GeoNames became an installed plug-in that fetches its own list
-(ADR-023 phase 3): this goes in part 4.
 
 Turning on a plug-in that declares an acknowledgment (a license, say) is a
 409 acknowledgment_required carrying its text and version until the request
@@ -39,7 +33,6 @@ from sqlmodel import Session
 
 from src.plugins.contract import Acknowledgment
 from src.plugins.manifest import INPUTS, LOOKUPS
-from src.server import plugin_data
 from src.server.api.dependencies import (
     get_current_user_id,
     get_tenant_session,
@@ -83,23 +76,8 @@ class Accepted(BaseModel):
     at: datetime
 
 
-class DataOut(BaseModel):
-    """What it keeps for the whole server, as it's fetched."""
-
-    title: str  # what it is: "The place list"
-    unit: str  # what count counts: "places"
-    # missing (never fetched), fetching, ready, failed
-    state: Literal["missing", "fetching", "ready", "failed"]
-    done: int = 0  # bytes downloaded so far, while fetching
-    total: int | None = None  # bytes in all, when known
-    detail: str | None = None  # what it's doing now
-    error: str | None = None  # why it failed
-    count: int | None = None  # how many it keeps (places), once ready
-    ready_at: datetime | None = None
-
-
 class RunningOut(BaseModel):
-    """What the plug-in runner last said of an installed one (ADR-023): starting, ready (perhaps with work in the
+    """What the plug-in runner last said of it (ADR-023): starting, ready (perhaps with work in the
     background: done of total, detail), preparing (done of total, detail), failing (it says it can't work: why),
     restarting (it stopped: why; started again soon), stopped (left stopped: why), off (on in no account, so not
     run: started when an account turns it on), or not_running (the runner itself isn't, or hasn't started it
@@ -127,7 +105,7 @@ class ChoiceOut(BaseModel):
 
 
 class SettingOut(BaseModel):
-    """An installed plug-in's setting, its schema as its manifest declares it, and its value here."""
+    """A plug-in's setting, its schema as its manifest declares it, and its value here."""
 
     key: str
     type: Literal["int", "float", "bool", "text", "choice", "secret"]
@@ -157,27 +135,25 @@ class PluginOut(BaseModel):
     acknowledgment: AcknowledgmentOut | None = None
     # The acceptance it's on by (or waiting with), while it's on or waiting.
     acknowledged: Accepted | None = None
-    # What it keeps for the whole server (None: nothing).
-    data: DataOut | None = None
-    # built_in: Lumiverb's own; installed: a program of its own the server admin installed (ADR-023).
-    kind: Literal["built_in", "installed"] = "built_in"
-    # An installed one's: its version, who made it, and where to read about it.
+    # A program of its own, installed on this server (ADR-023): every plug-in is since ADR-023 phase 3.
+    kind: Literal["installed"] = "installed"
+    # Its version, who made it, and where to read about it.
     version: str | None = None
     author: str | None = None
     homepage: str | None = None
-    # An installed one's default, for accounts whose admin hasn't turned it on or off; and whether this one hasn't.
+    # Its default, for accounts whose admin hasn't turned it on or off; and whether this one hasn't.
     on_by_default: bool | None = None
     follows_default: bool = False
-    # An installed one's, in words: what it reads, what it answers.
+    # In words: what it reads, what it answers.
     reads: list[str] = Field(default_factory=list)
     answers: list[str] = Field(default_factory=list)
     # The lookups it answers, by name ("places": Set location's Place search).
     lookups: list[str] = Field(default_factory=list)
     downloads: list[DownloadOut] = Field(default_factory=list)
     internet: bool = False
-    # An installed one's process, as the runner last said (None for Lumiverb's own).
+    # Its process, as the runner last said.
     running: RunningOut | None = None
-    # An installed one's settings: the account's, and the server's for a server admin.
+    # Its settings: the account's, and the server's for a server admin.
     settings: list[SettingOut] = Field(default_factory=list)
     # Saving settings: why the plug-in's own check didn't run (it isn't running); they were saved.
     unchecked: str | None = None
@@ -237,34 +213,27 @@ def _out(entry: Entry, row: dict | None, accepted: dict | None, *, admin: bool,
          said: dict | None = None, server_admin: bool = False, chosen: dict | None = None,
          server_chosen: dict | None = None) -> PluginOut:
     spec, installed = entry.spec, entry.installed
-    state = state_of(spec, row, installed.default if installed else None)
+    state = state_of(spec, row, installed.default)
     shown = None
-    if row is None and installed is not None and state != "off" and installed.acknowledged_version:
+    if row is None and state != "off" and installed.acknowledged_version:
         # On by default: the server admin accepted it, for every account that hasn't chosen.
         shown = Accepted(version=installed.acknowledged_version, at=installed.changed_at)
     elif spec.acknowledgment is not None and state != "off" and accepted is not None:
         shown = Accepted(version=accepted["version"], by=_email(accepted["user_id"]) if admin else None,
                          at=accepted["acknowledged_at"])
-    data = plugin_data.status(spec.plugin_id) if installed is None else None
-    out = PluginOut(plugin_id=spec.plugin_id, title=spec.title, description=spec.description, state=state,
-                    acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown,
-                    data=DataOut(title=spec.data_title, unit=spec.data_unit,
-                                 **{k: data.get(k) for k in DataOut.model_fields
-                                    if k not in ("title", "unit") and data.get(k) is not None})
-                    if data else None)
-    if installed is not None:
-        m = installed.manifest
-        out = out.model_copy(update={
-            "kind": "installed", "version": m.version, "author": m.author or None, "homepage": m.homepage or None,
-            "on_by_default": installed.on_by_default, "follows_default": row is None,
-            "reads": [INPUTS[i] for i in (m.work.inputs if m.work else ())],
-            "answers": [LOOKUPS[name] for name in m.lookups], "lookups": list(m.lookups),
-            "downloads": [DownloadOut(url=d.url, title=d.title, about_mb=d.about_mb) for d in m.downloads],
-            "internet": m.internet, "running": _running(spec.plugin_id, said),
-            "settings": [SettingOut(**setting_shown(s, (server_chosen or {}) if s.scope == SERVER else (chosen or {}),
-                                                    editable=server_admin if s.scope == SERVER else admin))
-                         for s in m.settings if s.scope == ACCOUNT or server_admin]})
-    return out
+    m = installed.manifest
+    return PluginOut(
+        plugin_id=spec.plugin_id, title=spec.title, description=spec.description, state=state,
+        acknowledgment=_acknowledgment(spec.acknowledgment), acknowledged=shown,
+        version=m.version, author=m.author or None, homepage=m.homepage or None,
+        on_by_default=installed.on_by_default, follows_default=row is None,
+        reads=[INPUTS[i] for i in (m.work.inputs if m.work else ())],
+        answers=[LOOKUPS[name] for name in m.lookups], lookups=list(m.lookups),
+        downloads=[DownloadOut(url=d.url, title=d.title, about_mb=d.about_mb) for d in m.downloads],
+        internet=m.internet, running=_running(spec.plugin_id, said),
+        settings=[SettingOut(**setting_shown(s, (server_chosen or {}) if s.scope == SERVER else (chosen or {}),
+                                             editable=server_admin if s.scope == SERVER else admin))
+                  for s in m.settings if s.scope == ACCOUNT or server_admin])
 
 
 def _server_admin(request: Request) -> bool:
@@ -301,9 +270,8 @@ def list_plugins(
     account = PluginSettingsRepository(session, ACCOUNT)
     return PluginList(plugins=[
         _out(e, rows.get(e.spec.plugin_id), accepted.get(e.spec.plugin_id), admin=_admin(request), said=said,
-             server_admin=server_admin,
-             chosen=account.get(e.spec.plugin_id) if e.installed else None,
-             server_chosen=_server_chosen(e.spec.plugin_id) if e.installed and server_admin else None)
+             server_admin=server_admin, chosen=account.get(e.spec.plugin_id),
+             server_chosen=_server_chosen(e.spec.plugin_id) if server_admin else None)
         for e in entries()])
 
 
@@ -317,13 +285,11 @@ def set_plugin(
     """Turn a plug-in on or off in this account. Turning on one that asks
     an acknowledgment: 409 acknowledgment_required with its text and version
     (details) unless acknowledged is that version; accepting is kept for
-    good. On already, nothing changes. Off asks nothing. On (newly or
-    already), what it keeps for the server is fetched if it isn't there, a
-    fetch that failed at once (Try again)."""
+    good. On already, nothing changes. Off asks nothing."""
     entry = find(plugin_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="No such plug-in")
-    spec, default = entry.spec, entry.installed.default if entry.installed else None
+    spec, default = entry.spec, entry.installed.default
     repo = PluginRepository(session)
     by = _by(request)
     now = utcnow()
@@ -343,18 +309,15 @@ def set_plugin(
             repo.acknowledge(plugin_id, ack.version, user_id=by, now=now)
         repo.set(plugin_id, True, acknowledged_version=ack.version if ack else None, by=by, now=now)
     session.commit()
-    if body.enabled and entry.installed is None:
-        plugin_data.ensure(plugin_id, retry_now=True)
     return _out(entry, repo.rows().get(plugin_id), repo.accepted().get(plugin_id), admin=True, said=_said(),
-                server_admin=_server_admin(request),
-                chosen=PluginSettingsRepository(session, ACCOUNT).get(plugin_id) if entry.installed else None,
-                server_chosen=_server_chosen(plugin_id) if entry.installed and _server_admin(request) else None)
+                server_admin=_server_admin(request), chosen=PluginSettingsRepository(session, ACCOUNT).get(plugin_id),
+                server_chosen=_server_chosen(plugin_id) if _server_admin(request) else None)
 
 
 def _installed(plugin_id: str) -> Entry:
-    """An installed plug-in (404 otherwise: Lumiverb's own have their settings where they're used)."""
+    """The plug-in (404 otherwise)."""
     entry = find(plugin_id)
-    if entry is None or entry.installed is None:
+    if entry is None:
         raise HTTPException(status_code=404, detail="No such installed plug-in")
     return entry
 

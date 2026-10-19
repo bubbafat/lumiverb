@@ -1,0 +1,7 @@
+{
+  "about": "Lumiverb's own install of this plug-in (src/server/own_plugins.py), not the protocol: the server settings it takes from the install's settings once, when it's first installed, unless the server admin chose them. Its mirror is LUMIVERB_GEONAMES_URL's, from when Lumiverb fetched GeoNames' lists itself, when that names a copy rather than GeoNames.",
+  "server_settings": [
+    {"key": "mirror", "from": "LUMIVERB_GEONAMES_URL",
+     "unless": ["https://download.geonames.org/export/dump/", "https://download.geonames.org/export/dump"]}
+  ]
+}

@@ -324,11 +324,12 @@ CC BY 4.0 license). Turned on, it downloads about 600 MB of GeoNames' lists
 once for the server and builds its own list of the world's towns and
 landmarks from them (Settings › Plug-ins says how far), then names
 where each photo and video was: the landmark it's at and the nearest town,
-in the Lightbox's Place names section, and finds places by name in Set
-location. Its radius is in Settings › Plug-ins. On a server that used it
-before, it stays on as it was and its clips keep their place names until
-it has named them again. A Linux install needs `DATA_DIR` in its env file
-for it, as for every plug-in.
+in the Lightbox's Place names section, and found by search by either (a
+search for "Magic Kingdom" or "Horizon West"), and finds places by name in
+Set location. Its radius is in Settings › Plug-ins. While it's off, or
+before it has its list, Set location says why Place finds nothing. A Linux
+install needs `DATA_DIR` in its env file for it, as for every plug-in: one
+without has no Place names.
 
 To try plug-ins, Lumiverb comes with an example that gives each photo and video a
 caption you choose, when it was taken and its shape, finds a few famous
