@@ -34,9 +34,9 @@ def scanner(tmp_path, monkeypatch):
 
 @pytest.mark.fast
 def test_sync_error_raised_quickly_on_ffmpeg_startup_crash(scanner):
-    """FFmpeg exits immediately (poll() → 1) with no PTS output.
-    SyncError must be raised well under PTS_QUEUE_TIMEOUT (2s), ideally < 0.5s.
-    """
+    """FFmpeg exits immediately (poll() → 1) with no PTS output: SyncError
+    without waiting out PTS_QUEUE_TIMEOUT (what's asserted is that it wasn't
+    waited for, never how fast: a busy machine is slow)."""
     mock_proc = MagicMock()
     mock_proc.stdout.read.return_value = _FRAME_BYTES  # one valid frame read
     mock_proc.poll.return_value = 1  # process already dead
@@ -49,4 +49,6 @@ def test_sync_error_raised_quickly_on_ffmpeg_startup_crash(scanner):
             list(scanner.scan(0.0, 10.0))
         elapsed = time.monotonic() - start
 
-    assert elapsed < 0.5, f"Expected fast SyncError, took {elapsed:.2f}s"
+    from src.processing.video.video_scanner import PTS_QUEUE_TIMEOUT
+
+    assert elapsed < PTS_QUEUE_TIMEOUT / 2, f"waited {elapsed:.2f}s, as if for PTS that can't come"

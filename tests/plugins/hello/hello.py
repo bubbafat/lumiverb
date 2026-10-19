@@ -10,6 +10,7 @@ plug-in going wrong in each way it might (tests/test_plugin_runner.py):
   failing     failed, with why
   crash       says why and exits 3 at once
   hang        listens but never answers
+  goes-quiet  answers its health once, then never again
   garbage     answers its health with what the protocol doesn't say
   memory      takes 300 MB first
   big-file    tries to write a 20 MB file (more than its disk_mb lets one file be), says what happened
@@ -29,6 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else ""
+ANSWERED = threading.Event()
 DATA = os.environ.get("LUMIVERB_PLUGIN_DATA", ".")
 
 
@@ -42,8 +44,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 — http.server's name
         if self.path != "/v1/health":
             self._answer(404, {"error": "not found"})
-        elif MODE == "hang":
+        elif MODE == "hang" or (MODE == "goes-quiet" and ANSWERED.is_set()):
             time.sleep(3600)
+        elif MODE == "goes-quiet":
+            ANSWERED.set()
+            self._answer(200, {"state": "ready"})
         elif MODE == "garbage":
             self._answer(200, {"state": "dancing"})
         elif MODE == "preparing":
