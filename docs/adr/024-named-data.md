@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-10-19). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation; the rest are proposed and wait for him. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
+Proposed (2026-10-19). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation, his answers to its questions included ("Robert's answers"); the rest are proposed. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
 
 Nothing here is built. ADR-023 phase 3 (GeoNames moved out) doesn't anticipate it.
 
@@ -38,13 +38,13 @@ And on privacy: "I think it's less about enforced privacy and more about documen
 | # | Question | Decision |
 |---|----------|----------|
 | 1 | How is data named? | **Robert.** By dotted, namespaced names. Every producer, built-in or plug-in, declares by name what it reads and what it makes. The graph Lumiverb's producers already form (`ProducerSpec.needs`) becomes the graph of every producer on an install. |
-| 2 | Whose names are whose? | **Robert.** `lumiverb.*` is official: the standard set, defined and documented by Lumiverb and versioned with the protocol. Everything else is extended: a plug-in's names are under its own id. `lumiverb.<media>.*` (`lumiverb.video.scenes`) groups what only one kind of clip has, for finding your way; data both have has no media level (`lumiverb.location`). Proposed: a third party's plug-in id is a reversed domain (`com.company.fancy`), so two companies can't both be `fancy`; Lumiverb's own keep their short ids (`geonames`). |
+| 2 | Whose names are whose? | **Robert.** `lumiverb.*` is official: Lumiverb's own data, defined and documented by Lumiverb, versioned with the protocol, and made by Lumiverb alone. Every other name is a plug-in's, named as its author likes, with no scheme imposed: "Let's avoid looking too much like java. I think it's lumiverb.* for builtins and whatever people want for anything else. If someone does not want to be a good citizen and use a good name that's on them." `lumiverb.<media>.*` (`lumiverb.video.scenes`) groups what only one kind of clip has, for finding your way; data both have has no media level (`lumiverb.location`). |
 | 3 | Can a plug-in keep its data from others? | **Robert.** Documented, not enforced. Each name a producer makes is part of its contract or not. A contract name is documented, has a type and a version, and stays the same within that version. Any other name can be read, with no promise: "If someone depends on a non-contractual piece and breaks ... tough cookies." Lumiverb still says when a reader breaks (decision 6); it never fails silently. Only contract names are listed for people (decision 10). |
-| 4 | What's checked at install? | **Robert.** Every name a plug-in reads is made on this install (by Lumiverb or by an installed plug-in), and nothing is circular. Otherwise the install is refused, saying what's missing or which names make the circle. Proposed: an upgrade is checked the same way (a new version could read something new, or close a circle), and a plug-in makes only names under its own id. |
-| 5 | What happens when what others read goes? | Robert left this open ("it might complain or something else"). Proposed: uninstalling a plug-in, or upgrading it to a version that no longer makes a name, asks first and names the plug-ins reading it (as the API asks before any surprising outcome). If the server admin goes on, the readers stay installed, their work held with a reason shown on Processing and the Admin page, and their results shown only while a clip still has what they were made from (`plugin_outputs.shown_sql` already does this for inputs). Installing it again picks them up where they were. Turned off in one account, the same, in that account; turning a reader on offers to turn on what it reads. |
+| 4 | What's checked at install? | **Robert.** Every name a plug-in reads is made on this install (by Lumiverb or by an installed plug-in), and nothing is circular. A plug-in makes no `lumiverb.*` name, and no name another installed plug-in makes (decision 8). Otherwise the install is refused, saying what's missing, who makes the name already, or which names make the circle. Proposed: an upgrade is checked the same way (a new version could read something new, or close a circle). |
+| 5 | What happens when what others read goes? | **Robert** (agreed). Uninstalling a plug-in, or upgrading it to a version that no longer makes a name, asks first and names the plug-ins reading it (as the API asks before any surprising outcome). If the server admin goes on, the readers stay installed, their work held with a reason shown on Processing and the Admin page, and their results shown only while a clip still has what they were made from (`plugin_outputs.shown_sql` already does this for inputs). Installing it again picks them up where they were. Turned off in one account, the same, in that account; turning a reader on offers to turn on what it reads. |
 | 6 | When is a clip's data ready for its reader? | As today, from the database: a clip is handed to a reader only once what it reads is made for that clip, and Processing says what it waits for and whether that's paused; a clip its maker gave up on isn't the reader's work left. What a plug-in read is part of the hash its output is kept with, so when its maker's data for a clip changes, the reader's is due again by itself: no cascade to declare. A name whose maker is gone is a wait with its own code (`input_gone`), never silent (`tests/test_no_silent_waits.py`). |
-| 7 | What shape is a name's data? | Proposed: each name has a type (text, number, a point, a time, a list of them; files later) and a major version. A reader names the major versions it takes (`com.company.fancy.metadata_a@1`). A contract name's type changes only with a new major version: an upgrade that changes it under the same version is refused. |
-| 8 | Can two producers make the same name? | Proposed: no, one maker per name on an install. Open for Robert: may a plug-in make a `lumiverb.*` name in place of Lumiverb's own, as the server admin's choice (a better transcriber making `lumiverb.video.transcript`)? It's how a built-in producer would move out of Lumiverb, and readers wouldn't notice. The name's shape stays Lumiverb's. |
+| 7 | What shape is a name's data? | Proposed: each name has a type (text, number, a point, a time, a list of them; files later) and a major version. A reader names the major versions it takes (`fancy.metadata_a@1`). A contract name's type changes only with a new major version: an upgrade that changes it under the same version is refused. |
+| 8 | Can two producers make the same name? | **Robert.** No: one maker per name, and a `lumiverb.*` name is Lumiverb's alone. Whether a plug-in may one day make a `lumiverb.*` name in place of Lumiverb's own (a better transcriber), or a mapping layer stand between a name and what makes it, is a future decision: "this feels like we're becoming needlessly complex. I think this is a future decision and for now they are not overloaded." |
 | 9 | How are clips found by their data? | **Robert.** By what they have, and don't: "has `lumiverb.video.analysis_proxy` but not `lumiverb.location.gps`". A filter `has:<name>`, negated by the filter algebra's `not` (`src/server/models/query_filter.py`); "has" is what the clip shows now. By value later, by the name's type: text matched as search matches it, numbers and times by range, points by distance. The `missing_*` filters each producer has today become `not has:`. |
 | 10 | Workflows ("When any video has a location.gps applied to it, perform action X")? | **Robert.** Not now: "100% forward looking and NOT something to build now." Contract names are what such a screen would list, which is a reason to keep the contract documented from the start. |
 
@@ -80,13 +80,13 @@ A page lists them, each with its type, version and what it is, written from the 
   "media": ["video"],
   "reads": ["lumiverb.video.analysis_proxy", "lumiverb.location.gps"],
   "outputs": {
-    "metadata_a": {"kind": "fact", "type": "text", "version": 1, "contract": true,
+    "fancy.metadata_a": {"kind": "fact", "type": "text", "version": 1, "contract": true,
                    "about": "What metadata A says about a clip"}
   }
 }
 ```
 
-It makes `com.company.fancy.metadata_a`. Another plug-in reads it as `"reads": ["com.company.fancy.metadata_a@1"]`. A reader is handed each clip's values of the names it reads, as inputs are handed today, and still never learns which account it is or anything of other clips. Files (an analysis proxy) are handed as a read-only copy once a plug-in can read files (ADR-023's "later").
+It makes `fancy.metadata_a`, a name its author chose. Another plug-in reads it as `"reads": ["fancy.metadata_a@1"]`. Protocol 1's outputs, named without a dot, are read as the plug-in's id and their key (`geonames.near`). A reader is handed each clip's values of the names it reads, as inputs are handed today, and still never learns which account it is or anything of other clips. Files (an analysis proxy) are handed as a read-only copy once a plug-in can read files (ADR-023's "later").
 
 ### Checks
 
@@ -94,15 +94,15 @@ At install, at upgrade and at uninstall, over every producer on the install, Lum
 
 - every name read is made here, at a version the reader takes;
 - an order exists in which each producer comes after what it reads (no circle);
-- a plug-in makes names under its own id only (and `lumiverb.*` only as decision 8 settles);
+- no plug-in makes a `lumiverb.*` name, and no name has two makers;
 - what stops being made, or changes type, and who reads it (decision 5's question).
 
 ### The scheduler
 
 A plug-in's producer needs the producers of what it reads (`ProducerSpec.needs`, as built-ins do), so its clips wait for them and Processing says so. The values it read go into its inputs' hash. A reader whose maker is gone is held with `input_gone`.
 
-## Questions for Robert
+## Robert's answers (2026-10-19)
 
-1. **When what others read is removed** (decision 5): ask, then hold the readers with a reason (recommended), or refuse until the readers are removed first?
-2. **A plug-in making a `lumiverb.*` name** in place of Lumiverb's own (decision 8): allowed as the server admin's choice, one maker per name (recommended: it's how built-ins move out), or `lumiverb.*` made by Lumiverb alone?
-3. **Third parties' ids** (decision 2): a reversed domain (recommended), or short ids, first come first served on an install?
+1. **When what others read is removed:** ask first, then hold the readers with a reason (decision 5). "agreed."
+2. **A plug-in making a `lumiverb.*` name:** not for now (decision 8). "This is an interesting debate. Part of me says "overload is fine" and part says "they are protected but we can have a mapping layer that abstracts that away" but this feels like we're becoming needlessly complex. I think this is a future decision and for now they are not overloaded."
+3. **Third parties' names:** no scheme: `lumiverb.*` for Lumiverb's own, anything else as its author likes (decision 2). "Let's avoid looking too much like java."
