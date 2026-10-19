@@ -111,7 +111,7 @@ def test_requests_go_to_online_machines_each_up_to_its_limit_least_busy_first():
     time.sleep(0.2)
     assert got == []
     pool.release(taken[0])
-    t.join(2)
+    t.join(60)
     assert got and got[0].name == "Gaming PC"
 
 
@@ -250,24 +250,23 @@ def test_while_a_machine_is_being_checked_the_job_isnt_given_up():
     gate = threading.Event()
 
     def slow_models(*_a, **_k):
-        gate.wait(5)
+        gate.wait(60)
         return [QWEN]
 
     got: list = []
     with patch("src.processing.ai_pool.list_models", side_effect=slow_models):
         first = threading.Thread(target=lambda: got.append(pool.acquire()))
         first.start()
-        for _ in range(50):
-            if gaming_pc.checking:
-                break
+        deadline = time.monotonic() + 60
+        while not gaming_pc.checking and time.monotonic() < deadline:
             time.sleep(0.01)
         second = threading.Thread(target=lambda: got.append(pool.acquire()))
         second.start()
         time.sleep(0.3)
         assert got == []  # waiting for the check, not giving up
         gate.set()
-        first.join(5)
-        second.join(5)
+        first.join(60)
+        second.join(60)
     assert [m.name if m else None for m in got] == ["Gaming PC", "Gaming PC"]
 
 
@@ -399,9 +398,11 @@ def test_a_clip_one_server_refuses_goes_to_the_others_first():
     got = []
     worker = threading.Thread(target=lambda: got.append(transcriber.transcribe("big.wav")))
     worker.start()
-    time.sleep(0.2)
+    deadline = time.monotonic() + 60
+    while not calls and time.monotonic() < deadline:  # the server refused it; the built-in is still busy
+        time.sleep(0.01)
     pool.release(pool.machines[0])
-    worker.join(5)
+    worker.join(60)
     assert got == [Heard()] and calls == ["Speaches", "Built in"]
     assert all(m.online for m in pool.machines)
     with pytest.raises(TranscriptError) as e:

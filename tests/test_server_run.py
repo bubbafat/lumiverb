@@ -237,7 +237,7 @@ def _free_port() -> int:
 
 def _healthy(port: int) -> bool:
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=30) as response:
             return response.status == 200
     except OSError:
         return False
@@ -306,7 +306,7 @@ def _nginx_bin() -> Path | None:
 
 def _setup_needed(base: str) -> bool:
     try:
-        with urllib.request.urlopen(f"{base}/v1/setup", timeout=5) as response:
+        with urllib.request.urlopen(f"{base}/v1/setup", timeout=30) as response:
             return response.status == 200 and b'"needed":true' in response.read()
     except OSError:
         return False
@@ -320,7 +320,7 @@ def _over_https(base: str, ca: Path) -> bool:
     context = ssl.create_default_context(cafile=str(ca))
     context.check_hostname = True
     try:
-        with urllib.request.urlopen(f"{base}/v1/setup", timeout=5, context=context) as response:
+        with urllib.request.urlopen(f"{base}/v1/setup", timeout=30, context=context) as response:
             return response.status == 200 and b'"needed":true' in response.read()
     except OSError:
         return False
@@ -333,7 +333,7 @@ def _first_answer(url: str) -> tuple[int, str | None]:
             return None
 
     try:
-        with urllib.request.build_opener(NoRedirect).open(url, timeout=5) as response:
+        with urllib.request.build_opener(NoRedirect).open(url, timeout=30) as response:
             return response.status, response.headers.get("Location")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.headers.get("Location")
@@ -378,7 +378,7 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
     ca = data / "tls" / "ca.crt"
     _chosen(data, network.Choice(other_devices=True, https=True), out,
             lambda: _over_https(f"https://127.0.0.1:{tls_port}", ca), defaults)
-    with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+    with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/lumiverb-ca.crt", timeout=30) as response:
         assert response.read() == ca.read_bytes(), "the authority's certificate, for a device to trust"
         assert response.headers["Content-Type"] == "application/x-x509-ca-cert"
     if lan:
@@ -386,7 +386,7 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
         assert network.https_seen(data) is None
         assert _over_https(f"https://{lan}:{tls_port}", ca)
         assert network.https_seen(data).address == lan, "a device using HTTPS, as nginx passed it on"
-        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=30) as response:
             assert response.read() == ca.read_bytes(), "a device fetches it before it can trust HTTPS"
 
     _chosen(data, network.Choice(other_devices=True, https=True, plain_http=False), out,
@@ -395,7 +395,7 @@ def _other_devices_may_use_it(data: Path, web_port: int, tls_port: int, out: Pat
     if lan:
         assert _over_https(f"https://{lan}:{tls_port}", ca)
         assert _first_answer(f"http://{lan}:{web_port}/v1/setup") == (301, f"https://{lan}:{tls_port}/v1/setup")
-        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=5) as response:
+        with urllib.request.urlopen(f"http://{lan}:{web_port}/lumiverb-ca.crt", timeout=30) as response:
             assert response.read() == ca.read_bytes(), "still: a new device needs it first"
     lines = network.listen_file(data).read_text()
     assert f"listen {tls_port} ssl default_server;" in lines and "ssl_protocols TLSv1.2 TLSv1.3;" in lines

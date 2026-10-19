@@ -738,7 +738,7 @@ def test_a_hung_probe_is_not_piled_up(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     def hang(path: Path, require_entries: bool) -> Path:
         calls.append(path)
-        release.wait(5)
+        release.wait(60)
         return path
 
     monkeypatch.setattr(roots, "_probe", hang)

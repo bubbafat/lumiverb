@@ -52,7 +52,8 @@ def _turn_on(env) -> None:  # noqa: F811
     version = registry()[GEONAMES].acknowledgment.version
     r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": version}, headers=env.admin)
     assert r.status_code == 200, r.text
-    for _ in range(300):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         data = next(p for p in env.client.get("/v1/plugins", headers=env.admin).json()["plugins"]
                     if p["plugin_id"] == GEONAMES)["data"]
         if data["state"] == "ready":

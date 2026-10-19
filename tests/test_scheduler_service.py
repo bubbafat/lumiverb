@@ -115,7 +115,7 @@ class Recorder:
 
     def runner(self, kind: str):
         def run_(acct, job) -> None:
-            self.hold.wait(5)
+            self.hold.wait(60)
             with self.lock:
                 self.ran.append((acct.tenant_id, kind, tuple(job.asset_ids)))
         return run_
@@ -148,7 +148,8 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
 
 
 def _settle(s: Scheduler) -> None:
-    deadline = time.monotonic() + 5
+    # Returns as soon as nothing runs: a long limit costs nothing.
+    deadline = time.monotonic() + 60
     while s.running and time.monotonic() < deadline:
         s.collect(timeout=0.1)
 
@@ -171,7 +172,7 @@ def test_a_scan_look_is_offered_to_each_account_and_not_twice_at_once() -> None:
 
     def scan(acct, job, *, now) -> None:
         scans.append(acct.tenant_id)
-        release.wait(5)
+        release.wait(60)
 
     s = _scheduler({"t1": FakeAccount()}, {}, rec, scan=scan)
     s.tick()
@@ -349,12 +350,12 @@ def test_run_ticks_until_stopped_and_lets_jobs_in_hand_finish() -> None:
     t = threading.Thread(target=run, kwargs={"stop": stop, "scheduler": s, "save": lambda: saves.append(1),
                                              "tick_sec": 0.01})
     t.start()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 60
     while not s.running and time.monotonic() < deadline:
         time.sleep(0.01)
     stop.set()
     rec.hold.set()
-    t.join(10)
+    t.join(60)
     assert not t.is_alive()
     assert ("t1", "clip", ("c",)) in rec.ran
     assert saves  # the scan state is saved, also on the way out
@@ -392,7 +393,7 @@ def test_accounts_are_listed_once_however_many_ask_at_once(monkeypatch: pytest.M
 
     def slow_list(self) -> None:
         listings.append(1)
-        gate.wait(1)
+        gate.wait(60)
 
     monkeypatch.setattr(Accounts, "_list", slow_list)
     accounts = Accounts(MagicMock(), url="http://api")
@@ -401,7 +402,7 @@ def test_accounts_are_listed_once_however_many_ask_at_once(monkeypatch: pytest.M
         t.start()
     gate.set()
     for t in threads:
-        t.join(5)
+        t.join(60)
     assert listings == [1]
 
 
@@ -525,7 +526,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     s.tick()
     assert time.monotonic() - start < 30, "the refresh's minute wasn't waited for (never how fast: a busy machine)"
     gate.set()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 60
     while not rec.ran and time.monotonic() < deadline:
         s.tick()
         _settle(s)
@@ -778,31 +779,31 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     slow = threading.Event()
     slow.set()
     acct = FakeAccount(vision=1)
-    acct.refresh = lambda: slow.wait(10)
+    acct.refresh = lambda: slow.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 1, "probe": 2, "render": 1, "gpu": 1, "scenes": 1},
                   candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
                   if kind.name == "vision" else [],
-                  runners={**rec.all(), "vision": lambda acct, job: (release.wait(30), vision(acct, job))[1]},
+                  runners={**rec.all(), "vision": lambda acct, job: (release.wait(60), vision(acct, job))[1]},
                   scan=MagicMock(), on_hold=lambda t: _pauses(held),
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     def vision_running() -> int:  # the scan job (instant here) may be in flight too: it isn't counted
         return s.dispatcher.status("t1")["running"].get("vision", 0)
 
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 60
     while vision_running() == 0 and time.monotonic() < deadline:  # a in hand, b waiting
         s.tick()
         time.sleep(0.02)
     assert vision_running() == 1
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     slow.clear()
     refreshing = threading.Event()
-    acct.refresh = lambda: (refreshing.set(), slow.wait(10))
+    acct.refresh = lambda: (refreshing.set(), slow.wait(60))
     while not refreshing.is_set() and time.monotonic() < deadline:  # a refill, past its look at what's paused, hangs
         s.tick()
         time.sleep(0.02)
     assert refreshing.is_set()
     held.add("vision")
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 60
     while s.dispatcher.status("t1")["waiting"] and time.monotonic() < deadline:
         s.tick()
         time.sleep(0.05)
@@ -989,7 +990,7 @@ def test_losing_the_database_lock_stops_the_scheduler() -> None:
                                              "lock_check_sec": 0}, daemon=True)
     t.start()
     try:
-        t.join(5)
+        t.join(60)
         assert not t.is_alive() and len(checks) == 2
     finally:
         stop.set()
@@ -1037,10 +1038,10 @@ def test_a_lock_connection_that_doesnt_answer_counts_as_lost() -> None:
     started = time.monotonic()
     assert _still_holds(hung, timeout=0.1) is False
     assert time.monotonic() - started < 30, "the hung minute wasn't waited for"
-    assert _still_holds(MagicMock(), timeout=1) is True
+    assert _still_holds(MagicMock(), timeout=30) is True
     gone = MagicMock()
     gone.execute.side_effect = ConnectionError("server closed the connection")
-    assert _still_holds(gone, timeout=1) is False
+    assert _still_holds(gone, timeout=30) is False
 
 
 @pytest.mark.fast

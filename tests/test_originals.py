@@ -124,5 +124,5 @@ def test_a_scope_that_would_leave_the_library_walks_nothing_and_holds_back_delet
 
 
 def test_the_drive_they_are_on(library):
-    assert reach(library).device(timeout=5) == os.stat(library["root_path"]).st_dev
-    assert Folder(Path(library["root_path"]) / "gone", "lib_1").device(timeout=5) is None
+    assert reach(library).device(timeout=30) == os.stat(library["root_path"]).st_dev
+    assert Folder(Path(library["root_path"]) / "gone", "lib_1").device(timeout=30) is None

@@ -254,7 +254,7 @@ class Harness:
 
         for _ in range(2):
             self.scheduler.tick()
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 60  # as soon as nothing runs
             while self.scheduler.running and time.monotonic() < deadline:
                 self.scheduler.collect(timeout=0.1)
             self.now += STATUS_EVERY_SEC

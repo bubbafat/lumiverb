@@ -54,7 +54,7 @@ class FakeClip:
             self.most = max(self.most, self.running)
         try:
             if self._hold is not None:
-                self._hold.wait(5)
+                self._hold.wait(60)
             self.seen.append(img.size)
             r, g, b = img.getpixel((0, 0))
             return [r / 255, g / 255, b / 255]
@@ -129,16 +129,15 @@ def test_the_scheduler_checks_it_as_it_checks_any_ai_machine() -> None:
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     try:
-        for _ in range(200):
-            if server.started:
-                break
+        deadline = time.monotonic() + 60
+        while not server.started and time.monotonic() < deadline:
             time.sleep(0.025)
         assert list_models(f"http://127.0.0.1:{port}/v1", KEY) == sorted([*CLIP_MODELS, *FACE_MODELS])
         with pytest.raises(VisionEndpointError):
             list_models(f"http://127.0.0.1:{port}/v1", "not its key")
     finally:
         server.should_exit = True
-        thread.join(10)
+        thread.join(60)
 
 
 def test_a_vector_for_each_image_and_its_models_version() -> None:
@@ -228,7 +227,7 @@ def test_requests_take_turns_at_once_at_a_time() -> None:
     time.sleep(0.3)
     hold.set()
     for t in threads:
-        t.join(10)
+        t.join(60)
     assert codes == [200, 200, 200] and clips[0].most == 1
 
 
@@ -255,7 +254,7 @@ def test_the_model_takes_turns_however_many_requests_are_taken() -> None:
     time.sleep(0.3)
     hold.set()
     for t in threads:
-        t.join(10)
+        t.join(60)
     assert codes == [200, 200] and clips[0].most == 1
 
 

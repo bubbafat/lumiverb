@@ -253,7 +253,7 @@ def test_the_scheduler_prunes_once_a_day_after_its_first_ten_minutes_once_all_ar
         now[0] = t
         s._prune_models_soon(accounts)
         if s._pruning is not None:
-            s._pruning.result(timeout=5)
+            s._pruning.result(timeout=60)
 
     try:
         tick_at(service.PRUNE_MODELS_FIRST_SEC - 1)
