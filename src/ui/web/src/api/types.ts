@@ -62,6 +62,20 @@ export interface Plugin {
   answers?: string[];
   downloads?: { url: string; title: string; about_mb: number }[];
   internet?: boolean;
+  /** An installed one's process, as the plug-in runner last said; null for Lumiverb's own. */
+  running?: PluginRunning | null;
+}
+
+export interface PluginRunning {
+  state: "starting" | "ready" | "preparing" | "failing" | "restarting" | "stopped" | "not_running";
+  why?: string | null;
+  /** Preparing: done of total, and what it says it's doing. */
+  detail?: string | null;
+  done?: number | null;
+  total?: number | null;
+  since?: string | null;
+  memory_mb?: number | null;
+  restarts?: number;
 }
 
 export interface PluginData {

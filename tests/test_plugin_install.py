@@ -15,13 +15,16 @@ from pathlib import Path
 
 import pytest
 
+from src.plugins.contract import Acknowledgment, PluginSpec
+from src.server.config import get_settings
 from src.server.database import get_control_session
 from src.server.lifecycle import cli
-from src.server.plugin_install import program_dir
+from src.server.plugin_install import install_mark, program_dir
 from src.server.repository.installed_plugins import InstalledPluginRepository
 from src.server.repository.plugins import state_of
-from src.plugins.contract import Acknowledgment, PluginSpec
 from tests.test_first_run_setup import _env_file, control  # noqa: F401 (control: a fixture)
+from tests.test_plugin_runner import _until
+from tests.test_plugin_runner import data as short_data  # noqa: F401 (a fixture)
 from tests.test_server_admins import install  # noqa: F401 (a fixture)
 
 HELLO = Path(__file__).parent / "plugins" / "hello"
@@ -190,8 +193,10 @@ def test_an_update_that_reads_more_asks_again_one_that_doesnt_doesnt(install, ma
     client, robert, _ = install
     env, data = machine
     assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--on", "--yes", "--env", env]) == 0
+    first = install_mark(program_dir(data, "hello"))
     asked = _answers(monkeypatch)
     assert cli.main(["plugins", "install", str(_hello(tmp_path, version="2")), "--env", env]) == 0
+    assert install_mark(program_dir(data, "hello")) not in (None, first), "each install its own: the runner restarts it"
     assert asked == [] and "This version reads and reaches nothing more." in capsys.readouterr().out
     assert _listed(client, robert)["hello"]["version"] == "2" and _listed(client, robert)["hello"]["state"] == "on"
 
@@ -242,3 +247,28 @@ def test_uninstalling_takes_it_away_and_the_log_keeps_everything(install, machin
     assert [(e["action"], e["version"], e["on_by_default"]) for e in log] == [
         ("install", "1", False), ("default", None, True), ("uninstall", "1", None)]
     assert all(e["by"].endswith(" on this machine") for e in log)
+
+
+@pytest.mark.slow
+def test_the_api_says_what_the_runner_says(install, control, short_data, tmp_path, monkeypatch):  # noqa: F811
+    """Installed on the machine, run by the runner reading the control database, said by the API."""
+    from src.server.plugin_runner import Runner
+
+    client, robert, _ = install
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={short_data}\n")
+    monkeypatch.setenv("DATA_DIR", str(short_data))
+    get_settings.cache_clear()
+    assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--on", "--yes", "--env", str(env)]) == 0
+    running = _listed(client, robert)["hello"]["running"]
+    assert (running["state"], running["why"]) == ("not_running", "The plug-in runner isn't running")
+
+    runner = Runner(short_data)
+    try:
+        _until(runner, lambda: _listed(client, robert)["hello"]["running"]["state"] == "ready")
+        running = _listed(client, robert)["hello"]["running"]
+        assert running["why"] is None and running["restarts"] == 0 and running["since"]
+        assert cli.main(["plugins", "uninstall", "hello", "--yes", "--env", str(env)]) == 0
+        _until(runner, lambda: runner.plugins == {})
+    finally:
+        runner.stop_all()

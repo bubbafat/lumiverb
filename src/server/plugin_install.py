@@ -31,6 +31,9 @@ from src.plugins.manifest import MANIFEST, Manifest, asks_more, parse, read
 from src.server.repository.installed_plugins import InstalledPluginRepository
 from src.server.repository.plugins import stands
 
+# Written into each installed copy: which install it is, so the runner starts a new one afresh (a folder's
+# inode isn't: a filesystem may give a new folder the number of one just removed).
+INSTALL_MARK = ".lumiverb-install"
 # A plug-in's folder, at most: more is a mistake (the wrong folder named).
 MAX_BYTES = 4 * 1024**3
 MAX_FILES = 100_000
@@ -47,6 +50,14 @@ def plugin_dir(data: Path, plugin_id: str) -> Path:
 
 def program_dir(data: Path, plugin_id: str) -> Path:
     return plugin_dir(data, plugin_id) / "program"
+
+
+def install_mark(program: Path) -> str | None:
+    """Which install a program folder is (INSTALL_MARK), None when it says none."""
+    try:
+        return (program / INSTALL_MARK).read_text().strip() or None
+    except OSError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -138,6 +149,7 @@ def install(p: Plan, *, on_by_default: bool, acknowledged: bool, data: Path, ses
     copy = home / f".program-{uuid.uuid4().hex}"
     try:
         shutil.copytree(p.folder, copy, symlinks=True)
+        (copy / INSTALL_MARK).write_text(uuid.uuid4().hex)
         _read_only(copy)
         InstalledPluginRepository(session).save(
             p.manifest.plugin_id, version=p.manifest.version, manifest=_as_json(p.folder),

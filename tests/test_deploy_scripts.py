@@ -329,6 +329,68 @@ def test_processing_keeps_its_packages_whichever_service_it_has():
     assert deps.index("No DATA_DIR") < text.index('step "Running migrations"') - text.index('step "Updating Python dependencies"')
 
 
+def _update_plugins(tmp_path: Path, env_text: str) -> tuple[str, list[str], Path]:
+    """Run update-api.sh's plug-in runner step; returns its output, the systemctl calls and the units' folder."""
+    env = tmp_path / "env"
+    env.write_text(env_text)
+    units = tmp_path / "units"
+    units.mkdir(exist_ok=True)
+    calls = tmp_path / "systemctl-calls"
+    calls.write_text("")
+    text = UPDATE_API.read_text()
+    block = text.split('step "Installing the plug-in runner"', 1)[1].split("\n", 1)[1].split("# ----", 1)[0]
+    script = (
+        'step() { :; }; ok() { echo "ok: $1"; }; warn() { echo "warn: $1"; }; chown() { :; }\n'
+        'fail() { echo "fail: $1"; exit 1; }\n'
+        f'systemctl() {{ echo "$*" >> "{calls}"; }}\n'
+        f'ENV_FILE="{env}"; APP_DIR=/opt/lumiverb; SVC_HOME=/var/lib/lumiverb; SVC_USER=lumiverb\n'
+        + block.replace("/etc/systemd/system/", f"{units}/")
+    )
+    out = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=30)
+    return out.stdout + out.stderr, calls.read_text().splitlines(), units
+
+
+def test_update_installs_the_plug_in_runner(tmp_path):
+    # ADR-023: every installed plug-in, a process of its own, writing only its folder.
+    data = tmp_path / "data"
+    out, calls, units = _update_plugins(tmp_path, f"DATA_DIR={data}\n")
+    unit = (units / "lumiverb-plugins.service").read_text()
+    assert "ExecStart=/opt/lumiverb/.venv/bin/python -m src.server.plugin_runner" in unit
+    assert f"ReadWritePaths={data}/plugins" in unit and "ProtectSystem=strict" in unit
+    assert "MemoryMax=4G" in unit and "KillMode=mixed" in unit and "Restart=always" in unit
+    assert calls == ["daemon-reload", "enable lumiverb-plugins"]
+    assert (data / "plugins").is_dir()
+    # Rerun: the same unit.
+    _update_plugins(tmp_path, f"DATA_DIR={data}\n")
+    assert (units / "lumiverb-plugins.service").read_text() == unit
+
+
+def test_without_a_data_disk_there_is_no_plug_in_runner(tmp_path):
+    out, calls, units = _update_plugins(tmp_path, "API_PORT=8100\n")
+    assert "warn: No DATA_DIR" in out and calls == []
+    assert not (units / "lumiverb-plugins.service").exists()
+
+
+def test_a_fresh_install_and_an_update_write_the_same_plug_in_runner():
+    def unit(text: str) -> list[str]:
+        body = text.split("Description=Lumiverb plug-ins", 1)[1].split("\nUNIT", 1)[0]
+        return [line.strip() for line in body.splitlines()]
+
+    assert unit(DEPLOY_API.read_text()) == unit(UPDATE_API.read_text())
+    deploy = DEPLOY_API.read_text()
+    assert "systemctl enable --now lumiverb-api lumiverb-plugins" in deploy
+    assert deploy.index('mkdir -p "$DATA_DIR"/plugins') < deploy.index("lumiverb-plugins.service <<UNIT")
+
+
+def test_the_plug_in_runner_stops_for_the_migrations_and_starts_once_the_api_answers():
+    text = UPDATE_API.read_text()
+    migrations = text.split('step "Running migrations"', 1)[1].split("# ----", 1)[0]
+    assert "systemctl stop lumiverb-plugins" in migrations
+    restart = text.split('step "Restarting services"', 1)[1]
+    assert restart.index("curl -sf http://127.0.0.1:${API_PORT}/health") < restart.index(
+        "systemctl restart lumiverb-plugins") < restart.index("systemctl start lumiverb-scheduler")
+
+
 def test_scheduler_temp_files_go_on_the_data_disk():
     # Whisper's WAVs (hundreds of MB for a long clip) went to PrivateTmp's
     # /tmp, RAM on prod. Not the API's tmp: each API start empties that.

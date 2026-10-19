@@ -515,6 +515,45 @@ ReadWritePaths=${DATA_DIR} ${SVC_HOME}
 WantedBy=multi-user.target
 UNIT
 
+# Every plug-in the server admin installs (ADR-023), a process of its own:
+# the runner reads what's installed from the control database, and what it
+# starts gets none of the env file's settings, runs below the API and the
+# scheduler, and writes only its own folder (DATA_DIR/plugins).
+mkdir -p "$DATA_DIR"/plugins
+chown "$SVC_USER":"$SVC_USER" "$DATA_DIR"/plugins
+cat > /etc/systemd/system/lumiverb-plugins.service <<UNIT
+[Unit]
+Description=Lumiverb plug-ins (each installed plug-in, a process of its own)
+After=network-online.target lumiverb-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SVC_USER}
+Group=${SVC_USER}
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=${SVC_HOME}
+ExecStart=${APP_DIR}/.venv/bin/python -m src.server.plugin_runner
+Restart=always
+RestartSec=10s
+# Only the runner hears the stop: it stops its plug-ins within 10 s; what's
+# left is killed at the end.
+KillMode=mixed
+TimeoutStopSec=20s
+# Every plug-in at once, at most (each is held to its own memory_mb by the runner).
+MemoryMax=4G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${DATA_DIR}/plugins
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/systemd/system/lumiverb-upkeep.service <<UNIT
 [Unit]
 Description=Lumiverb periodic upkeep (search sync, cleanup)
@@ -606,7 +645,7 @@ fi
 # ---------------------------------------------------------------------------
 step "Starting services"
 
-systemctl enable --now lumiverb-api lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
+systemctl enable --now lumiverb-api lumiverb-plugins lumiverb-upkeep.timer lumiverb-upkeep-daily.timer
 
 for i in {1..10}; do
   if curl -sf http://127.0.0.1:${API_PORT}/health >/dev/null 2>&1; then

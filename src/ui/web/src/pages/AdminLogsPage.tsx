@@ -14,11 +14,12 @@ const PART_NAMES: Record<string, string> = {
   quickwit: "Quickwit (removed)", // an older install's lines (ADR-019: search is in the database)
   nginx: "Web server",
   upkeep: "Upkeep",
+  plugins: "Plug-ins",
   "lumiverb-server": "Service",
 };
 const PARTS: Record<NonNullable<ServiceLog["source"]>, string[]> = {
-  file: ["api", "scheduler", "postgres", "nginx", "lumiverb-server"],
-  journal: ["api", "scheduler", "upkeep"],
+  file: ["api", "scheduler", "plugins", "postgres", "nginx", "lumiverb-server"],
+  journal: ["api", "scheduler", "plugins", "upkeep"],
 };
 
 const LEVEL_STYLE: Record<LogEntry["level"], string> = {

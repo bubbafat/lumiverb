@@ -168,6 +168,12 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server pause all --env /etc/lumiverb/env
 
 and `resume all` to carry on.
 
+Plug-ins the server admin installs (`lumiverb-server plugins install FOLDER --on|--off`, ADR-023) run in `lumiverb-plugins`, each a process of its own: below the API and the scheduler in priority, given none of `/etc/lumiverb/env`'s settings, writing only its own folder (`DATA_DIR/plugins/<id>/`), held to its own memory and disk, started again when it stops and left stopped, with why, when it keeps stopping (Settings › Plug-ins says which). Their lines are in its journal, each named (`plugin hello | …`):
+
+```bash
+journalctl -u lumiverb-plugins -f
+```
+
 ```bash
 sudo -u lumiverb -H /opt/lumiverb/.venv/bin/lumiverb library report-changes /mnt/media-01/Media/New\ shoot
 ```
