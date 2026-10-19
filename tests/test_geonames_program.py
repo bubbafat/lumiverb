@@ -214,11 +214,11 @@ def test_its_landmarks_are_lumiverbs_until_lumiverbs_go() -> None:
 
 
 def test_its_manifest_asks_what_place_names_asked_and_says_what_it_does() -> None:
-    from src.plugins.geonames import PLUGIN
+    from src.plugins.geonames import WAS
 
     m = read(PROGRAM)
-    assert (m.plugin_id, m.title, m.description) == (PLUGIN.plugin_id, PLUGIN.title, PLUGIN.description)
-    assert m.acknowledgment == PLUGIN.acknowledgment, "today's version 3, word for word: no one asked again"
+    assert (m.plugin_id, m.title, m.description) == (WAS.plugin_id, WAS.title, WAS.description)
+    assert m.acknowledgment == WAS.acknowledgment, "the built-in's version 3, word for word: no one asked again"
     assert m.run == ("python3", "-I", "geonames.py") and not m.internet
     assert m.credit.shown() == {"text": "GeoNames", "url": "https://www.geonames.org/",
                                 "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}

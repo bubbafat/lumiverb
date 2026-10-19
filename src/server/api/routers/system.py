@@ -147,6 +147,9 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
     if getattr(request.state, "server_admin", False) is True:  # the install's, not the account's
         rows.append(_row("disk", "Disk", lambda: _disk(now)))
         rows.append(_row("backups", "Backups", lambda: _backups_row(now)))
+        own = _row("own_plugins", "Lumiverb's own plug-ins", lambda: _own_plugins_row(now), db_error)
+        if own is not None:
+            rows.append(own)
 
     return SystemHealth(
         state=h.overall(rows),
@@ -280,6 +283,14 @@ def _previews_disk() -> dict | None:
             out["free"], out["total"] = usage.free, usage.total
     return out
 
+
+
+def _own_plugins_row(now: datetime) -> h.Row | None:
+    from src.server.database import get_control_session
+    from src.server.own_plugins import status
+
+    with get_control_session() as control:
+        return h.own_plugins_row(own=status(control), now=now)
 
 
 def _backups_row(now: datetime) -> h.Row:

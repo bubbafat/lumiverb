@@ -1,28 +1,25 @@
-"""The Place names plug-in (ADR-021 phase 2) against the real API and
-database, with a local web server standing in for download.geonames.org:
-nothing fetched until an account turns it on, the place list fetched once
-for the server, its progress and failures said, upkeep taking up a fetch
-that stopped, search by name (the exact name first, then the most
-populous, narrowed by region or country), landmarks beside the towns (the
-kinds kept, with a Wikipedia article or every one), places found by their
-names in other languages, a list from an older release fetched again while
-the old one is used, a location set by place, and the GeoNames credit
-beside every name."""
+"""Place names after the switch-over (ADR-023 phase 3 part 3), against the
+real API and database: GeoNames is an installed plug-in (Lumiverb's own,
+src/own_plugins/geonames/), and until part 4 what the built-in Place names
+left stands in for it in an account where it's on by the account's own
+switch: each clip's old name in the detail until the plug-in's is saved, and
+the list it fetched answering place searches and setting a location by place
+while the plug-in can't (not installed, or fetching its first list). On in no
+account, the plug-in fetches nothing; the first account turning it on starts
+its fetch. The old producer's routes are gone (410), and a place a location
+was set from keeps its credit whatever becomes of the plug-in. Local web
+servers stand in for download.geonames.org (tests/plugins/geonames_lists.py).
+
+Today's files are read as GeoNames writes them (the old fetch's parsers,
+used by the parity tests until part 4)."""
 
 from __future__ import annotations
 
-import http.server
-import io
-import threading
-import time
-import zipfile
-from datetime import timedelta
-from functools import partial
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import text
 
-from src.plugins import registry
 from src.plugins.geonames import data as geonames_data
 from src.plugins.geonames.data import (
     parse_countries,
@@ -32,14 +29,30 @@ from src.plugins.geonames.data import (
     parse_regions,
     wikipedia_linked,
 )
+from src.producers import INSTALLED, use_added
+from src.producers.plugin_work import PluginWork
 from src.server.config import get_settings
-from src.server.database import get_control_session
-from src.server.repository.places import fold
+from src.server.database import get_control_session, get_tenant_session, tenant_database_url
+from src.server.lifecycle import cli
+from src.server.own_plugins import install_own
+from src.server.plugin_producers import refresh
+from src.server.repository.asset_places import still_shown
+from src.server.repository.places import PlaceRepository, fold, label
+from src.server.repository.plugins import PluginRepository
 from src.shared.utils import utcnow
-from tests.test_scans_api import File, _library, _scan, env  # noqa: F401 — the shared fixture
+from tests.clips import make_clip
+from tests.plugins import geonames_lists as lists
+from tests.producer_fakes import FakeAccount, due, run_job, scheduler_client
+from tests.test_first_run_setup import _env_file, control  # noqa: F401 (control: a fixture)
+from tests.test_plugin_install import _listed
+from tests.test_plugin_runner import _until
+from tests.test_plugin_runner import data as short_data  # noqa: F401 (a fixture)
+from tests.test_server_admins import install  # noqa: F401 (a fixture)
 
 pytestmark = pytest.mark.slow
 GEONAMES = "geonames"
+CREDIT = {"text": "GeoNames", "url": "https://www.geonames.org/",
+          "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
 
 
 def _place(gid, name, ascii_name, lat, lon, cc, admin1, population, code="PPL"):
@@ -107,89 +120,6 @@ COUNTRIES = "#ISO\tISO3\tISO-Numeric\tfips\tCountry\n" \
             "CH\tCHE\t756\tSZ\tSwitzerland\nBR\tBRA\t076\tBR\tBrazil\n"
 
 
-@pytest.fixture(scope="module")
-def geonames_site(tmp_path_factory):
-    """A local stand-in for download.geonames.org: its three files; the URL it serves them at."""
-    root = tmp_path_factory.mktemp("geonames")
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("cities1000.txt", "\n".join(PLACES) + "\n")
-    (root / "cities1000.zip").write_bytes(buf.getvalue())
-    (root / "admin1CodesASCII.txt").write_text(REGIONS, encoding="utf-8")
-    (root / "countryInfo.txt").write_text(COUNTRIES, encoding="utf-8")
-    for name, member, lines in (("allCountries.zip", "allCountries.txt", "\n".join(FEATURES) + "\n"),
-                                ("alternateNamesV2.zip", "alternateNamesV2.txt", ALTERNATE_NAMES)):
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr(member, lines)
-        (root / name).write_bytes(buf.getvalue())
-    handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
-    handler.log_message = lambda *a, **k: None  # type: ignore[attr-defined]
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}/"
-    server.shutdown()
-
-
-@pytest.fixture(autouse=True)
-def _fresh(env, geonames_site, monkeypatch, tmp_path):  # noqa: F811
-    """Every test: the plug-in off in both accounts, nothing fetched, the stand-in site, and a data
-    folder of its own (what's downloaded goes there: never another worker's at the same time)."""
-    monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", geonames_site)
-    monkeypatch.setattr(get_settings(), "data_dir", str(tmp_path))
-    _forget()
-    yield
-    for headers in (env.admin, env.other):
-        env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": False}, headers=headers)
-    _wait_quiet()
-    _forget()
-
-
-def _forget() -> None:
-    with get_control_session() as session:
-        for table in ("plugin_data", "geonames_places", "geonames_landmarks", "geonames_admin1", "geonames_countries"):
-            session.execute(text(f"DELETE FROM {table}"))
-        session.commit()
-
-
-def _data(env, headers=None) -> dict:  # noqa: F811
-    r = env.client.get("/v1/plugins", headers=headers or env.admin)
-    assert r.status_code == 200, r.text
-    return next(p for p in r.json()["plugins"] if p["plugin_id"] == GEONAMES)["data"]
-
-
-def _wait_quiet() -> None:
-    """Until no fetch is running (a test's background thread)."""
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        with get_control_session() as session:
-            if not session.execute(text("SELECT 1 FROM plugin_data WHERE state = 'fetching'")).first():
-                return
-        time.sleep(0.05)
-
-
-def _turn_on(env, headers=None) -> dict:  # noqa: F811
-    version = registry()[GEONAMES].acknowledgment.version
-    r = env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": version},
-                       headers=headers or env.admin)
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def _until(env, state: str, headers=None) -> dict:  # noqa: F811
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        data = _data(env, headers)
-        if data["state"] == state:
-            return data
-        time.sleep(0.05)
-    raise AssertionError(f"never {state}: {data}")
-
-
-def _search(env, q: str, headers=None, **params):  # noqa: F811
-    return env.client.get("/v1/places", params={"q": q, **params}, headers=headers or env.admin)
-
-
 def test_the_files_are_read_as_geonames_writes_them() -> None:
     places = list(parse_places(iter(line + "\n" for line in PLACES)))
     assert [p["geonameid"] for p in places] == [3573890, 2988507, 4717560, 2657896, 3448439, 9999991, 2294768]
@@ -217,188 +147,247 @@ def test_the_files_are_read_as_geonames_writes_them() -> None:
                             "admin1_code": "11"}
 
 
-def test_nothing_is_fetched_or_found_until_an_account_turns_it_on(env) -> None:  # noqa: F811
-    assert _data(env) == {"title": "The place list", "unit": "places", "state": "missing", "done": 0,
-                          "total": None, "detail": None, "error": None, "count": None, "ready_at": None}
-    r = _search(env, "Paris")
-    assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", r.text
-    assert r.json()["error"]["details"]["plugin_id"] == GEONAMES
+
+
+
+# ---------------------------------------------------------------------------
+# An account as the built-in Place names left it, then the switch-over
+# ---------------------------------------------------------------------------
+
+
+def _named_as_before(tenant_id: str, asset_id: str, lat: float, lon: float) -> None:
+    """The clip's old name, as the built-in producer kept it (asset_place): the nearest town within 25 km and
+    the landmark it's at, from the built-in's list."""
     with get_control_session() as session:
-        assert session.execute(text("SELECT count(*) FROM geonames_places")).scalar() == 0
-
-    on = _turn_on(env)
-    assert on["data"]["state"] in ("fetching", "ready")
-    ready = _until(env, "ready")
-    assert ready["count"] == COUNT and ready["ready_at"] and ready["error"] is None
-    assert not geonames_data.folder().exists()  # the downloads, deleted once read
-    # Another account turning it on uses what's there.
-    assert _search(env, "Paris", env.other).status_code == 409  # off there
-    _turn_on(env, env.other)
-    assert _data(env, env.other)["state"] == "ready" and _search(env, "Paris", env.other).status_code == 200
-
-
-def test_places_are_found_by_name_most_populous_first_and_narrowed(env) -> None:  # noqa: F811
-    _turn_on(env)
-    _until(env, "ready")
-    r = _search(env, "paris")
-    assert r.status_code == 200, r.text
-    found = r.json()["places"]
-    assert [p["label"] for p in found] == ["Paris, Île-de-France, France", "Paris, Texas, United States",
-                                           "Parisot, Occitanie, France"]
-    assert found[0]["place_id"] == "geonames:2988507" and found[0]["lat"] == pytest.approx(48.85341)
-    assert r.json()["credit"]["license_url"] == "https://creativecommons.org/licenses/by/4.0/"
-    assert "GeoNames" in r.json()["credit"]["text"]
-    assert [p["label"] for p in _search(env, "Paris, tex").json()["places"]] == ["Paris, Texas, United States"]
-    assert [p["label"] for p in _search(env, "paris, us").json()["places"]] == ["Paris, Texas, United States"]
-    # Accents or not, and GeoNames' own ASCII spelling.
-    for typed in ("zurich", "Zürich", "ZUR", "zuerich"):
-        assert [p["name"] for p in _search(env, typed).json()["places"]] == ["Zürich"], typed
-    assert [p["label"] for p in _search(env, "sao paulo").json()["places"]] == ["São Paulo, Brazil"]
-    assert [p["label"] for p in _search(env, "paris, ile").json()["places"]] == ["Paris, Île-de-France, France"]
-    assert [p["label"] for p in _search(env, "Port of").json()["places"]] == ["Port of Spain, Trinidad and Tobago"]
-    assert _search(env, "%").json()["places"] == [] and _search(env, "par", limit=1).json()["places"][0]["name"] == "Paris"
-    assert env.client.get("/v1/places", params={"q": "Paris"}).status_code == 401  # signed in only
-    assert _search(env, "Paris", env.viewer).status_code == 200
-
-
-def test_a_location_set_by_place_keeps_the_place_and_its_credit(env) -> None:  # noqa: F811
-    lib = _library(env)
-    clip = _scan(env, lib, [File("trip.jpg", f"trip {lib}")], headers=env.admin).uploaded["trip.jpg"]
-    body = {"asset_ids": [clip], "place_id": "geonames:3573890"}
-    r = env.client.put("/v1/assets/locations", json=body, headers=env.editor)
-    assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", r.text
-
-    _turn_on(env)
-    _until(env, "ready")
-    for bad in ("geonames:1", "nope", "geonames:x"):
-        r = env.client.put("/v1/assets/locations", json={**body, "place_id": bad}, headers=env.editor)
-        assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_place", r.text
-    r = env.client.put("/v1/assets/locations", json={**body, "lat": 1.0, "lon": 1.0}, headers=env.editor)
-    assert r.status_code == 400  # one of lat and lon, same_as, place_id
-    r = env.client.put("/v1/assets/locations", json=body, headers=env.editor)
-    assert r.status_code == 200 and r.json()["updated"] == [clip], r.text
-    location = env.client.get(f"/v1/assets/{clip}", headers=env.admin).json()["location"]
-    assert (location["lat"], location["lon"]) == (pytest.approx(10.66668), pytest.approx(-61.51889))
-    assert location["source"] == "person" and location["basis_summary"] == "Port of Spain, Trinidad and Tobago"
-    assert location["credit"] == {"text": "GeoNames", "url": "https://www.geonames.org/",
-                                  "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
-    public = env.client.get(f"/v1/assets/{clip}", params={"public_library_id": lib})
-    assert "Port of Spain" not in public.text
-
-
-def test_a_failed_fetch_says_why_and_is_tried_again(env, monkeypatch, geonames_site) -> None:  # noqa: F811
-    monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", geonames_site + "missing/")
-    _turn_on(env)
-    failed = _until(env, "failed")
-    assert "404" in failed["error"]
-    r = _search(env, "Paris")
-    assert r.status_code == 503 and r.json()["error"]["code"] == "places_not_ready"
-    assert r.json()["error"]["details"]["state"] == "failed"
-
-    # Upkeep waits an hour before trying a failed fetch again; turning it on again (Try again) doesn't.
-    monkeypatch.setattr(get_settings(), "lumiverb_geonames_url", geonames_site)
-    r = env.client.post("/v1/upkeep", headers=env.admin)
-    assert r.status_code == 200 and r.json()["plugin_data"] == {GEONAMES: "waiting"}, r.text
-    _turn_on(env)
-    assert _until(env, "ready")["count"] == COUNT
-
-
-def test_upkeep_takes_up_a_fetch_that_stopped(env) -> None:  # noqa: F811
-    _turn_on(env)
-    _until(env, "ready")
-    _forget()
-    with get_control_session() as session:  # a fetch the API's restart cut off, long ago
-        session.execute(text("INSERT INTO plugin_data (plugin_id, state, done, updated_at)"
-                             " VALUES (:p, 'fetching', 10, :at)"), {"p": GEONAMES, "at": utcnow() - timedelta(hours=1)})
+        places = PlaceRepository(session)
+        town, mark = places.nearest(lat, lon, 25_000), places.landmark_at(lat, lon, 0)
+    with get_tenant_session(tenant_id) as session:
+        session.execute(text(
+            "INSERT INTO asset_place (asset_id, place_id, label, country_code, distance_m, lat, lon, named_at,"
+            "   landmark_id, landmark_name, landmark_label, landmark_distance_m)"
+            " VALUES (:a, :p, :label, :cc, :d, :lat, :lon, now(), :lm, :lm_name, :lm_label, :lm_d)"
+        ), {"a": asset_id, "p": f"geonames:{town['geonameid']}" if town else None, "label": label(town) if town else None,
+            "cc": town["country_code"] if town else None, "d": round(town["distance_m"]) if town else None,
+            "lat": lat, "lon": lon, "lm": f"geonames:{mark['geonameid']}" if mark else None,
+            "lm_name": mark["name"] if mark else None, "lm_label": label(mark) if mark else None,
+            "lm_d": round(mark["distance_m"]) if mark else None})
         session.commit()
-    r = env.client.post("/v1/upkeep", headers=env.admin)
-    assert r.status_code == 200 and r.json()["plugin_data"] == {GEONAMES: "started"}, r.text
-    assert _until(env, "ready")["count"] == COUNT
-    r = env.client.post("/v1/upkeep", headers=env.admin)
-    assert r.json()["plugin_data"] == {GEONAMES: "ready"}
-    # Off in every account: upkeep leaves it be.
-    env.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": False}, headers=env.admin)
-    assert env.client.post("/v1/upkeep", headers=env.admin).json()["plugin_data"] == {}
 
 
-def test_landmarks_are_found_by_name_after_the_towns(env) -> None:  # noqa: F811
-    _turn_on(env)
-    _until(env, "ready")
-    found = _search(env, "magic").json()["places"]
-    assert [(p["label"], p["kind"], p["population"]) for p in found] == [
-        ("Magic Kingdom, Walt Disney World, Florida, United States", "amusement park", 0)]
-    assert found[0]["place_id"] == "geonames:4164161"
-    assert [p["name"] for p in _search(env, "tour eif").json()["places"]] == ["Tour Eiffel"]
-    assert [p["name"] for p in _search(env, "champ, france").json()["places"]] == ["Champ de Mars"]
-    assert _search(env, "paris").json()["places"][0]["kind"] is None  # a town
-    for left_out in ("Hôtel du Coin", "Ruisseau"):
-        assert _search(env, left_out).json()["places"] == [], left_out
-    # A location set by a landmark's name.
-    lib = _library(env)
-    clip = _scan(env, lib, [File("castle.jpg", f"castle {lib}")], headers=env.admin).uploaded["castle.jpg"]
-    r = env.client.put("/v1/assets/locations", json={"asset_ids": [clip], "place_id": "geonames:4164161"},
-                       headers=env.editor)
+def _turned_on(tenant_id: str, on: bool = True, version: str = "3") -> None:
+    """The account's own switch for GeoNames, as an admin left it (accepting that version)."""
+    with get_tenant_session(tenant_id) as session:
+        repo = PluginRepository(session)
+        repo.set(GEONAMES, on, acknowledged_version=version, by="usr_robert", now=utcnow())
+        if on:
+            repo.acknowledge(GEONAMES, version, user_id="usr_robert", now=utcnow())
+        session.commit()
+
+
+POINTS = {"tower": lists.EIFFEL, "town": lists.PARIS, "park": lists.MAGIC_KINGDOM, "sea": (0.0, -150.0)}
+
+
+@pytest.fixture
+def account(install, control, short_data, tmp_path, monkeypatch):  # noqa: F811
+    """An account as Robert's is on the release before: GeoNames on (its acknowledgment 3 accepted), the
+    built-in's list fetched into the control database from a mirror of the tests' files, located clips named
+    by its producer (asset_place). The plug-in isn't installed yet."""
+    client, robert, tenant_id = install
+    mirror = lists.Mirror(lists.write(tmp_path / "site", stored_mb=2))
+    env = _env_file(tmp_path, control)
+    env.write_text(env.read_text() + f"DATA_DIR={short_data}\n")
+    # `lumiverb-server plugins` puts the env file's settings in the environment, where they'd outlast the test:
+    # this test's are put there first, to be put back after.
+    monkeypatch.setenv("DATA_DIR", str(short_data))
+    monkeypatch.setenv("APP_HOST", "http://localhost:6464")
+    monkeypatch.setenv("LUMIVERB_GEONAMES_URL", mirror.url)
+    get_settings.cache_clear()
+    geonames_data.fetch(lambda *a, **k: None)
+    _turned_on(tenant_id)
+    r = client.post("/v1/libraries", json={"name": "Places", "root_path": "/Volumes/places"}, headers=robert)
     assert r.status_code == 200, r.text
-    location = env.client.get(f"/v1/assets/{clip}", headers=env.admin).json()["location"]
-    assert (location["lat"], location["lon"]) == (pytest.approx(MAGIC_KINGDOM[0]), pytest.approx(MAGIC_KINGDOM[1]))
-    assert location["basis_summary"] == "Magic Kingdom, Walt Disney World, Florida, United States"
+    library_id = r.json()["library_id"]
+    clips = {}
+    with get_tenant_session(tenant_id) as session:
+        for name, (lat, lon) in POINTS.items():
+            clips[name] = make_clip(session, library_id, f"{name}.jpg")
+            session.execute(text("UPDATE assets SET gps_lat = :lat, gps_lon = :lon WHERE asset_id = :a"),
+                            {"lat": lat, "lon": lon, "a": clips[name]})
+        clips["picked"] = make_clip(session, library_id, "picked.jpg")
+        session.commit()
+    for name, (lat, lon) in POINTS.items():
+        _named_as_before(tenant_id, clips[name], lat, lon)
+    runner = SimpleNamespace(runner=None)
+    try:
+        yield SimpleNamespace(client=client, robert=robert, tenant_id=tenant_id, library_id=library_id,
+                              clips=clips, mirror=mirror, env=env, data=short_data, control=control, runner=runner)
+    finally:
+        if runner.runner is not None:
+            runner.runner.stop_all()
+        use_added((), by=INSTALLED)
+        mirror.close()
 
 
-def test_a_list_from_an_older_release_is_fetched_again_while_it_is_used(env) -> None:  # noqa: F811
-    from src.server import plugin_data
+def _detail(f, clip: str) -> dict:
+    r = f.client.get(f"/v1/assets/{f.clips[clip]}", headers=f.robert)
+    assert r.status_code == 200, r.text
+    return r.json()
 
-    _turn_on(env)
-    _until(env, "ready")
-    assert plugin_data.status(GEONAMES)["current"] is True
-    # The list a release before landmarks fetched: towns only, its version unsaid (1).
-    with get_control_session() as session:
+
+def _places(f, q: str) -> dict:
+    r = f.client.get("/v1/places", params={"q": q}, headers=f.robert)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _still(f) -> int:
+    with get_tenant_session(f.tenant_id) as session:
+        return still_shown(session)
+
+
+def _set_by_place(f, place_id: str):
+    return f.client.put("/v1/assets/locations", json={"asset_ids": [f.clips["picked"]], "place_id": place_id,
+                                                       "replace": "all"}, headers=f.robert)
+
+
+def test_not_installed_its_old_names_and_list_stand_in(account) -> None:
+    f = account
+    tower = _detail(f, "tower")
+    assert tower["place"]["label"] == "Paris, Île-de-France, France" and tower["place"]["landmark"]["name"] == "Tour Eiffel"
+    assert tower["place"]["credit"] == CREDIT and tower["facts"] == []
+    assert _still(f) == 4
+    # Place search answers from the built-in's list, credited with its license.
+    found = _places(f, "paris")
+    assert [(p["place_id"], p["label"], p["source"], p["source_title"]) for p in found["places"]] == [
+        ("geonames:2988507", "Paris, Île-de-France, France", GEONAMES, "Place names (GeoNames)"),
+        ("geonames:4717560", "Paris, Texas, United States", GEONAMES, "Place names (GeoNames)"),
+        ("geonames:9999991", "Parisot, Occitanie, France", GEONAMES, "Place names (GeoNames)")]
+    assert found["credit"] is None and found["unavailable"] == []
+    assert found["credits"] == [{"source": GEONAMES, **CREDIT}]
+    # A location set from one of its places keeps the place and its credit.
+    r = _set_by_place(f, "geonames:2988507")
+    assert r.status_code == 200, r.text
+    location = _detail(f, "picked")["location"]
+    assert (location["lat"], location["lon"]) == (pytest.approx(lists.PARIS[0]), pytest.approx(lists.PARIS[1]))
+    assert location["basis_summary"] == "Paris, Île-de-France, France" and location["credit"] == CREDIT
+    with get_tenant_session(f.tenant_id) as session:
+        basis = session.execute(text("SELECT basis FROM asset_location WHERE asset_id = :a"),
+                                {"a": f.clips["picked"]}).scalar()
+    assert basis["place"] == {"id": "geonames:2988507", "label": "Paris, Île-de-France, France", "source": GEONAMES,
+                              "credit": CREDIT}
+    for bad in ("geonames:1", "geonames:x"):
+        assert _set_by_place(f, bad).status_code == 422
+    # The old producer's routes are gone, naming the plug-in's work.
+    for route in ("/v1/places/nearest", "/v1/places/names"):
+        r = f.client.post(route, json={}, headers=f.robert)
+        assert r.status_code == 410 and r.json()["error"]["code"] == "gone", r.text
+        assert r.json()["error"]["details"]["replaced_by"][0].startswith("POST /v1/plugins/geonames/")
+    # Processing works without it: its row gone, failures and retry answering, the old producer unknown.
+    r = f.client.get("/v1/producers", headers=f.robert)
+    assert r.status_code == 200 and "place" not in {p["artifact"] for p in r.json()["producers"]}, r.text
+    assert f.client.get("/v1/producers/failures", headers=f.robert).status_code == 200
+    assert f.client.post("/v1/producers/failures/retry", json={"all": True}, headers=f.robert).status_code == 200
+    r = f.client.post("/v1/producers/failures/retry", json={"all": True, "artifact": "place"}, headers=f.robert)
+    assert r.status_code == 404, r.text
+    for scope in ("new", "redo"):  # Run and Remake
+        r = f.client.post("/v1/producers/run", json={"producer": "all", "all": True, "scope": scope}, headers=f.robert)
+        assert r.status_code == 200 and "place" not in {p["artifact"] for p in r.json()["producers"]}, r.text
+    # Turned off in the account: its old names hidden, its search off, a place not set.
+    _turned_on(f.tenant_id, on=False)
+    assert _detail(f, "tower")["place"] is None and _still(f) == 0
+    r = f.client.get("/v1/places", params={"q": "paris"}, headers=f.robert)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", r.text
+    r = _set_by_place(f, "geonames:2988507")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "plugin_off", r.text
+    assert _detail(f, "picked")["location"]["credit"] == CREDIT, "what was set stays credited"
+
+
+def _install_and_run(f):
+    install_own(get_settings().control_plane_database_url, f.data, geonames_url=get_settings().lumiverb_geonames_url,
+                say=lambda line: None)
+    refresh()
+    from src.server.plugin_runner import Runner
+
+    f.runner.runner = Runner(f.data)
+    return f.runner.runner
+
+
+def _running(f) -> dict:
+    return _listed(f.client, f.robert)[GEONAMES]["running"]
+
+
+def test_installed_it_takes_over_once_its_list_is_there_the_old_names_meanwhile(account) -> None:
+    f = account
+    f.mirror.hold("allCountries.zip", lists.MB)
+    runner = _install_and_run(f)
+    listed = _listed(f.client, f.robert)[GEONAMES]
+    assert (listed["kind"], listed["state"], listed["version"]) == ("installed", "on", "1"), "on as it was, unasked"
+    _until(runner, lambda: _running(f)["state"] == "preparing")
+    # While it fetches its first list: today's list answers, nothing said unavailable, the old names shown.
+    found = _places(f, "eiffel")
+    assert [(p["name"], p["matched"]) for p in found["places"]] == [("Tour Eiffel", "Eiffel Tower"), ("Eiffel Peak", None)]
+    assert found["unavailable"] == [] and found["credits"] == [{"source": GEONAMES, **CREDIT}]
+    assert _set_by_place(f, "geonames:6254976").status_code == 200
+    assert _detail(f, "town")["place"]["label"] == "Paris, Île-de-France, France"
+    before = {q: _places(f, q)["places"] for q in ("paris", "zur", "magic", "sampa", "tied")}
+
+    f.mirror.release()
+    _until(runner, lambda: _running(f)["state"] == "ready" and not _running(f).get("detail"))
+    # The plug-in answers now: the same places, the same ids.
+    for q, places in before.items():
+        assert _places(f, q)["places"] == places, q
+    with get_control_session() as session:  # the built-in's list isn't asked any more
+        session.execute(text("DELETE FROM geonames_places"))
         session.execute(text("DELETE FROM geonames_landmarks"))
-        session.execute(text("UPDATE plugin_data SET version = NULL, count = 6"))
         session.commit()
-    assert plugin_data.status(GEONAMES)["current"] is False
-    assert _search(env, "paris").status_code == 200  # what's there is used meanwhile
-    # The producer's lookups want this release's: they wait, and it's fetched again.
-    lib = _library(env)
-    clip = _scan(env, lib, [File("there.jpg", f"there {lib}")], headers=env.admin).uploaded["there.jpg"]
-    r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
-    assert r.status_code == 503 and r.json()["error"]["code"] == "places_not_ready", r.text
-    deadline = time.monotonic() + 60
-    while not plugin_data.status(GEONAMES)["current"] and time.monotonic() < deadline:
-        time.sleep(0.05)
-    data = _until(env, "ready")
-    assert data["count"] == COUNT
-    assert plugin_data.status(GEONAMES)["version"] == registry()[GEONAMES].data_version
-    assert [p["name"] for p in _search(env, "magic").json()["places"]] == ["Magic Kingdom, Walt Disney World"]
-    r = env.client.post("/v1/places/nearest", json={"asset_ids": [clip], "within_km": 25}, headers=env.admin)
+    assert [p["name"] for p in _places(f, "paris")["places"]] == ["Paris", "Paris", "Parisot"]
+    assert _set_by_place(f, "geonames:2988507").status_code == 200
+
+    # Its work names every located clip; then the detail shows its facts and no old name.
+    acct = FakeAccount(scheduler_client(f.tenant_id))
+    acct.tenant_id = f.tenant_id
+    items = due(tenant_database_url(f.tenant_id), "plugin_geonames", [f.library_id])
+    assert {i["asset_id"] for i in items} == {f.clips[n] for n in (*POINTS, "picked")}
+    run_job(PluginWork, acct, f.tenant_id, "plugin_geonames", items)
+    assert acct.failures.charged == []
+    said = {}
+    for name in POINTS:
+        detail = _detail(f, name)
+        assert detail["place"] is None, name
+        section = next(s for s in detail["facts"] if s["plugin_id"] == GEONAMES)
+        assert section["credit"] == CREDIT
+        said[name] = {fact["key"]: (fact["text"], fact["empty"]) for fact in section["facts"]}
+    assert said["tower"] == {"at": ("Tour Eiffel", False), "near": ("Paris, Île-de-France, France", False)}
+    assert said["park"] == {"at": ("Magic Kingdom, Walt Disney World, Florida, United States", False),
+                            "near": ("Not near a town", True)}
+    assert said["town"] == {"near": ("Paris, Île-de-France, France", False)}
+    assert said["sea"] == {"near": ("Not near a town", True)}
+    assert _still(f) == 0
+    # The count the removal waits on, as `lumiverb-server plugins` says it.
+    import io
+    from contextlib import redirect_stdout
+
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cli.main(["plugins", "--env", str(f.env)]) == 0
+    assert "0 clips still showing an old place name" in out.getvalue()
+
+    # Uninstalled: a location set from one of its places keeps its credit.
+    assert cli.main(["plugins", "uninstall", GEONAMES, "--yes", "--env", str(f.env)]) == 0
+    location = _detail(f, "picked")["location"]
+    assert location["basis_summary"] == "Paris, Île-de-France, France" and location["credit"] == CREDIT
+
+
+def test_on_in_no_account_it_fetches_nothing_until_one_turns_it_on(account) -> None:
+    f = account
+    _turned_on(f.tenant_id, on=False)
+    before = list(f.mirror.asked)  # the built-in's own fetch, the release before
+    runner = _install_and_run(f)
+    _until(runner, lambda: _running(f)["state"] == "off")
+    for _ in range(10):
+        runner.turn()
+    assert f.mirror.asked == before, "nothing fetched while no account has it on"
+    r = f.client.put(f"/v1/plugins/{GEONAMES}", json={"enabled": True, "acknowledged": "3"}, headers=f.robert)
     assert r.status_code == 200, r.text
-    # Upkeep leaves this release's list be.
-    assert env.client.post("/v1/upkeep", headers=env.admin).json()["plugin_data"] == {GEONAMES: "ready"}
-
-
-def test_places_are_found_by_their_names_in_other_languages(env) -> None:  # noqa: F811
-    _turn_on(env)
-    _until(env, "ready")
-    found = _search(env, "zurigo").json()["places"]
-    assert [(p["name"], p["matched"]) for p in found] == [("Zürich", "Zurigo")]
-    # The same name in French and English, French listed first: kept once, as English.
-    with get_control_session() as session:
-        assert session.execute(text("SELECT language FROM geonames_names WHERE geonameid = 6254976"
-                                    " AND folded = 'eiffel tower'")).scalars().all() == ["en"]
-    # Several of its names start so: the English one says which. Landmarks by how known they are (their
-    # other names): the tower, then the peak (found by its own name).
-    assert [(p["name"], p["matched"]) for p in _search(env, "eiffel").json()["places"]] == [
-        ("Tour Eiffel", "Eiffel Tower"), ("Eiffel Peak", None)]
-    assert [(p["name"], p["matched"]) for p in _search(env, "eiffelt").json()["places"]] == [
-        ("Tour Eiffel", "Eiffelturm")]
-    # Found by its own name: said so, once.
-    assert [(p["name"], p["matched"]) for p in _search(env, "zur").json()["places"]] == [("Zürich", None)]
-    # Exactly a place's own name before exactly another's (with no language), though that's more populous.
-    assert [(p["name"], p["matched"]) for p in _search(env, "sampa").json()["places"]] == [
-        ("Sampa", None), ("São Paulo", "Sampa")]
-    # Exactly another's before starting with its own: "zurigo" is Zürich's whole name in Italian.
-    assert [p["name"] for p in _search(env, "zurig").json()["places"]] == ["Zürich"]
-    for left_out in ("turicum", "zurchy", "8001", "le ruisseau"):
-        assert _search(env, left_out).json()["places"] == [], left_out
-    # Narrowed by where, as by its own name.
-    assert _search(env, "zurigo, brazil").json()["places"] == []
-    assert [p["name"] for p in _search(env, "zurigo, switz").json()["places"]] == ["Zürich"]
+    _until(runner, lambda: _running(f)["state"] == "ready" and not _running(f).get("detail"))
+    assert f.mirror.asked[:len(before)] == before and f.mirror.gets("cities1000.zip") == 2

@@ -30,7 +30,20 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.producers.place import SHOWS_LOCATION, located
+
+def located(coord: str, a: str = "a", loc: str = "l") -> str:
+    """SQL: the clip's latitude or longitude (coord "lat" or "lon") as it shows, on assets a with its
+    asset_location loc LEFT JOINed: a person's, else the file's, else an applied guess; NULL without one."""
+    gps = f"{a}.gps_{coord}"
+    return (f"(CASE WHEN {loc}.source = 'person' THEN {loc}.{coord}"
+            f" WHEN {a}.gps_lat IS NOT NULL AND {a}.gps_lon IS NOT NULL THEN {gps}"
+            f" WHEN {loc}.source = 'time' AND {loc}.status = 'applied' THEN {loc}.{coord} END)")
+
+
+# SQL on assets a: it shows a location: a person's, the file's GPS, or an applied guess (never a suggestion).
+SHOWS_LOCATION = ("(a.gps_lat IS NOT NULL AND a.gps_lon IS NOT NULL) OR EXISTS (SELECT 1 FROM asset_location pl"
+                  " WHERE pl.asset_id = a.asset_id AND (pl.source = 'person' OR (pl.source = 'time'"
+                  " AND pl.status = 'applied')))")
 
 # On assets a with its asset_location l LEFT JOINed: where the location it shows comes from, and how sure it is,
 # in meters (a person's its radius, 0; the file's its GPS accuracy when it says, else exact; a guess's its radius).

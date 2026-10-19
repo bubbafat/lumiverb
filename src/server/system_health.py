@@ -370,3 +370,30 @@ def backups_row(*, newest: datetime | None, newest_bytes: int = 0, last_error: s
         row.state = YELLOW
         row.reason = f"The last backup failed: {last_error} The one before is {ago(age)} old.{doing}"
     return row
+
+
+# -- Lumiverb's own plug-ins ----------------------------------------------------------
+
+
+def own_plugins_row(*, own: Sequence[Mapping[str, Any]], now: datetime) -> Row | None:
+    """Lumiverb's own plug-ins (src/server/own_plugins.py status): red when one couldn't be installed (why;
+    it's tried again at the next start), yellow when an older one waits for the next start to be updated, else
+    green. None when Lumiverb ships none."""
+    if not own:
+        return None
+    row = Row("own_plugins", "Lumiverb's own plug-ins", GREEN, "", link="/settings/plugins", checked_at=now)
+    failed = [o for o in own if o["failed"] and o["installed"] != o["shipped"]]
+    if failed:
+        row.state = RED
+        row.reason = " ".join(f"{o['title']} couldn't be installed: {o['failed']}." for o in failed) + \
+            " It's tried again at the next start."
+        return row
+    behind = [o for o in own if not o["uninstalled"] and o["installed"] != o["shipped"]]
+    if behind:
+        row.state = YELLOW
+        row.reason = f"{_names([o['title'] for o in behind])}: installed at the next start of Lumiverb."
+        return row
+    said = [f"{o['title']} {o['installed']}" if o["installed"] else f"{o['title']} uninstalled by the server admin"
+            for o in own]
+    row.reason = f"Installed: {_names(said)}."
+    return row

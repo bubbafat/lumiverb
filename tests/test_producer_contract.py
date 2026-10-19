@@ -30,8 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 def test_every_producer_declares_what_the_rest_needs():
     producers = registry()
     assert list(producers) == ["probe", "capture", "proxy", "video_preview", "analysis_proxy", "scenes", "scene_vision",
-                               "vision", "ocr", "clip", "faces", "video_faces", "transcript", "location",
-                               "place"]
+                               "vision", "ocr", "clip", "faces", "video_faces", "transcript", "location"]
     for p in producers.values():
         assert isinstance(p, ProducerSpec) and p.applies and p.made
         assert all(n in producers for n in p.needs), (p.artifact, p.needs)

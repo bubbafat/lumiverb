@@ -137,9 +137,16 @@ CREDITS = {"geonames": {"text": "GeoNames", "url": "https://www.geonames.org/",
                         "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}}
 
 
-def credit(source: str | None) -> dict[str, Any] | None:
-    """Who a place name is from, to show beside it: GeoNames, or the installed plug-in that found it (its
-    manifest's credit with its license, else its title); None for no place, or a plug-in no longer installed."""
+def credit(place: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Who a place name (a location's basis.place) is from, to show beside it: the credit kept with it when it
+    was set (ADR-023 phase 3: whatever becomes of the plug-in since), else GeoNames', else the installed
+    plug-in's that found it (its manifest's credit with its license, else its title); None for no place, or a
+    plug-in no longer installed that kept none."""
+    place = place if isinstance(place, dict) else {}
+    if isinstance(place.get("credit"), dict) and place["credit"].get("text"):
+        kept = place["credit"]
+        return {"text": kept["text"], "url": kept.get("url"), "license": kept.get("license")}
+    source = place.get("source")
     if not source:
         return None
     if source in CREDITS:
@@ -181,7 +188,7 @@ def for_asset(session: Session, asset_id: str) -> dict[str, Any] | None:
         "source": row["source"], "status": row["status"],
         "basis_summary": summary(session, row),
         # Who a place name in basis_summary is from, to show beside it (None without one).
-        "credit": credit(((row["basis"] or {}).get("place") or {}).get("source")),
+        "credit": credit((row["basis"] or {}).get("place")),
         # A guess kept with nothing else to go by: its fixes went ("source
         # removed"), or are outside the window now ("outside window").
         "basis_gone": bool((row["basis"] or {}).get("basis_gone")) if row["source"] == TIME else False,

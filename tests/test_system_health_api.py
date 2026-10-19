@@ -1,9 +1,9 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
-"""GET /v1/system/health: the Admin page's seven rows, gathered from the
+"""GET /v1/system/health: the Admin page's eight rows, gathered from the
 scheduler's status, the AI machines, the clips not searchable yet, the
-libraries, the data disk and the backups (the rules alone:
-tests/test_system_health.py). The disk and the backups are the install's, so
-a server admin sees them (signed in, as the Admin page is) and an account's
+libraries, the data disk, the backups and Lumiverb's own plug-ins (the rules
+alone: tests/test_system_health.py). The disk, the backups and Lumiverb's own
+plug-ins are the install's, so a server admin sees them (signed in, as the Admin page is) and an account's
 admin key doesn't."""
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from tests.test_lineage_api import _db, _ingest_with, _sha
 
 pytestmark = pytest.mark.slow
 
-KEYS = ["website", "processing", "ai", "search", "storage", "disk", "backups"]
+KEYS = ["website", "processing", "ai", "search", "storage", "disk", "backups", "own_plugins"]
 _signed_in: dict[str, dict[str, str]] = {}
 
 
@@ -81,7 +81,7 @@ def _forget(env, *keys: str) -> None:
         s.commit()
 
 
-def test_seven_rows_in_order_with_the_worst_overall(env):
+def test_eight_rows_in_order_with_the_worst_overall(env):
     body = _health(env)
     assert [r["key"] for r in body["rows"]] == KEYS
     client, headers, *_ = env

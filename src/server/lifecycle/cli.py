@@ -324,14 +324,27 @@ def _init(args: argparse.Namespace) -> int:
 
 
 def _migrate(args: argparse.Namespace) -> int:
-    _, url = _env_and_url(args)
+    env, url = _env_and_url(args)
     try:
         count = migrate(url)
     except MigrationError as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     print(f"✓ Migrated the control plane and {count} account(s)")
+    _install_own(env, url, say=print, fail=lambda line: print(line, file=sys.stderr))
     return 0
+
+
+def _install_own(env: dict[str, str], url: str, *, say, fail) -> None:
+    """Migrating's last step: Lumiverb's own plug-ins installed or updated (src/server/own_plugins.py), never
+    stopping what follows."""
+    from src.server.own_plugins import install_own
+
+    try:
+        data: Path | None = data_dir(env)
+    except InstallError:
+        data = None
+    install_own(url, data, geonames_url=env.get("LUMIVERB_GEONAMES_URL") or None, say=say, fail=fail)
 
 
 def backed_up_before_upgrade(env: dict[str, str], url: str) -> backups.Backup | None:
@@ -368,7 +381,10 @@ def _created_and_migrated(url: str, env: dict[str, str] | None = None) -> int:
         logger.info("Created the control database")
     if env is not None:
         backed_up_before_upgrade(env, url)
-    return migrate(url, say=logger.info)
+    count = migrate(url, say=logger.info)
+    if env is not None:
+        _install_own(env, url, say=logger.info, fail=logger.error)
+    return count
 
 
 def _then_migrated(env: dict[str, str], url: str, stop: threading.Event, migrated: threading.Event) -> None:
@@ -731,7 +747,7 @@ _STATE_WORDS = {"running": "running", "partly": "partly paused", "paused": "paus
 
 
 def _pausing(args: argparse.Namespace) -> int:
-    """pause|resume: a switch (upkeep, a producer), every library's scans
+    """pause|resume: a switch (upkeep, a producer, an installed plug-in's work), every library's scans
     or one's, or all, as Settings › Processing and `lumiverb pause|resume`
     do (the same routes' code, without a key: on the machine itself), in
     every account or the one named. Then each account's state."""
@@ -744,15 +760,12 @@ def _pausing(args: argparse.Namespace) -> int:
     from src.server.api.routers import producers as producer_routes
     from src.server.config import get_settings
     from src.server.database import get_control_session, get_tenant_session
+    from src.server.plugin_producers import refresh
     from src.server.repository import lineage
     from src.server.repository.control_plane import TenantRepository
     from src.shared.producers import PAUSE_ALL, PAUSE_SCANS, pause_state, pause_targets
 
     pausing = args.command == "pause"
-    names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
-    if args.name not in names:
-        print(f"✗ Nothing here is called {args.name}: {', '.join(names)}", file=sys.stderr)
-        return 2
     if args.library and args.name != PAUSE_SCANS:
         print("✗ --library goes with scans: a library's own Scans pause", file=sys.stderr)
         return 2
@@ -760,6 +773,11 @@ def _pausing(args: argparse.Namespace) -> int:
     os.environ.update(env)  # the server's settings are the environment's (src/server/config.py)
     get_settings.cache_clear()
     try:
+        refresh()  # an installed plug-in's work is a producer too, as the API's requests read them (ADR-023)
+        names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
+        if args.name not in names:
+            print(f"✗ Nothing here is called {args.name}: {', '.join(names)}", file=sys.stderr)
+            return 2
         with get_control_session() as ctrl:
             accounts = [(t.tenant_id, t.name) for t in TenantRepository(ctrl).list_all()
                         if args.account in (None, t.tenant_id, t.name)]
@@ -956,7 +974,8 @@ def main(argv: list[str] | None = None) -> int:
         command = commands.add_parser(
             verb, help=f"{does}: all, scans, upkeep or a producer, in every account (no API key: on this machine)")
         _env_option(command, argparse.SUPPRESS)
-        command.add_argument("name", help="all, scans, upkeep or a producer (e.g. vision)")
+        command.add_argument("name", help="all, scans, upkeep or a producer (e.g. vision, or a plug-in's work:"
+                                          " plugin_geonames)")
         command.add_argument("--library", help="with scans: this library's only (its name or id)")
         command.add_argument("--account", help="this account's only (its name or id)")
     args = parser.parse_args(argv)

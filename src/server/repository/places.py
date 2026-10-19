@@ -4,6 +4,12 @@ account, with their regions and countries, and its landmarks
 (src/plugins/geonames/landmarks.py), each found by its names in other
 languages too (geonames_names). Replaced whole, in one transaction, so a
 search never sees half a list.
+
+Since ADR-023 phase 3 the GeoNames plug-in keeps its own list; this one,
+fetched by the built-in Place names before, is what part 3's fallbacks
+answer from while the plug-in can't (not installed, not running, fetching
+its first list), in an account where GeoNames is on by its own switch
+(on_here). It goes in part 4.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from sqlmodel import Session
 
 from src.plugins.geonames.landmarks import FARTHEST_M, KINDS, reach_sql
 
+PLUGIN = "geonames"
 PREFIX = "geonames:"
 _BATCH = 5000
 # What's a town's name: not a section of one ("Zürich (Kreis 7)"), nor a
@@ -30,6 +37,21 @@ def _meters(t: str) -> str:
     """SQL: meters between (t.lat, t.lon) and (:lat, :lon), the haversine way."""
     return (f"2 * 6371000.0 * asin(sqrt(LEAST(1.0, power(sin(radians({t}.lat - :lat) / 2), 2)"
             f" + cos(radians(:lat)) * cos(radians({t}.lat)) * power(sin(radians({t}.lon - :lon) / 2), 2))))")
+
+
+def on_here_sql() -> str:
+    """SQL true while GeoNames is on in the account by its own switch (its plugins row: enabled, the version
+    accepted standing under the acknowledgment shipped, src/own_plugins/geonames/), installed or not: where its
+    old names and this list stand in for the plug-in (part 3's fallbacks)."""
+    from src.server.own_plugins import shipped
+    from src.server.repository.plugins import on_sql
+
+    manifest = shipped(PLUGIN)
+    return on_sql(PLUGIN, spec=manifest.spec()) if manifest else "false"
+
+
+def on_here(session: Session) -> bool:
+    return bool(session.execute(text(f"SELECT {on_here_sql()}")).scalar())
 
 
 def fold(name: str) -> str:
@@ -167,6 +189,10 @@ class PlaceRepository:
 
     def count(self) -> int:
         return int(self._session.execute(text("SELECT count(*) FROM geonames_places")).scalar() or 0)
+
+    def kept(self) -> bool:
+        """Whether the list is here (a search's question, every time: no count)."""
+        return bool(self._session.execute(text("SELECT EXISTS (SELECT 1 FROM geonames_places)")).scalar())
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Towns and landmarks whose name starts with what's typed, accents or

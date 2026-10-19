@@ -8,36 +8,34 @@ Today's answers are the golden file's (tests/plugins/geonames_golden.json,
 which holds the plug-in to them once today's code is gone: written again by
 tests/plugins/geonames_golden.py while it exists). The plug-in's are
 today's: from its list's own queries, over its socket, and through
-Lumiverb, installed beside the built-in Place names under another id: GET
-/v1/places finds the same places, and the Lightbox's facts say what its
-place lines said. Through Lumiverb, whitespace is compared collapsed on
-both sides: Lumiverb's checks of a plug-in's answers collapse it (a page
-shows it collapsed anyway).
+Lumiverb: GET /v1/places finds the same places once the plug-in answers as
+the built-in's list did standing in for it (part 3's fallback), and the
+Lightbox's facts say what the place lines said from the built-in's answers.
+Through Lumiverb, whitespace is compared collapsed on both sides: Lumiverb's
+checks of a plug-in's answers collapse it (a page shows it collapsed
+anyway).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 
 import pytest
 from sqlalchemy import text
 
 from src.plugins.geonames import data as geonames_data
 from src.producers import INSTALLED, use_added
-from src.producers.place.work import Name
 from src.producers.plugin_work import PluginWork
 from src.server.config import get_settings
 from src.server.database import get_control_session, get_tenant_session, tenant_database_url
-from src.server.lifecycle import cli
 from src.server.plugin_producers import refresh
 from src.server.repository.places import PlaceRepository, label
 from tests.clips import make_clip
 from tests.plugins import geonames_lists as lists
 from tests.producer_fakes import FakeAccount, due, run_job, scheduler_client
-from tests.test_first_run_setup import _env_file, control  # noqa: F401 (control: a fixture)
-from tests.test_geonames_program import FIRST, GOLDEN, PROGRAM, GeoNames, as_today
+from tests.test_first_run_setup import control  # noqa: F401 (a fixture)
+from tests.test_geonames_program import FIRST, GOLDEN, GeoNames, as_today
 from tests.test_plugin_install import _listed
 from tests.test_plugin_runner import (
     _until,
@@ -47,6 +45,9 @@ from tests.test_plugin_runner import data as short_data  # noqa: F401 (a fixture
 from tests.test_server_admins import install  # noqa: F401 (a fixture)
 
 pytestmark = pytest.mark.slow
+GEONAMES = "geonames"
+CREDIT = {"text": "GeoNames", "url": "https://www.geonames.org/",
+          "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
 WRITE = "LUMIVERB_WRITE_GEONAMES_GOLDEN"  # set by tests/plugins/geonames_golden.py: the golden file written again
 ABOUT = ("Today's Place names' answers (src/server/repository/places.py over src/plugins/geonames/data.py's fetch, "
          "in Postgres) to tests/plugins/geonames_lists.py's questions on its files: the GeoNames plug-in is held to "
@@ -90,10 +91,8 @@ def test_the_plug_in_answers_as_today_on_the_same_files(today, data) -> None:  #
 
 
 # ---------------------------------------------------------------------------
-# Through Lumiverb: the plug-in installed beside the built-in Place names
+# Through Lumiverb: the built-in's list standing in, then the plug-in
 # ---------------------------------------------------------------------------
-
-PLUGIN = "geonamesplugin"  # the built-in's id is geonames until part 3
 
 
 def _collapsed(value):
@@ -108,91 +107,72 @@ def _collapsed(value):
 
 @pytest.fixture
 def lumiverb(request, install, control, short_data, tmp_path, monkeypatch):  # noqa: F811
-    """An install with the plug-in installed on (another id) and running, from a mirror of the tests' files
-    (with what Lumiverb won't show, when it's parametrized True), the built-in Place names fetching from it
-    too once an account turns it on; a library."""
-    from src.server.plugin_runner import Runner
+    """An install with GeoNames on in the account (as Robert's is) and the built-in's list fetched into the
+    control database from a mirror of the tests' files (with what Lumiverb won't show, parametrized True), the
+    plug-in installed from the same mirror (its runner started by the test); a library."""
+    from src.server.own_plugins import install_own
+    from src.server.repository.plugins import PluginRepository
+    from src.shared.utils import utcnow
 
     client, robert, tenant_id = install
-    mirror = lists.Mirror(lists.write(tmp_path / "site", odd=getattr(request, "param", False)))
-    env = _env_file(tmp_path, control)
-    env.write_text(env.read_text() + f"DATA_DIR={short_data}\n")
+    odd = getattr(request, "param", False)
+    mirror = lists.Mirror(lists.write(tmp_path / "site", odd=odd))
     monkeypatch.setenv("DATA_DIR", str(short_data))
-    monkeypatch.setenv("LUMIVERB_GEONAMES_URL", mirror.url)  # the built-in's, read again with the env file's
+    monkeypatch.setenv("LUMIVERB_GEONAMES_URL", mirror.url)
     get_settings.cache_clear()
-    copy = tmp_path / "program"
-    shutil.copytree(PROGRAM, copy)
-    manifest = json.loads((copy / "lumiverb-plugin.json").read_text())
-    manifest.update(id=PLUGIN, title="Place names (the GeoNames plug-in)")
-    (copy / "lumiverb-plugin.json").write_text(json.dumps(manifest))
-    assert cli.main(["plugins", "install", str(copy), "--on", "--yes", "--env", str(env)]) == 0
-    r = client.put(f"/v1/plugins/{PLUGIN}/server-settings", json={"settings": {"mirror": mirror.url}}, headers=robert)
-    assert r.status_code == 200, r.text
+    if not odd:  # the built-in's fetch can't keep a NUL (Postgres text): only the plug-in is asked of those
+        geonames_data.fetch(lambda *a, **k: None)
+    with get_tenant_session(tenant_id) as session:
+        PluginRepository(session).set(GEONAMES, True, acknowledged_version="3", by="usr_robert", now=utcnow())
+        session.commit()
+    install_own(control, short_data, geonames_url=mirror.url, say=lambda line: None)
     refresh()
-    runner = Runner(short_data)
+    r = client.post("/v1/libraries", json={"name": "Places", "root_path": "/Volumes/places"}, headers=robert)
+    assert r.status_code == 200, r.text
+    f = {"client": client, "robert": robert, "tenant_id": tenant_id, "library_id": r.json()["library_id"],
+         "data": short_data, "runner": None}
     try:
-        _until(runner, lambda: _listed(client, robert)[PLUGIN]["running"]["state"] == "ready"
-               and not _listed(client, robert)[PLUGIN]["running"].get("detail"))
-        r = client.post("/v1/libraries", json={"name": "Places", "root_path": "/Volumes/places"}, headers=robert)
-        assert r.status_code == 200, r.text
-        yield {"client": client, "robert": robert, "tenant_id": tenant_id, "library_id": r.json()["library_id"],
-               "runner": runner}
+        yield f
     finally:
-        runner.stop_all()
+        if f["runner"] is not None:
+            f["runner"].stop_all()
         use_added((), by=INSTALLED)
         mirror.close()
 
 
-def _builtin_on(f) -> None:
-    """Today's Place names turned on in the account (its acknowledgment accepted), its list fetched."""
-    from src.plugins import registry
+def _running(f) -> None:
+    """The plug-in runner started, until GeoNames answers from its own list."""
+    from src.server.plugin_runner import Runner
 
-    version = registry()["geonames"].acknowledgment.version
-    r = f["client"].put("/v1/plugins/geonames", json={"enabled": True, "acknowledged": version}, headers=f["robert"])
-    assert r.status_code == 200, r.text
-    _until(f["runner"], lambda: _listed(f["client"], f["robert"])["geonames"]["data"]["state"] == "ready")
+    f["runner"] = runner = Runner(f["data"])
+    _until(runner, lambda: _listed(f["client"], f["robert"])[GEONAMES]["running"]["state"] == "ready"
+           and not _listed(f["client"], f["robert"])[GEONAMES]["running"].get("detail"))
 
 
-def _places(f, q: str, limit: int) -> dict[str, list]:
+def _places(f, q: str, limit: int) -> dict:
     r = f["client"].get("/v1/places", params={"q": q, "limit": limit}, headers=f["robert"])
     assert r.status_code == 200, r.text
     assert r.json()["unavailable"] == [], r.json()["unavailable"]
-    by: dict[str, list] = {"geonames": [], PLUGIN: []}
-    for p in r.json()["places"]:
-        by[p["source"]].append({**{k: p[k] for k in ("name", "region", "country", "label", "lat", "lon", "population",
-                                                     "kind", "matched")},
-                                "id": p["place_id"].split(":", 1)[1]})
-    return by
+    return r.json()
 
 
-def test_through_lumiverb_it_finds_the_places_place_names_finds(lumiverb) -> None:
+def test_through_lumiverb_the_plug_in_finds_the_places_the_built_ins_list_found(lumiverb) -> None:
     f = lumiverb
-    _builtin_on(f)
-    for typed, limit in lists.questions()["search"]:
-        if not typed.strip() or len(typed) > 200:
-            continue  # GET /v1/places asks for something typed
-        found = _places(f, typed, min(limit, 25))
-        assert _collapsed(found[PLUGIN]) == _collapsed(found["geonames"]), typed
-    r = f["client"].get("/v1/places", params={"q": "paris"}, headers=f["robert"])
-    credits = {c["source"]: c for c in r.json()["credits"]}
-    assert credits[PLUGIN]["license"] == credits["geonames"]["license"] == {
-        "text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}
-
-
-def _job(f, kind: str, work) -> None:
-    acct = FakeAccount(scheduler_client(f["tenant_id"]))
-    acct.tenant_id = f["tenant_id"]
-    items = due(tenant_database_url(f["tenant_id"]), kind, [f["library_id"]])
-    assert items, f"nothing of {kind} is due"
-    run_job(work, acct, f["tenant_id"], kind, items)
-    assert acct.failures.charged == [], acct.failures.charged
+    asked = [(typed, min(limit, 25)) for typed, limit in lists.questions()["search"] if typed.strip() and len(typed) <= 200]
+    standing_in = {a: _places(f, *a) for a in asked}  # the plug-in not running: the built-in's list answers
+    _running(f)
+    for a in asked:
+        theirs = _places(f, *a)
+        assert _collapsed(theirs["places"]) == _collapsed(standing_in[a]["places"]), a
+        assert theirs["credits"] == standing_in[a]["credits"], a
+    assert _places(f, "paris", 10)["credits"] == [{"source": GEONAMES, **CREDIT}]
 
 
 def test_through_lumiverb_its_facts_say_what_the_place_lines_said(lumiverb) -> None:
-    """The same clips named by both: the plug-in's At and Near (its section's facts, its empty line for no town)
-    are the Lightbox's "At …" and "Near …" lines from today's place."""
+    """The plug-in's At and Near for each clip (its section's facts, its empty line for no town) are the
+    Lightbox's "At …" and "Near …" lines from the built-in's answers for the same location."""
     f = lumiverb
-    _builtin_on(f)
+    _running(f)
     points = [(lat, lon) for lat, lon, sure, radius_km in lists.questions()["facts"] if sure == 0 and radius_km == 25]
     with get_tenant_session(f["tenant_id"]) as session:
         clips = [make_clip(session, f["library_id"], f"{n}.jpg") for n in range(len(points))]
@@ -200,20 +180,22 @@ def test_through_lumiverb_its_facts_say_what_the_place_lines_said(lumiverb) -> N
             session.execute(text("UPDATE assets SET gps_lat = :lat, gps_lon = :lon WHERE asset_id = :a"),
                             {"lat": lat, "lon": lon, "a": clip})
         session.commit()
-    _job(f, "place", Name)
-    _job(f, f"plugin_{PLUGIN}", PluginWork)
-    for clip, point in zip(clips, points, strict=True):
+    acct = FakeAccount(scheduler_client(f["tenant_id"]))
+    acct.tenant_id = f["tenant_id"]
+    items = due(tenant_database_url(f["tenant_id"]), "plugin_geonames", [f["library_id"]])
+    run_job(PluginWork, acct, f["tenant_id"], "plugin_geonames", items)
+    assert acct.failures.charged == []
+    with get_control_session() as session:
+        places = PlaceRepository(session)
+        said = [lists.at_and_near(places.nearest(lat, lon, 25_000), places.landmark_at(lat, lon, 0), label)
+                for lat, lon in points]
+    for clip, point, lines in zip(clips, points, said, strict=True):
         detail = f["client"].get(f"/v1/assets/{clip}", headers=f["robert"]).json()
-        place = detail["place"] or {}
-        landmark = place.get("landmark")
-        said = {"at": (landmark["name"] if place.get("label") else landmark["label"]) if landmark else None,
-                "near": place.get("label")}
-        section = next(s for s in detail["facts"] if s["plugin_id"] == PLUGIN)
+        section = next(s for s in detail["facts"] if s["plugin_id"] == GEONAMES)
         facts = {fact["key"]: (None if fact["empty"] else fact["text"]) for fact in section["facts"]}
-        assert _collapsed({"at": facts.get("at"), "near": facts.get("near")}) == _collapsed(said), point
-        empty = next((fact for fact in section["facts"] if fact["key"] == "near" and fact["empty"]), None)
-        if said["near"] is None:
-            assert empty is not None and empty["text"] == "Not near a town"
+        assert _collapsed({"at": facts.get("at"), "near": facts.get("near")}) == _collapsed(lines), point
+        if lines["near"] is None:
+            assert {"key": "near", "label": "Near", "text": "Not near a town", "url": None, "empty": True} in section["facts"]
 
 
 @pytest.mark.parametrize("lumiverb", [True], indirect=True, ids=["odd"])
@@ -221,8 +203,8 @@ def test_through_lumiverb_names_it_wont_show_still_answer_a_search(lumiverb) -> 
     """Names with control characters, < and >, a name longer than Lumiverb takes, and points that aren't
     real: the plug-in's search over them still answers (Lumiverb refuses a whole answer with one bad place)."""
     f = lumiverb
+    _running(f)
     for typed in ("bad", "bell", "llanfair", "tower", "nowhere", "a", "t"):
-        r = f["client"].get("/v1/places", params={"q": typed, "limit": 25}, headers=f["robert"])
-        assert r.status_code == 200 and r.json()["unavailable"] == [], (typed, r.text)
-    found = f["client"].get("/v1/places", params={"q": "tower"}, headers=f["robert"]).json()["places"]
+        _places(f, typed, 25)
+    found = _places(f, "tower", 10)["places"]
     assert [p["label"] for p in found] == ["Tower iof/i Tags, Gizascript, Longland"]

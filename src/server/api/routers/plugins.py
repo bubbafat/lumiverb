@@ -15,9 +15,11 @@ when its manifest says it checks them (POST /v1/settings/check on its
 socket), each error said by key (422 invalid_settings). A secret's value is
 never shown again; the server's settings only to server admins.
 
-What a plug-in keeps for the whole server (its spec's data: GeoNames'
-place list) is fetched in the background when an account turns it on
-(src/server/plugin_data.py); its state is each plug-in's `data`.
+What one of Lumiverb's own (ADR-021) keeps for the whole server (its
+spec's data) is fetched in the background when an account turns it on
+(src/server/plugin_data.py); its state is each plug-in's `data`. None has
+any since GeoNames became an installed plug-in that fetches its own list
+(ADR-023 phase 3): this goes in part 4.
 
 Turning on a plug-in that declares an acknowledgment (a license, say) is a
 409 acknowledgment_required carrying its text and version until the request
