@@ -25,10 +25,10 @@ The same codebase supports two deployment modes:
 
 | Mode | Operator | Cost | Infrastructure |
 |---|---|---|---|
-| Cloud-hosted | Product team | ~$12/month subscription | GCP (Cloud Run, Cloud SQL, Cloud Storage) |
-| Self-hosted | User | Free / one-time fee | Docker Compose on NAS or VPS |
+| Cloud-hosted | Product team | ~$12/month subscription | Not built: the original plan (GCP: Cloud Run, Cloud SQL, Cloud Storage) |
+| Self-hosted | User | Free / one-time fee | Built: one machine, a Mac (Homebrew) or a Linux box (systemd), section 11 |
 
-This follows the Immich model: fully open source, no open-core, with a hosted option for convenience.
+This follows the Immich model: fully open source, no open-core, with a hosted option for convenience. What's built is the self-hosted mode; ADR-016 sets how it runs.
 
 ---
 
@@ -39,7 +39,7 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 3. **Stateless API server.** The API server holds no local state. It can be replaced, scaled, or moved without data loss.
 4. **Per-tenant isolation.** Each tenant has a dedicated database. Cross-tenant data leakage is architecturally impossible.
 5. **Regenerable caches.** Proxies, thumbnails, search indexes and AI outputs are all regenerable from source. Human data in Postgres (person names, corrections, trash, projects, filters, settings) is irreplaceable and is never overwritten automatically by derived data (ADR-016).
-6. **Storage abstraction.** All object storage access goes through an abstraction layer supporting Cloud Storage, S3, Backblaze B2, and MinIO (for self-hosted).
+6. **Storage behind one interface** (ADR-020). What Lumiverb makes is kept in a `Store`, by key, and nothing else learns where (section 3.7); a library's originals are reached only through `src/processing/originals.py`. The filesystem is the one provider; another (S3, say) would be a provider and nothing else.
 
 ---
 
@@ -47,7 +47,7 @@ This follows the Immich model: fully open source, no open-core, with a hosted op
 
 ### 3.1 Control Plane
 
-A single shared Postgres database (tiny) with three tables:
+A single shared Postgres database (tiny):
 
 ```
 tenants           — tenant_id, name, plan, status, vision_model_id,
@@ -64,9 +64,13 @@ public_libraries  — library_id, tenant_id, created_at
 public_projects   — project_id, tenant_id, created_at
 revoked_tokens    — jti (PK), revoked_at. Server-side JWT revocation.
 tenant_db_routing — tenant_id, connection_string, region
+installed_plugins — each plug-in installed on the server: its version, manifest,
+                    default on or off and what was accepted (ADR-023)
+plugin_install_log — every install, update, uninstall and failure, by whom
+plugin_server_settings — each plug-in's server settings
 ```
 
-The control plane handles: tenant provisioning, API key validation, JWT revocation tracking, and routing requests to the correct tenant database. It never stores media metadata.
+The control plane handles: tenant provisioning, API key validation, JWT revocation tracking, and routing requests to the correct tenant database. It never stores media metadata. A user with `server_admin` set is a server admin: what's the install's rather than an account's (CLAUDE.md "Auth / tenant resolution").
 
 Where an account's database is, is its `tenant_db_routing` row, for every caller: a request (the middleware), a public link (which names only its account), and work outside one, such as a response's background task, upkeep for every account or the scheduler (`src/server/database.py` `tenant_database_url`, behind `get_tenant_session(tenant_id)`). A restore rewrites that row. The env file's `TENANT_DATABASE_URL_TEMPLATE` names only a new account's database (`src/server/accounts.py`), so nothing else reads it (`tests/test_account_database.py`).
 
@@ -146,7 +150,7 @@ The `pgvector` extension is enabled on the Postgres instance at provisioning tim
 
 ### 3.3 API Server
 
-Python + FastAPI + SQLModel. Stateless. Runs in Docker (self-hosted) or Cloud Run (cloud-hosted).
+Python + FastAPI + SQLModel. Stateless. Runs on the install's machine behind nginx: a Mac's one Homebrew service (`lumiverb-server run`) or a Linux install's systemd units (section 11).
 
 Responsibilities:
 - Authenticate requests via API key or JWT → route to tenant DB
@@ -156,7 +160,7 @@ Responsibilities:
 - Library and asset CRUD
 - User management (email/password auth, JWT sessions)
 - Atomic ingest (proxy + metadata in one request)
-- File serving (thumbnails, proxies, video previews — never source files)
+- File serving (thumbnails, proxies, video previews — never source files), through the Store (section 3.7)
 - Search (PostgreSQL full-text search in the account's database, ADR-019)
 - Similarity search endpoint (pgvector nearest-neighbor on CLIP embeddings, person-aware reranking)
 - People and face management (clustering, assignment, merge)
@@ -221,17 +225,23 @@ Search sync is timestamp-based: a clip's `search_synced_at` and `transcript_sync
 
 Text search is PostgreSQL's full-text search in each account's database (ADR-019): a clip's own words (`asset_search`), its scenes' (`video_scenes.words`) and its transcript's segments (`transcript_segments`), each searched among the clips in sight, so trash, archive and restore need nothing from search. `src/server/search/text_search.py` is the only code that knows the engine (English stemming, prefixes, phrases, field weights); swapping in another (ParadeDB's BM25, say) would be a migration and that file. It's in the database it searches: a backup and restore covers it, and there's no service to run.
 
-### 3.7 Object Storage
+### 3.7 Stored files and caches (ADR-020)
 
-All proxies, thumbnails, and (optionally) exported assets stored in object storage.
+Everything Lumiverb makes from a clip (its preview and thumbnail, a video's preview and analysis proxy, scene pictures, face crops) is kept in a `Store` by key (`src/server/storage/store.py`). Keys are `{tenant}/{library}/{kind}/{bucket}/...`, built only by the key builders there; where a key is kept is the provider's alone. Two failures are never confused: `NotFound` (the key has no file: the missing-file repair acts on it) and `Unavailable` (the storage can't be reached now, a drive unplugged: work waits and nothing is taken for missing; the API answers 503 `storage_unavailable`).
 
-Abstraction layer supports:
-- GCP Cloud Storage (cloud-hosted)
-- AWS S3 / S3-compatible (self-hosted or cloud)
-- Backblaze B2 (self-hosted, cost-optimised)
-- MinIO (fully local self-hosted)
+The one provider is the filesystem's (`files.py` `FileStore`): a write is never seen half done, and goes where its key goes when it's saved. Its folder is the previews folder: `DATA_DIR` until a server admin moves it (Settings › Storage), or a library's own (Library settings › Previews), recorded in `DATA_DIR/storage.json`; a move runs in the background and a key is read from either folder meanwhile (`storage/move.py`). `STORAGE_PROVIDER` names the provider, and config refuses any other.
 
-Key naming convention: `{tenant_id}/{asset_id}/proxy.jpg`, `{tenant_id}/{asset_id}/thumb.jpg`
+A `Cache` is a Store with a cap (`cache.py` `FileCache`): least recently used first, never a file a job holds. The account's playback cuts (`LUMIVERB_PLAYBACK_CACHE_GB`) and, on a scheduler that doesn't run beside the API's disk, its analysis proxies and previews (`LUMIVERB_ANALYSIS_CACHE_GB`, `LUMIVERB_PREVIEW_CACHE_GB`). A job's own work files are its scratch (`Work.scratch`), gone when the job ends. Clients keep no copies they decide from: the CLI caches nothing, and the Mac app's caches are capped.
+
+The API serves stored files through it (`src/server/api/streaming.py` `stream_stored`, with ranges), and writes and deletes through it; outside `src/server/storage/` nothing takes a stored file's path (`tests/test_store_only.py`). Every provider and cache is held to `tests/test_store_contract.py`.
+
+### 3.8 Plug-ins (ADR-023, ADR-024)
+
+A plug-in is a program of its own, in any language, run outside Lumiverb's processes. Its manifest (`lumiverb-plugin.json`, checked by `src/plugins/manifest.py` before any of its code runs) says its settings with their types and bounds, the inputs it reads, the outputs it gives back, what it downloads and whether it uses the internet. The server admin installs it on the machine (`lumiverb-server plugins install FOLDER`, copied read-only into `DATA_DIR/plugins/<id>/program/`), on or off by default; each account's admin turns it on or off, accepting what it asks for.
+
+The plug-in runner (`src/server/plugin_runner.py`: a Mac's `run` child, Linux's `lumiverb-plugins.service`) starts each one that's on somewhere as a process of its own (`plugin_launch.py`: niced, each file it writes capped, no core files, a clean environment; its data folder's size watched), talks to it over its socket (`plugin_client.py`), watches its memory, and restarts it with back-off. A plug-in never gets a database or an API key: Lumiverb pushes it what it reads and keeps what it gives back.
+
+Its work is a producer (`src/server/plugin_producers.py`, named by the plug-in's id): the scheduler hands it its clips' inputs (`src/producers/plugin_work.py`, one `POST /v1/work`), checks its outputs against the manifest and keeps them in the account's `plugin_outputs` with the inputs' hash, so a clip whose inputs change is due again. Its outputs are shown with the clip while it's on (the Lightbox's facts) and, those it marks searchable, found by search (`plugin_outputs.words`). A plug-in can also answer lookups (`src/server/plugin_lookups.py`: `places`, for Set location). Lumiverb's own plug-ins (`src/own_plugins/`: GeoNames) are installed by Lumiverb itself as migrating's last step (`src/server/own_plugins.py`), off by default. Lumiverb's own data and each plug-in's outputs have names (ADR-024: `lumiverb.*` for Lumiverb's, the plug-in's id for its own: `geonames.landmark`), listed in `docs/data-names.md`.
 
 ---
 
@@ -308,14 +318,14 @@ Client calls GET /v1/similar?asset_id=...&library_id=...
 | Database | PostgreSQL 18 + pgvector | Per-tenant isolation, JSONB for metadata, vector similarity (phase 2) |
 | Migrations | Alembic | Standard, works with SQLModel |
 | Search | PostgreSQL full-text search | In the database it searches: one source of truth, no service to run (ADR-019) |
-| Object storage | Abstracted (GCS / S3 / B2 / MinIO) | Deployment-mode flexibility |
+| Stored files | A `Store` by key: the filesystem (ADR-020) | One interface; another provider would be a provider and nothing else |
 | AI inference | OpenAI-compatible (configurable) | Supports any vision model (e.g. qwen3-visioncaption-2b via LM Studio) |
 | CLIP embeddings | open-clip-torch (ViT-B/32) | 512-dim vectors for similarity search |
 | CLI | Python, Typer | Shares models with API server |
 | Web UI | React, TypeScript, Tailwind | Required for media grid, virtualized scroll |
 | Mac app | Swift / SwiftUI | A browse client in the menu bar (the server's scheduler scans) |
-| Cloud platform | GCP | Employee discounts, known infrastructure |
-| Container | Docker Compose (self-hosted), Cloud Run (cloud) | Same image, different orchestration |
+| Install | Homebrew service on a Mac (`lumiverb-server run`), systemd units on Linux | One machine runs the API, the scheduler, the plug-ins, PostgreSQL and nginx (ADR-016) |
+| Plug-ins | Programs of their own, any language, over a socket (ADR-023) | Isolated from Lumiverb's processes |
 | Auth | Hybrid: email/password + JWT (web), API keys (CLI/automation). 1h access tokens, 7d refresh window, server-side revocation. Rate-limited auth endpoints. | Self-hosted, no external auth service dependency |
 
 ---
@@ -358,6 +368,8 @@ Staged rollout:
 
 ## 7. Storage Economics
 
+*The original plan's estimates for the cloud-hosted mode, which isn't built.*
+
 ### 7.1 Per-Asset Storage
 
 | Asset type | Size | Notes |
@@ -393,22 +405,18 @@ Staged rollout:
 
 ### 8.1 What Must Be Backed Up
 
-Only Postgres is irreplaceable. Everything else is regenerable:
-- Proxies / thumbnails → regenerable from source files via `lumiverb ingest`
-- Search rows → regenerable via search-sync (`--force`)
-- AI descriptions → regenerable by re-running ingest
+Only Postgres is irreplaceable: people's work (names, corrections, ratings, notes, projects, trash, settings) is there. Everything else is made again from the originals:
+- Previews, thumbnails and the rest of what's stored → the scheduler makes what's missing (the missing-file repair, the next scan)
+- Search rows → the search sweep writes them again (`lumiverb maintenance search-sync --all --force`)
+- AI descriptions and the rest of what producers make → remade by the scheduler (Settings › Processing)
 
-### 8.2 Postgres Backup Strategy
+### 8.2 Postgres Backups
 
-- Managed Cloud SQL with automated daily backups
-- Point-in-time recovery (PITR) enabled
-- Multi-AZ standby (~60s RTO on instance failure)
-- Nightly `pg_dump` to object storage as second layer
-- S3 versioning and Object Lock enabled day one
+`src/server/backups.py`: every database (the control plane and each account's) as `pg_dump` archives, a folder each with a manifest, in the backups folder (Settings › Backups). Nightly, started by the every-account upkeep when none has run since 03:00, kept 7 days plus 4 weekly; a Mac's service also backs up before an upgrade's migrations (3 kept). `lumiverb-server restore` puts one back beside the live database, then swaps it in. Search is in the databases, so it comes back with them.
 
-### 8.3 Object Storage
+### 8.3 Stored Files
 
-GCS standard tier provides 11 nines durability with built-in multi-AZ replication. No additional backup needed.
+Not backed up: everything in the Store is made again from the originals (8.1). The originals are the user's own, never written by Lumiverb (principle 2), and backed up however they back up their files.
 
 ---
 
@@ -424,11 +432,13 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - OpenAPI spec generated from FastAPI route definitions
 - Versioning via URL prefix: `/v1/...`
 - File uploads via multipart form (proxies, thumbnails)
-- File serving via signed URLs (object storage) or direct proxy (self-hosted)
+- File serving through the API from the Store (`stream_stored`, with ranges): never signed URLs to a storage service
 
 ---
 
 ## 10. Build Sequence
+
+*The original plan's phases, kept as history. What's built since is in the ADRs (`docs/adr/`).*
 
 ### Phase 1: Foundation (CLI + API)
 - Control plane + tenant provisioning
@@ -436,7 +446,7 @@ GCS standard tier provides 11 nines durability with built-in multi-AZ replicatio
 - Core API endpoints (libraries, assets, ingest, search)
 - Local agent CLI (ingest, repair, search, similar)
 - Client-side vision AI integration
-- Search sync + Quickwit integration
+- Search sync + Quickwit integration (Quickwit since replaced by PostgreSQL's own search, ADR-019)
 - Docker Compose for self-hosted deployment
 
 ### Phase 2: Search + Discovery
@@ -474,12 +484,12 @@ Superseded: the native macOS app is a browse client. The server's scheduler scan
 
 ## 11. Self-Hosted Deployment
 
-`docker-compose.yml` includes:
-- `api` — FastAPI server
-- `postgres` — PostgreSQL 18
-- `minio` — Object storage (optional, can point at S3/B2)
+One machine runs the whole install: the API, the scheduler, the plug-in runner, PostgreSQL (with pgvector) and nginx in front of the web app and the API.
 
-Configuration via environment variables. No cloud dependencies required. A NAS or $5/month VPS is sufficient for personal use.
+- **A Mac:** Homebrew (`brew install lumiverb`), one service, `lumiverb-server run` (`src/server/lifecycle/`): it starts Lumiverb's own PostgreSQL and nginx, migrates, and supervises the rest; `brew upgrade` is picked up without a restart. The README says how.
+- **Linux:** `scripts/deploy-api.sh` and `deploy-web.sh` set up systemd units and nginx; `scripts/update.sh` updates (`docs/linux-server.md`).
+
+Configuration is the install's env file (`lumiverb-server init` writes a Mac's). No cloud dependencies. `docker-compose.yml` is only the development database.
 
 ---
 
@@ -490,7 +500,7 @@ The following algorithms and patterns are extracted from the PoC codebase (`medi
 - Video scene segmentation and representative frame extraction
 - Vision AI integration and analysis pipeline
 - BM25 similarity search with adaptive threshold
-- Quickwit schema and index management
+- Quickwit schema and index management (since replaced by PostgreSQL's own search, ADR-019)
 - EXIF extraction, sharpness scoring, face detection
 - Proxy format: WebP (compact, widely supported)
 
