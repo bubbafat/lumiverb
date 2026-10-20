@@ -395,6 +395,27 @@ def test_uninstalled_with_what_it_made_kept_its_facts_stay_and_installing_it_aga
 
 
 @pytest.mark.slow
+def test_an_account_admin_deletes_a_kept_plug_ins_facts_from_their_account_after_saying_how_many(facts):
+    f = facts
+    a, _, _ = f.clips
+    _job(f)
+    r = f.client.delete("/v1/plugins/facts/facts", params={"count": 2}, headers=f.robert)
+    assert r.status_code == 404, "installed: an admin turns it off, or the server admin uninstalls it"
+    _uninstall(f, "keep")
+    kept = f.client.get("/v1/plugins/kept", headers=f.robert).json()["plugins"]
+    assert [(p["plugin_id"], p["title"], p["clips"]) for p in kept] == [("facts", "Facts", 2)]
+    r = f.client.delete("/v1/plugins/facts/facts", headers=f.robert)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "confirm_delete_facts", r.text
+    assert r.json()["error"]["details"] == {"count": 2, "title": "Facts"}
+    assert f.client.delete("/v1/plugins/facts/facts", params={"count": 1}, headers=f.robert).status_code == 409
+    r = f.client.delete("/v1/plugins/facts/facts", params={"count": 2}, headers=f.robert)
+    assert r.status_code == 200 and r.json() == {"deleted": 2}, r.text
+    assert f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"] == []
+    assert f.client.get("/v1/plugins/kept", headers=f.robert).json()["plugins"] == []
+    assert _account_rows(f) == {"outputs": 0, "lineage": 0, "settings": 0, "switch": 0, "pauses": 0}
+
+
+@pytest.mark.slow
 def test_uninstalled_to_the_trash_it_is_hidden_and_deleted_for_good_after_its_days(facts):
     from datetime import timedelta
 

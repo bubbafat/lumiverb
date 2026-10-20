@@ -8,7 +8,9 @@ let role = "admin";
 let state: "on" | "off" | "waiting" = "off";
 let version = "1";
 let accepted: { version: string; by: string | null; at: string } | null = null;
-const sent: { method: string; path: string; body: unknown }[] = [];
+const sent: { method: string; path: string; body: unknown; query?: string }[] = [];
+const KEPT = { plugin_id: "facts", title: "Facts", version: "2", removed_at: "2026-10-20T12:00:00Z", clips: 2 };
+let kept: (typeof KEPT)[] = [];
 
 const ACK = () => ({
   version,
@@ -32,11 +34,16 @@ beforeEach(() => {
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const path = new URL(url, "http://x").pathname.replace(/^\/v1/, "");
-    sent.push({ method, path, body });
+    sent.push({ method, path, body, query: new URL(url, "http://x").search });
     if (path === "/me" || path === "/auth/me" || path.endsWith("/me")) {
       return json({ user_id: "u1", email: "owner@example.com", role, server_admin: false });
     }
     if (path === "/plugins") return json({ plugins: [plugin()] });
+    if (path === "/plugins/kept") return json({ plugins: kept });
+    if (path === "/plugins/facts/facts" && method === "DELETE") {
+      kept = [];
+      return json({ deleted: 2 });
+    }
     if (path === "/plugins/geonames" && method === "PUT") {
       const { enabled, acknowledged } = body as { enabled: boolean; acknowledged?: string };
       if (!enabled) {
@@ -65,6 +72,7 @@ afterEach(() => {
   version = "1";
   accepted = null;
   sent.length = 0;
+  kept = [];
 });
 
 function renderSection() {
@@ -148,5 +156,26 @@ describe("PluginsSection", () => {
     await waitFor(() => expect(screen.getByText(/An admin turns them on/)).toBeTruthy());
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.getByText("On")).toBeTruthy();
+  });
+
+  it("shows a plug-in uninstalled with its facts kept, and an admin deletes them here after saying how many", async () => {
+    kept = [KEPT];
+    renderSection();
+    const row = await screen.findByRole("listitem", { name: "Facts" });
+    expect(row.textContent).toContain("Its facts for 2 clips are kept here, shown and searched as they were.");
+    fireEvent.click(within(row).getByRole("button", { name: "Delete its facts here" }));
+    const asked = within(row).getByRole("alertdialog", { name: "Delete its facts?" });
+    expect(asked.textContent).toContain("Delete its facts for 2 clips from this account, for good?");
+    fireEvent.click(within(asked).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Uninstalled, facts kept" })).toBeNull());
+    expect(sent.find((s) => s.method === "DELETE")).toMatchObject({ path: "/plugins/facts/facts", query: "?count=2" });
+  });
+
+  it("shows anyone else the kept facts, with nothing to delete them", async () => {
+    role = "viewer";
+    kept = [KEPT];
+    renderSection();
+    const row = await screen.findByRole("listitem", { name: "Facts" });
+    expect(within(row).queryByRole("button", { name: "Delete its facts here" })).toBeNull();
   });
 });
