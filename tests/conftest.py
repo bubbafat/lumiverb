@@ -50,6 +50,8 @@ os.environ.setdefault(
     "TENANT_DATABASE_URL_TEMPLATE", "postgresql://tests-start-their-own-db.invalid/{tenant_id}"
 )
 os.environ.setdefault("JWT_SECRET", "lumiverb-test-jwt-secret")
+# What seals the secrets kept for other services (src/server/sealing.py): a fixed Fernet key, for the tests alone.
+os.environ.setdefault("LUMIVERB_SECRETS_KEY", "bHVtaXZlcmItdGVzdHMtc2VjcmV0cy1rZXktMzJieXQ=")
 # Nor does a test fetch GeoNames' lists from GeoNames: a test that wants them
 # serves its own (tests/plugins/geonames_lists.py). This address becomes the
 # mirror of every GeoNames plug-in Lumiverb installs in a test

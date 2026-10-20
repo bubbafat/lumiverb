@@ -363,6 +363,77 @@ def test_only_the_schedulers_own_key_reads_ai_machines_keys(env, none):
     assert machine["api_key"] == "sk-1"
 
 
+def _stored_key(env, name: str) -> str:
+    from sqlalchemy import text
+
+    from src.server.database import get_control_session
+
+    with get_control_session() as session:
+        return session.execute(text("SELECT api_key FROM ai_machines WHERE tenant_id = :t AND name = :n"),
+                               {"t": env[4], "n": name}).scalar_one()
+
+
+@pytest.mark.slow
+def test_a_machines_key_is_kept_sealed_and_one_another_install_sealed_is_asked_again(env, none, monkeypatch):
+    """Sealed with the install's key (src/server/sealing.py): the database holds nothing readable, the
+    scheduler still sends it; restored where another key is (a backup elsewhere), it's said as unreadable."""
+    from cryptography.fernet import Fernet
+
+    from src.server import sealing
+    from tests.producer_fakes import scheduler_client
+
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        assert _add(env, name="Gaming PC", api_key="sk-1").status_code == 201
+        _model(env, "vision", QWEN)
+    stored = _stored_key(env, "Gaming PC")
+    assert stored.startswith("lv1:") and "sk-1" not in stored
+    scheduler = scheduler_client(env[4])
+    assert scheduler.get("/v1/ai/jobs/vision").json()["machines"][0]["api_key"] == "sk-1"
+    assert _machine(_ai(env), "Gaming PC")["key_readable"] is True
+    monkeypatch.setattr(sealing, "_key", lambda: Fernet.generate_key().decode())
+    shown = _machine(_ai(env), "Gaming PC")
+    assert (shown["has_key"], shown["key_readable"]) == (True, False), "Settings › AI asks for it again"
+    assert scheduler.get("/v1/ai/jobs/vision").json()["machines"][0]["api_key"] == ""
+
+
+@pytest.mark.slow
+def test_a_key_stored_before_sealing_is_read_then_sealed_by_upkeep(env, none):
+    from sqlalchemy import text
+
+    from src.server.database import get_control_session
+    from src.server.repository.ai_machines import seal_stored
+    from tests.producer_fakes import scheduler_client
+
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        assert _add(env, name="Gaming PC").status_code == 201
+        _model(env, "vision", QWEN)
+    with get_control_session() as session:
+        session.execute(text("UPDATE ai_machines SET api_key = 'sk-plain' WHERE tenant_id = :t AND name = 'Gaming PC'"),
+                        {"t": env[4]})
+        session.commit()
+    scheduler = scheduler_client(env[4])
+    assert scheduler.get("/v1/ai/jobs/vision").json()["machines"][0]["api_key"] == "sk-plain", "read as it is"
+    with get_control_session() as session:
+        assert seal_stored(session) >= 1 and seal_stored(session) == 0
+    assert _stored_key(env, "Gaming PC").startswith("lv1:")
+    assert scheduler.get("/v1/ai/jobs/vision").json()["machines"][0]["api_key"] == "sk-plain"
+
+
+@pytest.mark.slow
+def test_without_the_installs_key_a_machines_key_isnt_kept(env, none, monkeypatch):
+    from src.server import sealing
+
+    monkeypatch.setattr(sealing, "_key", lambda: "")
+    fake, _ = _machines({GAMING_PC: (QWEN,)})
+    with fake:
+        r = _add(env, name="Gaming PC", api_key="sk-1")
+    assert r.status_code == 503 and r.json()["error"]["code"] == "secrets_key_missing", r.text
+    assert "LUMIVERB_SECRETS_KEY" in r.json()["error"]["message"]
+    assert all(m["name"] != "Gaming PC" for m in _ai(env)["machines"]), "nothing kept unsealed"
+
+
 @pytest.mark.slow
 def test_editing_a_machine_without_its_key_keeps_the_key(env, none):
     """Settings → AI never has the key to send back: its edit leaves it out,
@@ -574,6 +645,7 @@ def test_a_machine_that_cant_answer_can_still_be_renamed_or_given_another_limit(
 def test_a_tenant_made_with_a_vision_url_gets_its_first_machine(env, none):
     from src.server.api.routers.ai import first_vision_machine
     from src.server.database import get_control_session
+    from src.server.repository.ai_machines import key_of
 
     client, *_ = env
     with patch("src.server.accounts.provision_tenant_database"):
@@ -583,7 +655,8 @@ def test_a_tenant_made_with_a_vision_url_gets_its_first_machine(env, none):
     assert r.status_code == 200, r.text
     with get_control_session() as ctrl:
         machine = first_vision_machine(ctrl, r.json()["tenant_id"])
-        assert (machine.api_url, machine.api_key, machine.jobs, machine.name) == (GAMING_PC, "sk-v", ["vision"], "172.18.0.6:11434")
+        assert (machine.api_url, key_of(machine), machine.jobs, machine.name) == (GAMING_PC, "sk-v", ["vision"], "172.18.0.6:11434")
+        assert machine.api_key.startswith("lv1:"), "kept sealed"
 
 
 @pytest.mark.slow

@@ -23,6 +23,7 @@ from pathlib import Path
 from src.server.lifecycle import network
 from src.server.lifecycle.envfile import read_env_file
 from src.server.lifecycle.migrate import APP_DIR
+from src.server.sealing import new_key as new_secrets_key
 
 # A block of their own, clear of a dev checkout's (Vite 5173, uvicorn 8000).
 # 6466 and 6467 were Quickwit's (ADR-019: search is in PostgreSQL). What
@@ -114,6 +115,9 @@ TENANT_DATABASE_URL_TEMPLATE={db}/{{tenant_id}}
 ADMIN_KEY={admin_key}
 API_SECRET_KEY={api_secret_key}
 JWT_SECRET={jwt_secret}
+# Seals the secrets Lumiverb keeps for other services (AI machines' keys, plug-ins'
+# secret settings): keep a copy with your backups, or those are entered again.
+LUMIVERB_SECRETS_KEY={new_secrets_key()}
 
 # Storage
 STORAGE_PROVIDER=local

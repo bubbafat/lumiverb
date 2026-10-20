@@ -43,7 +43,7 @@ from src.server.api.errors import (
     UpstreamError,
 )
 from src.server.models.control_plane import AiMachine, Tenant
-from src.server.repository.ai_machines import first_vision_machine, job_model, key_for, machines
+from src.server.repository.ai_machines import first_vision_machine, job_model, key_for, key_of, machines, set_key
 from src.server.repository.ai_machines import set_job_model as _store_model
 from src.shared.ai_jobs import AI_JOBS, BUILT_IN_JOBS, JOBS
 from src.shared.utils import utcnow
@@ -65,6 +65,9 @@ class MachineOut(BaseModel):
     name: str
     api_url: str
     has_key: bool
+    # False for a key this install can't read (sealed by another install's: a backup restored elsewhere): it's
+    # entered again (src/server/sealing.py).
+    key_readable: bool = True
     jobs: list[str]
     at_once: int
     enabled: bool
@@ -174,7 +177,7 @@ class WorkerMachine(BaseModel):
     machine_id: str
     name: str
     api_url: str
-    # Its key for an admin (the scheduler); "" for anyone else.
+    # Its key for the scheduler's own key alone; "" for anyone else (write-only).
     api_key: str
     at_once: int
     # The worker's own computer: it does the job itself.
@@ -243,6 +246,7 @@ def _settings(ctrl: Session, tenant_id: str) -> AiSettings:
                            choices=choices, built_in=job in BUILT_IN_JOBS, fixed=AI_JOBS[job].fixed or None))
     return AiSettings(
         machines=[MachineOut(machine_id=m.machine_id, name=m.name, api_url=m.api_url, has_key=bool(m.api_key),
+                             key_readable=key_of(m) is not None,
                              jobs=list(m.jobs), at_once=m.at_once, enabled=m.enabled, built_in=m.built_in,
                              shares_gpu=m.shares_gpu or m.built_in, status=_status(m))
                   for m in machines],
@@ -310,7 +314,7 @@ def connect(body: ConnectIn, request: Request) -> Models:
     if key is None and body.machine_id:
         with _control() as ctrl:
             machine = _machine(ctrl, request, body.machine_id)
-            key = machine.api_key if machine.api_url == api_url else None
+            key = key_of(machine) if machine.api_url == api_url else None
     return Models(models=_models_or_502(api_url, key))
 
 
@@ -328,8 +332,8 @@ def add_machine(body: MachineIn, request: Request) -> AiSettings:
         models = _models_or_502(api_url, body.api_key)
         _check_jobs(ctrl.get(Tenant, tenant_id), body.jobs, models)
         machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=body.name, api_url=api_url,
-                            api_key=body.api_key, jobs=body.jobs, at_once=body.at_once, enabled=body.enabled,
-                            shares_gpu=body.shares_gpu)
+                            jobs=body.jobs, at_once=body.at_once, enabled=body.enabled, shares_gpu=body.shares_gpu)
+        set_key(machine, body.api_key)
         _record(machine, models, "")
         ctrl.add(machine)
         _commit_named(ctrl, body.name)
@@ -361,7 +365,7 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             if body.jobs is not None and set(body.jobs) - BUILT_IN_JOBS:
                 can = " and ".join(JOBS[j].lower() for j in JOBS if j in BUILT_IN_JOBS)
                 raise _built_in_error(f"The built-in machine only does {can}: the rest need a server.")
-        was = (machine.api_url, machine.api_key, set(machine.jobs), machine.enabled)
+        was = (machine.api_url, key_of(machine), set(machine.jobs), machine.enabled)
         if body.name is not None:
             _name_free(ctrl, tenant_id, body.name, machine_id)
             machine.name = body.name
@@ -369,7 +373,7 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             machine.api_url = _url(body.api_url)
             machine.api_key = ""  # a key never goes along to another host unless given again
         if body.api_key is not None:
-            machine.api_key = body.api_key
+            set_key(machine, body.api_key)
         if body.jobs is not None:
             machine.jobs = body.jobs
         if body.at_once is not None:
@@ -380,13 +384,13 @@ def update_machine(machine_id: str, body: MachinePatch, request: Request) -> AiS
             machine.shares_gpu = body.shares_gpu
         # Asked again only for what needs it: where it is or its key changed,
         # a job it hadn't, or turned back on. A rename or a new limit doesn't.
-        moved = (machine.api_url, machine.api_key) != was[:2]
+        moved = (machine.api_url, key_of(machine)) != was[:2]
         if machine.built_in:
             # Nothing to ask: the worker checks it. A new job's model must be one it knows.
             for added in sorted(set(machine.jobs) - was[2]):
                 _check_jobs(ctrl.get(Tenant, tenant_id), [added], list(AI_JOBS[added].built_in_models))
         elif machine.enabled and (moved or set(machine.jobs) - was[2] or not was[3]):
-            models = _models_or_502(machine.api_url, machine.api_key)
+            models = _models_or_502(machine.api_url, key_of(machine))
             _check_jobs(ctrl.get(Tenant, tenant_id), machine.jobs, models)
             _record(machine, models, "")
         ctrl.add(machine)
@@ -472,7 +476,7 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
                     if machine.built_in:
                         models, error = list(AI_JOBS[job].built_in_models), ""
                     else:
-                        models, error = _ask(machine.api_url, machine.api_key)
+                        models, error = _ask(machine.api_url, key_of(machine))
                         _record(machine, models, error)
                         ctrl.add(machine)
                     asked.append({"machine_id": machine.machine_id, "name": machine.name, "models": models,

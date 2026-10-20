@@ -333,10 +333,13 @@ step "Writing ${ENV_FILE}"
 ADMIN_KEY="$(_existing_val ADMIN_KEY)"
 API_SECRET_KEY="$(_existing_val API_SECRET_KEY)"
 JWT_SECRET="$(_existing_val JWT_SECRET)"
+LUMIVERB_SECRETS_KEY="$(_existing_val LUMIVERB_SECRETS_KEY)"
 
 [[ -n "$ADMIN_KEY" ]]     || ADMIN_KEY="$(openssl rand -hex 32)"
 [[ -n "$API_SECRET_KEY" ]] || API_SECRET_KEY="$(openssl rand -hex 32)"
 [[ -n "$JWT_SECRET" ]]     || JWT_SECRET="$(openssl rand -hex 32)"
+# A Fernet key (src/server/sealing.py): 32 random bytes, URL-safe base64.
+[[ -n "$LUMIVERB_SECRETS_KEY" ]] || LUMIVERB_SECRETS_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
 
 DB_URL="postgresql+psycopg2://${PG_USER}:${PG_PASS}@127.0.0.1:${PG_PORT}"
 
@@ -353,6 +356,9 @@ TENANT_DATABASE_URL_TEMPLATE=${DB_URL}/{tenant_id}
 ADMIN_KEY=${ADMIN_KEY}
 API_SECRET_KEY=${API_SECRET_KEY}
 JWT_SECRET=${JWT_SECRET}
+# Seals the secrets Lumiverb keeps for other services (AI machines' keys, plug-ins'
+# secret settings): keep a copy with your backups, or those are entered again.
+LUMIVERB_SECRETS_KEY=${LUMIVERB_SECRETS_KEY}
 
 # Storage
 STORAGE_PROVIDER=local

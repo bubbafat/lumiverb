@@ -164,6 +164,12 @@ async def storage_unavailable_handler(request: Request, exc: Exception) -> JSONR
     return envelope(503, "storage_unavailable", STORAGE_UNAVAILABLE, headers={"Retry-After": "30"})
 
 
+async def secrets_key_missing_handler(request: Request, exc: Exception) -> JSONResponse:
+    """A secret to seal (an AI machine's key, a plug-in's secret setting) on an install with no
+    LUMIVERB_SECRETS_KEY (src/server/sealing.py): 503, saying how it gets one; nothing is kept unsealed."""
+    return envelope(503, "secrets_key_missing", str(exc))
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """A 500 in the envelope. Starlette still logs the exception (and re-raises it to the server)."""
     return envelope(500, "internal_error", "Something went wrong on the server.")

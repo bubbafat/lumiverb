@@ -253,6 +253,14 @@ if [[ -e "$QW_UNIT" || -e "$QW_CONF" || ( -n "$QW_DATA" && ( -e "$QW_DATA" || -L
 fi
 
 # ---------------------------------------------------------------------------
+step "Secrets key"
+# What seals the secrets Lumiverb keeps for other services (src/server/sealing.py): an install made before it
+# gets one, a Fernet key (32 random bytes, URL-safe base64). Keep a copy with your backups.
+grep -q '^LUMIVERB_SECRETS_KEY=' "$ENV_FILE" \
+  || env_append "LUMIVERB_SECRETS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')"
+ok "LUMIVERB_SECRETS_KEY in ${ENV_FILE}"
+
+# ---------------------------------------------------------------------------
 step "Ports"
 # Installs from before ports were configurable run the API on 8000.
 grep -q '^API_PORT=' "$ENV_FILE" || env_append "API_PORT=8000"
