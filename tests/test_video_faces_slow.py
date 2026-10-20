@@ -260,6 +260,15 @@ def test_what_isnt_a_videos_faces_is_refused_before_anything_is_saved(env, case)
 FIXTURES = Path(__file__).resolve().parents[1] / "clients/lumiverb-app/Sources/LumiverbKit/Tests/LumiverbKitTests/Fixtures"
 
 
+def _the_faces_guard(server):
+    """The account's faces job as the scheduler reads it (ADR-022): its machines, the built-in one here."""
+    from src.processing.faces_guard import FacesGuard
+
+    guard = FacesGuard(server)
+    assert guard.check(), guard.error
+    return guard
+
+
 class _Server:
     """The test server as the scheduler's API client: signed in, errors raised."""
 
@@ -312,6 +321,7 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
 
     server = _Server(client, auth)
     detector = FaceDetector(per_process=50)
+    faces_guard = _the_faces_guard(server)
 
     class _Acct:
         stopping = threading.Event()
@@ -327,6 +337,13 @@ def test_faces_in_a_real_clip_found_grouped_and_saved(env, tmp_path):
             @staticmethod
             def faces():
                 return detector
+
+            @staticmethod
+            @contextlib.contextmanager
+            def gpu_turn():
+                yield
+
+        guard = staticmethod(lambda job: {"faces": faces_guard}[job])
 
     _Acct.client = server
     _Acct.inputs = Inputs(_Acct, None)  # the scheduler's, the API's storage not on this machine
@@ -395,6 +412,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
                                      str(proxy)], capture_output=True, text=True, check=True).stdout)
     asset_id = _clip(engine, library_id, "faces/two_people.mov")
     server = _Server(client, auth)
+    faces_guard = _the_faces_guard(server)
     index_video_scenes(client=server, source_path=proxy, asset_id=asset_id, duration_sec=duration,
                        rel_path="faces/two_people.mov", lineage=made_lineage("lumiverb.video.scenes"), detail="normal")
     scenes = client.get(f"/v1/video/{asset_id}/scenes", headers=auth).json()["scenes"]
@@ -419,6 +437,13 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
                     @staticmethod
                     def faces():
                         return detector
+
+                    @staticmethod
+                    @contextlib.contextmanager
+                    def gpu_turn():
+                        yield
+
+                guard = staticmethod(lambda job: {"faces": faces_guard}[job])
 
             _Acct.client = server
             _Acct.producers._uses["lumiverb.video.faces"]["detail"] = detail
