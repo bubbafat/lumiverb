@@ -396,7 +396,10 @@ class UserRepository:
         return user
 
     def get_by_email(self, email: str) -> User | None:
-        stmt = select(User).where(User.email == email)
+        """Whoever has this address, whatever its case or the spaces around it (an address is one person's
+        however it's typed: users_email_any_case). The first made, on an install from before that had two."""
+        stmt = (select(User).where(func.lower(User.email) == email.strip().lower())
+                .order_by(User.created_at, User.user_id))
         return self._session.exec(stmt).first()
 
     def get_by_id(self, user_id: str) -> User | None:

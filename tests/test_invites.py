@@ -117,6 +117,18 @@ def test_on_a_mac_open_to_other_devices_the_link_is_its_network_address(admin, t
         "http://localhost:18080/join?token="), "this Mac only, on the port Settings › Network chose"
 
 
+def test_an_address_is_one_persons_whatever_its_case(admin):
+    made = _invite(admin, "Ana@Example.com")
+    again = admin.post("/v1/users", json={"email": "ana@example.COM", "role": "viewer"})
+    assert again.status_code == 409 and again.json()["error"]["code"] == "email_conflict", again.text
+    assert _join(admin, made["invite_urls"][0]).status_code == 200
+    for typed in ("ana@example.com", " ANA@EXAMPLE.COM ", "Ana@Example.com"):
+        assert _login(admin, typed, THEIRS).status_code == 200, typed
+    named = admin.post("/v1/admin/server-admins", json={"email": "aNa@example.com"})
+    assert named.status_code == 200, named.text
+    assert "Ana@Example.com" in [a["email"] for a in named.json()["server_admins"]], "kept as they typed it"
+
+
 def test_a_new_link_voids_the_old_one(admin):
     first = _invite(admin)["invite_urls"][0]
     renewed = admin.post(f"/v1/users/{_user_id(admin, 'ana@example.com')}/invite")
