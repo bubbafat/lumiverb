@@ -16,10 +16,13 @@ is kept beside what it's made from, in the account's database:
   facts its manifest says are searchable, for the plug-ins on in the account
   (the caller says which: never on a public page).
 
-The words are English: stemmed, so "dogs" finds "dog", a path's words too
-(a folder "Family" is found by "family", whose stem is "famili"), as typed
-words are read the same way (src/server/search/query_builder.py parses what a
-person typed). Unquoted words: any of them
+The words are read as English, in any language's letters: stemmed, so "dogs"
+finds "dog", a path's words too (a folder "Family" is found by "family", whose
+stem is "famili"); accents aside, so "zurich" finds "Zürich" and the other way
+round (what's shown keeps them); a hyphenated word as its parts, so a quoted
+"John Wayne Airport" finds "John Wayne Airport-Orange County" (the
+configuration `lumiverb`, migration c7e1a9d3f5b2). Typed words are read the
+same way (src/server/search/query_builder.py parses what a person typed). Unquoted words: any of them
 matches, more of them ranks higher, and all of them in a row higher still.
 A quoted phrase must match, its words in order. Words of three letters or
 more match as a prefix too ("disney" finds "Disneyland"), ranked at half.
@@ -38,11 +41,11 @@ from sqlmodel import Session
 
 from src.server.search.query_builder import PREFIX_MIN_LENGTH, parse_query
 
-CONFIG = "english"
+CONFIG = "lumiverb"  # English's, accents aside and a hyphenated word by its parts
 # A prefix match ranks at half an exact one.
 PREFIX_PENALTY = 0.5
-# A prefix is only a whole token of letters and digits: to_tsquery reads anything else as syntax.
-_PREFIXABLE = re.compile(r"^[a-z0-9]+$")
+# A prefix is only a whole token of letters and digits (any language's): to_tsquery reads anything else as syntax.
+_PREFIXABLE = re.compile(r"^[^\W_]+$")
 
 
 @dataclass(frozen=True)

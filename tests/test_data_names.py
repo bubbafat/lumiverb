@@ -286,7 +286,8 @@ def test_the_names_add_two_account_migrations_and_none_of_the_control_plane_s():
     from alembic.script import ScriptDirectory
 
     tenant = ScriptDirectory(str(REPO / "migrations" / "tenant"))
-    assert tenant.get_heads() == ["a3c9e5f1b7d2"]
+    (head,) = tenant.get_heads()  # later migrations come after them
+    assert "a3c9e5f1b7d2" in {r.revision for r in tenant.walk_revisions("base", head)}
     assert tenant.get_revision("a3c9e5f1b7d2").down_revision == "f2a6c8e4b0d7"
     assert tenant.get_revision("f2a6c8e4b0d7").down_revision == "f8c4a2e6d0b5"
     assert ScriptDirectory(str(REPO / "migrations" / "control")).get_heads() == ["d7f3b9e1c5a2"]
