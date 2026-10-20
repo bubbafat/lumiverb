@@ -346,6 +346,28 @@ def test_public_search_cant_reach_words_past_the_cap(public_lib_client, spoken):
 
 
 @pytest.mark.slow
+def test_a_public_pages_searches_are_limited_and_a_signed_in_persons_arent(public_lib_client, monkeypatch):
+    """A visitor's searches (query, facets, more like this) count against one limit by address
+    (rate_limit.public_search_limiter); what a page loads besides, and anyone signed in, don't."""
+    from src.server.api import rate_limit
+
+    client, api_key, library_id, _ = public_lib_client
+    monkeypatch.setattr(rate_limit.public_search_limiter, "max_requests", 3)
+    monkeypatch.setattr(rate_limit.public_search_limiter, "_hits", {})
+    f = [("f", f"library:{library_id}")]
+    assert client.get("/v1/query", params=f).status_code == 200
+    assert client.get("/v1/assets/facets", params=f).status_code == 200
+    assert client.get("/v1/similar", params={"asset_id": "ast_nonexistent", "library_id": library_id}).status_code == 404
+    for path, params in (("/v1/query", f), ("/v1/assets/facets", f),
+                         ("/v1/similar", {"asset_id": "ast_nonexistent", "library_id": library_id})):
+        assert client.get(path, params=params).status_code == 429, path
+    assert client.get(f"/v1/libraries/{library_id}").status_code == 200, "not a search"
+    signed_in = {"Authorization": f"Bearer {api_key}"}
+    for _ in range(5):
+        assert client.get("/v1/query", params=f, headers=signed_in).status_code == 200
+
+
+@pytest.mark.slow
 def test_public_facets_stay_in_the_public_library(public_lib_client):
     client, _, library_id, private_library_id = public_lib_client
     assert client.get("/v1/assets/facets", params=[("f", f"library:{library_id}")]).status_code == 200

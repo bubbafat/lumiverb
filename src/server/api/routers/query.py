@@ -20,6 +20,7 @@ from sqlmodel import Session
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
 from src.server.api.library_access import seen
 from src.server.api.limits import MAX_PAGE
+from src.server.api.rate_limit import anonymous_search_limited
 from src.server.api.routers.projects import guard_project_filters
 from src.server.models.filter_registry import parse_f_params
 from src.server.models.query_filter import (
@@ -296,7 +297,7 @@ def _visitor_view(item: QueryItem) -> QueryItem:
     )
 
 
-@router.get("", response_model=QueryResponse)
+@router.get("", response_model=QueryResponse, dependencies=[Depends(anonymous_search_limited)])
 def unified_query(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],

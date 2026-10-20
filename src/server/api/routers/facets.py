@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.server.api.dependencies import get_optional_user_id, get_tenant_session
+from src.server.api.rate_limit import anonymous_search_limited
 from src.server.models.filter_registry import parse_f_params
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ class FacetsResponse(BaseModel):
     guess_count: int = 0
 
 
-@router.get("/facets", response_model=FacetsResponse)
+@router.get("/facets", response_model=FacetsResponse, dependencies=[Depends(anonymous_search_limited)])
 def get_facets(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
