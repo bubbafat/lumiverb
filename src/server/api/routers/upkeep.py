@@ -568,16 +568,30 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
 
 
 def _seal_stored_secrets() -> None:
-    """What was kept for other services before sealing (src/server/sealing.py), sealed: AI machines' keys. Never
-    fails upkeep; on an install without its key, said once a run and left as it is."""
-    from src.server.database import get_control_session
+    """What was kept for other services before sealing (src/server/sealing.py), sealed: AI machines' keys, and
+    the plug-ins' secret settings, the server's and every account's. Never fails upkeep; on an install without
+    its key, said once a run and left as it is."""
+    from src.server.database import get_control_session, get_tenant_session
+    from src.server.plugin_catalog import installed, kept
+    from src.server.plugin_settings import ACCOUNT, SERVER
+    from src.server.plugin_settings import seal_stored as seal_settings
     from src.server.repository.ai_machines import seal_stored
+    from src.server.repository.control_plane import TenantRepository
     from src.server.sealing import SecretsKeyMissingError
 
     try:
+        manifests = {pid: p.manifest for found in (installed(), kept()) for pid, p in found.items()}
         with get_control_session() as session:
-            if n := seal_stored(session):
-                logger.info("Sealed %d AI machine key%s stored before sealing", n, "" if n == 1 else "s")
+            n = seal_stored(session)
+            n += seal_settings(session, SERVER, manifests)
+            session.commit()
+            accounts = [t.tenant_id for t in TenantRepository(session).list_live()]
+        for tenant_id in accounts:
+            with get_tenant_session(tenant_id) as tenant_session:
+                n += seal_settings(tenant_session, ACCOUNT, manifests)
+                tenant_session.commit()
+        if n:
+            logger.info("Sealed %d secret%s stored before sealing", n, "" if n == 1 else "s")
     except SecretsKeyMissingError as exc:
         logger.warning("Secrets aren't sealed: %s", exc)
     except Exception as exc:  # noqa: BLE001 — tried again at the next upkeep

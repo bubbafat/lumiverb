@@ -198,7 +198,7 @@ A batch of clips:
             "capture_time": {"utc": "2024-05-01T12:00:00Z", "offset_min": -420}}]}
 ```
 
-- `settings`: every setting, the account's and the server's together, secrets too.
+- `settings`: every setting, the account's and the server's together, secrets too (Lumiverb keeps a secret sealed and opens it to hand it on; one it can't read, set on another install, comes as its default, `""`).
 - `clips`: up to its `batch`, each with an `id` and the inputs it declares. An id means nothing outside the request: never which account, library, file or clip it is.
 
 It has 120 seconds for the whole batch, and answers each clip by its id:

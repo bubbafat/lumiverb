@@ -385,6 +385,12 @@ function MachineForm({ ai, machine, onDone }: { ai: AiSettings; machine?: AiMach
               }}
             />
           </label>
+          {machine?.has_key && machine.key_readable === false && sameUrl && !key && (
+            <p className="text-sm text-amber-300">
+              Its saved key can&apos;t be read on this server (it was saved on another, before a backup was restored
+              here): enter it again.
+            </p>
+          )}
           {machine?.has_key && sameUrl && !key && (
             <label className="flex items-center gap-2 text-sm text-gray-300">
               <input

@@ -948,6 +948,9 @@ export interface AiMachine {
   api_url: string;
   /** Whether a key is saved; the key itself is never sent back. */
   has_key: boolean;
+  /** False for a saved key this install can't read (saved by another install: a backup restored here): enter it
+   * again. */
+  key_readable?: boolean;
   jobs: string[];
   /** Requests it takes at once. */
   at_once: number;
