@@ -168,6 +168,11 @@ export default function AdminPage() {
             Manage users →
           </Link>
           {user?.server_admin && (
+            <Link to="/admin/accounts" className="text-sm text-indigo-400 hover:text-indigo-300">
+              Accounts →
+            </Link>
+          )}
+          {user?.server_admin && (
             <Link to="/admin/logs" className="text-sm text-indigo-400 hover:text-indigo-300">
               Logs →
             </Link>

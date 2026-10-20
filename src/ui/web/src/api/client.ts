@@ -1,5 +1,8 @@
 import type {
+  AccountItem,
+  AccountMade,
   KeptPlugin,
+  ServerAdminItem,
   PlaceSearch,
   Plugin,
   ApiKeyCreateResponse,
@@ -1749,6 +1752,43 @@ export async function updateUserRole(
 
 export async function deleteUser(userId: string): Promise<void> {
   return apiFetch<void>(`/users/${userId}`, { method: "DELETE" });
+}
+
+// --- The install's accounts and server admins (a server admin's: Admin › Accounts) ---
+
+export async function listAccounts(): Promise<AccountItem[]> {
+  return apiFetch<AccountItem[]>("/admin/tenants");
+}
+
+/** An account, its first admin invited at email (the link comes back, once). 409 email_conflict. */
+export async function createAccount(name: string, email: string): Promise<AccountMade> {
+  return apiFetch<AccountMade>("/admin/tenants", { method: "POST", body: { name, email } });
+}
+
+export async function renameAccount(tenantId: string, name: string): Promise<void> {
+  await apiFetch(`/admin/tenants/${encodeURIComponent(tenantId)}`, { method: "PATCH", body: { name } });
+}
+
+/** 409 confirm_delete_account (details: name, users, libraries, clips) until confirm is its name; own_account and
+ * last_server_admin 409s too. */
+export async function deleteAccount(tenantId: string, confirm?: string): Promise<void> {
+  const query = confirm === undefined ? "" : `?confirm=${encodeURIComponent(confirm)}`;
+  return apiFetch<void>(`/admin/tenants/${encodeURIComponent(tenantId)}${query}`, { method: "DELETE" });
+}
+
+export async function listServerAdmins(): Promise<ServerAdminItem[]> {
+  return (await apiFetch<{ server_admins: ServerAdminItem[] }>("/admin/server-admins")).server_admins;
+}
+
+/** 404 user_not_found when nobody signs in here with that email. */
+export async function addServerAdmin(email: string): Promise<ServerAdminItem[]> {
+  return (await apiFetch<{ server_admins: ServerAdminItem[] }>("/admin/server-admins",
+                                                               { method: "POST", body: { email } })).server_admins;
+}
+
+/** 409 last_server_admin for the last one. */
+export async function removeServerAdmin(userId: string): Promise<void> {
+  return apiFetch<void>(`/admin/server-admins/${encodeURIComponent(userId)}`, { method: "DELETE" });
 }
 
 export async function getCurrentUser(): Promise<CurrentUser> {
