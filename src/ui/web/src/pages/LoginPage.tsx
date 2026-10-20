@@ -10,6 +10,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // A demo server lets anyone try it as a viewer (POST /v1/auth/demo); elsewhere that's a 404.
+  const [demoOn, setDemoOn] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -25,6 +27,39 @@ export default function LoginPage() {
       live = false;
     };
   }, [navigate]);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/v1/auth/demo")
+      .then((res) => {
+        if (live && res.ok) setDemoOn(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  async function tryAsViewer() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/v1/auth/demo", { method: "POST" });
+      if (res.ok) {
+        const data = (await res.json()) as { access_token: string };
+        setApiKey(data.access_token);
+        navigate(signInNext(next));
+      } else if (res.status === 429) {
+        setError("Too many tries from here just now. Wait a minute and try again.");
+      } else {
+        setError("Trying it as a viewer isn't open just now.");
+      }
+    } catch {
+      setError("Could not reach server");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -45,6 +80,8 @@ export default function LoginPage() {
         navigate(signInNext(next));
       } else if (res.status === 401) {
         setError("Invalid email or password");
+      } else if (res.status === 404) {
+        setError("Signing in with a password isn't open here.");
       } else {
         setError("Could not reach server");
       }
@@ -64,6 +101,22 @@ export default function LoginPage() {
           </div>
           <h1 className="text-xl font-semibold text-gray-100">Lumiverb</h1>
         </div>
+
+        {demoOn && (
+          <div className="mb-6 space-y-2 border-b border-gray-800 pb-6">
+            <button
+              type="button"
+              onClick={() => void tryAsViewer()}
+              disabled={loading}
+              className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Try it as a viewer
+            </button>
+            <p className="text-center text-xs text-gray-400">
+              No account needed: search, browse and open anything. Nothing can be changed.
+            </p>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -115,11 +168,13 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-4 text-center text-sm text-gray-500">
-          <Link to="/forgot-password" className="text-indigo-400 hover:text-indigo-300">
-            Forgot password?
-          </Link>
-        </p>
+        {!demoOn && (
+          <p className="mt-4 text-center text-sm text-gray-500">
+            <Link to="/forgot-password" className="text-indigo-400 hover:text-indigo-300">
+              Forgot password?
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

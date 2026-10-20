@@ -86,7 +86,8 @@ export default function AccountSection() {
           <div className="mt-1">{roleBadge(user.role)}</div>
         </div>
 
-        {user.email && (
+        {/* Trying it as a viewer, the person is everyone's: no password to change. */}
+        {user.email && !user.demo && (
           <div>
             <Link
               to="/reset-password"

@@ -459,6 +459,8 @@ export interface CurrentUser {
   role: string;
   /** The install's admin too: where previews live, the network, backups, logs (only when signed in). */
   server_admin: boolean;
+  /** Trying it as a viewer (a demo server's): a session that reads only, so nothing that changes anything is offered. */
+  demo?: boolean;
 }
 
 /** One of the install's accounts, as its server admins see them (Admin › Accounts). */

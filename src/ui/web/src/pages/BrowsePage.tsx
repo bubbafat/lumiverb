@@ -33,7 +33,7 @@ import type { LeafFilter } from "../lib/queryFilter";
 import { useScrollContainer } from "../context/ScrollContainerContext";
 import { groupAssetsByDate } from "../lib/groupByDate";
 import { useSelection } from "../lib/useSelection";
-import { useCanEdit } from "../lib/useCanEdit";
+import { useCanEdit, useIsDemo } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { buildVirtualRows, buildFixedGridRows } from "../lib/virtualRows";
@@ -425,6 +425,8 @@ export default function BrowsePage() {
   );
   const selection = useSelection(orderedAssetIds);
   const canEdit = useCanEdit(isAuthenticated);
+  // Trying it as a viewer: nothing that changes anything (ratings, projects, saved searches) is offered.
+  const demo = useIsDemo(isAuthenticated);
   const clipActions = useClipActions(selection.clear);
 
   // Auto-select new arrivals for dates the user has already selected.
@@ -451,7 +453,7 @@ export default function BrowsePage() {
     queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
     queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
     // Ratings are a signed-in person's; a public page's visitor has none.
-    enabled: orderedAssetIds.length > 0 && !isPublicMode,
+    enabled: orderedAssetIds.length > 0 && !isPublicMode && !demo,
     staleTime: 30_000,
   });
   const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
@@ -966,7 +968,7 @@ export default function BrowsePage() {
                             selectionActive={selection.isActive}
                             onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
                             rating={ratingsMap[asset.asset_id]}
-                            onFavoriteToggle={(id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
+                            onFavoriteToggle={demo ? undefined : (id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                           />
                         </div>
                       );
@@ -1004,7 +1006,7 @@ export default function BrowsePage() {
             setParam("path", path);
           }}
           onDateClick={handleLightboxDateClick}
-          onAddToProject={(assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={demo ? undefined : (assetId) => setPickerAssetIds([assetId])}
           onArchive={canEdit ? (assetId) => {
             setLightboxAsset(null);
             void clipActions.archive([assetId]);
@@ -1014,7 +1016,7 @@ export default function BrowsePage() {
             clipActions.trash([assetId]);
           } : undefined}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
-          onRatingChange={handleRatingChange}
+          onRatingChange={demo ? undefined : handleRatingChange}
           libraryId={libraryId}
           isPublic={isPublicMode}
           publicLibraryId={libraryId}
@@ -1051,29 +1053,33 @@ export default function BrowsePage() {
 
       {/* Selection toolbar */}
       <SelectionToolbar count={selection.count} onClear={selection.clear}>
-        <HeartButton
-          favorite={false}
-          onClick={() => handleBatchRating({ favorite: true })}
-          size="sm"
-        />
-        <StarPicker
-          stars={0}
-          onChange={(stars) => handleBatchRating({ stars })}
-          size="sm"
-        />
-        <ColorPicker
-          color={null}
-          onChange={(color) => handleBatchRating({ color })}
-          size="sm"
-        />
-        <div className="h-4 w-px bg-gray-700" />
-        <button
-          type="button"
-          onClick={() => setPickerAssetIds(selection.toArray())}
-          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
-        >
-          Add to project
-        </button>
+        {!demo && (
+          <>
+            <HeartButton
+              favorite={false}
+              onClick={() => handleBatchRating({ favorite: true })}
+              size="sm"
+            />
+            <StarPicker
+              stars={0}
+              onChange={(stars) => handleBatchRating({ stars })}
+              size="sm"
+            />
+            <ColorPicker
+              color={null}
+              onChange={(color) => handleBatchRating({ color })}
+              size="sm"
+            />
+            <div className="h-4 w-px bg-gray-700" />
+            <button
+              type="button"
+              onClick={() => setPickerAssetIds(selection.toArray())}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+            >
+              Add to project
+            </button>
+          </>
+        )}
         {canEdit && (
           <>
             <button

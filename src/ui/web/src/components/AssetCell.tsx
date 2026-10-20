@@ -201,6 +201,9 @@ function AssetCellInner({
       {/* Heart toggle — bottom-right, always visible */}
       {onFavoriteToggle && (
         <div
+          role="button"
+          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          title={isFavorite ? "Remove from favorites" : "Add to favorites"}
           className={`absolute right-1.5 bottom-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full transition-all ${
             isFavorite
               ? "text-red-500"
