@@ -829,21 +829,18 @@ def _status_from_database(tenant_id: str) -> dict | None:
 # Accounts
 # ---------------------------------------------------------------------------
 
-KEY_LABEL = "scheduler"
-
-
 def scheduler_key(tenant_id: str) -> str:
     """A key for the scheduler's calls on the account's behalf: made at
     start, the previous one revoked. Nothing to configure."""
     from src.server.database import get_control_session
-    from src.server.repository.control_plane import ApiKeyRepository
+    from src.server.repository.control_plane import SCHEDULER_KEY_LABEL, ApiKeyRepository
 
     with get_control_session() as ctrl:
         repo = ApiKeyRepository(ctrl)
         for key in repo.list_by_tenant(tenant_id):
-            if key.label == KEY_LABEL and key.revoked_at is None:
+            if key.label == SCHEDULER_KEY_LABEL and key.revoked_at is None:
                 repo.revoke(key.key_id, tenant_id)
-        _, plaintext = repo.create(tenant_id, label=KEY_LABEL, role="admin")
+        _, plaintext = repo.create(tenant_id, label=SCHEDULER_KEY_LABEL, role="admin")
     return plaintext
 
 

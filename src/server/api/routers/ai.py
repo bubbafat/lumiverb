@@ -500,17 +500,17 @@ def set_job_model(job: str, body: JobModelIn, request: Request,
 
 @router.get("/jobs/{job}", response_model=WorkerJob, dependencies=[Depends(require_editor)])
 def job_machines(job: str, request: Request) -> WorkerJob:
-    """For the worker: a job's model and the enabled machines doing it, in
-    order (built_in: the worker does it itself), with their keys for an
-    admin (the scheduler's key is one). It checks each before sending it work."""
+    """For the scheduler: a job's model and the enabled machines doing it, in
+    order (built_in: it does it itself), with their keys for the scheduler's
+    own key alone (write-only otherwise). It checks each before sending it work."""
     if job not in JOBS:
         raise HTTPException(status_code=404, detail="Unknown job")
     tenant_id = request.state.tenant_id
-    role = getattr(request.state, "role", None)
+    scheduler = getattr(request.state, "scheduler", False)
     with _control() as ctrl:
         tenant = ctrl.get(Tenant, tenant_id)
         return WorkerJob(job=job, model=_job_model(tenant, job), machines=[
-            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=key_for(m, role),
+            WorkerMachine(machine_id=m.machine_id, name=m.name, api_url=m.api_url, api_key=key_for(m, scheduler),
                           at_once=m.at_once, built_in=m.built_in, shares_gpu=m.shares_gpu or m.built_in)
             for m in _machines(ctrl, tenant_id) if m.enabled and job in m.jobs])
 

@@ -97,10 +97,10 @@ def first_vision_machine(ctrl: Session, tenant_id: str) -> AiMachine | None:
     return next((m for m in machines(ctrl, tenant_id) if m.enabled and "vision" in m.jobs), None)
 
 
-def key_for(machine: AiMachine | None, role: str | None) -> str:
-    """A machine's key as a caller with role may read it: an admin's (the
-    scheduler's key is one, to send it work); "" for anyone else."""
-    return (machine.api_key or "") if machine is not None and role == "admin" else ""
+def key_for(machine: AiMachine | None, scheduler: bool) -> str:
+    """A machine's key as the caller may read it: the scheduler's own key's, to send it work; "" for anyone else,
+    an account admin too (write-only: Settings › AI says only whether one is saved)."""
+    return (machine.api_key or "") if machine is not None and scheduler else ""
 
 
 def free_name(ctrl: Session, tenant_id: str, base: str) -> str:

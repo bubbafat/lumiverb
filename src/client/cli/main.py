@@ -1041,8 +1041,8 @@ def _resolve_vision_config(
     client: LumiverbClient,
 ) -> tuple[str, str | None, str, str]:
     """The account's vision endpoint URL, key and model, chosen in Settings → AI
-    (the one place they live), and where they came from. The key comes back
-    only for an admin's key (None otherwise: --api-key gives one).
+    (the one place they live), and where they came from. The key never comes
+    back (keys are write-only: --api-key gives one).
 
     Returns (vision_api_url, vision_api_key, vision_model_id, source_label).
     """
