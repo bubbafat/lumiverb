@@ -57,6 +57,8 @@ class RateLimiter:
 login_limiter = RateLimiter(max_requests=5, window_seconds=60)
 forgot_password_limiter = RateLimiter(max_requests=3, window_seconds=60)
 reset_password_limiter = RateLimiter(max_requests=5, window_seconds=60)
+# Try it as a viewer (src/server/demo.py): a visitor signs in once a visit; a script making sessions is held back.
+demo_limiter = RateLimiter(max_requests=10, window_seconds=60)
 # Searches by someone not signed in (a public library's or project's page): a person browsing asks a few a
 # minute (a page of results, its facets, more like this); a script asking without end is held to two a second.
 public_search_limiter = RateLimiter(max_requests=120, window_seconds=60)

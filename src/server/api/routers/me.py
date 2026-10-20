@@ -15,6 +15,8 @@ class CurrentUserResponse(BaseModel):
     role: str
     # The install's admin too (ADR-018 decision 8): only when signed in, never with a key.
     server_admin: bool = False
+    # Signed in to try it as a viewer (src/server/demo.py): a session that reads only.
+    demo: bool = False
 
 
 @router.get("", response_model=CurrentUserResponse)
@@ -34,4 +36,5 @@ def get_current_user(request: Request) -> CurrentUserResponse:
         if user is not None:
             email = user.email
 
-    return CurrentUserResponse(user_id=user_id, email=email, role=role, server_admin=server_admin)
+    return CurrentUserResponse(user_id=user_id, email=email, role=role, server_admin=server_admin,
+                               demo=getattr(request.state, "demo", False) is True)

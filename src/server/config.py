@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # person at it owns the install (a Mac's: init --reset-on-this-machine).
     # Never on a server, where "on this machine" isn't "the operator".
     lumiverb_reset_on_this_machine: bool = False
+    # A demo server's: anyone may try it as this viewer (an email), with no password (src/server/demo.py).
+    lumiverb_demo_viewer: str = ""
+    # What it answers from anywhere but this machine (src/server/api/exposure.py): unset, everything.
+    lumiverb_exposure: str = ""
 
     # App
     app_env: str = "development"
@@ -67,6 +71,16 @@ class Settings(BaseSettings):
         if value not in PROVIDERS:
             raise ValueError(f"STORAGE_PROVIDER={value!r} isn't a storage provider: the providers are "
                              f"{', '.join(PROVIDERS)} (ADR-020 decision 8)")
+        return value
+
+    @field_validator("lumiverb_exposure")
+    @classmethod
+    def _an_exposure_there_is(cls, value: str) -> str:
+        from src.server.api.exposure import EXPOSURES
+
+        if value and value not in EXPOSURES:
+            raise ValueError(f"LUMIVERB_EXPOSURE={value!r} isn't one: leave it out for everything, "
+                             f"or {', '.join(EXPOSURES)} (src/server/api/exposure.py)")
         return value
 
     model_config = SettingsConfigDict(
