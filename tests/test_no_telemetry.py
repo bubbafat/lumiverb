@@ -46,6 +46,18 @@ def test_the_ai_workers_telemetry_is_off_too() -> None:
                                                          "operation_spans": False, "auto_configure": False}
 
 
+def test_the_api_serves_no_docs_pages_or_schema() -> None:
+    from fastapi.testclient import TestClient
+
+    from src.server.api.main import app
+
+    assert (app.docs_url, app.redoc_url, app.openapi_url) == (None, None, None)
+    with TestClient(app) as client:
+        for path in ("/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"):
+            r = client.get(path)
+            assert r.status_code == 401 and "openapi" not in r.text.lower(), path  # nothing, and only signed in
+
+
 def _inherited() -> dict[str, str]:
     import os
 
