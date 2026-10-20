@@ -146,10 +146,11 @@ class LibraryRepository:
         """Per library not in the trash: its clips with work still to do
         (no preview, or anything a producer still needs, failures waiting
         their turn included). A library with no clips isn't listed."""
-        from src.server.repository.assets import OUTSTANDING_CONDITIONS
+        from src.server.repository.assets import FACE_EMBEDDINGS, OUTSTANDING_CONDITIONS
         from src.server.repository.lineage import lineage_join
 
-        pending = "a.proxy_key IS NULL OR " + " OR ".join(f"({cond})" for cond in OUTSTANDING_CONDITIONS.values())
+        pending = "a.proxy_key IS NULL OR " + " OR ".join(
+            f"({cond})" for cond in (*OUTSTANDING_CONDITIONS.values(), FACE_EMBEDDINGS))
         rows = self._session.execute(text(f"""
             SELECT a.library_id, COUNT(*) FILTER (WHERE {pending}) AS pending
             FROM active_assets a

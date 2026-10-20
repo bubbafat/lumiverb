@@ -139,25 +139,25 @@ def test_a_description_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.vision.work.describe_clip", lambda **kw: {
         "asset_id": kw["asset_id"], "model_id": kw["model"], "model_version": "1",
         "description": "a dog on a beach", "tags": ["dog"]})
-    assert _run(acct, "vision", "ast_1") is None
+    assert _run(acct, "lumiverb.image.description", "ast_1") is None
     # The batch route, one clip: search is left to the upkeep sweep, not committed per clip.
     item, lineage = _item_posted(acct, "/v1/assets/batch-vision")
     assert item["description"] == "a dog on a beach" and item["asset_id"] == "ast_1"
     assert item["source_hash"] == SHA
-    assert lineage == acct.producers.lineage("vision", None,
-                                             used=acct.producers.with_model("vision", acct.vision.model))
+    assert lineage == acct.producers.lineage("lumiverb.image.description", None,
+                                             used=acct.producers.with_model("lumiverb.image.description", acct.vision.model))
 
 
 def test_a_description_that_fails_goes_through_the_machines_guard(acct, monkeypatch) -> None:
     error = RuntimeError("machine gone")
     monkeypatch.setattr("src.producers.vision.work.describe_clip", MagicMock(side_effect=error))
     acct.vision.charges.return_value = False  # the machines' trouble: it waits, uncharged
-    assert _run(acct, "vision", "ast_1") == ["ast_1"]
+    assert _run(acct, "lumiverb.image.description", "ast_1") == ["ast_1"]
     acct.vision.charges.assert_called_once_with(error)
     acct.failures.add.assert_not_called()
     acct.vision.charges.return_value = True  # the clip's: charged
-    assert _run(acct, "vision", "ast_2") is None
-    assert _charged(acct) == [("vision", "ast_2")]
+    assert _run(acct, "lumiverb.image.description", "ast_2") is None
+    assert _charged(acct) == [("lumiverb.image.description", "ast_2")]
     acct.client.post.assert_not_called()
 
 
@@ -165,9 +165,9 @@ def test_no_proxy_on_the_server_either_goes_to_the_guard(acct) -> None:
     """Not in the cache, and the server's says 404: nothing to describe, and the guard decides."""
     acct.cache.get.return_value = None
     acct.client.get.side_effect = LumiverbAPIError("not_found", "no proxy", 404)
-    assert _run(acct, "vision", "ast_1") is None
+    assert _run(acct, "lumiverb.image.description", "ast_1") is None
     assert "no description" in str(acct.vision.charges.call_args.args[0])
-    assert _charged(acct) == [("vision", "ast_1")]
+    assert _charged(acct) == [("lumiverb.image.description", "ast_1")]
 
 
 @pytest.mark.parametrize("status, outcome", [(503, "waits"), (500, "crash")])
@@ -176,9 +176,9 @@ def test_the_servers_proxy_failing_otherwise_is_judged_by_whose(acct, status, ou
     acct.client.get.side_effect = LumiverbAPIError("e", "x", status)
     if outcome == "crash":
         with pytest.raises(Crashed):
-            _run(acct, "vision", "ast_1")
+            _run(acct, "lumiverb.image.description", "ast_1")
     else:
-        assert _run(acct, "vision", "ast_1") == ["ast_1"]
+        assert _run(acct, "lumiverb.image.description", "ast_1") == ["ast_1"]
     acct.vision.charges.assert_not_called()
     acct.failures.add.assert_not_called()
 
@@ -186,7 +186,7 @@ def test_the_servers_proxy_failing_otherwise_is_judged_by_whose(acct, status, ou
 def test_text_in_an_image_is_saved_with_its_lineage(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.ocr.work.read_text", lambda **kw: {"asset_id": kw["asset_id"],
                                                                           "ocr_text": "STOP"})
-    _run(acct, "ocr", "ast_1")
+    _run(acct, "lumiverb.image.text", "ast_1")
     body = _posted(acct)["/v1/assets/batch-ocr"]
     assert body["items"] == [{"asset_id": "ast_1", "ocr_text": "STOP", "source_hash": SHA}]
     assert body["model_id"] == acct.vision.model and body["lineage"]["producer"] == "lumiverb.image.text"
@@ -195,7 +195,7 @@ def test_text_in_an_image_is_saved_with_its_lineage(acct, monkeypatch) -> None:
 def test_no_text_result_is_judged_by_the_guard(acct, monkeypatch) -> None:
     monkeypatch.setattr("src.producers.ocr.work.read_text", lambda **kw: None)
     acct.vision.charges.return_value = False
-    assert _run(acct, "ocr", "ast_3") == ["ast_3"]
+    assert _run(acct, "lumiverb.image.text", "ast_3") == ["ast_3"]
     assert "no OCR result" in str(acct.vision.charges.call_args.args[0])
 
 
@@ -204,7 +204,7 @@ def test_a_clip_embedding_is_saved_with_its_lineage(acct) -> None:
     acct.cache.get.return_value = b"the preview"
     acct.clip.embedder.return_value.embed.return_value = {
         "vector": [0.1, 0.2], "model_id": "clip", "model_version": "ViT-B-32-openai"}
-    _run(acct, "clip", "ast_1")
+    _run(acct, "lumiverb.image.likeness", "ast_1")
     item, lineage = _item_posted(acct, "/v1/assets/batch-embeddings")
     assert item["vector"] == [0.1, 0.2] and item["source_hash"] == SHA
     assert (item["model_id"], item["model_version"]) == ("clip", "ViT-B-32-openai")
@@ -226,7 +226,7 @@ def test_the_gpu_running_out_of_memory_charges_no_clip(acct) -> None:
     embed.calls = 0
     acct.cache.get.return_value = b"the preview"
     acct.clip.embedder.return_value.embed.side_effect = embed
-    assert _run(acct, "clip", "ast_1", "ast_2") == ["ast_2"]
+    assert _run(acct, "lumiverb.image.likeness", "ast_1", "ast_2") == ["ast_2"]
     acct.failures.add.assert_not_called()
 
 
@@ -235,7 +235,7 @@ def test_a_vector_made_with_another_model_isnt_saved(acct) -> None:
     acct.clip.embedder.return_value.embed.return_value = {
         "vector": [0.1], "model_id": "clip", "model_version": "ViT-L-14-laion2b"}
     acct.clip.charges.return_value = False  # the machine's: it served another model under the name
-    assert _run(acct, "clip", "ast_1") == ["ast_1"]  # it waits, uncharged
+    assert _run(acct, "lumiverb.image.likeness", "ast_1") == ["ast_1"]  # it waits, uncharged
     assert not [c for c in acct.client.post.call_args_list if c.args and c.args[0] == "/v1/assets/batch-embeddings"]
     acct.failures.add.assert_not_called()
 
@@ -244,7 +244,7 @@ def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypa
     seen = []
     monkeypatch.setattr("src.processing.video.probe.probe_video",
                         lambda source: seen.append(source) or MagicMock(to_dict=lambda: {"duration_sec": 2.0}))
-    assert _run(acct, "probe", "ast_1") is None
+    assert _run(acct, "lumiverb.video.format", "ast_1") is None
     assert seen == [tmp_path / "ast_1.jpg"]
     body = acct.client.put.call_args.kwargs["json"]
     assert acct.client.put.call_args.args[0] == "/v1/assets/ast_1/video-facet"
@@ -255,8 +255,8 @@ def test_a_probe_runs_on_the_librarys_storage_and_saves_the_facet(acct, monkeypa
 def test_a_probe_that_ffprobe_cant_read_is_the_clips(acct, monkeypatch, tmp_path) -> None:
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     monkeypatch.setattr("src.processing.video.probe.probe_video", MagicMock(side_effect=ValueError("invalid data")))
-    assert _run(acct, "probe", "ast_1") is None
-    assert _charged(acct) == [("probe", "ast_1")]
+    assert _run(acct, "lumiverb.video.format", "ast_1") is None
+    assert _charged(acct) == [("lumiverb.video.format", "ast_1")]
 
 
 @pytest.mark.parametrize("error", [FileNotFoundError(2, "No such file or directory: 'ffprobe'"),
@@ -267,7 +267,7 @@ def test_a_probe_this_machine_cant_run_is_a_crash_not_the_clips(acct, monkeypatc
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     monkeypatch.setattr("src.processing.video.probe.probe_video", MagicMock(side_effect=error))
     with pytest.raises(Crashed) as crashed:
-        _run(acct, "probe", "ast_1")
+        _run(acct, "lumiverb.video.format", "ast_1")
     assert crashed.value.asset_ids == ["ast_1"]
     acct.failures.add.assert_not_called()
 
@@ -278,15 +278,15 @@ def test_a_probe_ffprobe_refuses_is_the_clips(acct, monkeypatch, tmp_path) -> No
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     monkeypatch.setattr("src.processing.video.probe.probe_video",
                         MagicMock(side_effect=subprocess.CalledProcessError(1, "ffprobe")))
-    assert _run(acct, "probe", "ast_1") is None
-    assert _charged(acct) == [("probe", "ast_1")]
+    assert _run(acct, "lumiverb.video.format", "ast_1") is None
+    assert _charged(acct) == [("lumiverb.video.format", "ast_1")]
 
 
 def test_probing_waits_while_the_storage_is_away(acct, monkeypatch) -> None:
     probe = MagicMock()
     monkeypatch.setattr("src.processing.video.probe.probe_video", probe)
     acct.roots = {}
-    assert _run(acct, "probe", "ast_1") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.format", "ast_1") == NOT_TRIED
     probe.assert_not_called()
     acct.failures.add.assert_not_called()
     assert acct.gone == ["lib_1"]  # storage work there waits for the next look
@@ -294,18 +294,18 @@ def test_probing_waits_while_the_storage_is_away(acct, monkeypatch) -> None:
 
 def test_a_file_gone_from_reachable_storage_waits_for_its_scan(acct, tmp_path) -> None:
     (tmp_path / "other.mov").write_bytes(b"x")  # the storage is there; this file isn't
-    assert _run(acct, "probe", "ast_1") == ["ast_1"]
-    assert _run(acct, "render", "ast_2") == ["ast_2"]
+    assert _run(acct, "lumiverb.video.format", "ast_1") == ["ast_1"]
+    assert _run(acct, "lumiverb.video.analysis_proxy", "ast_2") == ["ast_2"]
     assert acct.gone == []
 
 
 def test_storage_that_went_away_since_the_last_look_isnt_tried(acct, tmp_path) -> None:
     # Review round 2: an unmounted share is an empty folder; every file in it
     # read as missing, held an hour each.
-    assert _run(acct, "probe", "ast_1") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.format", "ast_1") == NOT_TRIED
     assert acct.gone == ["lib_1"]
     acct.roots = {"lib_1": tmp_path / "gone"}
-    assert _run(acct, "render", "ast_2") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.analysis_proxy", "ast_2") == NOT_TRIED
 
 
 def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, monkeypatch, tmp_path) -> None:
@@ -318,10 +318,10 @@ def test_rendering_uses_the_servers_settings_and_this_machines_decoder(acct, mon
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
     sent = _sends(monkeypatch)
-    assert _run(acct, "render", "ast_1") is None
+    assert _run(acct, "lumiverb.video.analysis_proxy", "ast_1") is None
     [settings] = used
     assert settings.decoder == "cpu" and settings.gpu_decodes == 0
-    assert settings.max_edge == acct.producers.settings("analysis_proxy")["max_edge"]
+    assert settings.max_edge == acct.producers.settings("lumiverb.video.analysis_proxy")["max_edge"]
     # Sent in chunks (ADR-018 decision 9), the render as a path from the job's scratch.
     [(asset_id, artifact, body, lineage)] = sent
     assert (asset_id, artifact, body) == ("ast_1", "analysis_proxy", b"mp4")
@@ -354,8 +354,8 @@ def test_a_render_that_fails_is_the_clips_and_leaves_nothing(acct, monkeypatch, 
         raise RenderError("ffmpeg exit 1")
 
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
-    assert _run(acct, "render", "ast_1") is None
-    assert _charged(acct) == [("analysis_proxy", "ast_1")]
+    assert _run(acct, "lumiverb.video.analysis_proxy", "ast_1") is None
+    assert _charged(acct) == [("lumiverb.video.analysis_proxy", "ast_1")]
     [dest] = dests
     assert dest.parent.parent == runner.scratch_root(), "rendered in the job's scratch"
     assert not dest.parent.exists()
@@ -378,8 +378,8 @@ def test_an_upload_that_fails_leaves_nothing_in_the_cache(acct, monkeypatch, tmp
     (tmp_path / "ast_1.jpg").write_bytes(b"x")
     dests = _renders(monkeypatch)
     acct.client.post.side_effect = LumiverbAPIError("bad", "refused", 422)
-    assert _run(acct, "render", "ast_1") is None
-    assert _charged(acct) == [("analysis_proxy", "ast_1")]
+    assert _run(acct, "lumiverb.video.analysis_proxy", "ast_1") is None
+    assert _charged(acct) == [("lumiverb.video.analysis_proxy", "ast_1")]
     acct.analysis_cache.put.assert_not_called()
     [dest] = dests
     assert not dest.exists() and not dest.parent.exists(), "the render went with the job's scratch"
@@ -395,17 +395,17 @@ def test_an_analysis_proxys_lineage_leaves_out_this_machines_way_of_rendering(ac
     for encoder, decoder, gpus in (("libx264", "cpu", 0), ("h264_nvenc", "cuda", 2)):
         acct.machine = Machine(analysis_proxy_encoder=encoder, analysis_proxy_decoder=decoder, gpu_decodes=gpus)
         sent.clear()
-        _run(acct, "render", "ast_1")
+        _run(acct, "lumiverb.video.analysis_proxy", "ast_1")
         hashes.append(sent[-1][3]["settings_hash"])
-    settings = AnalysisProxySettings.for_producer(acct.producers.settings("analysis_proxy"), "libx264")
-    assert hashes == [acct.producers.lineage("analysis_proxy", SHA, used=settings.output())["settings_hash"]] * 2
+    settings = AnalysisProxySettings.for_producer(acct.producers.settings("lumiverb.video.analysis_proxy"), "libx264")
+    assert hashes == [acct.producers.lineage("lumiverb.video.analysis_proxy", SHA, used=settings.output())["settings_hash"]] * 2
 
 
 def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     heard = MagicMock(return_value=("1\n00:00:00,000 --> 00:00:01,000\nhola\n", "es"))
     monkeypatch.setattr("src.producers.transcript.work.transcribe", heard)
-    assert _run(acct, "transcript", "ast_1") is None
+    assert _run(acct, "lumiverb.video.transcript", "ast_1") is None
     assert heard.call_args.args == (tmp_path / "a.mp4", "transcriber", 500)
     work_dir = heard.call_args.kwargs["work_dir"]
     assert work_dir.parent.parent == runner.scratch_root(), "its WAVs in the job's scratch"
@@ -418,11 +418,11 @@ def test_a_transcript_is_saved_with_its_lineage(acct, monkeypatch, tmp_path) -> 
 def test_a_transcripts_lineage_says_its_model(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a, **kw: ("", ""))
-    _run(acct, "transcript", "ast_1")
+    _run(acct, "lumiverb.video.transcript", "ast_1")
     lineage = _posted(acct)["/v1/assets/ast_1/transcript"]["lineage"]
-    assert lineage == acct.producers.lineage("transcript", SHA, used=acct.producers.with_model("transcript", "small"))
-    assert lineage != acct.producers.lineage("transcript", SHA,
-                                             used=acct.producers.with_model("transcript", "large-v3"))
+    assert lineage == acct.producers.lineage("lumiverb.video.transcript", SHA, used=acct.producers.with_model("lumiverb.video.transcript", "small"))
+    assert lineage != acct.producers.lineage("lumiverb.video.transcript", SHA,
+                                             used=acct.producers.with_model("lumiverb.video.transcript", "large-v3"))
 
 
 def test_this_machines_trouble_transcribing_is_a_crash(acct, monkeypatch, tmp_path) -> None:
@@ -430,7 +430,7 @@ def test_this_machines_trouble_transcribing_is_a_crash(acct, monkeypatch, tmp_pa
     monkeypatch.setattr("src.producers.transcript.work.transcribe",
                         MagicMock(side_effect=FileNotFoundError(2, "No such file or directory: 'ffmpeg'")))
     with pytest.raises(Crashed):
-        _run(acct, "transcript", "ast_1")
+        _run(acct, "lumiverb.video.transcript", "ast_1")
     acct.failures.add.assert_not_called()
 
 
@@ -441,7 +441,7 @@ def test_the_machines_trouble_with_a_transcript_charges_no_clip(acct, monkeypatc
     error = TranscriptError("speaches broke off", endpoint_fault=True)
     monkeypatch.setattr("src.producers.transcript.work.transcribe", MagicMock(side_effect=error))
     acct.transcripts.charges.return_value = False
-    assert _run(acct, "transcript", "ast_1") == ["ast_1"]
+    assert _run(acct, "lumiverb.video.transcript", "ast_1") == ["ast_1"]
     acct.transcripts.charges.assert_called_once_with(error)
     acct.failures.add.assert_not_called()
 
@@ -449,14 +449,14 @@ def test_the_machines_trouble_with_a_transcript_charges_no_clip(acct, monkeypatc
 def test_a_transcript_that_could_not_be_tried_is_a_failure(acct, monkeypatch, tmp_path) -> None:
     acct.analysis_cache.get.return_value = tmp_path / "a.mp4"
     monkeypatch.setattr("src.producers.transcript.work.transcribe", lambda *a, **kw: None)
-    _run(acct, "transcript", "ast_1")
-    assert acct.failures.add.call_args.args == ("transcript", "ast_1", "transcription failed (see the log)")
+    _run(acct, "lumiverb.video.transcript", "ast_1")
+    assert acct.failures.add.call_args.args == ("lumiverb.video.transcript", "ast_1", "transcription failed (see the log)")
 
 
 def test_a_transcript_whose_analysis_copy_cant_be_read_is_a_failure(acct) -> None:
     acct.analysis_cache.get.return_value = None
-    _run(acct, "transcript", "ast_1")
-    assert _charged(acct) == [("transcript", "ast_1")]
+    _run(acct, "lumiverb.video.transcript", "ast_1")
+    assert _charged(acct) == [("lumiverb.video.transcript", "ast_1")]
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +470,9 @@ def test_once_stopping_nothing_more_is_made_or_saved(acct, monkeypatch, tmp_path
     describe = MagicMock()
     monkeypatch.setattr("src.producers.vision.work.describe_clip", describe)
     acct.stopping.set()
-    assert _run(acct, "vision", "ast_1") == NOT_TRIED
-    assert _run(acct, "transcript", "ast_2") == NOT_TRIED
-    assert _run(acct, "probe", "ast_3") == NOT_TRIED
+    assert _run(acct, "lumiverb.image.description", "ast_1") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.transcript", "ast_2") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.format", "ast_3") == NOT_TRIED
     describe.assert_not_called()
     acct.client.post.assert_not_called()
 
@@ -486,7 +486,7 @@ def test_probe_and_render_save_nothing_once_stopping(acct, monkeypatch, tmp_path
         return MagicMock(to_dict=lambda: {"duration_sec": 1.0})
 
     monkeypatch.setattr("src.processing.video.probe.probe_video", probe_video)
-    assert _run(acct, "probe", "ast_1") == NOT_TRIED
+    assert _run(acct, "lumiverb.video.format", "ast_1") == NOT_TRIED
     acct.client.put.assert_not_called()
     acct.failures.add.assert_not_called()
 
@@ -501,11 +501,11 @@ def test_a_save_error_is_judged_like_every_producers(acct, monkeypatch, tmp_path
     acct.client.put.side_effect = LumiverbAPIError("e", "saving failed", status)
     if outcome == "crash":
         with pytest.raises(Crashed) as crashed:
-            _run(acct, "probe", "ast_1")
+            _run(acct, "lumiverb.video.format", "ast_1")
         assert crashed.value.asset_ids == ["ast_1"]
     else:
-        assert _run(acct, "probe", "ast_1") == (None if outcome == "charged" else ["ast_1"])
-    assert _charged(acct) == ([("probe", "ast_1")] if outcome == "charged" else [])
+        assert _run(acct, "lumiverb.video.format", "ast_1") == (None if outcome == "charged" else ["ast_1"])
+    assert _charged(acct) == ([("lumiverb.video.format", "ast_1")] if outcome == "charged" else [])
 
 
 def test_whose_an_error_is() -> None:
@@ -529,7 +529,7 @@ def test_this_machines_trouble_saving_isnt_the_clips(acct, monkeypatch, tmp_path
     monkeypatch.setattr("src.processing.video.analysis_proxy.render_analysis_proxy", render)
     acct.analysis_cache.put.side_effect = OSError(28, "No space left on device")
     with pytest.raises(Crashed):  # counted, uncharged
-        _run(acct, "render", "ast_1")
+        _run(acct, "lumiverb.video.analysis_proxy", "ast_1")
     acct.failures.add.assert_not_called()
 
 
@@ -548,7 +548,7 @@ def test_clips_the_api_refuses_together_are_saved_one_by_one(acct) -> None:
     only the clip it refuses is charged."""
 
     class Two(runner.Work):
-        artifact = "faces"
+        artifact = "lumiverb.image.faces"
         together = True
 
         def make(self, clip):
@@ -560,9 +560,9 @@ def test_clips_the_api_refuses_together_are_saved_one_by_one(acct) -> None:
                 raise LumiverbAPIError("bad", "no", 422)
             client.post("/saved", json=ids)
 
-    assert run(Two, acct, _job("faces", "ast_1", "ast_bad", "ast_3")) is None
+    assert run(Two, acct, _job("lumiverb.image.faces", "ast_1", "ast_bad", "ast_3")) is None
     assert [c.kwargs["json"] for c in acct.client.post.call_args_list] == [["ast_1"], ["ast_3"]]
-    assert _charged(acct) == [("faces", "ast_bad")]
+    assert _charged(acct) == [("lumiverb.image.faces", "ast_bad")]
 
 
 def test_two_clips_crashing_in_a_row_leave_the_rest_waiting(acct) -> None:
@@ -570,7 +570,7 @@ def test_two_clips_crashing_in_a_row_leave_the_rest_waiting(acct) -> None:
     the GPU for hours."""
 
     class Dies(runner.Work):
-        artifact = "faces"
+        artifact = "lumiverb.image.faces"
 
         def make(self, clip):
             raise runner.Died("device hung")
@@ -579,7 +579,7 @@ def test_two_clips_crashing_in_a_row_leave_the_rest_waiting(acct) -> None:
             raise AssertionError("nothing made")
 
     with pytest.raises(Crashed) as crashed:
-        run(Dies, acct, _job("faces", "ast_1", "ast_2", "ast_3", "ast_4"))
+        run(Dies, acct, _job("lumiverb.image.faces", "ast_1", "ast_2", "ast_3", "ast_4"))
     assert crashed.value.asset_ids == ["ast_1", "ast_2"]
     assert crashed.value.waiting == ["ast_3", "ast_4"]
 
@@ -594,7 +594,7 @@ def _scenes_with(acct, monkeypatch, index, tmp_path) -> object:
     proxy = tmp_path / "ast_1.mp4"
     proxy.write_bytes(b"x")
     acct.analysis_cache.get.return_value = proxy
-    return _run(acct, "scenes", "ast_1", duration_sec=30.0)
+    return _run(acct, "lumiverb.video.scenes", "ast_1", duration_sec=30.0)
 
 
 def test_scenes_are_found_from_the_analysis_copy_and_saved_as_found(acct, monkeypatch, tmp_path) -> None:
@@ -617,7 +617,7 @@ def test_a_failed_chunk_charges_the_clips_scenes(acct, monkeypatch, tmp_path) ->
         raise ChunkFailed("chunk 3 failed: FFmpeg hung")
 
     assert _scenes_with(acct, monkeypatch, index, tmp_path) is None
-    assert _charged(acct) == [("scenes", "ast_1")]
+    assert _charged(acct) == [("lumiverb.video.scenes", "ast_1")]
 
 
 def test_scenes_that_cant_be_saved_for_now_charge_nothing(acct, monkeypatch, tmp_path) -> None:
@@ -639,8 +639,8 @@ def test_scenes_stopped_mid_clip_are_not_tried(acct, monkeypatch, tmp_path) -> N
 
 def test_a_video_without_its_analysis_copy_or_duration_waits(acct) -> None:
     acct.analysis_cache.get.return_value = None
-    assert _run(acct, "scenes", "ast_1", duration_sec=30.0) == ["ast_1"]
-    assert _run(acct, "scenes", "ast_2") == ["ast_2"]
+    assert _run(acct, "lumiverb.video.scenes", "ast_1", duration_sec=30.0) == ["ast_1"]
+    assert _run(acct, "lumiverb.video.scenes", "ast_2") == ["ast_2"]
     acct.failures.add.assert_not_called()
 
 
@@ -660,7 +660,7 @@ def _described(acct, monkeypatch, tmp_path, scenes: list[dict], describe=None, p
     acct.client.get.return_value.json.return_value = {"scenes": scenes}
     if patch is not None:
         acct.client.patch.side_effect = patch
-    return _run(acct, "scene_vision", "ast_1", **extra)
+    return _run(acct, "lumiverb.video.scene_descriptions", "ast_1", **extra)
 
 
 def _scene(scene_id: str, ms: int = 1000, **extra) -> dict:
@@ -705,7 +705,7 @@ def test_a_scene_the_model_cant_describe_is_the_videos_once_the_rest_are_saved(a
 
     assert _described(acct, monkeypatch, tmp_path, [_scene("s1"), _scene("s2")], describe=describe) is None
     assert [c.args[0] for c in acct.client.patch.call_args_list] == ["/v1/video/scenes/s2"]
-    assert _charged(acct) == [("scene_vision", "ast_1")]
+    assert _charged(acct) == [("lumiverb.video.scene_descriptions", "ast_1")]
     assert "1 of 2 scenes failed" in str(acct.failures.add.call_args.args[2])
 
 
@@ -719,8 +719,8 @@ def test_the_machines_trouble_stops_a_videos_scenes_uncharged(acct, monkeypatch,
 
 
 def test_scenes_described_this_way_already_are_skipped(acct, monkeypatch, tmp_path) -> None:
-    lineage = acct.producers.lineage("scene_vision", SHA,
-                                     used=acct.producers.with_model("scene_vision", acct.vision.model))
+    lineage = acct.producers.lineage("lumiverb.video.scene_descriptions", SHA,
+                                     used=acct.producers.with_model("lumiverb.video.scene_descriptions", acct.vision.model))
     done = _scene("s1", description="old", lineage={k: lineage[k] for k in ("producer", "version", "settings_hash")})
     assert _described(acct, monkeypatch, tmp_path, [done, _scene("s2")]) is None
     assert [c.args[0] for c in acct.client.patch.call_args_list] == ["/v1/video/scenes/s2"]
@@ -728,8 +728,8 @@ def test_scenes_described_this_way_already_are_skipped(acct, monkeypatch, tmp_pa
 
 def _this_way(acct) -> dict:
     """A scene's record as this job would make it."""
-    lineage = acct.producers.lineage("scene_vision", SHA,
-                                     used=acct.producers.with_model("scene_vision", acct.vision.model))
+    lineage = acct.producers.lineage("lumiverb.video.scene_descriptions", SHA,
+                                     used=acct.producers.with_model("lumiverb.video.scene_descriptions", acct.vision.model))
     return {k: lineage[k] for k in ("producer", "version", "settings_hash")}
 
 
@@ -752,7 +752,7 @@ def test_without_a_redo_scenes_described_this_way_are_left(acct, monkeypatch, tm
 def test_a_scene_described_another_way_is_described_again() -> None:
     from src.producers.scene_vision.work import described
 
-    now = {"producer": "scene-vision", "version": 2, "settings_hash": "abc"}
+    now = {"producer": "lumiverb.video.scene_descriptions", "version": 2, "settings_hash": "abc"}
     assert described({"description": "x", "lineage": dict(now)}, now)
     for key, other in (("producer", "other"), ("version", 1), ("settings_hash", "def")):
         assert not described({"description": "x", "lineage": {**now, key: other}}, now)
@@ -763,7 +763,7 @@ def test_a_scene_described_another_way_is_described_again() -> None:
 def test_a_scene_whose_record_isnt_said_counts_as_described() -> None:
     from src.producers.scene_vision.work import described
 
-    now = {"producer": "scene-vision", "version": 2, "settings_hash": "abc"}
+    now = {"producer": "lumiverb.video.scene_descriptions", "version": 2, "settings_hash": "abc"}
     assert described({"description": "x"}, now)  # no lineage key: the old rule, described is done
     assert described({"description": "x", "lineage": {}}, None)
 
@@ -812,7 +812,7 @@ def test_a_scene_with_no_frame_or_no_description_is_the_videos_once_the_rest_are
     assert _described(acct, monkeypatch, tmp_path, [_scene("s1", 1000), _scene("s2", 5000)], describe=describe,
                       patch=patched, extract=extracted) is None
     assert order == ["/v1/video/scenes/s2", "charged"]
-    assert _charged(acct) == [("scene_vision", "ast_1")]
+    assert _charged(acct) == [("lumiverb.video.scene_descriptions", "ast_1")]
     assert "1 of 2 scenes failed" in str(acct.failures.add.call_args.args[2])
     assert len(frames) == 2 and not any(f.exists() for f in frames)
     assert all(f.parent.parent == runner.scratch_root() for f in frames), "in the job's scratch"
@@ -841,15 +841,15 @@ def _face(asset_id: str) -> dict:
 
 def test_a_jobs_faces_are_saved_together_and_the_clips_that_failed_charged(acct, monkeypatch) -> None:
     detector = _faces(acct, monkeypatch, lambda a: {"error": "bad image"} if a == "ast_2" else _face(a))
-    assert _run(acct, "faces", "ast_1", "ast_2", "ast_3") is None
+    assert _run(acct, "lumiverb.image.faces", "ast_1", "ast_2", "ast_3") is None
     body = _posted(acct)["/v1/assets/batch-faces"]
     assert [i["asset_id"] for i in body["items"]] == ["ast_1", "ast_3"]
     assert body["items"][0]["source_hash"] == SHA and body["lineage"]["producer"] == "lumiverb.image.faces"
-    assert _charged(acct) == [("faces", "ast_2")]
+    assert _charged(acct) == [("lumiverb.image.faces", "ast_2")]
     from src.producers.faces.levels import gates
 
     # The settings, with the gates of its level (Normal's by default).
-    assert detector.detect.call_args.args[1] == {**acct.producers.settings("faces"), **gates("normal")}
+    assert detector.detect.call_args.args[1] == {**acct.producers.settings("lumiverb.image.faces"), **gates("normal")}
 
 
 def test_faces_say_which_clips_wait(acct, monkeypatch) -> None:
@@ -858,15 +858,15 @@ def test_faces_say_which_clips_wait(acct, monkeypatch) -> None:
         "ast_2": {"error": "[ONNXRuntimeError] : 6 : RUNTIME_EXCEPTION : CUDA failure 2: out of memory"},
         "ast_3": {"error": "Failed to allocate memory for requested buffer of size 1048576"},
         "ast_4": {"error": "bad image"}}.get(a) or _face(a))
-    assert _run(acct, "faces", "ast_2", "ast_3", "ast_4", "ast_5") == ["ast_2", "ast_3"]
-    assert _charged(acct) == [("faces", "ast_4")]
+    assert _run(acct, "lumiverb.image.faces", "ast_2", "ast_3", "ast_4", "ast_5") == ["ast_2", "ast_3"]
+    assert _charged(acct) == [("lumiverb.image.faces", "ast_4")]
 
 
 def test_a_face_photo_with_no_proxy_is_the_clips(acct, monkeypatch) -> None:
     detector = _faces(acct, monkeypatch, _face)
     acct.cache.get.side_effect = lambda asset_id, content_hash=None: None
-    assert _run(acct, "faces", "ast_1") is None
-    assert acct.failures.add.call_args.args == ("faces", "ast_1", "no proxy")
+    assert _run(acct, "lumiverb.image.faces", "ast_1") is None
+    assert acct.failures.add.call_args.args == ("lumiverb.image.faces", "ast_1", "no proxy")
     detector.detect.assert_not_called()
 
 
@@ -875,7 +875,7 @@ def test_a_face_save_the_api_cant_take_now_charges_nothing(acct, monkeypatch) ->
     string, charged to the clips. Now the parent saves, judged by whose()."""
     _faces(acct, monkeypatch, _face)
     acct.client.post.side_effect = LumiverbAPIError("database_unavailable", "away", 503)
-    assert _run(acct, "faces", "ast_1", "ast_2") == ["ast_1", "ast_2"]
+    assert _run(acct, "lumiverb.image.faces", "ast_1", "ast_2") == ["ast_1", "ast_2"]
     acct.failures.add.assert_not_called()
 
 
@@ -890,10 +890,10 @@ def test_a_face_process_that_dies_counts_the_clip_and_the_rest_go_on(acct, monke
 
     _faces(acct, monkeypatch, found)
     with pytest.raises(Crashed) as crashed:
-        _run(acct, "faces", "ast_1", "ast_bad", "ast_3", "ast_4")
+        _run(acct, "lumiverb.image.faces", "ast_1", "ast_bad", "ast_3", "ast_4")
     assert crashed.value.asset_ids == ["ast_bad"]
     assert [i["asset_id"] for i in _posted(acct)["/v1/assets/batch-faces"]["items"]] == ["ast_1", "ast_4"]
-    assert _charged(acct) == [("faces", "ast_3")]
+    assert _charged(acct) == [("lumiverb.image.faces", "ast_3")]
 
 
 def test_a_face_process_let_go_of_meanwhile_isnt_tried(acct, monkeypatch) -> None:
@@ -901,7 +901,7 @@ def test_a_face_process_let_go_of_meanwhile_isnt_tried(acct, monkeypatch) -> Non
         raise runner.Stopped("face detection let go of")
 
     _faces(acct, monkeypatch, found)
-    assert _run(acct, "faces", "ast_1") == NOT_TRIED
+    assert _run(acct, "lumiverb.image.faces", "ast_1") == NOT_TRIED
     acct.client.post.assert_not_called()
 
 
@@ -912,7 +912,7 @@ def test_a_stored_preview_is_the_clip_as_hashed_so_faces_read_it_and_nothing_els
     detector = _faces(acct, monkeypatch, _face)
     monkeypatch.setattr(acct.inputs, "stored_preview", lambda clip: b"stored " + clip["asset_id"].encode())
     detector.detect.side_effect = lambda image, settings: _face("ast_1") if image == b"stored ast_1" else {}
-    assert _run(acct, "faces", "ast_1") is None
+    assert _run(acct, "lumiverb.image.faces", "ast_1") is None
     assert [i["asset_id"] for i in _posted(acct)["/v1/assets/batch-faces"]["items"]] == ["ast_1"]
     acct.cache.get.assert_not_called()
 
@@ -927,8 +927,8 @@ class _Away:
         raise Unavailable("its drive isn't plugged in")
 
 
-@pytest.mark.parametrize("kind", ["clip", "ocr", "vision", "faces", "transcript", "scenes", "scene_vision",
-                                  "video_faces"])
+@pytest.mark.parametrize("kind", ["lumiverb.image.likeness", "lumiverb.image.text", "lumiverb.image.description", "lumiverb.image.faces", "lumiverb.video.transcript", "lumiverb.video.scenes", "lumiverb.video.scene_descriptions",
+                                  "lumiverb.video.faces"])
 def test_a_clip_whose_stored_files_cant_be_reached_waits_and_isnt_charged(acct, kind) -> None:
     """Nothing is taken for missing (ADR-020): every producer reading a
     clip's stored preview or analysis proxy waits until it can be reached."""

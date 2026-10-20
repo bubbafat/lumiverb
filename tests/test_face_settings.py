@@ -171,10 +171,10 @@ def test_the_scheduler_finds_faces_at_the_level_its_lineage_names(tmp_path, monk
     detector.detect.return_value = {"detection_model": "insightface", "detection_model_version": "buffalo_l",
                                     "embedding_model": "buffalo_l", "faces": []}
     acct.models.faces.return_value = detector
-    runners.runners()["faces"](acct, _job("faces", "ast_1"))
+    runners.runners()["lumiverb.image.faces"](acct, _job("lumiverb.image.faces", "ast_1"))
     assert detector.detect.call_args.args[1] == {**used, **gates(detail)}  # its level's gates
-    assert acct.client.post.call_args.kwargs["json"]["lineage"] == {**lineage("faces", used, None), "level": level}
-    acct.producers.settings.assert_called_once_with("faces")
+    assert acct.client.post.call_args.kwargs["json"]["lineage"] == {**lineage("lumiverb.image.faces", used, None), "level": level}
+    acct.producers.settings.assert_called_once_with("lumiverb.image.faces")
 
 
 def test_faces_settings_that_can_change_and_those_that_cant():

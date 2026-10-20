@@ -6,9 +6,18 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlmodel import Session
 
+from src.producers.names import (
+    CAPTURE_TIME,
+    DESCRIPTION,
+    FACES,
+    LIKENESS,
+    TEXT,
+    TRANSCRIPT,
+    VIDEO_FORMAT,
+)
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import ContentHash
 from src.server.api.dependencies import (
@@ -26,7 +35,6 @@ from src.server.api.routers.producers import LineageIn, require_lineage, with_so
 from src.server.models.tenant import Asset
 from src.server.repository import lineage
 from src.server.repository.assets import (
-    MISSING_CONDITIONS,
     AssetMetadataRepository,
     AssetOcrRepository,
     AssetRepository,
@@ -241,16 +249,17 @@ def page_assets() -> None:
     )
 
 
-# Counts for a library: its clips, what scans left out (proxies, EXIF), what
-# each producer the scheduler runs still needs, by its missing_* flag
-# (MISSING_CONDITIONS, the rule its queue lists from), and face embeddings,
-# stale search entries, and failures waiting their turn (not in the counts
-# above). A plug-in's work, added while Lumiverb runs, counts as one more
-# missing_* field.
-RepairSummary = create_model("RepairSummary", __config__=ConfigDict(extra="allow"), total_assets=(int, 0),
-                             missing_proxy=(int, 0), missing_exif=(int, 0),
-                             **{flag: (int, 0) for flag in MISSING_CONDITIONS}, stale_search_sync=(int, 0),
-                             waiting_failures=(int, 0))
+class RepairSummary(BaseModel):
+    """Counts for a library: its clips; what's missing, by name (ADR-024): what scans left out (previews,
+    lumiverb.preview; EXIF, lumiverb.metadata) and what each producer the scheduler runs still needs
+    (MISSING_CONDITIONS, the rule its queue lists from; a plug-in's work, added while Lumiverb runs, too); faces
+    without their vector; stale search entries; and failures waiting their turn (not in the counts above)."""
+
+    total_assets: int = 0
+    missing: dict[str, int] = {}
+    faces_without_vectors: int = 0
+    stale_search_sync: int = 0
+    waiting_failures: int = 0
 
 
 @router.get("/repair-summary", response_model=RepairSummary, dependencies=[Depends(require_signed_in)])
@@ -265,7 +274,8 @@ def repair_summary(
     if lib is None:
         raise HTTPException(status_code=404, detail="Library not found")
     row = AssetRepository(session).repair_counts(library_id)
-    return RepairSummary(total_assets=row["total"], **{f: n for f, n in row.items() if f.startswith("missing_")},
+    return RepairSummary(total_assets=row["total"], missing=row["missing"],
+                         faces_without_vectors=row["faces_without_vectors"],
                          waiting_failures=row["waiting_failures"], stale_search_sync=row["stale_search_sync"])
 
 
@@ -580,7 +590,7 @@ def put_video_facet(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> VideoFacetModel:
     """Store a video's probe result (replaces any earlier one). Sets duration_sec."""
-    made = require_lineage(body.lineage, "probe")  # before anything is saved
+    made = require_lineage(body.lineage, VIDEO_FORMAT)  # before anything is saved
     asset_repo = AssetRepository(session)
     asset = asset_repo.get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
@@ -589,7 +599,7 @@ def put_video_facet(
         raise HTTPException(status_code=400, detail="Video facets are only for video assets")
     facet = body.model_dump(exclude={"lineage"})
     asset_repo.upsert_video_facet(asset_id, facet)
-    lineage.record(session, asset_id, "probe", made)
+    lineage.record(session, asset_id, VIDEO_FORMAT, made)
     LibraryRepository(session).bump_revision(asset.library_id)
     return VideoFacetModel(**facet)
 
@@ -619,7 +629,7 @@ def put_capture(
     admin's, or the device that reads it): when it was taken, its zone, and
     its GPS accuracy (only with the file's GPS). The file's GPS itself is
     the scan's and isn't touched."""
-    made = require_lineage(body.lineage, "capture")  # before anything is saved
+    made = require_lineage(body.lineage, CAPTURE_TIME)  # before anything is saved
     taken_at = body.taken_at
     if taken_at is not None and taken_at.tzinfo is None:
         from datetime import timezone
@@ -629,7 +639,7 @@ def put_capture(
     if stored is None:
         raise HTTPException(status_code=404, detail="Asset not found")
     before, after = stored
-    lineage.record(session, asset_id, "capture", made, commit=False)
+    lineage.record(session, asset_id, CAPTURE_TIME, made, commit=False)
     # A new time on a fix rechecks the guesses from it and near it; on a clip without one, its own (ADR-017).
     from src.server.repository import locations
 
@@ -799,7 +809,7 @@ def submit_batch_ocr(
 ) -> dict:
     """Submit OCR text for multiple assets in one request. Assets that don't
     exist (or are in the trash) are skipped."""
-    made = require_lineage(body.lineage, "ocr")  # before anything is saved
+    made = require_lineage(body.lineage, TEXT)  # before anything is saved
     ocr_repo = AssetOcrRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
@@ -811,7 +821,7 @@ def submit_batch_ocr(
             skipped += 1
             continue
         ocr_repo.upsert(item.asset_id, item.ocr_text, body.model_id, commit=False)
-        lineage.record(session, item.asset_id, "ocr", with_source(made, item.source_hash),
+        lineage.record(session, item.asset_id, TEXT, with_source(made, item.source_hash),
                        outcome="ok" if item.ocr_text else "empty", commit=False)
         updated += 1
     session.commit()
@@ -852,7 +862,7 @@ def submit_batch_vision(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Submit AI vision results for multiple assets in one request."""
-    made = require_lineage(body.lineage, "vision")  # before anything is saved
+    made = require_lineage(body.lineage, DESCRIPTION)  # before anything is saved
     meta_repo = AssetMetadataRepository(session)
     asset_repo = AssetRepository(session)
     updated = 0
@@ -870,7 +880,7 @@ def submit_batch_vision(
             data={"description": item.description, "tags": item.tags},
         )
         asset_repo.set_status(item.asset_id, asset_status.DESCRIBED)
-        lineage.record(session, item.asset_id, "vision", with_source(made, item.source_hash))
+        lineage.record(session, item.asset_id, DESCRIPTION, with_source(made, item.source_hash))
         updated += 1
 
     if updated > 0:
@@ -950,7 +960,7 @@ def _transcript_lineage(body: TranscriptSubmitRequest) -> dict:
     lineage_required, checked before anything is saved)."""
     if body.source == "manual":
         return {"lineage": None, "person": True}
-    return {"lineage": require_lineage(body.lineage, "transcript")}
+    return {"lineage": require_lineage(body.lineage, TRANSCRIPT)}
 
 
 def _lock_transcript(session: Session, asset: Asset) -> None:
@@ -966,7 +976,7 @@ def _persons_transcript(session: Session, asset: Asset) -> bool:
         return True
     if _shown_transcript(asset) is not None:
         return False
-    return lineage.producer_of(session, asset.asset_id, "transcript") == P_PERSON
+    return lineage.producer_of(session, asset.asset_id, TRANSCRIPT) == P_PERSON
 
 
 def _shown_transcript(asset: Asset) -> str | None:
@@ -1007,7 +1017,7 @@ def submit_transcript(
         asset_repo.set_transcript(asset, srt=None, text=None, language=body.language, source=body.source,
                                   has_transcript=False)
         session.commit()
-        lineage.record(session, asset_id, "transcript", **made, outcome="empty")
+        lineage.record(session, asset_id, TRANSCRIPT, **made, outcome="empty")
         _transcript_searched(session, request, asset)
         return TranscriptSubmitResponse(asset_id=asset_id, status="no_speech")
 
@@ -1019,7 +1029,7 @@ def submit_transcript(
     asset_repo.set_transcript(asset, srt=body.srt, text=plain_text, language=body.language, source=body.source,
                               has_transcript=bool(plain_text.strip()))
     session.commit()
-    lineage.record(session, asset_id, "transcript", **made, outcome="ok" if asset.has_transcript else "empty")
+    lineage.record(session, asset_id, TRANSCRIPT, **made, outcome="ok" if asset.has_transcript else "empty")
     _transcript_searched(session, request, asset)
     return TranscriptSubmitResponse(asset_id=asset_id, status="transcribed")
 
@@ -1074,11 +1084,11 @@ def delete_transcript(
 
     if shown == "manual":
         AssetRepository(session).clear_transcript(asset, has_transcript=None)  # missing again: the machine makes one
-        lineage.forget(session, [asset_id], "transcript", commit=False)
+        lineage.forget(session, [asset_id], TRANSCRIPT, commit=False)
     else:
         AssetRepository(session).clear_transcript(asset, has_transcript=False)
         # A person removed the machine's: their choice stands, nothing makes it again.
-        lineage.record(session, asset_id, "transcript", None, person=True, outcome="empty", commit=False)
+        lineage.record(session, asset_id, TRANSCRIPT, None, person=True, outcome="empty", commit=False)
     session.commit()
     _transcript_searched(session, request, asset)
 
@@ -1179,7 +1189,7 @@ def submit_batch_embeddings(
     """Submit embedding vectors for multiple assets in one request. CLIP's
     (the producer's artifact) must say how they were made (lineage)."""
     from src.server.repository.assets import AssetEmbeddingRepository
-    made = require_lineage(body.lineage, "clip") if any(i.model_id == CLIP_MODEL_ID for i in body.items) else None
+    made = require_lineage(body.lineage, LIKENESS) if any(i.model_id == CLIP_MODEL_ID for i in body.items) else None
     asset_repo = AssetRepository(session)
     emb_repo = AssetEmbeddingRepository(session)
     updated = 0
@@ -1197,7 +1207,7 @@ def submit_batch_embeddings(
             vector=[float(x) for x in item.vector],
         )
         if item.model_id == CLIP_MODEL_ID:
-            lineage.record(session, item.asset_id, "clip", with_source(made, item.source_hash),
+            lineage.record(session, item.asset_id, LIKENESS, with_source(made, item.source_hash),
                            commit=False)
         updated += 1
 
@@ -1372,7 +1382,7 @@ def submit_batch_faces(
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> dict:
     """Submit face detections for multiple assets in one request."""
-    made = require_lineage(body.lineage, "faces")  # before anything is saved
+    made = require_lineage(body.lineage, FACES)  # before anything is saved
     from src.server.repository.faces import FaceRepository
 
     asset_repo = AssetRepository(session)
@@ -1405,7 +1415,7 @@ def submit_batch_faces(
             embedding_model=item.embedding_model,
             after=dropped,
         )
-        lineage.record(session, item.asset_id, "faces", with_source(made, item.source_hash),
+        lineage.record(session, item.asset_id, FACES, with_source(made, item.source_hash),
                        outcome="ok" if faces_data else "empty")  # commits
         dropped.run()  # the crops of faces not found again
 

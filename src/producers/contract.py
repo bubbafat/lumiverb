@@ -9,8 +9,8 @@ tier, whether it can be made again in place and what goes with it then,
 and its work (a src/producers/runner.py Work: make and save). Everything
 else reads it from the registry (src/producers/__init__.py): the scheduler
 (queue, kinds, pools and their slots, GPU sharing, runners), the reconciler
-and lineage, the repair summary and the asset page's missing_* filters, the
-AI jobs and where each one's model is kept (Settings → AI), and
+and lineage, the repair summary, the AI jobs and where each one's model is
+kept (Settings → AI), and
 GET /v1/producers (which Settings → Processing shows as it comes). Adding a
 producer is one folder: docs/architecture.md, "Adding a producer".
 
@@ -219,8 +219,9 @@ class Data:
 
 @dataclass(frozen=True)
 class ProducerSpec:
-    artifact: str  # the one artifact kind it makes
-    producer: str  # its id, recorded in lineage
+    # The name of what it makes (ADR-024: a lumiverb.* name; an installed plug-in's work, its plug-in's id). It's
+    # also the producer recorded in lineage, the scheduler's job kind (its remakes': redo:<name>) and its work list.
+    artifact: str
     version: str  # bump when the code changes its output
     media: tuple[str, ...]  # the media types it applies to
     title: str  # for people: "Transcripts"
@@ -273,9 +274,6 @@ class ProducerSpec:
     made_at_scan: bool = False
 
     # --- How the scheduler runs it (none of these: made by a scan) ---
-    kind: str = ""  # the job kind's name ("render" for analysis copies)
-    # Its missing_* filter (the asset page) and repair summary count.
-    flag: str = ""
     run: str = ""  # its work: "module:Class", a src/producers/runner.py Work
     tier: int = FIND
     pool: Pool | None = None  # the resource its work waits on
@@ -287,7 +285,8 @@ class ProducerSpec:
 
     @property
     def scheduled(self) -> bool:
-        return bool(self.kind)
+        """The scheduler runs its work (a scan makes the rest)."""
+        return bool(self.run)
 
     @property
     def job(self) -> str:

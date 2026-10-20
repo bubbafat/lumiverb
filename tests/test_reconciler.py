@@ -74,7 +74,7 @@ def _pending(env) -> int:
 
 def _describe(env, clip: str, sha: str | None):
     client, headers, *_ = env
-    body = {"model_id": "m", "description": "a dog on a beach", "lineage": _want(env, "vision", sha)}
+    body = {"model_id": "m", "description": "a dog on a beach", "lineage": _want(env, "lumiverb.image.description", sha)}
     r = saved(client, "vision", clip, json=body, headers=headers)
     assert r.status_code == 200, r.text
 
@@ -93,16 +93,16 @@ def _fail(env, items: list[dict], headers: dict | None = None):
 def test_missing_until_made_then_current(env):
     lib = _library(env, "RecMade")
     sha = _sha()
-    clip = _ingest_with(lib, "a.jpg", sha, {"proxy": _want(env, "proxy", sha)})
-    assert _due(lib, "vision") == [clip]
-    assert _summary(lib)["missing_vision"] == 1
-    assert _counts(lib, "vision") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "rechecking": 0, "below": 0, "failing": 0,
+    clip = _ingest_with(lib, "a.jpg", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)})
+    assert _due(lib, "lumiverb.image.description") == [clip]
+    assert _summary(lib)["missing"]["lumiverb.image.description"] == 1
+    assert _counts(lib, "lumiverb.image.description") == {"applicable": 1, "current": 0, "stale": 0, "missing": 1, "rechecking": 0, "below": 0, "failing": 0,
                                       "given_up": 0}
 
     _describe(lib, clip, sha)
-    assert _due(lib, "vision") == []
-    assert _summary(lib)["missing_vision"] == 0
-    assert _counts(lib, "vision")["current"] == 1
+    assert _due(lib, "lumiverb.image.description") == []
+    assert _summary(lib)["missing"]["lumiverb.image.description"] == 0
+    assert _counts(lib, "lumiverb.image.description")["current"] == 1
 
 
 @pytest.mark.slow
@@ -114,8 +114,8 @@ def test_lineage_without_the_artifact_is_missing(env):
     with _db(env) as s:  # the description went, its lineage stayed
         s.execute(text("DELETE FROM asset_metadata WHERE asset_id = :a"), {"a": clip})
         s.commit()
-    assert _due(lib, "vision") == [clip]
-    assert _counts(lib, "vision")["missing"] == 1
+    assert _due(lib, "lumiverb.image.description") == [clip]
+    assert _counts(lib, "lumiverb.image.description")["missing"] == 1
 
 
 @pytest.mark.slow
@@ -125,12 +125,12 @@ def test_an_artifact_nobody_said_how_was_made_is_stale_not_missing(env):
     clip = _ingest_with(lib, "a.jpg", sha, None)
     _describe(lib, clip, sha)
     with _db(env) as s:  # the description stayed, its lineage went
-        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
+        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"), {"a": clip})
         s.commit()
-    c = _counts(lib, "vision")
+    c = _counts(lib, "lumiverb.image.description")
     assert (c["stale"], c["missing"], c["current"]) == (1, 0, 0)
     # Stale from how it was made waits for approval: not handed out.
-    assert _due(lib, "vision") == []
+    assert _due(lib, "lumiverb.image.description") == []
 
 
 @pytest.mark.slow
@@ -140,17 +140,17 @@ def test_a_settings_change_makes_it_stale_and_it_waits_for_approval(env):
     clip = _ingest_with(lib, "a.jpg", sha, None)
     _describe(lib, clip, sha)
     with _db(env) as s:
-        s.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.vision', :v, now())"
+        s.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.lumiverb.image.description', :v, now())"
                        " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"),
                   {"v": '{"temperature": 0.5}'})
         s.commit()
     try:
-        assert _counts(lib, "vision")["stale"] == 1
-        assert _due(lib, "vision") == []
-        assert _summary(lib)["missing_vision"] == 0
+        assert _counts(lib, "lumiverb.image.description")["stale"] == 1
+        assert _due(lib, "lumiverb.image.description") == []
+        assert _summary(lib)["missing"]["lumiverb.image.description"] == 0
     finally:
         with _db(env) as s:
-            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.vision'"))
+            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.lumiverb.image.description'"))
             s.commit()
 
 
@@ -170,14 +170,14 @@ def test_a_changed_file_is_a_new_clip_made_from_scratch(env):
     _describe(lib, clip, old)
     r = saved(client, "embeddings", clip, json={
         "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
-        "lineage": _want(env, "clip", old)}, headers=headers)
+        "lineage": _want(env, "lumiverb.image.likeness", old)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _due(lib, "vision") == [] and _due(lib, "clip") == []
+    assert _due(lib, "lumiverb.image.description") == [] and _due(lib, "lumiverb.image.likeness") == []
 
     replaced = _ingest_with(lib, "a.jpg", new, None)
     assert replaced != clip
-    assert _due(lib, "vision") == [replaced] and _due(lib, "clip") == [replaced]
-    assert _summary(lib)["missing_vision"] == 1
+    assert _due(lib, "lumiverb.image.description") == [replaced] and _due(lib, "lumiverb.image.likeness") == [replaced]
+    assert _summary(lib)["missing"]["lumiverb.image.description"] == 1
     with _db(env) as s:  # the old clip, archived as missing, keeps its description
         assert s.execute(text("SELECT deleted_reason FROM assets WHERE asset_id = :a"), {"a": clip}).scalar() == "missing"
         assert s.execute(text("SELECT count(*) FROM asset_metadata WHERE asset_id = :a"), {"a": clip}).scalar() == 1
@@ -196,7 +196,7 @@ def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
                   {"i": f"scn_{vid}_0", "a": vid})
         s.commit()
     _analysis_proxy_made(env, vid)
-    assert _due(lib, "scenes") == [] and _due(lib, "scene_vision") == []
+    assert _due(lib, "lumiverb.video.scenes") == [] and _due(lib, "lumiverb.video.scene_descriptions") == []
 
     new = _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
     assert new != vid
@@ -206,7 +206,7 @@ def test_a_changed_video_is_a_new_clip_whose_scenes_are_found_from_it(env):
         # The old clip keeps its scenes, archived with it.
         assert s.execute(text("SELECT count(*) FROM video_scenes WHERE asset_id = :a"), {"a": vid}).scalar() == 1
     _analysis_proxy_made(env, new)
-    assert _due(lib, "scenes") == [new]
+    assert _due(lib, "lumiverb.video.scenes") == [new]
 
 
 @pytest.mark.slow
@@ -221,7 +221,7 @@ def test_a_persons_transcript_stays_when_the_file_changes(env):
                     headers=headers)
     assert r.status_code == 200, r.text
     _ingest_with(lib, "a.mov", _sha(), None, media_type="video")
-    assert _due(lib, "transcript") == []
+    assert _due(lib, "lumiverb.video.transcript") == []
 
 
 # ---------------------------------------------------------------------------
@@ -234,31 +234,31 @@ def test_a_failure_waits_then_is_handed_out_again(env):
     lib = _library(env, "RecFail")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    r = _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "the vision endpoint timed out"}])
+    r = _fail(env, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "the vision endpoint timed out"}])
     assert r.status_code == 200, r.text
     assert r.json() == {"recorded": 1}
 
-    assert _due(lib, "vision") == []
-    assert _summary(lib)["missing_vision"] == 0
+    assert _due(lib, "lumiverb.image.description") == []
+    assert _summary(lib)["missing"]["lumiverb.image.description"] == 0
     assert _summary(lib)["waiting_failures"] == 1
-    assert _counts(lib, "vision")["failing"] == 1
+    assert _counts(lib, "lumiverb.image.description")["failing"] == 1
     assert _pending(lib) >= 1  # not healthy: something's failing
 
     with _db(env) as s:  # its turn comes
         s.execute(text("UPDATE artifact_lineage SET retry_at = now() - interval '1 second'"
-                       " WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
+                       " WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"), {"a": clip})
         s.commit()
-    assert _due(lib, "vision") == [clip]
+    assert _due(lib, "lumiverb.image.description") == [clip]
 
-    _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "again"}])
+    _fail(env, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "again"}])
     with _db(env) as s:
         attempts, wait = s.execute(text(
-            "SELECT attempts, retry_at - now() FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"
+            "SELECT attempts, retry_at - now() FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"
         ), {"a": clip}).one()
     assert attempts == 2 and timedelta(minutes=9) < wait <= timedelta(minutes=10)
 
     _describe(lib, clip, sha)  # made at last: the failure is behind it
-    assert _counts(lib, "vision") == {"applicable": 1, "current": 1, "stale": 0, "missing": 0, "rechecking": 0, "below": 0, "failing": 0,
+    assert _counts(lib, "lumiverb.image.description") == {"applicable": 1, "current": 1, "stale": 0, "missing": 0, "rechecking": 0, "below": 0, "failing": 0,
                                       "given_up": 0}
 
 
@@ -270,9 +270,9 @@ def test_reporting_failures_is_the_schedulers(env):
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     for role in ("viewer", "editor"):
         key = _key_with_role(env, role)
-        assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=key).status_code == 403
+        assert _fail(env, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "x"}], headers=key).status_code == 403
     admin = _key_with_role(env, "admin")
-    assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}], headers=admin).status_code == 200
+    assert _fail(env, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "x"}], headers=admin).status_code == 200
 
 
 @pytest.mark.slow
@@ -281,10 +281,10 @@ def test_a_failure_for_no_such_artifact_or_clip(env):
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     r = _fail(env, [{"asset_id": clip, "artifact": "smell", "error": "x"}])
     assert r.status_code == 422
-    r = _fail(env, [{"asset_id": "ast_nope", "artifact": "vision", "error": "x"}])
+    r = _fail(env, [{"asset_id": "ast_nope", "artifact": "lumiverb.image.description", "error": "x"}])
     assert r.status_code == 200 and r.json() == {"recorded": 0}
     assert _fail(env, []).json() == {"recorded": 0}
-    assert _fail(env, [{"asset_id": clip, "artifact": "vision", "error": "x"}] * 501).status_code == 422
+    assert _fail(env, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "x"}] * 501).status_code == 422
 
 
 @pytest.mark.slow
@@ -300,12 +300,12 @@ def test_every_producer_sorts_a_new_clip_the_same_everywhere(env):
         s.commit()
     _analysis_proxy_made(env, vid)
     summary = _summary(lib)
-    for flag, artifact in P.MISSING_FLAGS.items():
-        handed = _due(lib, P.PRODUCERS[artifact].kind)
-        assert len(handed) == summary[flag], flag
-        assert _counts(lib, artifact)["missing"] == len(handed), flag
-    assert set(_due(lib, "vision")) == {img}
-    assert set(_due(lib, "transcript")) == {vid}
+    for name in P.SCHEDULED:
+        handed = _due(lib, name)
+        assert len(handed) == summary["missing"][name], name
+        assert _counts(lib, name)["missing"] == len(handed), name
+    assert set(_due(lib, "lumiverb.image.description")) == {img}
+    assert set(_due(lib, "lumiverb.video.transcript")) == {vid}
 
 
 # ---------------------------------------------------------------------------
@@ -327,8 +327,8 @@ def test_made_before_the_file_had_a_hash_is_stale_not_redone(env):
         s.execute(text("UPDATE artifact_lineage SET source_hash = NULL WHERE asset_id = :a"), {"a": clip})
         s.execute(text("UPDATE assets SET content_hash = :s WHERE asset_id = :a"), {"s": _sha(), "a": clip})
         s.commit()
-    assert _due(lib, "vision") == []
-    assert _counts(lib, "vision")["stale"] == 1
+    assert _due(lib, "lumiverb.image.description") == []
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
 
 
 @pytest.mark.slow
@@ -340,20 +340,20 @@ def test_scenes_are_never_handed_out_to_be_redone_in_place(env):
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true WHERE asset_id = :a"), {"a": vid})
         s.execute(text("INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-                       " source_hash, produced_at, outcome, attempts) VALUES (:a, 'scenes', 'scene-detect', '1',"
+                       " source_hash, produced_at, outcome, attempts) VALUES (:a, 'lumiverb.video.scenes', 'lumiverb.video.scenes', '1',"
                        " 'h', 'sha256:old', now(), 'ok', 0)"), {"a": vid})
         s.commit()
     _analysis_proxy_made(env, vid)  # what its scenes are found in: only the stale hash can hold it back
-    assert _due(lib, "scenes") == []
-    assert _counts(lib, "scenes")["stale"] == 1
+    assert _due(lib, "lumiverb.video.scenes") == []
+    assert _counts(lib, "lumiverb.video.scenes")["stale"] == 1
 
 
 @pytest.mark.slow
 def test_waiting_failures_are_what_the_counts_leave_out(env):
     lib = _library(env, "RecWaitCount")
     img = _ingest_with(lib, "a.jpg", _sha(), None)
-    _fail(env, [{"asset_id": img, "artifact": "vision", "error": "x"},
-                {"asset_id": img, "artifact": "transcript", "error": "x"},  # an image has no transcript
-                {"asset_id": img, "artifact": "proxy", "error": "x"}])  # the scan's, not enrich's
+    _fail(env, [{"asset_id": img, "artifact": "lumiverb.image.description", "error": "x"},
+                {"asset_id": img, "artifact": "lumiverb.video.transcript", "error": "x"},  # an image has no transcript
+                {"asset_id": img, "artifact": "lumiverb.preview", "error": "x"}])  # the scan's, not enrich's
     summary = _summary(lib)
-    assert summary["waiting_failures"] == 1 and summary["missing_vision"] == 0
+    assert summary["waiting_failures"] == 1 and summary["missing"]["lumiverb.image.description"] == 0

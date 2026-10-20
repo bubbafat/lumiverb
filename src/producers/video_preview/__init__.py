@@ -13,7 +13,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ORIGINAL,),
-    artifact="video_preview", producer="preview", version="1", media=VIDEO, title="Video previews", order=30,
+    artifact=names.VIDEO_PREVIEW, version="1", media=VIDEO, title="Video previews", order=30,
     applies="a.media_type = 'video'",
     made="a.video_preview_key IS NOT NULL",
     settings=(

@@ -186,7 +186,7 @@ def test_submit_faces_not_found(face_client: Tuple[_AuthClient, str, str]) -> No
     auth_client, _, _ = face_client
     r = auth_client.post(
         "/v1/assets/batch-faces",
-        json={"items": [{"asset_id": "nonexistent_asset_id", "faces": []}], "lineage": made("faces")},
+        json={"items": [{"asset_id": "nonexistent_asset_id", "faces": []}], "lineage": made("lumiverb.image.faces")},
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"processed": 0, "skipped": 1}
@@ -202,7 +202,7 @@ def test_list_faces_not_found(face_client: Tuple[_AuthClient, str, str]) -> None
 
 @pytest.mark.slow
 def test_repair_summary_missing_faces(face_client: Tuple[_AuthClient, str, str]) -> None:
-    """repair-summary includes missing_faces count."""
+    """repair-summary counts the photos whose faces weren't looked for, by name."""
     auth_client, library_id, tenant_url = face_client
 
     # Create an asset without face detection
@@ -211,14 +211,14 @@ def test_repair_summary_missing_faces(face_client: Tuple[_AuthClient, str, str])
     r = auth_client.get(f"/v1/assets/repair-summary?library_id={library_id}")
     assert r.status_code == 200
     data = r.json()
-    assert "missing_faces" in data
+    assert "lumiverb.image.faces" in data["missing"]
     # At least this asset should be missing faces
-    assert data["missing_faces"] >= 1
+    assert data["missing"]["lumiverb.image.faces"] >= 1
 
 
 @pytest.mark.slow
 def test_the_scheduler_hands_out_photos_whose_faces_werent_looked_for(face_client: Tuple[_AuthClient, str, str]) -> None:
-    """The faces producer is handed the photos not looked at yet (its queue: missing_faces)."""
+    """The faces producer is handed the photos not looked at yet (its queue)."""
     auth_client, library_id, tenant_url = face_client
 
     # Create asset and submit faces for it
@@ -232,7 +232,7 @@ def test_the_scheduler_hands_out_photos_whose_faces_werent_looked_for(face_clien
         _with_proxy(tenant_url, asset_id)
 
     # The scheduler's queue should include the unprocessed asset
-    ids = [c["asset_id"] for c in due(tenant_url, "faces", [library_id])]
+    ids = [c["asset_id"] for c in due(tenant_url, "lumiverb.image.faces", [library_id])]
     assert asset_without in ids
     assert asset_with not in ids
 

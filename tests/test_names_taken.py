@@ -1,8 +1,10 @@
 # ruff: noqa: F811 — pytest fixtures are named as parameters
-"""The server takes the names (ADR-024 phase 1 part 1): every route sent an
-artifact, a lineage's producer or a file's kind takes its name too
-(src/producers/names.py), with the same answer, and keeps today's id. What's
-never renamed (AI jobs, model ids, protocol 1's inputs) isn't taken by a name.
+"""The server stores and sends the names (ADR-024 phase 1 part 3), and still
+takes an older client's words until part 5 (src/producers/names.py RENAMED):
+every route sent an artifact or a lineage's producer by its old id gives the
+same answer as by its name, and keeps and answers the name. Files keep their
+kinds until part 4, taken by their names too. What's never renamed (AI jobs,
+model ids, protocol 1's inputs) isn't taken by a name.
 
 Against the real API and database (tests/test_analysis_proxy_api.py's
 account). A device's gate takes them too: tests/test_device_keys.py.
@@ -28,10 +30,12 @@ from tests.videos import playable
 
 pytestmark = pytest.mark.slow
 
+_OLD_PRODUCER = {name: producer for (_, producer), name in PRODUCERS.items()}
 
-def _named(env, artifact: str, sha: str | None) -> dict:
-    """Lineage as a current worker would send it, its producer by the name of what it makes."""
-    return {**_want(env, artifact, sha), "producer": ARTIFACTS[artifact]}
+
+def _old(env, name: str, sha: str | None) -> dict:
+    """Lineage as a client from before part 3 sends it: its producer by its old id."""
+    return {**_want(env, name, sha), "producer": _OLD_PRODUCER[name]}
 
 
 def _jpeg() -> tuple:
@@ -55,68 +59,66 @@ def test_each_name_is_stored_where_it_says(env):
         engine.dispose()
 
 
-def test_a_clip_ingested_by_names_is_as_one_by_ids(env):
-    lib = _library(env, "NamesIngest")
+@pytest.mark.parametrize("key, field", [("proxy", "proxy"), ("lumiverb.preview", "lumiverb.preview")])
+def test_a_clip_ingested_by_old_words_is_kept_by_names(env, key, field):
+    lib = _library(env, f"NamesIngest_{field}")
     client, headers, library_id, *_ = lib
     sha = _sha()
+    lineage = _old(lib, "lumiverb.preview", sha) if key == "proxy" else _want(lib, "lumiverb.preview", sha)
     data = {"library_id": library_id, "rel_path": "named.jpg", "file_size": "1000", "media_type": "image",
             "width": "64", "height": "36", "exif": json.dumps({"content_hash": sha}),
-            "lineage": json.dumps({"lumiverb.preview": _named(lib, "proxy", sha)})}
-    r = client.post("/v1/ingest", data=data, files={"lumiverb.preview": _jpeg()}, headers=headers)
+            "lineage": json.dumps({key: lineage})}
+    r = client.post("/v1/ingest", data=data, files={field: _jpeg()}, headers=headers)
     assert r.status_code == 200, r.text
     clip = r.json()["asset_id"]
-    assert _row(lib, clip, "proxy").producer == "proxy", "kept as today's id until part 3"
-    assert _state(lib, clip, "proxy") == "current"
-    again = {"exif": data["exif"], "lineage": data["lineage"]}
-    r = client.post(f"/v1/assets/{clip}/ingest", data=again, files={"lumiverb.preview": _jpeg()}, headers=headers)
-    assert r.status_code == 200, r.text
-    assert _state(lib, clip, "proxy") == "current"
+    assert _row(lib, clip, "lumiverb.preview").producer == "lumiverb.preview", "kept by its name"
+    assert _state(lib, clip, "lumiverb.preview") == "current"
     # Neither spelling of the preview: refused, saying what to send.
     r = client.post("/v1/ingest", data={**data, "rel_path": "none.jpg"}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "preview_required", r.text
-    r = client.post(f"/v1/assets/{clip}/ingest", data=again, headers=headers)
-    assert r.status_code == 422 and r.json()["error"]["code"] == "preview_required", r.text
 
 
-@pytest.mark.parametrize("artifact", ["vision", "ocr", "clip"])
-def test_a_lineage_by_name_leaves_nothing_due(env, artifact):
-    lib = _library(env, f"NamesDue_{artifact}")
+@pytest.mark.parametrize("name", ["lumiverb.image.description", "lumiverb.image.text", "lumiverb.image.likeness"])
+def test_a_lineage_by_its_old_producer_leaves_nothing_due(env, name):
+    lib = _library(env, f"NamesDue_{name}")
     client, headers, *_ = lib
     sha = _sha()
-    clip = _ingest_with(lib, "a.jpg", sha, {"proxy": _named(lib, "proxy", sha)})
-    assert _due(lib, artifact) == [clip]
+    clip = _ingest_with(lib, "a.jpg", sha)
+    assert _due(lib, name) == [clip]
     kind, body = {
-        "vision": ("vision", {"model_id": "m", "description": "a dog on a beach"}),
-        "ocr": ("ocr", {"ocr_text": "EXIT", "model_id": "m"}),
-        "clip": ("embeddings", {"model_id": "clip", "model_version": "1", "vector": [0.0] * 512}),
-    }[artifact]
-    r = saved(client, kind, clip, json={**body, "lineage": _named(lib, artifact, sha)}, headers=headers)
+        "lumiverb.image.description": ("vision", {"model_id": "m", "description": "a dog on a beach"}),
+        "lumiverb.image.text": ("ocr", {"ocr_text": "EXIT", "model_id": "m"}),
+        "lumiverb.image.likeness": ("embeddings", {"model_id": "clip", "model_version": "1", "vector": [0.0] * 512}),
+    }[name]
+    r = saved(client, kind, clip, json={**body, "lineage": _old(lib, name, sha)}, headers=headers)
     assert r.status_code == 200 and r.json()["updated"] == 1, r.text
-    assert _due(lib, artifact) == []
-    assert _counts(lib, artifact)["current"] == 1
-    assert _row(lib, clip, artifact).producer == {"vision": "vision", "ocr": "ocr", "clip": "clip"}[artifact]
+    assert _due(lib, name) == []
+    assert _counts(lib, name)["current"] == 1
+    assert _row(lib, clip, name).producer == name
 
 
 @pytest.mark.parametrize("artifact, producer", sorted(PRODUCERS))
-def test_each_producer_by_name_is_kept_as_today_s_and_current(env, artifact, producer):
-    # Every machine write goes through require_lineage, then lineage.record: a name kept as anything but
-    # today's id would be an unknown producer's, stale, and made again.
+def test_each_old_producer_is_kept_by_its_name_and_current(env, artifact, producer):
+    # Every machine write goes through require_lineage, then lineage.record: an old id kept as anything but the
+    # name would be an unknown producer's, stale, and made again.
     from sqlmodel import Session
 
     from src.server.api.routers.producers import require_lineage
     from src.server.database import get_engine_for_url
     from src.server.repository import lineage
 
+    name = ARTIFACTS[artifact]
     lib = _library(env, f"NamesEach_{artifact}")
     sha = _sha()
-    media = "image" if "image" in registry()[artifact].media else "video"
+    media = "image" if "image" in registry()[name].media else "video"
     clip = _ingest_with(lib, "a.jpg" if media == "image" else "a.mov", sha, media_type=media)
-    named = _named(lib, artifact, sha)
-    assert require_lineage(named, artifact)["producer"] == producer
+    old = {**_want(lib, name, sha), "producer": producer}
+    made = require_lineage(old, name)
+    assert made["producer"] == name
     with Session(get_engine_for_url(env[-1])) as session:
-        lineage.record(session, clip, artifact, named)
-    assert _row(lib, clip, artifact).producer == producer
-    assert _state(lib, clip, artifact) == "current"
+        lineage.record(session, clip, name, made)
+    assert _row(lib, clip, name).producer == name
+    assert _state(lib, clip, name) == "current"
 
 
 def test_a_model_id_is_never_a_name(env):
@@ -127,9 +129,9 @@ def test_a_model_id_is_never_a_name(env):
     clip = _ingest_with(lib, "a.jpg", sha)
     r = saved(client, "embeddings", clip, headers=headers, json={
         "model_id": "lumiverb.image.likeness", "model_version": "1", "vector": [0.0] * 512,
-        "lineage": _named(lib, "clip", sha)})
+        "lineage": _want(lib, "lumiverb.image.likeness", sha)})
     assert r.status_code == 200, r.text
-    assert _due(lib, "clip") == [clip]
+    assert _due(lib, "lumiverb.image.likeness") == [clip]
 
 
 def test_an_ai_job_is_never_a_name(env):
@@ -147,36 +149,36 @@ def test_a_file_by_its_name_is_the_file_by_its_kind(env):
     photo = _ingest_with(lib, "a.jpg", sha)
     for name in ("lumiverb.preview", "lumiverb.preview.thumbnail"):
         r = client.post(f"/v1/assets/{photo}/artifacts/{name}", files={"file": _jpeg()}, headers=headers,
-                        data={"lineage": json.dumps(_named(lib, "proxy", sha))})  # a thumbnail's is the preview's
+                        data={"lineage": json.dumps(_want(lib, "lumiverb.preview", sha))})  # a thumbnail: the preview's
         assert r.status_code == 200, (name, r.text)
         by_name = client.get(f"/v1/assets/{photo}/artifacts/{name}", headers=headers)
         by_kind = client.get(f"/v1/assets/{photo}/artifacts/{FILES[name]}", headers=headers)
         assert by_name.status_code == by_kind.status_code == 200, (name, by_name.text)
         assert by_name.content == by_kind.content and by_name.headers["content-type"] == by_kind.headers["content-type"]
-    assert _row(lib, photo, "proxy").producer == "proxy"
+    assert _row(lib, photo, "lumiverb.preview").producer == "lumiverb.preview"
 
-    # The batch upload's fields by their names.
+    # The batch upload's fields by their names, its lineage by an old word.
     r = client.post(f"/v1/assets/{photo}/artifacts", headers=headers,
                     files={"lumiverb.preview": _jpeg(), "lumiverb.preview.thumbnail": _jpeg()},
-                    data={"lineage": json.dumps({"lumiverb.preview": _named(lib, "proxy", sha)})})
+                    data={"lineage": json.dumps({"proxy": _old(lib, "lumiverb.preview", sha)})})
     assert r.status_code == 200, r.text
     assert sorted(i["artifact_type"] for i in r.json()["items"]) == ["proxy", "thumbnail"], r.json()
 
-    # A video's analysis proxy: whole, and in chunks.
+    # A video's analysis proxy: whole, and in chunks; files are kinds until part 4.
     video = _ingest_with(lib, "v.mov", _sha(), media_type="video")
-    vsha = _row(lib, video, "proxy").source_hash
+    vsha = _row(lib, video, "lumiverb.preview").source_hash
     r = client.post(f"/v1/assets/{video}/artifacts/lumiverb.video.analysis_proxy", headers=headers,
                     files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
-                    data={"lineage": json.dumps(_named(lib, "analysis_proxy", vsha))})
+                    data={"lineage": json.dumps(_old(lib, "lumiverb.video.analysis_proxy", vsha))})
     assert r.status_code == 200, r.text
-    assert _state(lib, video, "analysis_proxy") == "current"
+    assert _state(lib, video, "lumiverb.video.analysis_proxy") == "current"
     by_name = client.get(f"/v1/assets/{video}/artifacts/lumiverb.video.analysis_proxy", headers=headers)
     by_kind = client.get(f"/v1/assets/{video}/artifacts/analysis_proxy", headers=headers)
     assert by_name.status_code == by_kind.status_code == 200 and by_name.headers["etag"] == by_kind.headers["etag"]
     body = playable(2.0)
     r = client.post(f"/v1/assets/{video}/uploads", headers=headers, json={
         "artifact": "lumiverb.video.analysis_proxy", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(),
-        "lineage": _named(lib, "analysis_proxy", vsha)})
+        "lineage": _want(lib, "lumiverb.video.analysis_proxy", vsha)})
     assert r.status_code == 200 and r.json()["artifact"] == "analysis_proxy", r.text
     assert client.delete(f"/v1/uploads/{r.json()['upload_id']}", headers=headers).status_code == 204
     r = client.post(f"/v1/assets/{video}/uploads", headers=headers, json={
@@ -184,55 +186,77 @@ def test_a_file_by_its_name_is_the_file_by_its_kind(env):
     assert r.status_code == 422, r.text  # a scene's picture isn't sent in chunks, by either spelling
 
 
-def _producer(env, artifact: str) -> dict:
+def _producers(env) -> dict:
     client, headers, *_ = env
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     assert r.status_code == 200, r.text
-    return {p["artifact"]: p for p in r.json()["producers"]}[artifact]
+    return {p["artifact"]: p for p in r.json()["producers"]}
 
 
-def test_the_producers_routes_take_a_name(env):
+def test_get_producers_answers_names_and_what_each_reads(env):
+    rows = _producers(env)
+    assert set(rows) == set(registry())
+    for name, row in rows.items():
+        assert row["producer"] == name, "a producer is named by what it makes"
+        assert row["reads"] == list(registry()[name].reads)
+        assert all(n in rows for n in row["needs"]) and (not row["part_of"] or row["part_of"] in rows)
+    assert rows["lumiverb.location.guess"]["reads_others"] == ["lumiverb.capture_time", "lumiverb.location.gps",
+                                                               "lumiverb.location.person"]
+
+
+def test_the_producers_routes_take_an_old_word_and_answer_the_name(env):
     lib = _library(env, "NamesProducers")
     client, headers, library_id, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha())
 
-    r = client.put("/v1/producers/lumiverb.video.transcript/settings", headers=headers,
+    r = client.put("/v1/producers/transcript/settings", headers=headers,
                    json={"settings": {"vad_min_silence_ms": 800}, "redo": True})
-    assert r.status_code == 200 and r.json()["artifact"] == "transcript", r.text
-    assert _producer(env, "transcript")["settings"]["vad_min_silence_ms"] == 800
-    assert client.put("/v1/producers/transcript/settings", headers=headers,
+    assert r.status_code == 200 and r.json()["artifact"] == "lumiverb.video.transcript", r.text
+    assert _producers(env)["lumiverb.video.transcript"]["settings"]["vad_min_silence_ms"] == 800
+    assert client.put("/v1/producers/lumiverb.video.transcript/settings", headers=headers,
                       json={"settings": {"vad_min_silence_ms": None}, "redo": True}).status_code == 200
 
     for scope, field in (("work", "paused"), ("redo", "redo_stopped")):
-        r = client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": scope}, headers=headers)
+        r = client.post("/v1/producers/vision/pause", json={"scope": scope}, headers=headers)
         assert r.status_code == 204, r.text
-        assert _producer(env, "vision")[field] is True, scope
-        r = client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": scope}, headers=headers)
-        assert r.status_code == 204 and _producer(env, "vision")[field] is False, scope
+        assert _producers(env)["lumiverb.image.description"][field] is True, scope
+        r = client.post("/v1/producers/vision/resume", json={"scope": scope}, headers=headers)
+        assert r.status_code == 204 and _producers(env)["lumiverb.image.description"][field] is False, scope
 
     r = client.post("/v1/producers/failures", headers=headers, json={"items": [
-        {"asset_id": clip, "artifact": "lumiverb.image.text", "error": "unreadable"}]})
+        {"asset_id": clip, "artifact": "ocr", "error": "unreadable"}]})
     assert r.status_code == 200 and r.json()["recorded"] == 1, r.text
-    by_name = client.get("/v1/producers/failures", params={"artifact": "lumiverb.image.text", "library_id": library_id},
-                         headers=headers)
-    by_id = client.get("/v1/producers/failures", params={"artifact": "ocr", "library_id": library_id}, headers=headers)
-    assert by_name.status_code == by_id.status_code == 200 and by_name.json() == by_id.json()
-    assert [(i["asset_id"], i["artifact"]) for i in by_name.json()["items"]] == [(clip, "ocr")]
+    by_old = client.get("/v1/producers/failures", params={"artifact": "ocr", "library_id": library_id},
+                        headers=headers)
+    by_name = client.get("/v1/producers/failures", params={"artifact": "lumiverb.image.text",
+                                                           "library_id": library_id}, headers=headers)
+    assert by_old.status_code == by_name.status_code == 200 and by_old.json() == by_name.json()
+    assert [(i["asset_id"], i["artifact"]) for i in by_name.json()["items"]] == [(clip, "lumiverb.image.text")]
     r = client.post("/v1/producers/failures/retry", headers=headers,
-                    json={"all": True, "artifact": "lumiverb.image.text", "library_id": library_id})
+                    json={"all": True, "artifact": "ocr", "library_id": library_id})
     assert r.status_code == 200 and r.json()["retried"] == 1, r.text
 
     r = client.post("/v1/producers/run", headers=headers,
-                    json={"producer": "lumiverb.image.description", "library_ids": [library_id], "scope": "new"})
-    assert r.status_code == 200 and [p["artifact"] for p in r.json()["producers"]] == ["vision"], r.text
+                    json={"producer": "vision", "library_ids": [library_id], "scope": "new"})
+    assert r.status_code == 200, r.text
+    assert [p["artifact"] for p in r.json()["producers"]] == ["lumiverb.image.description"]
+    by_old = client.post("/v1/producers/faces/below/redo", headers=headers, json={"all": True, "library_id": library_id})
     by_name = client.post("/v1/producers/lumiverb.image.faces/below/redo", headers=headers,
                           json={"all": True, "library_id": library_id})
-    by_id = client.post("/v1/producers/faces/below/redo", headers=headers, json={"all": True, "library_id": library_id})
-    assert by_name.status_code == by_id.status_code == 200 and by_name.json() == by_id.json(), by_name.text
+    assert by_old.status_code == by_name.status_code == 200 and by_old.json() == by_name.json(), by_old.text
 
-    # A name nothing makes is as unknown as an id nothing makes.
-    for target in ("lumiverb.image.nothing", "lumiverb.people"):
+    # What nothing makes is unknown, by either spelling.
+    for target in ("lumiverb.image.nothing", "lumiverb.people", "nothing"):
         assert client.put(f"/v1/producers/{target}/settings", json={"settings": {}}, headers=headers).status_code == 404
         r = client.post("/v1/producers/failures", headers=headers, json={"items": [
             {"asset_id": clip, "artifact": target, "error": "x"}]})
         assert r.status_code == 422, r.text
+
+
+def test_the_queue_answers_names(env):
+    client, headers, *_ = env
+    r = client.get("/v1/producers/queue", headers=headers)
+    assert r.status_code == 200, r.text
+    targets = [sw["target"] for sw in r.json()["switches"]]
+    assert "upkeep" in targets and "lumiverb.image.description" in targets
+    assert not set(targets) & set(ARTIFACTS), "no old word"

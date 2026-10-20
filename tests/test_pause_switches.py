@@ -22,7 +22,7 @@ def test_the_switches_are_upkeep_and_each_producer_the_scheduler_makes():
     assert targets[0] == PAUSE_UPKEEP
     assert set(targets[1:]) == {a for a, p in PRODUCERS.items() if p.scheduled}
     assert PAUSE_SCANS not in targets  # each library's own
-    assert "proxy" not in targets  # scans make it: a library's Scans pause pauses it
+    assert "lumiverb.preview" not in targets  # scans make it: a library's Scans pause pauses it
 
 
 def test_nothing_paused_is_green_some_is_yellow_all_is_red():
@@ -34,13 +34,13 @@ def test_nothing_paused_is_green_some_is_yellow_all_is_red():
 
 def test_unpausing_one_switch_while_all_are_paused_is_yellow():
     targets = set(pause_targets())
-    assert pause_state(targets - {"vision"}) == "partly"
+    assert pause_state(targets - {"lumiverb.image.description"}) == "partly"
 
 
 def test_a_new_producer_while_all_are_paused_is_running_so_yellow():
     # Switches paused one by one: a producer added since has no row, so it runs
     # (Pause all is stored, so it would be paused: test_processing_pause_api).
-    before = set(pause_targets()) - {"ocr"}
+    before = set(pause_targets()) - {"lumiverb.image.text"}
     assert pause_state(before) == "partly"
 
 

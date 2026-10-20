@@ -34,16 +34,16 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import text
 
+from src.producers.names import remakes_of
 from src.producers.runner import Work
 from src.producers.runner import run as run_work
 from src.server.scheduler.inputs import Inputs
-from src.shared.producers import PRODUCERS
 from src.shared.waits import HELD, REASONS, SCAN, Waiting
+from tests.derived import saved
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.test_reconciler import _library
 from tests.test_scheduler_service import FakeAccount
-from tests.derived import saved
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_REASONS = ROOT / "src" / "ui" / "web" / "src" / "lib" / "waits.ts"
@@ -113,7 +113,7 @@ class Reads(Work):
     originals does (Work.inputs.original): a file missing from storage that's
     there waits for the scan. The GPU running out of memory is no clip's."""
 
-    artifact = "capture"
+    artifact = "lumiverb.capture_time"
 
     def make(self, clip: dict) -> None:
         with self.inputs.original(clip):
@@ -130,10 +130,10 @@ def test_a_job_says_why_each_clip_waits(tmp_path):
     acct = Account("t1", tmp_path, libraries=("lib_1",), reachable=("lib_1",))
     (tmp_path / "here.jpg").write_bytes(b"x")
     items = tuple({"asset_id": a, "library_id": "lib_1", "rel_path": a} for a in ("gone.jpg", "here.jpg"))
-    out = run_work(Reads, acct, Job("t1", "capture", 2, items))
+    out = run_work(Reads, acct, Job("t1", "lumiverb.capture_time", 2, items))
     assert out == ["gone.jpg"] and out.reason("gone.jpg") == SCAN  # a scan comes first
     acct.out_of_memory = True
-    out = run_work(Reads, acct, Job("t1", "capture", 2, items))
+    out = run_work(Reads, acct, Job("t1", "lumiverb.capture_time", 2, items))
     assert out == ["gone.jpg", "here.jpg"] and out.why == {"gone.jpg": SCAN, "here.jpg": HELD}
 
 
@@ -142,9 +142,9 @@ def test_the_dispatcher_counts_what_it_holds_back_and_why():
     from src.server.scheduler.dispatch import Dispatcher, KindSpec
 
     now = [0.0]
-    d = Dispatcher({"capture": KindSpec(2, "exif"), "redo_capture": KindSpec(4, "exif", same_as="capture")},
+    d = Dispatcher({"lumiverb.capture_time": KindSpec(2, "exif"), "redo:lumiverb.capture_time": KindSpec(4, "exif", same_as="lumiverb.capture_time")},
                    {"exif": 2}, clock=lambda: now[0])
-    d.offer("t1", "capture", [{"asset_id": a, "library_id": lib, "created_at": ""}
+    d.offer("t1", "lumiverb.capture_time", [{"asset_id": a, "library_id": lib, "created_at": ""}
                               for a, lib in (("a", "lib_1"), ("b", "lib_1"), ("c", "lib_2"))])
     job = d.take("exif")
     d.done(job, waiting=Waiting(["a"], {"a": SCAN}))  # its scan comes first
@@ -152,10 +152,10 @@ def test_the_dispatcher_counts_what_it_holds_back_and_why():
     d.done(job, waiting=["b"])  # an old runner's list says no why: held
     job = d.take("exif")
     d.done(job, waiting=[])  # made: settled, not held
-    assert d.status("t1")["held"] == [{"kind": "capture", "why": "held", "library_id": "lib_1", "clips": 1},
-                                      {"kind": "capture", "why": "scan", "library_id": "lib_1", "clips": 1}]
+    assert d.status("t1")["held"] == [{"kind": "lumiverb.capture_time", "why": "held", "library_id": "lib_1", "clips": 1},
+                                      {"kind": "lumiverb.capture_time", "why": "scan", "library_id": "lib_1", "clips": 1}]
     now[0] += 3601  # the hold's over
-    d.offer("t1", "capture", [])
+    d.offer("t1", "lumiverb.capture_time", [])
     assert d.status("t1")["held"] == []
 
 
@@ -168,10 +168,10 @@ def test_a_crash_keeps_why_the_rest_of_its_job_waits():
     def crashes(acct, job):
         raise Crashed(["bad"], OSError("disk"), waiting=Waiting(["moved"], {"moved": SCAN}))
 
-    s = Scheduler(lambda: {}, capacity={}, runners={"capture": crashes}, crashed=lambda *a: [],
+    s = Scheduler(lambda: {}, capacity={}, runners={"lumiverb.capture_time": crashes}, crashed=lambda *a: [],
                   write_status=lambda *a: None)
     items = tuple({"asset_id": a, "library_id": "lib_1"} for a in ("bad", "moved"))
-    out = s._run(FakeAccount("t1"), Job("t1", "capture", 2, items))
+    out = s._run(FakeAccount("t1"), Job("t1", "lumiverb.capture_time", 2, items))
     assert out == ["bad", "moved"] and out.why == {"moved": SCAN}  # bad: held, uncharged this time
     s.stop()
 
@@ -260,9 +260,8 @@ class Harness:
             self.now += STATUS_EVERY_SEC
 
     def handed_out(self, artifact: str) -> set[str]:
-        kind = PRODUCERS[artifact].kind
         with self._lock:
-            return {i for k, ids in self.ran if k in (kind, f"redo_{kind}") for i in ids}
+            return {i for k, ids in self.ran if k in (artifact, remakes_of(artifact)) for i in ids}
 
     def stop(self) -> None:
         self.scheduler.stop(grace=1)
@@ -293,7 +292,7 @@ def _stale_vision(lib) -> str:
     sha = _sha()
     clip = _ingest_with(lib, "stale.jpg", sha)
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
-                                                        "lineage": {**_want(lib, "vision", sha), "settings_hash": "older"}},
+                                                        "lineage": {**_want(lib, "lumiverb.image.description", sha), "settings_hash": "older"}},
                     headers=headers)
     assert r.status_code == 200, r.text
     return clip
@@ -378,7 +377,7 @@ def _prime(case: Case) -> None:
 
 
 def _hold_scan(case: Case) -> None:
-    case.h.real["capture"] = Reads  # its file isn't where its storage is
+    case.h.real["lumiverb.capture_time"] = Reads  # its file isn't where its storage is
     _prime(case)
 
 
@@ -389,7 +388,7 @@ def _lift_scan(case: Case) -> None:
 
 def _hold_held(case: Case) -> None:
     (case.root / "a.jpg").write_bytes(b"x")
-    case.h.real["capture"] = Reads
+    case.h.real["lumiverb.capture_time"] = Reads
     case.h.acct.out_of_memory = True
     _prime(case)
 
@@ -508,27 +507,27 @@ WORK, REDO = {"scope": "work"}, {"scope": "redo"}
 # Every reason due work can wait, as the scheduler meets it: how to close
 # the gate on a due clip, and how to open it.
 GATES: dict[str, Gate] = {
-    "paused": Gate("capture", _post("/v1/producers/{artifact}/pause", WORK), _post("/v1/producers/{artifact}/resume", WORK),
+    "paused": Gate("lumiverb.capture_time", _post("/v1/producers/{artifact}/pause", WORK), _post("/v1/producers/{artifact}/resume", WORK),
                    undo=_post("/v1/producers/{artifact}/resume", WORK)),
-    "scheduler": Gate("capture", lambda case: setattr(case.h.acct, "settings_ready", False),
+    "scheduler": Gate("lumiverb.capture_time", lambda case: setattr(case.h.acct, "settings_ready", False),
                       lambda case: setattr(case.h.acct, "settings_ready", True)),
-    "ai_machines": Gate("vision", _hold_machines, _lift_machines,
+    "ai_machines": Gate("lumiverb.image.description", _hold_machines, _lift_machines,
                         undo=lambda case: _set_vision(case.lib, "", machine=False), clips=False),
     # An installed plug-in's work, the plug-in runner saying it's starting, then that it's running.
-    "plugin_down": Gate("plugin_facts", _plugin_says("starting"), _plugin_says("ready"), clip=_located,
+    "plugin_down": Gate("facts", _plugin_says("starting"), _plugin_says("ready"), clip=_located,
                         setup=_add_facts, undo=_remove_facts),
-    "needs": Gate("vision", lambda case: _set_proxy(case, None), lambda case: _set_proxy(case, case.saved["proxy_key"])),
-    "storage": Gate("capture", _hold_storage, _lift_storage),
-    "device": Gate("capture", _hold_device, _lift_device),
-    "new_version": Gate("vision", lambda case: None, _post("/v1/producers/{artifact}/resume", REDO),
+    "needs": Gate("lumiverb.image.description", lambda case: _set_proxy(case, None), lambda case: _set_proxy(case, case.saved["proxy_key"])),
+    "storage": Gate("lumiverb.capture_time", _hold_storage, _lift_storage),
+    "device": Gate("lumiverb.capture_time", _hold_device, _lift_device),
+    "new_version": Gate("lumiverb.image.description", lambda case: None, _post("/v1/producers/{artifact}/resume", REDO),
                         clip=_older_version_vision, undo=_post("/v1/producers/{artifact}/resume", REDO)),
-    "redo_stopped": Gate("vision", _post("/v1/producers/{artifact}/pause", REDO),
+    "redo_stopped": Gate("lumiverb.image.description", _post("/v1/producers/{artifact}/pause", REDO),
                          _post("/v1/producers/{artifact}/resume", REDO), clip=_stale_vision,
                          undo=_post("/v1/producers/{artifact}/resume", REDO)),
-    "scan": Gate("capture", _hold_scan, _lift_scan),
-    "held": Gate("capture", _hold_held, _lift_held),
-    "retry_later": Gate("capture", lambda case: _fail(case, 1), _retry),
-    "given_up": Gate("capture", lambda case: _fail(case, 10), _retry),
+    "scan": Gate("lumiverb.capture_time", _hold_scan, _lift_scan),
+    "held": Gate("lumiverb.capture_time", _hold_held, _lift_held),
+    "retry_later": Gate("lumiverb.capture_time", lambda case: _fail(case, 1), _retry),
+    "given_up": Gate("lumiverb.capture_time", lambda case: _fail(case, 10), _retry),
     # The Scans row's: a library's scan, through the real scan pass and its back-off.
     "scan_failing": Gate("scans", _hold_scan_failing, _lift_scan_failing, clip=lambda lib: lib[2],
                          ran=_scanned, said=_scans_row, clips=False),
@@ -601,17 +600,17 @@ def test_a_scheduler_not_running_or_unable_to_list_says_so(env, tmp_path):
     from src.shared.utils import utcnow
 
     lib = _library(env, "SchedulerState")
-    case = Case(lib, Harness(env[4], lib[2], tmp_path), "capture", _image(lib), tmp_path)
+    case = Case(lib, Harness(env[4], lib[2], tmp_path), "lumiverb.capture_time", _image(lib), tmp_path)
     try:
-        case.h.unlistable.add("capture")
+        case.h.unlistable.add("lumiverb.capture_time")
         case.h.run()
-        assert case.clip not in case.h.handed_out("capture")
+        assert case.clip not in case.h.handed_out("lumiverb.capture_time")
         said = _reasons(case)["scheduler"]
         assert said["why"] == "cant_list" and "does not exist" in said["message"] and said["clips"] == 1
     finally:
         case.h.stop()
     _status(env, at=(utcnow() - timedelta(minutes=5)).isoformat(),
-            held=[{"kind": "capture", "why": "scan", "library_id": lib[2], "clips": 1}])
+            held=[{"kind": "lumiverb.capture_time", "why": "scan", "library_id": lib[2], "clips": 1}])
     said = _reasons(case)
     # What only a running scheduler knows (what it holds back) isn't said: that it isn't running is.
     assert said["scheduler"] == {"reason": "scheduler", "clips": 1, "why": "not_running"} and "scan" not in said
@@ -622,12 +621,12 @@ def test_machines_the_scheduler_cant_use_are_said_whatever_settings_say(env, tmp
     """Settings → AI has a model and an online machine, yet the scheduler
     can use none (its check hasn't reached them): its own word is said."""
     lib = _library(env, "MachinesUnusable")
-    case = Case(lib, Harness(env[4], lib[2], tmp_path), "vision", _image(lib), tmp_path)
+    case = Case(lib, Harness(env[4], lib[2], tmp_path), "lumiverb.image.description", _image(lib), tmp_path)
     _set_vision(lib, "qwen3-vl:8b-instruct", machine=True)
     try:
         case.h.acct.slots["vision"] = 0
         case.h.run()
-        assert case.clip not in case.h.handed_out("vision")
+        assert case.clip not in case.h.handed_out("lumiverb.image.description")
         said = _reasons(case)["ai_machines"]
         assert said == {"reason": "ai_machines", "clips": 1, "job": "vision", "why": "unusable",
                         "message": "No machine doing vision is online."}  # the account's guard's words
@@ -641,21 +640,21 @@ def test_held_clips_are_said_by_library_and_not_for_a_project(env):
     lib = _library(env, "HeldElsewhere")
     client, headers, library_id, *_ = lib
     clip = _image(lib)
-    _status(env, held=[{"kind": "capture", "why": "scan", "library_id": library_id, "clips": 2},
-                       {"kind": "capture", "library_id": library_id, "clips": 1},  # no why: held
-                       {"kind": "capture", "why": "held", "library_id": "lib_other", "clips": 5}])
-    case = Case(lib, MagicMock(), "capture", "", Path())
+    _status(env, held=[{"kind": "lumiverb.capture_time", "why": "scan", "library_id": library_id, "clips": 2},
+                       {"kind": "lumiverb.capture_time", "library_id": library_id, "clips": 1},  # no why: held
+                       {"kind": "lumiverb.capture_time", "why": "held", "library_id": "lib_other", "clips": 5}])
+    case = Case(lib, MagicMock(), "lumiverb.capture_time", "", Path())
     said = _reasons(case)
     assert said["scan"] == {"reason": "scan", "clips": 2, "paused": False}
     assert said["held"]["clips"] == 1  # the other library's aren't this one's
     every = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}
-    assert {w["reason"]: w["clips"] for w in every["capture"]["waits"]}["held"] == 6
+    assert {w["reason"]: w["clips"] for w in every["lumiverb.capture_time"]["waits"]}["held"] == 6
     r = client.post("/v1/projects", json={"name": "HeldProject", "asset_ids": [clip]}, headers=headers)
     assert r.status_code in (200, 201), r.text
     in_project = {p["artifact"]: p for p in client.get(
         "/v1/producers", params={"project_id": r.json()["project_id"]}, headers=headers).json()["producers"]}
     # The scheduler doesn't say which clips it holds: a project's row doesn't guess.
-    assert not {"scan", "held"} & {w["reason"] for w in in_project["capture"]["waits"]}
+    assert not {"scan", "held"} & {w["reason"] for w in in_project["lumiverb.capture_time"]["waits"]}
 
 
 @pytest.mark.slow
@@ -666,20 +665,20 @@ def test_scans_paused_is_said_with_what_waits_for_a_scan_or_for_proxies(env):
     with _db(lib) as s:
         s.execute(text("UPDATE assets SET proxy_key = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
-    _status(env, held=[{"kind": "capture", "why": "scan", "library_id": library_id, "clips": 1}])
+    _status(env, held=[{"kind": "lumiverb.capture_time", "why": "scan", "library_id": library_id, "clips": 1}])
     # The library's own Scans pause (ADR-018 phase 1).
     r = client.post("/v1/libraries/scans/pause", json={"library_ids": [library_id]}, headers=headers)
     assert r.status_code == 204, r.text
     try:
         rows = {p["artifact"]: p for p in client.get("/v1/producers", params={"library_id": library_id},
                                                      headers=headers).json()["producers"]}
-        assert {"reason": "scan", "clips": 1, "paused": True} in rows["capture"]["waits"]
+        assert {"reason": "scan", "clips": 1, "paused": True} in rows["lumiverb.capture_time"]["waits"]
         # Proxies are made by scans: what waits for one waits for the library's scans.
-        assert {"reason": "needs", "clips": 1, "artifact": "proxy", "paused": True} in rows["vision"]["waits"]
-        assert rows["proxy"]["waits"] == []  # scans make it: "Paused with scans" says so
+        assert {"reason": "needs", "clips": 1, "artifact": "lumiverb.preview", "paused": True} in rows["lumiverb.image.description"]["waits"]
+        assert rows["lumiverb.preview"]["waits"] == []  # scans make it: "Paused with scans" says so
         # Across every library, another's scans still run: not said as paused.
         everywhere = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}
-        assert all(not w.get("paused") for w in everywhere["vision"]["waits"] if w["reason"] == "needs")
+        assert all(not w.get("paused") for w in everywhere["lumiverb.image.description"]["waits"] if w["reason"] == "needs")
     finally:
         client.post("/v1/libraries/scans/resume", json={"library_ids": [library_id]}, headers=headers)
 
@@ -692,7 +691,7 @@ def test_storage_isnt_said_while_everything_is_paused(env):
     _image(lib)
     _status(env, storage_waits=[library_id], storage={library_id: {"seen_at": None, "away_since": None,
                                                                    "checked": False}})
-    case = Case(lib, MagicMock(), "capture", "", Path())
+    case = Case(lib, MagicMock(), "lumiverb.capture_time", "", Path())
     said = _reasons(case)
     assert said["storage"] == {"reason": "storage", "clips": 1, "library_id": library_id,
                                "library_name": "PausedDrives", "checked": False}
@@ -712,20 +711,20 @@ def test_a_new_version_and_an_admins_stop_are_told_apart(env):
     with _db(lib) as s:
         from src.server.repository import lineage
 
-        assert lineage.hold_new_version(s, "vision") is True
+        assert lineage.hold_new_version(s, "lumiverb.image.description") is True
     try:
         row = {p["artifact"]: p for p in client.get("/v1/producers", params={"library_id": library_id},
-                                                    headers=headers).json()["producers"]}["vision"]
+                                                    headers=headers).json()["producers"]}["lumiverb.image.description"]
         assert row["redo_stopped"] is True and row["new_version"] is True
         assert {"reason": "new_version", "clips": 1} in row["waits"]
-        client.post("/v1/producers/vision/resume", json=REDO, headers=headers)
-        assert client.post("/v1/producers/vision/pause", json=REDO, headers=headers).status_code == 204
+        client.post("/v1/producers/lumiverb.image.description/resume", json=REDO, headers=headers)
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json=REDO, headers=headers).status_code == 204
         row = {p["artifact"]: p for p in client.get("/v1/producers", params={"library_id": library_id},
-                                                    headers=headers).json()["producers"]}["vision"]
+                                                    headers=headers).json()["producers"]}["lumiverb.image.description"]
         assert row["redo_stopped"] is True and row["new_version"] is False
         assert {"reason": "redo_stopped", "clips": 1} in row["waits"]
     finally:
-        client.post("/v1/producers/vision/resume", json=REDO, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json=REDO, headers=headers)
 
 
 @pytest.mark.slow

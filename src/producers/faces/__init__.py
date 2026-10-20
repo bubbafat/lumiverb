@@ -29,8 +29,8 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.PREVIEW,),
-    artifact="faces", producer="insightface", version="1", media=IMAGE, title="Faces", order=100,
-    applies=f"a.media_type = 'image' AND {on('faces', DEFAULT)}",
+    artifact=names.FACES, version="1", media=IMAGE, title="Faces", order=100,
+    applies=f"a.media_type = 'image' AND {on(names.FACES, DEFAULT)}",
     made="a.face_count IS NOT NULL",
     settings=(
         Setting("model", "buffalo_l", "Model", kind="text", fixed="buffalo_l is the one face model installed."),
@@ -53,5 +53,5 @@ PRODUCER = ProducerSpec(
                "new settings don't find go."),
     regroup="src.server.repository.faces:regroup_faces",
     # The faces job's machines (Settings › AI); on the server's GPU, the built-in one takes turns with CLIP.
-    kind="faces", flag="missing_faces", run="src.producers.faces.work:Faces", pool=FACES, batch=25,
+    run="src.producers.faces.work:Faces", pool=FACES, batch=25,
 )

@@ -45,7 +45,7 @@ def _describe(env, asset_id: str, description: str) -> None:
     client, api_key, *_ = env
     r = saved(client, "vision", asset_id, headers=_auth(api_key), json={
         "model_id": "test-vision", "model_version": "1", "description": description, "tags": [],
-        "lineage": made("vision")})
+        "lineage": made("lumiverb.image.description")})
     assert r.status_code == 200, r.text
 
 

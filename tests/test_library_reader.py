@@ -135,9 +135,9 @@ def test_work_from_what_s_stored_is_listed_in_every_active_library_and_work_on_o
     videos = {lib: _ingest(env, lib, File(f"{lib}.mov", f"{lib} video")) for lib in (ours, theirs)}
     assert env.client.delete(f"/v1/libraries/{trashed}", headers=env.admin).status_code == 204
     with Session(env.db) as session:
-        listed = {c["asset_id"] for c in candidates(session, KINDS["clip"], None, limit=10_000)}
+        listed = {c["asset_id"] for c in candidates(session, KINDS["lumiverb.image.likeness"], None, limit=10_000)}
         assert {photos[ours], photos[theirs]} <= listed and photos[trashed] not in listed
-        on_originals = {c["asset_id"] for c in candidates(session, KINDS["probe"], [ours], limit=10_000)}
+        on_originals = {c["asset_id"] for c in candidates(session, KINDS["lumiverb.video.format"], [ours], limit=10_000)}
         assert videos[ours] in on_originals and videos[theirs] not in on_originals
         with pytest.raises(ValueError):
-            candidates(session, KINDS["probe"], None)
+            candidates(session, KINDS["lumiverb.video.format"], None)

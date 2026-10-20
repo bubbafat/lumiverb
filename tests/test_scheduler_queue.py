@@ -33,23 +33,23 @@ def test_a_kind_lists_its_due_clips_oldest_first(env) -> None:
     with _db(env) as s:
         s.execute(text("UPDATE assets SET created_at = now() - interval '1 day' WHERE asset_id = :a"), {"a": second})
         s.commit()
-    assert _due(lib, "probe", [lib[2]]) == [second, first]
+    assert _due(lib, "lumiverb.video.format", [lib[2]]) == [second, first]
 
 
 def test_only_the_libraries_asked_about(env) -> None:
     here, there = _library(env, "Asked"), _library(env, "Not asked")
     mine = _ingest(here, "mine.mov")
     _ingest(there, "theirs.mov")
-    assert _due(here, "probe", [here[2]]) == [mine]
-    assert _due(here, "probe", []) == []
+    assert _due(here, "lumiverb.video.format", [here[2]]) == [mine]
+    assert _due(here, "lumiverb.video.format", []) == []
 
 
 def test_a_kind_lists_only_its_media(env) -> None:
     lib = _library(env, "Media")
     video = _ingest(lib, "v.mov")
     photo = _ingest_with(lib, "p.jpg", _sha(), None)
-    assert _due(lib, "probe", [lib[2]]) == [video]
-    assert _due(lib, "vision", [lib[2]]) == [photo]
+    assert _due(lib, "lumiverb.video.format", [lib[2]]) == [video]
+    assert _due(lib, "lumiverb.image.description", [lib[2]]) == [photo]
 
 
 def test_a_clip_made_now_is_no_longer_due(env) -> None:
@@ -58,9 +58,9 @@ def test_a_clip_made_now_is_no_longer_due(env) -> None:
     sha = _sha()
     photo = _ingest_with(lib, "p.jpg", sha, None)
     r = saved(client, "vision", photo, json={"model_id": "m", "description": "a dog",
-                                                         "lineage": _want(lib, "vision", sha)}, headers=headers)
+                                                         "lineage": _want(lib, "lumiverb.image.description", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert photo not in _due(lib, "vision", [lib[2]])
+    assert photo not in _due(lib, "lumiverb.image.description", [lib[2]])
 
 
 def test_a_failure_waiting_its_turn_is_not_due(env) -> None:
@@ -68,10 +68,10 @@ def test_a_failure_waiting_its_turn_is_not_due(env) -> None:
     client, headers, *_ = lib
     photo = _ingest_with(lib, "p.jpg", _sha(), None)
     r = client.post("/v1/producers/failures", json={"items": [
-        {"asset_id": photo, "artifact": "vision", "error": "the model said nothing"}]}, headers=headers)
+        {"asset_id": photo, "artifact": "lumiverb.image.description", "error": "the model said nothing"}]}, headers=headers)
     assert r.status_code < 300, r.text
-    assert photo not in _due(lib, "vision", [lib[2]])
-    assert photo in _due(lib, "ocr", [lib[2]])  # its other work isn't held up
+    assert photo not in _due(lib, "lumiverb.image.description", [lib[2]])
+    assert photo in _due(lib, "lumiverb.image.text", [lib[2]])  # its other work isn't held up
 
 
 def test_transcripts_wait_for_the_analysis_copy(env) -> None:
@@ -80,9 +80,9 @@ def test_transcripts_wait_for_the_analysis_copy(env) -> None:
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": video})
         s.commit()
-    assert video not in _due(lib, "transcript", [lib[2]])
+    assert video not in _due(lib, "lumiverb.video.transcript", [lib[2]])
     _upload(lib, video)
-    assert video in _due(lib, "transcript", [lib[2]])
+    assert video in _due(lib, "lumiverb.video.transcript", [lib[2]])
 
 
 def test_an_item_says_what_its_job_needs(env) -> None:
@@ -90,7 +90,7 @@ def test_an_item_says_what_its_job_needs(env) -> None:
     sha = _sha()
     video = _ingest(lib, "Day 1/clip.mov", sha=sha)
     with _db(env) as s:
-        [item] = candidates(s, KINDS["probe"], [lib[2]])
+        [item] = candidates(s, KINDS["lumiverb.video.format"], [lib[2]])
     assert item["asset_id"] == video
     assert item["library_id"] == lib[2]
     assert item["rel_path"] == "Day 1/clip.mov"
@@ -110,5 +110,5 @@ def test_clips_in_hand_or_just_tried_are_left_out_so_the_rest_are_reached(env):
     first = _ingest(lib, "a.mov")
     second = _ingest(lib, "b.mov")
     with _db(env) as s:
-        assert [r["asset_id"] for r in candidates(s, KINDS["probe"], [lib[2]], limit=1)] == [first]
-        assert [r["asset_id"] for r in candidates(s, KINDS["probe"], [lib[2]], limit=1, skip=[first])] == [second]
+        assert [r["asset_id"] for r in candidates(s, KINDS["lumiverb.video.format"], [lib[2]], limit=1)] == [first]
+        assert [r["asset_id"] for r in candidates(s, KINDS["lumiverb.video.format"], [lib[2]], limit=1, skip=[first])] == [second]

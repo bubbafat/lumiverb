@@ -243,7 +243,8 @@ class ReaderClip(BaseModel):
     file_size: int | None = None
     content_hash: str | None = None
     # What its reader has to make from its original (src/server/reader_work.py WORK, in that order):
-    # "previews" (made by a scan), "probe", "capture", "analysis_proxy".
+    # By name (ADR-024): lumiverb.preview (a clip's previews, made by a scan), lumiverb.video.format,
+    # lumiverb.capture_time, lumiverb.video.analysis_proxy.
     work: list[str]
     # Made another way than now (another version or settings): made again after everything else.
     remakes: list[str]

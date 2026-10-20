@@ -132,7 +132,7 @@ def test_a_clip_that_failed_today_makes_processing_yellow(env):
     _status(env)
     asset_id = _ingest_with(env, "failing.jpg", _sha())
     with _db(env) as s:
-        lineage.record_failure(s, asset_id, "vision", "the model said nothing")
+        lineage.record_failure(s, asset_id, "lumiverb.image.description", "the model said nothing")
     try:
         row = _rows(env)["processing"]
         assert row["state"] == "yellow" and "1 clip failed" in row["reason"]

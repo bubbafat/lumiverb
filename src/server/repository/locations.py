@@ -28,10 +28,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers.names import LOCATION_GUESS
 from src.server.repository import lineage
 from src.shared.utils import utcnow
 
-ARTIFACT = "location"
+ARTIFACT = LOCATION_GUESS
 PERSON, TIME, SUGGESTION = "person", "time", "suggestion"
 APPLIED, SUGGESTED = "applied", "suggested"
 

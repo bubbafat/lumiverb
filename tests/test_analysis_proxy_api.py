@@ -112,7 +112,7 @@ def _upload(env, asset_id: str, body: bytes | None = None, content_type="video/m
     return client.post(
         f"/v1/assets/{asset_id}/artifacts/analysis_proxy",
         files={"file": ("analysis.mp4", io.BytesIO(playable() if body is None else body), content_type)},
-        data={"lineage": made_json("analysis_proxy")},
+        data={"lineage": made_json("lumiverb.video.analysis_proxy")},
         headers=headers,
     )
 
@@ -129,7 +129,7 @@ def _renders_due(env) -> list[dict]:
     from tests.producer_fakes import due
 
     _, _, library_id, *_ = env
-    return due(env[-1], "render", [library_id])
+    return due(env[-1], "lumiverb.video.analysis_proxy", [library_id])
 
 
 def _analysis_proxy_key(env, asset_id: str) -> str | None:
@@ -215,7 +215,7 @@ def test_analysis_proxies_have_their_own_size_ceiling(env) -> None:
         r = client.post(
             f"/v1/assets/{asset_id}/artifacts/video_preview",
             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
-            data={"lineage": made_json("video_preview")},
+            data={"lineage": made_json("lumiverb.video.preview")},
             headers=headers,
         )
         assert r.status_code == 413
@@ -235,27 +235,27 @@ def test_unknown_asset_is_404(env) -> None:
 
 @pytest.mark.slow
 def test_summary_and_the_scheduler_count_videos_without_a_proxy(env) -> None:
-    before = _summary(env)["missing_analysis_proxy"]
+    before = _summary(env)["missing"]["lumiverb.video.analysis_proxy"]
     video = _ingest(env, "missing/a.mov")
     _ingest(env, "missing/b.jpg", media_type="image")
-    assert _summary(env)["missing_analysis_proxy"] == before + 1
+    assert _summary(env)["missing"]["lumiverb.video.analysis_proxy"] == before + 1
     due = _renders_due(env)
     assert video in {c["asset_id"] for c in due}
     assert len(due) == before + 1 and all(c["media_type"] == "video" for c in due)
 
     _upload(env, video)
-    assert _summary(env)["missing_analysis_proxy"] == before
+    assert _summary(env)["missing"]["lumiverb.video.analysis_proxy"] == before
     assert video not in {c["asset_id"] for c in _renders_due(env)}
 
 
 @pytest.mark.slow
 def test_trashed_videos_are_not_counted(env) -> None:
     client, headers, *_ = env
-    before = _summary(env)["missing_analysis_proxy"]
+    before = _summary(env)["missing"]["lumiverb.video.analysis_proxy"]
     video = _ingest(env, "trashed/a.mov")
     r = client.request("DELETE", "/v1/assets", json={"asset_ids": [video], "reason": "user"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _summary(env)["missing_analysis_proxy"] == before
+    assert _summary(env)["missing"]["lumiverb.video.analysis_proxy"] == before
 
 
 # ---------------------------------------------------------------------------

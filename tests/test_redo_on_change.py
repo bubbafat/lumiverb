@@ -52,10 +52,10 @@ def _vision_on(env):
     yield
 
 
-def _made_old(env, clip: str, sha: str, artifact: str = "vision") -> None:
+def _made_old(env, clip: str, sha: str, artifact: str = "lumiverb.image.description") -> None:
     client, headers, *_ = env
     old = {"producer": artifact, "version": "1", "settings_hash": OLD, "source_hash": sha}
-    if artifact == "vision":
+    if artifact == "lumiverb.image.description":
         r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
                                                             "lineage": old}, headers=headers)
     else:
@@ -63,7 +63,7 @@ def _made_old(env, clip: str, sha: str, artifact: str = "vision") -> None:
     assert r.status_code == 200, r.text
 
 
-def _stale_clip(lib, name: str, artifact: str = "vision") -> tuple[str, str]:
+def _stale_clip(lib, name: str, artifact: str = "lumiverb.image.description") -> tuple[str, str]:
     sha = _sha()
     clip = _ingest_with(lib, name, sha, None)
     _made_old(lib, clip, sha, artifact)
@@ -78,7 +78,7 @@ def _due(env, kind: str) -> list[str]:
         return [i["asset_id"] for i in candidates(s, k, [env[2]], want=want)]
 
 
-def _producer(env, artifact: str = "vision", headers: dict | None = None, **params) -> dict:
+def _producer(env, artifact: str = "lumiverb.image.description", headers: dict | None = None, **params) -> dict:
     client, own, *_ = env
     r = client.get("/v1/producers", params=params, headers=headers or own)
     assert r.status_code == 200, r.text
@@ -97,9 +97,9 @@ def _error(r) -> dict:
 def test_a_clip_made_with_older_settings_is_redone_without_anyone_approving(env):
     lib = _library(env, "RedoStale")
     clip, sha = _stale_clip(lib, "a.jpg")
-    assert _counts(lib, "vision")["stale"] == 1
-    assert _due(lib, "redo_vision") == [clip]
-    assert _due(lib, "vision") == []  # not missing
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
+    assert _due(lib, "redo:lumiverb.image.description") == [clip]
+    assert _due(lib, "lumiverb.image.description") == []  # not missing
 
 
 def test_a_clip_made_again_with_todays_settings_is_done(env):
@@ -107,17 +107,17 @@ def test_a_clip_made_again_with_todays_settings_is_done(env):
     client, headers, *_ = lib
     clip, sha = _stale_clip(lib, "a.jpg")
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "new words",
-                                                        "lineage": _want(lib, "vision", sha)}, headers=headers)
+                                                        "lineage": _want(lib, "lumiverb.image.description", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _due(lib, "redo_vision") == []
-    assert _counts(lib, "vision")["current"] == 1
+    assert _due(lib, "redo:lumiverb.image.description") == []
+    assert _counts(lib, "lumiverb.image.description")["current"] == 1
 
 
 def test_a_missing_clip_is_due_as_missing_not_as_a_redo(env):
     lib = _library(env, "RedoMissing")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    assert _due(lib, "vision") == [clip]
-    assert _due(lib, "redo_vision") == []
+    assert _due(lib, "lumiverb.image.description") == [clip]
+    assert _due(lib, "redo:lumiverb.image.description") == []
 
 
 def test_a_clip_whose_file_changed_is_due_as_missing_not_as_a_redo(env):
@@ -127,8 +127,8 @@ def test_a_clip_whose_file_changed_is_due_as_missing_not_as_a_redo(env):
     with _db(lib) as s:
         s.execute(text("UPDATE assets SET content_hash = :n WHERE asset_id = :a"), {"n": _sha(), "a": clip})
         s.commit()
-    assert _due(lib, "vision") == [clip]
-    assert _due(lib, "redo_vision") == []
+    assert _due(lib, "lumiverb.image.description") == [clip]
+    assert _due(lib, "redo:lumiverb.image.description") == []
 
 
 def test_a_description_nobody_said_how_was_made_isnt_kept_so_its_made_not_redone(env):
@@ -140,11 +140,11 @@ def test_a_description_nobody_said_how_was_made_isnt_kept_so_its_made_not_redone
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", r.text
     with _db(lib) as s:
         assert s.execute(text("SELECT count(*) FROM asset_metadata WHERE asset_id = :a"), {"a": clip}).scalar() == 0
-        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"),
+        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"),
                          {"a": clip}).scalar() == 0
     # Still missing: made like any other, never redone.
-    assert _due(lib, "vision") == [clip]
-    assert _due(lib, "redo_vision") == []
+    assert _due(lib, "lumiverb.image.description") == [clip]
+    assert _due(lib, "redo:lumiverb.image.description") == []
 
 
 def test_a_description_whose_lineage_row_went_missing_is_redone(env):
@@ -153,10 +153,10 @@ def test_a_description_whose_lineage_row_went_missing_is_redone(env):
     lib = _library(env, "RedoNoRow")
     clip, sha = _stale_clip(lib, "a.jpg")
     with _db(lib) as s:
-        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip})
+        s.execute(text("DELETE FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"), {"a": clip})
         s.commit()
-    assert _due(lib, "vision") == []
-    assert _due(lib, "redo_vision") == [clip]
+    assert _due(lib, "lumiverb.image.description") == []
+    assert _due(lib, "redo:lumiverb.image.description") == [clip]
 
 
 def test_a_description_made_before_its_file_had_a_hash_is_redone(env):
@@ -167,14 +167,14 @@ def test_a_description_made_before_its_file_had_a_hash_is_redone(env):
     client, headers, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "words",
-                                            "lineage": _want(lib, "vision", None)}, headers=headers)
+                                            "lineage": _want(lib, "lumiverb.image.description", None)}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(lib) as s:
         s.execute(text("UPDATE artifact_lineage SET source_hash = NULL WHERE asset_id = :a"), {"a": clip})
         s.commit()
-    assert _counts(lib, "vision")["stale"] == 1
-    assert _due(lib, "vision") == []
-    assert _due(lib, "redo_vision") == [clip]
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
+    assert _due(lib, "lumiverb.image.description") == []
+    assert _due(lib, "redo:lumiverb.image.description") == [clip]
 
 
 def test_a_failed_redo_waits_its_turn(env):
@@ -182,9 +182,9 @@ def test_a_failed_redo_waits_its_turn(env):
     client, headers, *_ = lib
     clip, _ = _stale_clip(lib, "a.jpg")
     r = client.post("/v1/producers/failures", json={"items": [
-        {"asset_id": clip, "artifact": "vision", "error": "the model said nothing"}]}, headers=headers)
+        {"asset_id": clip, "artifact": "lumiverb.image.description", "error": "the model said nothing"}]}, headers=headers)
     assert r.status_code < 300, r.text
-    assert _due(lib, "redo_vision") == []
+    assert _due(lib, "redo:lumiverb.image.description") == []
 
 
 def test_a_persons_transcript_is_never_redone(env):
@@ -197,8 +197,8 @@ def test_a_persons_transcript_is_never_redone(env):
         s.commit()
     r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": SRT, "source": "manual"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _due(lib, "redo_transcript") == []
-    assert _due(lib, "transcript") == []
+    assert _due(lib, "redo:lumiverb.video.transcript") == []
+    assert _due(lib, "lumiverb.video.transcript") == []
 
 
 def test_a_machine_transcript_made_with_another_model_is_redone(env):
@@ -212,10 +212,10 @@ def test_a_machine_transcript_made_with_another_model_is_redone(env):
         s.commit()
     r = client.post(f"/v1/assets/{vid}/transcript", json={
         "srt": SRT, "source": "whisper",
-        "lineage": {"producer": "whisper", "version": "1", "settings_hash": OLD, "source_hash": sha}},
+        "lineage": {"producer": "lumiverb.video.transcript", "version": "1", "settings_hash": OLD, "source_hash": sha}},
         headers=headers)
     assert r.status_code == 200, r.text
-    assert _due(lib, "redo_transcript") == [vid]
+    assert _due(lib, "redo:lumiverb.video.transcript") == [vid]
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ def test_a_machine_transcript_made_with_another_model_is_redone(env):
 def _video_with_scenes(lib, n: int = 2) -> tuple[str, str, list[str]]:
     sha = _sha()
     vid = _ingest_with(lib, "v.mov", sha, None, media_type="video")
-    old = {"producer": "scene-vision", "version": "1", "settings_hash": OLD}
+    old = {"producer": "lumiverb.video.scene_descriptions", "version": "1", "settings_hash": OLD}
     scenes = [f"scn_{vid[-10:]}_{i}" for i in range(n)]
     with _db(lib) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30, video_indexed = true, analysis_proxy_key = 'k'"
@@ -239,7 +239,7 @@ def _video_with_scenes(lib, n: int = 2) -> tuple[str, str, list[str]]:
                                                             "l": json.dumps(old)})
         s.execute(text(
             "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
-            " source_hash, produced_at, outcome, attempts) VALUES (:a, 'scene_vision', 'scene-vision', '1', :h,"
+            " source_hash, produced_at, outcome, attempts) VALUES (:a, 'lumiverb.video.scene_descriptions', 'lumiverb.video.scene_descriptions', '1', :h,"
             " :sha, now(), 'ok', 0)"), {"a": vid, "h": OLD, "sha": sha})
         s.commit()
     return vid, sha, scenes
@@ -249,7 +249,7 @@ def _describe_scene(env, scene_id: str, sha: str):
     client, headers, *_ = env
     r = client.patch(f"/v1/video/scenes/{scene_id}", json={
         "model_id": "m", "model_version": "1", "description": "new words", "tags": [],
-        "lineage": _want(env, "scene_vision", sha)}, headers=headers)
+        "lineage": _want(env, "lumiverb.video.scene_descriptions", sha)}, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -257,16 +257,16 @@ def test_a_video_is_redone_until_every_scene_is_described_again(env):
     lib = _library(env, "RedoScenes")
     vid, sha, (first, second) = _video_with_scenes(lib)
     with _db(lib) as s:
-        k = KINDS["redo_scene_vision"]
+        k = KINDS["redo:lumiverb.video.scene_descriptions"]
         want = lineage.desired(s, k.artifact, _job_models(env[4]))
         [item] = candidates(s, k, [lib[2]], want=want)
     assert item["asset_id"] == vid and item["redo"] is True  # the scheduler redescribes every scene
     assert item["settings_hash"] == want["settings_hash"]  # what it's to be made with, for the scheduler to check
     _describe_scene(lib, first, sha)
-    assert _due(lib, "redo_scene_vision") == [vid]  # half new, half old
+    assert _due(lib, "redo:lumiverb.video.scene_descriptions") == [vid]  # half new, half old
     _describe_scene(lib, second, sha)
-    assert _due(lib, "redo_scene_vision") == []
-    assert _counts(lib, "scene_vision")["current"] == 1
+    assert _due(lib, "redo:lumiverb.video.scene_descriptions") == []
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["current"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -281,16 +281,16 @@ def test_an_admin_stops_a_redo_and_resumes_it(env):
     client, headers, *_ = lib
     _stale_clip(lib, "a.jpg")
     try:
-        assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"}, headers=headers).status_code == 204
         p = _producer(lib)
         assert p["redo_stopped"] is True and p["redo_stopped_at"] and p["redo_stopped_by"]
-        assert "vision" in _on_hold_in_database(env[4]).redo
+        assert "lumiverb.image.description" in _on_hold_in_database(env[4]).redo
         assert p["counts"]["stale"] >= 1  # still stale, waiting
-        assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204  # again: fine
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"}, headers=headers).status_code == 204  # again: fine
     finally:
-        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers).status_code == 204
     assert _producer(lib)["redo_stopped"] is False
-    assert "vision" not in _on_hold_in_database(env[4]).redo
+    assert "lumiverb.image.description" not in _on_hold_in_database(env[4]).redo
 
 
 def test_only_admins_stop_or_resume_and_only_they_see_who(env):
@@ -300,32 +300,32 @@ def test_only_admins_stop_or_resume_and_only_they_see_who(env):
     client, headers, *_ = lib
     editor = _key_with_role(env, "editor")
     viewer = _key_with_role(env, "viewer")
-    assert client.post("/v1/producers/ocr/pause", json={"scope": "redo"}, headers=editor).status_code == 403
-    assert client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=editor).status_code == 403
+    assert client.post("/v1/producers/lumiverb.image.text/pause", json={"scope": "redo"}, headers=editor).status_code == 403
+    assert client.post("/v1/producers/lumiverb.image.text/resume", json={"scope": "redo"}, headers=editor).status_code == 403
     try:
-        assert client.post("/v1/producers/ocr/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-        seen = _producer(lib, "ocr", headers=viewer)
+        assert client.post("/v1/producers/lumiverb.image.text/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+        seen = _producer(lib, "lumiverb.image.text", headers=viewer)
         assert seen["redo_stopped"] is True and seen["redo_stopped_by"] is None
     finally:
-        client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.text/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_what_isnt_redone_yet_cant_be_stopped_and_says_why(env, monkeypatch):
     lib = _library(env, "RedoCant")
     client, headers, *_ = lib
-    monkeypatch.setitem(lineage.CANT_REDO, "scenes", "Scenes aren't found again yet.")  # none is, today
-    p = _producer(lib, "scenes")
+    monkeypatch.setitem(lineage.CANT_REDO, "lumiverb.video.scenes", "Scenes aren't found again yet.")  # none is, today
+    p = _producer(lib, "lumiverb.video.scenes")
     assert p["redoable"] is False and p["why_not"] == "Scenes aren't found again yet."
-    r = client.post("/v1/producers/scenes/pause", json={"scope": "redo"}, headers=headers)
+    r = client.post("/v1/producers/lumiverb.video.scenes/pause", json={"scope": "redo"}, headers=headers)
     assert r.status_code == 409 and _error(r)["code"] == "cant_redo"
-    assert _producer(lib, "vision")["redoable"] is True
+    assert _producer(lib, "lumiverb.image.description")["redoable"] is True
 
 
 def test_what_scans_make_is_remade_and_its_remakes_stop_and_go_on(env):
     # ADR-018 decision 6: previews too, by scans (src/server/scans.py, reason remake).
     lib = _library(env, "RedoScans")
     client, headers, *_ = lib
-    for artifact in ("proxy", "video_preview"):
+    for artifact in ("lumiverb.preview", "lumiverb.video.preview"):
         assert _producer(lib, artifact)["redoable"] is True
         try:
             assert client.post(f"/v1/producers/{artifact}/pause", json={"scope": "redo"},
@@ -342,7 +342,7 @@ def test_what_scans_make_is_remade_and_its_remakes_stop_and_go_on(env):
 def test_the_upgrade_step_is_gone(env):
     lib = _library(env, "RedoNoUpgrade")
     client, headers, *_ = lib
-    assert client.post("/v1/producers/vision/upgrade", json={}, headers=headers).status_code in (404, 405)
+    assert client.post("/v1/producers/lumiverb.image.description/upgrade", json={}, headers=headers).status_code in (404, 405)
     p = _producer(lib)
     assert "upgrades" not in p and "edited" not in p and "upgradable" not in p
     with _db(env) as s:
@@ -369,7 +369,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert r.status_code == 201, r.text
             assert client.put("/v1/ai/jobs/vision", json={"model": "m1", "redo": True}, headers=headers).status_code == 200
             _stale_clip(lib, "a.jpg")
-            assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+            assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"}, headers=headers).status_code == 204
 
             r = client.put("/v1/ai/jobs/vision", json={"model": "m2"}, headers=headers)
             assert r.status_code == 409, r.text
@@ -377,7 +377,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert err["code"] == "redo_on_change"
             assert err["details"]["clips"] >= 1 and err["details"]["model"] == "m2"
             kinds = {k["artifact"] for k in err["details"]["artifacts"]}
-            assert "vision" in kinds
+            assert "lumiverb.image.description" in kinds
             assert err["details"]["question"] == "remake"
             assert "made with the old model" in err["message"] and "New files only with m2" in err["message"]
             assert "remake them too, after everything else" in err["message"]
@@ -387,7 +387,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             err = _error(client.put("/v1/ai/jobs/vision", json={"model": "m2"}, headers=headers))
             client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
             assert "Paused, so not made until it's resumed" in err["message"]
-            assert {k["artifact"]: k["paused"] for k in err["details"]["artifacts"]}["vision"] is True
+            assert {k["artifact"]: k["paused"] for k in err["details"]["artifacts"]}["lumiverb.image.description"] is True
             assert client.get("/v1/ai", headers=headers).json()["jobs"][0]["model"] == "m1"  # nothing changed
 
             # The same model again asks nothing.
@@ -406,7 +406,7 @@ def test_a_new_model_asks_with_the_count_then_redoes_and_resumes(env):
             assert seen["redo_stopped"] is True and seen["new_version"] is False
     finally:
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
-        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers)
         for m in client.get("/v1/ai", headers=headers).json()["machines"]:
             if not m.get("built_in"):
                 client.delete(f"/v1/ai/machines/{m['machine_id']}", headers=headers)
@@ -421,7 +421,7 @@ def test_turning_a_job_off_or_on_with_the_same_settings_asks_nothing(env):
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
         s.commit()
     r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": SRT, "source": "whisper",
-                                                          "lineage": _want(lib, "transcript", None)}, headers=headers)
+                                                          "lineage": _want(lib, "lumiverb.video.transcript", None)}, headers=headers)
     assert r.status_code == 200, r.text
     try:
         assert client.put("/v1/ai/jobs/transcripts", json={"model": ""}, headers=headers).status_code == 200
@@ -429,7 +429,7 @@ def test_turning_a_job_off_or_on_with_the_same_settings_asks_nothing(env):
         assert client.put("/v1/ai/jobs/transcripts", json={"model": "small"}, headers=headers).status_code == 200
         r = client.put("/v1/ai/jobs/transcripts", json={"model": "medium"}, headers=headers)
         assert r.status_code == 409 and _error(r)["code"] == "redo_on_change"
-        assert any(k["artifact"] == "transcript" for k in _error(r)["details"]["artifacts"])
+        assert any(k["artifact"] == "lumiverb.video.transcript" for k in _error(r)["details"]["artifacts"])
     finally:
         client.put("/v1/ai/jobs/transcripts", json={"model": "small", "redo": True}, headers=headers)
 
@@ -438,7 +438,7 @@ def test_a_new_model_doesnt_count_what_a_person_wrote(env):
     lib = _library(env, "RedoCountPerson")
     client, headers, *_ = lib
     with _db(lib) as s:
-        before = lineage.made_by_a_producer(s, ["transcript"])["transcript"]
+        before = lineage.made_by_a_producer(s, ["lumiverb.video.transcript"])["lumiverb.video.transcript"]
     vid = _ingest_with(lib, "t.mov", _sha(), None, media_type="video")
     with _db(lib) as s:
         s.execute(text("UPDATE assets SET duration_sec = 30 WHERE asset_id = :a"), {"a": vid})
@@ -446,4 +446,4 @@ def test_a_new_model_doesnt_count_what_a_person_wrote(env):
     r = client.post(f"/v1/assets/{vid}/transcript", json={"srt": SRT, "source": "manual"}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(lib) as s:
-        assert lineage.made_by_a_producer(s, ["transcript"])["transcript"] == before
+        assert lineage.made_by_a_producer(s, ["lumiverb.video.transcript"])["lumiverb.video.transcript"] == before

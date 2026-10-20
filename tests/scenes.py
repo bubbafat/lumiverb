@@ -47,7 +47,7 @@ def described_scenes(client: TestClient, headers: dict, asset_id: str, scenes: l
         found = [{"start_ms": s.start_ms, "end_ms": s.end_ms, "rep_frame_ms": s.start_ms}
                  for s in scenes if start <= s.start_ms < end]
         done = client.post(f"/v1/video/chunks/{work['chunk_id']}/complete", headers=headers,
-                           json={"worker_id": work["worker_id"], "scenes": found, "lineage": made("scenes")})
+                           json={"worker_id": work["worker_id"], "scenes": found, "lineage": made("lumiverb.video.scenes")})
         assert done.status_code == 200, done.text
     assert r.status_code == 204, r.text
 
@@ -58,6 +58,6 @@ def described_scenes(client: TestClient, headers: dict, asset_id: str, scenes: l
     for row, scene in zip(shown, scenes, strict=True):
         r = client.patch(f"/v1/video/scenes/{row['scene_id']}", headers=headers, json={
             "model_id": "test-vision", "model_version": "1", "description": scene.description,
-            "tags": list(scene.tags), "lineage": made("scene_vision")})
+            "tags": list(scene.tags), "lineage": made("lumiverb.video.scene_descriptions")})
         assert r.status_code == 200, r.text
     return [row["scene_id"] for row in shown]

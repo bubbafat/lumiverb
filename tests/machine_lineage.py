@@ -15,14 +15,17 @@ from src.processing.producer_settings import ProducerSettings
 
 _REGISTRY = ProducerSettings(None)
 
-# Everything an ingest can store; it reads the lineage of what it stores and ignores the rest.
-INGEST_KINDS = ("proxy", "vision", "clip", "probe", "capture")
+# Everything an ingest can store, by name (ADR-024); it reads the lineage of what it stores and ignores the rest.
+INGEST_KINDS = ("lumiverb.preview", "lumiverb.image.description", "lumiverb.image.likeness", "lumiverb.video.format",
+                "lumiverb.capture_time")
 
 
 def made(artifact: str, source_hash: str | None = None) -> dict:
-    """How a worker made the artifact, with the registry's settings. Without
-    a source hash the server records the clip's file as it is now."""
-    return _REGISTRY.lineage(artifact, source_hash)
+    """How a worker made the artifact (its name, or a file's kind: the name it's of), with the registry's
+    settings. Without a source hash the server records the clip's file as it is now."""
+    from src.producers.names import FILES, made_by_file
+
+    return _REGISTRY.lineage(made_by_file(artifact) if artifact in FILES.values() else artifact, source_hash)
 
 
 def made_json(artifact: str, source_hash: str | None = None) -> str:
@@ -31,10 +34,10 @@ def made_json(artifact: str, source_hash: str | None = None) -> str:
 
 
 def ingest_made(source_hash: str | None = None) -> str:
-    """An ingest's lineage form field: every kind it can store, by kind."""
+    """An ingest's lineage form field: everything it can store, by name."""
     return json.dumps({kind: made(kind, source_hash) for kind in INGEST_KINDS})
 
 
 def artifacts_made(source_hash: str | None = None) -> str:
-    """The batch artifact upload's lineage form field: the proxy and the preview, by kind."""
-    return json.dumps({kind: made(kind, source_hash) for kind in ("proxy", "video_preview")})
+    """The batch artifact upload's lineage form field: the preview and the video preview, by name."""
+    return json.dumps({name: made(name, source_hash) for name in ("lumiverb.preview", "lumiverb.video.preview")})

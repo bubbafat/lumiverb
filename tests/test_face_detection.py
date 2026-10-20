@@ -61,15 +61,12 @@ def test_face_list_response_model() -> None:
 
 @pytest.mark.fast
 def test_repair_summary_includes_missing_faces() -> None:
-    """RepairSummary model has missing_faces field."""
+    """RepairSummary keys what's missing by name (ADR-024)."""
     from src.server.api.routers.assets import RepairSummary
 
-    summary = RepairSummary(
-        total_assets=100,
-        missing_faces=25,
-    )
-    assert summary.missing_faces == 25
-    assert summary.missing_embeddings == 0
+    summary = RepairSummary(total_assets=100, missing={"lumiverb.image.faces": 25})
+    assert summary.missing["lumiverb.image.faces"] == 25
+    assert summary.missing.get("lumiverb.image.likeness", 0) == 0
 
 
 @pytest.mark.fast

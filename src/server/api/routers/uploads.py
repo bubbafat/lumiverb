@@ -21,7 +21,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 from sqlmodel import Session
 from starlette.concurrency import run_in_threadpool
 
-from src.producers.names import file_in
+from src.producers.names import file_in, made_by_file
 from src.server import uploaded_video, uploads
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
@@ -97,7 +97,7 @@ def start_upload(asset_id: str, body: StartUpload, request: Request,
     422 lineage_required."""
     from src.server.api.routers.producers import require_lineage
 
-    made = require_lineage(body.lineage, body.artifact)
+    made = require_lineage(body.lineage, made_by_file(body.artifact))  # the file's kind; lineage's by name
     asset = AssetRepository(session).get_by_id(asset_id)
     if asset is None or asset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Asset not found")

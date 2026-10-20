@@ -21,7 +21,7 @@ from tests.derived import saved
 
 def _ocr(env, clip: str, words: str, sha: str | None = None):
     client, headers, *_ = env
-    r = saved(client, "ocr", clip, json={"ocr_text": words, "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": words, "lineage": _want(env, "lumiverb.image.text", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     return r
@@ -39,11 +39,11 @@ def test_ocr_doesnt_wait_for_a_description(env):
     lib = _library(env, "OcrFirst")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    assert _due(lib, "ocr") == [clip]  # handed out right away
+    assert _due(lib, "lumiverb.image.text") == [clip]  # handed out right away
     _ocr(lib, clip, "EXIT", sha)
     assert _detail(env, clip)["ocr_text"] == "EXIT"
-    assert _due(lib, "ocr") == []
-    assert _counts(lib, "ocr")["current"] == 1
+    assert _due(lib, "lumiverb.image.text") == []
+    assert _counts(lib, "lumiverb.image.text")["current"] == 1
 
 
 @pytest.mark.slow
@@ -58,7 +58,7 @@ def test_describing_again_leaves_ocr_alone(env):
     saved(client, "vision", clip, json={"model_id": "other", "description": "a sign"}, headers=headers)
     _describe(lib, clip, sha)
     assert _detail(env, clip)["ocr_text"] == "NO PARKING"
-    assert _due(lib, "ocr") == []
+    assert _due(lib, "lumiverb.image.text") == []
 
 
 @pytest.mark.slow
@@ -68,7 +68,7 @@ def test_no_text_is_an_answer_too(env):
     clip = _ingest_with(lib, "a.jpg", sha, None)
     _ocr(lib, clip, "", sha)
     assert _detail(env, clip).get("ocr_text") in ("", None)
-    assert _due(lib, "ocr") == []
+    assert _due(lib, "lumiverb.image.text") == []
 
 
 @pytest.mark.slow
@@ -79,11 +79,11 @@ def test_a_batch_doesnt_need_descriptions_either(env):
     r = client.post("/v1/assets/batch-ocr", json={
         "items": [{"asset_id": c, "ocr_text": f"TEXT {i}"} for i, c in enumerate(clips)] + [
             {"asset_id": "ast_nope", "ocr_text": "x"}],
-        "lineage": _want(env, "ocr", None)}, headers=headers)
+        "lineage": _want(env, "lumiverb.image.text", None)}, headers=headers)
     assert r.status_code == 200, r.text
     assert (r.json()["updated"], r.json()["skipped"]) == (2, 1)
     assert [_detail(env, c)["ocr_text"] for c in clips] == ["TEXT 0", "TEXT 1"]
-    assert _summary(lib)["missing_ocr"] == 0
+    assert _summary(lib)["missing"]["lumiverb.image.text"] == 0
 
 
 def _found(lib, words: str) -> list[str]:
@@ -169,7 +169,7 @@ def test_describing_again_keeps_the_ocr_in_its_search_document(env):
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
     _ocr(lib, clip, "NO ENTRY", None)
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "a door",
-                                                        "lineage": _want(env, "vision", None)}, headers=headers)
+                                                        "lineage": _want(env, "lumiverb.image.description", None)}, headers=headers)
     assert r.status_code == 200, r.text
     row = _search_row(env, clip)
     assert (row.ocr_text, row.described) == ("NO ENTRY", "a door")

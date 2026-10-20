@@ -39,7 +39,7 @@ def _transcribe(env, vid: str, srt: str, sha: str | None = None, source: str = "
     client, headers, *_ = env
     body = {"srt": srt, "language": "en", "source": source}
     if source != "manual":
-        body["lineage"] = _want(env, "transcript", sha)
+        body["lineage"] = _want(env, "lumiverb.video.transcript", sha)
     r = client.post(f"/v1/assets/{vid}/transcript", json=body, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["status"]
@@ -72,7 +72,7 @@ def test_a_persons_transcript_replaces_the_machines_and_keeps_no_copy(env):
     _transcribe(env, vid, SRT_MACHINE, sha)
     _transcribe(env, vid, SRT_PERSON, source="manual")
     assert _shown(env, vid) == {"srt": SRT_PERSON, "source": "manual"}
-    assert _row(env, vid, "transcript")[0] == P.PERSON
+    assert _row(env, vid, "lumiverb.video.transcript")[0] == P.PERSON
 
     # The machine never replaces it, and nothing of its output is kept.
     assert _transcribe(env, vid, SRT_MACHINE_2, sha) == "kept_manual"
@@ -81,8 +81,8 @@ def test_a_persons_transcript_replaces_the_machines_and_keeps_no_copy(env):
     # Removing theirs leaves none, and it's missing again: the machine makes one.
     _remove(env, vid)
     assert _shown(env, vid) == {"srt": None, "source": None}
-    assert _lineage_row(env, vid, "transcript") is None
-    assert _due(lib, "transcript") == [vid]
+    assert _lineage_row(env, vid, "lumiverb.video.transcript") is None
+    assert _due(lib, "lumiverb.video.transcript") == [vid]
     _transcribe(env, vid, SRT_MACHINE_2, sha)
     assert _shown(env, vid) == {"srt": SRT_MACHINE_2, "source": "whisper"}
 
@@ -102,7 +102,7 @@ def test_a_persons_transcript_over_no_speech_and_removed_is_made_again(env):
     _transcribe(env, vid, SRT_PERSON, source="manual")
     _remove(env, vid)
     assert _shown(env, vid)["srt"] is None
-    assert _due(lib, "transcript") == [vid]
+    assert _due(lib, "lumiverb.video.transcript") == [vid]
 
 
 @pytest.mark.slow
@@ -112,8 +112,8 @@ def test_removing_the_machines_transcript_is_for_good(env):
     _transcribe(env, vid, SRT_MACHINE, sha)
     _remove(env, vid, "machine")
     assert _shown(env, vid) == {"srt": None, "source": None}
-    assert _due(lib, "transcript") == []
-    assert _row(env, vid, "transcript")[0] == P.PERSON
+    assert _due(lib, "lumiverb.video.transcript") == []
+    assert _row(env, vid, "lumiverb.video.transcript")[0] == P.PERSON
 
 
 @pytest.mark.slow
@@ -136,7 +136,7 @@ def test_removing_without_saying_whose_removes_whats_shown(env):
     lib, vid, sha = _video(env, "CorrRemoveShown")
     _transcribe(env, vid, SRT_MACHINE, sha)
     _remove(env, vid, None)
-    assert _shown(env, vid)["srt"] is None and _due(lib, "transcript") == []
+    assert _shown(env, vid)["srt"] is None and _due(lib, "lumiverb.video.transcript") == []
     client, headers, *_ = env
     assert client.delete(f"/v1/assets/{vid}/transcript", params={"which": "all"},
                          headers=headers).status_code == 422
@@ -217,7 +217,7 @@ def _image(env, name: str) -> tuple[tuple, str, str]:
 def _describe_as(env, clip: str, description: str, tags: list[str], model: str = "qwen3-vl:8b"):
     client, headers, *_ = env
     r = saved(client, "vision", clip, json={"model_id": model, "description": description, "tags": tags,
-                                                        "lineage": _want(env, "vision", None)}, headers=headers)
+                                                        "lineage": _want(env, "lumiverb.image.description", None)}, headers=headers)
     assert r.status_code == 200, r.text
 
 
@@ -259,7 +259,7 @@ def test_a_persons_description_is_the_one_copy(env):
     assert _correct(env, clip, description=None).status_code == 200
     d = _detail(env, clip)
     assert d["ai_description"] is None and d["corrected"] == []
-    assert _due(lib, "vision") == [clip] and _lineage_row(env, clip, "vision") is None
+    assert _due(lib, "lumiverb.image.description") == [clip] and _lineage_row(env, clip, "lumiverb.image.description") is None
     _describe_as(env, clip, "a grey cat asleep", ["cat"])
     assert _detail(env, clip)["ai_description"] == "a grey cat asleep"
 
@@ -327,11 +327,11 @@ def test_undoing_every_edit_while_search_is_down_still_reaches_search(env, monke
 def test_a_persons_ocr_is_the_one_copy(env):
     client, headers, *_ = env
     lib, clip, sha = _image(env, "CorrOcr")
-    r = saved(client, "ocr", clip, json={"ocr_text": "PLATFORN 9", "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": "PLATFORN 9", "lineage": _want(env, "lumiverb.image.text", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     _correct(env, clip, ocr_text="PLATFORM 9")
-    r = saved(client, "ocr", clip, json={"ocr_text": "PLATF0RM 9", "lineage": _want(env, "ocr", sha)},
+    r = saved(client, "ocr", clip, json={"ocr_text": "PLATF0RM 9", "lineage": _want(env, "lumiverb.image.text", sha)},
                     headers=headers)
     assert r.status_code == 200, r.text
     d = _detail(env, clip)
@@ -340,7 +340,7 @@ def test_a_persons_ocr_is_the_one_copy(env):
         assert s.execute(text("SELECT text FROM asset_ocr WHERE asset_id = :a"), {"a": clip}).scalar() == ""
     _correct(env, clip, ocr_text=None)
     assert _detail(env, clip)["ocr_text"] is None
-    assert _due(lib, "ocr") == [clip]
+    assert _due(lib, "lumiverb.image.text") == [clip]
 
 
 @pytest.mark.slow
@@ -373,7 +373,7 @@ def test_a_clip_with_no_description_can_be_given_one_and_the_machine_leaves_it(e
     _describe_as(env, clip, "a building", ["building"])  # it was missing: the machine makes it
     d = _detail(env, clip)
     assert d["ai_description"] == "The old station" and d["ai_tags"] == ["station"]
-    assert _due(lib, "vision") == []
+    assert _due(lib, "lumiverb.image.description") == []
 
 
 @pytest.mark.slow
@@ -436,19 +436,19 @@ def test_text_a_person_wrote_isnt_read_again_or_counted_for_a_new_model(env, vis
     lib = _library(env, "CorrOcrTheirs")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    _made_old(lib, clip, sha, "ocr")
-    assert _redo_due(lib, "redo_ocr") == [clip]
+    _made_old(lib, clip, sha, "lumiverb.image.text")
+    assert _redo_due(lib, "redo:lumiverb.image.text") == [clip]
     assert _correct(lib, clip, ocr_text="PLATFORM 9").status_code == 200
-    assert _redo_due(lib, "redo_ocr") == []
+    assert _redo_due(lib, "redo:lumiverb.image.text") == []
     with _db(lib) as s:
-        assert lineage.made_by_a_producer(s, ["ocr"]).get("ocr", 0) == 0
+        assert lineage.made_by_a_producer(s, ["lumiverb.image.text"]).get("lumiverb.image.text", 0) == 0
     # On a clip never read, it isn't missing either: the reading would only be dropped.
     unread = _ingest_with(lib, "b.jpg", _sha(), None)
     _correct(lib, unread, ocr_text="EXIT")
-    assert unread not in _due(lib, "ocr")
+    assert unread not in _due(lib, "lumiverb.image.text")
     # Removed, it's the machine's to read again.
     _correct(lib, unread, ocr_text=None)
-    assert unread in _due(lib, "ocr")
+    assert unread in _due(lib, "lumiverb.image.text")
 
 
 @pytest.mark.slow
@@ -458,18 +458,18 @@ def test_a_description_and_tags_a_person_wrote_arent_described_again(env, vision
     lib = _library(env, "CorrVisionTheirs")
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    _made_old(lib, clip, sha, "vision")
+    _made_old(lib, clip, sha, "lumiverb.image.description")
     _correct(lib, clip, description="Mittens")
-    assert _redo_due(lib, "redo_vision") == [clip]  # the machine's tags are still its to redo
+    assert _redo_due(lib, "redo:lumiverb.image.description") == [clip]  # the machine's tags are still its to redo
     _correct(lib, clip, tags=["cat"])
-    assert _redo_due(lib, "redo_vision") == []
+    assert _redo_due(lib, "redo:lumiverb.image.description") == []
     unread = _ingest_with(lib, "b.jpg", _sha(), None)
     _correct(lib, unread, description="The old station", tags=["station"])
-    assert unread not in _due(lib, "vision")
+    assert unread not in _due(lib, "lumiverb.image.description")
     assert _detail(lib, unread)["ai_description"] == "The old station"
     # Removing the description makes it the machine's again; the person's tags stay theirs.
     _correct(lib, unread, description=None)
-    assert unread in _due(lib, "vision")
+    assert unread in _due(lib, "lumiverb.image.description")
     assert _detail(lib, unread)["ai_tags"] == ["station"]
 
 
@@ -481,7 +481,7 @@ def test_a_late_machine_transcript_doesnt_undo_removing_the_machines(env):
     _remove(env, vid, "machine")
     assert _transcribe(env, vid, SRT_MACHINE_2, sha) == "kept_manual"
     assert _shown(env, vid) == {"srt": None, "source": None}
-    assert _row(env, vid, "transcript")[0] == P.PERSON
+    assert _row(env, vid, "lumiverb.video.transcript")[0] == P.PERSON
     # A person's own goes on, as always.
     _transcribe(env, vid, SRT_PERSON, source="manual")
     assert _shown(env, vid)["srt"] == SRT_PERSON

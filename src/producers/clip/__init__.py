@@ -29,7 +29,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.PREVIEW,),
-    artifact="clip", producer="clip", version="1", media=IMAGE, title="Visual search (CLIP)", order=90,
+    artifact=names.LIKENESS, version="1", media=IMAGE, title="Visual search (CLIP)", order=90,
     applies="a.media_type = 'image'",
     made=("EXISTS (SELECT 1 FROM asset_embeddings ae WHERE ae.asset_id = a.asset_id"
           f" AND ae.model_id = '{CLIP_MODEL_ID}')"),
@@ -41,5 +41,5 @@ PRODUCER = ProducerSpec(
     ),
     uniform=True,
     # The CLIP job's machines (Settings › AI); on the server's GPU, the built-in one takes turns with faces.
-    kind="clip", flag="missing_embeddings", run="src.producers.clip.work:Clip", pool=CLIP,
+    run="src.producers.clip.work:Clip", pool=CLIP,
 )

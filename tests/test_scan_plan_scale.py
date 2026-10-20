@@ -25,8 +25,8 @@ from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared serve
 pytestmark = pytest.mark.slow
 
 SMALL, LARGE = 3000, 12000
-ARTIFACTS = ("proxy", "video_preview", "probe", "capture", "analysis_proxy", "clip", "faces", "vision", "ocr",
-             "scenes", "transcript", "video_faces")
+ARTIFACTS = ("lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy", "lumiverb.image.likeness", "lumiverb.image.faces", "lumiverb.image.description", "lumiverb.image.text",
+             "lumiverb.video.scenes", "lumiverb.video.transcript", "lumiverb.video.faces")
 
 
 def _library(session: Session, library_id: str, n: int) -> None:
@@ -48,7 +48,7 @@ def _library(session: Session, library_id: str, n: int) -> None:
             "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash, source_hash,"
             " produced_at) SELECT asset_id, :a, :p, :v, :h, content_hash, now() FROM assets WHERE library_id = :l"),
             {"a": artifact, "p": want["producer"], "v": want["version"], "l": library_id,
-             "h": "0000000000000000" if artifact == "proxy" else want["settings_hash"]})
+             "h": "0000000000000000" if artifact == "lumiverb.preview" else want["settings_hash"]})
     session.commit()
 
 

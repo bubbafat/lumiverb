@@ -115,15 +115,15 @@ class TestTimestampConversion:
 
 @pytest.mark.fast
 class TestMissingTranscriptionCondition:
-    """Verify the missing_transcription SQL condition."""
+    """Verify the transcripts' missing condition (its work list, by name: ADR-024)."""
 
     def test_condition_exists(self):
         from src.server.repository.assets import MISSING_CONDITIONS
-        assert "missing_transcription" in MISSING_CONDITIONS
+        assert "lumiverb.video.transcript" in MISSING_CONDITIONS
 
     def test_condition_checks_has_transcript(self):
         from src.server.repository.assets import MISSING_CONDITIONS
-        cond = MISSING_CONDITIONS["missing_transcription"]
+        cond = MISSING_CONDITIONS["lumiverb.video.transcript"]
         assert "NOT (a.has_transcript IS NOT NULL)" in cond  # missing: the reconciler's MADE, negated
         assert "media_type = 'video'" in cond
         assert "duration_sec IS NOT NULL" in cond
@@ -137,7 +137,7 @@ class TestCliConfig:
         from src.client.cli.config import CLIConfig
         from src.shared.producers import PRODUCERS
         assert "whisper_model" not in CLIConfig.model_fields
-        assert PRODUCERS["transcript"].defaults["model"] == "small"
+        assert PRODUCERS["lumiverb.video.transcript"].defaults["model"] == "small"
 
     def test_how_many_at_once_is_the_machines_not_the_workers(self):
         """Each AI machine's "at once" (Settings → AI); an older config's key is ignored."""
@@ -163,13 +163,12 @@ class TestHasTranscriptFlag:
 
 @pytest.mark.fast
 class TestRepairSummaryModel:
-    """Verify RepairSummary includes missing_transcription."""
+    """Verify RepairSummary says what's missing by name (ADR-024)."""
 
     def test_model_has_field(self):
         from src.server.api.routers.assets import RepairSummary
-        summary = RepairSummary()
-        assert hasattr(summary, "missing_transcription")
-        assert summary.missing_transcription == 0
+        summary = RepairSummary(missing={"lumiverb.video.transcript": 0})
+        assert summary.missing["lumiverb.video.transcript"] == 0
 
 
 @pytest.mark.fast

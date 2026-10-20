@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.producers.names import file_in
+from src.producers.names import file_in, made_by_file
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.devices import may_call
 from src.server.api.errors import ApiError
@@ -143,7 +143,7 @@ def record_kept(session: Session, asset_id: str, artifact_type: str, key: str, s
     elif artifact_type == "analysis_proxy":
         asset_repo.set_analysis_proxy(asset_id, key, sha256)
     if artifact_type in ("proxy", "video_preview", "analysis_proxy"):
-        record_lineage(session, asset_id, artifact_type, made)
+        record_lineage(session, asset_id, made_by_file(artifact_type), made)
 
 
 class ArtifactUploadResponse(BaseModel):
@@ -176,9 +176,10 @@ async def upload_artifact(
     artifact_type = file_in(artifact_type)  # by today's kind or the file's name (ADR-024)
     # Proxies, previews and analysis copies say how they were made, before
     # anything is saved; a thumbnail as the proxy's (one producer makes both).
-    made = require_lineage(lineage, artifact_type) if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None
+    made = (require_lineage(lineage, made_by_file(artifact_type))
+            if artifact_type in ("proxy", "video_preview", "analysis_proxy") else None)
     if artifact_type == "thumbnail":
-        require_lineage(lineage, "proxy")
+        require_lineage(lineage, made_by_file(artifact_type))  # the preview's
     if artifact_type not in ALLOWED_ARTIFACT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -263,11 +264,11 @@ async def upload_artifacts_batch(
     video_preview = video_preview or video_preview_named
 
     # Each proxy or preview sent says how it was made, before anything is saved.
-    by_kind = _per_kind(lineage)
-    made = {kind: require_lineage(by_kind.get(kind), kind)
+    by_name = _per_kind(lineage)  # by the name each file is of (its old id too, until ADR-024's part 5)
+    made = {kind: require_lineage(by_name.get(made_by_file(kind)), made_by_file(kind))
             for kind, sent in (("proxy", proxy), ("video_preview", video_preview)) if sent is not None}
-    if thumbnail is not None:  # a thumbnail is the proxy producer's too
-        require_lineage(by_kind.get("proxy"), "proxy")
+    if thumbnail is not None:  # a thumbnail is the preview's too
+        require_lineage(by_name.get(made_by_file("thumbnail")), made_by_file("thumbnail"))
     files: dict[str, UploadFile] = {}
     if proxy is not None:
         files["proxy"] = proxy
@@ -307,7 +308,7 @@ async def upload_artifacts_batch(
         elif artifact_type == "video_preview":
             asset_repo.set_video_preview(asset_id, video_preview_key=key)
         if artifact_type in ("proxy", "video_preview"):
-            record_lineage(session, asset_id, artifact_type, made[artifact_type])
+            record_lineage(session, asset_id, made_by_file(artifact_type), made[artifact_type])
 
         items.append(BatchArtifactItem(artifact_type=artifact_type, key=key, sha256=sha256, duration_sec=duration_sec))
 

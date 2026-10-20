@@ -122,7 +122,7 @@ def vision_env(tmp_path_factory):
 
 def _post(auth: _AuthClient, asset_id: str, **kwargs):
     body = {"model_id": "test-vision-model", "description": "a sunset", "tags": ["landscape"],
-            "lineage": made("vision")}
+            "lineage": made("lumiverb.image.description")}
     body.update(kwargs)
     return saved(auth, "vision", asset_id, json=body)
 
@@ -141,10 +141,10 @@ def test_happy_path(vision_env) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("kind", ["vision", "ocr", "embeddings"])
+@pytest.mark.parametrize("kind", ["vision", "ocr", "embeddings"])  # the routes' words, not names
 def test_the_per_clip_route_is_gone_naming_the_batch_one(vision_env, kind) -> None:
     auth, _, _, active_id, _, _, _ = vision_env
-    r = auth.post(f"/v1/assets/{active_id}/{kind}", json={"description": "a sunset", "lineage": made("vision")})
+    r = auth.post(f"/v1/assets/{active_id}/{kind}", json={"description": "a sunset", "lineage": made("lumiverb.image.description")})
     assert r.status_code == 410, r.text
     error = r.json()["error"]
     assert error["code"] == "gone" and error["details"]["replaced_by"] == [f"POST /v1/assets/batch-{kind}"]

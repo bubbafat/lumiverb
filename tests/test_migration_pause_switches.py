@@ -24,7 +24,10 @@ def _rows(engine) -> dict:
 
 @pytest.mark.migration
 def test_an_old_pause_all_becomes_every_switch_paused() -> None:
+    from src.producers.names import ARTIFACTS
     from src.shared.producers import pause_targets
+
+    old_id = {name: old for old, name in ARTIFACTS.items()}  # that time's ids (ADR-024)
 
     with PostgresContainer(PG_IMAGE) as pg:
         url = _ensure_psycopg2(pg.get_connection_url())
@@ -39,7 +42,8 @@ def test_an_old_pause_all_becomes_every_switch_paused() -> None:
         rows = _rows(engine)
         # no 'all' left; producers added since (capture, location, video_faces, place) have no row of that
         # time; Scans was a switch then (each library's since aec154348364)
-        assert set(rows) == {*pause_targets(), "scans"} - {"capture", "location", "video_faces", "place"}
+        assert set(rows) == {*(old_id.get(t, t) for t in pause_targets()), "scans"} - {
+            "capture", "location", "video_faces", "place"}
         assert rows["vision"] == "usr_2" and rows["scans"] == "usr_1" and rows["upkeep"] == "usr_1"
         _alembic(url, "downgrade", BEFORE)  # down: the rows stay, as switches
         assert "all" not in _rows(engine)

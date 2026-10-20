@@ -39,6 +39,7 @@ from typing import Any
 
 from src.producers import registry
 from src.producers.live import LiveSeq
+from src.producers.names import LIKENESS
 from src.server.scheduler.dispatch import Dispatcher, Job, Outcome
 from src.server.scheduler.kinds import AI_JOB_KINDS, KINDS, QUEUED
 from src.server.scheduler.queue import BUFFER
@@ -446,10 +447,9 @@ class Scheduler:
     def _plugins_not_running(self) -> dict[str, str]:
         """Each installed plug-in's work whose plug-in isn't running, and why (plugin_runner.not_ready), by
         artifact: what the runner said at most PLUGINS_EVERY_SEC ago."""
-        from src.producers import ADDED_PREFIX
         from src.server.plugin_runner import not_ready
 
-        theirs = {a: p.plugin for a, p in registry().items() if a.startswith(ADDED_PREFIX) and p.plugin}
+        theirs = {a: p.plugin for a, p in registry().items() if p.plugin}
         if not theirs:
             return {}
         if self._clock() - self._plugins_at >= PLUGINS_EVERY_SEC:
@@ -505,7 +505,7 @@ class Scheduler:
         mark = failures.mark() if hasattr(failures, "mark") else None
         outcome = self._run(acct, job)
         kind = self._kinds.get(job.kind)
-        if mark is None or kind is None or not kind.flag:
+        if mark is None or kind is None or not kind.artifact:
             return outcome, set()
         try:
             return outcome, set(failures.charged(kind.artifact, job.asset_ids, since=mark))
@@ -531,7 +531,7 @@ class Scheduler:
         except Stopped:
             return NOT_TRIED
         except Exception as e:  # noqa: BLE001 — a job's surprise is logged; its clips are tried again later
-            if not kind.flag:  # a scan's
+            if not kind.artifact:  # a scan's
                 logger.exception("scheduler: %s for %s failed", job.kind, job.tenant_id)
                 return list(job.asset_ids)
             # The clips that waited say why (a Waiting); the crashed ones are held (HELD).
@@ -626,10 +626,10 @@ def models_wanted(accounts: Any) -> set[str] | None:
     accounts = list(accounts)
     if not all_models_read(accounts):
         return None
-    clips = [(PRODUCERS["clip"].defaults["model"], PRODUCERS["clip"].defaults["pretrained"])]
+    clips = [(PRODUCERS[LIKENESS].defaults["model"], PRODUCERS[LIKENESS].defaults["pretrained"])]
     whispers = []
     for acct in accounts:
-        clip = acct.producers.settings("clip")
+        clip = acct.producers.settings(LIKENESS)
         clips.append((clip["model"], clip["pretrained"]))
         if model := acct.guards["transcripts"].model:
             whispers.append(model)
@@ -792,7 +792,7 @@ def held_kinds(paused: Any) -> set[str]:
     its switch; its redo kind for its redo alone."""
     held = set()
     for kind in KINDS.values():
-        if not kind.flag:
+        if not kind.artifact:
             if kind.name == "scan" and paused.scans_paused():
                 held.add(kind.name)
         elif kind.artifact in paused.work or (kind.redo and kind.artifact in paused.redo):

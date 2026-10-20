@@ -150,6 +150,9 @@ def system_health(request: Request, session: Annotated[Session, Depends(get_tena
         own = _row("own_plugins", "Lumiverb's own plug-ins", lambda: _own_plugins_row(now), db_error)
         if own is not None:
             rows.append(own)
+        left = _row("plugins", "Installed plug-ins", lambda: _plugins_row(now), db_error)
+        if left is not None:
+            rows.append(left)
 
     return SystemHealth(
         state=h.overall(rows),
@@ -283,6 +286,15 @@ def _previews_disk() -> dict | None:
             out["free"], out["total"] = usage.free, usage.total
     return out
 
+
+
+def _plugins_row(now: datetime) -> h.Row | None:
+    from src.server.database import get_control_session
+    from src.server.plugin_catalog import left_out
+    from src.server.repository.installed_plugins import InstalledPluginRepository
+
+    with get_control_session() as control:
+        return h.plugins_row(left_out=left_out(InstalledPluginRepository(control).all()), now=now)
 
 
 def _own_plugins_row(now: datetime) -> h.Row | None:

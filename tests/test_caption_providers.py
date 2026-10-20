@@ -135,7 +135,7 @@ def test_openai_provider_sends_the_settings_it_was_given() -> None:
     from src.processing.workers.captions.openai_caption import OpenAICompatibleCaptionProvider
     from src.shared.producers import effective_settings
 
-    settings = {**effective_settings("vision"), "prompt": "Say what you see.", "temperature": 0.7, "max_tokens": 99}
+    settings = {**effective_settings("lumiverb.image.description"), "prompt": "Say what you see.", "temperature": 0.7, "max_tokens": 99}
     p = OpenAICompatibleCaptionProvider("http://x/v1", "m", settings=settings)
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"choices": [{"message": {"content": "{}"}}]}

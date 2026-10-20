@@ -611,10 +611,10 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
     guessed = _ingest(client, api_key, library_id, "trips/guessed.jpg", media_type="image")
     guess = {"lat": 3.5, "lon": 4.5, "radius_m": 900, "basis": {"summary": "From iPhone photos at 14:02"}}
     minutes = client.get("/v1/producers", params={"counts": "false"}, headers=auth).json()
-    minutes = next(f["value"] for p in minutes["producers"] if p["artifact"] == "location"
+    minutes = next(f["value"] for p in minutes["producers"] if p["artifact"] == "lumiverb.location.guess"
                    for f in p["fields"] if f["key"] == "inference_minutes")
     r = client.put(f"/v1/assets/locations/guess/{guessed}",
-                   json={"guess": guess, "minutes": minutes, "lineage": made("location")}, headers=auth)
+                   json={"guess": guess, "minutes": minutes, "lineage": made("lumiverb.location.guess")}, headers=auth)
     assert r.json() == {"result": "stored"}, r.text
     # Kept with its fixes gone ("source removed"): no more public than any guess.
     _tenant_sql(client, api_key, "UPDATE asset_location SET basis = basis || '{\"basis_gone\": true}'"
@@ -633,7 +633,7 @@ def test_public_pages_show_no_guess_and_the_producers_routes_refuse_visitors(pub
     assert client.post("/v1/assets/locations/clocks", params=visitor,
                        json={"asset_ids": [guessed]}).status_code in (401, 403)
     assert client.put(f"/v1/assets/locations/guess/{guessed}", params=visitor,
-                      json={"guess": None, "minutes": minutes, "lineage": made("location")}).status_code in (401, 403)
+                      json={"guess": None, "minutes": minutes, "lineage": made("lumiverb.location.guess")}).status_code in (401, 403)
     # The library as the module's other tests have it.
     assert client.patch(f"/v1/libraries/{library_id}", json={"infer_location": False, "remove_guesses": True},
                         headers=auth).status_code == 200

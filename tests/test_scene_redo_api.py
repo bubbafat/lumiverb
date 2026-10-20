@@ -56,15 +56,15 @@ def _video_found_the_old_way(lib) -> tuple[str, str]:
                   {"a": vid})
         s.commit()
     assert _start(lib, vid).status_code == 200
-    old = {**_want(lib, "scenes", sha), "settings_hash": OLD}
+    old = {**_want(lib, "lumiverb.video.scenes", sha), "settings_hash": OLD}
     _find(lib, vid, old, [(0, 12000), (12000, 30000)])
     for scene in client.get(f"/v1/video/{vid}/scenes", headers=headers).json()["scenes"]:
         storage.write(storage.scene_rep_key(tenant_id, library_id, vid, scene["rep_frame_ms"]), b"jpeg")
         r = client.patch(f"/v1/video/scenes/{scene['scene_id']}", json={
             "model_id": "m", "model_version": "1", "description": "a dog", "tags": [],
-            "lineage": _want(lib, "scene_vision", sha)}, headers=headers)
+            "lineage": _want(lib, "lumiverb.video.scene_descriptions", sha)}, headers=headers)
         assert r.status_code == 200, r.text
-    assert _counts(lib, "scenes")["stale"] == 1 and _counts(lib, "scene_vision")["current"] == 1
+    assert _counts(lib, "lumiverb.video.scenes")["stale"] == 1 and _counts(lib, "lumiverb.video.scene_descriptions")["current"] == 1
     return vid, sha
 
 
@@ -82,7 +82,7 @@ def _describe(lib, vid: str, sha: str, scenes: list[dict], text_: str = "a cat")
         storage.write(storage.scene_rep_key(tenant_id, library_id, vid, scene["rep_frame_ms"]), b"new jpeg")
         answers.append(client.patch(f"/v1/video/scenes/{scene['scene_id']}", json={
             "model_id": "m", "model_version": "1", "description": text_, "tags": [],
-            "lineage": _want(lib, "scene_vision", sha)}, headers=headers))
+            "lineage": _want(lib, "lumiverb.video.scene_descriptions", sha)}, headers=headers))
     return answers
 
 
@@ -113,16 +113,16 @@ def _search_hit(lib, vid: str, words: str) -> tuple:
 def _lineage(lib, vid: str) -> set[str]:
     with _db(lib) as s:
         return {r[0] for r in s.execute(text("SELECT artifact FROM artifact_lineage WHERE asset_id = :a"
-                                             " AND artifact IN ('scenes', 'scene_vision')"), {"a": vid})}
+                                             " AND artifact IN ('lumiverb.video.scenes', 'lumiverb.video.scene_descriptions')"), {"a": vid})}
 
 
 def test_detail_is_the_one_scene_setting_offered(env):
     p = {x["artifact"]: x for x in env[0].get("/v1/producers", params={"counts": "false"},
-                                              headers=env[1]).json()["producers"]}["scenes"]
+                                              headers=env[1]).json()["producers"]}["lumiverb.video.scenes"]
     assert p["redoable"] is True and p["why_not"] is None
     assert [(f["key"], f["kind"], f["choices"], f["value"], f["remakes"]) for f in p["fields"]] == [
         ("detail", "level", ["low", "normal", "high"], "normal", False)]
-    assert p["level"] == 1 and p["part_of"] == "scene_vision" and p["settings"] == {}
+    assert p["level"] == 1 and p["part_of"] == "lumiverb.video.scene_descriptions" and p["settings"] == {}
 
 
 def test_scene_descriptions_and_video_faces_say_they_need_scenes(env):
@@ -130,10 +130,10 @@ def test_scene_descriptions_and_video_faces_say_they_need_scenes(env):
     # them isn't in their counts: the processing page says it waits for Scenes.
     listed = {x["artifact"]: x for x in env[0].get("/v1/producers", params={"counts": "false"},
                                                    headers=env[1]).json()["producers"]}
-    assert listed["scene_vision"]["needs"] == ["analysis_proxy", "scenes"]
-    assert listed["video_faces"]["needs"] == ["analysis_proxy", "scenes"]
-    assert listed["scenes"]["needs"] == ["analysis_proxy"]
-    assert listed["vision"]["needs"] == ["proxy"]
+    assert listed["lumiverb.video.scene_descriptions"]["needs"] == ["lumiverb.video.analysis_proxy", "lumiverb.video.scenes"]
+    assert listed["lumiverb.video.faces"]["needs"] == ["lumiverb.video.analysis_proxy", "lumiverb.video.scenes"]
+    assert listed["lumiverb.video.scenes"]["needs"] == ["lumiverb.video.analysis_proxy"]
+    assert listed["lumiverb.image.description"]["needs"] == ["lumiverb.preview"]
 
 
 def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_described(env, describer):
@@ -144,16 +144,16 @@ def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_desc
     image = {s["rep_frame_ms"]: storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, s["rep_frame_ms"]))
              for s in old}
     assert all(p.exists() for p in image.values())
-    assert _due(lib, "redo_scenes") == [vid]
+    assert _due(lib, "redo:lumiverb.video.scenes") == [vid]
 
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is False, r.text
     _find(lib, vid, new, [(0, 30000)])
     # Found: the clip still shows its old scenes, described, with their images.
     assert _scenes(lib, vid) == old and all(p.exists() for p in image.values())
-    assert _counts(lib, "scenes")["current"] == 1 and _lineage(lib, vid) == {"scenes"}
-    assert _counts(lib, "scene_vision")["missing"] == 1  # the new scene is described next
+    assert _counts(lib, "lumiverb.video.scenes")["current"] == 1 and _lineage(lib, vid) == {"lumiverb.video.scenes"}
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["missing"] == 1  # the new scene is described next
     (found,) = _scenes(lib, vid, describing=True)
     assert (found["start_ms"], found["end_ms"], found["description"]) == (0, 30000, None)
     assert _search_hit(lib, vid, "dog")[0] == "scene"  # the old ones are still found
@@ -166,21 +166,21 @@ def test_a_redo_finds_new_scenes_beside_the_old_ones_and_swaps_them_in_once_desc
     assert image[0].read_bytes() == b"new jpeg" and not image[12000].exists()
     assert _search_hit(lib, vid, "cat") == ("scene", 0, 30000, "a cat")
     assert vid not in _found(lib, "dog")
-    assert _lineage(lib, vid) == {"scenes", "scene_vision"}
-    assert _counts(lib, "scene_vision")["current"] == 1 and _counts(lib, "scenes")["current"] == 1
+    assert _lineage(lib, vid) == {"lumiverb.video.scenes", "lumiverb.video.scene_descriptions"}
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["current"] == 1 and _counts(lib, "lumiverb.video.scenes")["current"] == 1
 
 
 def test_with_nothing_to_describe_them_new_scenes_are_shown_once_found(env):
     lib = _library(env, "SceneRedoNoModel")
     vid, sha = _video_found_the_old_way(lib)
     assert _search_hit(lib, vid, "dog")[0] == "scene"
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 30000)])
     (shown,) = _scenes(lib, vid)
     assert (shown["start_ms"], shown["end_ms"], shown["description"]) == (0, 30000, None)
     assert vid not in _found(lib, "dog")  # the old ones went, and what they said with them
-    assert _lineage(lib, vid) == {"scenes"}  # described once a model is set
+    assert _lineage(lib, vid) == {"lumiverb.video.scenes"}  # described once a model is set
 
 
 def test_a_failed_redo_leaves_the_scenes_shown(env, describer):
@@ -188,19 +188,19 @@ def test_a_failed_redo_leaves_the_scenes_shown(env, describer):
     client, headers, *_ = lib
     vid, sha = _video_found_the_old_way(lib)
     old = _scenes(lib, vid)
-    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
+    assert _start(lib, vid, redo=True, lineage=_want(lib, "lumiverb.video.scenes", sha)).status_code == 200
     w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/fail", json={"worker_id": w["worker_id"],
                                                                     "error_message": "no frames"}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _scenes(lib, vid) == old and _lineage(lib, vid) == {"scenes", "scene_vision"}
+    assert _scenes(lib, vid) == old and _lineage(lib, vid) == {"lumiverb.video.scenes", "lumiverb.video.scene_descriptions"}
 
 
 def test_a_redo_sent_again_changes_nothing(env, describer):
     lib = _library(env, "SceneRedoTwice")
     vid, sha = _video_found_the_old_way(lib)
     old = _scenes(lib, vid)
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     # Under way beside the old ones: a second redo leaves the chunks to finish.
     client, headers, *_ = lib
@@ -216,14 +216,14 @@ def test_a_redo_sent_again_changes_nothing(env, describer):
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is True, r.text
     assert _scenes(lib, vid) == old and len(_scenes(lib, vid, describing=True)) == 1
-    assert _lineage(lib, vid) == {"scenes"}
+    assert _lineage(lib, vid) == {"lumiverb.video.scenes"}
 
 
 def test_another_redo_drops_the_last_ones_staged_never_the_ones_shown(env, describer):
     lib = _library(env, "SceneRedoAgain")
     vid, sha = _video_found_the_old_way(lib)
     old = _scenes(lib, vid)
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 30000)])
     # Found by a run with settings that aren't the account's now (then changed again).
@@ -231,7 +231,7 @@ def test_another_redo_drops_the_last_ones_staged_never_the_ones_shown(env, descr
         s.execute(text("UPDATE video_index_chunks SET run = jsonb_set(run, '{settings_hash}', '\"0ther\"')"
                        " WHERE asset_id = :a"), {"a": vid})
         s.execute(text("UPDATE artifact_lineage SET settings_hash = '0ther' WHERE asset_id = :a"
-                       " AND artifact = 'scenes'"), {"a": vid})
+                       " AND artifact = 'lumiverb.video.scenes'"), {"a": vid})
         s.commit()
     r = _start(lib, vid, redo=True, lineage=new)
     assert r.status_code == 200 and r.json()["already_initialized"] is False, r.text
@@ -251,7 +251,7 @@ def test_a_redo_must_say_how_the_scenes_will_be_found(env):
 
 def _detail(lib, value):
     client, headers, *_ = lib
-    r = client.put("/v1/producers/scenes/settings", json={"settings": {"detail": value}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.video.scenes/settings", json={"settings": {"detail": value}}, headers=headers)
     assert r.status_code == 200, r.text  # never a 409: a level redoes nothing by itself
 
 
@@ -265,13 +265,13 @@ def _found_at(lib, name: str, level: int) -> str:
                   {"a": vid})
         s.commit()
     assert _start(lib, vid).status_code == 200
-    _find(lib, vid, {**_want(lib, "scenes", sha), "level": level}, [(0, 30000)])
+    _find(lib, vid, {**_want(lib, "lumiverb.video.scenes", sha), "level": level}, [(0, 30000)])
     return vid
 
 
 def _level(lib, vid: str):
     with _db(lib) as s:
-        return s.execute(text("SELECT level FROM artifact_lineage WHERE asset_id = :a AND artifact = 'scenes'"),
+        return s.execute(text("SELECT level FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.video.scenes'"),
                          {"a": vid}).scalar()
 
 
@@ -283,7 +283,7 @@ def test_scenes_record_the_detail_they_were_found_at_and_must_say_it(env):
     other = _ingest_with(lib, "unsaid.mov", _sha(), None, media_type="video")
     assert _start(lib, other).status_code == 200
     w = client.post(f"/v1/video/{other}/chunks/next", headers=headers).json()
-    unsaid = {k: v for k, v in _want(lib, "scenes", None).items() if k != "level"}
+    unsaid = {k: v for k, v in _want(lib, "lumiverb.video.scenes", None).items() if k != "level"}
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete",
                     json={"worker_id": w["worker_id"], "scenes": [], "lineage": unsaid}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required", r.text
@@ -293,13 +293,13 @@ def test_raising_detail_redoes_nothing_and_counts_the_videos_below_it(env):
     lib = _library(env, "SceneUp")
     vid = _found_at(lib, "normal.mov", 1)
     try:
-        assert _counts(lib, "scenes")["current"] == 1
+        assert _counts(lib, "lumiverb.video.scenes")["current"] == 1
         _detail(lib, "high")
-        c = _counts(lib, "scenes")
+        c = _counts(lib, "lumiverb.video.scenes")
         assert (c["below"], c["current"], c["stale"], c["missing"]) == (1, 0, 0, 0)
-        assert _due(lib, "redo_scenes") == [] and _due(lib, "scenes") == []  # out of date, not redone
+        assert _due(lib, "redo:lumiverb.video.scenes") == [] and _due(lib, "lumiverb.video.scenes") == []  # out of date, not redone
         _detail(lib, "low")  # dialling down costs nothing: made higher is current
-        c = _counts(lib, "scenes")
+        c = _counts(lib, "lumiverb.video.scenes")
         assert (c["below"], c["current"]) == (0, 1)
     finally:
         _detail(lib, None)
@@ -310,23 +310,23 @@ def test_videos_below_the_detail_are_redone_only_when_asked_by_name_or_all(env):
     lib = _library(env, "SceneRedoBelow")
     client, headers, library_id, *_ = lib
     low, high = _found_at(lib, "low.mov", 0), _found_at(lib, "high.mov", 2)
-    url = "/v1/producers/scenes/below/redo"
+    url = "/v1/producers/lumiverb.video.scenes/below/redo"
     try:
         _detail(lib, "high")
-        assert _counts(lib, "scenes")["below"] == 1
+        assert _counts(lib, "lumiverb.video.scenes")["below"] == 1
         for body in ({}, {"asset_ids": [low], "all": True}):  # the target is named, never inferred
             r = client.post(url, json=body, headers=headers)
             assert r.status_code == 400 and r.json()["error"]["code"] == "scope_required", r.text
-        r = client.post("/v1/producers/transcript/below/redo", json={"all": True}, headers=headers)
+        r = client.post("/v1/producers/lumiverb.video.transcript/below/redo", json={"all": True}, headers=headers)
         assert r.status_code == 409 and r.json()["error"]["code"] == "no_level", r.text
         assert client.post(url, json={"asset_ids": [high]}, headers=headers).json()["redo"] == 0  # not below
-        assert _due(lib, "redo_scenes") == []
+        assert _due(lib, "redo:lumiverb.video.scenes") == []
         # Every one below in this library (the account's other libraries have theirs).
         r = client.post(url, json={"all": True, "library_id": library_id}, headers=headers)
         assert r.status_code == 200 and r.json()["redo"] == 1, r.text
-        c = _counts(lib, "scenes")
+        c = _counts(lib, "lumiverb.video.scenes")
         assert (c["below"], c["stale"]) == (0, 1)
-        assert _due(lib, "redo_scenes") == [low]  # redone as any redo is, at the detail now
+        assert _due(lib, "redo:lumiverb.video.scenes") == [low]  # redone as any redo is, at the detail now
     finally:
         _detail(lib, None)
 
@@ -346,7 +346,7 @@ def test_scenes_alike_are_merged_when_the_last_chunk_completes(env):
     # A talking head in two windows, then a cut to the beach, in two (Normal: alike within 40 bits).
     found = {0: [(0, 15000, bits(0)), (15000, 30000, bits(12))], 1: [(30000, 45000, bits(200)),
                                                                      (45000, 60000, bits(190))]}
-    made = _want(lib, "scenes", sha)
+    made = _want(lib, "lumiverb.video.scenes", sha)
     for _ in found:
         w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
         r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", json={
@@ -355,15 +355,15 @@ def test_scenes_alike_are_merged_when_the_last_chunk_completes(env):
                        for a, b, h in found[w["chunk_index"]]]}, headers=headers)
         assert r.status_code == 200, r.text
         if w["chunk_index"] == 0:  # not found yet: nothing described sees the four
-            assert len(_scenes(lib, vid)) == 2 and _counts(lib, "scene_vision")["applicable"] == 0
+            assert len(_scenes(lib, vid)) == 2 and _counts(lib, "lumiverb.video.scene_descriptions")["applicable"] == 0
     scenes = _scenes(lib, vid)
     assert [(s["start_ms"], s["end_ms"], s["rep_frame_ms"]) for s in scenes] == [(0, 30000, 1000),
                                                                                (30000, 60000, 31000)]
     with _db(lib) as s:
         assert [r[0] for r in s.execute(text("SELECT scene_index FROM video_scenes WHERE asset_id = :a"
                                              " ORDER BY start_ms"), {"a": vid})] == [0, 1]
-    assert _counts(lib, "scenes")["current"] == 1
-    assert _counts(lib, "scene_vision")["missing"] == 1  # the two kept are described next
+    assert _counts(lib, "lumiverb.video.scenes")["current"] == 1
+    assert _counts(lib, "lumiverb.video.scene_descriptions")["missing"] == 1  # the two kept are described next
 
 
 def test_a_redo_with_settings_that_arent_the_accounts_now_starts_nothing_over(env):
@@ -371,7 +371,7 @@ def test_a_redo_with_settings_that_arent_the_accounts_now_starts_nothing_over(en
     would record settings already stale and be done twice."""
     lib = _library(env, "SceneRedoOld")
     vid, sha = _video_found_the_old_way(lib)
-    r = _start(lib, vid, redo=True, lineage={**_want(lib, "scenes", sha), "settings_hash": "n0tn0w"})
+    r = _start(lib, vid, redo=True, lineage={**_want(lib, "lumiverb.video.scenes", sha), "settings_hash": "n0tn0w"})
     assert r.status_code == 409 and r.json()["error"]["code"] == "settings_changed", r.text
     assert len(_scenes(lib, vid)) == 2
 
@@ -383,7 +383,7 @@ def test_only_editors_start_a_clip_over(env):
     vid, sha = _video_found_the_old_way(lib)
     client, *_ = lib
     r = client.post(f"/v1/video/{vid}/chunks", json={"duration_sec": 30.0, "scene_sec": 30.0, "redo": True,
-                                                      "lineage": _want(lib, "scenes", sha)},
+                                                      "lineage": _want(lib, "lumiverb.video.scenes", sha)},
                     headers=_key_with_role(env, "viewer"))
     assert r.status_code == 403, r.text
     assert len(_scenes(lib, vid)) == 2
@@ -394,7 +394,7 @@ def test_a_chunk_from_before_the_redo_saves_nothing(env):
     client, headers, *_ = lib
     vid, sha = _video_found_the_old_way(lib)
     shown = _scenes(lib, vid)
-    old = {**_want(lib, "scenes", sha), "settings_hash": OLD}
+    old = {**_want(lib, "lumiverb.video.scenes", sha), "settings_hash": OLD}
     # An old run's chunk, claimed again before the redo began.
     with _db(lib) as s:
         s.execute(text("UPDATE video_index_chunks SET status = 'pending', worker_id = NULL WHERE asset_id = :a"),
@@ -404,7 +404,7 @@ def test_a_chunk_from_before_the_redo_saves_nothing(env):
     with _db(lib) as s:  # back to found, as the old run left it
         s.execute(text("UPDATE video_index_chunks SET status = 'completed' WHERE asset_id = :a"), {"a": vid})
         s.commit()
-    assert _start(lib, vid, redo=True, lineage=_want(lib, "scenes", sha)).status_code == 200
+    assert _start(lib, vid, redo=True, lineage=_want(lib, "lumiverb.video.scenes", sha)).status_code == 200
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
         "worker_id": w["worker_id"], "lineage": old,
         "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 0}]})
@@ -417,7 +417,7 @@ def _found_again_and_described(lib) -> tuple[str, str, list[dict]]:
     they're shown: its id, its hash, and the old scenes, gone now."""
     vid, sha = _video_found_the_old_way(lib)
     old = _scenes(lib, vid)
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 30000)])
     assert all(r.status_code == 200 for r in _describe(lib, vid, sha, _scenes(lib, vid, describing=True)))
@@ -431,7 +431,7 @@ def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer):
     vid, sha, old = _found_again_and_described(lib)
     r = client.patch(f"/v1/video/scenes/{old[0]['scene_id']}", json={
         "model_id": "m", "model_version": "1", "description": "late", "tags": [],
-        "lineage": _want(lib, "scene_vision", sha)}, headers=headers)
+        "lineage": _want(lib, "lumiverb.video.scene_descriptions", sha)}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "scene_gone", r.text
     assert _scenes(lib, vid)[0]["description"] == "a cat"
     assert vid not in _found(lib, "late") and _search_hit(lib, vid, "cat")[0] == "scene"
@@ -440,7 +440,7 @@ def test_describing_a_scene_that_was_dropped_says_its_gone(env, describer):
 def test_a_scene_found_again_is_searchable_once_its_shown(env, describer):
     lib = _library(env, "SceneStagedSync")
     vid, sha = _video_found_the_old_way(lib)
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 20000), (20000, 30000)])
     first, second = _scenes(lib, vid, describing=True)
@@ -473,13 +473,13 @@ def test_found_again_deletes_only_images_at_keys_the_server_makes(env, tmp_path,
     assert _start(lib, vid).status_code == 200
     w = client.post(f"/v1/video/{vid}/chunks/next", headers=headers).json()
     r = client.post(f"/v1/video/chunks/{w['chunk_id']}/complete", headers=headers, json={
-        "worker_id": w["worker_id"], "lineage": {**_want(lib, "scenes", sha), "settings_hash": OLD},
+        "worker_id": w["worker_id"], "lineage": {**_want(lib, "lumiverb.video.scenes", sha), "settings_hash": OLD},
         "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 30000, "rep_frame_ms": 5000,
                     "thumbnail_key": str(outside), "proxy_key": f"../{beside.name}"}]})
     assert r.status_code == 200, r.text
     image = storage.abs_path(storage.scene_rep_key(tenant_id, library_id, vid, 5000))
     storage.write(storage.scene_rep_key(tenant_id, library_id, vid, 5000), b"jpeg")
-    new = _want(lib, "scenes", sha)
+    new = _want(lib, "lumiverb.video.scenes", sha)
     assert _start(lib, vid, redo=True, lineage=new).status_code == 200
     _find(lib, vid, new, [(0, 30000)])
     assert all(r.status_code == 200 for r in _describe(lib, vid, sha, _scenes(lib, vid, describing=True)))

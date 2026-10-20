@@ -7,6 +7,7 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlmodel import Session, select
 
+from src.producers.names import FACES
 from src.server.after_commit import AfterCommit
 from src.server.models.tenant import (
     Asset,
@@ -79,7 +80,7 @@ def face_merge_epsilon(session: Session) -> float:
     merging close groups is off."""
     from src.server.repository import lineage
 
-    uses = lineage.uses(session, "faces")
+    uses = lineage.uses(session, FACES)
     return float(uses["merge_distance"]) if uses["merge_close_clusters"] else 0.0
 
 
@@ -298,7 +299,7 @@ def current_face_model(session: Session) -> str:
         return model
     tenant_id = session.info.get("tenant_id")
     models = account_job_models(tenant_id) if tenant_id else None
-    model = str(lineage.desired(session, "faces", models)["settings"].get("model") or "buffalo_l")
+    model = str(lineage.desired(session, FACES, models)["settings"].get("model") or "buffalo_l")
     session.info["face_model"] = model
     return model
 

@@ -59,14 +59,14 @@ beforeEach(() => {
     }
     if (path === "/system/network") return json({ available: true, other_devices: false, addresses: [] });
     if (path === "/producers") {
-      return json({ producers: [producer("faces", [levelField(detail)]), producer("video_faces", [levelField("low")]),
-                                producer("location", [{ key: "inference_minutes", label: "Inference window", kind: "int",
+      return json({ producers: [producer("lumiverb.image.faces", [levelField(detail)]), producer("lumiverb.video.faces", [levelField("low")]),
+                                producer("lumiverb.location.guess", [{ key: "inference_minutes", label: "Inference window", kind: "int",
                                                         value: 360, default: 360, minimum: 5, maximum: 1440, unit: "min",
                                                         advanced: false, fixed: null }])] });
     }
-    if (path === "/producers/faces/settings") {
+    if (path === "/producers/lumiverb.image.faces/settings") {
       detail = body.settings.detail;
-      return json(producer("faces", [levelField(detail)]));
+      return json(producer("lumiverb.image.faces", [levelField(detail)]));
     }
     if (path === "/libraries" && method === "POST") {
       return json({ library_id: "lib_1", name: body.name, root_path: body.root_path, is_public: false, cover_asset_id: null });
@@ -129,8 +129,8 @@ describe("WelcomePage", () => {
     expect(screen.queryByRole("checkbox", { name: /Guess places/ })).toBeNull(); // each library's, as it's added
     expect((photos as HTMLSelectElement).value).toBe("normal");
     fireEvent.change(photos, { target: { value: "high" } });
-    await vi.waitFor(() => expect(sent.some((s) => s.path === "/producers/faces/settings")).toBe(true));
-    expect(sent.find((s) => s.path === "/producers/faces/settings")?.body).toEqual({ settings: { detail: "high" } });
+    await vi.waitFor(() => expect(sent.some((s) => s.path === "/producers/lumiverb.image.faces/settings")).toBe(true));
+    expect(sent.find((s) => s.path === "/producers/lumiverb.image.faces/settings")?.body).toEqual({ settings: { detail: "high" } });
   });
 
   it("adds the first library, then finishing goes to it", async () => {

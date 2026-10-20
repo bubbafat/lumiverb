@@ -26,11 +26,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from src.producers.contract import AiJob, Pool, ProducerSpec
-from src.producers.names import FILES, LUMIVERB, NAME, ORIGINAL, needs_of, sql_spelling
+from src.producers.names import FILES, LUMIVERB, NAME, ORIGINAL, PLUGIN_ID, needs_of, sql_spelling
 from src.producers.pools import SCANS
-
-# An added producer's artifact starts with this; none of Lumiverb's own does.
-ADDED_PREFIX = "plugin_"
 
 _registry: dict[str, ProducerSpec] | None = None  # Lumiverb's own, found in this package
 _added: dict[str, ProducerSpec] = {}  # added while running, by artifact
@@ -112,12 +109,11 @@ def use_added(specs: Iterable[ProducerSpec], by: str = INSTALLED) -> bool:
 
 
 def _check_added(p: ProducerSpec, own: dict[str, ProducerSpec]) -> None:
-    """An added producer is a plug-in's work, which the scheduler runs from
-    what Lumiverb keeps: it reads no original, makes nothing at a scan, uses no
-    AI job, can always be made again and is no part of another."""
-    if not p.artifact.startswith(ADDED_PREFIX) or p.artifact in own:
-        raise ValueError(f"{p.artifact}: an added producer's artifact starts with {ADDED_PREFIX!r}"
-                         " and is none of Lumiverb's own")
+    """An added producer is a plug-in's work, named by its plug-in's id (ADR-024), which the scheduler runs from
+    what Lumiverb keeps: it reads no original, makes nothing at a scan, uses no AI job, can always be made again
+    and is no part of another."""
+    if not (PLUGIN_ID.match(p.artifact) and p.artifact == p.plugin) or p.artifact in own:
+        raise ValueError(f"{p.artifact}: an added producer's artifact is its plug-in's id, none of Lumiverb's own")
     if not p.scheduled or p.storage or p.made_at_scan or p.job or p.cant_redo or p.part_of or p.regroup \
             or p.uniform or p.redo_also:
         raise ValueError(f"{p.artifact}: an added producer is run by the scheduler from what Lumiverb keeps"
@@ -135,20 +131,17 @@ def _check(found: list[ProducerSpec], added: frozenset[str] = frozenset()) -> No
     from src.processing.machine import Machine
 
     for p in found:
-        if p.artifact.startswith(ADDED_PREFIX) and p.artifact not in added:
-            raise ValueError(f"{p.artifact}: {ADDED_PREFIX!r} starts only a plug-in's work's artifact")
-    for field in ("artifact", "kind", "flag"):
-        values = [getattr(p, field) for p in found if getattr(p, field)]
-        if len(set(values)) != len(values):
-            raise ValueError(f"Two producers share a {field}: {sorted(values)}")
+        if p.artifact not in added and not NAME.match(p.artifact):
+            raise ValueError(f"{p.artifact}: one of Lumiverb's own producers is named by what it makes (a name)")
+    artifacts = [p.artifact for p in found]
+    if len(set(artifacts)) != len(artifacts):
+        raise ValueError(f"Two producers share a artifact: {sorted(artifacts)}")
     pools: dict[str, Pool] = {SCANS.name: SCANS}
     jobs: dict[str, AiJob] = {}
     job_pools: dict[str, str] = {}
     for p in found:
-        if p.scheduled and not (p.flag and p.run and ":" in p.run and p.pool):
-            raise ValueError(f"{p.artifact}: a producer the scheduler runs needs a flag, a run and a pool")
-        if p.flag and not p.flag.startswith("missing_"):
-            raise ValueError(f"{p.artifact}: its flag is a missing_* filter, not {p.flag!r}")
+        if (p.scheduled or p.pool is not None) and not (":" in p.run and p.pool):
+            raise ValueError(f"{p.artifact}: a producer the scheduler runs needs a run and a pool")
         if p.unit not in ("second", "clip"):
             raise ValueError(f"{p.artifact}: its unit is a second (of video) or a clip, not {p.unit!r}")
         levels = [s for s in p.settings if s.kind == "level"]
@@ -210,6 +203,8 @@ def _check_names(found: list[ProducerSpec], added: frozenset[str] = frozenset())
                              f" ({'lumiverb.' + want + '.*' if want else 'no media level'})")
         if name in made:
             raise ValueError(f"{p.artifact}: {name} is made by {made[name]} already")
+        if name != p.artifact:
+            raise ValueError(f"{p.artifact}: a producer's artifact is the name of what it makes, {name}")
         if p.storage and ORIGINAL not in p.reads:
             raise ValueError(f"{p.artifact}: it reads the originals (storage=True): its reads say {ORIGINAL}")
         made[name] = p.artifact

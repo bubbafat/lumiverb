@@ -46,40 +46,40 @@ def _fail_times(env, clip: str, artifact: str, n: int, error: str = "the model s
 def test_a_clip_is_given_up_after_ten_tries(env):
     lib = _library(env, "GiveUp")
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    _fail_times(lib, clip, "vision", 9)
+    _fail_times(lib, clip, "lumiverb.image.description", 9)
     with _db(lib) as s:
         attempts, retry_at = s.execute(text("SELECT attempts, retry_at FROM artifact_lineage"
-                                            " WHERE asset_id = :a AND artifact = 'vision'"), {"a": clip}).one()
+                                            " WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"), {"a": clip}).one()
     assert attempts == 9 and retry_at.year < 9999  # still tried again
-    _fail_times(lib, clip, "vision", 1, "the tenth time")
-    counts = _counts(lib, "vision")
+    _fail_times(lib, clip, "lumiverb.image.description", 1, "the tenth time")
+    counts = _counts(lib, "lumiverb.image.description")
     assert counts["failing"] == 1 and counts["given_up"] == 1
     [item] = _failures(lib, library_id=lib[2])["items"]
     assert item["given_up"] is True and item["retry_at"] is None and item["attempts"] == 10
     assert item["error"] == "the tenth time"  # the last error
-    assert _due(lib, "vision") == []
+    assert _due(lib, "lumiverb.image.description") == []
 
 
 def test_failing_clips_are_listed_with_why_newest_first(env):
     lib = _library(env, "FailList")
     a = _ingest_with(lib, "Day 1/a.jpg", _sha(), None)
     b = _ingest_with(lib, "Day 1/b.jpg", _sha(), None)
-    assert _fail(lib, [{"asset_id": a, "artifact": "ocr", "error": "first"}]).status_code == 200
-    assert _fail(lib, [{"asset_id": b, "artifact": "vision", "error": "second"}]).status_code == 200
+    assert _fail(lib, [{"asset_id": a, "artifact": "lumiverb.image.text", "error": "first"}]).status_code == 200
+    assert _fail(lib, [{"asset_id": b, "artifact": "lumiverb.image.description", "error": "second"}]).status_code == 200
     items = _failures(lib, library_id=lib[2])["items"]
-    assert [(i["asset_id"], i["artifact"]) for i in items] == [(b, "vision"), (a, "ocr")]
+    assert [(i["asset_id"], i["artifact"]) for i in items] == [(b, "lumiverb.image.description"), (a, "lumiverb.image.text")]
     first = items[1]
     assert first["title"] == "Text in images (OCR)" and first["rel_path"] == "Day 1/a.jpg"
     assert first["library_name"] == "FailList" and first["media_type"] == "image"
     assert first["attempts"] == 1 and first["given_up"] is False and first["retry_at"] and first["failed_at"]
-    assert [i["asset_id"] for i in _failures(lib, library_id=lib[2], artifact="ocr")["items"]] == [a]
+    assert [i["asset_id"] for i in _failures(lib, library_id=lib[2], artifact="lumiverb.image.text")["items"]] == [a]
 
 
 def test_the_list_pages(env):
     lib = _library(env, "FailPages")
     clips = [_ingest_with(lib, f"{i}.jpg", _sha(), None) for i in range(3)]
     for c in clips:
-        _fail(lib, [{"asset_id": c, "artifact": "vision", "error": "no"}])
+        _fail(lib, [{"asset_id": c, "artifact": "lumiverb.image.description", "error": "no"}])
     page = _failures(lib, library_id=lib[2], limit=2)
     assert len(page["items"]) == 2 and page["next_cursor"]
     rest = _failures(lib, library_id=lib[2], limit=2, after=page["next_cursor"])
@@ -92,9 +92,9 @@ def test_a_clip_made_at_last_leaves_the_list(env):
     client, headers, *_ = lib
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    _fail(lib, [{"asset_id": clip, "artifact": "vision", "error": "no"}])
+    _fail(lib, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "no"}])
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "a dog",
-                                                        "lineage": _want(lib, "vision", sha)}, headers=headers)
+                                                        "lineage": _want(lib, "lumiverb.image.description", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     assert _failures(lib, library_id=lib[2])["items"] == []
 
@@ -104,18 +104,18 @@ def test_trying_again_starts_the_back_off_over_given_up_or_not(env):
     client, headers, *_ = lib
     gave_up = _ingest_with(lib, "a.jpg", _sha(), None)
     waiting = _ingest_with(lib, "b.jpg", _sha(), None)
-    _fail_times(lib, gave_up, "vision", 10)
-    _fail(lib, [{"asset_id": waiting, "artifact": "vision", "error": "no"}])
-    assert _due(lib, "vision") == []
+    _fail_times(lib, gave_up, "lumiverb.image.description", 10)
+    _fail(lib, [{"asset_id": waiting, "artifact": "lumiverb.image.description", "error": "no"}])
+    assert _due(lib, "lumiverb.image.description") == []
     r = client.post("/v1/producers/failures/retry", json={"asset_ids": [gave_up]}, headers=headers)
     assert r.status_code == 200 and r.json() == {"retried": 1}
-    assert _due(lib, "vision") == [gave_up]
+    assert _due(lib, "lumiverb.image.description") == [gave_up]
     item = [i for i in _failures(lib, library_id=lib[2])["items"] if i["asset_id"] == gave_up][0]
     assert item["attempts"] == 0 and item["given_up"] is False  # the last error stays until it's made
-    r = client.post("/v1/producers/failures/retry", json={"artifact": "vision", "library_id": lib[2], "all": True},
+    r = client.post("/v1/producers/failures/retry", json={"artifact": "lumiverb.image.description", "library_id": lib[2], "all": True},
                     headers=headers)
     assert r.json() == {"retried": 2}
-    assert sorted(_due(lib, "vision")) == sorted([gave_up, waiting])
+    assert sorted(_due(lib, "lumiverb.image.description")) == sorted([gave_up, waiting])
     with _db(lib) as s:
         assert s.execute(text("SELECT value FROM system_metadata WHERE key = 'scheduler.retry_at'")).scalar()
 
@@ -126,7 +126,7 @@ def test_who_sees_and_who_tries_again(env):
     lib = _library(env, "FailRoles")
     client, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    _fail(lib, [{"asset_id": clip, "artifact": "vision", "error": "no"}])
+    _fail(lib, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "no"}])
     viewer, editor = _key_with_role(env, "viewer"), _key_with_role(env, "editor")
     assert client.get("/v1/producers/failures", params={"library_id": lib[2]}, headers=viewer).status_code == 200
     assert client.post("/v1/producers/failures/retry", json={"asset_ids": [clip]}, headers=viewer).status_code == 403
@@ -143,7 +143,7 @@ def test_a_trashed_clip_isnt_listed_or_tried_again(env):
     lib = _library(env, "FailTrashed")
     client, headers, *_ = lib
     clip = _ingest_with(lib, "a.jpg", _sha(), None)
-    _fail(lib, [{"asset_id": clip, "artifact": "vision", "error": "no"}])
+    _fail(lib, [{"asset_id": clip, "artifact": "lumiverb.image.description", "error": "no"}])
     with _db(lib) as s:
         s.execute(text("UPDATE assets SET deleted_at = now(), deleted_reason = 'user' WHERE asset_id = :a"),
                   {"a": clip})

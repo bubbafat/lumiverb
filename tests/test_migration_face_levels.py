@@ -38,7 +38,7 @@ def test_its_hashes_are_the_code_s():
 
     m = _migration()
     assert m._hash(m.OLD_DEFAULTS) == "8a9e204f61973fa2"
-    assert m._hash(m.NEW_SETTINGS) == settings_hash(effective_settings("faces"))
+    assert m._hash(m.NEW_SETTINGS) == settings_hash(effective_settings("lumiverb.image.faces"))
 
 
 @pytest.mark.migration
@@ -103,7 +103,7 @@ def test_faces_found_as_the_account_had_them_are_current_at_normal() -> None:
         # (today's server reads today's schema: migrated on to the latest first).
         _alembic(url, "upgrade", "head")
         with Session(engine) as session:
-            counts = lineage.counts(session, "faces", lineage.desired(session, "faces"))
+            counts = lineage.counts(session, "lumiverb.image.faces", lineage.desired(session, "lumiverb.image.faces"))
         assert (counts["current"], counts["stale"], counts["below"]) == (2, 1, 0)  # made_then, and the person's
 
         _alembic(url, "downgrade", BEFORE)

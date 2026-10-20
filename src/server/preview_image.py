@@ -10,6 +10,7 @@ import io
 
 from PIL import Image, ImageOps
 
+from src.producers.names import PREVIEW
 from src.server.images import NotAnImageError, decoded  # noqa: F401 — what these raise
 
 THUMBNAIL_LONG_EDGE = 512
@@ -23,7 +24,7 @@ def quality(session) -> int:
     thumbnails, ADR-018 decision 6)."""
     from src.server.repository import lineage
 
-    return int(lineage.desired(session, "proxy")["settings"].get("webp_quality", WEBP_QUALITY))
+    return int(lineage.desired(session, PREVIEW)["settings"].get("webp_quality", WEBP_QUALITY))
 
 
 def thumbnail(proxy: bytes, quality: int = WEBP_QUALITY) -> bytes:

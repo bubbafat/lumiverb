@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.producers.names import SCENE_DESCRIPTIONS
 from src.producers.runner import Waits, Work
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def described(scene: dict, lineage: dict | None) -> bool:
     if lineage is None or "lineage" not in scene:
         return True
     made = scene.get("lineage") or {}
-    theirs, ours = (producer_in("scene_vision", str(x.get("producer"))) for x in (made, lineage))
+    theirs, ours = (producer_in(SCENE_DESCRIPTIONS, str(x.get("producer"))) for x in (made, lineage))
     return theirs == ours and all(made.get(k) == lineage.get(k) for k in ("version", "settings_hash"))
 
 
@@ -49,7 +50,7 @@ class Scene:
 
 
 class SceneVision(Work):
-    artifact = "scene_vision"
+    artifact = SCENE_DESCRIPTIONS
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

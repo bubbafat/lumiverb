@@ -1,11 +1,14 @@
-"""Lumiverb's data, named (ADR-024 phase 1 part 1): each producer's `makes` and
+"""Lumiverb's data, named (ADR-024 phase 1): each producer's `makes` and
 `reads`, what Lumiverb keeps itself (src/producers/names.py), and what's
 worked out from them.
 
-Part 1 changes nothing the scheduler or the database works out: the registry
-is held to what it was before names (tests/fixtures/producers_before_names.json,
-written from main), and what each producer reads to the SQL that decides
-whether it's due. The registry's own refusals are in test_producer_contract.py.
+The names change nothing the scheduler works out but its words: the
+registry is held to what it was before names (tests/fixtures/
+producers_before_names.json, written from main before part 1), each old word
+read as its name through RENAMED, and what each producer reads to the SQL
+that decides whether it's due. The registry's own refusals are in
+test_producer_contract.py; the migration that renamed what's stored (part 3),
+test_migration_names_stored.py.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from src.producers.names import (
     artifact_in,
     file_in,
     is_reserved,
+    kind_in,
     makers,
     needs_of,
     page,
@@ -46,30 +50,61 @@ BEFORE = REPO / "tests" / "fixtures" / "producers_before_names.json"
 
 
 def _now() -> dict:
-    """What tests/fixtures/producers_before_names.json holds, as worked out now."""
+    """What tests/fixtures/producers_before_names.json holds, as worked out now (by name)."""
     from src.server.repository.lineage import APPLIES, MADE, RECHECK
     from src.server.scheduler.kinds import AI_JOB_KINDS
     from src.server.scheduler.kinds import KINDS as SCHEDULER_KINDS
-    from src.shared.producers import MISSING_FLAGS, pause_targets
+    from src.shared.producers import SCHEDULED, pause_targets
 
-    out = {"producers": {}, "kinds": {}, "missing_flags": dict(MISSING_FLAGS), "pause_targets": list(pause_targets()),
+    out = {"producers": {}, "kinds": {}, "scheduled": sorted(SCHEDULED), "pause_targets": list(pause_targets()),
            "applies": dict(APPLIES), "made": dict(MADE), "recheck": dict(RECHECK),
            "ai_job_kinds": {k: list(v) for k, v in AI_JOB_KINDS.items()}}
     for a, p in registry().items():
-        out["producers"][a] = {"producer": p.producer, "needs": list(p.needs), "part_of": p.part_of,
-                               "redo_also": list(p.redo_also), "tier": p.tier, "kind": p.kind, "flag": p.flag,
-                               "pool": p.pool.name if p.pool else None, "media": list(p.media),
+        out["producers"][a] = {"needs": list(p.needs), "part_of": p.part_of, "redo_also": list(p.redo_also),
+                               "tier": p.tier, "pool": p.pool.name if p.pool else None, "media": list(p.media),
                                "made_at_scan": p.made_at_scan, "storage": p.storage}
     for n, k in SCHEDULER_KINDS.items():
-        out["kinds"][n] = {"flag": k.flag, "storage": k.storage, "redo": k.redo, "tier": k.spec.tier,
+        out["kinds"][n] = {"artifact": k.artifact, "storage": k.storage, "redo": k.redo, "tier": k.spec.tier,
                            "pool": k.spec.pool, "batch": k.spec.batch, "same_as": k.spec.same_as,
                            "by_seconds": k.spec.by_seconds}
     return out
 
 
+def _sql_named(sql: str) -> str:
+    """Main's SQL with each artifact, producer and settings key it names as it's named now."""
+    for (old, producer), name in PRODUCERS.items():
+        sql = re.sub(rf"(\bartifact = )'{re.escape(old)}'", rf"\1'{name}'", sql)
+        sql = re.sub(rf"(\bproducer = )'{re.escape(producer)}'", rf"\1'{name}'", sql)
+        sql = sql.replace(f"'producer.{old}'", f"'producer.{name}'")
+    return sql
+
+
+def _before_named() -> dict:
+    """tests/fixtures/producers_before_names.json, each old word as its name (RENAMED)."""
+    before = json.loads(BEFORE.read_text())
+    return {
+        "producers": {artifact_in(a): {"needs": [artifact_in(n) for n in p["needs"]],
+                                       "part_of": artifact_in(p["part_of"]) if p["part_of"] else "",
+                                       "redo_also": [artifact_in(n) for n in p["redo_also"]], "tier": p["tier"],
+                                       "pool": p["pool"], "media": p["media"], "made_at_scan": p["made_at_scan"],
+                                       "storage": p["storage"]}
+                      for a, p in before["producers"].items()},
+        "kinds": {kind_in(n): {"artifact": artifact_in(before["missing_flags"][k["flag"]]) if k["flag"] else "",
+                               "storage": k["storage"], "redo": k["redo"], "tier": k["tier"], "pool": k["pool"],
+                               "batch": k["batch"], "same_as": kind_in(k["same_as"]) if k["same_as"] else "",
+                               "by_seconds": k["by_seconds"]} for n, k in before["kinds"].items()},
+        "scheduled": sorted(artifact_in(a) for a in before["missing_flags"].values()),
+        "pause_targets": [artifact_in(t) for t in before["pause_targets"]],
+        **{rule: {artifact_in(a): _sql_named(sql) for a, sql in before[rule].items()}
+           for rule in ("applies", "made", "recheck")},
+        "ai_job_kinds": {job: [kind_in(k) for k in kinds] for job, kinds in before["ai_job_kinds"].items()},
+    }
+
+
 def test_the_registry_works_out_what_it_did_before_names():
-    # needs worked out from reads, the same as declared before; nothing queued, paused or kept differently.
-    assert _now() == json.loads(BEFORE.read_text())
+    # needs worked out from reads, the same as declared before; nothing queued, paused or kept differently: only
+    # each word is its name now (ADR-024 part 3).
+    assert _now() == _before_named()
 
 
 # What a producer's SQL may read that's no one's data: the clip's own row, the library's switch, the lineage
@@ -109,30 +144,43 @@ def test_every_name_is_made_once_and_spelt_once_for_sql():
 
 
 def test_renamed_is_the_registry():
-    # Each family's old words, as the registry and the routes have them today.
+    # Each family's old words, to the names the registry has: every name one of them, and main's words.
     from src.server.api.routers.artifacts import ALLOWED_ARTIFACT_TYPES
+    from src.server.scheduler.kinds import KINDS as SCHEDULER_KINDS
 
-    own = [p for p in registry().values() if not p.plugin]
-    assert dict(ARTIFACTS) == {p.artifact: p.makes.name for p in own}
-    assert dict(PRODUCERS) == {(p.artifact, p.producer): p.makes.name for p in own}
-    assert dict(KINDS) == {p.kind: p.makes.name for p in own if p.kind}
+    before = json.loads(BEFORE.read_text())
+    own = {a for a, p in registry().items() if not p.plugin}
+    assert dict(ARTIFACTS) == {a: artifact_in(a) for a in before["producers"]} and set(ARTIFACTS.values()) == own
+    assert set(PRODUCERS) == {(a, p["producer"]) for a, p in before["producers"].items()}
+    assert all(name == ARTIFACTS[a] for (a, _), name in PRODUCERS.items())
+    assert set(KINDS) == {p["kind"] for p in before["producers"].values() if p["kind"]}
+    assert {KINDS[k] for k in KINDS} == {k for k in SCHEDULER_KINDS if k != "scan" and not k.startswith("redo:")}
     assert set(FILES.values()) == ALLOWED_ARTIFACT_TYPES
     assert all(f in makers() or f.rpartition(".")[0] in makers() for f in FILES)
     assert set(RENAMED) == {"artifact", "producer", "kind", "file"}
     assert RENAMED["file"] == {old: new for new, old in FILES.items()}
 
 
-def test_either_spelling_comes_in_as_todays():
-    assert artifact_in("lumiverb.image.text") == artifact_in("ocr") == "ocr"
-    assert artifact_in("lumiverb.video.analysis_proxy") == "analysis_proxy"
-    assert artifact_in("plugin_facts") == "plugin_facts"  # a plug-in's work is its own until part 3
-    assert file_in("lumiverb.preview") == file_in("proxy") == "proxy"
+def test_either_spelling_comes_in_as_its_name():
+    # From part 3 what's stored and sent is the name; an old word is taken until part 5.
+    assert artifact_in("lumiverb.image.text") == artifact_in("ocr") == "lumiverb.image.text"
+    assert artifact_in("analysis_proxy") == "lumiverb.video.analysis_proxy"
+    assert artifact_in("plugin_facts") == artifact_in("facts") == "facts"  # a plug-in's work, its id
+    assert artifact_in("plugin_my_tool") == "my-tool"  # each underscore was a dash
+    assert artifact_in("upkeep") == "upkeep" and artifact_in("all") == "all"
+    assert file_in("lumiverb.preview") == file_in("proxy") == "proxy"  # files keep their kinds until part 4
     assert file_in("lumiverb.preview.thumbnail") == "thumbnail"
     assert file_in("lumiverb.video.scenes.picture") == "scene_rep"
-    assert producer_in("faces", "lumiverb.image.faces") == producer_in("faces", "insightface") == "insightface"
-    # A name is mapped only for the artifact it's made for; another producer (a person's) as it came.
-    assert producer_in("vision", "lumiverb.image.faces") == "lumiverb.image.faces"
-    assert producer_in("vision", "manual") == "manual"
+    assert producer_in("lumiverb.image.faces", "insightface") == producer_in("faces", "insightface") \
+        == producer_in("faces", "lumiverb.image.faces") == "lumiverb.image.faces"
+    assert producer_in("facts", "plugin_facts") == "facts"
+    # Only the producer that makes it now, for its own artifact; another (an older one, a person's) as it came.
+    assert producer_in("lumiverb.image.description", "insightface") == "insightface"
+    assert producer_in("lumiverb.image.description", "manual") == "manual"
+    assert kind_in("render") == "lumiverb.video.analysis_proxy"
+    assert kind_in("redo_vision") == "redo:lumiverb.image.description"
+    assert kind_in("plugin_facts") == "facts" and kind_in("redo_plugin_facts") == "redo:facts"
+    assert kind_in("scan") == "scan" and kind_in("lumiverb.image.text") == "lumiverb.image.text"
 
 
 def test_needs_are_the_artifacts_its_reads_are_made_by():
@@ -149,10 +197,13 @@ def test_what_a_person_writes_is_what_corrections_keep():
     from src.server.repository.corrections import FIELDS
 
     written = {a: p.makes.person for a, p in registry().items() if p.makes.person}
-    assert set(written) == {*FIELDS.values(), "transcript"}
-    assert {f: a for f, a in FIELDS.items()} == {"description": "vision", "tags": "vision", "ocr_text": "ocr"}
-    assert written["vision"] == ("description", "tags") and written["ocr"] == ("text",)
-    assert written["transcript"] == ("language", "segments")
+    assert set(written) == {*FIELDS.values(), "lumiverb.video.transcript"}
+    assert {f: a for f, a in FIELDS.items()} == {
+        "description": "lumiverb.image.description", "tags": "lumiverb.image.description",
+        "ocr_text": "lumiverb.image.text"}
+    assert written["lumiverb.image.description"] == ("description", "tags")
+    assert written["lumiverb.image.text"] == ("text",)
+    assert written["lumiverb.video.transcript"] == ("language", "segments")
     assert {"language", "srt"} <= set(TranscriptSubmitRequest.model_fields)
     for a, fields in written.items():
         assert set(fields) <= {f.key for f in registry()[a].makes.fields}, a
@@ -172,14 +223,14 @@ def test_a_plug_ins_inputs_are_names_and_it_is_handed_them_as_before():
     assert spec.reads == ("lumiverb.preview", "lumiverb.location", "lumiverb.capture_time") and spec.needs == ()
     try:
         use_added([spec], by="test_data_names")
-        added = registry()["plugin_facts"]
+        added = registry()["facts"]  # its work by its plug-in's id
         # The preview's producer first, as before names; its capture time as the clip has it (never the capture
         # producer's, as the location producer waits for).
-        assert added.needs == ("proxy",)
+        assert added.needs == ("lumiverb.preview",)
         assert added.plugin == "facts"
     finally:
         use_added([], by="test_data_names")
-    assert "plugin_facts" not in registry()
+    assert "facts" not in registry()
 
 
 def test_a_plug_in_reading_what_nothing_makes_is_refused():
@@ -191,7 +242,7 @@ def test_a_plug_in_reading_what_nothing_makes_is_refused():
     spec = replace(spec_for(Installed(m, False, None, when, when)), reads=("lumiverb.teleport",))
     with pytest.raises(ValueError, match="reads what nothing makes"):
         use_added([spec], by="test_data_names")
-    assert "plugin_facts" not in registry()
+    assert "facts" not in registry()
 
 
 def test_the_ids_a_plug_in_cant_have():
@@ -212,11 +263,14 @@ def test_the_ids_a_plug_in_cant_have():
         assert not is_reserved(json.loads(f.read_text())["id"]), f
 
 
-def test_part_1_adds_no_migration():
-    # Its rollback is installing v0.1.104: the databases are that release's (part 3 adds the first revision).
+def test_the_names_add_one_account_migration_and_none_of_the_control_plane_s():
+    # Part 3's renames what's stored (its rollback, migrate --to f8c4a2e6d0b5); parts 1, 2 and 3 touch no control
+    # database.
     from alembic.script import ScriptDirectory
 
-    assert ScriptDirectory(str(REPO / "migrations" / "tenant")).get_heads() == ["f8c4a2e6d0b5"]
+    tenant = ScriptDirectory(str(REPO / "migrations" / "tenant"))
+    assert tenant.get_heads() == ["f2a6c8e4b0d7"]
+    assert tenant.get_revision("f2a6c8e4b0d7").down_revision == "f8c4a2e6d0b5"
     assert ScriptDirectory(str(REPO / "migrations" / "control")).get_heads() == ["d7f3b9e1c5a2"]
 
 
@@ -237,13 +291,13 @@ def test_the_kinds_lists_kept_by_hand_name_every_kind():
     # Settings › Processing's labels and cursor-api's list of the queue's kinds.
     from src.server.scheduler.kinds import KINDS as SCHEDULER_KINDS
 
-    kinds = {k for k in SCHEDULER_KINDS if not k.startswith("redo_")}
+    kinds = {k for k in SCHEDULER_KINDS if not k.startswith("redo:")}
     tsx = (REPO / "src/ui/web/src/pages/settings/ProcessingSection.tsx").read_text()
     labels = re.search(r"const KIND_LABELS[^{]*\{(.*?)\n\};", tsx, re.S).group(1)
-    assert set(re.findall(r"^\s+([a-z_]+):", labels, re.M)) == kinds
+    assert set(re.findall(r'^\s+"?([a-z_.]+)"?:', labels, re.M)) == kinds
     doc = (REPO / "docs/cursor-api.md").read_text()
     listed = re.search(r"Kinds: (.*?), an installed plug-in's work's", doc).group(1)
-    assert set(re.findall(r"`([a-z_]+)`", listed)) == kinds
+    assert set(re.findall(r"`([a-z_.]+)`", listed)) == kinds
 
 
 @pytest.mark.parametrize("word", ["lumiverb.preview", "lumiverb.location", "lumiverb.image.description"])

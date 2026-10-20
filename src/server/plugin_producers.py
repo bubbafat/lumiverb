@@ -6,8 +6,9 @@ producer's is.
 
 Its spec, from the manifest:
 
-- its artifact (and producer, kind, pool) is ``plugin_`` and its id with
-  dashes as underscores (an id has no underscore: one for each plug-in);
+- its artifact (its producer in lineage, its kind and its pool too) is its
+  plug-in's id (ADR-024: `plugin_<id>` before part 3; an id Lumiverb uses
+  is refused at install, src/producers/names.py RESERVED);
 - it applies to its media's clips that have its inputs
   (src/server/repository/clip_inputs.py), while it's on in the account
   (its row, else the server admin's default: repository/plugins.py on_sql);
@@ -35,7 +36,7 @@ import threading
 import time
 
 from src.plugins.manifest import INPUT_NAMES
-from src.producers import ADDED_PREFIX, INSTALLED, use_added
+from src.producers import INSTALLED, use_added
 from src.producers.contract import FIND, Pool, ProducerSpec, Setting
 from src.server.plugin_catalog import Installed, installed
 from src.server.repository.clip_inputs import hash_sql, present_sql
@@ -49,7 +50,8 @@ _KIND = {"int": "int", "float": "float", "bool": "bool", "text": "text", "choice
 
 
 def artifact_of(plugin_id: str) -> str:
-    return ADDED_PREFIX + plugin_id.replace("-", "_")
+    """Its work's artifact: its id (ADR-024)."""
+    return plugin_id
 
 
 def spec_for(plugin: Installed) -> ProducerSpec:
@@ -61,7 +63,7 @@ def spec_for(plugin: Installed) -> ProducerSpec:
     artifact = artifact_of(m.plugin_id)
     media = ", ".join(f"'{x}'" for x in work.media)
     return ProducerSpec(
-        artifact=artifact, producer=artifact, version=work.version, media=work.media, title=work.title,
+        artifact=artifact, version=work.version, media=work.media, title=work.title,
         applies=(f"({on_sql(m.spec(), plugin.default)})"
                  f" AND a.media_type IN ({media}) AND ({present_sql(work.inputs)})"),
         made=("EXISTS (SELECT 1 FROM plugin_outputs po WHERE po.asset_id = a.asset_id"
@@ -70,7 +72,7 @@ def spec_for(plugin: Installed) -> ProducerSpec:
                                maximum=s.maximum, unit=s.unit, advanced=s.advanced)
                        for s in m.settings if s.remakes),
         reads=tuple(INPUT_NAMES[i] for i in work.inputs), plugin=m.plugin_id, order=900,
-        kind=artifact, flag=f"missing_{artifact}", run=WORK, tier=FIND, pool=Pool(artifact, slots=1),
+        run=WORK, tier=FIND, pool=Pool(artifact, slots=1),
         batch=work.batch,
     )
 

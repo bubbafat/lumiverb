@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import logging
 
+from src.producers.names import FACES
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
 
 
 class Faces(Work):
-    artifact = "faces"
+    artifact = FACES
     together = True  # one request for the job's photos
 
     def __init__(self, acct, job) -> None:

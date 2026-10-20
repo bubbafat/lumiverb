@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from src.producers.names import DESCRIPTION
 from src.producers.runner import Work
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def describe_clip(*, asset_id: str, rel_path: str, model: str, provider, preview
 
 
 class Vision(Work):
-    artifact = "vision"
+    artifact = DESCRIPTION
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

@@ -221,7 +221,7 @@ def test_the_cli_turns_infer_location_on_and_asks_before_removing_guesses(env, t
     assert _ok(env.client.get(f"/v1/libraries/{team.b}", headers=env.admin))["infer_location"] is True
     clip = _scan(env, team.b, [File("g.jpg", f"g {team.b}")], headers=env.admin).uploaded["g.jpg"]
     guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "minutes": 360,
-             "lineage": made("location")}
+             "lineage": made("lumiverb.location.guess")}
     assert _ok(env.client.put(f"/v1/assets/locations/guess/{clip}", json=guess, headers=env.admin)) == {
         "result": "stored"}
 

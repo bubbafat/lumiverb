@@ -27,6 +27,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from src.producers.names import LOCATION_GUESS
 from src.server.api.dependencies import (
     get_current_user_id,
     get_tenant_session,
@@ -307,7 +308,7 @@ def save_location_guess(
 
     from src.server.api.routers.producers import require_lineage
 
-    made = require_lineage(body.lineage, "location")  # before anything is saved
+    made = require_lineage(body.lineage, LOCATION_GUESS)  # before anything is saved
     guess = body.guess.model_dump() if body.guess is not None else None
     if guess is not None:
         if not is_fix(guess["lat"], guess["lon"]):

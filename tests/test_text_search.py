@@ -53,7 +53,7 @@ def _describe(env, clip: str, description: str, tags: list[str] | None = None) -
     client, headers, *_ = env
     r = client.post("/v1/assets/batch-vision", headers=headers, json={
         "items": [{"asset_id": clip, "model_id": "qwen3-vl:8b", "description": description, "tags": tags or []}],
-        "lineage": made("vision")})
+        "lineage": made("lumiverb.image.description")})
     assert r.status_code == 200 and r.json()["updated"] == 1, r.text
 
 
@@ -61,7 +61,7 @@ def _read(env, clip: str, ocr_text: str) -> None:
     """As the OCR producer saves the text read in a picture (the sweep writes the row)."""
     client, headers, *_ = env
     r = client.post("/v1/assets/batch-ocr", headers=headers, json={
-        "items": [{"asset_id": clip, "ocr_text": ocr_text}], "model_id": "qwen3-vl:8b", "lineage": made("ocr")})
+        "items": [{"asset_id": clip, "ocr_text": ocr_text}], "model_id": "qwen3-vl:8b", "lineage": made("lumiverb.image.text")})
     assert r.status_code == 200, r.text
 
 
@@ -107,7 +107,7 @@ def _scene(env, clip: str, start_ms: int, end_ms: int, description: str, tags: l
         s.commit()
     r = client.patch(f"/v1/video/scenes/{scene_id}", headers=headers, json={
         "model_id": "qwen3-vl:8b", "model_version": "1", "description": description, "tags": tags,
-        "lineage": made("scene_vision")})
+        "lineage": made("lumiverb.video.scene_descriptions")})
     assert r.status_code == 200, r.text
     return scene_id
 

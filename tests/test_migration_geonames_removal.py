@@ -138,9 +138,11 @@ def test_an_account_from_before_the_switch_over_upgrades_straight_to_head() -> N
         with engine.connect() as conn:
             assert conn.execute(text("SELECT chosen FROM plugin_settings WHERE plugin_id = 'geonames'")).scalar() == {
                 "radius_km": 40}
+            # By their names since part 3 of ADR-024 phase 1 (f2a6c8e4b0d7).
             assert sorted(conn.execute(text("SELECT target, scope FROM producer_pauses")).all()) == [
-                ("plugin_geonames", "redo"), ("plugin_geonames", "work"), ("vision", "work")]
-            assert conn.execute(text("SELECT artifact FROM artifact_lineage")).scalars().all() == ["vision"]
+                ("geonames", "redo"), ("geonames", "work"), ("lumiverb.image.description", "work")]
+            assert conn.execute(text("SELECT artifact FROM artifact_lineage")).scalars().all() == [
+                "lumiverb.image.description"]
             basis = dict(conn.execute(text("SELECT asset_id, basis FROM asset_location")).all())
         assert basis[clips["picked"]]["place"] == {"id": "geonames:3573890", "label": "Port of Spain, Trinidad and Tobago",
                                                    "source": "geonames", "credit": CREDIT}

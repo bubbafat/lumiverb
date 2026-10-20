@@ -45,6 +45,7 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         settings: dict | None = None,
         ocr_settings: dict | None = None,
     ) -> None:
+        from src.producers.names import DESCRIPTION, TEXT
         from src.shared.producers import effective_settings
 
         self._base_url = base_url.rstrip("/")
@@ -52,8 +53,8 @@ class OpenAICompatibleCaptionProvider(CaptionProvider):
         self._api_key = api_key
         # Output-affecting settings (prompt, image size, sampling): the server's,
         # so what's recorded in lineage is what was sent. Defaults otherwise.
-        self._vision = settings or effective_settings("vision")
-        self._ocr = ocr_settings or effective_settings("ocr")
+        self._vision = settings or effective_settings(DESCRIPTION)
+        self._ocr = ocr_settings or effective_settings(TEXT)
 
     @property
     def provider_id(self) -> str:

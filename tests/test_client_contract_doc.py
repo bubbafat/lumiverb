@@ -48,9 +48,9 @@ def test_the_pictures_it_describes_are_the_ones_the_server_reads_and_keeps():
     assert f"at most {images.MAX_PIXELS // 1_000_000} megapixels" in said
     assert f"At most {ingest.MAX_PROXY_UPLOAD_BYTES // 2**20} MB at ingest" in said
     assert f"at most {ingest.PROXY_MAX_LONG_EDGE:,} px on its long edge" in said
-    assert f"send it at {PRODUCERS['proxy'].defaults['long_edge']:,} px" in said
+    assert f"send it at {PRODUCERS['lumiverb.preview'].defaults['long_edge']:,} px" in said
     assert f"WebP at {preview_image.THUMBNAIL_LONG_EDGE} px" in said
-    assert PRODUCERS["proxy"].defaults["thumbnail_edge"] == preview_image.THUMBNAIL_LONG_EDGE
+    assert PRODUCERS["lumiverb.preview"].defaults["thumbnail_edge"] == preview_image.THUMBNAIL_LONG_EDGE
 
 
 def test_the_videos_it_describes_are_the_ones_lumiverb_makes():
@@ -59,7 +59,7 @@ def test_the_videos_it_describes_are_the_ones_lumiverb_makes():
     from src.shared.producers import PRODUCERS
 
     said = _section()
-    preview, proxy = PRODUCERS["video_preview"].defaults, PRODUCERS["analysis_proxy"].defaults
+    preview, proxy = PRODUCERS["lumiverb.video.preview"].defaults, PRODUCERS["lumiverb.video.analysis_proxy"].defaults
     assert f"by default its first {preview['seconds']} seconds, at most {preview['max_height']} px high" in said
     assert (f"by default at most {proxy['max_edge']} px on its long edge and {proxy['fps_max']} frames a second"
             in said)
@@ -78,14 +78,14 @@ def test_the_scan_it_describes_waits_for_files_as_lumiverb_s_does():
 
 def test_what_it_sends_by_name_is_what_lumiverb_s_scan_sends():
     # ADR-024 phase 1 part 2: the preview, each lineage and the video preview by their names, at protocol 2.
-    from src.producers.names import file_named, name_of
+    from src.producers.names import CAPTURE_TIME, PREVIEW, VIDEO_FORMAT, file_named
     from src.shared.readers import PROTOCOL
 
     said = _section()
     assert f"Speak `protocol` {PROTOCOL}" in said
     assert f"   - `{file_named('proxy')}`: its preview" in said
-    for artifact in ("proxy", "capture", "probe"):
-        assert f"`{name_of(artifact)}`" in said, artifact
+    for name in (PREVIEW, CAPTURE_TIME, VIDEO_FORMAT):
+        assert f"`{name}`" in said, name
     assert f"`POST /v1/assets/{{id}}/artifacts/{file_named('video_preview')}`" in said
 
 

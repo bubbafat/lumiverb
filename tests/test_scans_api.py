@@ -175,7 +175,7 @@ def _ingest(env, library_id: str, f: File, *, preview: bool = True, headers: dic
     if video and preview:
         r = env.client.post(f"/v1/assets/{asset_id}/artifacts/video_preview", headers=headers or env.editor,
                             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
-                            data={"lineage": made_json("video_preview", f.sha)})
+                            data={"lineage": made_json("lumiverb.video.preview", f.sha)})
         assert r.status_code == 200, r.text
     return asset_id
 
@@ -1609,10 +1609,10 @@ def _library_of(env, n: int) -> tuple[str, list[File]]:
                                proxy_key=f"{lib}/proxy/{i:05}.webp", thumbnail_key=f"{lib}/thumbnail/{i:05}.webp",
                                created_at=T0, updated_at=T0) for i, f in enumerate(files)])
         session.commit()
-        want = lineage.desired(session, "proxy")
+        want = lineage.desired(session, "lumiverb.preview")
         session.execute(text(
             "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash, source_hash,"
-            " produced_at) SELECT a.asset_id, 'proxy', :p, :v, :h, a.content_hash, now() FROM assets a"
+            " produced_at) SELECT a.asset_id, 'lumiverb.preview', :p, :v, :h, a.content_hash, now() FROM assets a"
             " WHERE a.library_id = :lib"), {"p": want["producer"], "v": want["version"], "h": want["settings_hash"],
                                             "lib": lib})
         session.commit()

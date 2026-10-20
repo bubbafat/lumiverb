@@ -39,11 +39,11 @@ def test_a_clip_is_charged_after_so_many_crashes_in_a_row(env):
     clip = _ingest_with(lib, "a.jpg", _sha())
     tenant_id = env[4]
     for n in range(1, lineage.CRASHES_BEFORE_CHARGE):
-        assert _crashed_in_database(tenant_id, "ocr", [clip, "ast_gone"], "boom") == []
-        assert _crashes(lib, clip, "ocr") == n
-    assert _crashed_in_database(tenant_id, "ocr", [clip], "boom") == [clip]
-    assert _crashes(lib, clip, "ocr") is None  # starts over
-    assert _crashes(lib, "ast_gone", "ocr") is None  # a clip that's gone isn't kept
+        assert _crashed_in_database(tenant_id, "lumiverb.image.text", [clip, "ast_gone"], "boom") == []
+        assert _crashes(lib, clip, "lumiverb.image.text") == n
+    assert _crashed_in_database(tenant_id, "lumiverb.image.text", [clip], "boom") == [clip]
+    assert _crashes(lib, clip, "lumiverb.image.text") is None  # starts over
+    assert _crashes(lib, "ast_gone", "lumiverb.image.text") is None  # a clip that's gone isn't kept
 
 
 def test_a_success_or_a_charged_failure_starts_the_count_over(env):
@@ -52,16 +52,16 @@ def test_a_success_or_a_charged_failure_starts_the_count_over(env):
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha)
     tenant_id = env[4]
-    _crashed_in_database(tenant_id, "vision", [clip], "boom")
-    _crashed_in_database(tenant_id, "ocr", [clip], "boom")
+    _crashed_in_database(tenant_id, "lumiverb.image.description", [clip], "boom")
+    _crashed_in_database(tenant_id, "lumiverb.image.text", [clip], "boom")
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "a dog",
-                                                        "lineage": _want(lib, "vision", sha)}, headers=headers)
+                                                        "lineage": _want(lib, "lumiverb.image.description", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _crashes(lib, clip, "vision") is None
-    r = client.post("/v1/producers/failures", json={"items": [{"asset_id": clip, "artifact": "ocr", "error": "x"}]},
+    assert _crashes(lib, clip, "lumiverb.image.description") is None
+    r = client.post("/v1/producers/failures", json={"items": [{"asset_id": clip, "artifact": "lumiverb.image.text", "error": "x"}]},
                     headers=headers)
     assert r.status_code == 200, r.text
-    assert _crashes(lib, clip, "ocr") is None
+    assert _crashes(lib, clip, "lumiverb.image.text") is None
 
 
 def _made_by_an_older_version(lib, name: str) -> str:
@@ -69,12 +69,12 @@ def _made_by_an_older_version(lib, name: str) -> str:
     sha = _sha()
     clip = _ingest_with(lib, name, sha)
     r = saved(client, "vision", clip, json={"model_id": "m", "description": "old words",
-                                                        "lineage": _want(lib, "vision", sha)}, headers=headers)
+                                                        "lineage": _want(lib, "lumiverb.image.description", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(lib) as s:  # as if vision's version went up since
-        s.execute(text("UPDATE artifact_lineage SET producer_version = '0' WHERE asset_id = :a AND artifact = 'vision'"),
+        s.execute(text("UPDATE artifact_lineage SET producer_version = '0' WHERE asset_id = :a AND artifact = 'lumiverb.image.description'"),
                   {"a": clip})
-        s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.vision.version_seen'"))
+        s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.lumiverb.image.description.version_seen'"))
         s.commit()
     return clip
 
@@ -99,17 +99,17 @@ def test_a_new_producer_version_waits_for_an_admin_to_resume_its_redo(env):
     lib = _library(env, "NewVersion")
     client, headers, library_id, *_ = lib
     clip = _made_by_an_older_version(lib, "a.jpg")
-    redo = KINDS["redo_vision"]
+    redo = KINDS["redo:lumiverb.image.description"]
     try:
         assert _from_database(env[4], redo, [library_id]) is None  # stopped, not handed out
         r = client.get("/v1/producers", headers=headers)
-        p = {p["artifact"]: p for p in r.json()["producers"]}["vision"]
+        p = {p["artifact"]: p for p in r.json()["producers"]}["lumiverb.image.description"]
         assert p["redo_stopped"] is True and p["counts"]["stale"] >= 1  # what Processing shows
         assert _from_database(env[4], redo, [library_id]) is None  # still stopped
-        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers).status_code == 204
         assert clip in [i["asset_id"] for i in _from_database(env[4], redo, [library_id])]  # resuming sticks
     finally:
-        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_a_new_versions_hold_is_found_while_its_producer_is_paused(env):
@@ -125,26 +125,26 @@ def test_a_new_versions_hold_is_found_while_its_producer_is_paused(env):
     client, headers, library_id, *_ = lib
     _made_by_an_older_version(lib, "a.jpg")
     try:
-        assert client.post("/v1/producers/vision/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "work"}, headers=headers).status_code == 204
         # No AI machines and no slots: nothing runs, only what's due is listed.
         acct = FakeAccount(env[4], vision=0, transcripts=0, clip=0, faces=0, libraries=(library_id,), reachable=(library_id,))
         Scheduler(lambda: {env[4]: acct}, capacity={}, scan=MagicMock(), inline_refill=True).tick()
-        p = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}["vision"]
+        p = {p["artifact"]: p for p in client.get("/v1/producers", headers=headers).json()["producers"]}["lumiverb.image.description"]
         assert p["paused"] is True and p["redo_stopped"] is True and p["redo_stopped_by"] is None
     finally:
-        client.post("/v1/producers/vision/resume", json={"scope": "work"}, headers=headers)
-        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_without_clips_an_older_version_made_nothing_is_stopped(env):
     lib = _library(env, "SameVersion")
     with _db(lib) as s:
-        s.execute(text("UPDATE artifact_lineage SET producer_version = :v WHERE artifact = 'vision'"),
-                  {"v": lineage.PRODUCERS["vision"].version})
-        s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.vision.version_seen'"))
+        s.execute(text("UPDATE artifact_lineage SET producer_version = :v WHERE artifact = 'lumiverb.image.description'"),
+                  {"v": lineage.PRODUCERS["lumiverb.image.description"].version})
+        s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.lumiverb.image.description.version_seen'"))
         s.commit()
-        assert lineage.hold_new_version(s, "vision") is False
-        assert "vision" not in lineage.pauses(s).redo
+        assert lineage.hold_new_version(s, "lumiverb.image.description") is False
+        assert "lumiverb.image.description" not in lineage.pauses(s).redo
 
 
 def test_the_database_away_is_a_503_the_scheduler_charges_no_clip_for():

@@ -20,7 +20,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from src.producers.names import artifact_in
+from src.producers.names import (
+    CAPTURE_TIME,
+    DESCRIPTION,
+    LIKENESS,
+    PREVIEW,
+    VIDEO_FORMAT,
+    artifact_in,
+)
 from src.server import preview_image
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import checked_rel_path, get_tenant_session, require_editor
@@ -101,7 +108,7 @@ def _parse_optional_json_list(field: str | None, field_name: str) -> list[dict] 
 
 
 def _per_kind(raw: str | None) -> dict:
-    """The lineage form field: a JSON object by artifact kind (its id, or its name: ADR-024), or {}."""
+    """The lineage form field: a JSON object by each artifact's name (its old id too until ADR-024's part 5), or {}."""
     try:
         value = json.loads(raw) if raw else {}
     except ValueError:
@@ -127,17 +134,17 @@ def _required_lineage(raw: str | None, vision_data: dict | None, embeddings_data
     from src.server.api.routers.producers import require_lineage
     from src.shared.producers import CLIP_MODEL_ID
 
-    by_kind = _per_kind(raw)
-    kinds = ["proxy"]
-    if exif_data is not None and by_kind.get("capture") is not None:
-        kinds.append("capture")
+    by_name = _per_kind(raw)
+    made = [PREVIEW]
+    if exif_data is not None and by_name.get(CAPTURE_TIME) is not None:
+        made.append(CAPTURE_TIME)
     if vision_data is not None and vision_data.get("model_id"):
-        kinds.append("vision")
+        made.append(DESCRIPTION)
     if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
-        kinds.append("clip")
+        made.append(LIKENESS)
     if facet_data is not None:
-        kinds.append("probe")
-    return {kind: require_lineage(by_kind.get(kind), kind) for kind in kinds}
+        made.append(VIDEO_FORMAT)
+    return {name: require_lineage(by_name.get(name), name) for name in made}
 
 
 def _do_ingest(
@@ -264,22 +271,22 @@ def _do_ingest(
     # --- Bump library revision for UI polling ---
     LibraryRepository(session).bump_revision(library_id)
 
-    record_lineage(session, asset_id, "proxy", lineage_by_kind.get("proxy"), commit=False)
+    record_lineage(session, asset_id, PREVIEW, lineage_by_kind.get(PREVIEW), commit=False)
     if exif_data is not None:
-        if "capture" in lineage_by_kind:
-            record_lineage(session, asset_id, "capture", lineage_by_kind["capture"], commit=False)
+        if CAPTURE_TIME in lineage_by_kind:
+            record_lineage(session, asset_id, CAPTURE_TIME, lineage_by_kind[CAPTURE_TIME], commit=False)
         else:
             # EXIF from a scanner that doesn't say how it read the capture facts
             # (the macOS app): the capture producer reads them again.
             from src.server.repository.lineage import forget
 
-            forget(session, [asset_id], "capture", commit=False)
+            forget(session, [asset_id], CAPTURE_TIME, commit=False)
     # Only what was stored: a description with no model is dropped above,
     # and only the CLIP producer's vectors are its artifact.
     if vision_data is not None and vision_data.get("model_id"):
-        record_lineage(session, asset_id, "vision", lineage_by_kind.get("vision"), commit=False)
+        record_lineage(session, asset_id, DESCRIPTION, lineage_by_kind.get(DESCRIPTION), commit=False)
     if embeddings_data and any(e.get("model_id") == CLIP_MODEL_ID for e in embeddings_data):
-        record_lineage(session, asset_id, "clip", lineage_by_kind.get("clip"), commit=False)
+        record_lineage(session, asset_id, LIKENESS, lineage_by_kind.get(LIKENESS), commit=False)
 
     # Commit all changes atomically. The tenant session does NOT auto-commit
     # (SQLModel's `with Session` rolls back on exit), so every write path
@@ -375,7 +382,7 @@ async def create_and_ingest(
     vision: str | None = Form(default=None),
     embeddings: str | None = Form(default=None),
     video_facet: str | None = Form(default=None),
-    # JSON {"proxy": {...}, "probe": {...}}: how each artifact sent was made (see LineageIn)
+    # JSON {"lumiverb.preview": {...}, "lumiverb.video.format": {...}}: how each artifact sent was made (see LineageIn)
     lineage: str | None = Form(default=None),
 ) -> IngestResponse:
     """Create an asset record and ingest proxy + metadata in one atomic request.
@@ -572,7 +579,7 @@ async def create_and_ingest(
 
         try:
             asset_repo.upsert_video_facet(asset_id, facet_data)
-            record_lineage(session, asset_id, "probe", made["probe"])
+            record_lineage(session, asset_id, VIDEO_FORMAT, made[VIDEO_FORMAT])
         except IntegrityError:
             # Handed over to just now: the clip that moved here has its own.
             session.rollback()

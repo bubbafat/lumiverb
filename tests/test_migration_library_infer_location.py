@@ -87,7 +87,7 @@ def test_infer_location_moves_to_every_library_and_nothing_is_redone(overrides, 
         _account(url, overrides)
 
         _alembic(url, "upgrade", AFTER)
-        now = settings_hash(effective_settings("location"))  # the producer's hash as the code has it
+        now = settings_hash(effective_settings("lumiverb.location.guess"))  # the producer's hash as the code has it
         assert _state(url) == {"libraries": {"lib_a": on, "lib_b": on},
                                "hashes": {"guessed": now, "placed": ""}, "overrides": left}
 

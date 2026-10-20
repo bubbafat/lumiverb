@@ -169,7 +169,7 @@ def test_on_a_copy_with_human_data_of_its_own_keeps_it(env, own):
             from src.server.repository import lineage
 
             with _db(env) as session:
-                lineage.record(session, copy, "transcript", None, person=True, outcome="empty")
+                lineage.record(session, copy, "lumiverb.video.transcript", None, person=True, outcome="empty")
         elif own == "note":
             assert client.put(f"/v1/assets/{copy}/note", json={"text": "B-roll"}, headers=headers).status_code == 200
         elif own == "rating":

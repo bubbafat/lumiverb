@@ -19,7 +19,7 @@ import pytest
 from src.producers import registry
 from src.server.repository.faces import LARGE_INPUT_THRESHOLD, _cluster_face_embeddings
 
-DEFAULT_MERGE_DISTANCE = registry()["faces"].setting("merge_distance").default
+DEFAULT_MERGE_DISTANCE = registry()["lumiverb.image.faces"].setting("merge_distance").default
 
 
 def _unit(v: np.ndarray) -> np.ndarray:

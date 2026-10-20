@@ -141,7 +141,7 @@ def _scheduler(accounts: dict, due: dict[str, list[dict]], recorder: Recorder, *
         return [i for i in due.get(kind.name, []) if i["library_id"] in libraries and i["asset_id"] not in skip]
 
     return Scheduler(lambda: accounts, capacity=capacity or {"scan": 1, "probe": 2, "render": 1, "gpu": 1,
-                                                            "scenes": 1},
+                                                            "lumiverb.video.scenes": 1},
                      candidates=candidates, runners=recorder.all(), scan=scan or MagicMock(), inline_refill=True,
                      on_hold=lambda tenant_id: _pauses(held or (), paused or ()),
                      retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
@@ -157,11 +157,12 @@ def _settle(s: Scheduler) -> None:
 @pytest.mark.fast
 def test_every_pool_starts_its_best_job() -> None:
     rec = Recorder()
-    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "vision": [_item("v")],
-                                           "transcript": [_item("t")]}, rec)
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.video.format": [_item("p")], "lumiverb.image.description": [_item("v")],
+                                           "lumiverb.video.transcript": [_item("t")]}, rec)
     s.tick()
     _settle(s)
-    assert sorted(kind for _, kind, _ in rec.ran) == ["probe", "transcript", "vision"]
+    assert sorted(kind for _, kind, _ in rec.ran) == sorted(
+        ["lumiverb.video.format", "lumiverb.video.transcript", "lumiverb.image.description"])
 
 
 @pytest.mark.fast
@@ -200,19 +201,19 @@ def test_ai_work_waits_while_its_machines_cannot_be_used() -> None:
     # No clip is charged: its jobs simply aren't handed out.
     rec = Recorder()
     asked: list = []
-    s = _scheduler({"t1": FakeAccount(vision=0)}, {"vision": [_item("v")], "ocr": [_item("o")],
-                                                   "clip": [_item("c")]}, rec, asked=asked)
+    s = _scheduler({"t1": FakeAccount(vision=0)}, {"lumiverb.image.description": [_item("v")], "lumiverb.image.text": [_item("o")],
+                                                   "lumiverb.image.likeness": [_item("c")]}, rec, asked=asked)
     s.tick()
     _settle(s)
-    assert [kind for _, kind, _ in rec.ran] == ["clip"]
-    assert not any(kind in ("vision", "ocr", "scene_vision") for _, kind, _ in asked)
+    assert [kind for _, kind, _ in rec.ran] == ["lumiverb.image.likeness"]
+    assert not any(kind in ("lumiverb.image.description", "lumiverb.image.text", "lumiverb.video.scene_descriptions") for _, kind, _ in asked)
 
 
 @pytest.mark.fast
 def test_machines_that_go_down_stop_handing_out_their_work() -> None:
     rec = Recorder()
     acct = FakeAccount(vision=1)
-    s = _scheduler({"t1": acct}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
+    s = _scheduler({"t1": acct}, {"lumiverb.image.description": [_item("a"), _item("b", "2026-10-02")]}, rec)
     rec.hold.clear()
     s.tick()
     acct.slots["vision"] = 0
@@ -220,7 +221,7 @@ def test_machines_that_go_down_stop_handing_out_their_work() -> None:
     _settle(s)
     s.tick()
     _settle(s)
-    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+    assert [ids for _, kind, ids in rec.ran if kind == "lumiverb.image.description"] == [("a",)]
 
 
 @pytest.mark.fast
@@ -231,8 +232,8 @@ def test_storage_work_only_in_libraries_reachable_at_the_last_look() -> None:
     s = _scheduler({"t1": acct}, {}, rec, asked=asked)
     s.tick()
     libs = {kind: libs for _, kind, libs in asked}
-    assert libs["probe"] == ("lib_2",) and libs["render"] == ("lib_2",)
-    assert libs["vision"] is None, "what's made from what's stored: every active library (queue.candidates)"
+    assert libs["lumiverb.video.format"] == ("lib_2",) and libs["lumiverb.video.analysis_proxy"] == ("lib_2",)
+    assert libs["lumiverb.image.description"] is None, "what's made from what's stored: every active library (queue.candidates)"
 
 
 @pytest.mark.fast
@@ -241,7 +242,7 @@ def test_a_library_a_device_reads_gets_the_work_from_what_s_stored_and_none_on_i
     server makes the rest from the previews and analysis proxies it sent."""
     rec = Recorder()
     device_clip = {**_item("dev-clip"), "library_id": "lib_dev"}
-    due = {"vision": [device_clip], "probe": [device_clip], "render": [device_clip], "clip": [device_clip]}
+    due = {"lumiverb.image.description": [device_clip], "lumiverb.video.format": [device_clip], "lumiverb.video.analysis_proxy": [device_clip], "lumiverb.image.likeness": [device_clip]}
     acct = FakeAccount(libraries=("lib_1",), reachable=("lib_1",), devices_read=("lib_dev",), vision=1)
     s = _scheduler({"t1": acct}, due, rec)
     s.tick()
@@ -249,8 +250,8 @@ def test_a_library_a_device_reads_gets_the_work_from_what_s_stored_and_none_on_i
     s.tick()
     _settle(s)
     ran = {kind for _, kind, ids in rec.ran if ids == ("dev-clip",)}
-    assert {"vision", "clip"} <= ran
-    assert not ran & {"probe", "render"}, "never on a device's originals"
+    assert {"lumiverb.image.description", "lumiverb.image.likeness"} <= ran
+    assert not ran & {"lumiverb.video.format", "lumiverb.video.analysis_proxy"}, "never on a device's originals"
 
 
 @pytest.mark.fast
@@ -260,12 +261,12 @@ def test_nothing_is_asked_where_no_library_can_be_used() -> None:
     acct = FakeAccount(reachable=())
     s = _scheduler({"t1": acct}, {}, rec, asked=asked)
     s.tick()
-    assert not any(kind in ("probe", "render") for _, kind, _ in asked)
+    assert not any(kind in ("lumiverb.video.format", "lumiverb.video.analysis_proxy") for _, kind, _ in asked)
     # Review round 2: that wasn't an empty answer to wait on; once the
     # storage is there, it's asked at once.
     acct.reachable = ("lib_1",)
     s.tick()
-    assert ("t1", "probe", ("lib_1",)) in asked
+    assert ("t1", "lumiverb.video.format", ("lib_1",)) in asked
 
 
 @pytest.mark.fast
@@ -273,14 +274,14 @@ def test_a_pool_runs_no_more_than_its_slots() -> None:
     rec = Recorder()
     rec.hold.clear()
     s = _scheduler({"t1": FakeAccount(vision=2)},
-                   {"vision": [_item(f"v{i}", f"2026-10-0{i}") for i in range(1, 6)]}, rec)
+                   {"lumiverb.image.description": [_item(f"v{i}", f"2026-10-0{i}") for i in range(1, 6)]}, rec)
     started = s.tick()
     assert started == 3  # two descriptions and the scan look
     rec.hold.set()
     _settle(s)
     s.tick()
     _settle(s)
-    ran = [ids[0] for _, kind, ids in rec.ran if kind == "vision"]
+    ran = [ids[0] for _, kind, ids in rec.ran if kind == "lumiverb.image.description"]
     # The first two ran side by side (either may finish first); then the next two.
     assert sorted(ran[:2]) == ["v1", "v2"] and sorted(ran[2:]) == ["v3", "v4"]
 
@@ -291,7 +292,7 @@ def test_transcripts_get_twice_their_machines_slots() -> None:
     rec = Recorder()
     rec.hold.clear()
     s = _scheduler({"t1": FakeAccount(transcripts=1)},
-                   {"transcript": [_item(f"t{i}", f"2026-10-0{i}") for i in range(1, 5)]}, rec)
+                   {"lumiverb.video.transcript": [_item(f"t{i}", f"2026-10-0{i}") for i in range(1, 5)]}, rec)
     s.tick()
     assert s.dispatcher.running("transcripts@t1") == 2
     rec.hold.set()
@@ -306,9 +307,9 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
     def boom(acct, job):
         raise RuntimeError("model crashed")
 
-    runners["clip"] = boom
+    runners["lumiverb.image.likeness"] = boom
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"gpu": 1, "scan": 1},
-                  candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "clip" else [],
+                  candidates=lambda t, k, libs, skip=(): [_item("c1"), _item("c2", "2026-10-02")] if k.name == "lumiverb.image.likeness" else [],
                   runners=runners, scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
@@ -320,10 +321,10 @@ def test_a_job_that_fails_frees_its_slot_and_the_rest_go_on() -> None:
 def test_each_account_has_its_own_ai_machines() -> None:
     rec = Recorder()
     s = _scheduler({"t1": FakeAccount("t1", vision=1), "t2": FakeAccount("t2", vision=0)},
-                   {"vision": [_item("v")]}, rec)
+                   {"lumiverb.image.description": [_item("v")]}, rec)
     s.tick()
     _settle(s)
-    assert [(t, kind) for t, kind, _ in rec.ran if kind == "vision"] == [("t1", "vision")]
+    assert [(t, kind) for t, kind, _ in rec.ran if kind == "lumiverb.image.description"] == [("t1", "lumiverb.image.description")]
 
 
 @pytest.mark.fast
@@ -331,20 +332,20 @@ def test_one_accounts_trouble_does_not_stop_the_others() -> None:
     rec = Recorder()
     broken = FakeAccount("t1")
     broken.refresh = MagicMock(side_effect=RuntimeError("database gone"))
-    s = _scheduler({"t1": broken, "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": broken, "t2": FakeAccount("t2")}, {"lumiverb.image.likeness": [_item("c")]}, rec)
     for _ in range(2):  # the two accounts take turns on the one GPU slot
         s.tick()
         _settle(s)
-    assert ("t2", "clip", ("c",)) in rec.ran
+    assert ("t2", "lumiverb.image.likeness", ("c",)) in rec.ran
     # Its settings read before stay: its own work goes on too.
-    assert ("t1", "clip", ("c",)) in rec.ran
+    assert ("t1", "lumiverb.image.likeness", ("c",)) in rec.ran
 
 
 @pytest.mark.fast
 def test_run_ticks_until_stopped_and_lets_jobs_in_hand_finish() -> None:
     rec = Recorder()
     rec.hold.clear()
-    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.image.likeness": [_item("c")]}, rec)
     stop = threading.Event()
     saves: list[int] = []
     t = threading.Thread(target=run, kwargs={"stop": stop, "scheduler": s, "save": lambda: saves.append(1),
@@ -357,7 +358,7 @@ def test_run_ticks_until_stopped_and_lets_jobs_in_hand_finish() -> None:
     rec.hold.set()
     t.join(60)
     assert not t.is_alive()
-    assert ("t1", "clip", ("c",)) in rec.ran
+    assert ("t1", "lumiverb.image.likeness", ("c",)) in rec.ran
     assert saves  # the scan state is saved, also on the way out
 
 
@@ -412,14 +413,14 @@ def test_nothing_is_handed_out_until_the_accounts_settings_were_read() -> None:
     rec = Recorder()
     acct = FakeAccount()
     acct.settings_ready = False
-    s = _scheduler({"t1": acct}, {"clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": acct}, {"lumiverb.image.likeness": [_item("c")]}, rec)
     s.tick()
     _settle(s)
     assert [kind for _, kind, _ in rec.ran] == []
     acct.settings_ready = True
     s.tick()
     _settle(s)
-    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+    assert [kind for _, kind, _ in rec.ran] == ["lumiverb.image.likeness"]
 
 
 @pytest.mark.fast
@@ -435,10 +436,10 @@ def test_a_job_that_couldnt_try_is_offered_again_and_one_that_tried_waits() -> N
         tries.append(job.asset_ids[0])
         return next(outcomes)
 
-    runners["probe"] = probe
+    runners["lumiverb.video.format"] = probe
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in [_item("p")] if i["asset_id"] not in skip]
-                  if k.name == "probe" else [], runners=runners, scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
+                  if k.name == "lumiverb.video.format" else [], runners=runners, scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     for _ in range(4):
         s.tick()
         _settle(s)
@@ -462,16 +463,16 @@ def test_what_a_job_says_of_each_clip_decides_how_long_its_held() -> None:
         raise RuntimeError("a surprise")
 
     clock = Clock()
-    runners = {**Recorder().all(), "vision": lambda acct, job: ["b"], "ocr": boom}
-    due = {"vision": [_item("a"), _item("b", "2026-10-02")], "ocr": [_item("c")]}
+    runners = {**Recorder().all(), "lumiverb.image.description": lambda acct, job: ["b"], "lumiverb.image.text": boom}
+    due = {"lumiverb.image.description": [_item("a"), _item("b", "2026-10-02")], "lumiverb.image.text": [_item("c")]}
     s = Scheduler(lambda: {"t1": FakeAccount(vision=3)}, capacity={"scan": 0},
                   candidates=lambda t, k, libs, skip=(): [i for i in due.get(k.name, []) if i["asset_id"] not in skip],
                   runners=runners, scan=MagicMock(), inline_refill=True, clock=clock)
     s.tick()
     _settle(s)
     clock.now += s.dispatcher.settle_after + 1
-    assert s.dispatcher.held("t1", "vision") == ["b"]
-    assert s.dispatcher.held("t1", "ocr") == ["c"]
+    assert s.dispatcher.held("t1", "lumiverb.image.description") == ["b"]
+    assert s.dispatcher.held("t1", "lumiverb.image.text") == ["c"]
 
 
 @pytest.mark.fast
@@ -483,7 +484,7 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
     def candidates(tenant_id, kind, libraries, skip=()):
         skipped.append((kind.name, tuple(sorted(skip))))
         return [i for i in [_item("a"), _item("b", "2026-10-02")] if i["asset_id"] not in skip] \
-            if kind.name == "vision" else []
+            if kind.name == "lumiverb.image.description" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0}, candidates=candidates,
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
@@ -491,7 +492,7 @@ def test_the_database_is_asked_to_leave_out_clips_in_hand_or_just_tried() -> Non
     s.dispatcher._all_known_at.clear()
     s.dispatcher._buffers.clear()
     s.tick()
-    assert ("vision", ("a",)) in skipped
+    assert ("lumiverb.image.description", ("a",)) in skipped
     rec.hold.set()
     _settle(s)
 
@@ -501,15 +502,15 @@ def test_one_kinds_trouble_doesnt_hold_up_the_others() -> None:
     rec = Recorder()
 
     def candidates(tenant_id, kind, libraries, skip=()):
-        if kind.name == "probe":
+        if kind.name == "lumiverb.video.format":
             raise RuntimeError("statement timeout")
-        return [_item("c")] if kind.name == "clip" else []
+        return [_item("c")] if kind.name == "lumiverb.image.likeness" else []
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"probe": 1, "gpu": 1, "scan": 0},
                   candidates=candidates, runners=rec.all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
-    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+    assert [kind for _, kind, _ in rec.ran] == ["lumiverb.image.likeness"]
 
 
 @pytest.mark.fast
@@ -520,7 +521,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
     acct = FakeAccount()
     acct.refresh = lambda: gate.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"gpu": 1, "scan": 0},
-                  candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "clip" else [],
+                  candidates=lambda t, k, libs, skip=(): [_item("c")] if k.name == "lumiverb.image.likeness" else [],
                   runners=rec.all(), scan=MagicMock(), retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     start = time.monotonic()
     s.tick()
@@ -531,7 +532,7 @@ def test_refills_happen_off_the_dispatching_thread() -> None:
         s.tick()
         _settle(s)
         time.sleep(0.02)
-    assert [kind for _, kind, _ in rec.ran] == ["clip"]
+    assert [kind for _, kind, _ in rec.ran] == ["lumiverb.image.likeness"]
     s.stop()
 
 
@@ -584,36 +585,36 @@ def test_redo_runs_after_everything_else_in_its_pool() -> None:
     # Missing beats stale: a redo only fills slots the first makings leave idle.
     rec = Recorder()
     rec.hold.clear()
-    s = _scheduler({"t1": FakeAccount(vision=1)}, {"redo_vision": [_item("old", "2020-01-01")],
-                                                   "vision": [_item("new", "2026-10-09")]}, rec)
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"redo:lumiverb.image.description": [_item("old", "2020-01-01")],
+                                                   "lumiverb.image.description": [_item("new", "2026-10-09")]}, rec)
     s.tick()
     rec.hold.set()
     _settle(s)
     s.tick()
     _settle(s)
-    assert [(kind, ids) for _, kind, ids in rec.ran if "vision" in kind] == [("vision", ("new",)),
-                                                                            ("vision", ("old",))]
+    assert [(kind, ids) for _, kind, ids in rec.ran if "lumiverb.image.description" in kind] == [("lumiverb.image.description", ("new",)),
+                                                                            ("lumiverb.image.description", ("old",))]
 
 
 @pytest.mark.fast
 def test_a_redo_runs_with_its_first_kinds_runner() -> None:
     rec = Recorder()
-    s = _scheduler({"t1": FakeAccount()}, {"redo_clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": FakeAccount()}, {"redo:lumiverb.image.likeness": [_item("c")]}, rec)
     s.tick()
     _settle(s)
-    assert ("t1", "clip", ("c",)) in rec.ran
+    assert ("t1", "lumiverb.image.likeness", ("c",)) in rec.ran
 
 
 @pytest.mark.fast
 def test_a_stopped_redo_hands_out_nothing_and_is_not_asked_for() -> None:
     rec = Recorder()
     asked: list = []
-    s = _scheduler({"t1": FakeAccount()}, {"redo_vision": [_item("old")], "clip": [_item("c")]}, rec,
-                   asked=asked, paused={"vision"})
+    s = _scheduler({"t1": FakeAccount()}, {"redo:lumiverb.image.description": [_item("old")], "lumiverb.image.likeness": [_item("c")]}, rec,
+                   asked=asked, paused={"lumiverb.image.description"})
     s.tick()
     _settle(s)
-    assert [kind for _, kind, _ in rec.ran] == ["clip"]
-    assert "redo_vision" not in [kind for _, kind, _ in asked]
+    assert [kind for _, kind, _ in rec.ran] == ["lumiverb.image.likeness"]
+    assert "redo:lumiverb.image.description" not in [kind for _, kind, _ in asked]
 
 
 @pytest.mark.fast
@@ -622,10 +623,10 @@ def test_stopping_a_redo_clears_what_was_waiting_at_once() -> None:
     rec.hold.clear()
     stopped: set = set()
     s = _scheduler({"t1": FakeAccount(vision=1)},
-                   {"redo_vision": [_item("a"), _item("b", "2026-10-02")]}, rec, paused=stopped)
+                   {"redo:lumiverb.image.description": [_item("a"), _item("b", "2026-10-02")]}, rec, paused=stopped)
     s._on_hold = lambda tenant_id: _pauses((), stopped)
     s.tick()  # a in hand, b waiting
-    stopped.add("vision")
+    stopped.add("lumiverb.image.description")
     rec.hold.set()
     _settle(s)
     s.tick()
@@ -643,7 +644,7 @@ def test_a_paused_account_starts_nothing_and_asks_for_nothing() -> None:
     rec = Recorder()
     asked: list = []
     scan = MagicMock()
-    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "vision": [_item("v")]}, rec,
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.video.format": [_item("p")], "lumiverb.image.description": [_item("v")]}, rec,
                    asked=asked, held={*pause_targets(), PAUSE_SCANS}, scan=scan)
     s.tick()
     _settle(s)
@@ -665,12 +666,12 @@ def test_paused_scans_stop_only_scans() -> None:
     # Robert, Oct 9: scans can be paused on their own; the rest goes on.
     rec = Recorder()
     scan = MagicMock()
-    s = _scheduler({"t1": FakeAccount()}, {"probe": [_item("p")], "clip": [_item("c")]}, rec,
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.video.format": [_item("p")], "lumiverb.image.likeness": [_item("c")]}, rec,
                    held={"scans"}, scan=scan)
     s.tick()
     _settle(s)
     assert not scan.called
-    assert sorted(kind for _, kind, _ in rec.ran) == ["clip", "probe"]
+    assert sorted(kind for _, kind, _ in rec.ran) == ["lumiverb.image.likeness", "lumiverb.video.format"]
 
 
 @pytest.mark.fast
@@ -678,7 +679,7 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
     rec = Recorder()
     rec.hold.clear()
     held: set = set()
-    s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"lumiverb.image.description": [_item("a"), _item("b", "2026-10-02")]}, rec)
     s._on_hold = lambda tenant_id: _pauses(held)
     s.tick()  # a in hand, b waiting
     held.update(pause_targets())
@@ -694,24 +695,24 @@ def test_pausing_lets_running_jobs_finish_and_starts_nothing_more() -> None:
 @pytest.mark.fast
 def test_other_accounts_go_on_while_one_is_paused() -> None:
     rec = Recorder()
-    s = _scheduler({"t1": FakeAccount("t1"), "t2": FakeAccount("t2")}, {"clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": FakeAccount("t1"), "t2": FakeAccount("t2")}, {"lumiverb.image.likeness": [_item("c")]}, rec)
     s._on_hold = lambda tenant_id: _pauses(pause_targets() if tenant_id == "t1" else ())
     s.tick()
     _settle(s)
-    assert [(t, kind) for t, kind, _ in rec.ran] == [("t2", "clip")]
+    assert [(t, kind) for t, kind, _ in rec.ran] == [("t2", "lumiverb.image.likeness")]
 
 
 @pytest.mark.fast
 def test_a_paused_producer_starts_nothing_of_its_own_and_the_rest_go_on() -> None:
     rec = Recorder()
     asked: list = []
-    s = _scheduler({"t1": FakeAccount()}, {"vision": [_item("v")], "redo_vision": [_item("old")],
-                                           "ocr": [_item("o")], "clip": [_item("c")]}, rec,
-                   asked=asked, held={"vision"})
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.image.description": [_item("v")], "redo:lumiverb.image.description": [_item("old")],
+                                           "lumiverb.image.text": [_item("o")], "lumiverb.image.likeness": [_item("c")]}, rec,
+                   asked=asked, held={"lumiverb.image.description"})
     s.tick()
     _settle(s)
-    assert sorted(kind for _, kind, _ in rec.ran) == ["clip", "ocr"]
-    assert not {"vision", "redo_vision"} & {kind for _, kind, _ in asked}
+    assert sorted(kind for _, kind, _ in rec.ran) == ["lumiverb.image.likeness", "lumiverb.image.text"]
+    assert not {"lumiverb.image.description", "redo:lumiverb.image.description"} & {kind for _, kind, _ in asked}
 
 
 @pytest.mark.fast
@@ -721,10 +722,10 @@ def test_resuming_hands_out_what_was_waiting_at_once() -> None:
     rec = Recorder()
     rec.hold.clear()
     held: set = set()
-    s = _scheduler({"t1": FakeAccount(vision=1)}, {"vision": [_item("a"), _item("b", "2026-10-02")]}, rec)
+    s = _scheduler({"t1": FakeAccount(vision=1)}, {"lumiverb.image.description": [_item("a"), _item("b", "2026-10-02")]}, rec)
     s._on_hold = lambda tenant_id: _pauses(held)
     s.tick()  # a in hand, b waiting (all of them known)
-    held.add("vision")
+    held.add("lumiverb.image.description")
     s.tick()
     rec.hold.set()
     _settle(s)
@@ -740,7 +741,7 @@ def test_until_what_was_paused_can_be_read_nothing_starts() -> None:
         raise RuntimeError("database down")
 
     rec = Recorder()
-    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.image.likeness": [_item("c")]}, rec)
     s._on_hold = unreadable
     s.tick()
     _settle(s)
@@ -756,14 +757,14 @@ def test_a_pause_that_came_and_went_while_listing_doesnt_hold_the_kind_back() ->
     answers = [None, [_item("a")]]
 
     def candidates(tenant_id, kind, libraries, skip=()):
-        return answers.pop(0) if kind.name == "vision" and answers else []
+        return answers.pop(0) if kind.name == "lumiverb.image.description" and answers else []
 
     s = _scheduler({"t1": FakeAccount()}, {}, rec)
     s._candidates = candidates
     s.tick()
     s.tick()
     _settle(s)
-    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+    assert [ids for _, kind, ids in rec.ran if kind == "lumiverb.image.description"] == [("a",)]
 
 
 @pytest.mark.fast
@@ -774,7 +775,7 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     rec = Recorder()
     rec.hold.clear()
     release = threading.Event()  # a holds its slot until told, however slow the machine
-    vision = rec.runner("vision")
+    vision = rec.runner("lumiverb.image.description")
     held: set = set()
     slow = threading.Event()
     slow.set()
@@ -782,12 +783,12 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     acct.refresh = lambda: slow.wait(60)
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 1, "probe": 2, "render": 1, "gpu": 1, "scenes": 1},
                   candidates=lambda t, kind, libs, skip=(): [_item("a"), _item("b", "2026-10-02")]
-                  if kind.name == "vision" else [],
-                  runners={**rec.all(), "vision": lambda acct, job: (release.wait(60), vision(acct, job))[1]},
+                  if kind.name == "lumiverb.image.description" else [],
+                  runners={**rec.all(), "lumiverb.image.description": lambda acct, job: (release.wait(60), vision(acct, job))[1]},
                   scan=MagicMock(), on_hold=lambda t: _pauses(held),
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     def vision_running() -> int:  # the scan job (instant here) may be in flight too: it isn't counted
-        return s.dispatcher.status("t1")["running"].get("vision", 0)
+        return s.dispatcher.status("t1")["running"].get("lumiverb.image.description", 0)
 
     deadline = time.monotonic() + 60
     while vision_running() == 0 and time.monotonic() < deadline:  # a in hand, b waiting
@@ -802,7 +803,7 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
         s.tick()
         time.sleep(0.02)
     assert refreshing.is_set()
-    held.add("vision")
+    held.add("lumiverb.image.description")
     deadline = time.monotonic() + 60
     while s.dispatcher.status("t1")["waiting"] and time.monotonic() < deadline:
         s.tick()
@@ -816,7 +817,7 @@ def test_a_pause_stops_jobs_starting_while_a_slow_refill_is_still_running() -> N
     slow.set()
     _settle(s)
     s.stop(grace=1)
-    assert [ids for _, kind, ids in rec.ran if kind == "vision"] == [("a",)]
+    assert [ids for _, kind, ids in rec.ran if kind == "lumiverb.image.description"] == [("a",)]
 
 
 @pytest.mark.fast
@@ -825,20 +826,20 @@ def test_asking_to_try_failing_clips_again_lets_go_of_the_hour() -> None:
     # someone asking to try again shouldn't wait that out.
     rec = Recorder()
     asked: list[str | None] = [None]
-    s = _scheduler({"t1": FakeAccount()}, {"clip": [_item("c")]}, rec)
-    clip = s._runners["clip"]
-    s._runners["clip"] = lambda acct, job: clip(acct, job) or list(job.asset_ids)  # it waits
+    s = _scheduler({"t1": FakeAccount()}, {"lumiverb.image.likeness": [_item("c")]}, rec)
+    clip = s._runners["lumiverb.image.likeness"]
+    s._runners["lumiverb.image.likeness"] = lambda acct, job: clip(acct, job) or list(job.asset_ids)  # it waits
     s._retry_requested = lambda tenant_id: asked[0]
     for _ in range(2):
         s.tick()
         _settle(s)
         s.dispatcher._all_known_at.clear()
-    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",)]  # held for the hour
+    assert [ids for _, kind, ids in rec.ran if kind == "lumiverb.image.likeness"] == [("c",)]  # held for the hour
     asked[0] = "2026-10-09T01:00:00"
     for _ in range(2):
         s.tick()
         _settle(s)
-    assert [ids for _, kind, ids in rec.ran if kind == "clip"] == [("c",), ("c",)]
+    assert [ids for _, kind, ids in rec.ran if kind == "lumiverb.image.likeness"] == [("c",), ("c",)]
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +853,7 @@ def test_ai_machines_sharing_the_gpu_give_way_while_a_render_decodes() -> None:
     rec.hold.clear()
     acct = FakeAccount()
     s = Scheduler(lambda: {"t1": acct}, capacity={"render": 2, "scan": 0},
-                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
+                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "lumiverb.video.analysis_proxy" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=1,
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     s.tick()
@@ -868,7 +869,7 @@ def test_without_gpu_decoding_nothing_gives_way() -> None:
     rec = Recorder()
     acct = FakeAccount()
     s = Scheduler(lambda: {"t1": acct}, capacity={"render": 1, "scan": 0},
-                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "render" else [],
+                  candidates=lambda t, k, libs, skip=(): [_item("r")] if k.name == "lumiverb.video.analysis_proxy" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True, gpu_decodes=0,
                   retry_requested=lambda t: None, write_status=lambda t, st: None)
     s.tick()
@@ -882,7 +883,7 @@ def test_what_the_scheduler_is_doing_is_written_for_processing() -> None:
     rec.hold.clear()
     written: list[tuple[str, dict]] = []
     s = Scheduler(lambda: {"t1": FakeAccount(vision=1)}, capacity={"scan": 0},
-                  candidates=lambda t, k, libs, skip=(): [_item("a"), _item("b", "2026-10-02")] if k.name == "vision" else [],
+                  candidates=lambda t, k, libs, skip=(): [_item("a"), _item("b", "2026-10-02")] if k.name == "lumiverb.image.description" else [],
                   runners=rec.all(), scan=MagicMock(), inline_refill=True,
                   retry_requested=lambda t: None,
                   write_status=lambda t, st: written.append((t, st)))
@@ -892,7 +893,7 @@ def test_what_the_scheduler_is_doing_is_written_for_processing() -> None:
     s._status_at.clear()
     s.tick()
     tenant, status = written[-1]
-    assert tenant == "t1" and status["running"] == {"vision": 1} and status["waiting"]["vision"] >= 1
+    assert tenant == "t1" and status["running"] == {"lumiverb.image.description": 1} and status["waiting"]["lumiverb.image.description"] >= 1
     assert status["pools"]["vision"] == [1, 1] and "at" in status and status["gpu_hold"] == 0
     rec.hold.set()
     _settle(s)
@@ -1119,39 +1120,39 @@ def test_a_save_the_server_refuses_is_the_clips_failure() -> None:
 
     acct = FakeAccount()
     clock = Clock()
-    due = {"transcript": [_item("t")], "render": [_item("r")]}
+    due = {"lumiverb.video.transcript": [_item("t")], "lumiverb.video.analysis_proxy": [_item("r")]}
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0, "render": 1},
                   candidates=lambda t, k, libs, skip=(): [i for i in due.get(k.name, []) if i["asset_id"] not in skip],
-                  runners={**Recorder().all(), "transcript": refused, "render": gone}, scan=MagicMock(),
+                  runners={**Recorder().all(), "lumiverb.video.transcript": refused, "lumiverb.video.analysis_proxy": gone}, scan=MagicMock(),
                   inline_refill=True, clock=clock)
     s.tick()
     _settle(s)
     acct.failures.add.assert_called_once()
-    assert acct.failures.add.call_args.args[:2] == ("transcript", "t")
+    assert acct.failures.add.call_args.args[:2] == ("lumiverb.video.transcript", "t")
     assert "Invalid SRT format" in str(acct.failures.add.call_args.args[2])
     clock.now += s.dispatcher.settle_after + 1
-    assert s.dispatcher.held("t1", "transcript") == []  # reported: the server says when to try again
-    assert s.dispatcher.held("t1", "render") == ["r"]  # gone meanwhile: it waits
+    assert s.dispatcher.held("t1", "lumiverb.video.transcript") == []  # reported: the server says when to try again
+    assert s.dispatcher.held("t1", "lumiverb.video.analysis_proxy") == ["r"]  # gone meanwhile: it waits
 
 
 @pytest.mark.fast
 def test_a_redo_is_listed_with_its_settings_and_the_account_follows_them() -> None:
     rec = Recorder()
     acct = FakeAccount()
-    s = _scheduler({"t1": acct}, {"redo_vision": [{**_item("old"), "settings_hash": "new"}],
-                                  "clip": [_item("c")]}, rec)
+    s = _scheduler({"t1": acct}, {"redo:lumiverb.image.description": [{**_item("old"), "settings_hash": "new"}],
+                                  "lumiverb.image.likeness": [_item("c")]}, rec)
     s.tick()
     _settle(s)
-    assert acct.followed == [("vision", "new")]  # before its clips are handed out
+    assert acct.followed == [("lumiverb.image.description", "new")]  # before its clips are handed out
 
 
 @pytest.mark.fast
 def test_each_accounts_pace_starts_from_its_last_status_after_a_restart() -> None:
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"scan": 0}, candidates=lambda *a, **kw: [],
                   runners=Recorder().all(), scan=MagicMock(), inline_refill=True, retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None,
-                  last_status=lambda tenant_id: {"pace": {"render": 0.4, "vision": 9.0}})
+                  last_status=lambda tenant_id: {"pace": {"lumiverb.video.analysis_proxy": 0.4, "lumiverb.image.description": 9.0}})
     s.tick()
-    assert s.status("t1")["pace"] == {"render": 0.4, "vision": 9.0}
+    assert s.status("t1")["pace"] == {"lumiverb.video.analysis_proxy": 0.4, "lumiverb.image.description": 9.0}
 
 
 @pytest.mark.fast
@@ -1162,12 +1163,12 @@ def test_a_kind_learns_its_pace_only_from_the_clips_its_jobs_made() -> None:
     acct.failures = FailureReport(None)
 
     def vision(account, job):
-        account.failures.add("vision", "bad", "the model said no")
+        account.failures.add("lumiverb.image.description", "bad", "the model said no")
         return None
 
     s = Scheduler(lambda: {"t1": acct}, capacity={"scan": 0}, inline_refill=True, candidates=lambda t, k, libs, skip=(): [i for i in [_item("bad")] if i["asset_id"] not in skip]
-                  if k.name == "vision" else [],
-                  runners={**Recorder().all(), "vision": vision}, scan=MagicMock(),
+                  if k.name == "lumiverb.image.description" else [],
+                  runners={**Recorder().all(), "lumiverb.image.description": vision}, scan=MagicMock(),
                   retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     _settle(s)
@@ -1238,7 +1239,7 @@ class CrashCounter:
         return reached
 
 
-def _crash_scheduler(runner, counter: CrashCounter, kind: str = "ocr") -> Scheduler:
+def _crash_scheduler(runner, counter: CrashCounter, kind: str = "lumiverb.image.text") -> Scheduler:
     return Scheduler(lambda: {}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
                      runners={**Recorder().all(), kind: runner}, scan=MagicMock(), crashed=counter)
 
@@ -1260,12 +1261,12 @@ def test_a_clip_that_keeps_crashing_is_charged_after_so_many_in_a_row() -> None:
     s = _crash_scheduler(boom, counter)
     acct = FakeAccount()
     for _ in range(counter.limit - 1):
-        assert s._run(acct, _job("ocr", "c")) == ["c"]  # waits, uncharged
+        assert s._run(acct, _job("lumiverb.image.text", "c")) == ["c"]  # waits, uncharged
         acct.failures.add.assert_not_called()
-    assert s._run(acct, _job("ocr", "c")) is None  # charged: the server's back-off and giving up apply
+    assert s._run(acct, _job("lumiverb.image.text", "c")) is None  # charged: the server's back-off and giving up apply
     acct.failures.add.assert_called_once()
     artifact, asset_id, error = acct.failures.add.call_args.args
-    assert (artifact, asset_id) == ("ocr", "c") and "segfault in the model" in error
+    assert (artifact, asset_id) == ("lumiverb.image.text", "c") and "segfault in the model" in error
 
 
 @pytest.mark.fast
@@ -1284,7 +1285,7 @@ def test_trouble_reaching_the_server_charges_nothing_and_isnt_counted() -> None:
     s = _crash_scheduler(away, counter)
     acct = FakeAccount()
     for _ in range(3):
-        assert s._run(acct, _job("ocr", "c")) == ["c"]
+        assert s._run(acct, _job("lumiverb.image.text", "c")) == ["c"]
     assert counter.calls == [] and not acct.failures.add.called
 
 
@@ -1296,9 +1297,9 @@ def test_a_server_error_counts_as_a_crash() -> None:
         raise LumiverbAPIError("internal", "Internal Server Error", 500)
 
     counter = CrashCounter()
-    s = _crash_scheduler(internal, counter, kind="vision")
-    assert s._run(FakeAccount(), _job("vision", "v")) == ["v"]
-    assert counter.calls == [("vision", ["v"])]
+    s = _crash_scheduler(internal, counter, kind="lumiverb.image.description")
+    assert s._run(FakeAccount(), _job("lumiverb.image.description", "v")) == ["v"]
+    assert counter.calls == [("lumiverb.image.description", ["v"])]
 
 
 @pytest.mark.fast
@@ -1309,9 +1310,9 @@ def test_only_the_clips_that_crashed_are_counted() -> None:
         raise Crashed(["bad"], "face detection's process died or hung", waiting=["changed"])
 
     counter = CrashCounter()
-    s = _crash_scheduler(faces, counter, kind="faces")
-    assert sorted(s._run(FakeAccount(), _job("faces", "ok", "bad", "changed"))) == ["bad", "changed"]
-    assert counter.calls == [("faces", ["bad"])]
+    s = _crash_scheduler(faces, counter, kind="lumiverb.image.faces")
+    assert sorted(s._run(FakeAccount(), _job("lumiverb.image.faces", "ok", "bad", "changed"))) == ["bad", "changed"]
+    assert counter.calls == [("lumiverb.image.faces", ["bad"])]
 
 
 @pytest.mark.fast
@@ -1320,9 +1321,9 @@ def test_a_redo_counts_crashes_against_its_artifact() -> None:
         raise RuntimeError("boom")
 
     counter = CrashCounter()
-    s = _crash_scheduler(boom, counter, kind="vision")
-    s._run(FakeAccount(), _job("redo_vision", "v"))
-    assert counter.calls == [("vision", ["v"])]
+    s = _crash_scheduler(boom, counter, kind="lumiverb.image.description")
+    s._run(FakeAccount(), _job("redo:lumiverb.image.description", "v"))
+    assert counter.calls == [("lumiverb.image.description", ["v"])]
 
 
 @pytest.mark.fast
@@ -1334,9 +1335,9 @@ def test_counting_crashes_failing_charges_nothing() -> None:
         raise RuntimeError("database away")
 
     s = Scheduler(lambda: {}, capacity={"scan": 0}, candidates=lambda *a, **kw: [], inline_refill=True,
-                  runners={**Recorder().all(), "ocr": boom}, scan=MagicMock(), crashed=broken)
+                  runners={**Recorder().all(), "lumiverb.image.text": boom}, scan=MagicMock(), crashed=broken)
     acct = FakeAccount()
-    assert s._run(acct, _job("ocr", "c")) == ["c"]
+    assert s._run(acct, _job("lumiverb.image.text", "c")) == ["c"]
     acct.failures.add.assert_not_called()
 
 
@@ -1348,8 +1349,8 @@ def test_a_job_stopped_mid_save_counts_as_not_tried() -> None:
         raise Stopped("/v1/assets/x/video-facet")
 
     counter = CrashCounter()
-    s = _crash_scheduler(stopped, counter, kind="probe")
-    assert s._run(FakeAccount(), _job("probe", "p")) == NOT_TRIED
+    s = _crash_scheduler(stopped, counter, kind="lumiverb.video.format")
+    assert s._run(FakeAccount(), _job("lumiverb.video.format", "p")) == NOT_TRIED
     assert counter.calls == []
 
 
@@ -1453,7 +1454,7 @@ class ReadsOriginals(Work):
     do: through its inputs (Work.inputs.original), which go by the latest
     look and note storage found gone since. One that reads the storage."""
 
-    artifact = "probe"
+    artifact = "lumiverb.video.format"
 
     def make(self, clip: dict) -> str:
         with self.inputs.original(clip):
@@ -1536,7 +1537,7 @@ def _own_kinds(switch: str) -> set[str]:
     producer's its kind and its redo; Upkeep none of the scheduler's."""
     if switch == PAUSE_SCANS:
         return {"scan"}
-    return {k.name for k in KINDS.values() if k.flag and k.artifact == switch}
+    return {k.name for k in KINDS.values() if k.artifact and k.artifact == switch}
 
 
 @pytest.mark.fast
@@ -1646,11 +1647,11 @@ def test_a_new_versions_hold_is_looked_for_whatever_is_paused_before_any_redo_is
 
     s = Scheduler(lambda: {"t1": FakeAccount()}, capacity={"scan": 0}, candidates=candidates, inline_refill=True,
                   runners=Recorder().all(), scan=MagicMock(), clock=clock, new_versions=new_versions,
-                  on_hold=lambda tenant_id: _pauses({"vision"}),
+                  on_hold=lambda tenant_id: _pauses({"lumiverb.image.description"}),
                   retry_requested=lambda tenant_id: None, write_status=lambda tenant_id, status: None)
     s.tick()
     assert asked[0] == ("new versions", "t1")  # before anything is listed
-    assert ("listed", "redo_vision") not in asked  # vision is paused; its hold is still looked for
+    assert ("listed", "redo:lumiverb.image.description") not in asked  # vision is paused; its hold is still looked for
     asked.clear()
     clock.now += NEW_VERSIONS_EVERY_SEC / 2
     s.tick()

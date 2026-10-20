@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import logging
 
+from src.producers.names import CAPTURE_TIME
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
 
 
 class Capture(Work):
-    artifact = "capture"
+    artifact = CAPTURE_TIME
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

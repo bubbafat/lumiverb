@@ -120,7 +120,7 @@ def test_submit_vision_happy_path(submission_client) -> None:
             "model_version": "2024-08-26",
             "description": "A red barn at sunset",
             "tags": ["barn", "rural", "sunset"],
-            "lineage": made("vision"),
+            "lineage": made("lumiverb.image.description"),
         },
         headers=auth,
     )
@@ -137,7 +137,7 @@ def test_submit_ocr_needs_no_description_first(submission_client) -> None:
     # sub_b has not had vision submitted
     asset_id = image_asset_ids[1]
 
-    r = saved(client, "ocr", asset_id, json={"ocr_text": "hello", "lineage": made("ocr")},
+    r = saved(client, "ocr", asset_id, json={"ocr_text": "hello", "lineage": made("lumiverb.image.text")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -149,7 +149,7 @@ def test_submit_ocr_after_vision(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
     asset_id = image_asset_ids[0]  # already has vision metadata from above
 
-    r = saved(client, "ocr", asset_id, json={"ocr_text": "STOP SIGN", "lineage": made("ocr")},
+    r = saved(client, "ocr", asset_id, json={"ocr_text": "STOP SIGN", "lineage": made("lumiverb.image.text")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -165,7 +165,7 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
     client, auth, _, image_asset_ids, _ = submission_client
 
     # Make sure sub_c has vision metadata so we can update it
-    r = saved(client, "vision", image_asset_ids[2], json={"model_id": "moondream2", "description": "a stop sign", "lineage": made("vision")},
+    r = saved(client, "vision", image_asset_ids[2], json={"model_id": "moondream2", "description": "a stop sign", "lineage": made("lumiverb.image.description")},
         headers=auth,
     )
     assert r.status_code == 200
@@ -180,7 +180,7 @@ def test_batch_ocr_mixed_present_and_missing(submission_client) -> None:
             {"asset_id": "ast_nonex0000000000000000000", "ocr_text": "skip"},
         ]
     }
-    r = client.post("/v1/assets/batch-ocr", json={**payload, "lineage": made("ocr")}, headers=auth)
+    r = client.post("/v1/assets/batch-ocr", json={**payload, "lineage": made("lumiverb.image.text")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 3
@@ -212,7 +212,7 @@ def test_batch_vision_updates_and_skips(submission_client) -> None:
             },
         ]
     }
-    r = client.post("/v1/assets/batch-vision", json={**payload, "lineage": made("vision")}, headers=auth)
+    r = client.post("/v1/assets/batch-vision", json={**payload, "lineage": made("lumiverb.image.description")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 1
@@ -242,7 +242,7 @@ def test_batch_embeddings_updates_and_skips(submission_client) -> None:
             },
         ]
     }
-    r = client.post("/v1/assets/batch-embeddings", json={**payload, "lineage": made("clip")}, headers=auth)
+    r = client.post("/v1/assets/batch-embeddings", json={**payload, "lineage": made("lumiverb.image.likeness")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["updated"] == 1
@@ -295,7 +295,7 @@ def test_batch_faces_processes_and_normalizes_corners(submission_client) -> None
             },
         ]
     }
-    r = client.post("/v1/assets/batch-faces", json={**payload, "lineage": made("faces")}, headers=auth)
+    r = client.post("/v1/assets/batch-faces", json={**payload, "lineage": made("lumiverb.image.faces")}, headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["processed"] == 2

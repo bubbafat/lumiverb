@@ -47,7 +47,7 @@ FACET = {
 
 def _probed(facet: dict) -> dict:
     """A probe's PUT body: the facet and how it was found."""
-    return {**facet, "lineage": made("probe")}
+    return {**facet, "lineage": made("lumiverb.video.format")}
 
 
 @pytest.fixture(scope="module")
@@ -126,7 +126,7 @@ def _ingest(client, headers, library_id: str, rel_path: str, media_type: str, **
 def _missing_probe(env) -> set[str]:
     """The videos the scheduler hands out to be probed (its queue)."""
     _, _, library_id, tenant_url = env
-    return {c["asset_id"] for c in due(tenant_url, "probe", [library_id])}
+    return {c["asset_id"] for c in due(tenant_url, "lumiverb.video.format", [library_id])}
 
 
 @pytest.mark.slow

@@ -23,9 +23,9 @@ BEFORE_NOTCHES = {"max_edge": 960, "fps_max": 30, "crf": 28, "audio_kbps_per_cha
 
 @pytest.mark.fast
 def test_better_is_what_was_made_before_notches_so_nothing_is_made_again():
-    assert shared.effective_settings("analysis_proxy") == BEFORE_NOTCHES
-    assert shared.settings_hash(shared.effective_settings("analysis_proxy")) == shared.settings_hash(BEFORE_NOTCHES)
-    assert shared.notches("analysis_proxy") == {"quality": "better"}
+    assert shared.effective_settings("lumiverb.video.analysis_proxy") == BEFORE_NOTCHES
+    assert shared.settings_hash(shared.effective_settings("lumiverb.video.analysis_proxy")) == shared.settings_hash(BEFORE_NOTCHES)
+    assert shared.notches("lumiverb.video.analysis_proxy") == {"quality": "better"}
 
 
 @pytest.mark.fast
@@ -33,7 +33,7 @@ def test_better_is_what_was_made_before_notches_so_nothing_is_made_again():
 def test_each_notch_stands_for_a_number_each_encoder_maps_to_its_own(notch, crf, cq):
     from src.processing.video.analysis_proxy import AnalysisProxySettings, _video_codec_args
 
-    settings = shared.effective_settings("analysis_proxy", {"quality": notch})
+    settings = shared.effective_settings("lumiverb.video.analysis_proxy", {"quality": notch})
     assert settings["crf"] == crf and "quality" not in settings
     x264 = _video_codec_args(AnalysisProxySettings.for_producer(settings, "libx264"))
     assert x264[x264.index("-crf") + 1] == str(crf)
@@ -45,14 +45,14 @@ def test_each_notch_stands_for_a_number_each_encoder_maps_to_its_own(notch, crf,
 
 @pytest.mark.fast
 def test_a_notch_is_one_of_its_choices_and_one_it_doesnt_know_is_its_default():
-    setting = shared.PRODUCERS["analysis_proxy"].setting("quality")
+    setting = shared.PRODUCERS["lumiverb.video.analysis_proxy"].setting("quality")
     assert setting.check("best") == "best"
     with pytest.raises(ValueError, match="one of good, better, best"):
         setting.check(23)
-    assert shared.effective_settings("analysis_proxy", {"quality": "superb"})["crf"] == 28
-    assert shared.notches("analysis_proxy", {"quality": "superb"}) == {"quality": "better"}
+    assert shared.effective_settings("lumiverb.video.analysis_proxy", {"quality": "superb"})["crf"] == 28
+    assert shared.notches("lumiverb.video.analysis_proxy", {"quality": "superb"}) == {"quality": "better"}
     # A CRF an account set before notches is no setting now (the migration made it a notch).
-    assert shared.effective_settings("analysis_proxy", {"crf": 24})["crf"] == 28
+    assert shared.effective_settings("lumiverb.video.analysis_proxy", {"crf": 24})["crf"] == 28
 
 
 @pytest.mark.fast
@@ -69,7 +69,7 @@ def test_a_notch_declared_wrong_is_refused(bad):
     from src.producers import _check
     from src.producers.contract import Setting
 
-    p = shared.PRODUCERS["analysis_proxy"]
+    p = shared.PRODUCERS["lumiverb.video.analysis_proxy"]
     notch = {"key": "quality", "default": "better", "label": "Quality", "kind": "notch",
              "choices": ("good", "better", "best"), "means": p.setting("quality").means, **bad}
     settings = tuple(Setting(**notch) if s.key == "quality" else s for s in p.settings)
@@ -88,7 +88,7 @@ def _proxies(env) -> dict:
     client, headers, *_ = env
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     assert r.status_code == 200, r.text
-    return {p["artifact"]: p for p in r.json()["producers"]}["analysis_proxy"]
+    return {p["artifact"]: p for p in r.json()["producers"]}["lumiverb.video.analysis_proxy"]
 
 
 @pytest.mark.slow
@@ -98,21 +98,21 @@ def test_settings_show_the_notch_and_the_workers_are_told_its_number(env):
     assert (quality["kind"], quality["value"], quality["default"], quality["choices"]) == (
         "notch", "better", "better", ["good", "better", "best"])
     try:
-        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": "best"}, "redo": False},
+        r = client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": "best"}, "redo": False},
                        headers=headers)
         assert r.status_code == 200, r.text
         now = _proxies(env)
         assert {f["key"]: f for f in now["fields"]}["quality"]["value"] == "best"
         assert now["settings"]["crf"] == 23 and "quality" not in now["settings"]  # what a worker reads
         assert now["settings_hash"] == shared.settings_hash({**BEFORE_NOTCHES, "crf": 23})
-        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"crf": 23}}, headers=headers)
+        r = client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"crf": 23}}, headers=headers)
         assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_setting", r.text
-        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": 23}}, headers=headers)
+        r = client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": 23}}, headers=headers)
         assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
     finally:
-        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
+        client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
                    headers=headers)
-        client.post("/v1/producers/analysis_proxy/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.video.analysis_proxy/resume", json={"scope": "redo"}, headers=headers)
     assert _proxies(env)["settings_hash"] == shared.settings_hash(BEFORE_NOTCHES)
 
 
@@ -121,13 +121,13 @@ def test_settings_show_the_notch_and_the_workers_are_told_its_number(env):
 # ---------------------------------------------------------------------------
 
 BEFORE_PREVIEW_NOTCHES = {
-    "proxy": {"long_edge": 2048, "jpeg_quality": 75, "webp_quality": 80, "thumbnail_edge": 512},
-    "video_preview": {"seconds": 10, "max_height": 720, "crf": 28, "audio_kbps": 128},
+    "lumiverb.preview": {"long_edge": 2048, "jpeg_quality": 75, "webp_quality": 80, "thumbnail_edge": 512},
+    "lumiverb.video.preview": {"seconds": 10, "max_height": 720, "crf": 28, "audio_kbps": 128},
 }
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("artifact", ["proxy", "video_preview"])
+@pytest.mark.parametrize("artifact", ["lumiverb.preview", "lumiverb.video.preview"])
 def test_previews_at_better_are_what_scans_made_before_notches(artifact):
     assert shared.effective_settings(artifact) == BEFORE_PREVIEW_NOTCHES[artifact]
     assert shared.settings_hash(shared.effective_settings(artifact)) == shared.settings_hash(
@@ -137,9 +137,9 @@ def test_previews_at_better_are_what_scans_made_before_notches(artifact):
 def _made_with(notch: str, **changed) -> dict:
     """reader-changes' made_with, as the server says it for an account at this notch."""
     out = {}
-    for artifact in ("proxy", "video_preview"):
+    for artifact in ("lumiverb.preview", "lumiverb.video.preview"):
         spec = shared.PRODUCERS[artifact]
-        out[artifact] = {"producer": spec.producer, "version": spec.version,
+        out[artifact] = {"producer": spec.artifact, "version": spec.version,
                          "settings": shared.effective_settings(artifact, {"quality": notch})}
     for artifact, said in changed.items():
         out[artifact] = {**out[artifact], **said}
@@ -152,11 +152,11 @@ def test_the_scan_takes_the_accounts_preview_settings_unless_they_name_another_v
 
     best = Previews.told(_made_with("best"))
     assert (best.proxy["jpeg_quality"], best.proxy["webp_quality"], best.video_preview["crf"]) == (90, 90, 23)
-    assert best.lineage("proxy", "sha256:" + "ab" * 32)["settings_hash"] == shared.settings_hash(
-        shared.effective_settings("proxy", {"quality": "best"}))
+    assert best.lineage("lumiverb.preview", "sha256:" + "ab" * 32)["settings_hash"] == shared.settings_hash(
+        shared.effective_settings("lumiverb.preview", {"quality": "best"}))
     assert Previews.told({}) == Previews()  # an older server: the registry's
-    other = Previews.told(_made_with("best", proxy={"version": "99"}))  # this client can't make that one
-    assert other.proxy == shared.effective_settings("proxy") and other.video_preview["crf"] == 23
+    other = Previews.told(_made_with("best", **{"lumiverb.preview": {"version": "99"}}))  # this client can't make that
+    assert other.proxy == shared.effective_settings("lumiverb.preview") and other.video_preview["crf"] == 23
 
 
 @pytest.mark.fast
@@ -178,7 +178,7 @@ def test_the_scan_makes_a_photos_and_a_videos_previews_at_the_accounts_notch(tmp
     assert proxy.call_args.kwargs["jpeg_quality"] == 65 and webp.call_args.args[1] == 70
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
     assert json.loads(call.kwargs["data"]["lineage"])["lumiverb.preview"] == shared.lineage(
-        "proxy", shared.effective_settings("proxy", {"quality": "good"}), SHA)
+        "lumiverb.preview", shared.effective_settings("lumiverb.preview", {"quality": "good"}), SHA)
 
     args = _scan_args(tmp_path, "video")
     facet = MagicMock()
@@ -194,7 +194,7 @@ def test_the_scan_makes_a_photos_and_a_videos_previews_at_the_accounts_notch(tmp
     assert poster.call_args.kwargs["jpeg_quality"] == 65 and preview.call_args.kwargs["crf"] == 32
     posts = {c.args[0]: c for c in args["client"].post.call_args_list}
     assert json.loads(posts["/v1/assets/ast_a/artifacts/lumiverb.video.preview"].kwargs["data"]["lineage"]) == shared.lineage(
-        "video_preview", shared.effective_settings("video_preview", {"quality": "good"}), SHA)
+        "lumiverb.video.preview", shared.effective_settings("lumiverb.video.preview", {"quality": "good"}), SHA)
 
 
 @pytest.mark.fast
@@ -242,7 +242,7 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
         r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", io.BytesIO(photo), "image/jpeg")},
                         data={"library_id": library_id, "rel_path": name, "file_size": "1000", "media_type": "image",
                               "width": "640", "height": "480", "exif": json.dumps({"content_hash": sha}),
-                              "lineage": json.dumps({"proxy": want})})
+                              "lineage": json.dumps({"lumiverb.preview": want})})
         assert r.status_code == 200, r.text
         return r.json()["asset_id"]
 
@@ -254,7 +254,7 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
     better = ingest("better.jpg")
     assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=80, max_long_edge=2048)[0]
     try:
-        r = client.put("/v1/producers/proxy/settings", json={"settings": {"quality": "best"}, "redo": False},
+        r = client.put("/v1/producers/lumiverb.preview/settings", json={"settings": {"quality": "best"}, "redo": False},
                        headers=headers)
         assert r.status_code == 200, r.text  # new files only: the one made stays as it is
         best = ingest("best.jpg")
@@ -269,12 +269,12 @@ def test_the_server_keeps_previews_and_thumbnails_at_the_accounts_notch(env):
         assert r.status_code == 200, r.text
         assert kept(better, "proxy") == reencoded(photo, fmt="WEBP", quality=90)[0]
     finally:
-        client.put("/v1/producers/proxy/settings", json={"settings": {"quality": None}, "redo": True}, headers=headers)
-        client.post("/v1/producers/proxy/resume", json={"scope": "redo"}, headers=headers)
+        client.put("/v1/producers/lumiverb.preview/settings", json={"settings": {"quality": None}, "redo": True}, headers=headers)
+        client.post("/v1/producers/lumiverb.preview/resume", json={"scope": "redo"}, headers=headers)
 
 
 def _proxies_of(lib, sha: str | None) -> dict:
     """The proxy lineage a scan would send now (the account's settings)."""
     from tests.test_lineage_api import _want
 
-    return _want(lib, "proxy", sha)
+    return _want(lib, "lumiverb.preview", sha)

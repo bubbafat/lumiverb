@@ -2,7 +2,7 @@
 
 ## Status
 
-Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Part 1 done (v0.1.105, 2026-10-19); part 2 built. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
+Revised (2026-10-19) after Robert's decision (section 5): rename everything. Agreed again by the builder, the reviewer and the tester; then the coordinator's go for part 1. Part 1 done (v0.1.105, 2026-10-19); part 2 done (v0.1.106, 2026-10-19); part 3 built. Robert's phase 1: "refactor builtins to align to the new naming schema". ADR-024's decisions 1, 2, 8 and 12 are his; this plan only says how.
 
 ## What phase 1 does, and doesn't
 
@@ -217,7 +217,7 @@ From part 1 the server takes the names wherever it takes an id. From part 3 it s
 | Devices (`lumiverb device run`) and the scheduler's own check-in | Part 2's speak check-in protocol 2 (names) when the server offers it, else 1. Part 3's server is protocol 2 only (`check_ins.PROTOCOL` and `OLDEST_PROTOCOL` 2) | At part 3: a device older than part 2 is told to upgrade, 426 `reader_too_old`, never left silent |
 | The Mac and iPhone apps | Part 2's fetch files by their names and read playback's source in either spelling; Robert rebuilds both at part 2 | An app from before part 2 plays previews instead of analysis proxies from part 4, and its fetches stop at part 5 (404, naming the file's name) |
 | Resolve's plug-in | Part 2's fetches thumbnails as `lumiverb.preview.thumbnail` | At part 5 |
-| The CLI, on this machine or another | Part 2's takes and sends names | An older CLI's words and lineage are taken until part 5, then refused (422, naming the new name) |
+| The CLI, on this machine or another | Part 2's takes and sends names | An older CLI's words and lineage are taken until part 5, then refused (422, naming the new name). One exception, found by the tester at part 3: a CLI from before part 2 matches `producers settings <word>` against `GET /v1/producers` itself, so from part 3, which lists names, it finds none ("No producer analysis_proxy"). It needs part 2's CLI or later; its pause, resume, failures, enrich and redo, which the server maps, still work |
 | Scripts and people typing (`lumiverb pause vision`) | From part 2 the CLIs take names (`lumiverb.` optional) and old words with a warning naming the new one | At part 5: an old word is refused, saying the name to type |
 | The web app | Served by the server, so it changes with each part. A tab left open across an upgrade sends what it loaded: taken until part 5 | At part 5 |
 | Readers someone wrote (ADR-020 decision 9) | cursor-api says the names from part 1, and the old spellings' end at part 5 | At part 5 |

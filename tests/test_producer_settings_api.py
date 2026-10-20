@@ -39,31 +39,31 @@ def _put(env, artifact: str, headers=None, **body):
 @pytest.fixture(autouse=True)
 def _defaults_after(env):
     yield
-    for artifact, keys in {"transcript": ["vad_min_silence_ms"], "vision": ["prompt", "max_edge", "temperature"],
-                           "analysis_proxy": ["max_edge", "quality"]}.items():
+    for artifact, keys in {"lumiverb.video.transcript": ["vad_min_silence_ms"], "lumiverb.image.description": ["prompt", "max_edge", "temperature"],
+                           "lumiverb.video.analysis_proxy": ["max_edge", "quality"]}.items():
         _put(env, artifact, settings={k: None for k in keys}, redo=True)
 
 
 def test_each_setting_comes_with_its_bounds_and_whether_it_can_change(env):
-    fields = {f["key"]: f for f in _producer(env, "transcript")["fields"]}
+    fields = {f["key"]: f for f in _producer(env, "lumiverb.video.transcript")["fields"]}
     assert fields["vad_min_silence_ms"] == {
         "key": "vad_min_silence_ms", "label": "Shortest silence skipped", "kind": "int", "value": 500,
         "default": 500, "minimum": 100, "maximum": 2000, "unit": "ms", "advanced": False, "fixed": None,
         "remakes": True, "choices": []}
     assert "Settings → AI" in fields["model"]["fixed"]
-    clip = {f["key"]: f for f in _producer(env, "clip")["fields"]}
+    clip = {f["key"]: f for f in _producer(env, "lumiverb.image.likeness")["fields"]}
     assert all(f["fixed"] for f in clip.values())  # CLIP doesn't read them yet
 
 
 def test_an_admin_changes_a_setting_and_the_hash_follows(env):
-    before = _producer(env, "transcript")
-    r = _put(env, "transcript", settings={"vad_min_silence_ms": 800})
+    before = _producer(env, "lumiverb.video.transcript")
+    r = _put(env, "lumiverb.video.transcript", settings={"vad_min_silence_ms": 800})
     assert r.status_code == 200, r.text
-    after = _producer(env, "transcript")
+    after = _producer(env, "lumiverb.video.transcript")
     assert after["settings"]["vad_min_silence_ms"] == 800
     assert after["settings_hash"] != before["settings_hash"]
-    r = _put(env, "transcript", settings={"vad_min_silence_ms": None})  # back to its default
-    assert r.status_code == 200 and _producer(env, "transcript")["settings_hash"] == before["settings_hash"]
+    r = _put(env, "lumiverb.video.transcript", settings={"vad_min_silence_ms": None})  # back to its default
+    assert r.status_code == 200 and _producer(env, "lumiverb.video.transcript")["settings_hash"] == before["settings_hash"]
 
 
 @pytest.mark.parametrize("settings, code", [
@@ -75,14 +75,14 @@ def test_an_admin_changes_a_setting_and_the_hash_follows(env):
     ({"model": "large-v3"}, "setting_fixed"),  # its job's, in Settings → AI
 ])
 def test_what_cant_be_set_is_refused_saying_why(env, settings, code):
-    before = _producer(env, "transcript")["settings_hash"]
-    r = _put(env, "transcript", settings=settings)
+    before = _producer(env, "lumiverb.video.transcript")["settings_hash"]
+    r = _put(env, "lumiverb.video.transcript", settings=settings)
     assert r.status_code == 422 and r.json()["error"]["code"] == code, r.text
-    assert _producer(env, "transcript")["settings_hash"] == before
+    assert _producer(env, "lumiverb.video.transcript")["settings_hash"] == before
 
 
 def test_a_setting_the_code_doesnt_read_cant_be_changed(env):
-    r = _put(env, "clip", settings={"input_edge": 1024})
+    r = _put(env, "lumiverb.image.likeness", settings={"input_edge": 1024})
     assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
     assert "Not read by this producer yet" in r.json()["error"]["message"]
 
@@ -92,15 +92,15 @@ def test_new_settings_ask_before_making_again_what_the_old_ones_made(env):
     sha = _sha()
     photo = _ingest_with(lib, "a.jpg", sha, None)
     _describe(lib, photo, sha)
-    assert _counts(lib, "vision")["current"] == 1
-    r = _put(env, "vision", settings={"temperature": 0.5})
+    assert _counts(lib, "lumiverb.image.description")["current"] == 1
+    r = _put(env, "lumiverb.image.description", settings={"temperature": 0.5})
     assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
     assert r.json()["error"]["details"]["clips"] >= 1
-    assert _producer(env, "vision")["settings"]["temperature"] == 0.2  # nothing saved
-    r = _put(env, "vision", settings={"temperature": 0.5}, redo=True)
+    assert _producer(env, "lumiverb.image.description")["settings"]["temperature"] == 0.2  # nothing saved
+    r = _put(env, "lumiverb.image.description", settings={"temperature": 0.5}, redo=True)
     assert r.status_code == 200, r.text
     assert r.json()["settings"]["temperature"] == 0.5
-    assert _counts(lib, "vision")["stale"] == 1
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
 
 
 def test_new_files_only_keeps_what_the_old_settings_made_until_someone_remakes_it(env):
@@ -109,29 +109,29 @@ def test_new_files_only_keeps_what_the_old_settings_made_until_someone_remakes_i
     lib = _library(env, "SettingsNewOnly")
     sha = _sha()
     _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
-    r = _put(env, "vision", settings={"temperature": 0.5})
+    r = _put(env, "lumiverb.image.description", settings={"temperature": 0.5})
     err = r.json()["error"]
     assert r.status_code == 409 and err["details"]["question"] == "remake", r.text
     assert "New files only" in err["message"] and "remake them too" in err["message"]
     # A new version's hold (nobody's) becomes this person's choice.
-    _hold_as_a_new_version(env, "vision")
-    assert _producer(env, "vision")["new_version"] is True
+    _hold_as_a_new_version(env, "lumiverb.image.description")
+    assert _producer(env, "lumiverb.image.description")["new_version"] is True
     try:
-        r = _put(env, "vision", settings={"temperature": 0.5}, redo=False)
+        r = _put(env, "lumiverb.image.description", settings={"temperature": 0.5}, redo=False)
         assert r.status_code == 200, r.text
         assert r.json()["settings"]["temperature"] == 0.5
         assert r.json()["redo_stopped"] is True and r.json()["new_version"] is False
         assert r.json()["redo_stopped_by"], "a person's choice, kept on the server"
-        assert _counts(lib, "vision")["stale"] == 1  # kept as it was
+        assert _counts(lib, "lumiverb.image.description")["stale"] == 1  # kept as it was
         # Remake: the standing offer resumes its redo.
-        assert client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers).status_code == 204
-        assert _producer(env, "vision")["redo_stopped"] is False
+        assert client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert _producer(env, "lumiverb.image.description")["redo_stopped"] is False
     finally:
-        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_new_files_only_with_nothing_made_yet_stops_nothing(env):
-    r = _put(env, "transcript", settings={"vad_min_silence_ms": 900}, redo=False)
+    r = _put(env, "lumiverb.video.transcript", settings={"vad_min_silence_ms": 900}, redo=False)
     assert r.status_code == 200 and r.json()["redo_stopped"] is False, r.text
 
 
@@ -151,24 +151,24 @@ def _hold_as_a_new_version(env, artifact: str) -> None:
 
 def test_saving_settings_resumes_a_stopped_redo(env):
     client, headers, *_ = env
-    assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-    assert _producer(env, "analysis_proxy")["redo_stopped"] is True
-    r = _put(env, "analysis_proxy", settings={"quality": "good"}, redo=True)
+    assert client.post("/v1/producers/lumiverb.video.analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+    assert _producer(env, "lumiverb.video.analysis_proxy")["redo_stopped"] is True
+    r = _put(env, "lumiverb.video.analysis_proxy", settings={"quality": "good"}, redo=True)
     assert r.status_code == 200, r.text
-    assert r.json()["redo_stopped"] is False and _producer(env, "analysis_proxy")["redo_stopped"] is False
+    assert r.json()["redo_stopped"] is False and _producer(env, "lumiverb.video.analysis_proxy")["redo_stopped"] is False
 
 
 def test_a_float_setting_takes_a_whole_number_as_the_same_value(env):
-    r = _put(env, "vision", settings={"temperature": 1}, redo=True)
+    r = _put(env, "lumiverb.image.description", settings={"temperature": 1}, redo=True)
     assert r.status_code == 200 and r.json()["settings"]["temperature"] == 1.0
     assert isinstance(r.json()["settings"]["temperature"], float)
 
 
 def test_only_admins_change_settings(env):
     for role in ("editor", "viewer"):
-        r = _put(env, "transcript", headers=_key_with_role(env, role), settings={"vad_min_silence_ms": 800})
+        r = _put(env, "lumiverb.video.transcript", headers=_key_with_role(env, role), settings={"vad_min_silence_ms": 800})
         assert r.status_code == 403, r.text
-    assert _producer(env, "transcript")["settings"]["vad_min_silence_ms"] == 500
+    assert _producer(env, "lumiverb.video.transcript")["settings"]["vad_min_silence_ms"] == 500
 
 
 def test_an_unknown_producer_is_404(env):
@@ -177,11 +177,11 @@ def test_an_unknown_producer_is_404(env):
 
 def test_saving_the_same_settings_leaves_a_stopped_redo_stopped(env):
     client, headers, *_ = env
-    assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-    r = _put(env, "analysis_proxy", settings={"quality": "better"})  # its default: nothing changes
+    assert client.post("/v1/producers/lumiverb.video.analysis_proxy/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+    r = _put(env, "lumiverb.video.analysis_proxy", settings={"quality": "better"})  # its default: nothing changes
     assert r.status_code == 200 and r.json()["redo_stopped"] is True, r.text
     assert r.json()["redo_stopped_at"] and r.json()["redo_stopped_by"], r.text  # as GET says it, to an admin
-    client.post("/v1/producers/analysis_proxy/resume", json={"scope": "redo"}, headers=headers)
+    client.post("/v1/producers/lumiverb.video.analysis_proxy/resume", json={"scope": "redo"}, headers=headers)
 
 
 def _stored(env, artifact: str) -> str | None:
@@ -198,10 +198,10 @@ def _stored(env, artifact: str) -> str | None:
 
 
 def test_only_whats_changed_is_stored_and_back_to_defaults_stores_nothing(env):
-    assert _put(env, "transcript", settings={"vad_min_silence_ms": 800}).status_code == 200
-    assert _stored(env, "transcript") == '{"vad_min_silence_ms": 800}'
-    assert _put(env, "transcript", settings={"vad_min_silence_ms": 500}).status_code == 200  # the default
-    assert _stored(env, "transcript") is None
+    assert _put(env, "lumiverb.video.transcript", settings={"vad_min_silence_ms": 800}).status_code == 200
+    assert _stored(env, "lumiverb.video.transcript") == '{"vad_min_silence_ms": 800}'
+    assert _put(env, "lumiverb.video.transcript", settings={"vad_min_silence_ms": 500}).status_code == 200  # the default
+    assert _stored(env, "lumiverb.video.transcript") is None
 
 
 def test_the_count_asked_about_is_what_the_new_settings_would_redo(env):
@@ -209,12 +209,12 @@ def test_the_count_asked_about_is_what_the_new_settings_would_redo(env):
     sha = _sha()
     photo = _ingest_with(lib, "a.jpg", sha, None)
     _describe(lib, photo, sha)
-    assert _put(env, "vision", settings={"temperature": 0.5}, redo=True).status_code == 200
-    assert _counts(lib, "vision")["stale"] == 1
+    assert _put(env, "lumiverb.image.description", settings={"temperature": 0.5}, redo=True).status_code == 200
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
     # Back before anything was made again: nothing would be, so nothing asks.
-    r = _put(env, "vision", settings={"temperature": None})
+    r = _put(env, "lumiverb.image.description", settings={"temperature": None})
     assert r.status_code == 200, r.text
-    assert _counts(lib, "vision")["stale"] == 0
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 0
 
 
 def test_the_question_says_a_stopped_redo_starts_again(env):
@@ -222,13 +222,13 @@ def test_the_question_says_a_stopped_redo_starts_again(env):
     lib = _library(env, "SettingsStopped")
     sha = _sha()
     _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
-    assert client.post("/v1/producers/vision/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+    assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "redo"}, headers=headers).status_code == 204
     try:
-        r = _put(env, "vision", settings={"temperature": 0.7})
+        r = _put(env, "lumiverb.image.description", settings={"temperature": 0.7})
         assert r.status_code == 409, r.text
         assert "stopped" in r.json()["error"]["message"] and r.json()["error"]["details"]["redo_stopped"] is True
     finally:
-        client.post("/v1/producers/vision/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "redo"}, headers=headers)
 
 
 @pytest.mark.parametrize("raw", [
@@ -240,24 +240,24 @@ def test_the_question_says_a_stopped_redo_starts_again(env):
 ])
 def test_numbers_json_allows_but_no_bounds_do_are_refused(env, raw):
     client, headers, *_ = env
-    before = _producer(env, "vision")["settings_hash"]
-    r = client.put("/v1/producers/vision/settings", content=raw,
+    before = _producer(env, "lumiverb.image.description")["settings_hash"]
+    r = client.put("/v1/producers/lumiverb.image.description/settings", content=raw,
                    headers={**headers, "Content-Type": "application/json"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
-    assert _producer(env, "vision")["settings_hash"] == before
+    assert _producer(env, "lumiverb.image.description")["settings_hash"] == before
 
 
 @pytest.mark.parametrize("prompt, says", [("   ", "empty"), ("x" * 4001, "4,000")])
 def test_a_prompt_must_say_something_and_not_too_much(env, prompt, says):
-    r = _put(env, "vision", settings={"prompt": prompt}, redo=True)
+    r = _put(env, "lumiverb.image.description", settings={"prompt": prompt}, redo=True)
     assert r.status_code == 422 and says in r.json()["error"]["message"], r.text
 
 
 def test_a_new_prompt_is_saved_whole_with_its_equals_signs(env):
     prompt = "List objects as key=value pairs.\nThen a line: done=1"
-    r = _put(env, "vision", settings={"prompt": prompt}, redo=True)
+    r = _put(env, "lumiverb.image.description", settings={"prompt": prompt}, redo=True)
     assert r.status_code == 200, r.text
-    assert _producer(env, "vision")["settings"]["prompt"] == prompt
+    assert _producer(env, "lumiverb.image.description")["settings"]["prompt"] == prompt
 
 
 def _due(env, kind: str) -> list[str]:
@@ -288,39 +288,39 @@ def test_faces_are_found_by_level_and_off_finds_none(env):
     face_ids = plant_faces(client, named, [
         {"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9,
          "embedding": [0.0] * 100 + [1.0] + [0.0] * 411}],
-        headers=headers, lineage=_want(lib, "faces", sha),
+        headers=headers, lineage=_want(lib, "lumiverb.image.faces", sha),
         detection_model="insightface", detection_model_version="buffalo_l")
     assert client.post("/v1/people", json={"display_name": "Kept", "face_ids": face_ids},
                        headers=headers).status_code in (200, 201)
-    counts = _counts(lib, "faces")
+    counts = _counts(lib, "lumiverb.image.faces")
     assert (counts["applicable"], counts["current"], counts["missing"]) == (2, 1, 1)
-    assert _due(lib, "faces") == [waiting]
+    assert _due(lib, "lumiverb.image.faces") == [waiting]
     client.post("/v1/upkeep/recluster", headers=headers)
     assert _clusters_current(env)
     try:
-        r = _put(env, "faces", settings={"detail": "high"})  # no redo asked: a level never asks
+        r = _put(env, "lumiverb.image.faces", settings={"detail": "high"})  # no redo asked: a level never asks
         assert r.status_code == 200, r.text
         assert _clusters_current(env)  # what's found next changes, not the groups
-        counts = _counts(lib, "faces")
+        counts = _counts(lib, "lumiverb.image.faces")
         assert (counts["current"], counts["below"], counts["stale"]) == (0, 1, 0)
-        assert _due(lib, "faces") == [waiting]  # below isn't made again by itself
+        assert _due(lib, "lumiverb.image.faces") == [waiting]  # below isn't made again by itself
 
-        r = _put(env, "faces", settings={"detail": "off"})
+        r = _put(env, "lumiverb.image.faces", settings={"detail": "off"})
         assert r.status_code == 200, r.text
-        counts = _counts(lib, "faces")
+        counts = _counts(lib, "lumiverb.image.faces")
         assert (counts["applicable"], counts["missing"], counts["below"]) == (0, 0, 0)
-        assert _due(lib, "faces") == [] and _due(lib, "redo_faces") == []
+        assert _due(lib, "lumiverb.image.faces") == [] and _due(lib, "redo:lumiverb.image.faces") == []
         faces = client.get(f"/v1/assets/{named}/faces", headers=headers).json()["faces"]
         assert [f["person"]["display_name"] for f in faces] == ["Kept"]
     finally:
-        _put(env, "faces", settings={"detail": None})
-    assert _due(lib, "faces") == [waiting]  # on again: what's missing is found
+        _put(env, "lumiverb.image.faces", settings={"detail": None})
+    assert _due(lib, "lumiverb.image.faces") == [waiting]  # on again: what's missing is found
     for settings in ({"model": "antelopev2"}, {"det_size": 320}):
-        r = _put(env, "faces", settings=settings)
+        r = _put(env, "lumiverb.image.faces", settings=settings)
         assert r.status_code == 422 and r.json()["error"]["code"] == "setting_fixed", r.text
-    r = _put(env, "faces", settings={"min_confidence": 0.7})  # the gates went with levels
+    r = _put(env, "lumiverb.image.faces", settings={"min_confidence": 0.7})  # the gates went with levels
     assert r.status_code == 422 and r.json()["error"]["code"] == "unknown_setting", r.text
-    r = _put(env, "faces", settings={"detail": "max"})
+    r = _put(env, "lumiverb.image.faces", settings={"detail": "max"})
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text
 
 
@@ -335,15 +335,15 @@ def test_videos_off_finds_no_face_in_any_video(env):
         s.execute(text("UPDATE assets SET video_indexed = true, analysis_proxy_key = 'a.mp4' WHERE library_id = :l"),
                   {"l": library_id})
         s.commit()
-    assert _counts(lib, "video_faces")["missing"] == 1 and len(_due(lib, "video_faces")) == 1
-    assert _producer(env, "video_faces")["fields"][-1]["value"] == "low"
+    assert _counts(lib, "lumiverb.video.faces")["missing"] == 1 and len(_due(lib, "lumiverb.video.faces")) == 1
+    assert _producer(env, "lumiverb.video.faces")["fields"][-1]["value"] == "low"
     try:
-        assert _put(env, "video_faces", settings={"detail": "off"}).status_code == 200
-        assert _counts(lib, "video_faces")["applicable"] == 0 and _due(lib, "video_faces") == []
-        assert _producer(env, "faces")["level"] == 2  # photos' own level, still Normal
+        assert _put(env, "lumiverb.video.faces", settings={"detail": "off"}).status_code == 200
+        assert _counts(lib, "lumiverb.video.faces")["applicable"] == 0 and _due(lib, "lumiverb.video.faces") == []
+        assert _producer(env, "lumiverb.image.faces")["level"] == 2  # photos' own level, still Normal
     finally:
-        _put(env, "video_faces", settings={"detail": None})
-    assert len(_due(lib, "video_faces")) == 1
+        _put(env, "lumiverb.video.faces", settings={"detail": None})
+    assert len(_due(lib, "lumiverb.video.faces")) == 1
 
 
 def _meta(env, key: str) -> str | None:
@@ -389,11 +389,11 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     client, headers, *_ = lib
     sha = _sha()
     photo = _ingest_with(lib, "a.jpg", sha, None)
-    plant_faces(client, photo, [], headers=headers, lineage=_want(lib, "faces", sha),
+    plant_faces(client, photo, [], headers=headers, lineage=_want(lib, "lumiverb.image.faces", sha),
                 detection_model="insightface", detection_model_version="buffalo_l")
 
     distance = FACES.setting("merge_distance").default
-    before = _producer(env, "faces")
+    before = _producer(env, "lumiverb.image.faces")
     fields = {f["key"]: f for f in before["fields"]}
     assert fields["merge_close_clusters"] == {
         "key": "merge_close_clusters", "label": "Merge close groups", "kind": "bool", "value": True,
@@ -405,28 +405,28 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     assert "merge_close_clusters" not in before["settings"] and "merge_distance" not in before["settings"]
     assert _merge_epsilon(env) == distance
 
-    _put(env, "faces", settings={"merge_close_clusters": None})  # the cache starts clean
+    _put(env, "lumiverb.image.faces", settings={"merge_close_clusters": None})  # the cache starts clean
     client.post("/v1/upkeep/recluster", headers=headers)
     assert _clusters_current(env)
     try:
-        r = _put(env, "faces", settings={"merge_close_clusters": False})  # no redo asked: none needed
+        r = _put(env, "lumiverb.image.faces", settings={"merge_close_clusters": False})  # no redo asked: none needed
         assert r.status_code == 200, r.text
         assert {f["key"]: f for f in r.json()["fields"]}["merge_close_clusters"]["value"] is False
-        after = _producer(env, "faces")
+        after = _producer(env, "lumiverb.image.faces")
         assert after["settings_hash"] == before["settings_hash"]
-        assert _counts(lib, "faces")["stale"] == 0
+        assert _counts(lib, "lumiverb.image.faces")["stale"] == 0
         assert not _clusters_current(env)
         assert _merge_epsilon(env) == 0.0
 
         client.post("/v1/upkeep/recluster", headers=headers)
-        r = _put(env, "faces", settings={"merge_close_clusters": False})  # the same again: nothing to redo
+        r = _put(env, "lumiverb.image.faces", settings={"merge_close_clusters": False})  # the same again: nothing to redo
         assert r.status_code == 200 and _clusters_current(env)
 
-        r = _put(env, "faces", settings={"merge_close_clusters": True, "merge_distance": 0.3})
+        r = _put(env, "lumiverb.image.faces", settings={"merge_close_clusters": True, "merge_distance": 0.3})
         assert r.status_code == 200, r.text
         assert _merge_epsilon(env) == 0.3 and not _clusters_current(env)
     finally:
-        _put(env, "faces", settings={"merge_close_clusters": None, "merge_distance": None})
+        _put(env, "lumiverb.image.faces", settings={"merge_close_clusters": None, "merge_distance": None})
     assert _merge_epsilon(env) == distance
 
 
@@ -437,5 +437,5 @@ def test_face_grouping_settings_regroup_without_finding_faces_again(env):
     {"merge_distance": 0.9},
 ])
 def test_face_grouping_settings_are_checked(env, settings):
-    r = _put(env, "faces", settings=settings)
+    r = _put(env, "lumiverb.image.faces", settings=settings)
     assert r.status_code == 422 and r.json()["error"]["code"] == "bad_setting", r.text

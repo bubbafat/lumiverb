@@ -36,7 +36,7 @@ def candidates(session: Session, kind: Kind, library_ids: list[str] | None, limi
     from src.server.repository import lineage
     from src.server.repository.lineage import lineage_join
 
-    if not kind.flag or library_ids == []:
+    if not kind.artifact or library_ids == []:
         return []
     if kind.storage and library_ids is None:
         raise ValueError(f"{kind.name} reads the originals: only the libraries this server reads")

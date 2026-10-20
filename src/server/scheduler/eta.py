@@ -57,7 +57,7 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
             continue
         pool = p.pool.name
         members.setdefault(pool, [])
-        per, n = pace.get(p.kind), slots.get(pool, 0)
+        per, n = pace.get(p.artifact), slots.get(pool, 0)
         if work <= 0:
             continue
         if artifact in paused:
@@ -88,7 +88,7 @@ def eta(status: Mapping[str, Any], left: Mapping[str, float], *, now: Any,
     jobs = []
     for job in status.get("jobs") or []:
         kind = KINDS.get(job.get("kind", ""))
-        if kind is None or not kind.flag:  # a scan: how long one takes varies too much to say
+        if kind is None or not kind.artifact:  # a scan: how long one takes varies too much to say
             continue
         artifact = kind.artifact
         units, elapsed = float(job.get("units") or 0), float(job.get("elapsed") or 0) + since

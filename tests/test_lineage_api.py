@@ -95,7 +95,7 @@ def _ingest_post(env, rel_path: str, sha: str, lineage: dict | None | object = N
     data = {"library_id": library_id, "rel_path": rel_path, "file_size": "1000", "media_type": media_type,
             "width": "64", "height": "36", "exif": json.dumps({"content_hash": sha}), **fields}
     if lineage is None:
-        lineage = {"proxy": _want(env, "proxy", sha)}
+        lineage = {"lumiverb.preview": _want(env, "lumiverb.preview", sha)}
     if lineage is not SAYS_NOTHING:
         data["lineage"] = json.dumps(lineage)
     return client.post("/v1/ingest", data=data, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
@@ -147,13 +147,13 @@ def _everything(env, asset_id: str) -> dict:
 def test_every_producer_with_its_settings_and_counts(env):
     producers = _producers(env)
     assert set(producers) == set(P.ARTIFACTS)
-    t = producers["transcript"]
-    assert (t["producer"], t["version"], t["settings"]["model"]) == ("whisper", "1", "small")
+    t = producers["lumiverb.video.transcript"]
+    assert (t["producer"], t["version"], t["settings"]["model"]) == ("lumiverb.video.transcript", "1", "small")
     assert t["settings_hash"] == P.settings_hash(t["settings"])
     assert set(t["counts"]) == {"applicable", "current", "stale", "missing", "rechecking", "below", "failing",
                                 "given_up"}
-    assert producers["clip"]["uniform"] is True and producers["transcript"]["uniform"] is False
-    assert _producers(env, counts="false")["vision"]["counts"] is None
+    assert producers["lumiverb.image.likeness"]["uniform"] is True and producers["lumiverb.video.transcript"]["uniform"] is False
+    assert _producers(env, counts="false")["lumiverb.image.description"]["counts"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +164,8 @@ def test_every_producer_with_its_settings_and_counts(env):
 @pytest.mark.slow
 def test_an_ingest_that_says_how_its_proxy_was_made_is_current(env):
     sha = _sha()
-    clip = _ingest_with(env, "lin/current.jpg", sha, {"proxy": _want(env, "proxy", sha)})
-    assert _row(env, clip, "proxy")[0] == "proxy" and _state(env, clip, "proxy") == "current"
+    clip = _ingest_with(env, "lin/current.jpg", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)})
+    assert _row(env, clip, "lumiverb.preview")[0] == "lumiverb.preview" and _state(env, clip, "lumiverb.preview") == "current"
 
 
 @pytest.mark.slow
@@ -173,15 +173,15 @@ def test_an_ingest_that_doesnt_say_how_its_proxy_was_made_is_refused(env):
     sha = _sha()
     _refused(_ingest_post(env, "lin/unknown.jpg", sha, SAYS_NOTHING))
     # Saying how something else was made isn't saying how the proxy was.
-    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"vision": _want(env, "vision", sha)}))
-    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"proxy": None}))
+    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"lumiverb.image.description": _want(env, "lumiverb.image.description", sha)}))
+    _refused(_ingest_post(env, "lin/unknown.jpg", sha, {"lumiverb.preview": None}))
     assert _clips_at(env, "lin/unknown.jpg") == 0  # nothing was saved
 
 
 @pytest.mark.slow
 def test_another_kinds_producer_cant_make_this_one(env):
     sha = _sha()
-    _refused(_ingest_post(env, "lin/wrongkind.jpg", sha, {"proxy": _want(env, "faces", sha)}),
+    _refused(_ingest_post(env, "lin/wrongkind.jpg", sha, {"lumiverb.preview": _want(env, "lumiverb.image.faces", sha)}),
              "lineage_wrong_producer")
     assert _clips_at(env, "lin/wrongkind.jpg") == 0
 
@@ -189,7 +189,7 @@ def test_another_kinds_producer_cant_make_this_one(env):
     before = _everything(env, clip)
     client, headers, *_ = env
     _refused(saved(client, "vision", clip, json={
-        "model_id": "m", "description": "d", "lineage": _want(env, "ocr", sha)}, headers=headers),
+        "model_id": "m", "description": "d", "lineage": _want(env, "lumiverb.image.text", sha)}, headers=headers),
         "lineage_wrong_producer")
     assert _everything(env, clip) == before
 
@@ -197,17 +197,17 @@ def test_another_kinds_producer_cant_make_this_one(env):
 @pytest.mark.slow
 def test_a_changed_file_makes_what_was_made_from_it_stale(env):
     old, new = _sha(), _sha()
-    clip = _ingest_with(env, "lin/changed.jpg", old, {"proxy": _want(env, "proxy", old)})
+    clip = _ingest_with(env, "lin/changed.jpg", old, {"lumiverb.preview": _want(env, "lumiverb.preview", old)})
     client, headers, *_ = env
     r = client.post("/v1/assets/batch-vision", json={
         "items": [{"asset_id": clip, "model_id": "m", "description": "d", "tags": []}],
-        "lineage": _want(env, "vision", old)}, headers=headers)
+        "lineage": _want(env, "lumiverb.image.description", old)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _state(env, clip, "vision") == "current"
+    assert _state(env, clip, "lumiverb.image.description") == "current"
     with _db(env) as s:  # the file's content changed on disk (a scan saw a new hash)
         s.execute(text("UPDATE assets SET content_hash = :n WHERE asset_id = :a"), {"n": new, "a": clip})
         s.commit()
-    assert _state(env, clip, "vision") == "stale" and _state(env, clip, "proxy") == "stale"
+    assert _state(env, clip, "lumiverb.image.description") == "stale" and _state(env, clip, "lumiverb.preview") == "stale"
 
 
 @pytest.mark.slow
@@ -215,33 +215,33 @@ def test_changing_one_producers_setting_makes_exactly_its_artifacts_stale(env):
     """The phase's done-when, first half: transcripts go stale, nothing else does."""
     client, headers, *_ = env
     sha = _sha()
-    clip = _ingest_with(env, "lin/setting.mov", sha, {"proxy": _want(env, "proxy", sha)}, media_type="video")
+    clip = _ingest_with(env, "lin/setting.mov", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)}, media_type="video")
     # Transcripts apply once the probe says how long it is.
-    client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 5.0, "lineage": _want(env, "probe", sha)},
+    client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 5.0, "lineage": _want(env, "lumiverb.video.format", sha)},
                headers=headers)
     r = client.post(f"/v1/assets/{clip}/transcript", json={
         "srt": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "source": "whisper",
-        "lineage": _want(env, "transcript", sha)}, headers=headers)
+        "lineage": _want(env, "lumiverb.video.transcript", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _state(env, clip, "transcript") == "current" and _state(env, clip, "proxy") == "current"
+    assert _state(env, clip, "lumiverb.video.transcript") == "current" and _state(env, clip, "lumiverb.preview") == "current"
 
     before = _producers(env)
     with _db(env) as s:
-        s.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.transcript',"
+        s.execute(text("INSERT INTO system_metadata (key, value, updated_at) VALUES ('producer.lumiverb.video.transcript',"
                        " '{\"vad_min_silence_ms\": 700, \"model\": \"medium\"}', now())"))
         s.commit()
     try:
         after = _producers(env)
-        assert _state(env, clip, "transcript") == "stale"
-        assert _state(env, clip, "proxy") == "current"
+        assert _state(env, clip, "lumiverb.video.transcript") == "stale"
+        assert _state(env, clip, "lumiverb.preview") == "current"
         # The model is the transcripts job's (Settings → AI), whatever an override says.
-        assert after["transcript"]["settings"] == {"model": "small", "vad_min_silence_ms": 700}
-        assert after["transcript"]["counts"]["stale"] == before["transcript"]["counts"]["stale"] + 1
-        for artifact in set(P.ARTIFACTS) - {"transcript"}:
+        assert after["lumiverb.video.transcript"]["settings"] == {"model": "small", "vad_min_silence_ms": 700}
+        assert after["lumiverb.video.transcript"]["counts"]["stale"] == before["lumiverb.video.transcript"]["counts"]["stale"] + 1
+        for artifact in set(P.ARTIFACTS) - {"lumiverb.video.transcript"}:
             assert after[artifact]["counts"] == before[artifact]["counts"], artifact
     finally:
         with _db(env) as s:
-            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.transcript'"))
+            s.execute(text("DELETE FROM system_metadata WHERE key = 'producer.lumiverb.video.transcript'"))
             s.commit()
 
 
@@ -251,10 +251,10 @@ def test_a_persons_transcript_is_current_whatever_the_settings(env):
     clip = _ingest(env, "lin/person.mov", media_type="video", sha=_sha())
     client.post(f"/v1/assets/{clip}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
-    assert _row(env, clip, "transcript")[0] == P.PERSON and _state(env, clip, "transcript") == "current"
+    assert _row(env, clip, "lumiverb.video.transcript")[0] == P.PERSON and _state(env, clip, "lumiverb.video.transcript") == "current"
     # Removing theirs leaves none, and it's missing again: the machine makes one (Robert, Oct 9).
     client.delete(f"/v1/assets/{clip}/transcript", params={"which": "manual"}, headers=headers)
-    assert _row(env, clip, "transcript") is None and _state(env, clip, "transcript") == "missing"
+    assert _row(env, clip, "lumiverb.video.transcript") is None and _state(env, clip, "lumiverb.video.transcript") == "missing"
 
 
 @pytest.mark.slow
@@ -263,13 +263,13 @@ def test_nothing_found_is_a_result(env):
     sha = _sha()
     clip = _ingest_with(env, "lin/silent.mov", sha, None, media_type="video")
     client.post(f"/v1/assets/{clip}/transcript", json={"srt": "", "source": "whisper",
-                                                       "lineage": _want(env, "transcript", sha)}, headers=headers)
-    assert _row(env, clip, "transcript")[4] == "empty" and _state(env, clip, "transcript") == "current"
+                                                       "lineage": _want(env, "lumiverb.video.transcript", sha)}, headers=headers)
+    assert _row(env, clip, "lumiverb.video.transcript")[4] == "empty" and _state(env, clip, "lumiverb.video.transcript") == "current"
     face = _ingest_with(env, "lin/nofaces.jpg", sha, None)
     r = client.post("/v1/assets/batch-faces", json={"items": [{"asset_id": face, "faces": []}],
-                                                    "lineage": _want(env, "faces", sha)}, headers=headers)
+                                                    "lineage": _want(env, "lumiverb.image.faces", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _row(env, face, "faces")[4] == "empty"
+    assert _row(env, face, "lumiverb.image.faces")[4] == "empty"
 
 
 @pytest.mark.slow
@@ -280,32 +280,32 @@ def test_each_kind_of_write_records_its_artifact(env):
     vid = _ingest_with(env, "lin/all.mov", sha, None, media_type="video")
     vec = [0.0] * 512
     writes = [
-        ("vision", img, lambda: saved(client, "vision", img, json={
-            "model_id": "m", "description": "d", "lineage": _want(env, "vision", sha)}, headers=headers)),
-        ("ocr", img, lambda: saved(client, "ocr", img, json={
-            "ocr_text": "EXIT", "lineage": _want(env, "ocr", sha)}, headers=headers)),
-        ("clip", img, lambda: saved(client, "embeddings", img, json={
+        ("lumiverb.image.description", img, lambda: saved(client, "vision", img, json={
+            "model_id": "m", "description": "d", "lineage": _want(env, "lumiverb.image.description", sha)}, headers=headers)),
+        ("lumiverb.image.text", img, lambda: saved(client, "ocr", img, json={
+            "ocr_text": "EXIT", "lineage": _want(env, "lumiverb.image.text", sha)}, headers=headers)),
+        ("lumiverb.image.likeness", img, lambda: saved(client, "embeddings", img, json={
             "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": vec,
-            "lineage": _want(env, "clip", sha)}, headers=headers)),
-        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
-            "items": [{"asset_id": img, "faces": []}], "lineage": _want(env, "faces", sha)}, headers=headers)),
-        ("probe", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={
-            "duration_sec": 12.0, "lineage": _want(env, "probe", sha)}, headers=headers)),
-        ("analysis_proxy", vid, lambda: client.post(
+            "lineage": _want(env, "lumiverb.image.likeness", sha)}, headers=headers)),
+        ("lumiverb.image.faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+            "items": [{"asset_id": img, "faces": []}], "lineage": _want(env, "lumiverb.image.faces", sha)}, headers=headers)),
+        ("lumiverb.video.format", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={
+            "duration_sec": 12.0, "lineage": _want(env, "lumiverb.video.format", sha)}, headers=headers)),
+        ("lumiverb.video.analysis_proxy", vid, lambda: client.post(
             f"/v1/assets/{vid}/artifacts/analysis_proxy",
             files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
-            data={"lineage": json.dumps(_want(env, "analysis_proxy", sha))}, headers=headers)),
-        ("video_preview", vid, lambda: client.post(
+            data={"lineage": json.dumps(_want(env, "lumiverb.video.analysis_proxy", sha))}, headers=headers)),
+        ("lumiverb.video.preview", vid, lambda: client.post(
             f"/v1/assets/{vid}/artifacts/video_preview",
             files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
-            data={"lineage": json.dumps(_want(env, "video_preview", sha))}, headers=headers)),
+            data={"lineage": json.dumps(_want(env, "lumiverb.video.preview", sha))}, headers=headers)),
     ]
     for artifact, clip, write in writes:
         r = write()
         assert r.status_code in (200, 201), (artifact, r.text)
         assert _state(env, clip, artifact) == "current", artifact
     # The probe's response is the facet itself, never the lineage.
-    r = client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0, "lineage": _want(env, "probe", sha)},
+    r = client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0, "lineage": _want(env, "lumiverb.video.format", sha)},
                    headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["duration_sec"] == 12.0 and "lineage" not in r.json()
@@ -327,16 +327,16 @@ def test_scenes_count_once_every_scene_is_described(env):
         s.commit()
     r = client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
         "model_id": "m", "model_version": "1", "description": "a beach", "tags": [],
-        "lineage": _want(env, "scene_vision", sha)}, headers=headers)
+        "lineage": _want(env, "lumiverb.video.scene_descriptions", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     with _db(env) as s:
-        want = L.desired(s, "scene_vision")
-        missing_before = L.counts(s, "scene_vision", want)["missing"]
+        want = L.desired(s, "lumiverb.video.scene_descriptions")
+        missing_before = L.counts(s, "lumiverb.video.scene_descriptions", want)["missing"]
     client.patch(f"/v1/video/scenes/scn_{vid}_1", json={
         "model_id": "m", "model_version": "1", "description": "a sunset", "tags": [],
-        "lineage": _want(env, "scene_vision", sha)}, headers=headers)
+        "lineage": _want(env, "lumiverb.video.scene_descriptions", sha)}, headers=headers)
     with _db(env) as s:
-        assert L.counts(s, "scene_vision", want)["missing"] == missing_before - 1
+        assert L.counts(s, "lumiverb.video.scene_descriptions", want)["missing"] == missing_before - 1
 
 
 # ---------------------------------------------------------------------------
@@ -357,19 +357,19 @@ def test_a_failure_is_kept_and_tried_again_later_and_later(env):
         s.execute(text("UPDATE assets SET duration_sec = 5 WHERE asset_id = :a"), {"a": clip})
         s.commit()
         for _ in range(3):
-            L.record_failure(s, clip, "transcript", "ffmpeg: no audio stream")
+            L.record_failure(s, clip, "lumiverb.video.transcript", "ffmpeg: no audio stream")
             retry_at, attempts = s.execute(text(
-                "SELECT retry_at, attempts FROM artifact_lineage WHERE asset_id = :a AND artifact = 'transcript'"
+                "SELECT retry_at, attempts FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.video.transcript'"
             ), {"a": clip}).one()
             waits.append(retry_at - utcnow())
         assert attempts == 3
         assert timedelta(minutes=4) < waits[0] < timedelta(minutes=6)
         assert timedelta(minutes=19) < waits[2] < timedelta(minutes=21)
-        assert L.counts(s, "transcript", L.desired(s, "transcript"))["failing"] >= 1
+        assert L.counts(s, "lumiverb.video.transcript", L.desired(s, "lumiverb.video.transcript"))["failing"] >= 1
         # A success clears it.
-        L.record(s, clip, "transcript", None)
+        L.record(s, clip, "lumiverb.video.transcript", None)
         assert s.execute(text("SELECT error, attempts FROM artifact_lineage WHERE asset_id = :a"
-                              " AND artifact = 'transcript'"), {"a": clip}).one() == (None, 0)
+                              " AND artifact = 'lumiverb.video.transcript'"), {"a": clip}).one() == (None, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ def test_a_client_cant_claim_a_person_made_it(env):
         "model_id": "m", "description": "d",
         "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x", "source_hash": sha}}, headers=headers)
     _refused(r, "lineage_wrong_producer")
-    assert _everything(env, img) == before and _row(env, img, "vision") is None
+    assert _everything(env, img) == before and _row(env, img, "lumiverb.image.description") is None
 
     vid = _ingest_with(env, "lin/claims-person.mov", sha, None, media_type="video")
     before = _everything(env, vid)
@@ -396,11 +396,11 @@ def test_a_client_cant_claim_a_person_made_it(env):
         "srt": "1\n00:00:00,000 --> 00:00:01,000\nhi\n", "source": "whisper",
         "lineage": {"producer": P.PERSON, "version": "1", "settings_hash": "x"}}, headers=headers),
         "lineage_wrong_producer")
-    assert _everything(env, vid) == before and _row(env, vid, "transcript") is None
+    assert _everything(env, vid) == before and _row(env, vid, "lumiverb.video.transcript") is None
     # A transcript a person typed is theirs.
     client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                 headers=headers)
-    assert _row(env, vid, "transcript")[0] == P.PERSON
+    assert _row(env, vid, "lumiverb.video.transcript")[0] == P.PERSON
 
 
 @pytest.mark.slow
@@ -410,12 +410,12 @@ def test_another_models_vectors_leave_clips_lineage_alone(env):
     img = _ingest_with(env, "lin/featureprint.jpg", sha, None)
     r = saved(client, "embeddings", img, json={
         "model_id": "clip", "model_version": "ViT-B-32-openai", "vector": [0.0] * 512,
-        "lineage": _want(env, "clip", sha)}, headers=headers)
+        "lineage": _want(env, "lumiverb.image.likeness", sha)}, headers=headers)
     assert r.status_code == 200, r.text
     r = client.post("/v1/assets/batch-embeddings", json={"items": [{
         "asset_id": img, "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}]}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _state(env, img, "clip") == "current"
+    assert _state(env, img, "lumiverb.image.likeness") == "current"
 
 
 @pytest.mark.slow
@@ -428,7 +428,7 @@ def test_only_clips_vectors_count_as_made(env):
     client.post("/v1/assets/batch-embeddings", json={"items": [{
         "asset_id": img, "model_id": "apple_vision", "model_version": "1", "vector": [0.0] * 768}]}, headers=headers)
     with _db(env) as s:
-        assert L.counts(s, "clip", L.desired(s, "clip"), lib["library_id"])["missing"] == 1
+        assert L.counts(s, "lumiverb.image.likeness", L.desired(s, "lumiverb.image.likeness"), lib["library_id"])["missing"] == 1
 
 
 @pytest.mark.slow
@@ -437,7 +437,7 @@ def test_a_form_fields_lineage_is_checked(env):
     sha = _sha()
     vid = _ingest_with(env, "lin/badform.mov", sha, None, media_type="video")
     before = _everything(env, vid)
-    source = {"producer": "analysis-proxy", "version": "1", "settings_hash": "x"}
+    source = {"producer": "lumiverb.video.analysis_proxy", "version": "1", "settings_hash": "x"}
     for bad, code in (({**source, "version": "1" * 500}, "lineage_required"),  # unreadable is the same as not saying
                       (["not", "a", "dict"], "lineage_required"),
                       # A source that's no content hash the server takes says so.
@@ -447,7 +447,7 @@ def test_a_form_fields_lineage_is_checked(env):
                         files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                         data={"lineage": json.dumps(bad)}, headers=headers)
         _refused(r, code)
-        assert _everything(env, vid) == before and _row(env, vid, "analysis_proxy") is None
+        assert _everything(env, vid) == before and _row(env, vid, "lumiverb.video.analysis_proxy") is None
     r = client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
                     files={"file": ("a.mp4", io.BytesIO(playable()), "video/mp4")},
                     data={"lineage": "not json"}, headers=headers)
@@ -468,12 +468,12 @@ def test_an_ingest_records_only_what_it_stored(env):
         "library_id": library_id, "rel_path": "lin/nothing-stored.jpg", "file_size": "1000", "media_type": "image",
         "width": "64", "height": "36", "exif": json.dumps({"content_hash": sha}),
         "vision": json.dumps({"model_id": "", "description": "dropped"}), "embeddings": json.dumps([]),
-        "lineage": json.dumps({"proxy": _want(env, "proxy", sha), "vision": _want(env, "vision", sha),
-                               "clip": _want(env, "clip", sha)}),
+        "lineage": json.dumps({"lumiverb.preview": _want(env, "lumiverb.preview", sha), "lumiverb.image.description": _want(env, "lumiverb.image.description", sha),
+                               "lumiverb.image.likeness": _want(env, "lumiverb.image.likeness", sha)}),
     }, files={"proxy": ("p.jpg", buf, "image/jpeg")}, headers=headers)
     assert r.status_code == 200, r.text
     clip = r.json()["asset_id"]
-    assert _row(env, clip, "vision") is None and _row(env, clip, "clip") is None
+    assert _row(env, clip, "lumiverb.image.description") is None and _row(env, clip, "lumiverb.image.likeness") is None
 
 
 # ---------------------------------------------------------------------------
@@ -511,66 +511,66 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     face = {"bounding_box": {"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}, "detection_confidence": 0.9, "embedding": vec}
     scene = {"scene_index": 0, "start_ms": 0, "end_ms": 999, "rep_frame_ms": 0}
     writes = [
-        ("probe", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0},
+        ("lumiverb.video.format", vid, lambda: client.put(f"/v1/assets/{vid}/video-facet", json={"duration_sec": 12.0},
                                           headers=headers)),
-        ("vision", img, lambda: saved(client, "vision", img, json={
+        ("lumiverb.image.description", img, lambda: saved(client, "vision", img, json={
             "model_id": "m", "description": "d"}, headers=headers)),
-        ("vision", img, lambda: client.post("/v1/assets/batch-vision", json={
+        ("lumiverb.image.description", img, lambda: client.post("/v1/assets/batch-vision", json={
             "items": [{"asset_id": img, "model_id": "m", "description": "d"}]}, headers=headers)),
-        ("ocr", img, lambda: saved(client, "ocr", img, json={"ocr_text": "EXIT"}, headers=headers)),
-        ("ocr", img, lambda: client.post("/v1/assets/batch-ocr", json={
+        ("lumiverb.image.text", img, lambda: saved(client, "ocr", img, json={"ocr_text": "EXIT"}, headers=headers)),
+        ("lumiverb.image.text", img, lambda: client.post("/v1/assets/batch-ocr", json={
             "items": [{"asset_id": img, "ocr_text": "EXIT"}]}, headers=headers)),
-        ("clip", img, lambda: saved(client, "embeddings", img, json={
+        ("lumiverb.image.likeness", img, lambda: saved(client, "embeddings", img, json={
             "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}, headers=headers)),
-        ("clip", img, lambda: client.post("/v1/assets/batch-embeddings", json={"items": [{
+        ("lumiverb.image.likeness", img, lambda: client.post("/v1/assets/batch-embeddings", json={"items": [{
             "asset_id": img, "model_id": P.CLIP_MODEL_ID, "model_version": "ViT-B-32-openai", "vector": vec}]},
             headers=headers)),
-        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+        ("lumiverb.image.faces", img, lambda: client.post("/v1/assets/batch-faces", json={
             "items": [{"asset_id": img, "faces": [face]}]}, headers=headers)),
-        ("transcript", vid, lambda: client.post(f"/v1/assets/{vid}/transcript", json={
+        ("lumiverb.video.transcript", vid, lambda: client.post(f"/v1/assets/{vid}/transcript", json={
             "srt": "1\n00:00:00,000 --> 00:00:01,000\nhello\n", "source": "whisper"}, headers=headers)),
-        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/artifacts/proxy", files={"file": jpeg()},
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/proxy", files={"file": jpeg()},
                                            headers=headers)),
-        ("video_preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/video_preview",
+        ("lumiverb.video.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/video_preview",
                                                    files={"file": mp4()}, headers=headers)),
-        ("analysis_proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
+        ("lumiverb.video.analysis_proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts/analysis_proxy",
                                                     files={"file": mp4()}, headers=headers)),
-        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
+        ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
             "proxy": jpeg(), "video_preview": mp4()}, headers=headers)),
         # Saying how the preview was made isn't saying how the proxy was.
-        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
+        ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={
             "proxy": jpeg(), "video_preview": mp4()},
-            data={"lineage": json.dumps({"video_preview": _want(env, "video_preview", sha)})}, headers=headers)),
+            data={"lineage": json.dumps({"lumiverb.video.preview": _want(env, "lumiverb.video.preview", sha)})}, headers=headers)),
         # Scanned again with new content, and ingested again.
-        ("proxy", img, lambda: _ingest_post(env, "lin/refused.jpg", _sha(), SAYS_NOTHING)),
-        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, headers=headers)),
+        ("lumiverb.preview", img, lambda: _ingest_post(env, "lin/refused.jpg", _sha(), SAYS_NOTHING)),
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, headers=headers)),
         # An ingest says how it made each thing it stores, not just the proxy.
-        ("vision", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, data={
+        ("lumiverb.image.description", img, lambda: client.post(f"/v1/assets/{img}/ingest", files={"proxy": jpeg()}, data={
             "vision": json.dumps({"model_id": "m", "description": "d"}),
-            "lineage": json.dumps({"proxy": _want(env, "proxy", sha)})}, headers=headers)),
-        ("clip", img, lambda: _ingest_post(env, "lin/refused.jpg", sha, {"proxy": _want(env, "proxy", sha)},
+            "lineage": json.dumps({"lumiverb.preview": _want(env, "lumiverb.preview", sha)})}, headers=headers)),
+        ("lumiverb.image.likeness", img, lambda: _ingest_post(env, "lin/refused.jpg", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)},
                                            embeddings=json.dumps([{"model_id": P.CLIP_MODEL_ID,
                                                                    "model_version": "ViT-B-32-openai",
                                                                    "vector": vec}]))),
-        ("probe", vid, lambda: _ingest_post(env, "lin/refused.mov", sha, {"proxy": _want(env, "proxy", sha)},
+        ("lumiverb.video.format", vid, lambda: _ingest_post(env, "lin/refused.mov", sha, {"lumiverb.preview": _want(env, "lumiverb.preview", sha)},
                                             media_type="video", video_facet=json.dumps({"duration_sec": 12.0}))),
-        ("scenes", vid, lambda: client.post(f"/v1/video/chunks/{chunk['chunk_id']}/complete", json={
+        ("lumiverb.video.scenes", vid, lambda: client.post(f"/v1/video/chunks/{chunk['chunk_id']}/complete", json={
             "worker_id": chunk["worker_id"], "scenes": [scene]}, headers=headers)),
-        ("scene_vision", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
+        ("lumiverb.video.scene_descriptions", vid, lambda: client.patch(f"/v1/video/scenes/scn_{vid}_0", json={
             "model_id": "m", "model_version": "1", "description": "a beach", "tags": []}, headers=headers)),
         # Review: a thumbnail is the proxy producer's, however it arrives.
-        ("proxy", img, lambda: client.post(f"/v1/assets/{img}/artifacts/thumbnail", files={"file": jpeg()},
+        ("lumiverb.preview", img, lambda: client.post(f"/v1/assets/{img}/artifacts/thumbnail", files={"file": jpeg()},
                                            headers=headers)),
-        ("proxy", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
+        ("lumiverb.preview", vid, lambda: client.post(f"/v1/assets/{vid}/artifacts", files={"thumbnail": jpeg()},
                                            headers=headers)),
         # Lineage that can't be read is no lineage, in the same envelope on every route.
-        ("vision", img, lambda: saved(client, "vision", img, json={
-            "model_id": "m", "description": "d", "lineage": {"producer": "vision"}}, headers=headers)),
-        ("ocr", img, lambda: saved(client, "ocr", img, json={
+        ("lumiverb.image.description", img, lambda: saved(client, "vision", img, json={
+            "model_id": "m", "description": "d", "lineage": {"producer": "lumiverb.image.description"}}, headers=headers)),
+        ("lumiverb.image.text", img, lambda: saved(client, "ocr", img, json={
             "ocr_text": "EXIT", "lineage": "not lineage"}, headers=headers)),
-        ("faces", img, lambda: client.post("/v1/assets/batch-faces", json={
+        ("lumiverb.image.faces", img, lambda: client.post("/v1/assets/batch-faces", json={
             "items": [{"asset_id": img, "faces": [face]}], "lineage": {
-                "producer": "insightface", "version": "", "settings_hash": ""}}, headers=headers)),
+                "producer": "lumiverb.image.faces", "version": "", "settings_hash": ""}}, headers=headers)),
     ]
     for artifact, clip, write in writes:
         before = _everything(env, clip)
@@ -581,9 +581,10 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
 
     # Another kind's producer is named in what it says.
     r = saved(client, "vision", img, json={"model_id": "m", "description": "d",
-                                                      "lineage": _want(env, "faces", sha)}, headers=headers)
+                                                      "lineage": _want(env, "lumiverb.image.faces", sha)}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["details"] == {
-        "artifact": "vision", "sent": "insightface", "expected": "vision"}, r.text
+        "artifact": "lumiverb.image.description", "sent": "lumiverb.image.faces",
+        "expected": "lumiverb.image.description"}, r.text
 
     # A new clip that doesn't say how its proxy was made isn't kept at all.
     _refused(_ingest_post(env, "lin/refused-new.jpg", sha, SAYS_NOTHING))
@@ -593,7 +594,7 @@ def test_every_machine_write_that_doesnt_say_is_refused_and_saves_nothing(env):
     r = client.post(f"/v1/assets/{vid}/transcript", json={"source": "manual", "srt": "1\n00:00:00,000 --> 00:00:01,000\nmine\n"},
                     headers=headers)
     assert r.status_code == 200, r.text
-    assert _row(env, vid, "transcript")[0] == P.PERSON
+    assert _row(env, vid, "lumiverb.video.transcript")[0] == P.PERSON
     r = client.patch(f"/v1/assets/{img}/corrections", json={"description": "my dog", "tags": ["dog"]},
                      headers=headers)
     assert r.status_code == 200, r.text

@@ -204,19 +204,19 @@ def test_a_redo_made_with_settings_newer_than_those_read_reads_them_again(acct) 
 
     acct.client.get.return_value.json.return_value = {"producers": []}
     acct.producers.refresh()
-    now = lineage("transcript", acct.producers.settings("transcript"), None)["settings_hash"]
+    now = lineage("lumiverb.video.transcript", acct.producers.settings("lumiverb.video.transcript"), None)["settings_hash"]
     calls = acct.client.get.call_count
-    acct.follow_settings("transcript", now)  # what it has: nothing to read
+    acct.follow_settings("lumiverb.video.transcript", now)  # what it has: nothing to read
     assert acct.client.get.call_count == calls
-    newer = {**PRODUCERS["transcript"].defaults, "vad_min_silence_ms": 800}
-    acct.client.get.return_value.json.return_value = {"producers": [{"artifact": "transcript", "settings": newer}]}
-    acct.follow_settings("transcript", lineage("transcript", newer, None)["settings_hash"])
-    assert acct.producers.settings("transcript")["vad_min_silence_ms"] == 800
+    newer = {**PRODUCERS["lumiverb.video.transcript"].defaults, "vad_min_silence_ms": 800}
+    acct.client.get.return_value.json.return_value = {"producers": [{"artifact": "lumiverb.video.transcript", "settings": newer}]}
+    acct.follow_settings("lumiverb.video.transcript", lineage("lumiverb.video.transcript", newer, None)["settings_hash"])
+    assert acct.producers.settings("lumiverb.video.transcript")["vad_min_silence_ms"] == 800
     calls = acct.client.get.call_count
-    acct.follow_settings("transcript", "another")  # still not what it has: not again so soon
+    acct.follow_settings("lumiverb.video.transcript", "another")  # still not what it has: not again so soon
     assert acct.client.get.call_count == calls
     acct.clock.now += account_mod.RETRY_SEC
-    acct.follow_settings("transcript", "another")
+    acct.follow_settings("lumiverb.video.transcript", "another")
     assert acct.client.get.call_count == calls + 1
 
 

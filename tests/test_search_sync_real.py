@@ -46,7 +46,7 @@ def _ok(r) -> None:
 def _describe(lib, clip: str, description: str, tags: list[str]) -> None:
     client, headers, *_ = lib
     _ok(saved(client, "vision", clip, headers=headers, json={
-        "model_id": "m", "description": description, "tags": tags, "lineage": _want(lib, "vision", None)}))
+        "model_id": "m", "description": description, "tags": tags, "lineage": _want(lib, "lumiverb.image.description", None)}))
 
 
 def _correct(lib, clip: str, **body) -> None:
@@ -76,7 +76,7 @@ def _describe_scene(lib, scene_id: str, description: str, tags: list[str]) -> No
     client, headers, *_ = lib
     _ok(client.patch(f"/v1/video/scenes/{scene_id}", headers=headers, json={
         "model_id": "m", "model_version": "1", "description": description, "tags": tags,
-        "lineage": _want(lib, "scene_vision", None)}))
+        "lineage": _want(lib, "lumiverb.video.scene_descriptions", None)}))
 
 
 def test_a_clip_is_found_by_every_word_a_person_sees(env):
@@ -87,7 +87,7 @@ def test_a_clip_is_found_by_every_word_a_person_sees(env):
     # A person rewrote the description: search finds their words, not the machine's.
     _correct(lib, clip, description="a quoddy lighthouse in fog")
     _ok(saved(client, "ocr", clip, json={"ocr_text": "WELCOME TO MARBLEHEAD",
-                                                    "lineage": _want(lib, "ocr", None)}, headers=headers))
+                                                    "lineage": _want(lib, "lumiverb.image.text", None)}, headers=headers))
     _ok(client.put(f"/v1/assets/{clip}/note", json={"text": "ask about the zephyrine print"}, headers=headers))
 
     for words in ("quoddy", "coast", "marblehead", "zephyrine", "beach"):  # description, tags, OCR, note, path

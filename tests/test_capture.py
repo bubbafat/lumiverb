@@ -132,9 +132,9 @@ def _ingest(env, rel_path: str, exif: dict, *, says_capture: bool = True, librar
     buf = io.BytesIO()
     Image.new("RGB", (16, 16)).save(buf, format="JPEG")
     buf.seek(0)
-    kinds = {"proxy": made("proxy")}
+    kinds = {"lumiverb.preview": made("lumiverb.preview")}
     if says_capture:
-        kinds["capture"] = made("capture")
+        kinds["lumiverb.capture_time"] = made("lumiverb.capture_time")
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": library_id or lib, "rel_path": rel_path, "file_size": "10", "media_type": "image",
         "lineage": json.dumps(kinds), "exif": json.dumps({"content_hash": sha or "sha256:" + os.urandom(32).hex(), **exif})})
@@ -168,29 +168,29 @@ def test_the_capture_route_stores_what_the_file_says(env) -> None:
     body = {"taken_at": "2024-06-15T14:30:00", "taken_at_offset_min": 120, "gps_accuracy_m": 7.5}
     r = client.put(f"/v1/assets/{a}/capture", json=body, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required"
-    r = client.put(f"/v1/assets/{a}/capture", json={**body, "lineage": made("capture")}, headers=headers)
+    r = client.put(f"/v1/assets/{a}/capture", json={**body, "lineage": made("lumiverb.capture_time")}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json() == {"changed": True}
     row = _row(env, a)
     assert row["taken_at"] == datetime(2024, 6, 15, 14, 30, tzinfo=UTC)
     assert (row["taken_at_offset_min"], row["gps_accuracy_m"]) == (120, 7.5)
     # The same again changes nothing; a file with no date now keeps the stored one.
-    r = client.put(f"/v1/assets/{a}/capture", json={**body, "lineage": made("capture")}, headers=headers)
+    r = client.put(f"/v1/assets/{a}/capture", json={**body, "lineage": made("lumiverb.capture_time")}, headers=headers)
     assert r.json() == {"changed": False}
     r = client.put(f"/v1/assets/{a}/capture", json={"taken_at": None, "taken_at_offset_min": 120,
-                                                   "lineage": made("capture")}, headers=headers)
+                                                   "lineage": made("lumiverb.capture_time")}, headers=headers)
     assert r.json() == {"changed": False}
     assert _row(env, a)["taken_at"] == datetime(2024, 6, 15, 14, 30, tzinfo=UTC)
     assert _row(env, a)["gps_accuracy_m"] is None  # the file said none this time
     # Accuracy without the file's GPS isn't kept; a zone out of range is refused.
     b = _ingest(env, "cap/nogps.jpg", {"taken_at": "2024-06-15T10:30:00+00:00"})
-    r = client.put(f"/v1/assets/{b}/capture", json={"gps_accuracy_m": 3.0, "lineage": made("capture")},
+    r = client.put(f"/v1/assets/{b}/capture", json={"gps_accuracy_m": 3.0, "lineage": made("lumiverb.capture_time")},
                    headers=headers)
     assert r.status_code == 200 and _row(env, b)["gps_accuracy_m"] is None
-    r = client.put(f"/v1/assets/{b}/capture", json={"taken_at_offset_min": 900, "lineage": made("capture")},
+    r = client.put(f"/v1/assets/{b}/capture", json={"taken_at_offset_min": 900, "lineage": made("lumiverb.capture_time")},
                    headers=headers)
     assert r.status_code == 422
-    r = client.put("/v1/assets/ast_nope/capture", json={"lineage": made("capture")}, headers=headers)
+    r = client.put("/v1/assets/ast_nope/capture", json={"lineage": made("lumiverb.capture_time")}, headers=headers)
     assert r.status_code == 404
 
 
@@ -200,11 +200,11 @@ def test_a_scan_that_says_how_it_read_them_isnt_read_again_and_one_that_doesnt_i
     sha = "sha256:" + os.urandom(32).hex()
     python = _ingest(env, "py.jpg", {"taken_at": "2024-06-15T14:30:00+00:00"}, library_id=lib, sha=sha)
     mac = _ingest(env, "mac.jpg", {"taken_at": "2024-06-15T18:30:00+00:00"}, says_capture=False, library_id=lib)
-    assert [c["asset_id"] for c in due(env[-1], "capture", [lib])] == [mac]
+    assert [c["asset_id"] for c in due(env[-1], "lumiverb.capture_time", [lib])] == [mac]
     # The Python scan sends it again without saying: read again too.
     assert _ingest(env, "py.jpg", {"taken_at": "2024-06-15T14:30:00+00:00"}, says_capture=False, library_id=lib,
                    sha=sha) == python
-    assert {c["asset_id"] for c in due(env[-1], "capture", [lib])} == {python, mac}
+    assert {c["asset_id"] for c in due(env[-1], "lumiverb.capture_time", [lib])} == {python, mac}
 
 
 @pytest.mark.slow
@@ -220,18 +220,18 @@ def test_the_producer_reads_the_originals_and_fixes_a_macs_taken_at(env, tmp_pat
                 says_capture=False, library_id=lib)
     b = _ingest(env, "trip/b.jpg", {"taken_at": "2024-06-15T19:00:00+00:00"}, says_capture=False, library_id=lib)
     gone = _ingest(env, "trip/gone.jpg", {}, says_capture=False, library_id=lib)
-    items = due(env[-1], "capture", [lib])
+    items = due(env[-1], "lumiverb.capture_time", [lib])
     assert {c["asset_id"] for c in items} == {a, b, gone}
 
     acct = FakeAccount(scheduler_client(env[4]), {lib: tmp_path})
-    outcome = run_job(Capture, acct, env[4], "capture", items)
+    outcome = run_job(Capture, acct, env[4], "lumiverb.capture_time", items)
     assert outcome == [gone]  # not on its storage: it waits for the scan that says so
     assert acct.failures.charged == []
     assert _row(env, a) == {"taken_at": datetime(2024, 6, 15, 14, 30, tzinfo=UTC), "taken_at_offset_min": 120,
                             "gps_accuracy_m": 4.0, "gps_lat": 48.85}
     assert _row(env, b)["taken_at"] == datetime(2024, 6, 15, 15, 0, tzinfo=UTC)
     assert _row(env, b)["taken_at_offset_min"] is None
-    assert [c["asset_id"] for c in due(env[-1], "capture", [lib])] == [gone]
+    assert [c["asset_id"] for c in due(env[-1], "lumiverb.capture_time", [lib])] == [gone]
 
 
 @pytest.mark.slow
@@ -242,7 +242,7 @@ def test_storage_away_tries_nothing(env, tmp_path) -> None:
     lib = _library(env, tmp_path)
     _ingest(env, "x.jpg", {}, says_capture=False, library_id=lib)
     acct = FakeAccount(scheduler_client(env[4]), {lib: None})
-    assert run_job(Capture, acct, env[4], "capture", due(env[-1], "capture", [lib])) == NOT_TRIED
+    assert run_job(Capture, acct, env[4], "lumiverb.capture_time", due(env[-1], "lumiverb.capture_time", [lib])) == NOT_TRIED
     assert acct.away == [lib]
 
 
@@ -253,7 +253,7 @@ def test_only_the_scheduler_saves_capture_facts(env) -> None:
 
     client, *_ = env
     a = _ingest(env, "cap/who.jpg", {"taken_at": "2024-06-15T10:30:00+00:00"})
-    body = {"taken_at": "2024-06-15T14:30:00", "lineage": made("capture")}
+    body = {"taken_at": "2024-06-15T14:30:00", "lineage": made("lumiverb.capture_time")}
     for role in ("viewer", "editor"):
         r = client.put(f"/v1/assets/{a}/capture", json=body, headers=_key_with_role(env, role))
         assert r.status_code == 403, (role, r.text)

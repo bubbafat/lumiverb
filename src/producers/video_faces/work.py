@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.producers.names import VIDEO_FACES
 from src.producers.runner import Failed, Stopped, Waits, Work
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class Found:
 
 
 class VideoFaces(Work):
-    artifact = "video_faces"
+    artifact = VIDEO_FACES
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

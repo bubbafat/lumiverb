@@ -32,7 +32,7 @@ def plant_faces(client: Any, asset_id: str, faces: list[dict], *, headers: dict 
     auth = {"headers": headers} if headers is not None else {}
     r = client.post("/v1/assets/batch-faces", json={
         "items": [{"asset_id": asset_id, "faces": faces, **item}],
-        "lineage": lineage if lineage is not None else made("faces")}, **auth)
+        "lineage": lineage if lineage is not None else made("lumiverb.image.faces")}, **auth)
     assert r.status_code == 200, r.text
     assert r.json() == {"processed": 1, "skipped": 0}, r.text
     if not faces:

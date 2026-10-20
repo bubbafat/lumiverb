@@ -56,7 +56,7 @@ def test_pause_all_pauses_every_switch_and_resume_all_resumes_every_one(env):
         assert [s["target"] for s in q["switches"]] == list(pause_targets())
         assert all(s["paused"] and s["paused_at"] and s["paused_by"] for s in q["switches"])
         assert set(_on_hold_in_database(env[4]).work) == set(pause_targets())
-        assert _producers(env)["vision"]["paused"] is True
+        assert _producers(env)["lumiverb.image.description"]["paused"] is True
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204  # again: fine
     finally:
         assert client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers).status_code == 204
@@ -81,9 +81,9 @@ def test_a_producer_added_after_pause_all_is_paused_too(env, monkeypatch):
         assert "newcomer" in held and set(before) <= set(held)
         assert _queue(env)["state"] == "paused"
         # Resuming one switch leaves every other one paused, the newcomer too.
-        assert client.post("/v1/producers/vision/resume", json={"scope": "work"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "work"}, headers=headers).status_code == 204
         held = _on_hold_in_database(env[4]).work
-        assert "vision" not in held and "newcomer" in held and "capture" in held
+        assert "lumiverb.image.description" not in held and "newcomer" in held and "lumiverb.capture_time" in held
         assert _queue(env)["state"] == "partly"
     finally:
         monkeypatch.undo()
@@ -109,7 +109,7 @@ def test_one_switch_paused_is_partly_and_the_rest_go_on(env):
 
     client, headers, *_ = env
     try:
-        for target in ("vision", "upkeep"):
+        for target in ("lumiverb.image.description", "upkeep"):
             assert client.post(f"/v1/producers/{target}/pause", json={"scope": "work"}, headers=headers).status_code == 204, target
             sw = _switches(env)
             assert sw[target]["paused"] is True and sw[target]["paused_at"] and sw[target]["paused_by"]
@@ -149,23 +149,23 @@ def test_every_switch_works_while_all_are_paused_and_the_state_follows(env):
 def test_pausing_a_producer_and_stopping_its_redo_are_apart(env):
     client, headers, *_ = env
     try:
-        assert client.post("/v1/producers/ocr/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        assert _producers(env)["ocr"]["redo_stopped"] is False
-        assert client.post("/v1/producers/ocr/pause", json={"scope": "redo"}, headers=headers).status_code == 204
-        assert client.post("/v1/producers/ocr/resume", json={"scope": "work"}, headers=headers).status_code == 204
-        p = _producers(env)["ocr"]
+        assert client.post("/v1/producers/lumiverb.image.text/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        assert _producers(env)["lumiverb.image.text"]["redo_stopped"] is False
+        assert client.post("/v1/producers/lumiverb.image.text/pause", json={"scope": "redo"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.text/resume", json={"scope": "work"}, headers=headers).status_code == 204
+        p = _producers(env)["lumiverb.image.text"]
         assert p["paused"] is False and p["redo_stopped"] is True and p["redo_stopped_at"]
     finally:
-        client.post("/v1/producers/ocr/resume", json={"scope": "work"}, headers=headers)
-        client.post("/v1/producers/ocr/resume", json={"scope": "redo"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.text/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.text/resume", json={"scope": "redo"}, headers=headers)
 
 
 def test_only_admins_pause_or_resume_and_only_they_see_who(env):
     client, headers, *_ = env
     editor = _key_with_role(env, "editor")
     viewer = _key_with_role(env, "viewer")
-    for path in ("/v1/producers/all/pause", "/v1/producers/all/resume", "/v1/producers/ocr/pause",
-                 "/v1/producers/ocr/resume", "/v1/producers/scans/pause", "/v1/producers/upkeep/resume",
+    for path in ("/v1/producers/all/pause", "/v1/producers/all/resume", "/v1/producers/lumiverb.image.text/pause",
+                 "/v1/producers/lumiverb.image.text/resume", "/v1/producers/scans/pause", "/v1/producers/upkeep/resume",
                  "/v1/libraries/scans/pause", "/v1/libraries/scans/resume"):
         assert client.post(path, headers=editor).status_code == 403, path
         assert client.post(path, headers=viewer).status_code == 403, path
@@ -173,7 +173,7 @@ def test_only_admins_pause_or_resume_and_only_they_see_who(env):
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
         q = _queue(env, viewer)
         assert q["state"] == "paused" and all(s["paused_at"] and s["paused_by"] is None for s in q["switches"])
-        p = _producers(env, viewer)["ocr"]
+        p = _producers(env, viewer)["lumiverb.image.text"]
         assert p["paused"] is True and p["paused_by"] is None
     finally:
         client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers)
@@ -183,26 +183,26 @@ def test_an_unknown_producer_is_404_and_one_scans_make_is_paused_with_a_librarys
     client, headers, *_ = env
     assert client.post("/v1/producers/nope/pause", json={"scope": "work"}, headers=headers).status_code == 404
     assert client.post("/v1/producers/nope/resume", json={"scope": "work"}, headers=headers).status_code == 404
-    r = client.post("/v1/producers/proxy/pause", json={"scope": "work"}, headers=headers)
+    r = client.post("/v1/producers/lumiverb.preview/pause", json={"scope": "work"}, headers=headers)
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_scheduled", r.text
     assert "a library's scans" in r.json()["error"]["message"]
     producers = _producers(env)
-    assert producers["proxy"]["paused"] is False and producers["proxy"]["scheduled"] is False
-    assert producers["vision"]["scheduled"] is True
+    assert producers["lumiverb.preview"]["paused"] is False and producers["lumiverb.preview"]["scheduled"] is False
+    assert producers["lumiverb.image.description"]["scheduled"] is True
 
 
 def test_new_settings_dont_resume_a_paused_producer(env):
     client, headers, *_ = env
     try:
-        assert client.post("/v1/producers/analysis_proxy/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
+        assert client.post("/v1/producers/lumiverb.video.analysis_proxy/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        r = client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
                        headers=headers)
         assert r.status_code == 200, r.text
-        assert r.json()["paused"] is True and _producers(env)["analysis_proxy"]["paused"] is True
+        assert r.json()["paused"] is True and _producers(env)["lumiverb.video.analysis_proxy"]["paused"] is True
     finally:
-        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
+        client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
                    headers=headers)
-        client.post("/v1/producers/analysis_proxy/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/lumiverb.video.analysis_proxy/resume", json={"scope": "work"}, headers=headers)
 
 
 def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
@@ -223,14 +223,14 @@ def test_new_settings_or_a_new_model_lift_no_pause_only_a_toggle_does(env):
             assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
             held = set(pause_targets())
             assert set(_on_hold_in_database(env[4]).work) == held
-            r = client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
+            r = client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": "good"}, "redo": True},
                            headers=headers)
             assert r.status_code == 200 and r.json()["paused"] is True, r.text
             assert _model(env, "vision", LLAVA, redo=True).status_code == 200
             assert set(_on_hold_in_database(env[4]).work) == held and _queue(env)["state"] == "paused"
     finally:
         assert client.post("/v1/producers/all/resume", json={"scope": "work"}, headers=headers).status_code == 204  # the toggle
-        client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
+        client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": None}, "redo": True},
                    headers=headers)
         with fake:
             _model(env, "vision", "")
@@ -246,13 +246,13 @@ def test_the_redo_question_says_a_paused_producer_waits(env):
     sha = _sha()
     _describe(lib, _ingest_with(lib, "a.jpg", sha, None), sha)
     try:
-        assert client.post("/v1/producers/vision/pause", json={"scope": "work"}, headers=headers).status_code == 204
-        r = client.put("/v1/producers/vision/settings", json={"settings": {"temperature": 0.7}}, headers=headers)
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        r = client.put("/v1/producers/lumiverb.image.description/settings", json={"settings": {"temperature": 0.7}}, headers=headers)
         assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
         assert "paused" in r.json()["error"]["message"] and r.json()["error"]["details"]["paused"] is True
         assert "all_paused" not in r.json()["error"]["details"]
     finally:
-        client.post("/v1/producers/vision/resume", json={"scope": "work"}, headers=headers)
+        client.post("/v1/producers/lumiverb.image.description/resume", json={"scope": "work"}, headers=headers)
 
 
 def test_while_upkeep_is_paused_it_deletes_and_changes_nothing_but_search_stays_current(env):
@@ -374,16 +374,16 @@ def test_the_queue_gives_paused_work_no_time_but_running_jobs_say_theirs(env):
 
     client, headers, *_ = env
     _ingest_with(_library(env, "PausedEta"), "a.jpg", _sha(), None)  # a photo nothing has described yet
-    _write(env, {"at": utcnow().isoformat(), "running": {"vision": 1}, "waiting": {},
+    _write(env, {"at": utcnow().isoformat(), "running": {"lumiverb.image.description": 1}, "waiting": {},
                  "pools": {"vision": [1, 3], "gpu": [0, 1], "probe": [0, 1]},
-                 "pace": {"vision": 6.0, "ocr": 3.0, "clip": 0.5, "faces": 0.5},
-                 "jobs": [{"kind": "vision", "units": 1.0, "elapsed": 2.0}]})
+                 "pace": {"lumiverb.image.description": 6.0, "lumiverb.image.text": 3.0, "lumiverb.image.likeness": 0.5, "lumiverb.image.faces": 0.5},
+                 "jobs": [{"kind": "lumiverb.image.description", "units": 1.0, "elapsed": 2.0}]})
     try:
-        assert client.post("/v1/producers/vision/pause", json={"scope": "work"}, headers=headers).status_code == 204
+        assert client.post("/v1/producers/lumiverb.image.description/pause", json={"scope": "work"}, headers=headers).status_code == 204
         producers_router._work_left_cache.clear()
         eta = _queue(env)["eta"]
-        assert eta["producers"]["vision"] is None and eta["producers"]["ocr"] is not None
-        assert {"artifact": "vision", "title": _producers(env)["vision"]["title"], "why": "paused"} in eta["not_counted"]
+        assert eta["producers"]["lumiverb.image.description"] is None and eta["producers"]["lumiverb.image.text"] is not None
+        assert {"artifact": "lumiverb.image.description", "title": _producers(env)["lumiverb.image.description"]["title"], "why": "paused"} in eta["not_counted"]
         assert client.post("/v1/producers/all/pause", json={"scope": "work"}, headers=headers).status_code == 204
         eta = _queue(env)["eta"]
         assert all(t is None or t == 0 for t in eta["producers"].values()) and eta["caught_up"] is None

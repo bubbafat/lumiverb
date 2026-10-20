@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from src.processing.video import ffmpeg_run
+from src.producers.names import VIDEO_PREVIEW
 from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.config import get_settings
@@ -84,7 +85,7 @@ def whole_clip(source: str, duration_sec: float | None) -> bool:
 
     if source == "analysis_proxy":
         return True
-    preview_seconds = PRODUCERS["video_preview"].defaults["seconds"]
+    preview_seconds = PRODUCERS[VIDEO_PREVIEW].defaults["seconds"]
     return duration_sec is not None and duration_sec <= preview_seconds + WHOLE_SLACK_SEC
 
 

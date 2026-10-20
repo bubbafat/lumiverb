@@ -120,7 +120,7 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
         s.tick()
         s.collect(timeout=0.5)
         with _db(env) as session:
-            if photo not in [i["asset_id"] for i in candidates(session, KINDS["vision"], [lib[2]])]:
+            if photo not in [i["asset_id"] for i in candidates(session, KINDS["lumiverb.image.description"], [lib[2]])]:
                 break
     s.stop()
     client, headers, *_ = lib
@@ -128,7 +128,7 @@ def test_a_description_goes_from_the_queue_to_the_database(env, home: Path) -> N
     assert r.status_code == 200, r.text
     assert "a red square" in r.text
     with _db(env) as session:
-        assert photo not in [i["asset_id"] for i in candidates(session, KINDS["vision"], [lib[2]])]
+        assert photo not in [i["asset_id"] for i in candidates(session, KINDS["lumiverb.image.description"], [lib[2]])]
 
 
 def test_a_job_reads_its_clips_files_from_the_store_by_the_keys_its_rows_carry(env) -> None:

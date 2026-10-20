@@ -1057,7 +1057,7 @@ def test_machine_transcript_never_replaces_manual(env) -> None:
         r = client.post(
             f"/v1/assets/{asset_id}/transcript",
             json={"srt": srt, "language": "en", "source": source,
-                  **({} if source == "manual" else {"lineage": made("transcript")})},
+                  **({} if source == "manual" else {"lineage": made("lumiverb.video.transcript")})},
             headers=headers,
         )
         assert r.status_code == 200, r.text

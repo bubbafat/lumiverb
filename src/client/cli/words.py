@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from src.producers.names import said, short, typed
+from src.producers.names import artifact_in, short, typed
 
 console = Console()
 warn = Console(stderr=True)
@@ -24,7 +24,7 @@ warn = Console(stderr=True)
 
 def shown(value: str) -> str:
     """A producer or switch the server answered (either spelling) as a person types it."""
-    return short(said(value))
+    return short(artifact_in(value))
 
 
 def producers_listed(client) -> list[str]:

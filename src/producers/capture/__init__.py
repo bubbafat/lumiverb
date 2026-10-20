@@ -24,13 +24,13 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ORIGINAL,),
-    artifact="capture", producer="exiftool", version="1", media=ALL, title="Capture time and GPS accuracy", order=15,
+    artifact=names.CAPTURE_TIME, version="1", media=ALL, title="Capture time and GPS accuracy", order=15,
     applies="true",
     # Made once its lineage says so: the facts themselves can be empty (a PNG says nothing).
     made=("EXISTS (SELECT 1 FROM artifact_lineage cl WHERE cl.asset_id = a.asset_id"
-          " AND cl.artifact = 'capture' AND cl.producer <> '')"),
+          f" AND cl.artifact = '{names.CAPTURE_TIME}' AND cl.producer <> '')"),
     # Its time read again, the clip's guess is made again with it.
-    redo_also=("location",),
-    kind="capture", flag="missing_capture", run="src.producers.capture.work:Capture", tier=PREPARE, pool=EXIF,
+    redo_also=(names.LOCATION_GUESS,),
+    run="src.producers.capture.work:Capture", tier=PREPARE, pool=EXIF,
     batch=50, storage=True,
 )

@@ -96,7 +96,7 @@ beforeEach(() => {
         return err(409, "redo_on_change",
                    `${made} clips were made with the old model: descriptions and tags (${made}). New files only with ${body.model}, and they stay as they are until you remake them; or remake them too, after everything else.`,
                    { job: "vision", model: body.model, clips: made, question: "remake",
-                     artifacts: [{ artifact: "vision", title: "Descriptions and tags", clips: made }] });
+                     artifacts: [{ artifact: "lumiverb.image.description", title: "Descriptions and tags", clips: made }] });
       }
       if (body.model && !machines.some((x) => offers[x.api_url]?.includes(body.model))) {
         return err(409, "model_not_offered", `No machine doing descriptions & text offers ${body.model}.`,

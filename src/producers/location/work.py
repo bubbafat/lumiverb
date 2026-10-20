@@ -19,6 +19,7 @@ from src.producers.location.infer import (
     locate,
     parse_time,
 )
+from src.producers.names import LOCATION_GUESS
 from src.producers.runner import Work
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def day_clock(day: dict) -> Clock:
 
 
 class Locate(Work):
-    artifact = "location"
+    artifact = LOCATION_GUESS
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

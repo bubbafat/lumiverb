@@ -46,16 +46,18 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from src.producers import names
+
 logger = logging.getLogger(__name__)
 
 # What a device makes from the originals, in the order it makes them: renders last.
-ORDER = ("probe", "capture", "analysis_proxy")
+ORDER = (names.VIDEO_FORMAT, names.CAPTURE_TIME, names.ANALYSIS_PROXY)
 PAGE = 500  # reader-work's clips a page
 
 
 def _ids(words: list[str] | None) -> set[str]:
     """What the server lists (what's paused, a clip's work), whichever spelling it answers in (ADR-024: today's
-    ids before part 3, the names after), as the producers' ids here."""
+    ids before part 3, the names after), as names."""
     from src.producers.names import artifact_in
 
     return {artifact_in(w) for w in words or []}
@@ -267,7 +269,7 @@ class Device:
             if self.stopping.is_set() or (stop is not None and stop()):
                 return i
             items = tuple({**c, "library_id": library_id} for c in clips[i:i + batch])
-            run(load(spec.run), self, Job(self.tenant_id, spec.kind, 0, items))
+            run(load(spec.run), self, Job(self.tenant_id, spec.artifact, 0, items))
             self.failures.flush()
         return len(clips)
 

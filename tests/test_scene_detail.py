@@ -255,7 +255,7 @@ def test_detail_is_the_only_setting_and_its_out_of_the_hash():
     assert [(s.key, s.kind, s.choices, s.remakes) for s in SCENES.settings] == [
         ("detail", "level", DETAILS, False)]
     assert SCENES.defaults == {} and SCENES.use_defaults == {"detail": "normal"}
-    assert SCENES.level is SCENES.settings[0] and SCENES.part_of == "scene_vision"
+    assert SCENES.level is SCENES.settings[0] and SCENES.part_of == "lumiverb.video.scene_descriptions"
     with pytest.raises(ValueError, match="one of low, normal, high"):
         SCENES.level.check("extreme")
 
@@ -263,10 +263,10 @@ def test_detail_is_the_only_setting_and_its_out_of_the_hash():
 def test_lineage_records_the_level_apart_from_the_hash():
     from src.shared.producers import level_of, lineage
 
-    assert lineage("scenes", {}, None, level_of("scenes", {"detail": "high"}))["level"] == 2
-    assert lineage("scenes", {}, None)["level"] == 1  # the default's
-    assert lineage("scenes", {}, None, 0)["settings_hash"] == lineage("scenes", {}, None, 2)["settings_hash"]
-    assert "level" not in lineage("transcript", {}, None)
+    assert lineage("lumiverb.video.scenes", {}, None, level_of("lumiverb.video.scenes", {"detail": "high"}))["level"] == 2
+    assert lineage("lumiverb.video.scenes", {}, None)["level"] == 1  # the default's
+    assert lineage("lumiverb.video.scenes", {}, None, 0)["settings_hash"] == lineage("lumiverb.video.scenes", {}, None, 2)["settings_hash"]
+    assert "level" not in lineage("lumiverb.video.transcript", {}, None)
 
 
 @pytest.fixture()
@@ -344,14 +344,14 @@ def test_the_scheduler_hands_the_indexer_the_accounts_detail_and_records_its_lev
     proxy.write_bytes(b"x")
     acct.analysis_cache.held.return_value = contextlib.nullcontext(proxy)
     acct.inputs = Inputs(acct, None)  # not beside the API's Store: the cache above
-    job = Job("t1", "scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "content_hash": "s1",
+    job = Job("t1", "lumiverb.video.scenes", 3, ({"asset_id": "a1", "rel_path": "a.mp4", "duration_sec": 10.0, "content_hash": "s1",
                                    "redo": True},))
     with patch("src.producers.scenes.work.index_video_scenes") as index:
         index.return_value = {"scenes": 1, "chunks": 1, "elapsed": 0.1}
         assert run(Scenes, acct, job) is None
     kw = index.call_args.kwargs
     assert kw["detail"] == "high" and kw["redo"] is True
-    assert kw["lineage"] == {**lineage("scenes", {}, "s1"), "level": 2}
+    assert kw["lineage"] == {**lineage("lumiverb.video.scenes", {}, "s1"), "level": 2}
 
 
 def test_a_redo_asks_the_server_to_start_the_clip_over_with_its_windows():
@@ -360,7 +360,7 @@ def test_a_redo_asks_the_server_to_start_the_clip_over_with_its_windows():
     client = MagicMock()
     client.post.side_effect = lambda path, *a, **k: (_Resp(204) if path.endswith("/chunks/next")
                                                      else _Resp(data={"chunk_count": 1, "already_initialized": True}))
-    made = {"producer": "scene-detect", "version": "3", "settings_hash": "abc", "source_hash": None, "level": 0}
+    made = {"producer": "lumiverb.video.scenes", "version": "3", "settings_hash": "abc", "source_hash": None, "level": 0}
     with patch("src.producers.scenes.work.VideoScanner"):
         index_video_scenes(client=client, source_path=MagicMock(), asset_id="ast_1", duration_sec=300.0,
                            rel_path="v.mp4", lineage=made, detail="low", redo=True)

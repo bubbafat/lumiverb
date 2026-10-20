@@ -444,20 +444,20 @@ def test_leaving_a_job_without_a_machine_never_asks_and_processing_says_it_waits
         _add(env, name="Studio", api_url=STUDIO)
         _model(env, "vision", QWEN, redo=True)
     gaming_pc, studio = (m["machine_id"] for m in _added(_ai(env)))
-    assert _waiting(env, "vision") is None
+    assert _waiting(env, "lumiverb.image.description") is None
     for method, path, body in (("patch", f"/v1/ai/machines/{studio}", {"enabled": False}),
                                ("patch", f"/v1/ai/machines/{gaming_pc}", {"jobs": []}),
                                ("delete", f"/v1/ai/machines/{gaming_pc}", None)):
         r = client.request(method.upper(), path, json=body, headers=headers)
         assert r.status_code == 200, (method, body, r.text)
     assert _job(_ai(env), "vision")["machines"] == 0
-    assert _waiting(env, "vision") == ("No machine does descriptions & text: its work waits until an admin "
+    assert _waiting(env, "lumiverb.image.description") == ("No machine does descriptions & text: its work waits until an admin "
                                        "adds one in Settings → AI.")
-    assert _waiting(env, "ocr") == _waiting(env, "vision")  # every producer of the job
+    assert _waiting(env, "lumiverb.image.text") == _waiting(env, "lumiverb.image.description")  # every producer of the job
     with fake:
         _model(env, "vision", "")
-    assert _waiting(env, "vision") == ("Descriptions & text are off: no model is chosen in Settings → AI.")
-    assert _waiting(env, "clip") is None  # the built-in machine does CLIP
+    assert _waiting(env, "lumiverb.image.description") == ("Descriptions & text are off: no model is chosen in Settings → AI.")
+    assert _waiting(env, "lumiverb.image.likeness") is None  # the built-in machine does CLIP
 
 
 @pytest.mark.slow
@@ -471,10 +471,10 @@ def test_a_job_whose_machines_are_all_offline_says_so_in_processing(env, none):
     worker = _key_with_role(env, "admin")  # the scheduler's key
     client.post(f"/v1/ai/machines/{gaming_pc}/status", json={"online": False, "error": "Couldn't reach it."},
                 headers=worker)
-    assert _waiting(env, "vision") == ("No machine doing descriptions & text is online: its work waits. "
+    assert _waiting(env, "lumiverb.image.description") == ("No machine doing descriptions & text is online: its work waits. "
                                        "Settings → AI shows why.")
     client.post(f"/v1/ai/machines/{gaming_pc}/status", json={"online": True, "models": [QWEN]}, headers=worker)
-    assert _waiting(env, "vision") is None
+    assert _waiting(env, "lumiverb.image.description") is None
 
 
 @pytest.mark.slow
@@ -513,16 +513,16 @@ def test_changing_the_model_makes_descriptions_stale(env, none):
         _model(env, "vision", QWEN)
     sha = _sha()
     clip = _ingest_with(lib, "a.jpg", sha, None)
-    assert _want(env, "vision", sha)["settings_hash"]
+    assert _want(env, "lumiverb.image.description", sha)["settings_hash"]
     _describe(lib, clip, sha)
-    assert _counts(lib, "vision")["current"] == 1
+    assert _counts(lib, "lumiverb.image.description")["current"] == 1
     with fake:
         r = _model(env, "vision", LLAVA)  # asks first, with the count
         assert r.status_code == 409 and r.json()["error"]["code"] == "redo_on_change", r.text
         assert r.json()["error"]["details"]["clips"] >= 1
-        assert _counts(lib, "vision")["stale"] == 0  # nothing changed yet
+        assert _counts(lib, "lumiverb.image.description")["stale"] == 0  # nothing changed yet
         assert _model(env, "vision", LLAVA, redo=True).status_code == 200
-    assert _counts(lib, "vision")["stale"] == 1
+    assert _counts(lib, "lumiverb.image.description")["stale"] == 1
 
 
 @pytest.mark.slow
@@ -745,19 +745,19 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
     client, headers, *_ = lib
     sha = _sha()
     clip = _ingest_with(lib, "talk.mov", sha, None, media_type="video")
-    client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 5.0, "lineage": _want(lib, "probe", sha)},
+    client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 5.0, "lineage": _want(lib, "lumiverb.video.format", sha)},
                headers=headers)
     r = client.post(f"/v1/assets/{clip}/transcript", json={
-        "srt": SRT, "source": "whisper", "lineage": _want(lib, "transcript", sha)}, headers=headers)
+        "srt": SRT, "source": "whisper", "lineage": _want(lib, "lumiverb.video.transcript", sha)}, headers=headers)
     assert r.status_code == 200, r.text
-    assert _counts(lib, "transcript")["current"] == 1
+    assert _counts(lib, "lumiverb.video.transcript")["current"] == 1
     r = _model(env, "transcripts", "medium")  # asks first, with the count
     assert r.status_code == 409 and r.json()["error"]["details"]["job"] == "transcripts", r.text
-    assert _counts(lib, "transcript")["stale"] == 0
+    assert _counts(lib, "lumiverb.video.transcript")["stale"] == 0
     assert _model(env, "transcripts", "medium", redo=True).status_code == 200
-    assert _counts(lib, "transcript")["stale"] == 1
+    assert _counts(lib, "lumiverb.video.transcript")["stale"] == 1
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
-    assert {p["artifact"]: p for p in r.json()["producers"]}["transcript"]["settings"] == {
+    assert {p["artifact"]: p for p in r.json()["producers"]}["lumiverb.video.transcript"]["settings"] == {
         "model": "medium", "vad_min_silence_ms": 500}
     # The vision model is the vision job's alone.
     fake, _ = _machines({GAMING_PC: (QWEN,)})
@@ -766,7 +766,7 @@ def test_changing_the_transcripts_model_makes_transcripts_stale(env, none):
         assert _model(env, "vision", QWEN, redo=True).status_code == 200
     r = client.get("/v1/producers", params={"counts": "false"}, headers=headers)
     settings = {p["artifact"]: p["settings"] for p in r.json()["producers"]}
-    assert settings["transcript"]["model"] == "medium" and settings["vision"]["model"] == QWEN
+    assert settings["lumiverb.video.transcript"]["model"] == "medium" and settings["lumiverb.image.description"]["model"] == QWEN
 
 
 @pytest.mark.slow

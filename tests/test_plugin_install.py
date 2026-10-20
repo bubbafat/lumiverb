@@ -373,3 +373,42 @@ def test_a_plug_in_that_checks_its_settings_is_asked_while_it_runs(install, cont
         assert r.status_code == 200 and r.json()["unchecked"] is None, r.text
     finally:
         runner.stop_all()
+
+
+@pytest.mark.slow
+def test_one_installed_with_an_id_lumiverb_uses_now_is_left_out_and_said(install, machine, capsys, caplog):  # noqa: F811
+    # ADR-024 section 8: installed before part 1 refused such an id (none is on Robert's Mac). Left out, as a
+    # manifest Lumiverb no longer reads is: not run, its work not a producer; said on the Admin page, in the log at
+    # every start, and by `lumiverb-server plugins`, with what to do.
+    import logging
+
+    from src.server import plugin_catalog
+    from src.shared.utils import utcnow
+
+    client, robert, _ = install
+    env, _ = machine
+    manifest = {**json.loads((HELLO / "lumiverb-plugin.json").read_text()), "id": "faces", "title": "Faces Plus"}
+    with get_control_session() as session:
+        InstalledPluginRepository(session).save("faces", version="1", manifest=manifest, on_by_default=True,
+                                                acknowledged_version=None, permissions={}, by="robert", now=utcnow())
+        session.commit()
+    said = "Faces Plus's id `faces` is one Lumiverb uses now: uninstall it, then install it under another id"
+    try:
+        plugin_catalog._SAID.discard("faces")  # as a new process starts
+        with caplog.at_level(logging.WARNING, logger=plugin_catalog.__name__):
+            assert "faces" not in plugin_catalog.installed() and "faces" not in plugin_catalog.installed()
+        assert [r.getMessage() for r in caplog.records if "faces" in r.getMessage()] == [
+            f"Plug-in faces left out: {said}"], "once a start"
+        assert "faces" not in _listed(client, robert)
+        r = client.get("/v1/producers", params={"counts": "false"}, headers=robert)
+        assert r.status_code == 200 and "faces" not in {p["artifact"] for p in r.json()["producers"]}, r.text
+        rows = {r["key"]: r for r in client.get("/v1/system/health", headers=robert).json()["rows"]}
+        assert (rows["plugins"]["state"], rows["plugins"]["reason"]) == ("red", f"{said}."), rows.get("plugins")
+        assert cli.main(["plugins", "--env", env]) == 0
+        assert f"  faces 1  Faces Plus: on by default\n    ! left out: {said}" in capsys.readouterr().out
+    finally:
+        with get_control_session() as session:
+            InstalledPluginRepository(session).remove("faces", by="robert", now=utcnow())
+            session.commit()
+    rows = {r["key"]: r for r in client.get("/v1/system/health", headers=robert).json()["rows"]}
+    assert "plugins" not in rows, "uninstalled: nothing to say"
