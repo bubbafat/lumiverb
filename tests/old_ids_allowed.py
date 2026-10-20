@@ -212,7 +212,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     'a word': {
-        'clip': (
+        'clip': ('src/ui/web/src/pages/AdminAccountsPage.tsx', 
             'clients/resolve/plugin/renderer.js', 'src/client/cli/commands/archive.py',
             'src/client/cli/commands/projects.py', 'src/client/cli/commands/settings.py', 'src/client/cli/main.py',
             'src/server/api/routers/libraries.py', 'src/server/api/routers/projects.py',
