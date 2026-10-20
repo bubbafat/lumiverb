@@ -19,10 +19,12 @@ from src.server.api.errors import (
     api_error_handler,
     envelope,
     http_exception_handler,
+    secrets_key_missing_handler,
     storage_unavailable_handler,
     unhandled_error_handler,
     validation_error_handler,
 )
+from src.server.sealing import SecretsKeyMissingError
 from src.server.storage.store import Unavailable
 from src.server.api import devices, library_access
 from src.server.api.https_seen import NoteHttps
@@ -130,6 +132,7 @@ app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Unavailable, storage_unavailable_handler)
+app.add_exception_handler(SecretsKeyMissingError, secrets_key_missing_handler)
 
 
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

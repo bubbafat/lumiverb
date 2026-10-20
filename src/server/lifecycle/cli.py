@@ -157,7 +157,9 @@ def data_dir(env: dict[str, str]) -> Path:
 # (scheduler/service.py scheduler_key): no other secret. The server's
 # settings require the template (config.py) though it reads each account's
 # database from its routing: the same credentials as the control URL's.
-SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE")
+SCHEDULER_SECRETS = ("CONTROL_PLANE_DATABASE_URL", "TENANT_DATABASE_URL_TEMPLATE",
+                     # Opens the plug-ins' secret settings it hands them (src/server/sealing.py): the runner's too.
+                     "LUMIVERB_SECRETS_KEY")
 
 
 def forget_quickwit(env: dict[str, str], data: Path) -> list[Path]:
@@ -258,6 +260,20 @@ def server_children(env: dict[str, str], *, migrated: threading.Event | None = N
         restart_after=10, stop_within=20, term_main_only=True, start_after=migrated,
     )
     return [*started_first, api, scheduler, plugins]
+
+
+def with_secrets_key(env_file: Path, env: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    """The env with LUMIVERB_SECRETS_KEY (src/server/sealing.py), added to the env file of an install made before
+    it was (init writes it now), and what was done, for the log: None when it was there."""
+    from src.server.sealing import ENV_NAME, new_key
+
+    if env.get(ENV_NAME):
+        return env, None
+    key = new_key()
+    with env_file.open("a") as f:
+        f.write(f"\n# Seals the secrets Lumiverb keeps for other services (AI machines' keys, plug-ins' secret settings):"
+                f"\n# keep a copy with your backups, or those are entered again.\n{ENV_NAME}={key}\n")
+    return {**env, ENV_NAME: key}, f"{ENV_NAME} added to {env_file}: keep a copy of it with your backups"
 
 
 def migrate_when_ready(url: str, stop: threading.Event, *, migrate_fn: Callable[[str], int] = migrate,
@@ -488,8 +504,10 @@ def _run(args: argparse.Namespace) -> int:
     before = env.get(roles.SUPERUSER_URL)
     env = as_app_role(env, named)  # before the children are built: they connect as its role
     ports_moved = None
+    secrets_key_added = None
     if named is not None:  # the API off 6465, HTTPS's now (api_port.py), before anything starts on either
         env, ports_moved = api_port.moved(named, env)
+        env, secrets_key_added = with_secrets_key(named, env)
     url = env["CONTROL_PLANE_DATABASE_URL"]
     data = data_dir(env)  # before anything starts
     migrated = threading.Event()
@@ -503,6 +521,8 @@ def _run(args: argparse.Namespace) -> int:
                     named, roles.APP_ROLE, roles.SUPERUSER_URL)
     if ports_moved:
         logger.info("Ports: %s", ports_moved)
+    if secrets_key_added:
+        logger.info("Secrets: %s", secrets_key_added)
     private.begin(data, log_file)  # umask 077 before anything is made, and what's there made private
     forget_quickwit(env, data)
     stop = threading.Event()

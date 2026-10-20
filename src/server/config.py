@@ -30,6 +30,8 @@ class Settings(BaseSettings):
 
     # Auth (JWT + password reset)
     jwt_secret: str = ""  # Required for JWT auth; generate with: openssl rand -hex 32
+    # What seals the secrets Lumiverb keeps for other services (src/server/sealing.py): init makes it.
+    lumiverb_secrets_key: str = ""
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""

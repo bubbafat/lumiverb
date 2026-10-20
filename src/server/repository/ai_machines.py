@@ -1,4 +1,5 @@
-"""The account's AI machines on the control plane (routers/ai.py is their API)."""
+"""The account's AI machines on the control plane (routers/ai.py is their API). A machine's key is kept sealed
+(src/server/sealing.py): set_key seals it, key_of opens it, nothing else reads ai_machines.api_key."""
 
 from __future__ import annotations
 
@@ -97,10 +98,38 @@ def first_vision_machine(ctrl: Session, tenant_id: str) -> AiMachine | None:
     return next((m for m in machines(ctrl, tenant_id) if m.enabled and "vision" in m.jobs), None)
 
 
+def key_of(machine: AiMachine) -> str | None:
+    """Its key: "" for none; None when this install can't read it (sealed with another install's key: a backup
+    restored elsewhere), so it's entered again."""
+    from src.server.sealing import opened
+
+    return opened(machine.api_key)
+
+
+def set_key(machine: AiMachine, key: str) -> None:
+    """Its key, sealed ("" for none). SecretsKeyMissingError when the install has no key to seal with."""
+    from src.server.sealing import seal
+
+    machine.api_key = seal(key)
+
+
 def key_for(machine: AiMachine | None, scheduler: bool) -> str:
     """A machine's key as the caller may read it: the scheduler's own key's, to send it work; "" for anyone else,
-    an account admin too (write-only: Settings › AI says only whether one is saved)."""
-    return (machine.api_key or "") if machine is not None and scheduler else ""
+    an account admin too (write-only: Settings › AI says only whether one is saved), and for one this install
+    can't read."""
+    return (key_of(machine) or "") if machine is not None and scheduler else ""
+
+
+def seal_stored(ctrl: Session) -> int:
+    """Upkeep: every machine's key stored before sealing, sealed. How many. Commits."""
+    from src.server.sealing import is_sealed
+
+    found = [m for m in ctrl.exec(select(AiMachine)).all() if m.api_key and not is_sealed(m.api_key)]
+    for machine in found:
+        set_key(machine, machine.api_key)
+        ctrl.add(machine)
+    ctrl.commit()
+    return len(found)
 
 
 def free_name(ctrl: Session, tenant_id: str, base: str) -> str:
@@ -131,7 +160,7 @@ def update_vision(ctrl: Session, tenant: Tenant, *, api_url: str | None, api_key
         else:
             machine.api_url = url
     if api_key is not None and machine is not None:
-        machine.api_key = api_key
+        set_key(machine, api_key)
     if machine is not None:
         ctrl.add(machine)
     if model is not None:
@@ -146,5 +175,7 @@ def new_vision_machine(ctrl: Session, tenant_id: str, api_url: str, api_key: str
     """A machine doing vision at api_url, named after its host (not added to the session)."""
     url = api_url.strip().rstrip("/")
     host = url.split("://")[-1].split("/")[0] or "Vision"
-    return AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=free_name(ctrl, tenant_id, host),
-                     api_url=url, api_key=api_key, jobs=["vision"])
+    machine = AiMachine(machine_id=f"aim_{ULID()}", tenant_id=tenant_id, name=free_name(ctrl, tenant_id, host),
+                        api_url=url, jobs=["vision"])
+    set_key(machine, api_key)
+    return machine

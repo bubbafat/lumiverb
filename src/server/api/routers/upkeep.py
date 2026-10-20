@@ -533,6 +533,8 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     previews_move = _previews_move() if scope.all_tenants else None
     plugins_purged = _purge_trashed_plugins() if scope.all_tenants else None
     if scope.all_tenants:
+        _seal_stored_secrets()
+    if scope.all_tenants:
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
         purge_result = _purge_expired_trash_all_tenants()
@@ -563,6 +565,23 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         previews_move=previews_move,
         plugins_purged=plugins_purged,
     )
+
+
+def _seal_stored_secrets() -> None:
+    """What was kept for other services before sealing (src/server/sealing.py), sealed: AI machines' keys. Never
+    fails upkeep; on an install without its key, said once a run and left as it is."""
+    from src.server.database import get_control_session
+    from src.server.repository.ai_machines import seal_stored
+    from src.server.sealing import SecretsKeyMissingError
+
+    try:
+        with get_control_session() as session:
+            if n := seal_stored(session):
+                logger.info("Sealed %d AI machine key%s stored before sealing", n, "" if n == 1 else "s")
+    except SecretsKeyMissingError as exc:
+        logger.warning("Secrets aren't sealed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — tried again at the next upkeep
+        logger.warning("Secrets weren't sealed: %s", exc)
 
 
 def _purge_trashed_plugins() -> list[str]:
