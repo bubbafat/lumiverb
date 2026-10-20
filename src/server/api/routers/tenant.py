@@ -231,8 +231,8 @@ def get_tenant_context(request: Request) -> TenantContextResponse:
     return TenantContextResponse(
         tenant_id=tenant_id,
         vision_api_url=machine.api_url if machine else "",
-        # Only an admin's; the Mac app keeps its own key and never reads this.
-        vision_api_key=key_for(machine, getattr(request.state, "role", None)),
+        # Never the key (write-only: the scheduler's own key reads it from /v1/ai/jobs); the Mac app keeps its own.
+        vision_api_key=key_for(machine, getattr(request.state, "scheduler", False)),
         vision_model_id=job_model(tenant, "vision"),
     )
 

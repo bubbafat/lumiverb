@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from src.server.api.dependencies import is_install_key
 from src.server.config import get_settings
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, TenantRepository, UserRepository
+from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, TenantRepository, UserRepository, SCHEDULER_KEY_LABEL
 from src.server.repository.library_roles import MakerGoneError, person_of_key, person_of_user
 
 logger = logging.getLogger(__name__)
@@ -179,6 +179,9 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                 # A device's key: it scans the libraries it reads and nothing else (src/server/api/devices.py).
                 request.state.device_id = api_key.device_id
                 request.state.server_admin = False  # a person signed in, never a key, whoever made it
+                # The scheduler's own key (made by no person): the only caller handed an AI machine's key.
+                request.state.scheduler = (api_key.label == SCHEDULER_KEY_LABEL and api_key.created_by_user_id is None
+                                           and api_key.device_id is None)
                 request.state.person = person
                 request.state.is_public_request = False
             return await call_next(request)

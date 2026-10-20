@@ -338,20 +338,29 @@ def test_an_editor_never_sees_an_ai_machines_key(env, none):
 
 
 @pytest.mark.slow
-def test_an_admin_reads_ai_machines_keys(env, none):
-    """Signed in or by key; Settings → AI still only says whether one is saved."""
+def test_only_the_schedulers_own_key_reads_ai_machines_keys(env, none):
+    """Keys are write-only: an account admin, signed in or by a key, never reads one back (Settings → AI says
+    only whether one is saved), nor a key a person made and labelled as the scheduler's; the scheduler's own key,
+    made by no person, reads it to send the machine work."""
+    from tests.producer_fakes import scheduler_client
+
     client, headers, *_ = env
     fake, _ = _machines({GAMING_PC: (QWEN,)})
     with fake:
         _add(env, name="Gaming PC", api_key="sk-1")
         _model(env, "vision", QWEN)
     _, signed_in = _user(client, headers, "ai-keys-admin@example.com", "admin")
-    for admin in (headers, signed_in):
-        [machine] = client.get("/v1/ai/jobs/vision", headers=admin).json()["machines"]
-        assert machine["api_key"] == "sk-1"
-        assert client.get("/v1/tenant/context", headers=admin).json()["vision_api_key"] == "sk-1"
+    made = client.post("/v1/keys", json={"label": "scheduler", "role": "admin"}, headers=signed_in)
+    assert made.status_code == 200, made.text
+    posing = {"Authorization": f"Bearer {made.json()['plaintext']}"}
+    for admin in (headers, signed_in, posing):
+        r = client.get("/v1/ai/jobs/vision", headers=admin)
+        assert r.json()["machines"][0]["api_key"] == "" and "sk-1" not in r.text
+        assert client.get("/v1/tenant/context", headers=admin).json()["vision_api_key"] == ""
     shown = _machine(_ai(env, headers=signed_in), "Gaming PC")
     assert shown["has_key"] is True and "api_key" not in shown
+    [machine] = scheduler_client(env[4]).get("/v1/ai/jobs/vision").json()["machines"]
+    assert machine["api_key"] == "sk-1"
 
 
 @pytest.mark.slow

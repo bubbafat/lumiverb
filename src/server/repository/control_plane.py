@@ -16,6 +16,9 @@ from ulid import ULID
 
 # An account deleted by the server admin: kept, never reached (TenantRepository.gone).
 DELETED = "deleted"
+# The label of the key the scheduler makes for itself in each account (scheduler/service.py scheduler_key), made by
+# no person: the one key an AI machine's key is ever handed to (repository/ai_machines.py key_for).
+SCHEDULER_KEY_LABEL = "scheduler"
 
 
 class TenantRepository:
