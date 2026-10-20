@@ -60,6 +60,13 @@ reset_password_limiter = RateLimiter(max_requests=5, window_seconds=60)
 # Searches by someone not signed in (a public library's or project's page): a person browsing asks a few a
 # minute (a page of results, its facets, more like this); a script asking without end is held to two a second.
 public_search_limiter = RateLimiter(max_requests=120, window_seconds=60)
+# Search by a picture (signed in): CLIP and a face model look at each one, seconds of CPU or GPU apiece.
+image_search_limiter = RateLimiter(max_requests=20, window_seconds=60)
+
+
+def image_search_limited(request: Request) -> None:
+    """A route's dependency: a search by picture counts against image_search_limiter, by address; 429 past it."""
+    image_search_limiter.check(request)
 
 
 def anonymous_search_limited(request: Request) -> None:

@@ -479,13 +479,15 @@ def _no_host_fstab(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _auth_limits_fresh():
-    """Every test starts with nobody's sign-ins counted (src/server/api/rate_limit.py
-    counts them per process): another test's sign-ins on the same worker never
-    use up this one's, and a test of the limits makes its own."""
+    """Every test starts with nobody's requests counted (src/server/api/rate_limit.py
+    counts sign-ins, a public page's searches and searches by picture per
+    process): another test's on the same worker never use up this one's, and a
+    test of the limits makes its own."""
     from src.server.api import rate_limit
 
-    for limiter in (rate_limit.login_limiter, rate_limit.forgot_password_limiter, rate_limit.reset_password_limiter):
-        limiter._hits.clear()
+    for limiter in vars(rate_limit).values():
+        if isinstance(limiter, rate_limit.RateLimiter):
+            limiter._hits.clear()
 
 
 # A proxy nothing listens on, for every plug-in a test starts: one not pointed at the test's own list (a

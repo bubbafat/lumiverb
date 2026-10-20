@@ -1,23 +1,19 @@
-"""Server-side InsightFace provider used by hybrid similarity search.
+"""The faces in a picture searched by (search by image's hybrid similarity),
+found in a process of its own.
 
-The CLI workers use `src.processing.workers.faces.insightface_provider` for
-ingest-time face detection. The server uses the *same* provider class
-to extract faces from query images uploaded via search-by-image — but
-needs two extra setup steps that don't apply on the worker side:
+The picture is checked here first (src/server/images.py: JPEG, PNG or WebP,
+at most 120 MP), before any model. Then InsightFace looks at it in a child
+process, the faces producer's (src/producers/faces/detect.py FaceDetector):
+ONNX Runtime leaks ~35 MB a picture with no fix, so the API's own process
+never loads the model, the child is replaced after PER_PROCESS pictures,
+and it's let go of once nothing has asked for IDLE_SEC (its memory back to
+the machine). A picture it hasn't answered for in TIMEOUT_SEC is given up
+and the child replaced; the search goes on by the picture's look alone.
 
-1. **Writable model cache.** The systemd unit pins the API server's
-   filesystem to read-only outside `${DATA_DIR}` (see deploy-api.sh —
-   `ProtectSystem=strict` + `ReadWritePaths=${DATA_DIR}`). InsightFace
-   downloads models to `~/.insightface/models` unless told otherwise
-   (it reads no setting: the provider passes root=, model_root): the
-   models folder (DATA_DIR/models, src/processing/models_dir.py), the
-   scheduler's too, so search by image and the faces process share one copy.
-
-2. **Module-level singleton.** Workers spawn fresh per-batch
-   subprocesses (the ONNX leak forces it). The API server is one
-   long-lived uvicorn worker — we want a single InsightFace instance
-   loaded lazily on first query and reused after that. Per-query model
-   load would add ~500 ms cold-start to every search.
+The model is kept in the models folder (DATA_DIR/models,
+src/processing/models_dir.py: model_root), the scheduler's too, so search
+by image and the faces producer share one copy. The API's unit may write
+only under DATA_DIR (deploy-api.sh: ProtectSystem=strict).
 """
 
 from __future__ import annotations
@@ -25,17 +21,26 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.processing.workers.faces.insightface_provider import (
-        FaceDetection,
-        InsightFaceProvider,
-    )
+    from src.processing.workers.faces.insightface_provider import FaceDetection
+    from src.producers.faces.detect import FaceDetector
 
 logger = logging.getLogger(__name__)
 
-_provider: "InsightFaceProvider | None" = None
+# Pictures a child looks at before it's replaced (its leak, ~35 MB each, given back).
+PER_PROCESS = 20
+# A picture not answered for in this long is given up, and the child replaced.
+TIMEOUT_SEC = 60.0
+# Nothing asked for this long: the child is let go of (loading the model again costs seconds).
+IDLE_SEC = 300.0
+# How often that's looked at.
+LOOK_SEC = 30.0
+
+_detector: FaceDetector | None = None
+_last_used = 0.0
 _lock = threading.Lock()
 
 
@@ -49,49 +54,64 @@ def _ensure_writable_cache() -> str:
     return str(cache_root)
 
 
-def get_provider() -> "InsightFaceProvider":
-    """Lazy-load the singleton InsightFace provider, configuring the
-    model cache on first use. Thread-safe with double-checked locking.
-    Raises RuntimeError if the `face_recognition` extra isn't installed
-    so the caller can fall back to scene-only search."""
-    global _provider
-    if _provider is not None:
-        return _provider
+def _the_detector() -> FaceDetector:
+    """The child process's keeper, made at the first search (and the thread
+    that lets the child go once idle)."""
+    global _detector
     with _lock:
-        if _provider is not None:
-            return _provider
-        cache_root = _ensure_writable_cache()
+        if _detector is None:
+            from src.producers.faces.detect import FaceDetector
+
+            _ensure_writable_cache()
+            _detector = FaceDetector(PER_PROCESS, timeout_sec=TIMEOUT_SEC)
+            threading.Thread(target=_keep_letting_go, name="face-search-idle", daemon=True).start()
+        return _detector
+
+
+def let_go_if_idle(now: float | None = None) -> bool:
+    """Let the child go when nothing has asked for IDLE_SEC and no search is
+    under way. True when it was let go of."""
+    detector = _detector
+    if detector is None or (now if now is not None else time.monotonic()) - _last_used < IDLE_SEC:
+        return False
+    return detector.close_if_idle()
+
+
+def _keep_letting_go() -> None:
+    while True:
+        time.sleep(LOOK_SEC)
         try:
-            from src.processing.workers.faces.insightface_provider import (
-                InsightFaceProvider,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "InsightFace not installed — server hybrid similarity "
-                "requires `uv sync --extra face_recognition`"
-            ) from exc
-        provider = InsightFaceProvider()
-        # Force the model load now so the first real query doesn't pay
-        # the cold-start cost AND so we surface a download/permission
-        # error at startup-time-of-first-call rather than mid-search.
-        provider.ensure_loaded()
-        _provider = provider
-        logger.info("Server InsightFace provider ready (cache=%s)", cache_root)
-        return _provider
+            if let_go_if_idle():
+                logger.info("Face search's process let go of: idle")
+        except Exception:  # noqa: BLE001 — looked at again next time
+            logger.exception("face search: couldn't let its idle process go")
 
 
-def detect_faces_in_image(image_bytes: bytes) -> "list[FaceDetection]":
-    """Decode bytes → PIL → run InsightFace, returning the same
-    `FaceDetection` list the worker pipeline produces. Used by the
-    hybrid similarity endpoint to enrich a query image with face
-    embeddings before fanning out to per-face vector search.
-    NotAnImageError (before the model loads) unless it's an image the
-    server reads (src/server/images.py)."""
+def detect_faces_in_image(image_bytes: bytes) -> list[FaceDetection]:
+    """The faces InsightFace finds in the picture, as the faces producer
+    finds them (its default settings), each with its embedding. NotAnImageError
+    (before any model) unless it's an image the server reads. RuntimeError
+    when the child couldn't look at it, and the producer's Died when it died
+    or hung: the search falls back to the picture's look."""
+    global _last_used
+    from src.processing.workers.faces.insightface_provider import FaceDetection
     from src.server.images import rgb
 
-    img = rgb(image_bytes)
+    rgb(image_bytes).close()  # refused here, never handed to the child
+    detector = _the_detector()
     try:
-        provider = get_provider()
-        return provider.detect_faces(img)
+        found = detector.detect(image_bytes, {})
     finally:
-        img.close()
+        _last_used = time.monotonic()
+    if "error" in found:
+        raise RuntimeError(f"face search couldn't look at the picture: {found['error']}")
+    return [FaceDetection(bounding_box=f["bounding_box"], detection_confidence=f["detection_confidence"],
+                          embedding=f["embedding"]) for f in found["faces"]]
+
+
+def close() -> None:
+    """Let the child go (the API stopping)."""
+    with _lock:
+        detector = _detector
+    if detector is not None:
+        detector.close()
