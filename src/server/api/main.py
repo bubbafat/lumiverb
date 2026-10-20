@@ -110,6 +110,9 @@ async def lifespan(app: FastAPI):
     yield
     # Running ffmpeg cuts would otherwise hold the worker's exit for minutes.
     playback.stop_cuts()
+    from src.server.faces import server_face_provider
+
+    server_face_provider.close()  # search by image's face process
 
 
 set_application_name("lumiverb-api")  # its connections, as PostgreSQL shows them

@@ -939,6 +939,19 @@ def _by_vector(auth_client: _AuthClient, library_id: str, picture: bytes):
 
 
 @pytest.mark.slow
+def test_searches_by_picture_are_limited_by_address(similarity_client: Tuple[_AuthClient, str, str], clip_sees,
+                                                    faces_looked_for, monkeypatch) -> None:
+    """Each looked at by CLIP and the face model: so many a minute from one address (rate_limit), then 429."""
+    from src.server.api import rate_limit
+
+    auth_client, library_id, _ = similarity_client
+    monkeypatch.setattr(rate_limit.image_search_limiter, "max_requests", 2)
+    body = {"library_id": library_id, "image_b64": _b64(sample("JPEG"))}
+    assert [auth_client.post("/v1/similar/search-by-image", json=body).status_code for _ in range(3)] == [200, 200, 429]
+    assert len(faces_looked_for) == 2, "the third wasn't looked at"
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("fmt", READ)
 def test_image_search_reads_jpeg_png_and_webp(similarity_client: Tuple[_AuthClient, str, str], clip_sees,
                                              faces_looked_for, fmt) -> None:

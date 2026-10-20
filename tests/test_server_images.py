@@ -208,30 +208,31 @@ def test_previews_are_read_only_as_jpeg_png_and_webp(fmt, other_readers):
 def test_face_detection_reads_only_jpeg_png_and_webp(monkeypatch, other_readers):
     from src.server.faces import server_face_provider
 
-    seen: list[tuple[str, tuple[int, int]]] = []
-    provider = SimpleNamespace(detect_faces=lambda img: seen.append((img.mode, img.size)) or [])
-    loaded: list[bool] = []
-    monkeypatch.setattr(server_face_provider, "get_provider", lambda: loaded.append(True) or provider)
+    handed: list[bytes] = []
+    child = SimpleNamespace(detect=lambda image, settings: handed.append(image) or {"faces": []})
+    monkeypatch.setattr(server_face_provider, "_the_detector", lambda: child)
 
     for fmt in NOT_READ:
         with pytest.raises(ValueError, match=REFUSED_FORMAT):
             server_face_provider.detect_faces_in_image(sample(fmt))
-    assert seen == [] and loaded == [], "refused before the model loads"
+    assert handed == [], "refused here, never handed to the face process"
     assert other_readers == []
 
     for fmt in READ:
         assert server_face_provider.detect_faces_in_image(sample(fmt)) == []
-    assert seen == [("RGB", (64, 48))] * 3
+    assert handed == [sample(fmt) for fmt in READ]
 
 
 @pytest.mark.filterwarnings("ignore::PIL.Image.DecompressionBombWarning")
 def test_face_detection_refuses_an_image_over_the_pixel_limit(monkeypatch, no_decoding):
     from src.server.faces import server_face_provider
 
-    monkeypatch.setattr(server_face_provider, "get_provider",
-                        lambda: SimpleNamespace(detect_faces=lambda img: []))
+    handed: list[bytes] = []
+    monkeypatch.setattr(server_face_provider, "_the_detector",
+                        lambda: SimpleNamespace(detect=lambda image, settings: handed.append(image) or {"faces": []}))
     with pytest.raises(ValueError, match="more than the 120 megapixels"):
         server_face_provider.detect_faces_in_image(sparse_png(*OVERSIZED))
+    assert handed == []
 
 
 def test_clip_embeds_only_jpeg_png_and_webp(monkeypatch, tmp_path: Path, other_readers):

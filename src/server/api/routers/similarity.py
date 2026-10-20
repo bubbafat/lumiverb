@@ -14,7 +14,7 @@ from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.api.library_access import names
 from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
-from src.server.api.rate_limit import anonymous_search_limited
+from src.server.api.rate_limit import anonymous_search_limited, image_search_limited
 from src.server.models.similarity import CameraSpec, DateRange, SimilarityScope
 from src.server.repository.assets import AssetEmbeddingRepository, AssetRepository
 from src.server.repository.libraries import LibraryRepository
@@ -289,7 +289,7 @@ def find_similar(
     )
 
 
-@router.post("/search-by-image", response_model=ImageSimilarityResponse)
+@router.post("/search-by-image", response_model=ImageSimilarityResponse, dependencies=[Depends(image_search_limited)])
 @names(sees=("body.library_id",))
 def search_by_image(
     body: ImageSimilarityRequest,
