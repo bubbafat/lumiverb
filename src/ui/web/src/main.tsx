@@ -7,6 +7,7 @@ import AppShell from "./components/AppShell";
 import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminLogsPage from "./pages/AdminLogsPage";
+import AdminAccountsPage from "./pages/AdminAccountsPage";
 import BrowsePage from "./pages/BrowsePage";
 import ProjectsPage from "./pages/ProjectsPage";
 import UnifiedBrowsePage from "./pages/UnifiedBrowsePage";
@@ -197,6 +198,14 @@ createRoot(document.getElementById("root")!).render(
               element={
                 <RequireAuth>
                   {<AdminUsersPage />}
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="admin/accounts"
+              element={
+                <RequireAuth>
+                  {<AdminAccountsPage />}
                 </RequireAuth>
               }
             />

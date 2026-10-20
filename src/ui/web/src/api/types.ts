@@ -459,6 +459,33 @@ export interface CurrentUser {
   server_admin: boolean;
 }
 
+/** One of the install's accounts, as its server admins see them (Admin › Accounts). */
+export interface AccountItem {
+  tenant_id: string;
+  name: string;
+  plan: string;
+  /** "active", or "deleted": kept, never reached again. */
+  status: string;
+  /** The people who sign in to it. */
+  users: number;
+  created_at: string | null;
+}
+
+/** An account just made with its first admin invited: the link to send them, shown once. */
+export interface AccountMade {
+  tenant_id: string;
+  invite_urls: string[] | null;
+  invite_expires_at: string | null;
+}
+
+/** Someone who's a server admin, and their account. */
+export interface ServerAdminItem {
+  user_id: string;
+  email: string;
+  tenant_id: string;
+  account: string;
+}
+
 export interface ApiKeyItem {
   key_id: string;
   label: string | null;
