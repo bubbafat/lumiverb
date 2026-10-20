@@ -32,10 +32,15 @@ def set_application_name(name: str) -> None:
     APPLICATION_NAME = name
 
 
-# How long a connection may take to be made, in seconds (libpq's connect_timeout); None: no limit, so a
-# database host that drops what it's sent takes minutes and one that never answers takes forever. The
-# plug-in runner sets one (src/server/plugin_runner.py CONNECT_WITHIN_SEC).
-CONNECT_TIMEOUT_SEC: int | None = None
+# How long a connection may take to be made, in seconds (libpq's connect_timeout): without one, a database
+# host that drops what it's sent takes minutes and one that never answers takes forever, holding up the
+# request, or the scheduler's work for that account until a restart. The plug-in runner sets less
+# (src/server/plugin_runner.py CONNECT_WITHIN_SEC).
+CONNECT_TIMEOUT_SEC: int | None = 10
+# A connection made is kept checked (TCP keepalives, libpq's): one whose database host went away is given
+# up on within a minute or so (30 s quiet, then 3 probes 10 s apart), not left waiting for the system's
+# own, which takes hours.
+KEEPALIVES = {"keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 3}
 
 
 def set_connect_timeout(seconds: int) -> None:
@@ -55,7 +60,7 @@ def _create_engine(url: str) -> Engine:
     """An engine whose sessions run in UTC, whatever the server's default:
     Ubuntu's Postgres takes the machine's timezone (prod's is New York),
     and timestamps should read the same from every install."""
-    connect_args: dict = {"application_name": APPLICATION_NAME}
+    connect_args: dict = {"application_name": APPLICATION_NAME, **KEEPALIVES}
     if CONNECT_TIMEOUT_SEC is not None:
         connect_args["connect_timeout"] = CONNECT_TIMEOUT_SEC
     engine = create_engine(url, connect_args=connect_args, **_engine_kwargs())
