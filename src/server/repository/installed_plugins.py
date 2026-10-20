@@ -4,7 +4,9 @@ acknowledgment the server admin accepted for the accounts that follow the
 default, and what it reads and reaches as accepted (installed_plugins);
 every install, change of default and uninstall, kept for good, and an
 install of one of Lumiverb's own that failed, with why
-(plugin_install_log)."""
+(plugin_install_log). One uninstalled with what it made kept, or in the
+trash, is in removed_plugins (its row as installed): nothing that runs
+plug-ins reads it, and installing it again takes it out."""
 
 from __future__ import annotations
 
@@ -15,9 +17,13 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-INSTALL, DEFAULT, UNINSTALL, FAILED = "install", "default", "uninstall", "failed"
+INSTALL, DEFAULT, UNINSTALL, FAILED, PURGE = "install", "default", "uninstall", "failed", "purge"
+# What uninstalling does with what a plug-in made (Robert 2026-10-20): kept as it was, in the trash, or deleted.
+KEEP, TRASH, DELETE = "keep", "trash", "delete"
 _COLUMNS = ("plugin_id, version, manifest, on_by_default, acknowledged_version, permissions, installed_by,"
             " installed_at, changed_by, changed_at")
+_REMOVED = ("plugin_id, version, manifest, on_by_default, acknowledged_version, permissions, kept, removed_by,"
+            " removed_at, purge_after")
 
 
 class InstalledPluginRepository:
@@ -58,11 +64,51 @@ class InstalledPluginRepository:
         ), {"p": plugin_id, "on": on, "ack": acknowledged_version, "by": by, "now": now})
         self._log(plugin_id, DEFAULT, on_by_default=on, acknowledged_version=acknowledged_version, by=by, now=now)
 
-    def remove(self, plugin_id: str, *, by: str, now: datetime) -> None:
-        """Uninstalled. Doesn't commit."""
+    def remove(self, plugin_id: str, kept: str, *, by: str, now: datetime, purge_after: datetime | None = None) -> None:
+        """Uninstalled, what it made kept (KEEP), in the trash until purge_after (TRASH: its row kept in
+        removed_plugins), or deleted (DELETE). Doesn't commit."""
+        if kept in (KEEP, TRASH):
+            self._session.execute(text(
+                "INSERT INTO removed_plugins (plugin_id, version, manifest, on_by_default, acknowledged_version,"
+                "   permissions, kept, removed_by, removed_at, purge_after)"
+                " SELECT plugin_id, version, manifest, on_by_default, acknowledged_version, permissions, :kept, :by,"
+                "   :now, :purge FROM installed_plugins WHERE plugin_id = :p"
+                " ON CONFLICT (plugin_id) DO UPDATE SET version = EXCLUDED.version, manifest = EXCLUDED.manifest,"
+                "   on_by_default = EXCLUDED.on_by_default, acknowledged_version = EXCLUDED.acknowledged_version,"
+                "   permissions = EXCLUDED.permissions, kept = EXCLUDED.kept, removed_by = EXCLUDED.removed_by,"
+                "   removed_at = EXCLUDED.removed_at, purge_after = EXCLUDED.purge_after"
+            ), {"p": plugin_id, "kept": kept, "by": by, "now": now, "purge": purge_after if kept == TRASH else None})
+        else:
+            self._session.execute(text("DELETE FROM removed_plugins WHERE plugin_id = :p"), {"p": plugin_id})
         version = self._session.execute(text("DELETE FROM installed_plugins WHERE plugin_id = :p RETURNING version"),
                                         {"p": plugin_id}).scalar()
-        self._log(plugin_id, UNINSTALL, version=version, by=by, now=now)
+        self._log(plugin_id, UNINSTALL, version=version, why=kept, by=by, now=now)
+
+    def removed(self) -> list[dict[str, Any]]:
+        """The plug-ins uninstalled with what they made kept or in the trash."""
+        return [dict(r) for r in self._session.execute(text(
+            f"SELECT {_REMOVED} FROM removed_plugins ORDER BY plugin_id")).mappings().all()]
+
+    def removed_one(self, plugin_id: str) -> dict[str, Any] | None:
+        row = self._session.execute(text(f"SELECT {_REMOVED} FROM removed_plugins WHERE plugin_id = :p"),
+                                    {"p": plugin_id}).mappings().first()
+        return dict(row) if row else None
+
+    def restored(self, plugin_id: str) -> None:
+        """Installed again: no longer removed (what it made is its again). Doesn't commit."""
+        self._session.execute(text("DELETE FROM removed_plugins WHERE plugin_id = :p"), {"p": plugin_id})
+
+    def trash_due(self, now: datetime) -> list[str]:
+        """The trashed plug-ins whose time is up."""
+        return list(self._session.execute(text(
+            "SELECT plugin_id FROM removed_plugins WHERE kept = 'trash' AND purge_after <= :now ORDER BY plugin_id"
+        ), {"now": now}).scalars())
+
+    def purged(self, plugin_id: str, *, by: str, now: datetime) -> None:
+        """A removed plug-in deleted for good (the trash's time up, or what it made deleted). Doesn't commit."""
+        version = self._session.execute(text("DELETE FROM removed_plugins WHERE plugin_id = :p RETURNING version"),
+                                        {"p": plugin_id}).scalar()
+        self._log(plugin_id, PURGE, version=version, by=by, now=now)
 
     def failed(self, plugin_id: str, *, version: str | None, why: str, by: str, now: datetime) -> None:
         """An install that failed (one of Lumiverb's own), and why. Doesn't commit."""

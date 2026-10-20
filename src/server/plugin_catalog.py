@@ -73,6 +73,25 @@ def installed() -> dict[str, Installed]:
     return out
 
 
+def kept() -> dict[str, Installed]:
+    """The plug-ins uninstalled with what they made kept (removed_plugins, keep: Robert, 2026-10-20), by id:
+    their facts are shown and searched as they were while installed, in the accounts where they were on, and
+    nothing else of theirs runs (they're no producer, answer no lookup, have no settings to change)."""
+    from src.server.repository.installed_plugins import KEEP
+
+    with get_control_session() as session:
+        rows = [r for r in InstalledPluginRepository(session).removed() if r["kept"] == KEEP]
+    out: dict[str, Installed] = {}
+    for row in rows:
+        try:
+            manifest = parse(row["manifest"])
+        except ManifestError:
+            continue
+        out[row["plugin_id"]] = Installed(manifest, row["on_by_default"], row["acknowledged_version"],
+                                          row["removed_at"], row["removed_at"])
+    return out
+
+
 def left_out(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Of the installed plug-ins' rows, those Lumiverb leaves out for their id (ADR-024 section 8): one
     installed before part 1 with an id Lumiverb uses now. Each with what to do."""

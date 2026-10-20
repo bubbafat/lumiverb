@@ -34,7 +34,10 @@ export function PluginFactsSection({ plugins }: { plugins: PluginFacts[] }) {
       {plugins.map((p) => (
         <section key={p.plugin_id} aria-label={p.title}>
           <hr className="mb-4 border-gray-700" />
-          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">{p.title}</div>
+          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+            {p.title}
+            {p.removed && <span className="ml-2 normal-case tracking-normal text-gray-600">· uninstalled, kept as it was</span>}
+          </div>
           <dl className="space-y-2">
             {p.facts.map((f) => (
               <div key={f.key} className="flex">

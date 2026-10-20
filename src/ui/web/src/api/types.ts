@@ -375,6 +375,8 @@ export interface PluginFacts {
   plugin_id: string;
   title: string;
   credit: Credit | null;
+  /** Uninstalled, with what it made kept by the server admin: shown as it was, made no more. */
+  removed?: boolean;
   /** empty: it had nothing to say, and text is the line its manifest declares for that ("Not near a town"). */
   facts: { key: string; label: string; text: string; url: string | null; empty?: boolean }[];
 }

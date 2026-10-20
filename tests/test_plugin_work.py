@@ -27,7 +27,7 @@ from src.producers import INSTALLED, use_added
 from src.producers.plugin_work import PluginWork
 from src.producers.runner import Crashed
 from src.server.config import get_settings
-from src.server.database import get_tenant_session, tenant_database_url
+from src.server.database import get_control_session, get_tenant_session, tenant_database_url
 from src.server.lifecycle import cli
 from src.server.plugin_producers import refresh
 from src.server.repository.plugin_outputs import PluginOutputRepository
@@ -297,7 +297,7 @@ def test_its_api_hands_out_only_what_it_declares_and_keeps_only_what_is_checked(
 def test_installed_its_work_is_a_producer_and_uninstalled_it_isnt(facts):
     f = facts
     assert ARTIFACT in PRODUCERS
-    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 0
+    assert cli.main(["plugins", "uninstall", "facts", "--delete", "--yes", "--env", str(f.env)]) == 0
     refresh()
     assert ARTIFACT not in PRODUCERS
     r = f.client.get("/v1/producers", headers=f.robert)
@@ -306,8 +306,8 @@ def test_installed_its_work_is_a_producer_and_uninstalled_it_isnt(facts):
 
 @pytest.mark.slow
 def test_what_an_uninstalled_plug_ins_work_left_breaks_nothing(facts):
-    """Its lineage (made, made with nothing to say, failed), its settings and its pause stay in the account once
-    it's gone (as a removed producer's do): every list, retry and run leaves them out."""
+    """Uninstalled to the trash, its lineage (made, made with nothing to say, failed), its settings and its
+    pause stay in the account (as a removed producer's do): every list, retry and run leaves them out."""
     f = facts
     a, b, _ = f.clips
     assert _set(f, {"word": "Kept"}).status_code == 200
@@ -321,7 +321,7 @@ def test_what_an_uninstalled_plug_ins_work_left_breaks_nothing(facts):
     assert f.client.post(f"/v1/producers/{ARTIFACT}/pause", json={"scope": "work"}, headers=f.robert).status_code == 204
     failing = f.client.get("/v1/producers/failures", headers=f.robert).json()["items"]
     assert [i["artifact"] for i in failing] == [ARTIFACT, ARTIFACT]
-    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 0
+    assert cli.main(["plugins", "uninstall", "facts", "--trash", "--yes", "--env", str(f.env)]) == 0
     refresh()
     assert ARTIFACT not in PRODUCERS
 
@@ -338,6 +338,115 @@ def test_what_an_uninstalled_plug_ins_work_left_breaks_nothing(facts):
         assert r.status_code == 200 and ARTIFACT not in {p["artifact"] for p in r.json()["producers"]}, r.text
     r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
     assert r.status_code == 200 and r.json()["facts"] == [], "uninstalled: what it made isn't shown"
+
+
+def _account_rows(f) -> dict[str, int]:
+    with get_tenant_session(f.tenant_id) as session:
+        return {table: session.execute(text(sql), {"p": "facts"}).scalar_one() for table, sql in (
+            ("outputs", "SELECT count(*) FROM plugin_outputs WHERE plugin_id = :p"),
+            ("lineage", "SELECT count(*) FROM artifact_lineage WHERE artifact = :p"),
+            ("settings", "SELECT count(*) FROM plugin_settings WHERE plugin_id = :p"),
+            ("switch", "SELECT count(*) FROM plugins WHERE plugin_id = :p"),
+            ("pauses", "SELECT count(*) FROM producer_pauses WHERE target = :p"))}
+
+
+def _uninstall(f, kept: str, capsys=None) -> str:
+    assert cli.main(["plugins", "uninstall", "facts", f"--{kept}", "--yes", "--env", str(f.env)]) == 0
+    refresh()
+    return capsys.readouterr().out if capsys else ""
+
+
+@pytest.mark.slow
+def test_uninstalling_says_what_it_has_and_what_stops_and_asks_which(facts, capsys):
+    f = facts
+    _job(f)
+    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 1, "no one to ask: says"
+    said = capsys.readouterr()
+    assert "Say what becomes of what it made: --keep, --trash or --delete" in said.err
+    assert "facts for 2 clips" in said.out and "Without it:" in said.out
+    assert "Facts stops being made for new and changed clips" in said.out
+    assert "Set location's Place search no longer finds places from it" in said.out
+    assert ARTIFACT in PRODUCERS, "nothing done"
+
+
+@pytest.mark.slow
+def test_uninstalled_with_what_it_made_kept_its_facts_stay_and_installing_it_again_picks_them_up(facts, capsys):
+    f = facts
+    a, b, _ = f.clips
+    assert _set(f, {"word": "Zanzibar"}).status_code == 200
+    _job(f)
+    said = _uninstall(f, "keep", capsys)
+    assert "what it made is kept, shown and searched as before" in said
+    assert ARTIFACT not in PRODUCERS, "no longer made"
+    facts = f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"]
+    assert [(p["plugin_id"], p["removed"]) for p in facts] == [("facts", True)], "shown as it was, said so"
+    assert _found(f, "zanzibar") == {a, b}, "and searched"
+    home = f.data / "plugins" / "facts"
+    assert (home / "data").is_dir() and not (home / "program").exists(), "its own data kept, its program gone"
+    assert cli.main(["plugins", "--env", str(f.env)]) == 0
+    assert "facts 1  Facts: uninstalled, what it made kept" in capsys.readouterr().out
+
+    assert cli.main(["plugins", "install", str(FACTS), "--yes", "--env", str(f.env)]) == 0, "on as it was"
+    refresh()
+    facts = f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"]
+    assert [(p["plugin_id"], p["removed"]) for p in facts] == [("facts", False)]
+    assert _due(f) == [], "picked up: nothing made again"
+    assert _account_rows(f)["settings"] == 1, "its settings as they were"
+
+
+@pytest.mark.slow
+def test_uninstalled_to_the_trash_it_is_hidden_and_deleted_for_good_after_its_days(facts):
+    from datetime import timedelta
+
+    from src.server import plugin_install
+    from src.server.repository.installed_plugins import InstalledPluginRepository
+    from src.shared.utils import utcnow
+
+    f = facts
+    a, _, _ = f.clips
+    _job(f)
+    _uninstall(f, "trash")
+    assert f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"] == [], "hidden"
+    assert _account_rows(f)["outputs"] == 2, "and kept"
+    with get_control_session() as session:
+        row = InstalledPluginRepository(session).removed_one("facts")
+        assert row["kept"] == "trash" and timedelta(days=29) < row["purge_after"] - utcnow() <= timedelta(days=30)
+        assert plugin_install.purge_trash(data=f.data, session=session, now=utcnow()) == [], "not yet"
+        assert plugin_install.purge_trash(data=f.data, session=session,
+                                          now=utcnow() + timedelta(days=plugin_install.TRASH_DAYS + 1)) == ["facts"]
+        assert InstalledPluginRepository(session).removed_one("facts") is None
+        assert [e["action"] for e in InstalledPluginRepository(session).log("facts")][-2:] == ["uninstall", "purge"]
+    assert _account_rows(f) == {"outputs": 0, "lineage": 0, "settings": 0, "switch": 0, "pauses": 0}
+    assert not (f.data / "plugins" / "facts").exists()
+
+
+@pytest.mark.slow
+def test_installed_again_before_its_days_are_up_a_trashed_plug_in_is_back(facts):
+    f = facts
+    a, _, _ = f.clips
+    _job(f)
+    _uninstall(f, "trash")
+    assert cli.main(["plugins", "install", str(FACTS), "--yes", "--env", str(f.env)]) == 0
+    refresh()
+    assert [p["plugin_id"] for p in f.client.get(f"/v1/assets/{a}", headers=f.robert).json()["facts"]] == ["facts"]
+    assert _due(f) == []
+
+
+@pytest.mark.slow
+def test_deleted_now_everything_it_left_goes_from_every_account(facts):
+    from src.server.plugin_settings import SERVER, PluginSettingsRepository
+
+    f = facts
+    assert _set(f, {"word": "Gone"}).status_code == 200
+    r = f.client.put("/v1/plugins/facts/server-settings", json={"settings": {"token": "s3cret"}}, headers=f.robert)
+    assert r.status_code == 200, r.text
+    _job(f)
+    assert f.client.post(f"/v1/producers/{ARTIFACT}/pause", json={"scope": "work"}, headers=f.robert).status_code == 204
+    _uninstall(f, "delete")
+    assert _account_rows(f) == {"outputs": 0, "lineage": 0, "settings": 0, "switch": 0, "pauses": 0}
+    with get_control_session() as session:
+        assert PluginSettingsRepository(session, SERVER).get("facts") == {}
+    assert not (f.data / "plugins" / "facts").exists()
 
 
 @pytest.mark.slow
@@ -382,7 +491,7 @@ def test_an_account_that_cant_be_read_holds_up_no_other(facts, control, caplog):
     hello = Path(__file__).parent / "plugins" / "hello"
     assert cli.main(["plugins", "install", str(hello), "--on", "--yes", "--env", str(f.env)]) == 0
     _until(f.runner, lambda: "hello" in f.runner.plugins and f.runner.plugins["hello"].state == "ready")
-    assert cli.main(["plugins", "uninstall", "facts", "--yes", "--env", str(f.env)]) == 0
+    assert cli.main(["plugins", "uninstall", "facts", "--trash", "--yes", "--env", str(f.env)]) == 0
     _until(f.runner, lambda: "facts" not in f.runner.plugins)
     said = [r.getMessage() for r in caplog.records if f"account {away} can't be read" in r.getMessage()]
     assert len(said) == 1, "said once, not at every look"
@@ -442,7 +551,7 @@ def test_its_facts_show_with_the_clip_and_are_found_by_search_while_it_is_on(fac
     _job(f)
     r = f.client.get(f"/v1/assets/{a}", headers=f.robert)
     assert r.status_code == 200, r.text
-    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts", "credit": CREDIT, "facts": [
+    assert r.json()["facts"] == [{"plugin_id": "facts", "title": "Facts", "credit": CREDIT, "removed": False, "facts": [
         {"key": "where", "label": "Where", "text": "Zanzibar at 41.000, -73.000 (file)",
          "url": "https://www.openstreetmap.org/?mlat=41.0&mlon=-73.0", "empty": False},
         {"key": "when", "label": "When", "text": "Zanzibar 2024-05-01T12:00:00Z", "url": None, "empty": False},

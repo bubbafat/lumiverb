@@ -1,5 +1,6 @@
-"""Each account's plug-ins (ADR-021, ADR-023): its switch for each one, and
-every acknowledgment its admins accepted.
+"""Each account's plug-ins (ADR-021, ADR-023): its switch for each one,
+every acknowledgment its admins accepted, and what a plug-in has here when
+it's uninstalled (holds) or deleted for good (forget).
 
 A plug-in is on when its row says enabled and, if it declares an
 acknowledgment, the version accepted when it was turned on still stands:
@@ -108,3 +109,28 @@ class PluginRepository:
             "INSERT INTO plugin_acknowledgments (plugin_id, version, user_id, acknowledged_at)"
             " VALUES (:p, :v, :u, :now)"
         ), {"p": plugin_id, "v": version, "u": user_id, "now": now})
+
+    def holds(self, plugin_id: str) -> dict[str, Any]:
+        """What a plug-in has in this account, for the server admin uninstalling it to see: {clips: those it
+        made something for, settings: whether its settings were chosen here, chosen: whether this account
+        turned it on or off itself (else it follows the default)}."""
+        row = self._session.execute(text(
+            "SELECT (SELECT count(*) FROM plugin_outputs WHERE plugin_id = :p) AS clips,"
+            " EXISTS (SELECT 1 FROM plugin_settings WHERE plugin_id = :p) AS settings,"
+            " EXISTS (SELECT 1 FROM plugins WHERE plugin_id = :p) AS chosen"), {"p": plugin_id}).mappings().one()
+        return dict(row)
+
+    def forget(self, plugin_id: str) -> int:
+        """Everything a plug-in left in this account but who accepted its acknowledgment (a person's, kept for
+        good): what it made for each clip, its work's lineage, failures, crashes, pauses and the version seen,
+        its settings and its switch. How many clips it had made something for. Doesn't commit."""
+        clips = self._session.execute(text("DELETE FROM plugin_outputs WHERE plugin_id = :p"),
+                                      {"p": plugin_id}).rowcount
+        for sql in ("DELETE FROM artifact_lineage WHERE artifact = :p",
+                    "DELETE FROM producer_crashes WHERE artifact = :p",
+                    "DELETE FROM producer_pauses WHERE target = :p",
+                    "DELETE FROM plugin_settings WHERE plugin_id = :p",
+                    "DELETE FROM plugins WHERE plugin_id = :p",
+                    "DELETE FROM system_metadata WHERE key = :seen"):
+            self._session.execute(text(sql), {"p": plugin_id, "seen": f"producer.{plugin_id}.version_seen"})
+        return clips

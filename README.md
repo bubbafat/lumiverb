@@ -337,8 +337,11 @@ without has no Place names.
 To try plug-ins, Lumiverb comes with an example that gives each photo and video a
 caption you choose, when it was taken and its shape, finds a few famous
 places in Set location, and has one setting of every kind. `lumiverb-server plugins` lists what's installed and says where
-the example is. `lumiverb-server plugins uninstall example` takes it away
-again.
+the example is. `lumiverb-server plugins uninstall example --delete` takes it
+away again, with what it made. Uninstalling any plug-in first says what it has
+and what stops working without it, then keeps what it made (`--keep`: shown
+and searched as before, picked up by installing it again), puts it in the
+trash for 30 days (`--trash`), or deletes it now (`--delete`).
 
 ---
 

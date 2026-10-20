@@ -246,13 +246,14 @@ def test_uninstalling_takes_it_away_and_the_log_keeps_everything(install, machin
     env, data = machine
     assert cli.main(["plugins", "install", str(_hello(tmp_path)), "--off", "--yes", "--env", env]) == 0
     assert cli.main(["plugins", "default", "hello", "on", "--env", env]) == 0
+    assert cli.main(["plugins", "uninstall", "hello", "--env", env]) == 1, "not said what becomes of what it made"
     _answers(monkeypatch, "n")
-    assert cli.main(["plugins", "uninstall", "hello", "--env", env]) == 1
+    assert cli.main(["plugins", "uninstall", "hello", "--delete", "--env", env]) == 1
     assert "hello" in _listed(client, robert)
-    assert cli.main(["plugins", "uninstall", "hello", "--yes", "--env", env]) == 0
+    assert cli.main(["plugins", "uninstall", "hello", "--delete", "--yes", "--env", env]) == 0
     assert "hello" not in _listed(client, robert) and not (data / "plugins" / "hello").exists()
     assert client.put("/v1/plugins/hello", json={"enabled": True}, headers=robert).status_code == 404
-    assert cli.main(["plugins", "uninstall", "hello", "--yes", "--env", env]) == 1
+    assert cli.main(["plugins", "uninstall", "hello", "--delete", "--yes", "--env", env]) == 1
     with get_control_session() as session:
         log = InstalledPluginRepository(session).log("hello")
     assert [(e["action"], e["version"], e["on_by_default"]) for e in log] == [
@@ -279,7 +280,7 @@ def test_the_api_says_what_the_runner_says(install, control, short_data, tmp_pat
         _until(runner, lambda: _listed(client, robert)["hello"]["running"]["state"] == "ready")
         running = _listed(client, robert)["hello"]["running"]
         assert running["why"] is None and running["restarts"] == 0 and running["since"]
-        assert cli.main(["plugins", "uninstall", "hello", "--yes", "--env", str(env)]) == 0
+        assert cli.main(["plugins", "uninstall", "hello", "--delete", "--yes", "--env", str(env)]) == 0
         _until(runner, lambda: runner.plugins == {})
     finally:
         runner.stop_all()
@@ -408,7 +409,7 @@ def test_one_installed_with_an_id_lumiverb_uses_now_is_left_out_and_said(install
         assert f"  faces 1  Faces Plus: on by default\n    ! left out: {said}" in capsys.readouterr().out
     finally:
         with get_control_session() as session:
-            InstalledPluginRepository(session).remove("faces", by="robert", now=utcnow())
+            InstalledPluginRepository(session).remove("faces", "delete", by="robert", now=utcnow())
             session.commit()
     rows = {r["key"]: r for r in client.get("/v1/system/health", headers=robert).json()["rows"]}
     assert "plugins" not in rows, "uninstalled: nothing to say"

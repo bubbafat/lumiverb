@@ -8,8 +8,20 @@ reads and reaches as accepted, and whether it's on or off by default in
 every account that hasn't chosen (Robert, 2026-10-18). On by default, its
 acknowledgment, if it has one, is accepted by the server admin for those
 accounts. A newer version that reads or reaches more asks again; one that
-asks the same or less doesn't. Uninstalling stops it being offered and
-removes its folder.
+asks the same or less doesn't.
+
+Uninstalling (Robert, 2026-10-20: an informed decision) first says what it
+has (impact: each account's clips it made something for, its settings, its
+own data folder's size) and what stops working without it, then does one of
+three with what it made:
+- keep: its facts stay shown and searched in every account as before, its
+  settings and its own data folder kept; installing it again picks it all
+  up, nothing made again (a broken upgrade path: uninstall, install anew);
+- trash: hidden, kept TRASH_DAYS, then deleted for good by upkeep
+  (purge_trash); installing it again before then brings it back;
+- delete: what it made, its settings and its own data, gone now from every
+  account (who accepted its acknowledgment is kept: a person's record).
+Its program goes whichever: it's no longer run, nor its work done.
 """
 
 from __future__ import annotations
@@ -20,7 +32,7 @@ import shutil
 import stat
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +40,7 @@ from sqlmodel import Session
 
 from src.plugins.manifest import MANIFEST, Manifest, asks_more, parse, read
 from src.producers.names import is_reserved
-from src.server.repository.installed_plugins import InstalledPluginRepository
+from src.server.repository.installed_plugins import DELETE, KEEP, TRASH, InstalledPluginRepository
 from src.server.repository.plugins import stands
 
 # Written into each installed copy: which install it is, so the runner starts a new one afresh (a folder's
@@ -39,6 +51,8 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "plugin_examples" / "example"
 # A plug-in's folder, at most: more is a mistake (the wrong folder named).
 MAX_BYTES = 4 * 1024**3
 MAX_FILES = 100_000
+# Days a plug-in uninstalled to the trash keeps what it made before it's deleted for good (Robert, 2026-10-20).
+TRASH_DAYS = 30
 
 
 class PluginInstallError(Exception):
@@ -70,6 +84,8 @@ class Plan:
     folder: Path
     before: dict[str, Any] | None  # its row, when a version is installed already
     more: list[str]  # what it reads or reaches that the version accepted didn't, in words
+    # Uninstalled with what it made kept or in the trash (removed_plugins): installing it brings that back.
+    removed: dict[str, Any] | None = None
 
     @property
     def asks(self) -> bool:
@@ -79,6 +95,8 @@ class Plan:
     def on_by_default(self, choice: bool | None) -> bool:
         if choice is not None:
             return choice
+        if self.before is None and self.removed is not None:
+            return bool(self.removed["on_by_default"])  # as it was before it was uninstalled
         if self.before is None:
             raise PluginInstallError("Say --on or --off: whether it's on in every account that hasn't turned it "
                                      "on or off itself")
@@ -89,7 +107,8 @@ class Plan:
         ack = self.manifest.acknowledgment
         if not on or ack is None:
             return False
-        accepted = self.before.get("acknowledged_version") if self.before else None
+        was = self.before or self.removed
+        accepted = was.get("acknowledged_version") if was else None
         return not (accepted and stands(ack, accepted))
 
 
@@ -113,9 +132,10 @@ def plan(folder: Path, session: Session, data: Path) -> Plan:
         if files > MAX_FILES or size > MAX_BYTES:
             raise PluginInstallError(f"{folder} holds more than a plug-in does ({MAX_FILES:,} files or "
                                      f"{MAX_BYTES // 1024**3} GB): is it the right folder?")
-    before = InstalledPluginRepository(session).get(manifest.plugin_id)
+    repo = InstalledPluginRepository(session)
+    before = repo.get(manifest.plugin_id)
     more = asks_more(before["permissions"], manifest.permissions()) if before else []
-    return Plan(manifest, folder, before, more)
+    return Plan(manifest, folder, before, more, None if before else repo.removed_one(manifest.plugin_id))
 
 
 def _read_only(path: Path) -> None:
@@ -150,7 +170,7 @@ def install(p: Plan, *, on_by_default: bool, acknowledged: bool, data: Path, ses
     if keep_accepted:
         accepted = p.before["acknowledged_version"] if p.before and on_by_default else None
     elif on_by_default and ack is not None:
-        accepted = ack.version if p.acknowledgment_asked(True) else p.before["acknowledged_version"]
+        accepted = ack.version if p.acknowledgment_asked(True) else (p.before or p.removed)["acknowledged_version"]
     home = plugin_dir(data, p.manifest.plugin_id)
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o700)
@@ -159,10 +179,11 @@ def install(p: Plan, *, on_by_default: bool, acknowledged: bool, data: Path, ses
         shutil.copytree(p.folder, copy, symlinks=True)
         (copy / INSTALL_MARK).write_text(uuid.uuid4().hex)
         _read_only(copy)
-        InstalledPluginRepository(session).save(
-            p.manifest.plugin_id, version=p.manifest.version, manifest=_as_json(p.folder),
-            on_by_default=on_by_default, acknowledged_version=accepted, permissions=p.manifest.permissions(),
-            by=by, now=now)
+        repo = InstalledPluginRepository(session)
+        repo.save(p.manifest.plugin_id, version=p.manifest.version, manifest=_as_json(p.folder),
+                  on_by_default=on_by_default, acknowledged_version=accepted, permissions=p.manifest.permissions(),
+                  by=by, now=now)
+        repo.restored(p.manifest.plugin_id)  # what it made, kept or in the trash, is its again
         session.commit()
     except BaseException:
         session.rollback()
@@ -195,11 +216,123 @@ def set_default(plugin_id: str, on: bool, *, acknowledged: bool, session: Sessio
     session.commit()
 
 
-def uninstall(plugin_id: str, *, data: Path, session: Session, by: str, now: datetime) -> None:
-    """No longer offered to any account; its folder (its program and its own data) removed."""
+@dataclass(frozen=True)
+class Impact:
+    """What uninstalling a plug-in takes away, for the server admin to see first."""
+
+    title: str
+    accounts: list[dict[str, Any]]  # each {tenant_id, name, clips, settings, chosen} it has something in
+    unreadable: list[str]  # the accounts whose databases can't be read now (what they hold isn't known)
+    data_mb: int  # its own data folder
+    stops: list[str]  # what stops working without it, in words
+
+
+def _accounts(session: Session) -> list[Any]:
+    """Every account whose database there is (a deleted one's isn't)."""
+    from src.server.repository.control_plane import TenantRepository
+
+    return [t for t in TenantRepository(session).list_all() if t.status != "deleted"]
+
+
+def dependents(plugin_id: str) -> list[str]:
+    """The plug-ins that read what this one makes, in words: none can yet, as a plug-in reads only Lumiverb's
+    own data (protocol 1). ADR-024 phase 3 (plug-ins reading each other's) names them here, and on Settings ›
+    Plug-ins, as broken chains."""
+    return []
+
+
+def impact(plugin_id: str, *, session: Session, data: Path) -> Impact:
+    """What it has and what stops working without it. PluginInstallError when it isn't installed."""
+    from src.server.database import get_tenant_session
+    from src.server.repository.plugins import PluginRepository
+
+    row = InstalledPluginRepository(session).get(plugin_id)
+    if row is None:
+        raise PluginInstallError(f"No plug-in {plugin_id} is installed")
+    m = parse(row["manifest"])
+    accounts, unreadable = [], []
+    for tenant in _accounts(session):
+        try:
+            with get_tenant_session(tenant.tenant_id) as tenant_session:
+                held = PluginRepository(tenant_session).holds(plugin_id)
+        except Exception:  # noqa: BLE001 — that account's database away: said, not guessed
+            unreadable.append(tenant.name)
+            continue
+        if held["clips"] or held["settings"] or held["chosen"]:
+            accounts.append({"tenant_id": tenant.tenant_id, "name": tenant.name, **held})
+    stops = []
+    if m.work is not None:
+        stops.append(f"{m.work.title} stops being made for new and changed clips")
+    if "places" in m.lookups:
+        stops.append("Set location's Place search no longer finds places from it")
+    stops += dependents(plugin_id)
+    return Impact(m.title, accounts, unreadable, _folder_mb(plugin_dir(data, plugin_id) / "data"), stops)
+
+
+def _folder_mb(folder: Path) -> int:
+    total = 0
+    for root, _dirs, names in os.walk(folder):
+        total += sum(os.lstat(os.path.join(root, n)).st_size for n in names)
+    return total // 2**20
+
+
+def uninstall(plugin_id: str, kept: str, *, data: Path, session: Session, by: str, now: datetime) -> list[str]:
+    """No longer offered to any account, nor run; what it made kept (KEEP), in the trash for TRASH_DAYS
+    (TRASH), or deleted now from every account with its own data (DELETE). The accounts whose databases
+    couldn't be read (DELETE: what it made there stays, hidden)."""
+    if kept not in (KEEP, TRASH, DELETE):
+        raise PluginInstallError("Say whether what it made is kept, put in the trash, or deleted")
     repo = InstalledPluginRepository(session)
     if repo.get(plugin_id) is None:
         raise PluginInstallError(f"No plug-in {plugin_id} is installed")
-    repo.remove(plugin_id, by=by, now=now)
+    repo.remove(plugin_id, kept, by=by, now=now, purge_after=now + timedelta(days=TRASH_DAYS))
+    if kept == DELETE:
+        _forget_server(plugin_id, session)
     session.commit()
-    _remove(plugin_dir(data, plugin_id))
+    home = plugin_dir(data, plugin_id)
+    if kept != DELETE:  # its program goes; its own data stays for it to pick up
+        for path in (home / "program", home / "tmp"):
+            _remove(path)
+        (home / "server-settings.json").unlink(missing_ok=True)
+        return []
+    unreadable = _forget_everywhere(plugin_id, session)
+    _remove(home)
+    return unreadable
+
+
+def _forget_server(plugin_id: str, session: Session) -> None:
+    from src.server.plugin_settings import SERVER, PluginSettingsRepository
+
+    PluginSettingsRepository(session, SERVER).forget(plugin_id)
+
+
+def _forget_everywhere(plugin_id: str, session: Session) -> list[str]:
+    """What it left in every account deleted; the accounts that couldn't be read."""
+    from src.server.database import get_tenant_session
+    from src.server.repository.plugins import PluginRepository
+
+    unreadable = []
+    for tenant in _accounts(session):
+        try:
+            with get_tenant_session(tenant.tenant_id) as tenant_session:
+                PluginRepository(tenant_session).forget(plugin_id)
+                tenant_session.commit()
+        except Exception:  # noqa: BLE001 — that account's database away: what it holds stays, hidden
+            unreadable.append(tenant.name)
+    return unreadable
+
+
+def purge_trash(*, data: Path, session: Session, now: datetime) -> list[str]:
+    """Upkeep: each plug-in in the trash past its TRASH_DAYS deleted for good, from every account, with its
+    own data. The ids purged (one an account's database couldn't be read for waits for the next upkeep)."""
+    repo = InstalledPluginRepository(session)
+    purged = []
+    for plugin_id in repo.trash_due(now):
+        if _forget_everywhere(plugin_id, session):
+            continue
+        _forget_server(plugin_id, session)
+        repo.purged(plugin_id, by="upkeep", now=now)
+        session.commit()
+        _remove(plugin_dir(data, plugin_id))
+        purged.append(plugin_id)
+    return purged

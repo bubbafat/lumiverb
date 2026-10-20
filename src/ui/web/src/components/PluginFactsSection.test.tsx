@@ -28,6 +28,21 @@ describe("A clip's facts from its plug-ins", () => {
     expect(within(example).queryByText(/^From/)).toBeNull();
   });
 
+  it("says a plug-in uninstalled with what it made kept is so, and nothing of one installed", () => {
+    render(
+      <PluginFactsSection
+        plugins={[
+          { plugin_id: "facts", title: "Facts", credit: null, removed: true,
+            facts: [{ key: "where", label: "Where", text: "Near the harbour", url: null }] },
+          { plugin_id: "example", title: "Example plug-in", credit: null, removed: false,
+            facts: [{ key: "caption", label: "Caption", text: "Seen by the example", url: null }] },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("region", { name: "Facts" }).textContent).toContain("uninstalled, kept as it was");
+    expect(screen.getByRole("region", { name: "Example plug-in" }).textContent).not.toContain("uninstalled");
+  });
+
   it("says its empty line where it had nothing to say, and links the license beside its credit", () => {
     render(
       <PluginFactsSection

@@ -36,6 +36,10 @@ class PluginSettingsRepository:
                                        {"p": plugin_id}).scalar()
         return dict(chosen) if isinstance(chosen, dict) else {}
 
+    def forget(self, plugin_id: str) -> None:
+        """Its values gone (it's deleted for good). Doesn't commit."""
+        self._session.execute(text(f"DELETE FROM {self._table} WHERE plugin_id = :p"), {"p": plugin_id})
+
     def save(self, plugin_id: str, chosen: dict[str, Any], *, by: str | None, now: datetime) -> None:
         """Doesn't commit."""
         self._session.execute(text(

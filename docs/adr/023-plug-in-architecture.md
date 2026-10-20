@@ -154,7 +154,7 @@ Later kinds, each when a plug-in needs it: `tags` (words a clip is found and fil
 
 An output renamed in a newer version says the key it was saved under (`was`, ADR-024 phase 2): the search sweep renames what's saved under that, nothing made again.
 
-Outputs are kept by Lumiverb in the account's database (`plugin_outputs`: clip, plug-in, key, value, the inputs' hash, lineage). A plug-in has no storage in an account. Turning it off keeps its outputs and hides them. Removing it from the server removes them, after the server admin is asked.
+Outputs are kept by Lumiverb in the account's database (`plugin_outputs`: clip, plug-in, key, value, the inputs' hash, lineage). A plug-in has no storage in an account. Turning it off keeps its outputs and hides them. Removing it from the server asks the server admin what becomes of them, having said what it has in each account and what stops working without it (Robert, 2026-10-20: "We want you to make an informed decision about uninstalling"): kept (shown and searched as before, its settings and its own data kept; installing it again picks it all up, nothing made again: an upgrade that won't take, say), in the trash (hidden, deleted for good after 30 days; installing it again before then brings it back), or deleted now from every account (who accepted its acknowledgment is kept, a person's record). An account's admin can delete a kept plug-in's facts from their account.
 
 ### Lookups: what it adds to a screen
 
@@ -235,7 +235,7 @@ Holding a plug-in to what its manifest says it reaches (no network unless it dec
 
 `lumiverb-server plugins install FOLDER --on|--off` runs on the machine, as `server-admins` does. It checks the manifest, shows it in words (what it reads, what it shows, what it downloads and from where, whether it uses the internet, its acknowledgment if it's to be on by default) and asks the server admin to accept. Then it copies the folder into the install (`DATA_DIR/plugins/<id>/program/`, read-only) and records it in the control database: which version, on or off by default, who accepted what and when. `--yes` is for no one to ask, having been shown it.
 
-- `lumiverb-server plugins list` shows what's installed and its state; `default ID on|off` changes its default for the accounts that follow it; `uninstall ID` stops it and removes its program (its outputs, from phase 2, after the server admin is asked how many there are).
+- `lumiverb-server plugins list` shows what's installed and its state; `default ID on|off` changes its default for the accounts that follow it; `uninstall ID --keep|--trash|--delete` stops it and removes its program, having said what it has in each account and what stops working, with what it made kept, in the trash for 30 days (upkeep deletes it after: `plugin_install.purge_trash`) or deleted now (`src/server/plugin_install.py` `uninstall`, `impact`; the control database's `removed_plugins`).
 - Installing a newer version of a plug-in replaces it. One that reads or reaches more asks again; one that asks the same or less doesn't.
 - Phase 5 adds installing from a URL with its checksum (`--sha256`), and the Admin page.
 - Lumiverb's own plug-ins ship in the install (`plugins/<id>/`), installed already.

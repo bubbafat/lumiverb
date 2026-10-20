@@ -4,11 +4,15 @@ phase 1a), the server admin's, on the machine itself (as server-admins).
   plugins                                 what's installed, and Lumiverb's own
   plugins install FOLDER --on|--off       install it (or a newer version), on or off by default
   plugins default ID on|off               its default, in every account that hasn't chosen
-  plugins uninstall ID                    no longer offered; its folder removed
+  plugins uninstall ID --keep|--trash|--delete
+                                          no longer offered or run; what it made kept,
+                                          in the trash for 30 days, or deleted now
 
 Each shows what it reads and reaches (and an acknowledgment it asks, on by
-default) and asks before doing it; --yes is for no one to ask, having been
-shown it.
+default), or for an uninstall what it has and what stops working, and asks
+before doing it; --yes is for no one to ask, having been shown it. Uninstall
+asks which of its three when none is said, and refuses to guess when no one
+can be asked.
 """
 
 from __future__ import annotations
@@ -42,10 +46,18 @@ def add_parser(commands, env_option: Callable[[argparse.ArgumentParser, object],
     change.add_argument("plugin_id", help="its id")
     change.add_argument("state", choices=("on", "off"))
     change.add_argument("--yes", action="store_true", help="don't ask (having been shown its acknowledgment)")
-    remove = actions.add_parser("uninstall", help="no longer offered to any account; its folder removed")
+    remove = actions.add_parser("uninstall", help="no longer offered or run; what it made kept, trashed or deleted")
     env_option(remove, argparse.SUPPRESS)
     remove.add_argument("plugin_id", help="its id")
-    remove.add_argument("--yes", action="store_true", help="don't ask")
+    kept = remove.add_mutually_exclusive_group()
+    kept.add_argument("--keep", dest="kept", action="store_const", const="keep",
+                      help="its facts stay shown and searched, its settings and data kept: installing it again "
+                           "picks it all up")
+    kept.add_argument("--trash", dest="kept", action="store_const", const="trash",
+                      help="hidden, kept 30 days, then deleted; installing it again before then brings it back")
+    kept.add_argument("--delete", dest="kept", action="store_const", const="delete",
+                      help="what it made, its settings and its own data, deleted now from every account")
+    remove.add_argument("--yes", action="store_true", help="don't ask (having been shown what it has)")
 
 
 def _yes(question: str, yes: bool) -> bool:
@@ -126,14 +138,56 @@ def _default(args: argparse.Namespace, session) -> int:
     return 0
 
 
+_CHOICES = {"k": "keep", "keep": "keep", "t": "trash", "trash": "trash", "d": "delete", "delete": "delete"}
+_DONE = {"keep": "what it made is kept, shown and searched as before: install it again to pick it all up",
+         "trash": "what it made is in the trash, hidden: install it again within {days} days to bring it back",
+         "delete": "what it made, its settings and its own data are deleted"}
+
+
 def _uninstall(args: argparse.Namespace, session, data: Path) -> int:
     from src.server import plugin_install
 
-    if not _yes(f"Uninstall {args.plugin_id}? No account will have it, and its own data goes", args.yes):
+    found = plugin_install.impact(args.plugin_id, session=session, data=data)
+    print(f"Uninstalling {found.title} ({args.plugin_id}).")
+    if found.accounts:
+        print("It has:")
+        for a in found.accounts:
+            has = [f"facts for {a['clips']:,} clip{'' if a['clips'] == 1 else 's'}"] if a["clips"] else []
+            has += ["its settings chosen"] if a["settings"] else []
+            has += ["turned on or off there"] if a["chosen"] and not has else []
+            print(f"  • {a['name']}: {', '.join(has)}")
+    else:
+        print("It has made nothing in any account.")
+    for name in found.unreadable:
+        print(f"  ! {name}: its database can't be read now, so what it has there isn't known")
+    if found.data_mb:
+        print(f"  • Its own data: {found.data_mb:,} MB")
+    if found.stops:
+        print("Without it:")
+        for line in found.stops:
+            print(f"  • {line}")
+    kept = args.kept
+    if kept is None:
+        if args.yes or not sys.stdin.isatty():
+            print("✗ Say what becomes of what it made: --keep, --trash or --delete", file=sys.stderr)
+            return 1
+        print(f"What it made:\n  [k]eep: shown and searched as before; install it again to pick it all up"
+              f"\n  [t]rash: hidden, deleted in {plugin_install.TRASH_DAYS} days unless it's installed again"
+              f"\n  [d]elete: what it made, its settings and its own data, deleted now")
+        try:
+            kept = _CHOICES.get(input("Keep, trash or delete? [k/t/d, anything else: cancel] ").strip().lower())
+        except EOFError:
+            kept = None
+        if kept is None:
+            print("Not uninstalled")
+            return 1
+    elif not _yes(f"Uninstall it, and {kept} what it made?", args.yes):
         print("Not uninstalled")
         return 1
-    plugin_install.uninstall(args.plugin_id, data=data, session=session, by=_by(), now=utcnow())
-    print(f"✓ Uninstalled {args.plugin_id}")
+    unreadable = plugin_install.uninstall(args.plugin_id, kept, data=data, session=session, by=_by(), now=utcnow())
+    print(f"✓ Uninstalled {args.plugin_id}: {_DONE[kept].format(days=plugin_install.TRASH_DAYS)}")
+    for name in unreadable:
+        print(f"  ! {name}: its database couldn't be read, so what it made there stays, hidden")
     return 0
 
 
@@ -162,6 +216,13 @@ def _list(session) -> int:
                 else "uninstalled by the server admin" if own["uninstalled"]
                 else f"not installed: {own['failed']}" if own["failed"] else "not installed yet")
         print(f"Lumiverb's own: {own['plugin_id']} ({own['title']}) {said}")
+    from src.server.repository.installed_plugins import InstalledPluginRepository as _Repo
+
+    for row in _Repo(session).removed():
+        title = row["manifest"].get("title", "")
+        said = ("uninstalled, what it made kept" if row["kept"] == "keep"
+                else f"uninstalled, in the trash until {row['purge_after']:%Y-%m-%d}")
+        print(f"  {row['plugin_id']} {row['version']}  {title}: {said}")
     from src.server.plugin_install import EXAMPLE
 
     if EXAMPLE.is_dir() and not any(row["plugin_id"] == "example" for row in rows):

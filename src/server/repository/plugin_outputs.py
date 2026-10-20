@@ -93,13 +93,14 @@ class PluginOutputRepository:
         ), {"a": asset_id}).first() is not None
 
 
-def _on_with_work(session: Session) -> list[Any]:
-    """The installed plug-ins with work that are on in this account, each its Installed (manifest first)."""
-    from src.server.plugin_catalog import installed
+def _on_with_work(session: Session) -> list[tuple[Any, bool]]:
+    """The plug-ins with work that are on in this account, each (its Installed, whether it's uninstalled with
+    what it made kept: plugin_catalog.kept, shown as it was)."""
+    from src.server.plugin_catalog import installed, kept
     from src.server.repository.plugins import ON, PluginRepository, state_of
 
     rows = PluginRepository(session).rows()
-    return [p for pid, p in installed().items()
+    return [(p, removed) for removed, found in ((False, installed()), (True, kept())) for pid, p in found.items()
             if p.manifest.work is not None and state_of(p.manifest.spec(), rows.get(pid), p.default) == ON]
 
 
@@ -117,25 +118,27 @@ def _fact(output: Any, outputs: dict[str, Any]) -> dict[str, Any] | None:
 
 def facts_of(session: Session, asset_id: str) -> list[dict[str, Any]]:
     """What the clip's detail shows of what plug-ins made for it: each plug-in on here that made it a fact,
-    in title order, {plugin_id, title, credit: {text, url, license} | None, facts: [{key, label, text, url,
-    empty}]} in its manifest's order (an output with nothing to say is its empty line, or left out). Made
+    in title order, {plugin_id, title, credit: {text, url, license} | None, removed: uninstalled with what it
+    made kept, facts: [{key, label, text, url, empty}]} in its manifest's order (an output with nothing to
+    say is its empty line, or left out). Made
     from inputs the clip has changed since, it shows until the new ones are saved; for a clip that's lost an
     input (its location cleared), it isn't shown."""
     repo = PluginOutputRepository(session)
     made = repo.of(asset_id)
     out = []
-    for plugin in sorted(_on_with_work(session), key=lambda p: (p.manifest.title.lower(), p.manifest.plugin_id)):
+    for plugin, removed in sorted(_on_with_work(session),
+                                  key=lambda pr: (pr[0].manifest.title.lower(), pr[0].manifest.plugin_id)):
         m = plugin.manifest
         outputs = (made.get(m.plugin_id) or {}).get("outputs") or {}
         facts = [fact for o in m.work.outputs if (fact := _fact(o, outputs)) is not None]
         if facts and repo.shown(asset_id, m.work):
             out.append({"plugin_id": m.plugin_id, "title": m.title,
-                        "credit": m.credit.shown() if m.credit else None, "facts": facts})
+                        "credit": m.credit.shown() if m.credit else None, "removed": removed, "facts": facts})
     return out
 
 
 def searched_plugins(session: Session) -> dict[str, str]:
     """The plug-ins whose facts a search in this account reads (on here, with a searchable output), each with
     the SQL on active_assets a for the clips whose facts are shown (shown_sql)."""
-    return {p.manifest.plugin_id: shown_sql(p.manifest.work) for p in _on_with_work(session)
+    return {p.manifest.plugin_id: shown_sql(p.manifest.work) for p, _removed in _on_with_work(session)
             if any(o.searchable for o in p.manifest.work.outputs)}

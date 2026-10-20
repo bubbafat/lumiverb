@@ -170,6 +170,9 @@ class UpkeepResult(BaseModel):
     # (src/server/storage/move.py): "started", "running", "waiting" (15 minutes
     # after an error) or "not moving"; None for one account.
     previews_move: str | None = None
+    # The admin key with tenants=all: the plug-ins uninstalled to the trash whose 30 days were up, deleted for
+    # good from every account (src/server/plugin_install.py purge_trash); None for one account.
+    plugins_purged: list[str] | None = None
 
 
 def _bearer(authorization: str | None) -> str | None:
@@ -522,11 +525,13 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
     keys unused past the account's key-idle days.
 
     An account admin's key: that account. The admin key with tenants=all:
-    every account, old revoked tokens are dropped, and the nightly backup
-    starts when it's due (none since the latest 03:00 here).
+    every account, old revoked tokens are dropped, the nightly backup
+    starts when it's due (none since the latest 03:00 here), and the
+    plug-ins uninstalled to the trash past their days are deleted for good.
     """
     backup = _nightly_backup() if scope.all_tenants else None
     previews_move = _previews_move() if scope.all_tenants else None
+    plugins_purged = _purge_trashed_plugins() if scope.all_tenants else None
     if scope.all_tenants:
         sync_result = _run_sweep_all_tenants()
         prop_result = _propagate_faces_all_tenants()
@@ -556,7 +561,27 @@ def run_upkeep(scope: Scope) -> UpkeepResult:
         idle_keys=IdleKeysResult(**idle_keys),
         backup=backup,
         previews_move=previews_move,
+        plugins_purged=plugins_purged,
     )
+
+
+def _purge_trashed_plugins() -> list[str]:
+    """The plug-ins in the trash past their days, deleted for good. Never fails upkeep."""
+    from pathlib import Path
+
+    from src.server.database import get_control_session
+    from src.server.plugin_install import purge_trash
+    from src.shared.utils import utcnow
+
+    try:
+        with get_control_session() as session:
+            purged = purge_trash(data=Path(get_settings().data_dir), session=session, now=utcnow())
+    except Exception as exc:  # noqa: BLE001 — tried again at the next upkeep
+        logger.warning("Trashed plug-ins weren't deleted: %s", exc)
+        return []
+    for plugin_id in purged:
+        logger.info("Plug-in %s: its trash days are up, what it made is deleted", plugin_id)
+    return purged
 
 
 def _nightly_backup() -> str:

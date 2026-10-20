@@ -141,7 +141,8 @@ def test_one_the_server_admin_uninstalled_stays_uninstalled_until_they_install_i
     monkeypatch.setenv("APP_HOST", "http://localhost:6464")
     assert cli.main(["migrate", "--env", str(env)]) == 0
     assert f"✓ Place names (GeoNames) {SHIPPED} installed" in capsys.readouterr().out
-    assert cli.main(["plugins", "uninstall", GEONAMES, "--yes", "--env", str(env)]) == 0
+    # Uninstalled with what it made kept: still the server admin's choice, never installed again for them.
+    assert cli.main(["plugins", "uninstall", GEONAMES, "--keep", "--yes", "--env", str(env)]) == 0
     said = _install(control, data)
     assert _row() is None and said == [
         f"Place names (GeoNames): uninstalled by the server admin, so not installed again "
@@ -170,7 +171,7 @@ def test_the_install_s_geonames_mirror_becomes_its_mirror_once(control, tmp_path
     assert mirror() == "https://chosen.example/dump/", "the server admin's, kept"
     # Installed again after an uninstall: not its first install, so nothing carried over again.
     with get_control_session() as session:
-        InstalledPluginRepository(session).remove(GEONAMES, by="lumiverb-test", now=utcnow())
+        InstalledPluginRepository(session).remove(GEONAMES, "delete", by="lumiverb-test", now=utcnow())
         session.execute(text("DELETE FROM plugin_server_settings"))
         session.execute(text("DELETE FROM plugin_install_log WHERE action = 'uninstall'"))
         session.commit()
