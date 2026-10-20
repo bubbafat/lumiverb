@@ -80,7 +80,7 @@ from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
 from src.shared.path_filter import PathFilter, has_control_character
-from src.shared.producers import PRODUCERS, effective_settings
+from src.shared.producers import PRODUCERS, checked, effective_settings
 from src.shared.producers import lineage as producer_lineage
 
 logger = logging.getLogger(__name__)
@@ -215,7 +215,9 @@ class Previews:
     what each quality notch stands for), or the registry's defaults when it
     doesn't say, or says them for another version than this one's; and the
     lineage that says how they were made. Probes and capture facts have no
-    settings."""
+    settings. What it says for this version is held to what this version
+    declares (shared/producers.checked): a value that isn't one is refused,
+    SettingsRefusedError, and the scan makes nothing with it."""
 
     proxy: dict = field(default_factory=lambda: effective_settings(PREVIEW))
     video_preview: dict = field(default_factory=lambda: effective_settings(VIDEO_PREVIEW))
@@ -228,7 +230,7 @@ class Previews:
             if (said.get("producer"), said.get("version")) != (spec.artifact, spec.version) \
                     or not isinstance(said.get("settings"), dict) or set(said["settings"]) != set(ours):
                 return ours
-            return dict(said["settings"])
+            return checked(artifact, said["settings"])
 
         return cls(settings(PREVIEW), settings(VIDEO_PREVIEW))
 

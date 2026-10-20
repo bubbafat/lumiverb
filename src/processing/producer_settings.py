@@ -11,7 +11,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.shared.producers import PRODUCERS, effective_settings, level_of, lineage, use_settings
+from src.shared.producers import (
+    PRODUCERS,
+    SettingsRefusedError,
+    checked,
+    effective_settings,
+    level_of,
+    lineage,
+    use_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +30,9 @@ class ProducerSettings:
         self._client = client
         self._settings: dict[str, dict[str, Any]] = {a: effective_settings(a) for a in PRODUCERS}
         self._uses: dict[str, dict[str, Any]] = {a: use_settings(a) for a in PRODUCERS}
+        # What a reader was told and refused, by artifact, and why: nothing of those is made here until it's told
+        # settings this version makes them with (told).
+        self.refused: dict[str, str] = {}
         if fetch:
             self.refresh()
 
@@ -55,14 +66,34 @@ class ProducerSettings:
 
     def told(self, made_with: dict[str, dict[str, Any]]) -> None:
         """What a library's reader is told each one it makes is made with
-        (reader-changes' made_with: GET /v1/producers is no device's)."""
-        fresh = dict(self._settings)
+        (reader-changes' made_with: GET /v1/producers is no device's). For
+        this version, held to what it declares (shared/producers.checked):
+        one refused is said in the log and kept in refused, and nothing of it
+        is made (settings raises) until it's told settings it makes it with;
+        for another version, this one's defaults, as a scan's previews."""
+        fresh, refused = dict(self._settings), dict(self.refused)
         for artifact, made in made_with.items():
-            if artifact in fresh and isinstance(made.get("settings"), dict):
-                fresh[artifact] = dict(made["settings"])
-        self._settings = fresh
+            if artifact not in fresh or not isinstance(made, dict) or not isinstance(made.get("settings"), dict):
+                continue
+            spec = PRODUCERS[artifact]
+            if (made.get("producer"), made.get("version")) != (spec.artifact, spec.version):
+                fresh[artifact] = effective_settings(artifact)
+                refused.pop(artifact, None)
+                continue
+            try:
+                fresh[artifact] = checked(artifact, made["settings"])
+                refused.pop(artifact, None)
+            except SettingsRefusedError as exc:
+                if refused.get(artifact) != str(exc):
+                    logger.error("The server's settings for %s were refused, so it isn't made here: %s",
+                                 spec.title, exc)
+                refused[artifact] = str(exc)
+        self._settings, self.refused = fresh, refused
 
     def settings(self, artifact: str) -> dict[str, Any]:
+        """What it's made with now; SettingsRefusedError when the server's were refused (told)."""
+        if artifact in self.refused:
+            raise SettingsRefusedError(self.refused[artifact])
         return dict(self._settings[artifact])
 
     def uses(self, artifact: str) -> dict[str, Any]:

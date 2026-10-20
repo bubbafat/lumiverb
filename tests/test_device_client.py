@@ -15,6 +15,7 @@ Its remakes wait while it's on battery, and say so.
 
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from src.processing.device import Device
+from src.producers.names import ANALYSIS_PROXY
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_scan_outcomes import Lib, _image, _video
 
@@ -137,6 +139,45 @@ def test_it_speaks_the_names_check_in_protocol(env, device):
     assert reader.once() == 1, "the analysis proxy, from the server's list in names"
     assert _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"]
     assert heard.protocols and set(heard.protocols) == {2}
+
+
+class _Tampered(TestClient):
+    """The real API, the analysis proxy's settings in its reader-changes answers rewritten on the way (what
+    plain HTTP lets anyone between do)."""
+
+    max_edge: object = None
+
+    def request(self, method, url, **kwargs):
+        import httpx
+
+        r = super().request(method, url, **kwargs)
+        made = (r.json().get("made_with") or {}).get(ANALYSIS_PROXY) \
+            if self.max_edge is not None and httpx.URL(str(url)).path.endswith("/reader-changes") else None
+        if not made:
+            return r
+        body = r.json()
+        body["made_with"][ANALYSIS_PROXY]["settings"]["max_edge"] = self.max_edge
+        return httpx.Response(200, json=body, request=r.request)
+
+
+def test_settings_changed_on_the_way_are_refused_and_nothing_is_made_with_them(env, device, caplog):
+    from src.server.api.main import app
+
+    lib, reader, api = device
+    tampered = _Tampered(app, headers=dict(api._client.headers))
+    tampered.max_edge = "960':h=1,movie=/etc/passwd"
+    api._client = tampered
+    _video(lib, "videos/b.mp4")
+    with caplog.at_level(logging.ERROR):
+        reader.once()
+    clip = _clips(env, lib)["videos/b.mp4"]
+    assert not clip["analysis_proxy_key"], "nothing made with settings it refused"
+    assert clip["proxy_key"] and "lumiverb.video.format" in clip["made"], "the rest goes on"
+    assert any("Analysis proxies: Longest edge is a number" in r.getMessage() for r in caplog.records)
+
+    tampered.max_edge = None  # the next answer as the server sent it: asked afresh, made
+    assert reader.once() == 1
+    assert _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"] and not reader.producers.refused
 
 
 def test_what_is_paused_waits(env, device):
