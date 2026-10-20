@@ -1,38 +1,65 @@
 """The server admin's API (ADR-018 decision 8): the install's accounts, and
 who its server admins are. A server admin who signed in, or the install's
 own key (ADMIN_KEY, for its scripts and the CLI's `lumiverb admin`):
-dependencies.require_server_admin."""
+dependencies.require_server_admin. The web app's Admin › Accounts is a
+server admin's: an account made with its first admin's invite, renamed, or
+deleted once what it holds is said and its name typed. A deleted account is
+kept and never reached again: nobody signs in to it, its keys and public
+links answer nothing, and it isn't worked on (TenantRepository.gone)."""
 
+import logging
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session
 
 from src.server.accounts import AccountError, create_account, remove_account
 from src.server.api.dependencies import get_db_session, require_server_admin
-from src.server.api.errors import ApiError, ConflictError
+from src.server.api.errors import ApiError, ConflictError, DecisionRequiredError
 from src.server.repository.control_plane import (
+    DELETED,
     ApiKeyRepository,
     TenantRepository,
     UserRepository,
 )
+from src.shared.path_filter import has_control_character
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_server_admin)])
 
 
+def _plain_name(name: str) -> str:
+    name = name.strip()
+    if not name or has_control_character(name):
+        raise ValueError("a name, with no control characters")
+    return name
+
+
 class CreateTenantRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
     plan: str = "free"  # free | pro | enterprise
-    email: str = ""
+    # Its first admin, invited: they choose their password at the link that comes back. Empty: none (a script's,
+    # which uses the key that comes back).
+    email: str = Field(default="", max_length=320)
     vision_api_url: str = ""
     vision_api_key: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _plain(cls, v: str) -> str:
+        return _plain_name(v)
 
 
 class CreateTenantResponse(BaseModel):
     tenant_id: str
     api_key: str
     database: str = "provisioned"
+    # With an email: its first admin's invite (shown once), as a user's invite is (routers/users.py).
+    invite_urls: list[str] | None = None
+    invite_expires_at: datetime | None = None
 
 
 class TenantListItem(BaseModel):
@@ -40,16 +67,25 @@ class TenantListItem(BaseModel):
     name: str
     plan: str
     status: str
+    users: int = 0  # the people who sign in to it
+    created_at: datetime | None = None
 
 
 class UpdateTenantRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)  # renamed
     vision_api_url: str | None = None
     vision_api_key: str | None = None
     vision_model_id: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _plain(cls, v: str | None) -> str | None:
+        return None if v is None else _plain_name(v)
+
 
 class UpdateTenantResponse(BaseModel):
     tenant_id: str
+    name: str = ""
     vision_api_url: str
     vision_model_id: str = ""
 
@@ -76,9 +112,14 @@ def create_tenant(
     session: Annotated[Session, Depends(get_db_session)],
 ) -> CreateTenantResponse:
     """
-    Create tenant, provision DB, add routing, create default API key.
+    Create tenant, provision DB, add routing, create default API key; with
+    an email, its first admin too, invited (the link comes back, once).
+    409 email_conflict when someone signs in with that email already.
     On failure, attempt cleanup and return 500.
     """
+    email = body.email.strip()
+    if email and UserRepository(session).get_by_email(email) is not None:
+        raise ConflictError("email_conflict", "Someone signs in with that email already.", {"email": email})
     try:
         tenant_id = create_account(
             session, body.name, plan=body.plan,
@@ -100,10 +141,18 @@ def create_tenant(
             detail=f"Failed to create API key: {e}",
         ) from e
 
+    invite = None
+    if email:
+        from src.server.invites import new_invite, unusable_password_hash
+
+        user = UserRepository(session).create(tenant_id, email, unusable_password_hash(), role="admin")
+        invite = new_invite(session, user.user_id)
     return CreateTenantResponse(
         tenant_id=tenant_id,
         api_key=plaintext_key,
         database="provisioned",
+        invite_urls=list(invite.urls) if invite else None,
+        invite_expires_at=invite.expires_at if invite else None,
     )
 
 
@@ -114,12 +163,15 @@ def list_tenants(
     """Return all tenants with status and plan. No API keys in response."""
     tenant_repo = TenantRepository(session)
     tenants = tenant_repo.list_all()
+    people = UserRepository(session).count_by_tenant()
     return [
         TenantListItem(
             tenant_id=t.tenant_id,
             name=t.name,
             plan=t.plan,
             status=t.status,
+            users=people.get(t.tenant_id, 0),
+            created_at=t.created_at,
         )
         for t in tenants
     ]
@@ -131,19 +183,24 @@ def update_tenant(
     body: UpdateTenantRequest,
     session: Annotated[Session, Depends(get_db_session)],
 ) -> UpdateTenantResponse:
-    """Update a tenant's vision endpoint and model. Only provided fields are
-    changed. The endpoint is its first machine doing vision (/v1/ai): an
-    empty URL removes that machine; another makes or moves it."""
+    """Rename an account, or change its vision endpoint and model. Only
+    provided fields are changed. The endpoint is its first machine doing
+    vision (/v1/ai): an empty URL removes that machine; another makes or
+    moves it."""
     from src.server.repository.ai_machines import job_model, update_vision
 
     tenant_repo = TenantRepository(session)
     tenant = tenant_repo.get_by_id(tenant_id)
-    if tenant is None or tenant.status == "deleted":
+    if tenant is None or tenant.status == DELETED:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if body.name is not None:
+        tenant_repo.rename(tenant_id, body.name)
+        tenant = tenant_repo.get_by_id(tenant_id)
     machine = update_vision(session, tenant, api_url=body.vision_api_url, api_key=body.vision_api_key,
                             model=body.vision_model_id)
     return UpdateTenantResponse(
         tenant_id=tenant.tenant_id,
+        name=tenant.name,
         vision_api_url=machine.api_url if machine is not None else "",
         vision_model_id=job_model(tenant, "vision"),
     )
@@ -207,20 +264,56 @@ def list_tenant_keys(
     ]
 
 
+def _holds(tenant_id: str, users: int) -> dict:
+    """What an account holds, said before it's deleted: its people, libraries and clips."""
+    from src.server.database import get_tenant_session
+    from src.server.repository.assets import AssetRepository
+    from src.server.repository.libraries import LibraryRepository
+
+    try:
+        with get_tenant_session(tenant_id) as tenant_session:
+            ids = [lib.library_id for lib in LibraryRepository(tenant_session).list_all()]
+            clips = AssetRepository(tenant_session).count_all_for_libraries(ids) if ids else 0
+    except Exception as exc:  # noqa: BLE001 — its database away: what it holds isn't known, and it's said so
+        logger.warning("Account %s's database can't be read: %s", tenant_id, exc)
+        return {"users": users, "libraries": None, "clips": None}
+    return {"users": users, "libraries": len(ids), "clips": clips}
+
+
 @router.delete("/tenants/{tenant_id}", status_code=204)
 def delete_tenant(
     tenant_id: str,
+    request: Request,
     session: Annotated[Session, Depends(get_db_session)],
+    confirm: str | None = None,
 ) -> None:
-    """Soft delete: set tenant status to 'deleted' and revoke all API keys."""
+    """Delete an account: kept (its database, its rows), never reached again: nobody signs in to it, its keys are
+    revoked, its public links answer nothing, and it isn't worked on. 409 confirm_delete_account (details: name,
+    users, libraries, clips; null where its database can't be read) until confirm is its name, as typed. 409
+    own_account for the account of the server admin asking; 409 last_server_admin when no server admin would be
+    left in an account not deleted. 404 for no such account, or one deleted already."""
     tenant_repo = TenantRepository(session)
     key_repo = ApiKeyRepository(session)
     tenant = tenant_repo.get_by_id(tenant_id)
-    if tenant is None:
+    if tenant is None or tenant.status == DELETED:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if getattr(request.state, "tenant_id", None) == tenant_id and not getattr(request.state, "install_key", False):
+        raise ConflictError("own_account", "That's the account you're signed in to: another server admin deletes it.")
+    users = UserRepository(session)
+    admins = users.server_admins()
+    others = [u for u in admins if u.tenant_id != tenant_id and not tenant_repo.gone(u.tenant_id)]
+    if not others and any(u.tenant_id == tenant_id for u in admins):
+        raise ConflictError("last_server_admin", "No server admin would be left in an account that isn't deleted: "
+                            "name one in another account first.")
+    if confirm != tenant.name:
+        held = _holds(tenant_id, users.count_by_tenant().get(tenant_id, 0))
+        raise DecisionRequiredError(
+            "confirm_delete_account",
+            f"{tenant.name} will be deleted: nobody signs in to it again. Send confirm: its name, to go ahead.",
+            {"name": tenant.name, **held})
     for key in key_repo.list_by_tenant_id(tenant_id):
         key_repo.revoke(key.key_id)
-    tenant_repo.update_status(tenant_id, "deleted")
+    tenant_repo.update_status(tenant_id, DELETED)
     return None
 
 
