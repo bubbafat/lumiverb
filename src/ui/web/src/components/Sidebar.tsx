@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getApiKey, listLibraries, listSavedViews, deleteSavedView, updateSavedView, logout } from "../api/client";
 import type { SavedViewItem } from "../api/client";
-import { useCanEdit } from "../lib/useCanEdit";
+import { useCanEdit, useIsDemo } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { DirectoryTree } from "./DirectoryTree";
 import { AdminAlertDot } from "./HealthDot";
@@ -161,6 +161,8 @@ export interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAlert = null, showAdmin = false }: SidebarProps) {
   const canEdit = useCanEdit(Boolean(getApiKey()));
+  // Trying it as a viewer: no projects (an editor's), archive, trash or favorites, which a demo server doesn't answer.
+  const demo = useIsDemo(Boolean(getApiKey()));
   const folderActions = useClipActions();
   const { libraryId } = useParams<{ libraryId: string }>();
   const location = useLocation();
@@ -378,18 +380,20 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
             {photoStackIcon()}
             {showLabels && <span>Manage libraries</span>}
           </Link>
-          <Link
-            to="/projects"
-            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname.startsWith("/projects")
-                ? "bg-indigo-600/30 text-indigo-200"
-                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-gray-500" />
-            {projectsIcon()}
-            {showLabels && <span>Projects</span>}
-          </Link>
+          {!demo && (
+            <Link
+              to="/projects"
+              className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+                location.pathname.startsWith("/projects")
+                  ? "bg-indigo-600/30 text-indigo-200"
+                  : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+              }`}
+            >
+              <span className="h-2 w-2 rounded-full bg-gray-500" />
+              {projectsIcon()}
+              {showLabels && <span>Projects</span>}
+            </Link>
+          )}
           <Link
             to="/people"
             className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
@@ -404,54 +408,60 @@ export function Sidebar({ collapsed, onToggleCollapsed, onOpenPalette, adminAler
             </svg>
             {showLabels && <span>People</span>}
           </Link>
-          <Link
-            to="/archive"
-            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname.startsWith("/archive")
-                ? "bg-indigo-600/30 text-indigo-200"
-                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-gray-500" />
-            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
-            </svg>
-            {showLabels && <span>Archive</span>}
-          </Link>
-          <Link
-            to="/trash"
-            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname.startsWith("/trash")
-                ? "bg-indigo-600/30 text-indigo-200"
-                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-gray-500" />
-            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-            </svg>
-            {showLabels && <span>Trash</span>}
-          </Link>
+          {!demo && (
+            <Link
+              to="/archive"
+              className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+                location.pathname.startsWith("/archive")
+                  ? "bg-indigo-600/30 text-indigo-200"
+                  : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+              }`}
+            >
+              <span className="h-2 w-2 rounded-full bg-gray-500" />
+              <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+              </svg>
+              {showLabels && <span>Archive</span>}
+            </Link>
+          )}
+          {!demo && (
+            <Link
+              to="/trash"
+              className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+                location.pathname.startsWith("/trash")
+                  ? "bg-indigo-600/30 text-indigo-200"
+                  : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+              }`}
+            >
+              <span className="h-2 w-2 rounded-full bg-gray-500" />
+              <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+              </svg>
+              {showLabels && <span>Trash</span>}
+            </Link>
+          )}
         </div>
 
         {/* Divider between manual curation and automatic views */}
         <div className="border-t border-gray-700/50 mx-2" />
 
         <div className="px-2 py-1 space-y-1">
-          <Link
-            to="/browse?favorite=true"
-            className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
-              location.pathname === "/browse" && location.search.includes("favorite=true")
-                ? "bg-indigo-600/30 text-indigo-200"
-                : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-gray-500" />
-            <svg className="h-5 w-5 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
-            </svg>
-            {showLabels && <span>Favorites</span>}
-          </Link>
+          {!demo && (
+            <Link
+              to="/browse?favorite=true"
+              className={`flex items-center gap-2 rounded-lg px-2 py-3 text-sm transition-colors duration-150 ${
+                location.pathname === "/browse" && location.search.includes("favorite=true")
+                  ? "bg-indigo-600/30 text-indigo-200"
+                  : "text-gray-400 hover:bg-gray-800/80 hover:text-gray-200"
+              }`}
+            >
+              <span className="h-2 w-2 rounded-full bg-gray-500" />
+              <svg className="h-5 w-5 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+              </svg>
+              {showLabels && <span>Favorites</span>}
+            </Link>
+          )}
           {/* Saved searches */}
           {savedViews.map((sv) => {
             const viewPath = `/browse?${sv.query_params}`;

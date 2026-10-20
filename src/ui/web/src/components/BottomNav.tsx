@@ -95,8 +95,10 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 /** adminAlert: a yellow or red dot on Admin when the system needs a look (AppShell asks).
- * showAdmin: the Admin link, for admins only. */
-export function BottomNav({ adminAlert = null, showAdmin = false }: { adminAlert?: "yellow" | "red" | null; showAdmin?: boolean } = {}) {
+ * showAdmin: the Admin link, for admins only. showProjects: not while trying it as a viewer. */
+export function BottomNav({ adminAlert = null, showAdmin = false, showProjects = true }: {
+  adminAlert?: "yellow" | "red" | null; showAdmin?: boolean; showProjects?: boolean;
+} = {}) {
   const { libraryId } = useParams<{ libraryId?: string }>();
 
   return (
@@ -114,10 +116,12 @@ export function BottomNav({ adminAlert = null, showAdmin = false }: { adminAlert
         </NavLink>
       )}
 
-      <NavLink to="/projects" className={linkClass}>
-        <StackIcon />
-        <span>Projects</span>
-      </NavLink>
+      {showProjects && (
+        <NavLink to="/projects" className={linkClass}>
+          <StackIcon />
+          <span>Projects</span>
+        </NavLink>
+      )}
 
       <NavLink to="/people" className={linkClass}>
         <PeopleIcon />

@@ -13,16 +13,18 @@ interface NavItem {
   requireAdmin?: boolean;
   /** The install's, not an account's (where previews live, backups). */
   requireServerAdmin?: boolean;
+  /** Not a demo session's (trying it as a viewer): a demo server answers none of it from elsewhere. */
+  notInDemo?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/settings/account", label: "Account" },
   { to: "/settings/preferences", label: "Preferences" },
   { to: "/settings/playback", label: "Playback" },
-  { to: "/settings/ai", label: "AI" },
-  { to: "/settings/processing", label: "Processing" },
+  { to: "/settings/ai", label: "AI", notInDemo: true },
+  { to: "/settings/processing", label: "Processing", notInDemo: true },
   { to: "/settings/files", label: "Files" },
-  { to: "/settings/network", label: "Network" },
+  { to: "/settings/network", label: "Network", notInDemo: true },
   { to: "/settings/backups", label: "Backups", requireServerAdmin: true },
   { to: "/settings/storage", label: "Storage", requireServerAdmin: true },
   { to: "/settings/devices", label: "Devices", requireAdmin: true },
@@ -38,7 +40,8 @@ export default function SettingsPage() {
   });
 
   // The worker couldn't use the vision model: flag the AI page until it's fixed.
-  const { data: ai } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings });
+  const demo = user?.demo === true;
+  const { data: ai } = useQuery({ queryKey: AI_QUERY_KEY, queryFn: getAiSettings, enabled: user !== undefined && !demo });
   const aiProblem = aiHasProblem(ai);
   const isServerAdmin = user?.server_admin === true;
   const { data: backups } = useQuery({ queryKey: BACKUPS_QUERY_KEY, queryFn: getBackups, enabled: isServerAdmin });
@@ -59,6 +62,7 @@ export default function SettingsPage() {
             if (item.requireEditor && !isEditorOrAbove) return null;
             if (item.requireServerAdmin && !isPending && !isServerAdmin) return null;
             if (item.requireAdmin && !isPending && user?.role !== "admin") return null;
+            if (item.notInDemo && (isPending || demo)) return null;
             return (
               <NavLink
                 key={item.to}

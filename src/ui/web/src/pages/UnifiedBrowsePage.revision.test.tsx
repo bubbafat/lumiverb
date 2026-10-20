@@ -269,6 +269,25 @@ describe("saving a search as a project", () => {
   });
 });
 
+describe("trying it as a viewer (a demo session, which reads only)", () => {
+  it("offers no rating, saved search or project, and asks for no ratings", async () => {
+    api.getCurrentUser.mockResolvedValue({ role: "viewer", demo: true });
+    const { queryByRole } = renderPage("/browse?f=path:Shoots");
+    await advance(100);
+    expect(queryByRole("button", { name: "Add to favorites" })).toBeNull();
+    expect(queryByRole("button", { name: "Save search" })).toBeNull();
+    expect(api.lookupRatings).not.toHaveBeenCalled();
+  });
+
+  it("leaves a viewer signed in as themselves their ratings and saved searches", async () => {
+    api.getCurrentUser.mockResolvedValue({ role: "viewer", demo: false });
+    const { queryByRole } = renderPage("/browse?f=path:Shoots");
+    await advance(100);
+    expect(queryByRole("button", { name: "Add to favorites" })).not.toBeNull();
+    expect(queryByRole("button", { name: "Save search" })).not.toBeNull();
+  });
+});
+
 describe("the grid's width", () => {
   it("is the grid's own box, not the padded page's", async () => {
     // On a phone the page's padding left the last column hanging off the

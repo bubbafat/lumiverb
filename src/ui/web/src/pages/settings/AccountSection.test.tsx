@@ -60,4 +60,16 @@ describe("AccountSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(logout).toHaveBeenCalled());
   });
+
+  it("offers a password's change to someone signed in as themselves, never to someone trying it as a viewer", async () => {
+    renderSection();
+    expect(await screen.findByRole("link", { name: "Change password" })).toBeTruthy();
+    cleanup();
+    vi.mocked(getCurrentUser).mockResolvedValue(
+      { user_id: "u2", email: "demo@example.com", role: "viewer", server_admin: false, demo: true });
+    renderSection();
+    expect(await screen.findByText("demo@example.com")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Change password" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  });
 });

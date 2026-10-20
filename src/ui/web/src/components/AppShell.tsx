@@ -86,10 +86,15 @@ export default function AppShell() {
           ref={setMainEl}
           className="flex-1 overflow-auto pb-safe-offset-16 md:pb-0"
         >
+          {me?.demo && (
+            <p role="status" className="border-b border-indigo-900/60 bg-indigo-950/60 px-4 py-2 text-center text-sm text-indigo-200">
+              You're trying Lumiverb as a viewer: search, browse and open anything. Nothing here can be changed.
+            </p>
+          )}
           <Outlet />
         </main>
       </ScrollContainerContext.Provider>
-      <BottomNav adminAlert={adminAlert} showAdmin={isAdmin} />
+      <BottomNav adminAlert={adminAlert} showAdmin={isAdmin} showProjects={!me?.demo} />
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <KeyboardShortcuts

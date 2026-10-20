@@ -15,7 +15,7 @@ import type { QueryItem } from "../api/client";
 import { AssetCell } from "../components/AssetCell";
 import { ProjectPicker } from "../components/ProjectPicker";
 import { SetLocationModal } from "../components/SetLocationModal";
-import { useCanEdit } from "../lib/useCanEdit";
+import { useCanEdit, useIsDemo } from "../lib/useCanEdit";
 import { useClipActions } from "../lib/useClipActions";
 import { useRevisionRefresh } from "../lib/useRevisionRefresh";
 import { Lightbox } from "../components/Lightbox";
@@ -317,6 +317,8 @@ export default function UnifiedBrowsePage() {
   );
   const selection = useSelection(orderedAssetIds);
   const canEdit = useCanEdit();
+  // Trying it as a viewer: nothing that changes anything (ratings, projects, saved searches) is offered.
+  const demo = useIsDemo();
   const clipActions = useClipActions(selection.clear);
   const [pickerAssetIds, setPickerAssetIds] = useState<string[] | null>(null);
   const [locationAssetIds, setLocationAssetIds] = useState<string[] | null>(null);
@@ -329,7 +331,7 @@ export default function UnifiedBrowsePage() {
   const ratingsQuery = useQuery({
     queryKey: ["ratings", orderedAssetIds.slice(0, 500)],
     queryFn: () => lookupRatings(orderedAssetIds.slice(0, 500)),
-    enabled: orderedAssetIds.length > 0,
+    enabled: orderedAssetIds.length > 0 && !demo,
     staleTime: 30_000,
   });
   const ratingsMap: Record<string, AssetRating> = ratingsQuery.data?.ratings ?? {};
@@ -504,7 +506,7 @@ export default function UnifiedBrowsePage() {
           <span className="text-gray-300 truncate">{pageTitle}</span>
         </div>
         <div className="flex items-center gap-2">
-          {hasActiveFilters && (
+          {hasActiveFilters && !demo && (
             <button
               type="button"
               onClick={() => {
@@ -748,7 +750,7 @@ export default function UnifiedBrowsePage() {
                             selectionActive={selection.isActive}
                             onSelect={(e) => selection.toggle(asset.asset_id, { shiftKey: e.shiftKey })}
                             rating={ratingsMap[asset.asset_id]}
-                            onFavoriteToggle={(id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
+                            onFavoriteToggle={demo ? undefined : (id) => handleRatingChange(id, { favorite: !(ratingsMap[id]?.favorite ?? false) })}
                             libraryName={libraryNames[asset.library_id]}
                           />
                         </div>
@@ -779,7 +781,7 @@ export default function UnifiedBrowsePage() {
           onClose={handleLightboxClose}
           onNavigate={handleLightboxNavigate}
           onDateClick={handleLightboxDateClick}
-          onAddToProject={(assetId) => setPickerAssetIds([assetId])}
+          onAddToProject={demo ? undefined : (assetId) => setPickerAssetIds([assetId])}
           onArchive={canEdit ? (assetId) => {
             setLightboxAsset(null);
             void clipActions.archive([assetId]);
@@ -789,7 +791,7 @@ export default function UnifiedBrowsePage() {
             clipActions.trash([assetId]);
           } : undefined}
           rating={lightboxAsset ? ratingsMap[lightboxAsset.asset_id] : undefined}
-          onRatingChange={handleRatingChange}
+          onRatingChange={demo ? undefined : handleRatingChange}
           onTagClick={(tag) => {
             setLightboxAsset(null);
             handleSetFilter("tag", tag);
@@ -829,29 +831,33 @@ export default function UnifiedBrowsePage() {
 
       {/* Selection toolbar */}
       <SelectionToolbar count={selection.count} onClear={selection.clear}>
-        <HeartButton
-          favorite={false}
-          onClick={() => handleBatchRating({ favorite: true })}
-          size="sm"
-        />
-        <StarPicker
-          stars={0}
-          onChange={(stars) => handleBatchRating({ stars })}
-          size="sm"
-        />
-        <ColorPicker
-          color={null}
-          onChange={(color) => handleBatchRating({ color })}
-          size="sm"
-        />
-        <div className="h-4 w-px bg-gray-700" />
-        <button
-          type="button"
-          onClick={() => setPickerAssetIds(selection.toArray())}
-          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
-        >
-          Add to project
-        </button>
+        {!demo && (
+          <>
+            <HeartButton
+              favorite={false}
+              onClick={() => handleBatchRating({ favorite: true })}
+              size="sm"
+            />
+            <StarPicker
+              stars={0}
+              onChange={(stars) => handleBatchRating({ stars })}
+              size="sm"
+            />
+            <ColorPicker
+              color={null}
+              onChange={(color) => handleBatchRating({ color })}
+              size="sm"
+            />
+            <div className="h-4 w-px bg-gray-700" />
+            <button
+              type="button"
+              onClick={() => setPickerAssetIds(selection.toArray())}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"
+            >
+              Add to project
+            </button>
+          </>
+        )}
         {canEdit && (
           <>
             <button
