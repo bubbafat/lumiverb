@@ -76,6 +76,10 @@ def test_the_migration_s_mapping_is_renamed():
     assert dict(KINDS) == m.KINDS
     assert set(m._POOLS) == {p.pool.name for p in registry().values() if p.pool and not p.plugin} | {"scan"}
     assert m._RESERVED == RESERVED
+    # Down: a word no plug-in may have stays, every way; one that could be a plug-in's id is its work.
+    for word in sorted(RESERVED):
+        assert (m._work_down(word), m._kind_down(word), m._pool_down(word)) == (word, word, word), word
+    assert (m._work_down("my-facts"), m._kind_down("redo:my-facts")) == ("plugin_my_facts", "redo_plugin_my_facts")
     # And this file's own, which outlives both.
     assert (set(m.ARTIFACTS), m.PRODUCERS) == (OLD_ARTIFACTS, CURRENT)
 
@@ -130,6 +134,7 @@ PAUSES = [  # (target, scope, paused_by) before, and the target after
     ("plugin_faces", "work", "usr_1", "plugin_faces"),
     ("all", "work", "usr_1", "all"),
     ("upkeep", "work", "usr_1", "upkeep"),
+    ("scans", "work", "usr_1", "scans"),  # left behind (each library's since aec154348364): stays, both ways
 ]
 CRASHES = [("photo", "faces", "lumiverb.image.faces"), ("photo", "plugin_my_facts", "my-facts")]
 KEYS = [  # system_metadata's keys before, and after

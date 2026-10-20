@@ -26,7 +26,13 @@ goes in part 5): an install that skips releases, a restored backup and a
 downgrade still run this migration. tests/test_migration_names_stored.py
 holds it equal to RENAMED while both exist.
 
-Down: each renamed back, by the same mapping.
+Down: each renamed back, by the same mapping. A plug-in's work goes back
+to `plugin_<id>`, whether the up renamed it or part 3's code wrote it; a
+word no plug-in may have (every old id, `all`, `upkeep`, a pool, ...) stays
+as it is. One the up left alone that could be a plug-in's id (a producer
+removed before, its rows left behind) can't be told from a plug-in's work,
+and goes to `plugin_<it>` too: both releases ignore an artifact they don't
+know.
 """
 
 from __future__ import annotations
@@ -83,15 +89,23 @@ _RESERVED = frozenset({
     "thumbnail", "transcript", "video_faces", "video_preview", "vision", "whisper", "capture_time", "image",
     "metadata", "original", "people", "video",
 })
-_KEEP_TARGETS = ("all", "upkeep")
 # Lumiverb's pools keep their names (a pool is shared, so no one name fits it); a plug-in's is its work's.
 _POOLS = ("scan", "probe", "exif", "render", "scenes", "vision", "clip", "faces", "transcripts", "cpu")
+
+
+def _could_be_plugins(word: str) -> bool:
+    """A plug-in may have this id: one installed now, its work named by it."""
+    return bool(_PLUGIN_ID.match(word)) and not word.startswith("lumiverb") and word not in _RESERVED
 
 
 def _added_id(old: str) -> str | None:
     match = _ADDED.match(old)
     plugin_id = match.group(1).replace("_", "-") if match else None
-    return None if plugin_id is None or plugin_id.startswith("lumiverb") or plugin_id in _RESERVED else plugin_id
+    return plugin_id if plugin_id is not None and _could_be_plugins(plugin_id) else None
+
+
+def _added_down(new: str) -> str:
+    return "plugin_" + new.replace("-", "_") if _could_be_plugins(new) else new
 
 
 def _work_up(old: str) -> str:
@@ -101,11 +115,7 @@ def _work_up(old: str) -> str:
 
 def _work_down(new: str) -> str:
     olds = {v: k for k, v in ARTIFACTS.items()}
-    if new in olds:
-        return olds[new]
-    if _PLUGIN_ID.match(new) and new not in ARTIFACTS and new not in _KEEP_TARGETS:
-        return "plugin_" + new.replace("-", "_")
-    return new
+    return olds.get(new) or _added_down(new)
 
 
 def _pool_up(old: str) -> str:
@@ -113,7 +123,7 @@ def _pool_up(old: str) -> str:
 
 
 def _pool_down(new: str) -> str:
-    return "plugin_" + new.replace("-", "_") if _PLUGIN_ID.match(new) and new not in _POOLS else new
+    return _added_down(new)  # Lumiverb's pools are reserved: they stay
 
 
 def _kind_up(old: str) -> str:
@@ -126,11 +136,7 @@ def _kind_down(new: str) -> str:
     if new.startswith("redo:"):
         return "redo_" + _kind_down(new.removeprefix("redo:"))
     olds = {v: k for k, v in KINDS.items()}
-    if new in olds:
-        return olds[new]
-    if _PLUGIN_ID.match(new) and new not in KINDS and new not in ("scan", *_KEEP_TARGETS):
-        return "plugin_" + new.replace("-", "_")
-    return new
+    return olds.get(new) or _added_down(new)
 
 
 def _rename_column(conn, table: str, column: str, way) -> None:
