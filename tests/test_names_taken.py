@@ -297,8 +297,8 @@ def test_the_producers_routes_take_a_name_and_refuse_an_old_word_naming_it(env):
                     json={"all": True, "library_id": library_id})
     assert r.status_code == 200, r.text
 
-    # What nothing makes, and never made, is unknown.
-    for target in ("lumiverb.image.nothing", "lumiverb.people", "nothing"):
+    # What nothing makes, and never made, is unknown: a left-out plug-in's work (an id it can't have) too.
+    for target in ("lumiverb.image.nothing", "lumiverb.people", "nothing", "plugin_vision"):
         r = client.put(f"/v1/producers/{target}/settings", json={"settings": {}}, headers=headers)
         assert r.status_code == 404 and r.json()["error"]["code"] != "renamed", r.text
         r = client.post("/v1/producers/failures", headers=headers, json={"items": [

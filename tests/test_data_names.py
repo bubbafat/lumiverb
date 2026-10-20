@@ -181,6 +181,10 @@ def test_an_old_word_is_said_by_its_name_and_never_taken():
     assert now_called("scene_rep") == "lumiverb.video.scenes.picture"
     assert now_called("redo_vision", "kind") == "redo:lumiverb.image.description"
     assert now_called("plugin_facts") == "facts" and now_called("plugin_my_tool", "artifact") == "my-tool"
+    # Never an id a plug-in can't have: one installed with it was left out (its work no producer), so there's no
+    # name to give, only "nothing is called that".
+    for word in ("plugin_vision", "plugin_faces", "plugin_lumiverb_tools", "plugin_scans", "redo_plugin_vision"):
+        assert now_called(word) is None, word
     # A word of another family isn't one, and a name, a machine's word or a plug-in's id never was.
     assert now_called("thumbnail", "artifact") is None and now_called("render", "artifact") is None
     for word in ("lumiverb.image.text", "facts", "upkeep", "all", "scan", "redo:lumiverb.image.text", ""):
@@ -193,6 +197,7 @@ def test_an_old_word_is_said_by_its_name_and_never_taken():
     assert typed("vision", listed) == (None, "vision is called image.description now: type that")
     assert typed("plugin_facts", listed) == (None, "plugin_facts is called facts now: type that")
     assert typed("teleport", listed) == (None, None)
+    assert typed("plugin_vision", listed) == (None, None)
 
 
 def test_needs_are_the_artifacts_its_reads_are_made_by():

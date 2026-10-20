@@ -8,9 +8,11 @@ file). tests/old_ids.py finds them.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.old_ids import _plugin_work, _python, _script, matches
+from tests.old_ids import REPO, _plugin_work, _python, _script, files, matches
 from tests.old_ids_allowed import ALLOWED
 
 pytestmark = pytest.mark.fast
@@ -32,6 +34,22 @@ def test_the_allow_list_has_nothing_left_over():
     stale = sorted(f"{family}: {word} in {path}" for family, words in ALLOWED.items() for word, paths in words.items()
                    for path in paths if (path, word) not in seen)
     assert stale == [], "allowed, and not there any more: take it out of tests/old_ids_allowed.py\n" + "\n".join(stale)
+
+
+def test_every_tree_is_looked_in():
+    # So a change to ROOTS, DOCS or _SKIP can't drop one quietly: the server, the web, both apps, Resolve, the
+    # tests and the living docs, and each kind of file.
+    looked = [str(p.relative_to(REPO)) for p in files()]
+    for tree in ("src/server/", "src/client/", "src/processing/", "src/producers/", "src/ui/web/src/",
+                 "clients/lumiverb-app/Sources/macOS/", "clients/lumiverb-app/Sources/iOS/",
+                 "clients/lumiverb-app/Sources/LumiverbKit/", "clients/resolve/plugin/", "clients/resolve/test/",
+                 "tests/", "docs/"):
+        assert any(p.startswith(tree) for p in looked), tree
+    for doc in ("CLAUDE.md", "README.md", "docs/cursor-api.md", "docs/cursor-cli.md", "docs/architecture.md",
+                "docs/data-names.md"):
+        assert doc in looked, doc
+    assert not any(p.startswith(("docs/adr/", "docs/archive/")) for p in looked), "the ADRs are history"
+    assert {Path(p).suffix for p in looked} == {".py", ".ts", ".tsx", ".js", ".swift", ".md"}
 
 
 def test_each_way_an_old_id_is_written_is_found():

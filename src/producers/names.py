@@ -115,13 +115,15 @@ _ADDED_ID = re.compile(r"^plugin_([a-z][a-z0-9_]{0,39})$")
 def now_called(word: str, family: str | None = None) -> str | None:
     """The name an old word (of this family: artifact, producer, kind, file; any when None) was renamed to, for a
     refusal to name: `vision` → lumiverb.image.description, `redo_vision` → redo:lumiverb.image.description,
-    `plugin_<id>` → the plug-in's id. None for a word that was never one of these."""
+    `plugin_<id>` → the plug-in's id (never an id a plug-in can't have: that one was left out, its work no
+    producer). None for a word that was never one of these."""
     if word.startswith("redo_") and family in (None, "kind"):
         name = now_called(word.removeprefix("redo_"), "kind")
         return remakes_of(name) if name else None
     match = _ADDED_ID.match(word)
     if match and family in (None, "artifact", "producer", "kind"):
-        return match.group(1).replace("_", "-")
+        plugin_id = match.group(1).replace("_", "-")
+        return None if is_reserved(plugin_id) else plugin_id
     for name, was in WAS.items():
         if word in (was.values() if family is None else (was.get(family),)):
             return name
