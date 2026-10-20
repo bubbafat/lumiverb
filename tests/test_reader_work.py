@@ -18,13 +18,14 @@ import json
 import pytest
 from sqlalchemy import text
 
+from src.producers.names import remakes_of
 from src.shared.producers import PRODUCERS
 from tests.producer_fakes import due
 from tests.test_analysis_proxy_api import env  # noqa: F401 — the shared server fixture
 from tests.test_lineage_api import _db, _ingest_with, _sha, _want
 from tests.videos import playable
 
-ALL_WORK = ["previews", "probe", "capture", "analysis_proxy"]
+ALL_WORK = ["lumiverb.preview", "lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy"]
 
 
 def _library(env, name: str) -> tuple:
@@ -55,14 +56,14 @@ def _work(env, **params) -> dict[str, tuple[list[str], list[str]]]:
 def _photo(env, rel_path: str, *, capture: bool = True) -> tuple[str, str]:
     """A photo as a scan sends it: its preview, and its capture facts read with the EXIF."""
     sha = _sha()
-    made = {"proxy": _want(env, "proxy", sha), **({"capture": _want(env, "capture", sha)} if capture else {})}
+    made = {"lumiverb.preview": _want(env, "lumiverb.preview", sha), **({"lumiverb.capture_time": _want(env, "lumiverb.capture_time", sha)} if capture else {})}
     return _ingest_with(env, rel_path, sha, made), sha
 
 
 def _video(env, rel_path: str, *, capture: bool = True) -> tuple[str, str]:
     """A video whose scan sent its poster and capture facts, but not yet its preview, probe or analysis proxy."""
     sha = _sha()
-    made = {"proxy": _want(env, "proxy", sha), **({"capture": _want(env, "capture", sha)} if capture else {})}
+    made = {"lumiverb.preview": _want(env, "lumiverb.preview", sha), **({"lumiverb.capture_time": _want(env, "lumiverb.capture_time", sha)} if capture else {})}
     return _ingest_with(env, rel_path, sha, made, media_type="video"), sha
 
 
@@ -70,13 +71,13 @@ def _preview_sent(env, clip: str, sha: str) -> None:
     client, headers, *_ = env
     r = client.post(f"/v1/assets/{clip}/artifacts/video_preview", headers=headers,
                     files={"file": ("p.mp4", io.BytesIO(playable()), "video/mp4")},
-                    data={"lineage": json.dumps(_want(env, "video_preview", sha))})
+                    data={"lineage": json.dumps(_want(env, "lumiverb.video.preview", sha))})
     assert r.status_code == 200, r.text
 
 
 def _probed(env, clip: str, sha: str) -> None:
     client, headers, *_ = env
-    r = client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 30.0, "lineage": _want(env, "probe", sha)},
+    r = client.put(f"/v1/assets/{clip}/video-facet", json={"duration_sec": 30.0, "lineage": _want(env, "lumiverb.video.format", sha)},
                    headers=headers)
     assert r.status_code == 200, r.text
 
@@ -88,7 +89,7 @@ def _analysis_proxy_made(env, clip: str, made: dict) -> None:
     with _db(env) as s:
         s.execute(text("UPDATE assets SET analysis_proxy_key = :k WHERE asset_id = :a"),
                   {"k": f"analysis/{clip}.mp4", "a": clip})
-        lineage.record(s, clip, "analysis_proxy", made, commit=False)
+        lineage.record(s, clip, "lumiverb.video.analysis_proxy", made, commit=False)
         s.commit()
 
 
@@ -96,7 +97,7 @@ def _all_made(env, rel_path: str) -> tuple[str, str]:
     clip, sha = _video(env, rel_path)
     _preview_sent(env, clip, sha)
     _probed(env, clip, sha)
-    _analysis_proxy_made(env, clip, _want(env, "analysis_proxy", sha))
+    _analysis_proxy_made(env, clip, _want(env, "lumiverb.video.analysis_proxy", sha))
     return clip, sha
 
 
@@ -124,7 +125,7 @@ def test_a_new_clip_lists_what_its_original_is_still_needed_for(env):
     unread, _ = _photo(lib, "b.jpg", capture=False)
     video, _ = _video(lib, "c.mov")
     older, _ = _video(lib, "d.mov", capture=False)  # sent by a scanner that didn't read capture facts
-    assert _work(lib) == {unread: (["capture"], []), video: (["previews", "probe", "analysis_proxy"], []),
+    assert _work(lib) == {unread: (["lumiverb.capture_time"], []), video: (["lumiverb.preview", "lumiverb.video.format", "lumiverb.video.analysis_proxy"], []),
                           older: (ALL_WORK, [])}
     assert photo not in _work(lib)  # its scan made everything it needs the original for
 
@@ -134,10 +135,10 @@ def test_what_is_made_leaves_the_list_by_itself(env):
     lib = _library(env, "ReaderMade")
     video, sha = _video(lib, "a.mov")
     _preview_sent(lib, video, sha)
-    assert _work(lib) == {video: (["probe", "analysis_proxy"], [])}
+    assert _work(lib) == {video: (["lumiverb.video.format", "lumiverb.video.analysis_proxy"], [])}
     _probed(lib, video, sha)
-    assert _work(lib) == {video: (["analysis_proxy"], [])}
-    _analysis_proxy_made(lib, video, _want(lib, "analysis_proxy", sha))
+    assert _work(lib) == {video: (["lumiverb.video.analysis_proxy"], [])}
+    _analysis_proxy_made(lib, video, _want(lib, "lumiverb.video.analysis_proxy", sha))
     assert _work(lib) == {}
 
 
@@ -152,7 +153,7 @@ def test_a_lost_preview_is_listed_again(env):
         s.execute(text("UPDATE assets SET proxy_key = NULL, thumbnail_key = NULL WHERE asset_id = :a"), {"a": photo})
         s.execute(text("UPDATE assets SET video_preview_key = NULL WHERE asset_id = :a"), {"a": video})
         s.commit()
-    assert _work(lib) == {photo: (["previews"], []), video: (["previews"], [])}
+    assert _work(lib) == {photo: (["lumiverb.preview"], []), video: (["lumiverb.preview"], [])}
 
 
 @pytest.mark.slow
@@ -161,14 +162,14 @@ def test_a_failure_waits_its_turn(env):
     lib = _library(env, "ReaderFailed")
     photo, _ = _photo(lib, "a.jpg", capture=False)
     r = client.post("/v1/producers/failures", json={"items": [
-        {"asset_id": photo, "artifact": "capture", "error": "exiftool couldn't read it"}]}, headers=headers)
+        {"asset_id": photo, "artifact": "lumiverb.capture_time", "error": "exiftool couldn't read it"}]}, headers=headers)
     assert r.status_code == 200 and r.json() == {"recorded": 1}, r.text
     assert _work(lib) == {}
     with _db(lib) as s:  # its turn comes
         s.execute(text("UPDATE artifact_lineage SET retry_at = now() - interval '1 second'"
-                       " WHERE asset_id = :a AND artifact = 'capture'"), {"a": photo})
+                       " WHERE asset_id = :a AND artifact = 'lumiverb.capture_time'"), {"a": photo})
         s.commit()
-    assert _work(lib) == {photo: (["capture"], [])}
+    assert _work(lib) == {photo: (["lumiverb.capture_time"], [])}
 
 
 # ---------------------------------------------------------------------------
@@ -180,15 +181,15 @@ def test_a_failure_waits_its_turn(env):
 def test_remakes_are_listed_apart_while_the_redo_runs(env):
     lib = _library(env, "ReaderRemake")
     video, _ = _all_made(lib, "a.mov")
-    _set(lib, "analysis_proxy", quality="good")
+    _set(lib, "lumiverb.video.analysis_proxy", quality="good")
     try:
-        assert _work(lib) == {video: ([], ["analysis_proxy"])}
-        _post(lib, "/v1/producers/analysis_proxy/pause", {"scope": "redo"})
+        assert _work(lib) == {video: ([], ["lumiverb.video.analysis_proxy"])}
+        _post(lib, "/v1/producers/lumiverb.video.analysis_proxy/pause", {"scope": "redo"})
         assert _work(lib) == {}  # its redo stopped: the clip keeps what it has
-        _post(lib, "/v1/producers/analysis_proxy/resume", {"scope": "redo"})
-        assert _work(lib) == {video: ([], ["analysis_proxy"])}
+        _post(lib, "/v1/producers/lumiverb.video.analysis_proxy/resume", {"scope": "redo"})
+        assert _work(lib) == {video: ([], ["lumiverb.video.analysis_proxy"])}
     finally:
-        _set(lib, "analysis_proxy", quality=None)
+        _set(lib, "lumiverb.video.analysis_proxy", quality=None)
     assert _work(lib) == {}  # low, high, low again: nothing to do
 
 
@@ -198,23 +199,23 @@ def test_a_new_version_waits_to_be_seen_before_its_remakes_are_listed(env):
 
     lib = _library(env, "ReaderVersion")
     video, sha = _all_made(lib, "a.mov")
-    older = {**_want(lib, "analysis_proxy", sha), "version": "1"}  # made by the version before
-    assert older["version"] != PRODUCERS["analysis_proxy"].version
+    older = {**_want(lib, "lumiverb.video.analysis_proxy", sha), "version": "1"}  # made by the version before
+    assert older["version"] != PRODUCERS["lumiverb.video.analysis_proxy"].version
     _analysis_proxy_made(lib, video, older)
-    key = "producer.analysis_proxy.version_seen"
+    key = "producer.lumiverb.video.analysis_proxy.version_seen"
     with _db(lib) as s:
         s.execute(text("DELETE FROM system_metadata WHERE key = :k"), {"k": key})
         s.commit()
     try:
         assert _work(lib) == {}  # nobody approved the new version: the scheduler stops its redo when it sees it
         with _db(lib) as s:
-            assert lineage.hold_new_version(s, "analysis_proxy")  # as the scheduler does
+            assert lineage.hold_new_version(s, "lumiverb.video.analysis_proxy")  # as the scheduler does
         assert _work(lib) == {}
-        _post(lib, "/v1/producers/analysis_proxy/resume", {"scope": "redo"})  # an admin's yes
-        assert _work(lib) == {video: ([], ["analysis_proxy"])}
+        _post(lib, "/v1/producers/lumiverb.video.analysis_proxy/resume", {"scope": "redo"})  # an admin's yes
+        assert _work(lib) == {video: ([], ["lumiverb.video.analysis_proxy"])}
     finally:
-        _analysis_proxy_made(lib, video, _want(lib, "analysis_proxy", sha))
-        _post(lib, "/v1/producers/analysis_proxy/resume", {"scope": "redo"})
+        _analysis_proxy_made(lib, video, _want(lib, "lumiverb.video.analysis_proxy", sha))
+        _post(lib, "/v1/producers/lumiverb.video.analysis_proxy/resume", {"scope": "redo"})
     assert _work(lib) == {}
 
 
@@ -228,14 +229,14 @@ def test_paused_work_is_not_listed(env):
     lib = _library(env, "ReaderPaused")
     library_id = lib[2]
     video, _ = _video(lib, "a.mov", capture=False)
-    _post(lib, "/v1/producers/capture/pause", {"scope": "work"})
+    _post(lib, "/v1/producers/lumiverb.capture_time/pause", {"scope": "work"})
     try:
-        assert _work(lib) == {video: (["previews", "probe", "analysis_proxy"], [])}
+        assert _work(lib) == {video: (["lumiverb.preview", "lumiverb.video.format", "lumiverb.video.analysis_proxy"], [])}
     finally:
-        _post(lib, "/v1/producers/capture/resume", {"scope": "work"})
+        _post(lib, "/v1/producers/lumiverb.capture_time/resume", {"scope": "work"})
     _post(lib, "/v1/libraries/scans/pause", {"library_ids": [library_id]})
     try:  # only a scan makes previews
-        assert _work(lib) == {video: (["probe", "capture", "analysis_proxy"], [])}
+        assert _work(lib) == {video: (["lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy"], [])}
     finally:
         _post(lib, "/v1/libraries/scans/resume", {"library_ids": [library_id]})
     _post(lib, "/v1/producers/all/pause", {"scope": "work"})
@@ -262,18 +263,17 @@ def test_each_producers_work_is_what_the_scheduler_is_handed(env):
     _probed(lib, probed, sha)
     remade, _ = _all_made(lib, "e.mov")
     _all_made(lib, "f.mov")
-    _set(lib, "analysis_proxy", quality="good")
+    _set(lib, "lumiverb.video.analysis_proxy", quality="good")
     try:
         listed = _work(lib)
-        for artifact in ("probe", "capture", "analysis_proxy"):
-            kind = PRODUCERS[artifact].kind
-            handed = {c["asset_id"] for c in due(tenant_url, kind, [library_id])}
+        for artifact in ("lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy"):
+            handed = {c["asset_id"] for c in due(tenant_url, artifact, [library_id])}
             assert handed == {a for a, (work, _) in listed.items() if artifact in work}, artifact
-            again = {c["asset_id"] for c in due(tenant_url, f"redo_{kind}", [library_id])}
+            again = {c["asset_id"] for c in due(tenant_url, remakes_of(artifact), [library_id])}
             assert again == {a for a, (_, remakes) in listed.items() if artifact in remakes}, artifact
-        assert listed[remade][1] == ["analysis_proxy"]
+        assert listed[remade][1] == ["lumiverb.video.analysis_proxy"]
     finally:
-        _set(lib, "analysis_proxy", quality=None)
+        _set(lib, "lumiverb.video.analysis_proxy", quality=None)
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ def test_the_list_comes_a_page_at_a_time_oldest_first(env):
     assert [c["asset_id"] for c in first["clips"]] == sorted(clips)[:2] and first["next_cursor"] == sorted(clips)[1]
     assert first["clips"][0] | {"asset_id": None} == {
         "asset_id": None, "rel_path": first["clips"][0]["rel_path"], "media_type": "image", "file_size": 1000,
-        "content_hash": first["clips"][0]["content_hash"], "work": ["capture"], "remakes": []}
+        "content_hash": first["clips"][0]["content_hash"], "work": ["lumiverb.capture_time"], "remakes": []}
     assert list(_work(lib, limit=2)) == sorted(clips)
 
 

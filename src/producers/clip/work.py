@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 
 from src.producers.clip import CLIP_MODEL_ID, PROXY_CACHE_EDGE
+from src.producers.names import LIKENESS
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class Clip(Work):
     """A photo's vector by whichever of the CLIP job's machines is free (ADR-022): the
     built-in one (this machine's CLIP, as embed() above) or a Lumiverb AI worker."""
 
-    artifact = "clip"
+    artifact = LIKENESS
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

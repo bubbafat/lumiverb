@@ -24,24 +24,24 @@ def test_the_workers_constants_are_the_registrys_settings():
     from src.processing.workers.embeddings import clip_provider
     from src.processing.workers.faces import insightface_provider as face
 
-    proxy = P.effective_settings("proxy")  # its quality notch at its default, better: what it stands for
+    proxy = P.effective_settings("lumiverb.preview")  # its quality notch at its default, better: what it stands for
     assert (proxy_gen.PROXY_LONG_EDGE, proxy_gen.PROXY_JPEG_QUALITY) == (proxy["long_edge"], proxy["jpeg_quality"])
-    assert AnalysisProxySettings().output() == P.effective_settings("analysis_proxy")  # better: CRF 28
+    assert AnalysisProxySettings().output() == P.effective_settings("lumiverb.video.analysis_proxy")  # better: CRF 28
     # Scenes have one setting, Detail, out of the hash: what they're found with is fixed in code.
     from src.producers.scenes import detail as scene_detail
 
-    assert P.PRODUCERS["scenes"].defaults == {}
+    assert P.PRODUCERS["lumiverb.video.scenes"].defaults == {}
     assert video_scanner.OUT_WIDTH == scene_detail.FRAME_WIDTH
     assert scene_segmenter.HASH_SIZE == scene_detail.HASH_SIZE == 16
     assert "select='eq(pict_type\\\\,I)'" in inspect.getsource(video_scanner)  # keyframes only
-    faces = P.PRODUCERS["faces"].defaults
+    faces = P.PRODUCERS["lumiverb.image.faces"].defaults
     assert face.MODEL_VERSION == faces["model"]
     # The rest of what faces are found with is the level's (Normal's are the provider's defaults).
     from src.producers.faces.levels import GATES
 
     assert face.FaceSettings().__dict__ == {"det_size": faces["det_size"], "max_detect_edge": face.MAX_DETECT_EDGE,
                                            **GATES["normal"]}
-    clip = P.PRODUCERS["clip"].defaults
+    clip = P.PRODUCERS["lumiverb.image.likeness"].defaults
     assert clip_provider.MODEL_VERSION == f"{clip['model']}-{clip['pretrained']}"
     from src.processing.proxy import proxy_cache
     from src.producers.clip import PROXY_CACHE_EDGE
@@ -58,14 +58,14 @@ def test_the_previews_settings_are_what_the_scan_renders():
     from src.processing import ingest
 
     source = inspect.getsource(ingest._generate_video_preview)
-    preview = P.effective_settings("video_preview")
+    preview = P.effective_settings("lumiverb.video.preview")
     assert f"PREVIEW_DURATION_SEC = {preview['seconds']}" in source
     assert f"PREVIEW_MAX_HEIGHT = {preview['max_height']}" in source
     # Its quality is the account's notch (scan.Previews); its default, better's CRF.
     assert '"-crf", str(crf)' in source
     assert inspect.signature(ingest._generate_video_preview).parameters["crf"].default == preview["crf"]
     assert f'"-b:a", "{preview["audio_kbps"]}k"' in source
-    proxy = P.effective_settings("proxy")
+    proxy = P.effective_settings("lumiverb.preview")
     assert ingest.PROXY_WEBP_QUALITY == proxy["webp_quality"]
     from src.server import preview_image
     from src.server.api.routers import ingest as server_ingest
@@ -88,11 +88,11 @@ def _client(settings: dict | None = None, fails: bool = False) -> MagicMock:
 def test_it_uses_the_servers_settings_and_says_so():
     from src.processing.producer_settings import ProducerSettings
 
-    ps = ProducerSettings(_client({"transcript": {"model": "medium"}}))
-    assert ps.settings("transcript")["model"] == "medium"
-    lin = ps.lineage("transcript", "sha256:" + "ab" * 32)
+    ps = ProducerSettings(_client({"lumiverb.video.transcript": {"model": "medium"}}))
+    assert ps.settings("lumiverb.video.transcript")["model"] == "medium"
+    lin = ps.lineage("lumiverb.video.transcript", "sha256:" + "ab" * 32)
     assert lin == {"producer": "lumiverb.video.transcript", "version": "1",
-                   "settings_hash": P.settings_hash({**P.effective_settings("transcript"), "model": "medium"}),
+                   "settings_hash": P.settings_hash({**P.effective_settings("lumiverb.video.transcript"), "model": "medium"}),
                    "source_hash": "sha256:" + "ab" * 32}
 
 
@@ -100,16 +100,16 @@ def test_an_older_server_means_the_registrys_settings():
     from src.processing.producer_settings import ProducerSettings
 
     ps = ProducerSettings(_client(fails=True))
-    assert ps.settings("transcript") == P.effective_settings("transcript")
+    assert ps.settings("lumiverb.video.transcript") == P.effective_settings("lumiverb.video.transcript")
 
 
 def test_settings_actually_used_are_what_lineage_hashes():
     from src.processing.producer_settings import ProducerSettings
 
     ps = ProducerSettings(_client())
-    used = {**ps.settings("clip"), "input_edge": 2048}
-    assert ps.lineage("clip", None, used=used)["settings_hash"] == P.settings_hash(used)
-    assert ps.lineage("clip", None, used=used)["settings_hash"] != ps.lineage("clip", None)["settings_hash"]
+    used = {**ps.settings("lumiverb.image.likeness"), "input_edge": 2048}
+    assert ps.lineage("lumiverb.image.likeness", None, used=used)["settings_hash"] == P.settings_hash(used)
+    assert ps.lineage("lumiverb.image.likeness", None, used=used)["settings_hash"] != ps.lineage("lumiverb.image.likeness", None)["settings_hash"]
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +148,8 @@ def test_a_scanned_image_says_how_its_proxy_was_made(tmp_path):
     [call] = [c for c in args["client"].post.call_args_list if c.args[0] == "/v1/ingest"]
     # Each by its name (ADR-024 phase 1 part 2: a server takes them from part 1), the preview too.
     assert json.loads(call.kwargs["data"]["lineage"]) == {
-        "lumiverb.preview": P.lineage("proxy", P.effective_settings("proxy"), SHA),
-        "lumiverb.capture_time": P.lineage("capture", {}, SHA)}
+        "lumiverb.preview": P.lineage("lumiverb.preview", P.effective_settings("lumiverb.preview"), SHA),
+        "lumiverb.capture_time": P.lineage("lumiverb.capture_time", {}, SHA)}
     assert set(call.kwargs["files"]) == {"lumiverb.preview"}
 
 
@@ -172,11 +172,11 @@ def test_a_scanned_video_says_how_its_proxy_probe_and_preview_were_made(tmp_path
         scan._scan_one_video(**args)
     posts = {c.args[0]: c for c in args["client"].post.call_args_list}
     assert json.loads(posts["/v1/ingest"].kwargs["data"]["lineage"]) == {
-        "lumiverb.preview": P.lineage("proxy", P.effective_settings("proxy"), SHA),
-        "lumiverb.capture_time": P.lineage("capture", {}, SHA),
-        "lumiverb.video.format": P.lineage("probe", {}, SHA)}
+        "lumiverb.preview": P.lineage("lumiverb.preview", P.effective_settings("lumiverb.preview"), SHA),
+        "lumiverb.capture_time": P.lineage("lumiverb.capture_time", {}, SHA),
+        "lumiverb.video.format": P.lineage("lumiverb.video.format", {}, SHA)}
     assert json.loads(posts["/v1/assets/ast_a/artifacts/lumiverb.video.preview"].kwargs["data"]["lineage"]) == P.lineage(
-        "video_preview", P.effective_settings("video_preview"), SHA)
+        "lumiverb.video.preview", P.effective_settings("lumiverb.video.preview"), SHA)
 
 
 def test_a_failed_probe_isnt_claimed(tmp_path):
@@ -205,17 +205,17 @@ def test_a_refresh_swaps_the_settings_in_at_once_and_keeps_them_when_the_server_
 
     from src.processing.producer_settings import ProducerSettings
 
-    client = _client({"vision": {"model": "custom", "max_edge": 999}})
+    client = _client({"lumiverb.image.description": {"model": "custom", "max_edge": 999}})
     producers = ProducerSettings(client)
-    assert producers.settings("vision")["max_edge"] == 999
+    assert producers.settings("lumiverb.image.description")["max_edge"] == 999
     seen: list[int] = []
     answered = threading.Event()
 
     def slow_get(*args, **kwargs):
-        seen.append(producers.settings("vision")["max_edge"])  # what a job reads meanwhile
+        seen.append(producers.settings("lumiverb.image.description")["max_edge"])  # what a job reads meanwhile
         answered.set()
         raise ConnectionError("the API is restarting")
 
     client.get.side_effect = slow_get
     assert producers.refresh() is False
-    assert seen == [999] and producers.settings("vision")["max_edge"] == 999
+    assert seen == [999] and producers.settings("lumiverb.image.description")["max_edge"] == 999

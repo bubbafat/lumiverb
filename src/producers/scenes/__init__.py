@@ -25,7 +25,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ANALYSIS_PROXY, names.METADATA),
-    artifact="scenes", producer="scene-detect", version="4", media=VIDEO, unit="second", title="Scenes", order=50,
+    artifact=names.SCENES, version="4", media=VIDEO, unit="second", title="Scenes", order=50,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.video_indexed",
@@ -35,8 +35,8 @@ PRODUCER = ProducerSpec(
         Setting("detail", DEFAULT, "Detail", kind="level", choices=DETAILS, remakes=False),
     ),
     # Found again, a clip's scenes are new ones: their descriptions go with the old.
-    redo_also=("scene_vision",),
+    redo_also=(names.SCENE_DESCRIPTIONS,),
     redo_on_source_change=False,
-    part_of="scene_vision",
-    kind="scenes", flag="missing_video_scenes", run="src.producers.scenes.work:Scenes", pool=SCENES,
+    part_of=names.SCENE_DESCRIPTIONS,
+    run="src.producers.scenes.work:Scenes", pool=SCENES,
 )

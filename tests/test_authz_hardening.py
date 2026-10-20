@@ -300,7 +300,7 @@ def test_long_password_new_user_is_a_400(public_lib_client):
 def test_editors_cant_report_for_the_scheduler(public_lib_client, located):
     client, api_key, _, _ = public_lib_client
     _, ed = _user(client, _bearer(api_key), "sched@example.com", "editor")
-    failures = {"items": [{"asset_id": located, "artifact": "proxy", "error": "x"}]}
+    failures = {"items": [{"asset_id": located, "artifact": "lumiverb.preview", "error": "x"}]}
     assert client.post("/v1/producers/failures", json=failures, headers=ed).status_code == 403
     assert client.post("/v1/ai/machines/mch_any/status", json={"online": False}, headers=ed).status_code == 403
 

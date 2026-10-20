@@ -27,6 +27,7 @@ import {
 } from "../../api/client";
 import { WAIT_SENTENCES, waitIsLoud, waitSentence, type WaitContext } from "../../lib/waits";
 import { readerLine } from "../../lib/readers";
+import { FACES, LOCATION_GUESS } from "../../lib/names";
 
 const linkClass = "text-sm text-indigo-300 hover:text-indigo-200 disabled:opacity-50";
 const inputClass =
@@ -284,7 +285,7 @@ function ProducerRow({
           {producer.plugin.on === false ? ": off, so nothing is made. Turn it on in Settings › Plug-ins." : "."}
         </p>
       )}
-      {producer.artifact === "location" && (
+      {producer.artifact === LOCATION_GUESS && (
         <p className="text-xs text-gray-500">Only in the libraries where Infer location is on, in each library&apos;s settings.</p>
       )}
       {!producer.scheduled && scansPaused && <p className="text-sm text-amber-300">Paused with scans</p>}
@@ -421,28 +422,30 @@ function WaitLine({ wait, say }: { wait: ProducerWait; say: WaitContext }) {
   );
 }
 
-// Each of the scheduler's kinds (src/server/scheduler/kinds.py), held to them by tests/test_data_names.py.
+// Each of the scheduler's kinds (src/server/scheduler/kinds.py), held to them by tests/test_data_names.py: a
+// producer's is its name (ADR-024), its remakes' redo:<name>; the scan's is scan.
 const KIND_LABELS: Record<string, [string, string]> = {
   scan: ["scan", "scans"],
-  probe: ["video probe", "video probes"],
-  render: ["analysis copy", "analysis copies"],
-  clip: ["CLIP embedding", "CLIP embeddings"],
-  vision: ["description", "descriptions"],
-  ocr: ["text read", "texts read"],
-  scene_vision: ["scene description", "scene descriptions"],
-  faces: ["face batch", "face batches"],
-  transcript: ["transcript", "transcripts"],
-  scenes: ["scene detection", "scene detections"],
-  capture: ["capture time read", "capture times read"],
-  location: ["location guess", "location guesses"],
-  video_faces: ["video's faces", "videos' faces"],
+  "lumiverb.video.format": ["video probe", "video probes"],
+  "lumiverb.video.analysis_proxy": ["analysis copy", "analysis copies"],
+  "lumiverb.image.likeness": ["CLIP embedding", "CLIP embeddings"],
+  "lumiverb.image.description": ["description", "descriptions"],
+  "lumiverb.image.text": ["text read", "texts read"],
+  "lumiverb.video.scene_descriptions": ["scene description", "scene descriptions"],
+  "lumiverb.image.faces": ["face batch", "face batches"],
+  "lumiverb.video.transcript": ["transcript", "transcripts"],
+  "lumiverb.video.scenes": ["scene detection", "scene detections"],
+  "lumiverb.capture_time": ["capture time read", "capture times read"],
+  "lumiverb.location.guess": ["location guess", "location guesses"],
+  "lumiverb.video.faces": ["video's faces", "videos' faces"],
 };
+const REDO = "redo:";
 
 /** "2 descriptions", "1 redo of transcripts". */
 export function kindCount(kind: string, count: number): string {
-  if (kind.startsWith("redo_")) {
-    const base = KIND_LABELS[kind.slice(5)]?.[1] ?? kind.slice(5);
-    return `${n(count)} redo${count === 1 ? "" : "s"} of ${base}`;
+  if (kind.startsWith(REDO)) {
+    const name = kind.slice(REDO.length);
+    return `${n(count)} redo${count === 1 ? "" : "s"} of ${KIND_LABELS[name]?.[1] ?? name}`;
   }
   const [one, many] = KIND_LABELS[kind] ?? [kind, kind];
   return `${n(count)} ${count === 1 ? one : many}`;
@@ -450,7 +453,8 @@ export function kindCount(kind: string, count: number): string {
 
 /** One job of a kind: "analysis copy", "redo of transcripts". */
 function jobLabel(kind: string): string {
-  if (kind.startsWith("redo_")) return `redo of ${KIND_LABELS[kind.slice(5)]?.[1] ?? kind.slice(5)}`;
+  const name = kind.slice(REDO.length);
+  if (kind.startsWith(REDO)) return `redo of ${KIND_LABELS[name]?.[1] ?? name}`;
   return KIND_LABELS[kind]?.[0] ?? kind;
 }
 
@@ -988,10 +992,10 @@ function SettingsForm({ producer, fields }: { producer: Producer; fields: Settin
             : `New files get these settings; the ${done.toLocaleString()} ${done === 1 ? "clip" : "clips"} already made stay as ${done === 1 ? "it is" : "they are"}.`}
         </p>
       )}
-      {changed.length > 0 && !remade && producer.artifact === "faces" && (
+      {changed.length > 0 && !remade && producer.artifact === FACES && (
         <p className="text-gray-400">Face groups are worked out again; no face is found again.</p>
       )}
-      {changed.length > 0 && !remade && producer.artifact === "location" && (
+      {changed.length > 0 && !remade && producer.artifact === LOCATION_GUESS && (
         <p className="text-gray-400">Guesses are checked again.</p>
       )}
       {problem && (

@@ -32,6 +32,7 @@ from datetime import datetime
 from typing import Any
 
 from src.processing.originals import Originals
+from src.producers.names import DESCRIPTION, TEXT
 from src.server.scheduler.kinds import SCAN_EVERY_SEC
 from src.server.scheduler.scans import ScanState
 
@@ -348,8 +349,8 @@ class Account:
         """Describes and reads images on whichever vision machine is free, and the model."""
         vision = self.guards["vision"]
         model = vision.model
-        vision_settings = self.producers.with_model("vision", model)
-        ocr_settings = self.producers.with_model("ocr", model)
+        vision_settings = self.producers.with_model(DESCRIPTION, model)
+        ocr_settings = self.producers.with_model(TEXT, model)
         key = (model, repr(sorted(vision_settings.items())), repr(sorted(ocr_settings.items())))
         with self._lock:
             if self._vision_provider is None or self._vision_provider[0] != key:

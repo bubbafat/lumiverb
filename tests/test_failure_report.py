@@ -30,7 +30,7 @@ def test_failures_go_in_batches():
     client = MagicMock()
     report = FailureReport(client)
     for i in range(501):
-        report.add("vision", f"ast_{i}", "timed out")
+        report.add("lumiverb.image.description", f"ast_{i}", "timed out")
     report.flush()
     sizes = [len(c.kwargs["json"]["items"]) for c in client.post.call_args_list]
     assert sizes == [500, 1]
@@ -39,8 +39,8 @@ def test_failures_go_in_batches():
 def test_an_error_is_kept_short_and_never_empty():
     client = MagicMock()
     report = FailureReport(client)
-    report.add("vision", "ast_a", "x" * 5000)
-    report.add("vision", "ast_b", TimeoutError())
+    report.add("lumiverb.image.description", "ast_a", "x" * 5000)
+    report.add("lumiverb.image.description", "ast_b", TimeoutError())
     report.flush()
     a, b = client.post.call_args.kwargs["json"]["items"]
     assert len(a["error"]) == 2000 and b["error"] == "TimeoutError"
@@ -55,10 +55,10 @@ def test_a_report_that_cant_be_sent_doesnt_stop_the_work_and_is_sent_later():
     client = MagicMock()
     client.post.side_effect = httpx.ConnectError("connection reset")
     report = FailureReport(client)
-    report.add("vision", "ast_a", "x")
+    report.add("lumiverb.image.description", "ast_a", "x")
     report.flush()  # no raise
     assert report.pending() == 1
-    report.add("vision", "ast_b", "x")
+    report.add("lumiverb.image.description", "ast_b", "x")
     client.post.side_effect = None
     client.post.reset_mock()
     report.flush()
@@ -72,7 +72,7 @@ def test_a_server_404_keeps_the_report_too():
     client = MagicMock()
     client.post.side_effect = LumiverbAPIError("not_found", "Not Found", 404)
     report = FailureReport(client)
-    report.add("vision", "ast_a", "x")
+    report.add("lumiverb.image.description", "ast_a", "x")
     report.flush()
     report.flush()
     assert client.post.call_count == 2 and report.pending() == 1
@@ -90,7 +90,7 @@ def test_one_item_the_server_refuses_doesnt_sink_its_batch():
     client.post.side_effect = post
     report = FailureReport(client)
     for asset_id in ("ast_1", "ast_2", "ast_bad", "ast_3", "ast_4"):
-        report.add("vision", asset_id, "x")
+        report.add("lumiverb.image.description", asset_id, "x")
     report.flush()
     accepted = [i["asset_id"] for c in client.post.call_args_list for i in c.kwargs["json"]["items"]
                 if "ast_bad" not in [j["asset_id"] for j in c.kwargs["json"]["items"]]]
@@ -102,8 +102,8 @@ def test_what_the_server_cant_take_isnt_reported():
     client = MagicMock()
     report = FailureReport(client)
     report.add("no_such_artifact", "ast_a", "x")
-    report.add("vision", "a" * 65, "x")
-    report.add("vision", "ast_b", "nul\x00inside")
+    report.add("lumiverb.image.description", "a" * 65, "x")
+    report.add("lumiverb.image.description", "ast_b", "nul\x00inside")
     report.add("lumiverb.image.text", "ast_c", "unreadable")  # by its name too
     report.flush()
     # Sent by the name of what it makes (ADR-024 phase 1 part 2: a server takes it from part 1).
@@ -120,7 +120,7 @@ def test_unsent_reports_are_kept_up_to_a_limit(monkeypatch: pytest.MonkeyPatch):
     client.post.side_effect = httpx.ConnectError("down")
     report = FailureReport(client)
     for i in range(5):
-        report.add("vision", f"ast_{i}", "x")
+        report.add("lumiverb.image.description", f"ast_{i}", "x")
     report.flush()
     assert report.pending() == 3
     client.post.side_effect = None
@@ -137,11 +137,11 @@ def test_unsent_reports_are_kept_up_to_a_limit(monkeypatch: pytest.MonkeyPatch):
 def test_it_says_which_of_a_jobs_clips_it_charged_since_the_job_began() -> None:
     clock = [100.0]
     report = FailureReport(MagicMock(), clock=lambda: clock[0])
-    report.add("scenes", "old", "before the job")
+    report.add("lumiverb.video.scenes", "old", "before the job")
     clock[0] = 200.0
-    report.add("scenes", "a", "bad file")
-    report.add("vision", "b", "another artifact")
-    assert report.charged("scenes", ["a", "b", "old", "c"], since=150.0) == {"a"}
+    report.add("lumiverb.video.scenes", "a", "bad file")
+    report.add("lumiverb.image.description", "b", "another artifact")
+    assert report.charged("lumiverb.video.scenes", ["a", "b", "old", "c"], since=150.0) == {"a"}
 
 
 def test_one_item_that_keeps_failing_otherwise_doesnt_block_the_rest_for_long():
@@ -159,7 +159,7 @@ def test_one_item_that_keeps_failing_otherwise_doesnt_block_the_rest_for_long():
     client.post.side_effect = post
     report = FailureReport(client)
     for asset_id in ("ast_bad", "ast_1", "ast_2"):
-        report.add("vision", asset_id, "x")
+        report.add("lumiverb.image.description", asset_id, "x")
     for _ in range(failure_report.SINGLE_TRIES):
         report.flush()
     accepted = {i["asset_id"] for c in client.post.call_args_list for i in c.kwargs["json"]["items"]
@@ -172,7 +172,7 @@ def test_an_error_that_isnt_utf_8_is_made_sendable():
 
     client = MagicMock()
     report = FailureReport(client)
-    report.add("probe", "ast_a", "ffprobe: /mnt/caf\udce9.mov: Invalid data")
+    report.add("lumiverb.video.format", "ast_a", "ffprobe: /mnt/caf\udce9.mov: Invalid data")
     report.flush()
     (item,) = client.post.call_args.kwargs["json"]["items"]
     json.dumps(item).encode("utf-8")  # no lone surrogate left

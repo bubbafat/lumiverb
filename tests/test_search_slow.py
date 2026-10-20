@@ -105,7 +105,7 @@ def _described(auth_client: _AuthClient, tenant_url: str, library_id: str, descr
 def _describe(auth_client: _AuthClient, asset_id: str, description: str, tag: str, model_id: str) -> None:
     r = saved(auth_client, "vision", asset_id, json={
         "model_id": model_id, "model_version": "2", "description": description, "tags": [tag],
-        "lineage": made("vision")})
+        "lineage": made("lumiverb.image.description")})
     assert r.status_code == 200, r.text
 
 

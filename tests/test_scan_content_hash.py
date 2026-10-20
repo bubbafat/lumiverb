@@ -324,7 +324,7 @@ def test_work_handed_out_before_the_swap_is_of_this_content(env, api, lib):
     whole_hash = _hashed_before_fp1(env, clip["asset_id"], path)
     _scan(api, lib)  # swapped
 
-    r = saved(client, "ocr", clip["asset_id"], json={"ocr_text": "", "lineage": made("ocr", whole_hash)},
+    r = saved(client, "ocr", clip["asset_id"], json={"ocr_text": "", "lineage": made("lumiverb.image.text", whole_hash)},
               headers=headers)
     assert r.status_code == 200, r.text
     assert _sources(env, clip["asset_id"]) == {content_hash(path)}
@@ -333,10 +333,10 @@ def test_work_handed_out_before_the_swap_is_of_this_content(env, api, lib):
     small = _image(lib, "small.png", 3)
     _scan(api, lib)
     other = _in_sight(env, lib)["small.png"]
-    r = saved(client, "ocr", other["asset_id"], json={"ocr_text": "", "lineage": made("ocr", whole_hash)},
+    r = saved(client, "ocr", other["asset_id"], json={"ocr_text": "", "lineage": made("lumiverb.image.text", whole_hash)},
               headers=headers)
     assert r.status_code == 200, r.text
     with _db(env) as session:
         source = session.execute(text("SELECT source_hash FROM artifact_lineage WHERE asset_id = :a"
-                                      " AND artifact = 'ocr'"), {"a": other["asset_id"]}).scalar_one()
+                                      " AND artifact = 'lumiverb.image.text'"), {"a": other["asset_id"]}).scalar_one()
     assert source == whole_hash and other["content_hash"] == whole_file_sha256(small)

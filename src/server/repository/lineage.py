@@ -39,13 +39,12 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
-from src.producers import ADDED_PREFIX
-from src.producers.names import producer_in
+from src.producers.names import producer_in, sql_spelling
 from src.producers.live import LiveMap, LiveSet, Made
 from src.shared.content_hash import FP1, FULL_UP_TO, SHA256
 from src.shared.producers import (
     MADE_AT_SCAN,
-    MISSING_FLAGS,
+    SCHEDULED,
     PERSON,
     PRODUCERS,
     UNKNOWN,
@@ -98,7 +97,7 @@ def overrides(session: Session, artifact: str) -> dict[str, Any]:
     """The producer's settings an admin changed. An installed plug-in's work's are its settings the account
     chose (Settings › Plug-ins, plugin_settings): those that remake are what its lineage holds."""
     p = PRODUCERS.get(artifact)
-    if p is not None and p.plugin and artifact.startswith(ADDED_PREFIX):
+    if p is not None and p.plugin:
         from src.server.plugin_settings import ACCOUNT, PluginSettingsRepository
 
         return PluginSettingsRepository(session, ACCOUNT).get(p.plugin)
@@ -134,7 +133,7 @@ def desired(session: Session, artifact: str, job_models: Mapping[str, str] | Non
     p = PRODUCERS[artifact]
     changed = overrides(session, artifact)
     settings = effective_settings(artifact, changed, account_settings(session, job_models))
-    return {"producer": p.producer, "version": p.version, "settings": settings,
+    return {"producer": p.artifact, "version": p.version, "settings": settings,
             "settings_hash": settings_hash(settings), "level": level_of(artifact, uses(session, artifact)),
             "notches": notches(artifact, changed)}
 
@@ -149,10 +148,10 @@ def _stale_sql() -> str:
 
 def _lineage_cols() -> str:
     cols = []
-    for artifact in (*MISSING_FLAGS.values(), *MADE_AT_SCAN):
+    for artifact in (*SCHEDULED, *MADE_AT_SCAN):
         cols.append(f"max(l.source_hash) FILTER (WHERE l.artifact = '{artifact}'"
-                    f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{artifact}")
-        cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{artifact}")
+                    f" AND l.producer NOT IN ('', '{PERSON}')) AS src_{sql_spelling(artifact)}")
+        cols.append(f"bool_or(l.artifact = '{artifact}' AND l.retry_at > now()) AS wait_{sql_spelling(artifact)}")
     return ", ".join(cols)
 
 
@@ -180,13 +179,13 @@ def source_changed(artifact: str) -> str:
     changed: it's stale, waiting for approval like any other)."""
     if artifact in NOT_REDONE_ON_SOURCE_CHANGE:
         return "false"
-    return (f"(a.content_hash IS NOT NULL AND la.src_{artifact} IS NOT NULL"
-            f" AND la.src_{artifact} <> a.content_hash)")
+    return (f"(a.content_hash IS NOT NULL AND la.src_{sql_spelling(artifact)} IS NOT NULL"
+            f" AND la.src_{sql_spelling(artifact)} <> a.content_hash)")
 
 
 def waiting(artifact: str) -> str:
     """The last try failed and its turn hasn't come."""
-    return f"COALESCE(la.wait_{artifact}, false)"
+    return f"COALESCE(la.wait_{sql_spelling(artifact)}, false)"
 
 
 def outstanding(artifact: str) -> str:
@@ -389,7 +388,7 @@ def redoable(artifact: str) -> bool:
     """Made again in place when made another way than now: what the
     scheduler makes (its redo kind), or a scan (MADE_AT_SCAN: the plan's
     remake, src/server/scans.py), unless it can't be yet (cant_redo)."""
-    return (artifact in MISSING_FLAGS.values() or artifact in MADE_AT_SCAN) and artifact not in CANT_REDO
+    return (artifact in SCHEDULED or artifact in MADE_AT_SCAN) and artifact not in CANT_REDO
 
 
 # A lineage row l names the file it was made from, or the clip a's file isn't
@@ -410,13 +409,13 @@ def redo_due(artifact: str) -> str:
             f" AND NOT {waiting(artifact)} AND NOT ({RECHECK[artifact]})"
             f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id"
             f"   AND l.artifact = '{artifact}' AND (l.producer = :person"
-            f"     OR (l.producer = :p_{artifact} AND l.producer_version = :v_{artifact}"
-            f"         AND l.settings_hash = :h_{artifact} AND {NAMES_ITS_FILE}))))")
+            f"     OR (l.producer = :p_{sql_spelling(artifact)} AND l.producer_version = :v_{sql_spelling(artifact)}"
+            f"         AND l.settings_hash = :h_{sql_spelling(artifact)} AND {NAMES_ITS_FILE}))))")
 
 
 def redo_params(artifact: str, want: dict[str, Any]) -> dict[str, Any]:
-    return {"person": PERSON, f"p_{artifact}": want["producer"], f"v_{artifact}": want["version"],
-            f"h_{artifact}": want["settings_hash"]}
+    return {"person": PERSON, f"p_{sql_spelling(artifact)}": want["producer"], f"v_{sql_spelling(artifact)}": want["version"],
+            f"h_{sql_spelling(artifact)}": want["settings_hash"]}
 
 
 # A pause's scope: all of a switch's work (Scans, Upkeep or a producer's,
@@ -613,7 +612,7 @@ def _made_by_older_version(session: Session, artifact: str) -> bool:
     p = PRODUCERS[artifact]
     return session.execute(text(
         "SELECT 1 FROM artifact_lineage WHERE artifact = :a AND producer = :p AND producer_version <> :v LIMIT 1"
-    ), {"a": artifact, "p": p.producer, "v": p.version}).first() is not None
+    ), {"a": artifact, "p": p.artifact, "v": p.version}).first() is not None
 
 
 def upkeep_paused(session: Session) -> bool:
@@ -660,9 +659,9 @@ def record(session: Session, asset_id: str, artifact: str, lineage: dict[str, An
     handed out before the swap is still of this content.
     produced_at: when it was made, for one kept and shown again (now otherwise)."""
     lineage = lineage or {}
-    # Its producer by today's id or its name (ADR-024 phase 1): kept as today's until part 3.
+    # Its producer by its name (ADR-024), or the old id of the producer that makes it now (taken until part 5).
     producer = PERSON if person else producer_in(artifact, str(lineage.get("producer") or UNKNOWN))
-    if not person and producer != PRODUCERS[artifact].producer:
+    if not person and producer != artifact:
         # Another kind's producer can't make this one, and a client can't
         # claim a person made it: whatever it is, it isn't current.
         producer = UNKNOWN

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from src.producers.names import TEXT
 from src.producers.runner import Work
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ def read_text(*, asset_id: str, rel_path: str, ocr_provider, preview: Callable[[
 
 
 class Ocr(Work):
-    artifact = "ocr"
+    artifact = TEXT
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

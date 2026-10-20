@@ -42,7 +42,7 @@ from tests.test_plugin_runner import data as short_data  # noqa: F401 (a fixture
 from tests.test_server_admins import install  # noqa: F401 (a fixture)
 
 FACTS = Path(__file__).parent / "plugins" / "facts"
-ARTIFACT = "plugin_facts"
+ARTIFACT = "facts"  # a plug-in's work by its id (ADR-024)
 CREDIT = {"text": "Facts' places", "url": "https://example.org/facts",
           "license": {"text": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}}
 
@@ -245,10 +245,10 @@ def test_a_setting_that_remakes_asks_what_becomes_of_what_it_made(facts):
     row = _row(f)  # new ones only: what was made stays, its redo stopped by this person
     assert (row["redo_stopped"], row["counts"]["stale"]) == (True, 2)
     assert _set(f, {"word": "Spotted"}, redo=True).status_code == 200
-    assert _row(f)["redo_stopped"] is False and _due(f, f"redo_{ARTIFACT}") == [a, b]
-    _job(f, f"redo_{ARTIFACT}")
+    assert _row(f)["redo_stopped"] is False and _due(f, f"redo:{ARTIFACT}") == [a, b]
+    _job(f, f"redo:{ARTIFACT}")
     assert _outputs(f, a)["when"] == {"text": "Spotted 2024-05-01T12:00:00Z"}
-    assert _due(f, f"redo_{ARTIFACT}") == [] and _row(f)["counts"]["current"] == 2
+    assert _due(f, f"redo:{ARTIFACT}") == [] and _row(f)["counts"]["current"] == 2
     assert _set(f, {"behave": "html"}).status_code == 200, "a setting that doesn't remake asks nothing"
 
 
@@ -260,7 +260,7 @@ def test_its_api_hands_out_only_what_it_declares_and_keeps_only_what_is_checked(
     assert r.status_code == 200, r.text
     [(clip, given)] = r.json()["clips"].items()
     assert clip == a and set(given["inputs"]) == {"location", "capture_time", "metadata"} and given["inputs_hash"]
-    lineage = PRODUCERS[ARTIFACT].producer
+    lineage = PRODUCERS[ARTIFACT].artifact
 
     def save(items, made: dict | None = None):
         made = made if made is not None else {"producer": lineage, "version": "1", "settings_hash": "x"}

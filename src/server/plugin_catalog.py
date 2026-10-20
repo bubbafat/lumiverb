@@ -19,6 +19,7 @@ from typing import Any
 
 from src.plugins.contract import PluginSpec
 from src.plugins.manifest import Manifest, ManifestError, parse
+from src.producers.names import is_reserved
 from src.server.database import get_control_session
 from src.server.repository.installed_plugins import InstalledPluginRepository
 
@@ -45,9 +46,14 @@ class Entry:
     installed: Installed
 
 
+# Plug-ins left out for their id, said in this process's log (once each: at every start).
+_SAID: set[str] = set()
+
+
 def installed() -> dict[str, Installed]:
     """The installed plug-ins by id. One whose manifest this Lumiverb no longer reads (a later release
-    checks more) is left out, said in the log: installing it again says why."""
+    checks more) is left out, said in the log: installing it again says why. So is one installed before
+    ADR-024 with an id no plug-in may have now (left_out): it isn't run, and its work isn't a producer."""
     with get_control_session() as session:
         rows = InstalledPluginRepository(session).all()
     out: dict[str, Installed] = {}
@@ -57,8 +63,26 @@ def installed() -> dict[str, Installed]:
         except ManifestError as exc:
             logger.warning("Plug-in %s left out: its manifest isn't one this Lumiverb reads (%s)", row["plugin_id"], exc)
             continue
+        if is_reserved(row["plugin_id"]):
+            if row["plugin_id"] not in _SAID:
+                _SAID.add(row["plugin_id"])
+                logger.warning("Plug-in %s left out: %s", row["plugin_id"], left_out([row])[0]["why"])
+            continue
         out[row["plugin_id"]] = Installed(manifest, row["on_by_default"], row["acknowledged_version"],
                                           row["installed_at"], row["changed_at"])
+    return out
+
+
+def left_out(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Of the installed plug-ins' rows, those Lumiverb leaves out for their id (ADR-024 section 8): one
+    installed before part 1 with an id Lumiverb uses now. Each with what to do."""
+    out = []
+    for row in rows:
+        if is_reserved(row["plugin_id"]):
+            title = row["manifest"].get("title") or row["plugin_id"]
+            out.append({"plugin_id": row["plugin_id"], "title": title, "why": (
+                f"{title}'s id `{row['plugin_id']}` is one Lumiverb uses now: uninstall it, then install it under"
+                " another id")})
     return out
 
 

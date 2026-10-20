@@ -27,14 +27,14 @@ PRODUCER = ProducerSpec(
     # the file's GPS nor a person's location: from the clips taken around it.
     makes=MAKES, reads=(names.CAPTURE_TIME, names.LOCATION_GPS, names.LOCATION_PERSON),
     reads_others=(names.CAPTURE_TIME, names.LOCATION_GPS, names.LOCATION_PERSON),
-    artifact="location", producer="location", version="1", media=ALL, title="Location guesses", order=120,
+    artifact=names.LOCATION_GUESS, version="1", media=ALL, title="Location guesses", order=120,
     # No location from the file or a person, and a time to go by.
     applies=(f"{INFER_ON} AND a.taken_at IS NOT NULL AND (a.gps_lat IS NULL OR a.gps_lon IS NULL)"
              " AND NOT EXISTS (SELECT 1 FROM asset_location pl WHERE pl.asset_id = a.asset_id"
              " AND pl.source = 'person')"),
     # Tried: a guess, or nothing within the window (outcome empty).
     made=("EXISTS (SELECT 1 FROM artifact_lineage ll WHERE ll.asset_id = a.asset_id"
-          " AND ll.artifact = 'location' AND ll.producer = 'location')"),
+          f" AND ll.artifact = '{names.LOCATION_GUESS}' AND ll.producer = '{names.LOCATION_GUESS}')"),
     # A guess due to be checked again (a fix near it changed, came or went;
     # the window changed): kept meanwhile, and not missing.
     recheck=("EXISTS (SELECT 1 FROM asset_location rl WHERE rl.asset_id = a.asset_id"
@@ -48,6 +48,6 @@ PRODUCER = ProducerSpec(
     # Its own file changing changes nothing here; its capture time does (which remakes it).
     redo_on_source_change=False,
     regroup="src.server.repository.locations:window_changed",
-    kind="location", flag="missing_location", run="src.producers.location.work:Locate", tier=FIND, pool=CPU,
+    run="src.producers.location.work:Locate", tier=FIND, pool=CPU,
     batch=200,
 )

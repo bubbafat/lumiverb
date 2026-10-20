@@ -26,7 +26,7 @@ def _library(env, name: str) -> tuple:
 
 def _check_in(env, libraries: list[dict] | None = None, **body) -> dict:
     client, headers, *_ = env
-    r = client.post("/v1/readers/check-in", json={"client": "this server", "version": "0.1.test", "protocol": 1,
+    r = client.post("/v1/readers/check-in", json={"client": "this server", "version": "0.1.test", "protocol": 2,
                                                   "libraries": libraries or [], **body}, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()
@@ -85,7 +85,7 @@ def test_a_check_in_is_kept_and_answered_with_the_libraries_it_reads(env):
     _check_in(env, [{"library_id": a[2], "state": "idle"}])
     assert _listed(a)["checked_in"]["remakes_held"] is None
     client, headers, *_ = env
-    r = client.post("/v1/readers/check-in", json={"client": "x", "version": "1", "protocol": 1, "libraries": [
+    r = client.post("/v1/readers/check-in", json={"client": "x", "version": "1", "protocol": 2, "libraries": [
         {"library_id": a[2], "state": "idle", "remakes_held": "tired"}]}, headers=headers)
     assert r.status_code == 422, r.text
 
@@ -104,7 +104,7 @@ def test_only_an_admin_checks_in_as_this_server(env):
     from tests.test_archive_trash_safety import _key_with_role
 
     client, *_ = env
-    body = {"client": "x", "version": "1", "protocol": 1, "libraries": []}
+    body = {"client": "x", "version": "1", "protocol": 2, "libraries": []}
     for role in ("viewer", "editor"):
         assert client.post("/v1/readers/check-in", json=body, headers=_key_with_role(env, role)).status_code == 403
     assert client.post("/v1/readers/check-in", json={**body, "reader": "device:x"},
@@ -114,13 +114,12 @@ def test_only_an_admin_checks_in_as_this_server(env):
 
 
 @pytest.mark.slow
-def test_a_reader_too_old_is_told_so(env, monkeypatch):
-    from src.server import check_ins
-
+def test_a_reader_too_old_is_told_so(env):
+    # Protocol 1 sent today's ids (ADR-024 phase 1 part 3): a reader from before part 2 is told to update.
     client, headers, *_ = env
-    monkeypatch.setattr(check_ins, "OLDEST_PROTOCOL", 2)
     r = client.post("/v1/readers/check-in", json={"client": "x", "version": "1", "protocol": 1}, headers=headers)
     assert r.status_code == 426 and r.json()["error"]["code"] == "reader_too_old", r.text
+    assert r.json()["error"]["details"] == {"oldest_protocol": 2, "protocol": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -165,20 +164,20 @@ def test_the_mark_moves_with_what_the_reader_acts_on(env):
                                                      headers=headers), 204))
     moves("its scans resumed", lambda: ok(client.post("/v1/libraries/scans/resume", json={"library_ids": [library_id]},
                                                       headers=headers), 204))
-    moves("a producer paused", lambda: ok(client.post("/v1/producers/probe/pause", json={"scope": "work"},
+    moves("a producer paused", lambda: ok(client.post("/v1/producers/lumiverb.video.format/pause", json={"scope": "work"},
                                                       headers=headers), 204))
-    moves("a producer resumed", lambda: ok(client.post("/v1/producers/probe/resume", json={"scope": "work"},
+    moves("a producer resumed", lambda: ok(client.post("/v1/producers/lumiverb.video.format/resume", json={"scope": "work"},
                                                        headers=headers), 204))
 
     def settings(quality):
-        ok(client.put("/v1/producers/analysis_proxy/settings", json={"settings": {"quality": quality}, "redo": True},
+        ok(client.put("/v1/producers/lumiverb.video.analysis_proxy/settings", json={"settings": {"quality": quality}, "redo": True},
                       headers=headers))
 
     moves("what it makes is made another way", lambda: settings("good"))
     moves("and back", lambda: settings(None))
     moves("its root moved", lambda: ok(client.patch(f"/v1/libraries/{library_id}", json={"root_path": "/tmp/moved"},
                                                     headers=headers)))
-    ok(client.post("/v1/producers/failures", json={"items": [{"asset_id": clip, "artifact": "capture",
+    ok(client.post("/v1/producers/failures", json={"items": [{"asset_id": clip, "artifact": "lumiverb.capture_time",
                                                               "error": "exiftool couldn't read it"}]},
                    headers=headers))
     moves("failing clips asked to be tried again", lambda: ok(client.post("/v1/producers/failures/retry", json={"all": True},
@@ -223,12 +222,12 @@ def test_what_changed_is_everything_a_reader_acts_on(env):
                     headers=headers), 201)
     _ok(client.post(f"/v1/libraries/{library_id}/filters", json={"type": "include", "pattern": "Footage/**"},
                     headers=headers), 201)
-    _ok(client.post("/v1/producers/capture/pause", json={"scope": "work"}, headers=headers), 204)
+    _ok(client.post("/v1/producers/lumiverb.capture_time/pause", json={"scope": "work"}, headers=headers), 204)
     try:
         r = _ok(client.get(f"/v1/libraries/{library_id}/reader-changes", params={"since": 5}, headers=headers))
         mark = _mark(lib)
     finally:
-        _ok(client.post("/v1/producers/capture/resume", json={"scope": "work"}, headers=headers), 204)
+        _ok(client.post("/v1/producers/lumiverb.capture_time/resume", json={"scope": "work"}, headers=headers), 204)
     assert r["everything"] is True and r["mark"] == mark
     assert r["library"] == {"library_id": library_id, "name": "Changes", "root_path": "/tmp/Changes",
                             "reader": "server", "status": "active", "scans_paused": False, "scan_now": False}
@@ -236,12 +235,13 @@ def test_what_changed_is_everything_a_reader_acts_on(env):
     defaults = _ok(client.get("/v1/tenant/filter-defaults", headers=headers))
     assert r["filters"]["account"] == {"includes": sorted(d["pattern"] for d in defaults["includes"]),
                                        "excludes": sorted(d["pattern"] for d in defaults["excludes"])}
-    assert set(r["made_with"]) == {"proxy", "video_preview", "probe", "capture", "analysis_proxy"}
+    assert set(r["made_with"]) == {"lumiverb.preview", "lumiverb.video.preview", "lumiverb.video.format",
+                                   "lumiverb.capture_time", "lumiverb.video.analysis_proxy"}
     for artifact, made in r["made_with"].items():
         want = _want(lib, artifact, None)
         assert (made["producer"], made["version"], made["settings_hash"]) == (
             want["producer"], want["version"], want["settings_hash"]), artifact
-    assert r["paused"] == {"work": ["capture"], "remakes": []}
+    assert r["paused"] == {"work": ["lumiverb.capture_time"], "remakes": []}
     assert client.get("/v1/libraries/lib_nope/reader-changes", headers=headers).status_code == 404
 
 
@@ -264,12 +264,12 @@ def test_a_scan_takes_its_filters_and_how_it_makes_previews_from_what_changed(en
     account, library, previews = _told(Client(), lib[2])
     assert library == [PathFilter(type="exclude", pattern="**/Proxy/**")]
     assert all(isinstance(f, PathFilter) for f in account)
-    assert previews.video_preview == effective_settings("video_preview")
-    _ok(client.put("/v1/producers/video_preview/settings", json={"settings": {"quality": "best"}}, headers=headers))
+    assert previews.video_preview == effective_settings("lumiverb.video.preview")
+    _ok(client.put("/v1/producers/lumiverb.video.preview/settings", json={"settings": {"quality": "best"}}, headers=headers))
     try:
         assert _told(Client(), lib[2])[2].video_preview["crf"] == 23  # the account's notch
     finally:
-        _ok(client.put("/v1/producers/video_preview/settings", json={"settings": {"quality": None}}, headers=headers))
+        _ok(client.put("/v1/producers/lumiverb.video.preview/settings", json={"settings": {"quality": None}}, headers=headers))
 
 
 # ---------------------------------------------------------------------------

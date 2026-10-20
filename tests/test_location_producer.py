@@ -54,14 +54,15 @@ def _clip(env, lib: str, rel_path: str, when: str, *, offset: int | None = None,
         exif |= {"gps_lat": gps[0], "gps_lon": gps[1]}
     r = client.post("/v1/ingest", headers=headers, files={"proxy": ("p.jpg", buf, "image/jpeg")}, data={
         "library_id": lib, "rel_path": rel_path, "file_size": "10", "media_type": "image",
-        "lineage": json.dumps({"proxy": made("proxy"), "capture": made("capture")}), "exif": json.dumps(exif)})
+        "lineage": json.dumps({"lumiverb.preview": made("lumiverb.preview"),
+                                 "lumiverb.capture_time": made("lumiverb.capture_time")}), "exif": json.dumps(exif)})
     assert r.status_code == 200, r.text
     return r.json()["asset_id"]
 
 
 def _settings(env, *, minutes: int = 360) -> None:
     client, headers, *_ = env
-    r = client.put("/v1/producers/location/settings", headers=headers,
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", headers=headers,
                    json={"settings": {"inference_minutes": minutes}})
     assert r.status_code == 200, r.text
 
@@ -72,9 +73,9 @@ def _infer(env, lib: str, on: bool, **more):
 
 
 def _run(env, lib: str, only: list[str] | None = None):
-    items = [c for c in due(env[-1], "location", [lib]) if only is None or c["asset_id"] in only]
+    items = [c for c in due(env[-1], "lumiverb.location.guess", [lib]) if only is None or c["asset_id"] in only]
     acct = FakeAccount(scheduler_client(env[4]))
-    outcome = run_job(Locate, acct, env[4], "location", items)
+    outcome = run_job(Locate, acct, env[4], "lumiverb.location.guess", items)
     assert acct.failures.charged == [], acct.failures.charged
     return outcome, [c["asset_id"] for c in items]
 
@@ -95,13 +96,13 @@ def _location(env, asset_id: str) -> dict | None:
 
 
 def _lineage(env, asset_id: str) -> dict | None:
-    rows = _sql(env, "SELECT producer, outcome FROM artifact_lineage WHERE asset_id = :a AND artifact = 'location'",
+    rows = _sql(env, "SELECT producer, outcome FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.location.guess'",
                 a=asset_id)
     return rows[0] if rows else None
 
 
 def _due(env, lib: str) -> set[str]:
-    return {c["asset_id"] for c in due(env[-1], "location", [lib])}
+    return {c["asset_id"] for c in due(env[-1], "lumiverb.location.guess", [lib])}
 
 
 def _person(env, asset_ids: list[str], lat: float, lon: float, replace: str = "none"):
@@ -169,7 +170,7 @@ def test_camera_clips_are_placed_from_phone_photos_across_folders(env) -> None:
     assert loc["basis"]["summary"] == "From iPhone 15 Pro photos 14:00–15:00"
     nearest = _location(env, after)
     assert nearest["basis"]["method"] == "nearest" and nearest["radius_m"] == 100 + 8000
-    assert _location(env, far) is None and _lineage(env, far) == {"producer": "location", "outcome": "empty"}
+    assert _location(env, far) is None and _lineage(env, far) == {"producer": "lumiverb.location.guess", "outcome": "empty"}
     assert _due(env, lib) == set()
 
     client, headers, *_ = env
@@ -238,10 +239,10 @@ def test_a_persons_location_is_never_overwritten_and_is_a_fix(env) -> None:
     guess = {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}
     for asset_id in (placed, filed):
         r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": guess, "minutes": 360,
-                                                                          "lineage": made("location")}, headers=headers)
+                                                                          "lineage": made("lumiverb.location.guess")}, headers=headers)
         assert r.status_code == 200 and r.json() == {"result": "kept"}, r.text
         r = client.put(f"/v1/assets/locations/guess/{asset_id}", json={"guess": None, "minutes": 360,
-                                                                          "lineage": made("location")}, headers=headers)
+                                                                          "lineage": made("lumiverb.location.guess")}, headers=headers)
         assert r.json() == {"result": "kept"}
     assert _location(env, placed)["source"] == "person" and (_location(env, placed)["lat"]) == 1.0
     assert _lineage(env, placed)["producer"] == "person"
@@ -303,7 +304,7 @@ def _restore(env, asset_id: str) -> None:
 
 def _capture(env, asset_id: str, taken_at: str) -> None:
     client, headers, *_ = env
-    r = client.put(f"/v1/assets/{asset_id}/capture", json={"taken_at": taken_at, "lineage": made("capture")},
+    r = client.put(f"/v1/assets/{asset_id}/capture", json={"taken_at": taken_at, "lineage": made("lumiverb.capture_time")},
                    headers=headers)
     assert r.status_code == 200 and r.json() == {"changed": True}, r.text
 
@@ -380,7 +381,7 @@ def test_a_surer_new_fix_replaces_a_guess_and_a_less_sure_one_doesnt(env) -> Non
     assert _recheck(env, sure) == "new_fix" and _recheck(env, loose) == "new_fix"
     _run(env, lib)
     assert _location(env, sure) == before and _recheck(env, sure) is None and sure not in _due(env, lib)
-    assert _lineage(env, sure) == {"producer": "location", "outcome": "ok"}
+    assert _lineage(env, sure) == {"producer": "lumiverb.location.guess", "outcome": "ok"}
     assert _location(env, loose)["basis"]["fixes"] == [{"asset_id": b, "gap_min": 150.0}]
     assert _location(env, loose)["radius_m"] == 100 + 10_000
 
@@ -467,7 +468,7 @@ def test_a_new_window_checks_guesses_again_without_removing_them_first(env) -> N
     guessed_before = _sql(env, "SELECT count(*) AS n FROM asset_location WHERE source = 'time'")[0]["n"]
 
     # Wider: no question asked, nothing removed; checked again, and the clip where nothing was found is due.
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
     assert r.status_code == 200, r.text
     assert _sql(env, "SELECT count(*) AS n FROM asset_location WHERE source = 'time'")[0]["n"] == guessed_before
     assert _recheck(env, c) == "window_changed" and {c, early} <= _due(env, lib)
@@ -477,7 +478,7 @@ def test_a_new_window_checks_guesses_again_without_removing_them_first(env) -> N
 
     # Narrower, leaving b outside: replaced from a alone, less sure. early's only fix is outside: kept, marked.
     early_before = _location(env, early)
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 300}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 300}}, headers=headers)
     assert r.status_code == 200, r.text
     assert _recheck(env, c) == "outside_window" and _recheck(env, early) == "outside_window"
     _run(env, lib)
@@ -486,12 +487,12 @@ def test_a_new_window_checks_guesses_again_without_removing_them_first(env) -> N
     loc = _location(env, early)
     assert {k: loc[k] for k in ("lat", "lon", "radius_m")} == {k: early_before[k] for k in ("lat", "lon", "radius_m")}
     assert loc["basis"]["outside_window"] is True and _recheck(env, early) is None and early not in _due(env, lib)
-    assert _lineage(env, early) == {"producer": "location", "outcome": "ok"}
+    assert _lineage(env, early) == {"producer": "lumiverb.location.guess", "outcome": "ok"}
     assert _detail(env, early)["outside_window"] is True and _detail(env, early)["basis_gone"] is False
 
     # Narrower again, leaving a outside too: still kept, marked, never removed.
     kept = _location(env, c)
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
     assert r.status_code == 200, r.text
     _run(env, lib)
     loc = _location(env, c)
@@ -499,7 +500,7 @@ def test_a_new_window_checks_guesses_again_without_removing_them_first(env) -> N
     assert loc["basis"]["outside_window"] is True
 
     # Wider again: checked again, and the guesses made again (as sure or surer) clear the marks.
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 480}}, headers=headers)
     assert r.status_code == 200, r.text
     _run(env, lib)
     assert [f["asset_id"] for f in _location(env, c)["basis"]["fixes"]] == [a, b]
@@ -521,16 +522,16 @@ def test_a_fix_that_goes_between_working_out_a_guess_and_saving_it_makes_the_sav
 
     # A new fix near it: due. Worked out (from b), then b is trashed before the save.
     b = _clip(env, lib, "Phone/b.jpg", "2024-06-15T11:05:00", gps=(1.0, 1.001), device=PHONE)
-    [item] = [i for i in due(env[-1], "location", [lib]) if i["asset_id"] == c]
+    [item] = [i for i in due(env[-1], "lumiverb.location.guess", [lib]) if i["asset_id"] == c]
     acct = FakeAccount(scheduler_client(env[4]))
-    work = Locate(acct, Job(tenant_id=env[4], kind="location", tier=3, items=(item,)))
+    work = Locate(acct, Job(tenant_id=env[4], kind="lumiverb.location.guess", tier=3, items=(item,)))
     result = work.make(item)
     assert [f["asset_id"] for f in result["guess"]["basis"]["fixes"]] == [a, b]
     assert [f["asset_id"] for f in result["fixes"]] == [a, b]
     _trash(env, b)
     client = scheduler_client(env[4])
     r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": result["guess"], "minutes": 360,
-                                                            "fixes": result["fixes"], "lineage": made("location")})
+                                                            "fixes": result["fixes"], "lineage": made("lumiverb.location.guess")})
     assert r.json() == {"result": "stale"}
     assert _location(env, c) == guess and _recheck(env, c) == "new_fix" and c in _due(env, lib)  # nothing written
 
@@ -540,18 +541,18 @@ def test_a_fix_that_goes_between_working_out_a_guess_and_saving_it_makes_the_sav
         seen = [{"asset_id": a, "lat": 1.0, "lon": 1.0, "taken_at": "2024-06-15T10:00:00+00:00"}]
         guess_a = {**result["guess"], "basis": {"fixes": [{"asset_id": a, "gap_min": 60.0}]}}
         ok = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess_a, "minutes": 360,
-                                                                 "fixes": seen, "lineage": made("location")})
+                                                                 "fixes": seen, "lineage": made("lumiverb.location.guess")})
         assert ok.json()["result"] != "stale", ok.text
         _sql_exec(env, change, a=a)
         r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess_a, "minutes": 360,
-                                                                "fixes": seen, "lineage": made("location")})
+                                                                "fixes": seen, "lineage": made("lumiverb.location.guess")})
         assert r.json() == {"result": "stale"}, change
         _sql_exec(env, "UPDATE assets SET gps_lat = 1.0, taken_at = '2024-06-15T10:00:00+00:00' WHERE asset_id = :a",
                   a=a)
     # A guess naming a fix it doesn't say it saw is refused.
     api, headers, *_ = env
     r = api.put(f"/v1/assets/locations/guess/{c}", json={"guess": result["guess"], "minutes": 360,
-                                                         "lineage": made("location")}, headers=headers)
+                                                         "lineage": made("lumiverb.location.guess")}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "fixes_required"
 
 
@@ -566,11 +567,11 @@ def test_a_guess_being_checked_again_isnt_missing(env) -> None:
 
     def counts() -> dict:
         r = client.get("/v1/producers", params={"library_id": lib}, headers=headers)
-        return next(p["counts"] for p in r.json()["producers"] if p["artifact"] == "location")
+        return next(p["counts"] for p in r.json()["producers"] if p["artifact"] == "lumiverb.location.guess")
 
     def summary() -> int:
         r = client.get("/v1/assets/repair-summary", params={"library_id": lib}, headers=headers)
-        return r.json()["missing_location"]
+        return r.json()["missing"]["lumiverb.location.guess"]
 
     assert counts()["missing"] == 0 and counts()["rechecking"] == 0 and summary() == 0 and _due(env, lib) == set()
     _clip(env, lib, "Phone/b.jpg", "2024-06-15T11:05:00", gps=(1.0, 1.001), device=PHONE)
@@ -617,7 +618,7 @@ def test_nothing_else_checks_a_guess_again_and_a_persons_location_is_never_touch
     _trash(env, z)
     quiet()
     client, headers, *_ = env
-    r = client.put(f"/v1/assets/{a}/capture", json={"taken_at": "2024-06-15T10:00:00", "lineage": made("capture")},
+    r = client.put(f"/v1/assets/{a}/capture", json={"taken_at": "2024-06-15T10:00:00", "lineage": made("lumiverb.capture_time")},
                    headers=headers)
     assert r.status_code == 200 and r.json() == {"changed": False}
     quiet()
@@ -629,7 +630,7 @@ def test_nothing_else_checks_a_guess_again_and_a_persons_location_is_never_touch
     _trash(env, a)
     _restore(env, a)
     _capture(env, a, "2024-06-15T10:30:00")
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 200}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 200}}, headers=headers)
     assert r.status_code == 200, r.text
     _run(env, lib)
     _settings(env)
@@ -662,7 +663,7 @@ def test_the_clock_offset_from_scene_pairs_places_a_camera_on_home_time(env) -> 
     lone = _clip(env, lib, "Cam/lone.jpg", "2024-06-15T17:30:00", device=CAMERA)
     items = [{"asset_id": p, "model_id": "clip", "model_version": "1", "vector": v} for p, v in zip(phones, vectors, strict=True)]
     items += [{"asset_id": c, "model_id": "clip", "model_version": "1", "vector": v} for c, v in zip(cameras, vectors[:3], strict=True)]
-    r = client.post("/v1/assets/batch-embeddings", json={"items": items, "lineage": made("clip")}, headers=headers)
+    r = client.post("/v1/assets/batch-embeddings", json={"items": items, "lineage": made("lumiverb.image.likeness")}, headers=headers)
     assert r.status_code == 200, r.text
 
     r = client.post("/v1/assets/locations/clocks", json={"asset_ids": [lone]}, headers=headers)
@@ -698,7 +699,7 @@ def test_changing_the_window_doesnt_ask_and_turning_a_library_off_removes_its_gu
     _trash(env, trashed)  # its guess counts and goes too
 
     # The window isn't in lineage: nothing to make again, so nothing asked (guesses are checked again).
-    r = client.put("/v1/producers/location/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
+    r = client.put("/v1/producers/lumiverb.location.guess/settings", json={"settings": {"inference_minutes": 120}}, headers=headers)
     assert r.status_code == 200, r.text
     assert _location(env, guessed)["source"] == "time"
     _run(env, lib)
@@ -719,7 +720,7 @@ def test_changing_the_window_doesnt_ask_and_turning_a_library_off_removes_its_gu
 
     # A guess worked out before it was turned off, saved after: refused, nothing written.
     guess = {"guess": {"lat": 1.0, "lon": 1.0, "radius_m": 100, "basis": {}}, "minutes": 360,
-             "lineage": made("location")}
+             "lineage": made("lumiverb.location.guess")}
     assert client.put(f"/v1/assets/locations/guess/{guessed}", json=guess, headers=headers).json() == {"result": "off"}
     assert _location(env, guessed) is None and _lineage(env, guessed) is None
 
@@ -737,21 +738,21 @@ def test_the_guess_route_takes_only_what_a_machine_says_it_made(env) -> None:
     r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "minutes": 360}, headers=headers)
     assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_required"
     r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 0, "lon": 0}, "minutes": 360,
-                                                           "lineage": made("location")}, headers=headers)
+                                                           "lineage": made("lumiverb.location.guess")}, headers=headers)
     assert r.status_code == 422
     r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": {**guess, "lat": 91}, "minutes": 360,
-                                                           "lineage": made("location")}, headers=headers)
+                                                           "lineage": made("lumiverb.location.guess")}, headers=headers)
     assert r.status_code == 422
-    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "lineage": made("location")},
+    r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "lineage": made("lumiverb.location.guess")},
                    headers=headers)
     assert r.status_code == 422  # the window it was made in, always
     r = client.put("/v1/assets/locations/guess/ast_nope", json={"guess": guess, "minutes": 360,
-                                                               "lineage": made("location")}, headers=headers)
+                                                               "lineage": made("lumiverb.location.guess")}, headers=headers)
     assert r.json() == {"result": "gone"}
     # Made in a window that's no longer the setting: nothing written, tried again.
     _settings(env)
     r = client.put(f"/v1/assets/locations/guess/{c}", json={"guess": guess, "minutes": 120,
-                                                           "lineage": made("location")}, headers=headers)
+                                                           "lineage": made("lumiverb.location.guess")}, headers=headers)
     assert r.json() == {"result": "stale"} and _location(env, c) is None and _lineage(env, c) is None
     r = client.post("/v1/assets/locations/clocks", json={}, headers=headers)
     assert r.status_code == 400  # named clips only, never "all"
@@ -767,7 +768,7 @@ def test_only_the_scheduler_reads_for_guesses_or_saves_them(env) -> None:
     _clip(env, lib, "Phone/p.jpg", "2024-06-15T10:00:00", gps=(1.0, 1.0), device=PHONE)
     c = _clip(env, lib, "BMC/c.jpg", "2024-06-15T11:00:00")
     guess = {"guess": {"lat": 5.0, "lon": 5.0, "radius_m": 100, "basis": {}}, "minutes": 360,
-             "lineage": made("location")}
+             "lineage": made("lumiverb.location.guess")}
     for role in ("viewer", "editor"):
         key = _key_with_role(env, role)
         assert client.post("/v1/assets/locations/clocks", json={"asset_ids": [c]}, headers=key).status_code == 403

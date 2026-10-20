@@ -57,6 +57,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from ulid import ULID
 
+from src.producers.names import sql_spelling
 from src.server.models.tenant import ScanSession
 from src.server.reader_work import previews_missing
 from src.server.repository import lineage
@@ -183,16 +184,17 @@ REMOVED = """
 # library has, its hash made before fp1, is hashed whole too (legacy): it's
 # compared with what was. An unchanged clip whose previews were made another
 # way than now is uploaded again (remake: ADR-018 decision 6), while their
-# remakes run (:remake_<artifact>), REMAKES_PER_SCAN at most (_CAP_REMAKES,
+# remakes run (:remake_<its name's SQL spelling>), REMAKES_PER_SCAN at most (_CAP_REMAKES,
 # the oldest clips first), its previews made at the account's settings. Each
 # clip's own lineage rows are looked up by index, as the rest of the plan is:
 # no join over every clip's lineage, nor a window over the plan, either of
 # which turned the one statement quadratic in the files found (v0.1.73).
 _REMAKE = " OR ".join(
-    f"(:remake_{a} AND ({APPLIES[a]}) AND ({MADE[a]})"
+    f"(:remake_{sql_spelling(a)} AND ({APPLIES[a]}) AND ({MADE[a]})"
     f" AND NOT EXISTS (SELECT 1 FROM artifact_lineage l WHERE l.asset_id = a.asset_id AND l.artifact = '{a}'"
     f"   AND (l.producer = :person OR l.retry_at > now()"
-    f"        OR (l.producer = :p_{a} AND l.producer_version = :v_{a} AND l.settings_hash = :h_{a}"
+    f"        OR (l.producer = :p_{sql_spelling(a)} AND l.producer_version = :v_{sql_spelling(a)}"
+    f"            AND l.settings_hash = :h_{sql_spelling(a)}"
     f"            AND {NAMES_ITS_FILE}))))"
     for a in MADE_AT_SCAN)
 _PLAN = f"""
@@ -373,7 +375,7 @@ def plan(session: Session, scan: ScanSession, unlisted: list[str], *, follow_mov
     session.execute(text(_PLAN), {**_params(scan), "force": scan.force, "thorough": scan.thorough,
                                   "force_add": scan.force_add, "moves": moves_possible(scan, follow_moves),
                                   **remaking})
-    if any(remaking[f"remake_{a}"] for a in MADE_AT_SCAN):
+    if any(remaking[f"remake_{sql_spelling(a)}"] for a in MADE_AT_SCAN):
         session.execute(text(_CAP_REMAKES), {"scan_id": scan.scan_id, "remake_cap": remaking["remake_cap"]})
 
 
@@ -387,7 +389,7 @@ def _remakes(session: Session, scan: ScanSession, *, wanted: bool = True) -> dic
     go = wanted and not scan.dry_run
     out: dict = {"remake_cap": REMAKES_PER_SCAN if go else 0}
     for artifact in MADE_AT_SCAN:
-        out[f"remake_{artifact}"] = go and artifact not in paused.redo \
+        out[f"remake_{sql_spelling(artifact)}"] = go and artifact not in paused.redo \
             and not lineage.new_version_unseen(session, artifact)
         out.update(lineage.redo_params(artifact, lineage.desired(session, artifact)))
     return out

@@ -1,28 +1,29 @@
 """Video API: scene chunks (init, claim next, complete, fail), scenes, and a
 video's faces. All require tenant auth."""
 
+import logging
 import uuid
-from typing import Any, Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy.orm.exc import StaleDataError
 from sqlmodel import Session
 
+from src.producers.names import SCENE_DESCRIPTIONS, SCENES, VIDEO_FACES
 from src.server.after_commit import AfterCommit
 from src.server.api.content_hashes import why_not
 from src.server.api.dependencies import get_tenant_session, require_editor
 from src.server.api.errors import ApiError, ConflictError, GoneError
 from src.server.api.routers.producers import LineageIn, require_lineage, with_source
-from src.server.repository.lineage import record as record_lineage
 from src.server.repository.assets import AssetMetadataRepository, AssetRepository
 from src.server.repository.faces import FaceRepository
 from src.server.repository.libraries import LibraryRepository
+from src.server.repository.lineage import record as record_lineage
 from src.server.repository.video import ChunksBusy, VideoIndexChunkRepository, VideoSceneRepository
 from src.server.storage import store as stored
 from src.server.storage.store import get_store
 
-import logging
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/video", tags=["video"])
@@ -64,7 +65,7 @@ def init_chunks(
     while its run is under way or once it's found, changes nothing."""
     run = None
     if body.redo:
-        made = require_lineage(body.lineage, "scenes")
+        made = require_lineage(body.lineage, SCENES)
         _now_current(session, made)
         run, dropped = VideoSceneRepository(session).found_beside(asset_id, made)
         if dropped is not None:
@@ -87,7 +88,7 @@ def _now_current(session: Session, made: dict) -> None:
     with settings read before they changed again would record stale ones."""
     from src.server.repository import lineage
 
-    want = lineage.desired(session, "scenes")
+    want = lineage.desired(session, SCENES)
     if (made["producer"], str(made.get("version") or ""), made.get("settings_hash")) != (
             want["producer"], want["version"], want["settings_hash"]):
         raise ConflictError("settings_changed", "Scenes are found with other settings now: read them again.",
@@ -101,7 +102,7 @@ def _described_here(request: Request) -> bool:
     from src.shared.producers import PRODUCERS
 
     models, _ = tenant_ai(request)
-    return bool(models.get(PRODUCERS["scene_vision"].job))
+    return bool(models.get(PRODUCERS[SCENE_DESCRIPTIONS].job))
 
 
 def _swap_in(request: Request, session: Session, asset_id: str, described: dict | None) -> bool:
@@ -216,7 +217,7 @@ def complete_chunk(
     request: Request,
     session: Annotated[Session, Depends(get_tenant_session)],
 ) -> ChunkCompleteResponse:
-    made = require_lineage(body.lineage, "scenes")  # how the scenes were found, before anything is saved
+    made = require_lineage(body.lineage, SCENES)  # how the scenes were found, before anything is saved
     chunk_repo = VideoIndexChunkRepository(session)
     chunk = chunk_repo.get_by_id(chunk_id)
     if chunk is None:
@@ -247,12 +248,12 @@ def complete_chunk(
         found, kept = chunk_repo.merge_alike(asset_id, detail(name_of(made.get("level"))).same_within, staged)
         _log.info("Scenes of %s: %d found, %d kept (detail %s)", asset_id, found, kept, name_of(made.get("level")))
         # How they were found lands with them: a redo in between sees both or neither.
-        record_lineage(session, asset_id, "scenes", made, commit=False)
+        record_lineage(session, asset_id, SCENES, made, commit=False)
         if staged:
             # Found: described next, while the clip still shows its old ones,
             # then swapped in by the last description (update_scene_vision).
             VideoSceneRepository(session).mark_found(asset_id)
-            lineage.start_over(session, [asset_id], "scene_vision")
+            lineage.start_over(session, [asset_id], SCENE_DESCRIPTIONS)
             show_now = not _described_here(request)
         else:
             AssetRepository(session).set_video_indexed(asset_id)
@@ -382,7 +383,7 @@ def update_scene_vision(
     """Update vision results on a scene after describing its rep frame; it
     says how (422 lineage_required, before anything is saved). The last of a
     redo's found scenes described swaps them in for the ones the clip shows."""
-    made = require_lineage(body.lineage, "scene_vision")
+    made = require_lineage(body.lineage, SCENE_DESCRIPTIONS)
     scene_repo = VideoSceneRepository(session)
     try:
         scene_repo.update_vision(
@@ -407,7 +408,7 @@ def update_scene_vision(
         if not run.undescribed and run.staged == "found":
             _swap_in(request, session, run.asset_id, made)
         elif not run.undescribed:
-            record_lineage(session, run.asset_id, "scene_vision", made)
+            record_lineage(session, run.asset_id, SCENE_DESCRIPTIONS, made)
     return SceneVisionUpdateResponse(scene_id=scene_id, status="updated")
 
 
@@ -421,10 +422,10 @@ def _scene_gone(scene_id: str) -> ConflictError:
 def _scene_lineage(made: dict | None) -> dict:
     """A scene's own record of how its description was made (as the clip's
     is recorded: a write that doesn't say, or names another producer, is unknown's)."""
-    from src.shared.producers import PRODUCERS, UNKNOWN
+    from src.shared.producers import UNKNOWN
 
     made = made or {}
-    if made.get("producer") != PRODUCERS["scene_vision"].producer:
+    if made.get("producer") != SCENE_DESCRIPTIONS:
         return {"producer": UNKNOWN, "version": "", "settings_hash": ""}
     return {"producer": made["producer"], "version": str(made.get("version") or ""),
             "settings_hash": str(made.get("settings_hash") or "")}
@@ -507,7 +508,7 @@ def submit_video_faces(
     from src.server.api.routers.assets import _normalize_bounding_box
     from src.server.repository import lineage as lineage_repo
 
-    made = require_lineage(lineage, "video_faces")  # before anything is saved
+    made = require_lineage(lineage, VIDEO_FACES)  # before anything is saved
     if source_hash and (why := why_not(source_hash)) is not None:
         raise ApiError(400, "content_hash_not_valid", f"source_hash: {why}", {"source_hash": source_hash[:100]})
     try:
@@ -550,7 +551,7 @@ def submit_video_faces(
         embedding_model=embedding_model,
         after=dropped,
     )
-    lineage_repo.record(session, asset_id, "video_faces", with_source(made, source_hash or None),
+    lineage_repo.record(session, asset_id, VIDEO_FACES, with_source(made, source_hash or None),
                         outcome="ok" if items else "empty")  # commits
     dropped.run()  # the crops of faces not found again
 

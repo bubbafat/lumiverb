@@ -97,8 +97,8 @@ def test_one_pass_adds_the_files_and_makes_what_needs_them(env, device):
     assert all(c["proxy_key"] for c in clips.values()), "previews, from the scan"
     video = clips["videos/b.mp4"]
     assert video["analysis_proxy_key"] and video["duration_sec"] and video["duration_sec"] > 0.5
-    assert {"probe", "capture", "analysis_proxy"} <= set(video["made"])
-    assert "capture" in clips["photos/a.png"]["made"]
+    assert {"lumiverb.video.format", "lumiverb.capture_time", "lumiverb.video.analysis_proxy"} <= set(video["made"])
+    assert "lumiverb.capture_time" in clips["photos/a.png"]["made"]
     assert done == 1, "the scan sends probe facts and capture; the work renders the analysis proxy"
     assert _reader_work(env, lib) == [], "nothing left that needs the originals"
 
@@ -111,72 +111,43 @@ def test_one_pass_adds_the_files_and_makes_what_needs_them(env, device):
     assert set(_clips(env, lib)) == {"photos/a.png", "videos/b.mp4"}
 
 
-class _ServerInNames(TestClient):
-    """The real API as a server from ADR-024 part 3 answers a reader: its lists in names (reader-changes'
-    made_with and paused, reader-work's work and remakes, GET /v1/producers' artifacts), at check-in
-    protocol 2. What the reader sends goes to the real API as it is (it takes names from part 1)."""
+class _Heard(TestClient):
+    """The real API, noting the check-in protocol each check-in speaks."""
 
     protocols: list[int]
 
     def request(self, method, url, **kwargs):
         import httpx
 
-        from src.producers.names import file_named, name_of
-
-        path = httpx.URL(str(url)).path
-        if path.endswith("/readers/check-in"):
+        if httpx.URL(str(url)).path.endswith("/readers/check-in"):
             self.protocols.append(kwargs["json"]["protocol"])
-        r = super().request(method, url, **kwargs)
-        if r.status_code != 200 or not (path.endswith(("/reader-changes", "/reader-work")) or path == "/v1/producers"):
-            return r
-        body = r.json()
-
-        def named(words: list[str]) -> list[str]:
-            return [file_named("proxy") if w == "previews" else name_of(w) for w in words]
-
-        if "made_with" in body:
-            body["made_with"] = {name_of(a): {**made, "producer": name_of(a)} for a, made in body["made_with"].items()}
-            body["paused"] = {k: named(v) for k, v in body["paused"].items()}
-        for clip in body.get("clips", []):
-            clip["work"], clip["remakes"] = named(clip.get("work") or []), named(clip.get("remakes") or [])
-        for row in body.get("producers", []):
-            row["artifact"] = row["producer"] = name_of(row["artifact"])
-        return httpx.Response(200, json=body, request=r.request)
+        return super().request(method, url, **kwargs)
 
 
-def test_against_a_server_in_names_one_pass_makes_the_same(env, device):
-    # ADR-024 phase 1 part 2: a part 2 reader speaks check-in protocol 2 and reads the lists in either spelling.
+def test_it_speaks_the_names_check_in_protocol(env, device):
+    # ADR-024 phase 1 part 3: the server answers in names, at check-in protocol 2 only.
     from src.server.api.main import app
 
     lib, reader, api = device
-    names = _ServerInNames(app, headers=dict(api._client.headers))
-    names.protocols = []
-    api._client = names
-    _image(lib, "photos/a.png", 1)
+    heard = _Heard(app, headers=dict(api._client.headers))
+    heard.protocols = []
+    api._client = heard
     _video(lib, "videos/b.mp4")
 
     assert reader.once() == 1, "the analysis proxy, from the server's list in names"
-    video = _clips(env, lib)["videos/b.mp4"]
-    assert video["analysis_proxy_key"] and {"probe", "capture", "analysis_proxy"} <= set(video["made"])
-    assert _reader_work(env, lib) == [], "nothing left that needs the originals"
-    assert reader.once() == 0
-    assert names.protocols and set(names.protocols) == {2}
+    assert _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"]
+    assert heard.protocols and set(heard.protocols) == {2}
 
 
-def test_against_a_server_in_names_what_is_paused_waits(env, device):
-    from src.server.api.main import app
-
+def test_what_is_paused_waits(env, device):
     client, headers, *_ = env
-    lib, reader, api = device
-    names = _ServerInNames(app, headers=dict(api._client.headers))
-    names.protocols = []
-    api._client = names
+    lib, reader, _ = device
     _video(lib, "videos/b.mp4")
     r = client.post("/v1/producers/lumiverb.video.analysis_proxy/pause", json={"scope": "work"}, headers=headers)
     assert r.status_code == 204, r.text
     try:
         reader.once()
-        assert not _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"], "paused: told so in names, and waits"
+        assert not _clips(env, lib)["videos/b.mp4"]["analysis_proxy_key"], "paused: told so, and waits"
     finally:
         client.post("/v1/producers/lumiverb.video.analysis_proxy/resume", json={"scope": "work"}, headers=headers)
     reader.once()
@@ -197,16 +168,16 @@ def test_it_reads_only_its_own_libraries(env, device, tmp_path: Path):
     reader.once()
     mine = _clips(env, lib)["a.png"]["asset_id"]
     ok = api.raw("POST", "/v1/producers/failures", json={"items": [
-        {"asset_id": mine, "artifact": "capture", "error": "exiftool said no"}]})
+        {"asset_id": mine, "artifact": "lumiverb.capture_time", "error": "exiftool said no"}]})
     assert ok.status_code == 200 and ok.json() == {"recorded": 1}, ok.text
     refused = api.raw("POST", "/v1/producers/failures", json={"items": [
-        {"asset_id": mine, "artifact": "vision", "error": "x"}]})
+        {"asset_id": mine, "artifact": "lumiverb.image.description", "error": "x"}]})
     assert refused.status_code == 403 and refused.json()["error"]["code"] == "not_for_devices"
     from tests.clips import make_clip
 
     other_clip = make_clip(env[5], theirs["library_id"], "b.jpg")
     elsewhere = api.raw("POST", "/v1/producers/failures", json={"items": [
-        {"asset_id": mine, "artifact": "probe", "error": "x"}, {"asset_id": other_clip, "artifact": "probe", "error": "x"}]})
+        {"asset_id": mine, "artifact": "lumiverb.video.format", "error": "x"}, {"asset_id": other_clip, "artifact": "lumiverb.video.format", "error": "x"}]})
     assert elsewhere.status_code == 404
     assert api.raw("GET", f"/v1/libraries/{lib.id}/changes").status_code == 200
     assert api.raw("GET", f"/v1/libraries/{theirs['library_id']}/changes").status_code == 404
@@ -235,11 +206,11 @@ def test_its_work_makes_probe_facts_and_capture_through_the_producers(env, devic
     reader.check_in()
     reader.look()
     listed = {c["asset_id"]: c["work"] for c in _reader_work(env, lib)}
-    assert {"probe", "capture"} <= set(listed[clip])
+    assert {"lumiverb.video.format", "lumiverb.capture_time"} <= set(listed[clip])
     reader.work()
     made = next(c for c in _clips(env, lib).values() if c["asset_id"] == clip)
-    assert {"probe", "capture"} <= set(made["made"]) and made["duration_sec"] > 0.5
-    assert clip not in {c["asset_id"] for c in _reader_work(env, lib) if {"probe", "capture"} & set(c["work"])}
+    assert {"lumiverb.video.format", "lumiverb.capture_time"} <= set(made["made"]) and made["duration_sec"] > 0.5
+    assert clip not in {c["asset_id"] for c in _reader_work(env, lib) if {"lumiverb.video.format", "lumiverb.capture_time"} & set(c["work"])}
 
 
 def _checked_in(env, lib: Lib) -> dict:
@@ -336,7 +307,7 @@ def _hashes(env, lib: Lib) -> dict[str, dict[str, str]]:
             rows = conn.execute(text(
                 "SELECT a.rel_path, l.artifact, l.settings_hash FROM assets a"
                 " JOIN artifact_lineage l ON l.asset_id = a.asset_id WHERE a.library_id = :l"
-                " AND l.artifact IN ('proxy', 'video_preview', 'analysis_proxy')"), {"l": lib.id}).all()
+                " AND l.artifact IN ('lumiverb.preview', 'lumiverb.video.preview', 'lumiverb.video.analysis_proxy')"), {"l": lib.id}).all()
     finally:
         engine.dispose()
     out: dict[str, dict[str, str]] = {}
@@ -357,7 +328,7 @@ def test_its_remakes_wait_on_battery_and_say_so_then_go_on(env, device):
     reader.once()
     before = _hashes(env, lib)
     try:
-        for artifact, notch in (("proxy", "best"), ("analysis_proxy", "good")):
+        for artifact, notch in (("lumiverb.preview", "best"), ("lumiverb.video.analysis_proxy", "good")):
             r = client.put(f"/v1/producers/{artifact}/settings", json={"settings": {"quality": notch}, "redo": True},
                            headers=headers)
             assert r.status_code == 200, r.text
@@ -368,20 +339,20 @@ def test_its_remakes_wait_on_battery_and_say_so_then_go_on(env, device):
         assert seen["checked_in"]["remakes_held"] == "battery"
         waits = {p["artifact"]: p["waits"] for p in client.get(
             "/v1/producers", params={"library_id": lib.id}, headers=headers).json()["producers"]}
-        [wait] = [w for w in waits["analysis_proxy"] if w["reason"] == "device"]
+        [wait] = [w for w in waits["lumiverb.video.analysis_proxy"] if w["reason"] == "device"]
         assert wait["remakes_held"] == "battery" and wait["clips"] == 1
         assert wait["device_name"].startswith("Studio") and wait["checked_in_at"]  # who, and when it was heard
 
         reader._held = lambda: None
         reader.once()
         after = _hashes(env, lib)
-        best = shared.settings_hash(shared.effective_settings("proxy", {"quality": "best"}))
-        good = shared.settings_hash(shared.effective_settings("analysis_proxy", {"quality": "good"}))
-        assert after["a.png"]["proxy"] == best and after["b.mp4"]["proxy"] == best
-        assert after["b.mp4"]["analysis_proxy"] == good
+        best = shared.settings_hash(shared.effective_settings("lumiverb.preview", {"quality": "best"}))
+        good = shared.settings_hash(shared.effective_settings("lumiverb.video.analysis_proxy", {"quality": "good"}))
+        assert after["a.png"]["lumiverb.preview"] == best and after["b.mp4"]["lumiverb.preview"] == best
+        assert after["b.mp4"]["lumiverb.video.analysis_proxy"] == good
         seen = next(x for x in client.get("/v1/libraries", headers=headers).json() if x["library_id"] == lib.id)
         assert seen["checked_in"]["remakes_held"] is None
     finally:
-        for artifact in ("proxy", "analysis_proxy"):
+        for artifact in ("lumiverb.preview", "lumiverb.video.analysis_proxy"):
             client.put(f"/v1/producers/{artifact}/settings", json={"settings": {"quality": None}, "redo": True},
                        headers=headers)

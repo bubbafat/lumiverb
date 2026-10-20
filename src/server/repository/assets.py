@@ -30,14 +30,13 @@ from ulid import ULID
 # Canonical view for non-trashed assets. Use in raw SQL (e.g. FROM active_assets).
 ACTIVE_ASSETS = "active_assets"
 
-# What each producer the scheduler runs still needs, by its missing_* flag
-# (the scheduler's queue lists from it, scheduler/queue.py, and the repair
-# summary counts it), from the reconciler (repository/lineage.py): missing,
-# or made from a file whose content has since changed, less failures
-# waiting their turn. OUTSTANDING includes those failures (the library
-# health dot). missing_face_embeddings counts faces found without one. Both
-# as the producers are now (src/producers/live.py).
-_FACE_EMBEDDINGS = (
+# What each producer the scheduler runs still needs, by its name (the
+# repair summary counts it), from the reconciler (repository/lineage.py):
+# missing, or made from a file whose content has since changed, less
+# failures waiting their turn. OUTSTANDING includes those failures (the
+# library health dot). Both as the producers are now (src/producers/live.py).
+# FACE_EMBEDDINGS: faces found without their vector.
+FACE_EMBEDDINGS = (
     "a.face_count > 0 AND a.media_type = 'image'"
     " AND EXISTS (SELECT 1 FROM faces f WHERE f.asset_id = a.asset_id AND f.embedding_vector IS NULL)"
 )
@@ -45,11 +44,10 @@ _FACE_EMBEDDINGS = (
 
 def _reconciled(rule: str) -> dict[str, str]:
     from src.server.repository import lineage
-    from src.shared.producers import MISSING_FLAGS
+    from src.shared.producers import SCHEDULED
 
     of = getattr(lineage, rule)
-    return {**{flag: of(artifact) for flag, artifact in MISSING_FLAGS.items()},
-            "missing_face_embeddings": _FACE_EMBEDDINGS}
+    return {artifact: of(artifact) for artifact in SCHEDULED}
 
 
 MISSING_CONDITIONS: Mapping[str, str] = LiveMap(lambda: _reconciled("due"))
@@ -193,30 +191,39 @@ class AssetRepository:
         """), {"ids": asset_ids}).all()
 
     def repair_counts(self, library_id: str) -> dict:
-        """A library's clips, what scans left out (proxies, EXIF), what each
-        producer still needs (MISSING_CONDITIONS, by its missing_* flag),
-        stale search entries, and clip-steps left out of those because their
-        last try failed and their turn hasn't come (waiting_failures)."""
+        """A library's clips, and what's missing by name (ADR-024): what
+        scans left out (previews, EXIF: lumiverb.preview, lumiverb.metadata)
+        and what each producer still needs (MISSING_CONDITIONS); faces
+        without their vector, stale search entries, and clip-steps left out
+        of those because their last try failed and their turn hasn't come
+        (waiting_failures)."""
+        from src.producers.names import METADATA, PREVIEW, sql_spelling
         from src.server.repository import lineage
         from src.server.search.sync import STALE_SEARCH  # the search sweep's own rule
-        from src.shared.producers import MISSING_FLAGS
+        from src.shared.producers import SCHEDULED
 
-        counts = ",\n".join(f"COUNT(*) FILTER (WHERE {cond}) AS {f}" for f, cond in MISSING_CONDITIONS.items())
+        counts = ",\n".join(f"COUNT(*) FILTER (WHERE {cond}) AS {sql_spelling(name)}"
+                             for name, cond in MISSING_CONDITIONS.items())
         # waiting() first: cheap, and false for nearly every clip, so the rest is rarely looked at.
         waiting = " + ".join(f"COUNT(*) FILTER (WHERE {lineage.waiting(a)} AND {lineage.outstanding(a)})"
-                             for a in MISSING_FLAGS.values())
-        return dict(self._session.execute(text(f"""
+                             for a in SCHEDULED)
+        row = self._session.execute(text(f"""
             SELECT
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_proxy,
-                COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_exif,
+                COUNT(*) FILTER (WHERE proxy_key IS NULL) AS missing_preview,
+                COUNT(*) FILTER (WHERE exif_extracted_at IS NULL AND media_type = 'image') AS missing_metadata,
                 {counts},
+                COUNT(*) FILTER (WHERE {FACE_EMBEDDINGS}) AS faces_without_vectors,
                 COUNT(*) FILTER (WHERE {STALE_SEARCH}) AS stale_search_sync,
                 {waiting} AS waiting_failures
             FROM active_assets a
             {lineage.lineage_join()}
             WHERE library_id = :library_id
-        """), {"library_id": library_id}).mappings().one())
+        """), {"library_id": library_id}).mappings().one()
+        return {"total": row["total"], "faces_without_vectors": row["faces_without_vectors"],
+                "stale_search_sync": row["stale_search_sync"], "waiting_failures": row["waiting_failures"],
+                "missing": {PREVIEW: row["missing_preview"], METADATA: row["missing_metadata"],
+                            **{name: row[sql_spelling(name)] for name in MISSING_CONDITIONS}}}
 
     def mark_unsynced(self, asset: Asset) -> None:
         """Stale until search has the clip as it is now (not committed)."""

@@ -66,7 +66,7 @@ def _as_an_old_client(env, method: str, path: str, headers: dict | None, asset_i
     elif path.endswith("/faces"):
         asset_id = asset_id or _ingest(env, f"retired/{uuid.uuid4().hex[:8]}.jpg", media_type="image")
         body = {"detection_model": "apple_vision", "detection_model_version": "1", "faces": [FACE],
-                "lineage": made("faces")}
+                "lineage": made("lumiverb.image.faces")}
     url = path.format(library_id=library_id, asset_id=asset_id)
     return client.request(method, url, json=body, params=params, headers=headers)
 

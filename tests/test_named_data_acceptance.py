@@ -89,9 +89,24 @@ def test_phase1_clients_and_plug_ins_get_what_they_got_before(facts):  # noqa: F
 # ---------------------------------------------------------------------------
 
 SEEDED = Path(__file__).parent / "plugins" / "tester_named_data_seeded.json"
-# Today's id -> its name, as the rename stores and sends it (the plan's section 1). Empty: no rename yet, so the
-# test holds an account copied in to answer exactly as it did.
-RENAMED: dict[str, str] = {}
+# Today's id -> its name, as the rename stores and sends it (the plan's section 1, part 3), written out here
+# apart from the builder's mapping; an installed plug-in's work, `plugin_<id>`, is its plug-in's id.
+RENAMED: dict[str, str] = {
+    "probe": "lumiverb.video.format", "capture": "lumiverb.capture_time", "proxy": "lumiverb.preview",
+    "video_preview": "lumiverb.video.preview", "analysis_proxy": "lumiverb.video.analysis_proxy",
+    "scenes": "lumiverb.video.scenes", "scene_vision": "lumiverb.video.scene_descriptions",
+    "vision": "lumiverb.image.description", "ocr": "lumiverb.image.text", "clip": "lumiverb.image.likeness",
+    "faces": "lumiverb.image.faces", "video_faces": "lumiverb.video.faces", "transcript": "lumiverb.video.transcript",
+    "location": "lumiverb.location.guess", "plugin_facts": "facts",
+}
+
+
+def _kind(kind: str) -> str:
+    """A job's kind as the rename says it: its producer's name (the analysis proxy's was `render`), its remakes'
+    `redo:<name>`; the scan's stays."""
+    if kind.startswith("redo_"):
+        return "redo:" + _kind(kind.removeprefix("redo_"))
+    return RENAMED["analysis_proxy"] if kind == "render" else RENAMED.get(kind, kind)
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?")
 
 
@@ -133,14 +148,17 @@ def _rows(session, seeded: dict) -> dict:
 
 
 def _renamed(value):
-    """What v0.1.104 said, said as the rename says it: an id where an id is, renamed (not a lineage producer's,
-    a job's or a title's, which keep their words)."""
+    """What v0.1.104 said, said as the rename says it: an id where an id is, renamed, and a producer's row's
+    producer the name of what it makes (not a job's or a title's, which keep their words)."""
     if isinstance(value, list):
         return [_renamed(v) for v in value]
     if isinstance(value, dict):
-        return {k: (RENAMED.get(v, v) if k in ("artifact", "part_of", "target") and isinstance(v, str)
-                    else [RENAMED.get(x, x) for x in v] if k == "needs" and isinstance(v, list)
-                    else _renamed(v)) for k, v in value.items()}
+        out = {k: (RENAMED.get(v, v) if k in ("artifact", "part_of", "target") and isinstance(v, str)
+                   else [RENAMED.get(x, x) for x in v] if k == "needs" and isinstance(v, list)
+                   else _renamed(v)) for k, v in value.items()}
+        if "producer" in out and isinstance(out.get("artifact"), str) and "title" in out:
+            out["producer"] = out["artifact"]
+        return out
     return value
 
 
@@ -173,9 +191,9 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
            "switches": client.get("/v1/producers/queue", headers=robert).json().get("switches"),
            "failures": client.get("/v1/producers/failures", headers=robert).json(),
            "due": {kind: sorted(clips[c["asset_id"]] for c in due(url, kind, [library_id]))
-                   for kind in sorted(RENAMED.get(k, k) for k in seeded["said"]["due"])}}
+                   for kind in sorted(_kind(k) for k in seeded["said"]["due"])}}
     then = _renamed(seeded["said"])
-    then["due"] = {RENAMED.get(k, k): v for k, v in then["due"].items()}
+    then["due"] = {_kind(k): v for k, v in then["due"].items()}
     now, then = _timeless(now), _timeless(then)
     mine = {row["artifact"]: row for row in now["producers"]}
     theirs = {row["artifact"]: row for row in then["producers"]}
@@ -189,5 +207,13 @@ def test_rename_an_account_from_before_migrated_up_answers_as_it_did_and_down_is
     if RENAMED:
         _tenant_alembic(url, "downgrade", seeded["revision"])
         with get_tenant_session(tenant_id) as session:
-            assert _rows(session, seeded) == inserted, "migrated down, every row as it was"
+            down = _rows(session, seeded)
+        # Every row as it was, but each library's reader mark: the renames moved it on, up and down, as any change
+        # to what its reader is told does (so it fetches what it was told again, in the words it's said in now).
+        libraries = next(t for t in seeded["tables"] if t["table"] == "libraries")
+        mark = [c for c, _ in libraries["columns"]].index("reader_mark")
+        for before, after in zip(inserted["libraries"], down["libraries"], strict=True):
+            assert int(after[mark]) > int(before[mark]), "its reader is told to fetch what changed"
+            before[mark] = after[mark]
+        assert down == inserted, "migrated down, every row as it was"
         _tenant_alembic(url, "upgrade", "head")

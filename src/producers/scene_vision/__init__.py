@@ -17,7 +17,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ANALYSIS_PROXY, names.SCENES),
-    artifact="scene_vision", producer="scene-vision", version="1", media=VIDEO, unit="second", title="Scene descriptions",
+    artifact=names.SCENE_DESCRIPTIONS, version="1", media=VIDEO, unit="second", title="Scene descriptions",
     order=60,
     # The scenes shown, and a redo's once found (described, then swapped in);
     # not a redo's still being found.
@@ -28,6 +28,6 @@ PRODUCER = ProducerSpec(
           " AND s.staged IS DISTINCT FROM 'finding')"),
     settings=ai_settings(VISION_PROMPT, fixed=NOT_OFFERED),
     redo_on_source_change=False,
-    kind="scene_vision", flag="missing_scene_vision", run="src.producers.scene_vision.work:SceneVision",
+    run="src.producers.scene_vision.work:SceneVision",
     pool=VISION,
 )

@@ -24,7 +24,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ORIGINAL,),
-    artifact="analysis_proxy", producer="analysis-proxy", version="2", media=VIDEO, unit="second", title="Analysis proxies",
+    artifact=names.ANALYSIS_PROXY, version="2", media=VIDEO, unit="second", title="Analysis proxies",
     order=40,
     applies="a.media_type = 'video'",
     made="a.analysis_proxy_key IS NOT NULL",
@@ -38,6 +38,6 @@ PRODUCER = ProducerSpec(
                 advanced=True),
     ),
     redo_on_source_change=False,
-    kind="render", flag="missing_analysis_proxy", run="src.producers.analysis_proxy.work:Render", tier=PREPARE,
+    run="src.producers.analysis_proxy.work:Render", tier=PREPARE,
     pool=RENDERS, storage=True,
 )

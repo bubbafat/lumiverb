@@ -47,8 +47,8 @@ def hidden(env):
         conn.execute(text("UPDATE assets SET camera_make = :m WHERE asset_id = :a"),
                      {"m": f"Cam{word}", "a": c1})
     _ok(env.client.post("/v1/producers/failures", headers=env.admin, json={
-        "items": [{"asset_id": c1, "artifact": "clip", "error": f"failed {word}"},
-                  {"asset_id": a1, "artifact": "clip", "error": "failed here"}]}))
+        "items": [{"asset_id": c1, "artifact": "lumiverb.image.likeness", "error": f"failed {word}"},
+                  {"asset_id": a1, "artifact": "lumiverb.image.likeness", "error": "failed here"}]}))
     assert env.client.delete(f"/v1/assets/{c2}", headers=env.admin).status_code in (200, 204)
     _ok(env.client.post("/v1/assets/archive", json={"asset_ids": [c3]}, headers=env.admin))
     library_c = _ok(env.client.get(f"/v1/libraries/{c}", headers=env.admin))
@@ -160,7 +160,7 @@ def test_search_finds_only_what_they_can_see(env, hidden):
 def test_counts_are_counted_over_what_they_see(env, hidden):
     def clip_counts(headers, **params):
         rows = _ok(env.client.get("/v1/producers", params=params, headers=headers))["producers"]
-        return next(p["counts"] for p in rows if p["artifact"] == "clip")
+        return next(p["counts"] for p in rows if p["artifact"] == "lumiverb.image.likeness")
 
     theirs = clip_counts(hidden.key)
     everyones = clip_counts(env.admin)
@@ -175,7 +175,7 @@ def test_what_acts_on_every_library_acts_on_the_ones_they_edit(env, hidden):
     _ok(env.client.post("/v1/producers/failures/retry", json={"all": True}, headers=hidden.key))
     with env.db.connect() as conn:
         retry_at = dict(conn.execute(text(
-            "SELECT asset_id, attempts FROM artifact_lineage WHERE artifact = 'clip' AND asset_id = ANY(:ids)"),
+            "SELECT asset_id, attempts FROM artifact_lineage WHERE artifact = 'lumiverb.image.likeness' AND asset_id = ANY(:ids)"),
             {"ids": [hidden.a1, hidden.c_clips[0]]}).all())
     assert retry_at[hidden.a1] == 0 and retry_at[hidden.c_clips[0]] > 0, "C's failure is left as it was"
     library_c = _ok(env.client.get(f"/v1/libraries/{hidden.c}", headers=env.admin))
@@ -204,7 +204,7 @@ def test_projects_show_only_the_clips_they_can_see(env, hidden):
             assert "a1.jpg" in r.text, "their own clip is exported"
     r = env.client.get("/v1/producers", params={"project_id": hidden.mixed}, headers=hidden.key)
     assert r.status_code == 200 and next(p for p in r.json()["producers"]
-                                         if p["artifact"] == "clip")["counts"]["applicable"] == 1
+                                         if p["artifact"] == "lumiverb.image.likeness")["counts"]["applicable"] == 1
     everyone = _ok(env.client.get(f"/v1/projects/{hidden.mixed}", headers=env.admin))
     assert everyone["asset_count"] == 2 and everyone["cover_asset_id"] == hidden.c_clips[0]
 

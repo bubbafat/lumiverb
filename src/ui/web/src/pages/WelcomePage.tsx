@@ -13,6 +13,7 @@ import {
   setSetupProgress,
   type Producer,
 } from "../api/client";
+import { FACES, VIDEO_FACES } from "../lib/names";
 import AiSection from "./settings/AiSection";
 import { FolderChoice, BACKUPS_QUERY_KEY } from "./settings/BackupsSection";
 import NetworkSection from "./settings/NetworkSection";
@@ -226,8 +227,8 @@ function FindStep() {
   });
   if (!producers) return <div className="h-24 rounded-lg bg-gray-900/50 animate-pulse" />;
   const by = Object.fromEntries(producers.map((p) => [p.artifact, p]));
-  const photos = level(by.faces);
-  const videos = level(by.video_faces);
+  const photos = level(by[FACES]);
+  const videos = level(by[VIDEO_FACES]);
 
   function Level({ label, artifact, value, hint }: { label: string; artifact: string; value: { value: string; choices: string[] }; hint: string }) {
     return (
@@ -250,11 +251,11 @@ function FindStep() {
   return (
     <div className="space-y-4 rounded-lg border border-gray-700/50 bg-gray-900/50 p-6">
       {photos && (
-        <Level label="Faces in photos" artifact="faces" value={photos}
+        <Level label="Faces in photos" artifact={FACES} value={photos}
                hint="Low: clear faces near the camera. High: small faces in crowds too, and more that aren't faces. Off: none found; what's found stays." />
       )}
       {videos && (
-        <Level label="Faces in videos" artifact="video_faces" value={videos}
+        <Level label="Faces in videos" artifact={VIDEO_FACES} value={videos}
                hint="Low: a frame from each scene. Normal: a few. High: every 3 seconds, slower." />
       )}
       {change.isError && (

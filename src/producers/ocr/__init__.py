@@ -13,9 +13,9 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.PREVIEW,),
-    artifact="ocr", producer="ocr", version="1", media=IMAGE, title="Text in images (OCR)", order=80,
+    artifact=names.TEXT, version="1", media=IMAGE, title="Text in images (OCR)", order=80,
     applies="a.media_type = 'image'",
     made="EXISTS (SELECT 1 FROM asset_ocr o WHERE o.asset_id = a.asset_id)",
     settings=ai_settings(OCR_PROMPT),
-    kind="ocr", flag="missing_ocr", run="src.producers.ocr.work:Ocr", pool=VISION,
+    run="src.producers.ocr.work:Ocr", pool=VISION,
 )

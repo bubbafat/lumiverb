@@ -137,8 +137,8 @@ def _named(f, points: list[tuple[float, float]]) -> list[str]:
         session.commit()
     acct = FakeAccount(scheduler_client(f["tenant_id"]))
     acct.tenant_id = f["tenant_id"]
-    items = due(tenant_database_url(f["tenant_id"]), "plugin_geonames", [f["library_id"]])
-    run_job(PluginWork, acct, f["tenant_id"], "plugin_geonames", items)
+    items = due(tenant_database_url(f["tenant_id"]), "geonames", [f["library_id"]])
+    run_job(PluginWork, acct, f["tenant_id"], "geonames", items)
     assert acct.failures.charged == []
     return clips
 
@@ -185,7 +185,7 @@ def test_search_finds_a_clip_by_the_landmark_it_is_at_and_the_town_it_is_near(lu
         assert run_search_sync_sweep(session)["facts_synced"] == 1
         assert run_search_sync_sweep(session)["facts_synced"] == 0, "once"
     assert _found(f, "eiffel") == {eiffel}
-    assert due(tenant_database_url(f["tenant_id"]), "plugin_geonames", [f["library_id"]]) == [], "nothing made again"
+    assert due(tenant_database_url(f["tenant_id"]), "geonames", [f["library_id"]]) == [], "nothing made again"
 
 
 @pytest.mark.parametrize("lumiverb", ["off"], indirect=True, ids=["off"])

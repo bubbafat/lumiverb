@@ -13,9 +13,9 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.PREVIEW,),
-    artifact="vision", producer="vision", version="1", media=IMAGE, title="Descriptions and tags", order=70,
+    artifact=names.DESCRIPTION, version="1", media=IMAGE, title="Descriptions and tags", order=70,
     applies="a.media_type = 'image'",
     made="EXISTS (SELECT 1 FROM asset_metadata am WHERE am.asset_id = a.asset_id)",
     settings=ai_settings(VISION_PROMPT),
-    kind="vision", flag="missing_vision", run="src.producers.vision.work:Vision", pool=VISION,
+    run="src.producers.vision.work:Vision", pool=VISION,
 )

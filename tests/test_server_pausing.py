@@ -57,13 +57,13 @@ def test_pause_all_and_resume_all(env, env_file, capsys):
 def test_one_switch_and_one_librarys_scans(env, env_file, capsys):
     # A producer by the name of what it makes, with or without lumiverb. (ADR-024 phase 1 part 2).
     assert _server(env, env_file, "pause", "image.description") == 0
-    assert _paused(env) == {"vision"}
+    assert _paused(env) == {"lumiverb.image.description"}
     assert _server(env, env_file, "pause", "scans", "--library", "Footage") == 0
-    assert _paused(env) == {"vision", "scans of Footage"}
+    assert _paused(env) == {"lumiverb.image.description", "scans of Footage"}
     assert capsys.readouterr().out.strip().endswith("processing partly paused")
 
     assert _server(env, env_file, "resume", "scans", "--library", "Footage", "--account", "AnalysisTenant") == 0
-    assert _paused(env) == {"vision"}
+    assert _paused(env) == {"lumiverb.image.description"}
     assert _server(env, env_file, "resume", "lumiverb.image.description") == 0
     assert _paused(env) == set()
 
@@ -71,7 +71,7 @@ def test_one_switch_and_one_librarys_scans(env, env_file, capsys):
 def test_an_old_word_is_taken_with_a_warning(env, env_file, capsys):
     assert _server(env, env_file, "pause", "vision") == 0
     assert "! vision is called image.description now: type that" in capsys.readouterr().err
-    assert _paused(env) == {"vision"}
+    assert _paused(env) == {"lumiverb.image.description"}
     assert _server(env, env_file, "resume", "vision") == 0
     assert _paused(env) == set()
 

@@ -4,7 +4,7 @@
 
 Accepted (2026-10-19, Robert: he answered its questions and set its phases). From Robert's question during ADR-023 phase 3: how does one producer know another's data is ready, and could a plug-in depend on data another plug-in makes? The decisions marked **Robert** are his, from that conversation, his answers to its questions included ("Robert's answers"); the rest are proposals that each phase's plan settles. Builds on ADR-023: it widens decision 4 (what a plug-in can read) and decision 5 (what it gives back).
 
-Phase 1's part 1 is done (v0.1.105): the names (`src/producers/names.py`, `docs/data-names.md`), taken by the server; part 2, the clients speaking them, is built. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104) didn't anticipate it.
+Phase 1's part 1 is done (v0.1.105): the names (`src/producers/names.py`, `docs/data-names.md`), taken by the server; part 2, the clients speaking them, is done (v0.1.106); part 3, the names stored and sent (tenant migration `f2a6c8e4b0d7`, check-in protocol 2 only), is built. ADR-023 phase 3 (GeoNames moved out, done in v0.1.104) didn't anticipate it.
 
 ## Progress
 

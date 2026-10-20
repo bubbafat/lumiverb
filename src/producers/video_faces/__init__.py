@@ -21,10 +21,10 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ANALYSIS_PROXY, names.SCENES, names.METADATA),
-    artifact="video_faces", producer="insightface-video", version="1", media=VIDEO, unit="second",
+    artifact=names.VIDEO_FACES, version="1", media=VIDEO, unit="second",
     title="Faces in videos", order=101,
     # Its scenes first: Low looks at their pictures. Off finds none.
-    applies=f"a.media_type = 'video' AND a.video_indexed AND {on('video_faces', DEFAULT)}",
+    applies=f"a.media_type = 'video' AND a.video_indexed AND {on(names.VIDEO_FACES, DEFAULT)}",
     made="a.face_count IS NOT NULL",
     settings=(
         Setting("model", "buffalo_l", "Model", kind="text", fixed="buffalo_l is the one face model installed."),
@@ -38,6 +38,6 @@ PRODUCER = ProducerSpec(
     redo_on_source_change=False,
     redo_note=("Faces people named, or said aren't a certain person, are kept; the rest are found again, and ones the "
                "new settings don't find go."),
-    part_of="faces",
-    kind="video_faces", flag="missing_video_faces", run="src.producers.video_faces.work:VideoFaces", pool=FACES,
+    part_of=names.FACES,
+    run="src.producers.video_faces.work:VideoFaces", pool=FACES,
 )

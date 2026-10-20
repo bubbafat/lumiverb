@@ -188,7 +188,7 @@ class _Acct:
         self.stopping = threading.Event()
         self.producers = ProducerSettings(None)
         if detail:
-            self.producers._uses["video_faces"]["detail"] = detail
+            self.producers._uses["lumiverb.video.faces"]["detail"] = detail
         self._detector = detector
         outer = self
 

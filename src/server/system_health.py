@@ -375,6 +375,15 @@ def backups_row(*, newest: datetime | None, newest_bytes: int = 0, last_error: s
 # -- Lumiverb's own plug-ins ----------------------------------------------------------
 
 
+def plugins_row(*, left_out: Sequence[Mapping[str, str]], now: datetime) -> Row | None:
+    """The plug-ins the server admin installed that Lumiverb leaves out (src/server/plugin_catalog.py
+    left_out): red, each with what to do. None when there's none."""
+    if not left_out:
+        return None
+    return Row("plugins", "Installed plug-ins", RED, " ".join(f"{o['why']}." for o in left_out),
+               link="/settings/plugins", checked_at=now)
+
+
 def own_plugins_row(*, own: Sequence[Mapping[str, Any]], now: datetime) -> Row | None:
     """Lumiverb's own plug-ins (src/server/own_plugins.py status): red when one couldn't be installed (why;
     it's tried again at the next start), yellow when an older one waits for the next start to be updated, else

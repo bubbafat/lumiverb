@@ -6,7 +6,7 @@ import type { ProducerWait } from "../api/client";
 const DETAILS: Record<string, Partial<ProducerWait>> = {
   scheduler: { why: "not_running" },
   ai_machines: { job: "vision", why: "offline", message: "No machine doing descriptions & text is online: its work waits. Settings → AI shows why." },
-  needs: { artifact: "scenes", paused: false },
+  needs: { artifact: "lumiverb.video.scenes", paused: false },
   storage: { library_id: "lib_1", library_name: "Empty Besters", checked: true, away_since: "2026-10-12T18:20:00Z",
              seen_at: "2026-10-12T17:55:00Z" },
   device: { library_id: "lib_2", library_name: "Footage", device_id: "dev_1", device_name: "Robert's Mac Studio",

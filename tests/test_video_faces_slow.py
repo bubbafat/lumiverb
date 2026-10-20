@@ -126,7 +126,7 @@ def _send(client, auth, asset_id: str, faces: list[dict], crops: list[bytes] | N
           lineage: str | None = None, **fields):
     crops = [_crop((200, 120, 90)) for _ in faces] if crops is None else crops
     return client.post(f"/v1/video/{asset_id}/faces", headers=auth, data={
-        "faces": json.dumps(faces), "lineage": made_json("video_faces") if lineage is None else lineage, **fields,
+        "faces": json.dumps(faces), "lineage": made_json("lumiverb.video.faces") if lineage is None else lineage, **fields,
     }, files=[("crops", (f"{i}.webp", c, "image/webp")) for i, c in enumerate(crops)])
 
 
@@ -149,8 +149,8 @@ def test_a_videos_people_are_saved_with_their_times_and_crops(env):
         assert got.status_code == 200 and got.content == crop
     with engine.connect() as conn:
         row = conn.execute(text("SELECT producer, level, outcome FROM artifact_lineage"
-                                " WHERE asset_id = :a AND artifact = 'video_faces'"), {"a": asset_id}).one()
-    assert tuple(row) == ("insightface-video", 1, "ok")  # Low
+                                " WHERE asset_id = :a AND artifact = 'lumiverb.video.faces'"), {"a": asset_id}).one()
+    assert tuple(row) == ("lumiverb.video.faces", 1, "ok")  # Low
 
 
 def test_a_video_with_no_one_in_it_is_done(env):
@@ -161,7 +161,7 @@ def test_a_video_with_no_one_in_it_is_done(env):
     assert r.json() == {"face_count": 0, "face_ids": []}
     with engine.connect() as conn:
         assert conn.execute(text("SELECT outcome FROM artifact_lineage WHERE asset_id = :a"
-                                 " AND artifact = 'video_faces'"), {"a": asset_id}).scalar() == "empty"
+                                 " AND artifact = 'lumiverb.video.faces'"), {"a": asset_id}).scalar() == "empty"
 
 
 def test_a_named_face_keeps_its_name_when_found_again(env):
@@ -241,9 +241,9 @@ def test_what_isnt_a_videos_faces_is_refused_before_anything_is_saved(env, case)
         r = _send(client, auth, asset_id, [PERSON_A], lineage="")
     elif case == "not_json":
         r = client.post(f"/v1/video/{asset_id}/faces", headers=auth,
-                        data={"faces": "[{", "lineage": made_json("video_faces")})
+                        data={"faces": "[{", "lineage": made_json("lumiverb.video.faces")})
     elif case == "other_producer":
-        r = _send(client, auth, asset_id, [PERSON_A], lineage=json.dumps(made("faces")))
+        r = _send(client, auth, asset_id, [PERSON_A], lineage=json.dumps(made("lumiverb.image.faces")))
     elif case == "no_times":
         r = _send(client, auth, asset_id, [{**PERSON_A, "seen_ms": []}])
     else:
@@ -396,7 +396,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
     asset_id = _clip(engine, library_id, "faces/two_people.mov")
     server = _Server(client, auth)
     index_video_scenes(client=server, source_path=proxy, asset_id=asset_id, duration_sec=duration,
-                       rel_path="faces/two_people.mov", lineage=made_lineage("scenes"), detail="normal")
+                       rel_path="faces/two_people.mov", lineage=made_lineage("lumiverb.video.scenes"), detail="normal")
     scenes = client.get(f"/v1/video/{asset_id}/scenes", headers=auth).json()["scenes"]
     assert scenes
 
@@ -421,7 +421,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
                         return detector
 
             _Acct.client = server
-            _Acct.producers._uses["video_faces"]["detail"] = detail
+            _Acct.producers._uses["lumiverb.video.faces"]["detail"] = detail
             work = VideoFaces(_Acct, None)
             found = work.make(item)
             work.save(server, [(item, found)])
@@ -442,7 +442,7 @@ def test_two_people_in_a_real_video_at_every_level(env, tmp_path):
             with engine.connect() as conn:
                 count, level = conn.execute(text(
                     "SELECT a.face_count, l.level FROM assets a JOIN artifact_lineage l ON l.asset_id = a.asset_id"
-                    " AND l.artifact = 'video_faces' WHERE a.asset_id = :a"), {"a": asset_id}).one()
-            assert (count, level) == (2, level_of("video_faces", {"detail": detail})), detail
+                    " AND l.artifact = 'lumiverb.video.faces' WHERE a.asset_id = :a"), {"a": asset_id}).one()
+            assert (count, level) == (2, level_of("lumiverb.video.faces", {"detail": detail})), detail
     finally:
         detector.close()

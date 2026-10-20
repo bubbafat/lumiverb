@@ -120,7 +120,7 @@ def test_the_face_process_does_so_many_jobs_photos_before_a_fresh_one() -> None:
     from src.shared.producers import PRODUCERS
 
     models = Models(face_batches_per_process=4)
-    assert models.faces()._per_process == 4 * PRODUCERS["faces"].batch
+    assert models.faces()._per_process == 4 * PRODUCERS["lumiverb.image.faces"].batch
 
 
 # ---------------------------------------------------------------------------

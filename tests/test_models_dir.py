@@ -211,7 +211,7 @@ def test_a_models_repo_is_what_its_library_loads_it_from():
 
 def _account(*, ready: bool = True, read: bool = True, whisper: str = "small",
              clip: tuple[str, str] = ("ViT-B-32", "openai")) -> SimpleNamespace:
-    settings = {"clip": {"model": clip[0], "pretrained": clip[1]}}
+    settings = {"lumiverb.image.likeness": {"model": clip[0], "pretrained": clip[1]}}
     return SimpleNamespace(settings_ready=ready, guards={"transcripts": SimpleNamespace(model_read=read, model=whisper)},
                            producers=SimpleNamespace(settings=settings.__getitem__))
 

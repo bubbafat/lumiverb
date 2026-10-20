@@ -107,7 +107,7 @@ def _run(client: MagicMock, library: Path, clips: list[dict], at_once: int = 1) 
             return
         (library / f"{clip['asset_id']}.mp4").write_bytes(b"proxy")
         try:
-            run(Transcript, acct, Job("t1", "transcript", 3, (clip,)))
+            run(Transcript, acct, Job("t1", "lumiverb.video.transcript", 3, (clip,)))
         except Crashed:
             pass  # counted by the service
 
@@ -287,6 +287,6 @@ def test_the_built_in_failing_to_load_moves_the_clip_to_a_server_timed_onto_the_
     assert req["fields"]["file"][2] == b"RIFF speech"
     sent = _transcripts(client)["ast_a"]
     assert sent["srt"] == "1\n00:00:02,250 --> 00:00:02,750\nhi\n" and sent["language"] == "en"
-    assert sent["lineage"] == P.lineage("transcript", {"model": "small", "vad_min_silence_ms": 500}, SHA)
+    assert sent["lineage"] == P.lineage("lumiverb.video.transcript", {"model": "small", "vad_min_silence_ms": 500}, SHA)
     assert _statuses(client, "aim_self")[-1]["error"] == "Couldn't load small: no space left"
     assert _charged(client) == []

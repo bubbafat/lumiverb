@@ -19,7 +19,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ORIGINAL,),
-    artifact="proxy", producer="proxy", version="1", media=ALL, title="Proxies and thumbnails", order=20,
+    artifact=names.PREVIEW, version="1", media=ALL, title="Proxies and thumbnails", order=20,
     applies="true",
     made="a.proxy_key IS NOT NULL",
     settings=(

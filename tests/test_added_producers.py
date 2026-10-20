@@ -22,7 +22,7 @@ from src.server.repository.lineage import Pauses
 
 pytestmark = pytest.mark.fast
 
-NAME = "plugin_example"
+NAME = "example-facts"  # a plug-in's work is named by its plug-in's id (ADR-024): a dash in it too
 BY = "test"  # what a test adds is its own: the installed plug-ins' come and go apart
 
 
@@ -32,12 +32,12 @@ def use_added(specs) -> bool:
 
 def _spec(name: str = NAME, **changes) -> ProducerSpec:
     spec = ProducerSpec(
-        artifact=name, producer=name, version="1", media=IMAGE, title="Example facts",
+        artifact=name, plugin=name, version="1", media=IMAGE, title="Example facts",
         applies="a.media_type = 'image'",
         # Made: its own lineage row (a failure's names no producer).
         made=(f"EXISTS (SELECT 1 FROM artifact_lineage x WHERE x.asset_id = a.asset_id AND x.artifact = '{name}'"
               f" AND x.producer = '{name}')"),
-        kind=name, flag=f"missing_{name}", run="tests.test_added_producers:Nothing", tier=FIND,
+        run="tests.test_added_producers:Nothing", tier=FIND,
         pool=Pool(name, slots=1), batch=10)
     return replace(spec, **changes)
 
@@ -49,14 +49,15 @@ def _none_added_after():
 
 
 def test_a_producer_added_shows_everywhere_the_producers_are_read():
+    from src.producers.names import remakes_of, sql_spelling
     from src.server.repository import lineage
     from src.server.repository.assets import MISSING_CONDITIONS, OUTSTANDING_CONDITIONS
     from src.server.scheduler.kinds import KINDS, QUEUED
     from src.server.scheduler.service import REDONE
     from src.shared.producers import (
         ARTIFACTS,
-        MISSING_FLAGS,
         PRODUCERS,
+        SCHEDULED,
         effective_settings,
         pause_targets,
     )
@@ -64,22 +65,23 @@ def test_a_producer_added_shows_everywhere_the_producers_are_read():
     def seen() -> dict:
         return {
             "listed": NAME in PRODUCERS and NAME in ARTIFACTS and list(PRODUCERS)[-1] == NAME,
-            "flag": MISSING_FLAGS.get(f"missing_{NAME}"),
+            "scheduled": NAME in SCHEDULED,
             "rules": [lineage.APPLIES.get(NAME), NAME in lineage.MADE, lineage.RECHECK.get(NAME)],
-            "joined": f"src_{NAME}" in lineage.lineage_join() and f"wait_{NAME}" in lineage.lineage_join(),
-            "conditions": f"missing_{NAME}" in MISSING_CONDITIONS and f"missing_{NAME}" in OUTSTANDING_CONDITIONS,
-            "kinds": [KINDS[k].spec.tier for k in (NAME, f"redo_{NAME}") if k in KINDS],
+            "joined": f"src_{sql_spelling(NAME)}" in lineage.lineage_join()
+            and f"wait_{sql_spelling(NAME)}" in lineage.lineage_join(),
+            "conditions": NAME in MISSING_CONDITIONS and NAME in OUTSTANDING_CONDITIONS,
+            "kinds": [KINDS[k].spec.tier for k in (NAME, remakes_of(NAME)) if k in KINDS],
             "queued": sorted(k.name for k in QUEUED if NAME in k.name),
             "redone": NAME in REDONE and lineage.redoable(NAME),
             "switch": NAME in pause_targets(),
         }
 
-    assert seen() == {"listed": False, "flag": None, "rules": [None, False, None], "joined": False,
+    assert seen() == {"listed": False, "scheduled": False, "rules": [None, False, None], "joined": False,
                       "conditions": False, "kinds": [], "queued": [], "redone": False, "switch": False}
     assert use_added([_spec()]) is True
-    assert seen() == {"listed": True, "flag": NAME, "rules": ["a.media_type = 'image'", True, "false"],
-                      "joined": True, "conditions": True, "kinds": [FIND, REDO], "queued": [NAME, f"redo_{NAME}"],
-                      "redone": True, "switch": True}
+    assert seen() == {"listed": True, "scheduled": True, "rules": ["a.media_type = 'image'", True, "false"],
+                      "joined": True, "conditions": True, "kinds": [FIND, REDO],
+                      "queued": [NAME, f"redo:{NAME}"], "redone": True, "switch": True}
     assert effective_settings(NAME) == {}
     assert use_added([_spec()]) is False  # the same again changes nothing
     assert use_added(()) is True
@@ -94,30 +96,29 @@ def test_the_list_handed_out_never_changes_under_whoever_holds_it():
 
 
 @pytest.mark.parametrize("changes, says", [
-    ({"artifact": "example"}, "starts with 'plugin_'"),
+    ({"artifact": "example"}, "is its plug-in's id"),
+    ({"artifact": "lumiverb.image.facts", "plugin": "lumiverb.image.facts"}, "is its plug-in's id"),
     ({"storage": True}, "from what Lumiverb keeps"),
     ({"made_at_scan": True}, "from what Lumiverb keeps"),
     ({"pool": Pool(NAME, job=AiJob("geo", "Places", guard="x:Y"))}, "from what Lumiverb keeps"),
-    ({"kind": ""}, "from what Lumiverb keeps"),
+    ({"run": "", "pool": None}, "from what Lumiverb keeps"),
     ({"pool": Pool("cpu", slots=2)}, "pool is its own"),
     ({"pool": Pool(NAME, sized_by="renders")}, "pool is its own"),
-    ({"kind": "probe"}, "Two producers share a kind"),
-    ({"flag": "missing_probe"}, "Two producers share a flag"),
     ({"reads": ("lumiverb.teleport",)}, "reads what nothing makes"),
-    ({"needs": ("proxy",)}, "worked out from its reads, never declared"),
+    ({"needs": ("lumiverb.preview",)}, "worked out from its reads, never declared"),
 ])
 def test_a_producer_added_is_a_plugins_work_and_nothing_else(changes, says):
-    use_added([_spec("plugin_kept")])
+    use_added([_spec("kept-one")])
     before = registry()
     with pytest.raises(ValueError, match=says):
         use_added([_spec(**changes)])
     assert registry() is before  # refused: the list stays as it was
 
 
-def test_none_of_lumiverbs_own_producers_takes_the_prefix():
+def test_one_of_lumiverbs_own_is_named_by_what_it_makes():
     from src.producers import _check
 
-    with pytest.raises(ValueError, match="starts only a plug-in's work's artifact"):
+    with pytest.raises(ValueError, match="is named by what it makes"):
         _check([_spec()])
 
 
@@ -140,6 +141,8 @@ def _scheduler(monkeypatch, ran: list, asked: list):
 
     # The runners it loads itself, as it does when none are handed to it: a kind taken up later's too.
     monkeypatch.setattr(runners, "runners", lambda: {k: runner(k) for k in dict.fromkeys(q.base for q in QUEUED)})
+    # Its plug-in running (a plug-in's work waits while it isn't: test_plugin_work).
+    monkeypatch.setattr(Scheduler, "_plugins_not_running", lambda self: {})
 
     def candidates(tenant_id, kind, libraries, skip=()):
         asked.append(kind.name)

@@ -38,7 +38,7 @@ def _failure(env, asset_id: str):  # noqa: F811
 
 def test_a_producer_added_while_the_api_runs_is_listed_handed_out_and_counted(env, library):  # noqa: F811
     asset_id = make_clip(env.tenant_url, library, "added.jpg")
-    assert f"missing_{NAME}" not in _summary(env, library)
+    assert NAME not in _summary(env, library)["missing"]
     assert _failure(env, asset_id).status_code == 422  # no producer makes it yet
 
     use_added([_spec()])
@@ -47,14 +47,14 @@ def test_a_producer_added_while_the_api_runs_is_listed_handed_out_and_counted(en
     rows = {p["artifact"]: p for p in r.json()["producers"]}
     assert rows[NAME]["title"] == "Example facts"
     assert [c["asset_id"] for c in due(env.tenant_url, NAME, [library])] == [asset_id]
-    assert _summary(env, library)[f"missing_{NAME}"] == 1
+    assert _summary(env, library)["missing"][NAME] == 1
 
     r = _failure(env, asset_id)
     assert r.status_code == 200 and r.json() == {"recorded": 1}, r.text
     assert due(env.tenant_url, NAME, [library]) == []  # waiting its turn
-    assert _summary(env, library)[f"missing_{NAME}"] == 0 and _summary(env, library)["waiting_failures"] == 1
+    assert _summary(env, library)["missing"][NAME] == 0 and _summary(env, library)["waiting_failures"] == 1
 
     use_added(())
     r = env.client.get("/v1/producers", headers=env.admin)
     assert NAME not in {p["artifact"] for p in r.json()["producers"]}
-    assert f"missing_{NAME}" not in _summary(env, library)
+    assert NAME not in _summary(env, library)["missing"]

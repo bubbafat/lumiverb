@@ -69,10 +69,9 @@ def _act(command: str, name: str | None, library: str | None = None) -> None:
     else:
         # "all" is a target like any other; a switch's work, never only its redo. Sent as the server lists it
         # (when it can't say, by the name of what each makes, which every server from v0.1.105 takes).
-        from src.producers.names import name_of
         from src.shared.producers import pause_targets
 
-        listed = switches_listed(client) or ["all", *(name_of(a) for a in pause_targets())]
+        listed = switches_listed(client) or ["all", *pause_targets()]
         name = resolved(name, listed, "switch", server_says=True)
         r = client.raw("POST", f"/v1/producers/{name}/{command}", json={"scope": "work"})
     if r.status_code >= 400:

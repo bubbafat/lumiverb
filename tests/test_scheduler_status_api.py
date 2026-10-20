@@ -33,10 +33,10 @@ def test_the_queue_says_whats_running_and_whether_the_scheduler_is(env):
     client, headers, *_ = env
     r = client.get("/v1/producers/queue", headers=headers)
     assert r.status_code == 200 and r.json()["live"] is False  # nothing written yet
-    _write(env, {"at": utcnow().isoformat(), "running": {"render": 1, "vision": 2}, "waiting": {"vision": 40},
+    _write(env, {"at": utcnow().isoformat(), "running": {"lumiverb.video.analysis_proxy": 1, "lumiverb.image.description": 2}, "waiting": {"lumiverb.image.description": 40},
                  "pools": {"render": [1, 3], "vision": [2, 2]}, "gpu_hold": 1})
     body = client.get("/v1/producers/queue", headers=headers).json()
-    assert body["live"] is True and body["running"] == {"render": 1, "vision": 2}
+    assert body["live"] is True and body["running"] == {"lumiverb.video.analysis_proxy": 1, "lumiverb.image.description": 2}
     assert body["pools"]["render"] == [1, 3] and body["gpu_hold"] == 1
     _write(env, {"at": (utcnow() - timedelta(minutes=2)).isoformat(), "running": {}, "waiting": {}, "pools": {}})
     assert client.get("/v1/producers/queue", headers=headers).json()["live"] is False
@@ -74,25 +74,25 @@ def test_the_queue_says_how_long_until_each_producer_and_everything_is_made(env)
     client, headers, *_ = env
     lib = _library(env, "Eta")
     _ingest_with(lib, "a.jpg", _sha(), None)  # a photo nothing has described yet
-    _write(env, {"at": utcnow().isoformat(), "running": {"vision": 1}, "waiting": {},
+    _write(env, {"at": utcnow().isoformat(), "running": {"lumiverb.image.description": 1}, "waiting": {},
                  "pools": {"vision": [1, 3], "gpu": [0, 1], "probe": [0, 1]},
-                 "pace": {"vision": 6.0, "ocr": 3.0, "clip": 0.5, "faces": 0.5},
-                 "jobs": [{"kind": "vision", "units": 1.0, "elapsed": 2.0}]})
+                 "pace": {"lumiverb.image.description": 6.0, "lumiverb.image.text": 3.0, "lumiverb.image.likeness": 0.5, "lumiverb.image.faces": 0.5},
+                 "jobs": [{"kind": "lumiverb.image.description", "units": 1.0, "elapsed": 2.0}]})
     from src.server.api.routers import producers as producers_router
 
     producers_router._work_left_cache.clear()
     body = client.get("/v1/producers/queue", headers=headers).json()
     eta = body["eta"]
     left = client.get("/v1/producers", params={"library_id": lib[2]}, headers=headers).json()
-    vision_pool = (6.0 * _missing(client, headers, "vision") + 3.0 * _missing(client, headers, "ocr")) / 3
+    vision_pool = (6.0 * _missing(client, headers, "lumiverb.image.description") + 3.0 * _missing(client, headers, "lumiverb.image.text")) / 3
     assert eta["pools"]["vision"] == pytest.approx(vision_pool)
-    assert eta["producers"]["vision"] == eta["producers"]["ocr"] == pytest.approx(vision_pool)  # they share it
+    assert eta["producers"]["lumiverb.image.description"] == eta["producers"]["lumiverb.image.text"] == pytest.approx(vision_pool)  # they share it
     assert eta["caught_up"] == pytest.approx(max(eta["pools"].values()))
     # Producers with work and no pace (transcripts, scenes...) are named, not guessed.
     assert all(n["why"] in ("no_machine", "not_known_yet") for n in eta["not_counted"])
     [job] = eta["jobs"]
-    assert job["artifact"] == "vision" and job["left"] == pytest.approx(4.0, abs=1.0)
-    assert {p["artifact"]: p["unit"] for p in left["producers"]}["transcript"] == "second"
+    assert job["artifact"] == "lumiverb.image.description" and job["left"] == pytest.approx(4.0, abs=1.0)
+    assert {p["artifact"]: p["unit"] for p in left["producers"]}["lumiverb.video.transcript"] == "second"
     # A scheduler that stopped saying: nothing to time.
     _write(env, {"at": (utcnow() - timedelta(minutes=2)).isoformat(), "running": {}, "waiting": {}, "pools": {}})
     assert client.get("/v1/producers/queue", headers=headers).json()["eta"] is None
@@ -123,22 +123,22 @@ def test_work_left_is_what_the_scheduler_will_do(env):
     with _db(env) as s:
         s.execute(text("UPDATE assets SET duration_sec = 60 WHERE asset_id = ANY(:a)"), {"a": clips})
         s.commit()
-    base = _work(env, "transcript", redo=False)
+    base = _work(env, "lumiverb.video.transcript", redo=False)
     with _db(env) as s:
         for clip, retry in ((clips[0], "now() + interval '1 hour'"), (clips[1], "'infinity'")):
             s.execute(text(
                 "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
                 " produced_at, outcome, error, attempts, retry_at)"
-                f" VALUES (:a, 'transcript', 'whisper', '1', 'h', now(), 'failed', 'no', 1, {retry})"), {"a": clip})
+                f" VALUES (:a, 'lumiverb.video.transcript', 'lumiverb.video.transcript', '1', 'h', now(), 'failed', 'no', 1, {retry})"), {"a": clip})
         # The third can't be heard: its analysis copy was given up.
         s.execute(text(
             "INSERT INTO artifact_lineage (asset_id, artifact, producer, producer_version, settings_hash,"
             " produced_at, outcome, error, attempts, retry_at)"
-            " VALUES (:a, 'analysis_proxy', 'analysis-proxy', '1', 'h', now(), 'failed', 'no', 10, 'infinity')"),
+            " VALUES (:a, 'lumiverb.video.analysis_proxy', 'lumiverb.video.analysis_proxy', '1', 'h', now(), 'failed', 'no', 10, 'infinity')"),
             {"a": clips[2]})
         s.commit()
-    now = _work(env, "transcript", redo=False)
+    now = _work(env, "lumiverb.video.transcript", redo=False)
     assert base["clips"] - now["clips"] == 3 and base["seconds"] - now["seconds"] == 180
     # Its library's storage is away: nothing it reads the originals for is counted.
-    away = _work(env, "analysis_proxy", redo=False, away=[library_id])
-    assert away["clips"] == _work(env, "analysis_proxy", redo=False)["clips"] - 3  # all but the given-up one
+    away = _work(env, "lumiverb.video.analysis_proxy", redo=False, away=[library_id])
+    assert away["clips"] == _work(env, "lumiverb.video.analysis_proxy", redo=False)["clips"] - 3  # all but the given-up one

@@ -88,8 +88,8 @@ def test_a_file_in_chunks_is_kept_as_one_upload_would_keep_it(env, data_dir):
     assert _analysis_proxy_key(env, asset_id) == kept["key"]
     assert hashlib.sha256(storage.abs_path(kept["key"]).read_bytes()).hexdigest() == kept["sha256"]
     with _db(env) as s:  # how it was made, as the start said: sent by its name, kept as today's id until part 3
-        assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'analysis_proxy'"),
-                         {"a": asset_id}).scalar() == producer_in("analysis_proxy", made("analysis_proxy")["producer"])
+        assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.video.analysis_proxy'"),
+                         {"a": asset_id}).scalar() == producer_in("analysis_proxy", made("lumiverb.video.analysis_proxy")["producer"])
     assert not any(data_dir.rglob("*.part")), "its bytes go once it's kept"
     assert _finish(env, upload).json() == kept  # sent again: the answer the first got
     status = client.get(upload["chunk_url"], headers=headers).json()
@@ -148,7 +148,7 @@ def test_finishing_too_soon_or_with_other_bytes(env, data_dir):
 def test_a_video_no_browser_plays_is_dropped_at_the_finish(env):
     asset_id = _ingest(env, "chunks/hevc.mov")
     data = made_with("-c:v", "libx265", "-pix_fmt", "yuv420p", "-x265-params", "log-level=error", "-tag:v", "hvc1")
-    upload = _start(env, asset_id, data, artifact="video_preview")
+    upload = _start(env, asset_id, data, artifact="lumiverb.video.preview")
     _put(env, upload, data, 0, len(data))
     error = _error(_finish(env, upload), 422, "video_not_playable")
     assert any("not H.264" in p for p in error["details"]["problems"])
@@ -162,11 +162,11 @@ def test_what_an_upload_can_be(env):
     video = _ingest(env, "chunks/rules.mov")
     photo = _ingest(env, "chunks/rules.jpg", media_type="image")
     data = playable()
-    body = {"artifact": "analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-            "lineage": made("analysis_proxy")}
+    body = {"artifact": "lumiverb.video.analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            "lineage": made("lumiverb.video.analysis_proxy")}
     assert client.post(f"/v1/assets/{photo}/uploads", json=body, headers=headers).status_code == 400
     assert client.post("/v1/assets/ast_nope/uploads", json=body, headers=headers).status_code == 404
-    assert client.post(f"/v1/assets/{video}/uploads", json={**body, "artifact": "proxy"},
+    assert client.post(f"/v1/assets/{video}/uploads", json={**body, "artifact": "lumiverb.preview"},
                        headers=headers).status_code == 422  # pictures are one request
     assert client.post(f"/v1/assets/{video}/uploads", json={**body, "sha256": "ABC"}, headers=headers).status_code == 422
     _error(client.post(f"/v1/assets/{video}/uploads", json={**body, "lineage": None}, headers=headers),
@@ -187,8 +187,8 @@ def test_a_viewer_sends_nothing(env):
     video = _ingest(env, "chunks/viewer.mov")
     data = playable()
     r = client.post(f"/v1/assets/{video}/uploads", headers=_key_with_role(env, "viewer"), json={
-        "artifact": "analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-        "lineage": made("analysis_proxy")})
+        "artifact": "lumiverb.video.analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "lineage": made("lumiverb.video.analysis_proxy")})
     assert r.status_code == 403
 
 
@@ -227,8 +227,8 @@ def test_the_client_sends_a_render_in_chunks_as_the_scheduler_does(env, tmp_path
     render.write_bytes(playable(2.0))
     api = ApiClient("http://testserver", "unused")
     api._client = TestClient(app, headers=headers)
-    kept = send(api, asset_id, "analysis_proxy", render, made("analysis_proxy"), chunk_size=10_000)
+    kept = send(api, asset_id, "analysis_proxy", render, made("lumiverb.video.analysis_proxy"), chunk_size=10_000)
     assert _analysis_proxy_key(env, asset_id) == kept["key"]
     assert kept["duration_sec"] == pytest.approx(2.0, abs=0.1)
-    again = send(api, asset_id, "analysis_proxy", render, made("analysis_proxy"))  # the same render sent again
+    again = send(api, asset_id, "analysis_proxy", render, made("lumiverb.video.analysis_proxy"))  # the same render sent again
     assert again == kept  # a new upload of it, kept the same

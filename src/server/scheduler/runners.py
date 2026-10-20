@@ -45,4 +45,4 @@ def runners() -> dict[str, Callable[[Account, Job], Outcome]]:
     from src.producers import load
     from src.shared.producers import PRODUCERS
 
-    return {p.kind: partial(run, load(p.run)) for p in PRODUCERS.values() if p.scheduled}
+    return {p.artifact: partial(run, load(p.run)) for p in PRODUCERS.values() if p.scheduled}

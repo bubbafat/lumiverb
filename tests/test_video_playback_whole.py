@@ -37,7 +37,7 @@ def test_every_preview_is_the_length_whole_clip_goes_by():
     from src.processing import ingest
     from src.producers import registry
 
-    seconds = PRODUCERS["video_preview"].defaults["seconds"]
+    seconds = PRODUCERS["lumiverb.video.preview"].defaults["seconds"]
     assert f"PREVIEW_DURATION_SEC = {seconds}" in inspect.getsource(ingest._generate_video_preview)
-    setting = next(s for s in registry()["video_preview"].settings if s.key == "seconds")
+    setting = next(s for s in registry()["lumiverb.video.preview"].settings if s.key == "seconds")
     assert setting.fixed, "the preview length can be changed now: make whole_clip use each preview's own"

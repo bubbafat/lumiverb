@@ -144,11 +144,16 @@ def _list(session) -> int:
     if not rows:
         print("No plug-ins are installed: install one with `lumiverb-server plugins install FOLDER --on|--off`")
     else:
+        from src.server.plugin_catalog import left_out
+
+        left = {o["plugin_id"]: o["why"] for o in left_out(rows)}
         print("Installed plug-ins:")
         for row in rows:
             title = row["manifest"].get("title", "")
             print(f"  {row['plugin_id']} {row['version']}  {title}: "
                   f"{'on' if row['on_by_default'] else 'off'} by default")
+            if row["plugin_id"] in left:
+                print(f"    ! left out: {left[row['plugin_id']]}")
     from src.server.own_plugins import status
 
     for own in status(session):

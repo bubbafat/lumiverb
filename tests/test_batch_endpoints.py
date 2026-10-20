@@ -192,10 +192,10 @@ class TestBatchEndpointModels:
 
 @pytest.mark.fast
 class TestMissingOcrCondition:
-    """missing_ocr is about OCR's own table, not the description's row."""
+    """Whether text is still to be read is about OCR's own table, not the description's row."""
 
     def test_missing_ocr_checks_the_ocr_table(self):
         from src.server.repository.assets import MISSING_CONDITIONS
-        cond = MISSING_CONDITIONS["missing_ocr"]
+        cond = MISSING_CONDITIONS["lumiverb.image.text"]
         assert "asset_ocr" in cond
         assert "asset_metadata" not in cond

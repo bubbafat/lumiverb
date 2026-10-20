@@ -70,7 +70,15 @@ from src.processing.ingest import (
 from src.processing.originals import Originals, reach, where
 from src.processing.proxy.proxy_cache import ProxyCache
 from src.processing.video.probe import probe_video
-from src.producers.names import artifact_in, file_named, name_of, producer_in
+from src.producers.names import (
+    CAPTURE_TIME,
+    PREVIEW,
+    VIDEO_FORMAT,
+    VIDEO_PREVIEW,
+    artifact_in,
+    file_named,
+    producer_in,
+)
 from src.shared.content_hash import content_hash, sampled, whole_file_sha256
 from src.shared.file_extensions import media_type_of
 from src.shared.io_utils import UnsafeRelPathError, check_rel_path
@@ -212,8 +220,8 @@ class Previews:
     lineage that says how they were made. Probes and capture facts have no
     settings."""
 
-    proxy: dict = field(default_factory=lambda: effective_settings("proxy"))
-    video_preview: dict = field(default_factory=lambda: effective_settings("video_preview"))
+    proxy: dict = field(default_factory=lambda: effective_settings(PREVIEW))
+    video_preview: dict = field(default_factory=lambda: effective_settings(VIDEO_PREVIEW))
 
     @classmethod
     def told(cls, made_with: Mapping[str, dict]) -> Previews:
@@ -224,15 +232,15 @@ class Previews:
             spec, said = PRODUCERS[artifact], made_with.get(artifact) or {}
             ours = effective_settings(artifact)
             producer = producer_in(artifact, str(said.get("producer")))
-            if (producer, said.get("version")) != (spec.producer, spec.version) \
+            if (producer, said.get("version")) != (spec.artifact, spec.version) \
                     or not isinstance(said.get("settings"), dict) or set(said["settings"]) != set(ours):
                 return ours
             return dict(said["settings"])
 
-        return cls(settings("proxy"), settings("video_preview"))
+        return cls(settings(PREVIEW), settings(VIDEO_PREVIEW))
 
     def lineage(self, artifact: str, source_hash: str | None) -> dict:
-        settings = {"proxy": self.proxy, "video_preview": self.video_preview}.get(artifact)
+        settings = {PREVIEW: self.proxy, VIDEO_PREVIEW: self.video_preview}.get(artifact)
         return producer_lineage(artifact, effective_settings(artifact) if settings is None else settings,
                                 source_hash)
 
@@ -291,8 +299,8 @@ def _scan_one(
             if f.get("file_mtime") is not None:
                 data["file_mtime"] = f["file_mtime"].isoformat()
             # The capture facts (taken_at, its zone, GPS accuracy) came with the EXIF.
-            data["lineage"] = json.dumps({name_of("proxy"): previews.lineage("proxy", f.get("content_hash")),
-                                          name_of("capture"): previews.lineage("capture", f.get("content_hash"))})
+            data["lineage"] = json.dumps({PREVIEW: previews.lineage(PREVIEW, f.get("content_hash")),
+                                          CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash"))})
 
             resp = client.post("/v1/ingest", files=upload, data=data)
             result = resp.json()
@@ -372,11 +380,11 @@ def _scan_one_video(
                 data["file_mtime"] = f["file_mtime"].isoformat()
             # Frame rate, timecode, audio layout for editor exports. A failed
             # probe doesn't block ingest: the scheduler's probe makes it.
-            made = {name_of("proxy"): previews.lineage("proxy", f.get("content_hash")),
-                    name_of("capture"): previews.lineage("capture", f.get("content_hash"))}
+            made = {PREVIEW: previews.lineage(PREVIEW, f.get("content_hash")),
+                    CAPTURE_TIME: previews.lineage(CAPTURE_TIME, f.get("content_hash"))}
             try:
                 data["video_facet"] = json.dumps(probe_video(source_path).to_dict())
-                made[name_of("probe")] = previews.lineage("probe", f.get("content_hash"))
+                made[VIDEO_FORMAT] = previews.lineage(VIDEO_FORMAT, f.get("content_hash"))
             except Exception as exc:  # noqa: BLE001 — any ffprobe failure
                 logger.warning("Probe failed for %s: %s", rel_path, exc)
             data["lineage"] = json.dumps(made)
@@ -389,7 +397,7 @@ def _scan_one_video(
                 client.post(
                     f"/v1/assets/{asset_id}/artifacts/{file_named('video_preview')}",
                     files={"file": ("preview.mp4", io.BytesIO(preview_bytes), "video/mp4")},
-                    data={"lineage": json.dumps(previews.lineage("video_preview", f.get("content_hash")))},
+                    data={"lineage": json.dumps(previews.lineage(VIDEO_PREVIEW, f.get("content_hash")))},
                 )
             del preview_bytes
 

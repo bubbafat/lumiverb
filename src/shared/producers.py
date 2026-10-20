@@ -76,9 +76,8 @@ def pause_state(paused: set[str] | frozenset[str], *, libraries_paused: int = 0,
         return "running"
     return "paused" if n == len(targets) and libraries_paused >= libraries else "partly"
 
-# The repair summary's counts and page filters (what the scheduler is
-# handed) and the artifact each is about.
-MISSING_FLAGS: Mapping[str, str] = LiveMap(lambda: {p.flag: p.artifact for p in registry().values() if p.flag})
+# The producers the scheduler runs, each a work list (what it's handed) and a repair summary count, by name.
+SCHEDULED: tuple[str, ...] = LiveSeq(lambda: [a for a, p in registry().items() if p.scheduled])  # type: ignore[assignment]
 # What a scan makes of each file it reads and uploads with its clip, and
 # remakes (src/server/scans.py): the preview and thumbnail, a video's preview.
 # Lumiverb's own: an added producer makes nothing at a scan.
@@ -164,12 +163,11 @@ def lineage(artifact: str, settings: Mapping[str, Any], source_hash: str | None,
             level: int | None = None) -> dict[str, Any]:
     """What a write records about how the artifact was made. level: the
     level it was made at, for a producer with a level setting (its default's
-    when not given); kept apart from the settings hash. The producer by the
-    name of what it makes (ADR-024; a server takes it from part 1); an
-    installed plug-in's work by its own."""
+    when not given); kept apart from the settings hash. The producer is the
+    name of what it makes (ADR-024; an installed plug-in's work, its plug-in's id)."""
     p = PRODUCERS[artifact]
     out = {
-        "producer": p.makes.name if p.makes is not None else p.producer,
+        "producer": p.artifact,
         "version": p.version,
         "settings_hash": settings_hash(settings),
         "source_hash": source_hash,

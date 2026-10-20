@@ -7,6 +7,7 @@ import logging
 import subprocess
 from pathlib import Path
 
+from src.producers.names import TRANSCRIPT
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ def transcribe(source_path: Path, transcriber, vad_min_silence_ms: int = 500, *,
 
 
 class Transcript(Work):
-    artifact = "transcript"
+    artifact = TRANSCRIPT
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

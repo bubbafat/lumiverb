@@ -75,7 +75,7 @@ from tests.test_server_admins import (
 pytestmark = pytest.mark.slow
 
 PROBE = Path(__file__).parent / "plugins" / "probe"
-KIND = "plugin_prober"  # its id isn't probe: a word Lumiverb uses (ADR-024 phase 1)
+KIND = "prober"  # its work by its id (ADR-024 part 3); its id isn't probe: a word Lumiverb uses
 LICENSE = {"text": "CC0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}
 CREDIT = {"text": "Probe's places", "url": "https://example.org/probe", "license": LICENSE}
 
@@ -762,10 +762,10 @@ def test_part3_place_names_work_can_be_paused_and_resumed_on_the_machine(install
             return {tuple(r) for r in session.execute(text("SELECT target, scope FROM producer_pauses"))}
 
     for verb in ("pause", "resume"):
-        said = subprocess.run([str(command), verb, "plugin_geonames", "--env", str(env)], capture_output=True, text=True,
+        said = subprocess.run([str(command), verb, "geonames", "--env", str(env)], capture_output=True, text=True,
                               timeout=120)
         assert said.returncode == 0, f"{verb}: {said.stdout}{said.stderr}"
-        mine = {scope for target, scope in pauses() if target == "plugin_geonames"}
+        mine = {scope for target, scope in pauses() if target == "geonames"}
         assert ("work" in mine) if verb == "pause" else (mine == set()), f"after {verb}: {pauses()}"
 
 
@@ -862,9 +862,9 @@ def test_part4_a_landmarks_name_finds_its_clips_named_before_the_upgrade_and_aft
         return made_
 
     def name_whats_due() -> None:
-        items = due(tenant_database_url(tenant_id), "plugin_geonames", [library_id])
+        items = due(tenant_database_url(tenant_id), "geonames", [library_id])
         if items:
-            run_job(PluginWork, acct, tenant_id, "plugin_geonames", items)
+            run_job(PluginWork, acct, tenant_id, "geonames", items)
         assert acct.failures.charged == []
 
     def shown(clip: str) -> dict:
@@ -1051,7 +1051,7 @@ def test_part4_an_account_from_before_part_3_upgraded_straight_to_head_loses_not
         assert conn.execute(text("SELECT chosen FROM plugin_settings WHERE plugin_id = 'geonames'")).scalar() == {
             "radius_km": 40}
         assert sorted(conn.execute(text("SELECT target, scope FROM producer_pauses")).all()) == [
-            ("plugin_geonames", "redo"), ("plugin_geonames", "work")]
+            ("geonames", "redo"), ("geonames", "work")]
         assert conn.execute(text("SELECT count(*) FROM artifact_lineage WHERE artifact = 'place'")).scalar() == 0
         row = conn.execute(text("SELECT lat, lon, source, basis FROM asset_location WHERE asset_id = :a"),
                            {"a": clips["picked"]}).one()
@@ -1092,18 +1092,18 @@ def test_part4_an_account_from_before_part_3_upgraded_straight_to_head_loses_not
         assert [p["place_id"] for p in r.json()["places"]] == [picked["id"]], r.text
         rows = client.get("/v1/producers", headers=robert).json()
         mine = next(p for p in (rows.get("producers", rows) if isinstance(rows, dict) else rows)
-                    if p["artifact"] == "plugin_geonames")
+                    if p["artifact"] == "geonames")
         assert mine["paused"] is True, "its work paused, as Place names' was: nothing named until resumed"
         assert all(shown(c) == {} for c in clips.values())
 
-        resumed = subprocess.run([str(command), "resume", "plugin_geonames", "--env", str(env)],
+        resumed = subprocess.run([str(command), "resume", "geonames", "--env", str(env)],
                                  capture_output=True, text=True, timeout=120)
         assert resumed.returncode == 0, resumed.stdout + resumed.stderr
         acct = FakeAccount(scheduler_client(tenant_id))
         acct.tenant_id = tenant_id
-        items = due(account, "plugin_geonames", [library_id])
+        items = due(account, "geonames", [library_id])
         assert {c["asset_id"] for c in items} == set(clips.values()), "every located clip is due"
-        run_job(PluginWork, acct, tenant_id, "plugin_geonames", items)
+        run_job(PluginWork, acct, tenant_id, "geonames", items)
         assert acct.failures.charged == []
         named = {name: shown(clip) for name, clip in clips.items()}
         assert [named[n]["at"] for n in ("q1", "q2", "picked")] == [QUILLSTONE] * 3, named

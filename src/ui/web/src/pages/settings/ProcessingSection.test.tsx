@@ -40,7 +40,7 @@ const sent: { method: string; url: string; body: unknown }[] = [];
 
 function producer(over: Partial<Producer>): Producer {
   return {
-    artifact: "vision", producer: "vision", version: "1", title: "Descriptions and tags", media: ["image"],
+    artifact: "lumiverb.image.description", producer: "lumiverb.image.description", version: "1", title: "Descriptions and tags", media: ["image"],
     uniform: false, settings: { model: "qwen3-vl:8b-instruct", temperature: 0.2 }, settings_hash: "h",
     fields: [
       { key: "model", label: "Model", kind: "text", value: "qwen3-vl:8b-instruct", default: "", minimum: null,
@@ -190,8 +190,8 @@ describe("ProcessingSection", () => {
   it("lists each producer with its counts, its settings and why one isn't made again yet", async () => {
     producers = [
       producer({}),
-      producer({ artifact: "clip", title: "Visual search (CLIP)", uniform: true }),
-      producer({ artifact: "scenes", title: "Scenes", media: ["video"], redoable: false,
+      producer({ artifact: "lumiverb.image.likeness", title: "Visual search (CLIP)", uniform: true }),
+      producer({ artifact: "lumiverb.video.scenes", title: "Scenes", media: ["video"], redoable: false,
                  why_not: "Finding a video's scenes again isn't built yet." }),
     ];
     renderSection();
@@ -209,7 +209,7 @@ describe("ProcessingSection", () => {
     const why = "No machine does descriptions & text: its work waits until an admin adds one in Settings → AI.";
     producers = [
       producer({ waiting: why, waits: [{ reason: "ai_machines", clips: 4, job: "vision", why: "no_machine", message: why }] }),
-      producer({ artifact: "clip", title: "Visual search (CLIP)", waits: [] }),
+      producer({ artifact: "lumiverb.image.likeness", title: "Visual search (CLIP)", waits: [] }),
     ];
     renderSection();
     const vision = await row("Descriptions and tags");
@@ -242,12 +242,12 @@ describe("ProcessingSection", () => {
     producers = [producer({})];
     renderSection();
     fireEvent.click(await screen.findByRole("button", { name: "Stop remaking Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/pause")
+    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/lumiverb.image.description/pause")
                                                && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
     expect(await screen.findByText("3 photos made another way than now stay as they are: an admin chose to keep them."))
       .toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "Remake Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/vision/resume")
+    await waitFor(() => expect(sent.some((s) => s.url.endsWith("/producers/lumiverb.image.description/resume")
                                                && (s.body as { scope?: string } | undefined)?.scope === "redo")).toBe(true));
     expect(await screen.findByText("Remaking 3 clips, after everything else.")).toBeTruthy();
   });
@@ -272,7 +272,7 @@ describe("ProcessingSection", () => {
 
   it("shows everyone the counts and the remakes; only admins stop or remake", async () => {
     role = "viewer";
-    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)", redo_stopped: true })];
+    producers = [producer({}), producer({ artifact: "lumiverb.image.text", title: "Text in images (OCR)", redo_stopped: true })];
     renderSection();
     expect(await screen.findByText("Only admins can pause processing or choose what's remade.")).toBeTruthy();
     expect((await row("Descriptions and tags")).textContent).toContain("Remaking 3 clips");
@@ -285,7 +285,7 @@ describe("ProcessingSection", () => {
   const flip = (name: string) => fireEvent.click(screen.getByRole("switch", { name }));
 
   it("shows a green switch for all processing, one for each library's scans, upkeep and each producer (admins)", async () => {
-    producers = [producer({}), producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
+    producers = [producer({}), producer({ artifact: "lumiverb.preview", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     await screen.findByRole("switch", { name: "Descriptions and tags" });
     expect(state("All processing")).toBe("running");
@@ -334,7 +334,7 @@ describe("ProcessingSection", () => {
   });
 
   it("green → yellow → red → yellow → green → red → green, as the rows are flipped", async () => {
-    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)" })];
+    producers = [producer({}), producer({ artifact: "lumiverb.image.text", title: "Text in images (OCR)" })];
     renderSection();
     await screen.findByRole("switch", { name: "Descriptions and tags" });
     flip("Descriptions and tags");  // one row paused: yellow
@@ -356,15 +356,15 @@ describe("ProcessingSection", () => {
     await waitFor(() => expect(state("All processing")).toBe("running"));
     expect(state("Scans of Footage")).toBe("running");
     expect(sent.filter((r) => r.method === "POST").map((r) => new URL(r.url, "http://x").pathname)).toEqual([
-      "/v1/producers/vision/pause", "/v1/producers/all/pause", "/v1/libraries/scans/resume",
-      "/v1/producers/upkeep/resume", "/v1/producers/vision/resume", "/v1/producers/ocr/resume",
+      "/v1/producers/lumiverb.image.description/pause", "/v1/producers/all/pause", "/v1/libraries/scans/resume",
+      "/v1/producers/upkeep/resume", "/v1/producers/lumiverb.image.description/resume", "/v1/producers/lumiverb.image.text/resume",
       "/v1/libraries/scans/resume", "/v1/producers/all/pause", "/v1/producers/all/resume"]);
     expect(sent.filter((r) => r.url.includes("/libraries/scans/")).map((r) => r.body)).toEqual([
       { library_ids: ["lib_1"] }, { library_ids: ["lib_2"] }]);
   });
 
   it("a paused producer's row says Paused, and its redo waits", async () => {
-    paused = new Set(["vision"]);
+    paused = new Set(["lumiverb.image.description"]);
     producers = [producer({})];
     renderSection();
     await waitFor(async () => expect((await row("Descriptions and tags")).textContent).toContain(
@@ -375,14 +375,14 @@ describe("ProcessingSection", () => {
 
   it("what scans make says Paused with scans when every library's scans are, or the library shown's", async () => {
     paused = new Set(["scans:lib_1", "scans:lib_2"]);
-    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
+    producers = [producer({ artifact: "lumiverb.preview", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     expect((await row("Proxies and thumbnails")).textContent).toContain("Paused with scans");
   });
 
   it("one library's scans paused isn't every library's", async () => {
     paused = new Set(["scans:lib_2"]);
-    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", scheduled: false })];
+    producers = [producer({ artifact: "lumiverb.preview", title: "Proxies and thumbnails", scheduled: false })];
     renderSection();
     await waitFor(() => expect(state("Scans of Stills")).toBe("paused"));
     expect((await row("Proxies and thumbnails")).textContent).not.toContain("Paused with scans");
@@ -418,7 +418,7 @@ describe("ProcessingSection", () => {
       producers = [producer({})];
       renderSection();
       await screen.findByRole("switch", { name: "Descriptions and tags" });
-      paused = new Set(["scans:lib_1", "scans:lib_2", "upkeep", "vision"]);  // lumiverb pause all, elsewhere
+      paused = new Set(["scans:lib_1", "scans:lib_2", "upkeep", "lumiverb.image.description"]);  // lumiverb pause all, elsewhere
       await vi.advanceTimersByTimeAsync(5_500);
       await waitFor(() => expect(state("All processing")).toBe("paused"));
       paused = new Set();  // lumiverb resume all
@@ -461,10 +461,10 @@ describe("ProcessingSection", () => {
   it("shows why clips fail, and tries them again", async () => {
     producers = [producer({ counts: { applicable: 10, current: 6, stale: 0, missing: 1, failing: 3, given_up: 1 } })];
     failures = [
-      { asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "Day 1/a.jpg",
+      { asset_id: "ast_1", artifact: "lumiverb.image.description", title: "Descriptions and tags", rel_path: "Day 1/a.jpg",
         library_id: "lib_1", library_name: "Footage", media_type: "image", error: "the model said nothing",
         attempts: 10, failed_at: "2026-10-09T01:00:00Z", retry_at: null, given_up: true },
-      { asset_id: "ast_2", artifact: "vision", title: "Descriptions and tags", rel_path: "Day 1/b.jpg",
+      { asset_id: "ast_2", artifact: "lumiverb.image.description", title: "Descriptions and tags", rel_path: "Day 1/b.jpg",
         library_id: "lib_1", library_name: "Footage", media_type: "image", error: "timed out",
         attempts: 2, failed_at: "2026-10-09T01:00:00Z", retry_at: "2026-10-09T01:10:00Z", given_up: false },
     ];
@@ -478,18 +478,18 @@ describe("ProcessingSection", () => {
     fireEvent.click(within(vision).getByRole("button", { name: "Try again: Day 1/a.jpg" }));
     expect(await within(vision).findByText("1 clip will be tried again shortly.")).toBeTruthy();
     expect(sent.find((s) => s.url.endsWith("/producers/failures/retry"))!.body).toEqual({
-      artifact: "vision", asset_ids: ["ast_1"] });
+      artifact: "lumiverb.image.description", asset_ids: ["ast_1"] });
     fireEvent.click(within(vision).getByRole("button", { name: "Try all again" }));
     await waitFor(() => expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry")).length).toBe(2));
     // Every failing clip of the producer's: named (all: true), never inferred.
     expect(sent.filter((s) => s.url.endsWith("/producers/failures/retry"))[1].body).toEqual({
-      artifact: "vision", all: true });
+      artifact: "lumiverb.image.description", all: true });
   });
 
   it("lets viewers see failures but not try them again", async () => {
     role = "viewer";
     producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
-    failures = [{ asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "a.jpg",
+    failures = [{ asset_id: "ast_1", artifact: "lumiverb.image.description", title: "Descriptions and tags", rel_path: "a.jpg",
                   library_id: "lib_1", library_name: "Footage", media_type: "image", error: "no",
                   attempts: 1, failed_at: null, retry_at: "2026-10-09T01:10:00Z", given_up: false }];
     renderSection();
@@ -506,12 +506,12 @@ describe("ProcessingSection", () => {
     fireEvent.change(screen.getByLabelText("Counts for"), { target: { value: "library:lib_1" } });
     const vision = await row("Descriptions and tags");
     fireEvent.click(await within(vision).findByRole("button", { name: "Show failures: Descriptions and tags" }));
-    await waitFor(() => expect(sent.some((s) => s.url.includes("/producers/failures?artifact=vision&library_id=lib_1"))).toBe(true));
+    await waitFor(() => expect(sent.some((s) => s.url.includes("/producers/failures?artifact=lumiverb.image.description&library_id=lib_1"))).toBe(true));
   });
 
   it("shows what the scheduler is doing now and what's next", async () => {
-    queue = { live: true, at: new Date().toISOString(), running: { render: 1, vision: 2, redo_transcript: 1 },
-              waiting: { vision: 40, scan: 1 }, pools: {}, gpu_hold: 1 };
+    queue = { live: true, at: new Date().toISOString(), running: { "lumiverb.video.analysis_proxy": 1, "lumiverb.image.description": 2, "redo:lumiverb.video.transcript": 1 },
+              waiting: { "lumiverb.image.description": 40, scan: 1 }, pools: {}, gpu_hold: 1 };
     renderSection();
     const now = await screen.findByLabelText("Now");
     expect(now.textContent).toContain("Now: 1 analysis copy, 2 descriptions, 1 redo of transcripts");
@@ -520,11 +520,11 @@ describe("ProcessingSection", () => {
   });
 
   it("says how long until everything is made, and each job running", async () => {
-    queue = { live: true, at: new Date().toISOString(), running: { render: 1, vision: 1 }, waiting: {}, pools: {},
-              gpu_hold: 0, eta: { producers: { vision: 7500, analysis_proxy: 90 }, pools: {}, caught_up: 7500,
-              jobs: [{ kind: "render", artifact: "analysis_proxy", unit: "second", units: 1440, elapsed: 60, left: 250 },
-                     { kind: "vision", artifact: "vision", unit: "clip", units: 1, elapsed: 4, left: null }] } };
-    producers = [producer({}), producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"],
+    queue = { live: true, at: new Date().toISOString(), running: { "lumiverb.video.analysis_proxy": 1, "lumiverb.image.description": 1 }, waiting: {}, pools: {},
+              gpu_hold: 0, eta: { producers: { "lumiverb.image.description": 7500, "lumiverb.video.analysis_proxy": 90 }, pools: {}, caught_up: 7500,
+              jobs: [{ kind: "lumiverb.video.analysis_proxy", artifact: "lumiverb.video.analysis_proxy", unit: "second", units: 1440, elapsed: 60, left: 250 },
+                     { kind: "lumiverb.image.description", artifact: "lumiverb.image.description", unit: "clip", units: 1, elapsed: 4, left: null }] } };
+    producers = [producer({}), producer({ artifact: "lumiverb.video.analysis_proxy", title: "Analysis proxies", media: ["video"],
                                           unit: "second" })];
     renderSection();
     const now = await screen.findByLabelText("Now");
@@ -537,11 +537,11 @@ describe("ProcessingSection", () => {
 
   it("says when everything is made, and when how long isn't known yet", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
-              eta: { producers: { vision: 0 }, pools: {}, caught_up: 0, jobs: [] } };
+              eta: { producers: { "lumiverb.image.description": 0 }, pools: {}, caught_up: 0, jobs: [] } };
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain("Caught up");
     cleanup();
-    queue = { ...(queue as object), eta: { producers: { vision: null }, pools: {}, caught_up: null, jobs: [] } };
+    queue = { ...(queue as object), eta: { producers: { "lumiverb.image.description": null }, pools: {}, caught_up: null, jobs: [] } };
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain(
       "How long until everything is made isn't known yet: it's learned from the jobs as they finish.");
@@ -549,28 +549,28 @@ describe("ProcessingSection", () => {
 
   it("says Paused for paused work, and names it", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
-              eta: { producers: { vision: null }, pools: {}, caught_up: null, jobs: [],
-                     not_counted: [{ artifact: "vision", title: "Descriptions and tags", why: "paused" }] } };
+              eta: { producers: { "lumiverb.image.description": null }, pools: {}, caught_up: null, jobs: [],
+                     not_counted: [{ artifact: "lumiverb.image.description", title: "Descriptions and tags", why: "paused" }] } };
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain(
       "Paused.");
     cleanup();
-    queue = { ...(queue as object), eta: { producers: { vision: null, ocr: 1800 }, pools: { vision: 1800 },
+    queue = { ...(queue as object), eta: { producers: { "lumiverb.image.description": null, "lumiverb.image.text": 1800 }, pools: { vision: 1800 },
               caught_up: 1800, jobs: [],
-              not_counted: [{ artifact: "vision", title: "Descriptions and tags", why: "paused" }] } };
+              not_counted: [{ artifact: "lumiverb.image.description", title: "Descriptions and tags", why: "paused" }] } };
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain(
       "not counting descriptions and tags (paused)");
   });
 
   it("names what the headline leaves out, and says a job is late or how short its video is", async () => {
-    queue = { live: true, at: new Date().toISOString(), running: { render: 9 }, waiting: {}, pools: {}, gpu_hold: 0,
-              eta: { producers: { analysis_proxy: 600 }, pools: { render: 600 }, caught_up: 600,
-                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" },
-                                   { artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }],
-                     jobs: [{ kind: "render", artifact: "analysis_proxy", unit: "second", units: 45, elapsed: 400,
+    queue = { live: true, at: new Date().toISOString(), running: { "lumiverb.video.analysis_proxy": 9 }, waiting: {}, pools: {}, gpu_hold: 0,
+              eta: { producers: { "lumiverb.video.analysis_proxy": 600 }, pools: { render: 600 }, caught_up: 600,
+                     not_counted: [{ artifact: "lumiverb.video.transcript", title: "Transcripts", why: "no_machine" },
+                                   { artifact: "lumiverb.image.text", title: "Text in images (OCR)", why: "not_known_yet" }],
+                     jobs: [{ kind: "lumiverb.video.analysis_proxy", artifact: "lumiverb.video.analysis_proxy", unit: "second", units: 45, elapsed: 400,
                               left: 0, late: true },
-                            ...Array.from({ length: 9 }, () => ({ kind: "render", artifact: "analysis_proxy",
+                            ...Array.from({ length: 9 }, () => ({ kind: "lumiverb.video.analysis_proxy", artifact: "lumiverb.video.analysis_proxy",
                               unit: "second", units: 600, elapsed: 10, left: 290, late: false }))] } };
     renderSection();
     const now = await screen.findByLabelText("Now");
@@ -582,16 +582,16 @@ describe("ProcessingSection", () => {
 
   it("says a producer's time isn't known yet, and caught up not counting what no machine is doing", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
-              eta: { producers: { ocr: null, transcript: null }, pools: {}, caught_up: 0, jobs: [],
-                     not_counted: [{ artifact: "transcript", title: "Transcripts", why: "no_machine" }] } };
-    producers = [producer({ artifact: "ocr", title: "Text in images (OCR)" })];
+              eta: { producers: { "lumiverb.image.text": null, "lumiverb.video.transcript": null }, pools: {}, caught_up: 0, jobs: [],
+                     not_counted: [{ artifact: "lumiverb.video.transcript", title: "Transcripts", why: "no_machine" }] } };
+    producers = [producer({ artifact: "lumiverb.image.text", title: "Text in images (OCR)" })];
     renderSection();
     expect((await screen.findByLabelText("Now")).textContent).toContain(
       "Caught up, not counting transcripts (no machine doing them now).");
     expect((await row("Text in images (OCR)")).textContent).not.toContain("not known yet");
     cleanup();
-    queue = { ...(queue as object), eta: { producers: { ocr: null }, pools: {}, caught_up: null, jobs: [],
-              not_counted: [{ artifact: "ocr", title: "Text in images (OCR)", why: "not_known_yet" }] } };
+    queue = { ...(queue as object), eta: { producers: { "lumiverb.image.text": null }, pools: {}, caught_up: null, jobs: [],
+              not_counted: [{ artifact: "lumiverb.image.text", title: "Text in images (OCR)", why: "not_known_yet" }] } };
     renderSection();
     expect((await row("Text in images (OCR)")).textContent).toContain("time left not known yet");
   });
@@ -599,8 +599,8 @@ describe("ProcessingSection", () => {
   it("asks the scheduler what it's doing once for the whole page, not once a row", async () => {
     queue = { live: true, at: new Date().toISOString(), running: {}, waiting: {}, pools: {}, gpu_hold: 0,
               eta: { producers: {}, pools: {}, caught_up: 0, not_counted: [], jobs: [] } };
-    producers = [producer({}), producer({ artifact: "ocr", title: "Text in images (OCR)" }),
-                 producer({ artifact: "clip", title: "Visual search (CLIP)" })];
+    producers = [producer({}), producer({ artifact: "lumiverb.image.text", title: "Text in images (OCR)" }),
+                 producer({ artifact: "lumiverb.image.likeness", title: "Visual search (CLIP)" })];
     renderSection();
     await row("Visual search (CLIP)");
     await screen.findByLabelText("Now");
@@ -621,7 +621,7 @@ describe("ProcessingSection", () => {
 
   it("says a clip someone asked to try again is being tried", async () => {
     producers = [producer({ counts: { applicable: 10, current: 9, stale: 0, missing: 0, failing: 1, given_up: 0 } })];
-    failures = [{ asset_id: "ast_1", artifact: "vision", title: "Descriptions and tags", rel_path: "a.jpg",
+    failures = [{ asset_id: "ast_1", artifact: "lumiverb.image.description", title: "Descriptions and tags", rel_path: "a.jpg",
                   library_id: "lib_1", library_name: "Test footage", media_type: "image", error: "no",
                   attempts: 0, failed_at: "2026-10-09T01:00:00Z", retry_at: null, given_up: false }];
     renderSection();
@@ -642,7 +642,7 @@ describe("ProcessingSection settings", () => {
   ] as Producer["fields"];
 
   async function openSettings() {
-    producers = [producer({ artifact: "transcript", title: "Transcripts", media: ["video"], fields })];
+    producers = [producer({ artifact: "lumiverb.video.transcript", title: "Transcripts", media: ["video"], fields })];
     renderSection();
     fireEvent.click(await screen.findByText("Settings · version 1"));
   }
@@ -656,7 +656,7 @@ describe("ProcessingSection settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save the settings of Transcripts" }));
     await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
     const put = sent.find((r) => r.method === "PUT")!;
-    expect(put.url).toContain("/producers/transcript/settings");
+    expect(put.url).toContain("/producers/lumiverb.video.transcript/settings");
     expect(put.body).toEqual({ settings: { vad_min_silence_ms: 800 } });
   });
 
@@ -677,7 +677,7 @@ describe("ProcessingSection settings", () => {
     const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
                       minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
                       choices: ["good", "better", "best"] } as NonNullable<Producer["fields"]>[number];
-    producers = [producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"], fields: [quality] })];
+    producers = [producer({ artifact: "lumiverb.video.analysis_proxy", title: "Analysis proxies", media: ["video"], fields: [quality] })];
     renderSection();
     fireEvent.click(await screen.findByText("Settings · version 1"));
     const select = screen.getByLabelText("Quality") as HTMLSelectElement;
@@ -693,7 +693,7 @@ describe("ProcessingSection settings", () => {
     const quality = { key: "quality", label: "Quality", kind: "notch", value: "better", default: "better",
                       minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: true,
                       choices: ["good", "better", "best"] } as NonNullable<Producer["fields"]>[number];
-    producers = [producer({ artifact: "proxy", title: "Proxies and thumbnails", media: ["image", "video"],
+    producers = [producer({ artifact: "lumiverb.preview", title: "Proxies and thumbnails", media: ["image", "video"],
                             redoable: false, scheduled: false, fields: [quality] })];
     renderSection();
     fireEvent.click(await screen.findByText("Settings · version 1"));
@@ -719,7 +719,7 @@ describe("ProcessingSection settings", () => {
   });
 
   it("goes back to a setting's default when its field is emptied, as the CLI's KEY= does", async () => {
-    producers = [producer({ artifact: "transcript", title: "Transcripts", media: ["video"],
+    producers = [producer({ artifact: "lumiverb.video.transcript", title: "Transcripts", media: ["video"],
                             fields: [{ ...fields![1], value: 800 }] })];
     renderSection();
     fireEvent.click(await screen.findByText("Settings · version 1"));
@@ -778,7 +778,7 @@ describe("ProcessingSection settings", () => {
 
   it("says why settings can't change in words, not only on hover (phones can't hover)", async () => {
     const why = "Not read by this producer yet: changing it would change nothing it makes.";
-    producers = [producer({ artifact: "faces", title: "Faces", fields: [
+    producers = [producer({ artifact: "lumiverb.image.faces", title: "Faces", fields: [
       { key: "det_size", label: "Detection size", kind: "int", value: 640, default: 640, minimum: null, maximum: null,
         unit: "px", advanced: false, fixed: why },
       { key: "min_confidence", label: "Least confidence", kind: "float", value: 0.5, default: 0.5, minimum: null,
@@ -800,7 +800,7 @@ describe("ProcessingSection settings", () => {
     ] as Producer["fields"];
 
     it("a yes-or-no setting is a checkbox, and turning it off sends false", async () => {
-      producers = [producer({ artifact: "faces", title: "Faces", fields: grouping })];
+      producers = [producer({ artifact: "lumiverb.image.faces", title: "Faces", fields: grouping })];
       renderSection();
       fireEvent.click(await screen.findByText("Settings · version 1"));
       const box = screen.getByLabelText("Merge close groups") as HTMLInputElement;
@@ -814,7 +814,7 @@ describe("ProcessingSection settings", () => {
     });
 
     it("says a grouping change regroups, and not that anything is made again", async () => {
-      producers = [producer({ artifact: "faces", title: "Faces", fields: grouping })];
+      producers = [producer({ artifact: "lumiverb.image.faces", title: "Faces", fields: grouping })];
       renderSection();
       fireEvent.click(await screen.findByText("Settings · version 1"));
       fireEvent.click(screen.getByLabelText("Merge close groups"));
@@ -825,7 +825,7 @@ describe("ProcessingSection settings", () => {
     });
 
     it("says nothing is redone when nothing is done yet, and the face line is only for faces", async () => {
-      producers = [producer({ artifact: "location", title: "Location guesses", fields: grouping,
+      producers = [producer({ artifact: "lumiverb.location.guess", title: "Location guesses", fields: grouping,
                               counts: { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0 } })];
       renderSection();
       fireEvent.click(await screen.findByText("Settings · version 1"));
@@ -844,14 +844,14 @@ describe("ProcessingSection settings", () => {
     });
 
     it("names an installed plug-in whose title says it's one once", async () => {
-      producers = [producer({ artifact: "plugin_example", title: "Example facts", fields: [],
+      producers = [producer({ artifact: "example", title: "Example facts", fields: [],
                               plugin: { plugin_id: "example", title: "Example plug-in", on: true } })];
       renderSection();
       expect((await row("Example facts")).textContent).toContain("Part of the Example plug-in.");
     });
 
     it("counts guesses being checked again apart from missing", async () => {
-      producers = [producer({ artifact: "location", title: "Location guesses", fields: [],
+      producers = [producer({ artifact: "lumiverb.location.guess", title: "Location guesses", fields: [],
                               counts: { applicable: 10, current: 6, stale: 0, missing: 1, rechecking: 3, failing: 0 } })];
       renderSection();
       const shown = (await row("Location guesses")).textContent;
@@ -860,7 +860,7 @@ describe("ProcessingSection settings", () => {
     });
 
     it("says a new inference window checks guesses again, not that they're made again", async () => {
-      producers = [producer({ artifact: "location", title: "Location guesses", fields: [
+      producers = [producer({ artifact: "lumiverb.location.guess", title: "Location guesses", fields: [
         { key: "inference_minutes", label: "Inference window", kind: "int", value: 360, default: 360, minimum: 5,
           maximum: 1440, unit: "min", advanced: false, fixed: null, remakes: false }] })];
       renderSection();
@@ -872,7 +872,7 @@ describe("ProcessingSection settings", () => {
 
     it("shows editors yes or no as On or Off", async () => {
       role = "editor";
-      producers = [producer({ artifact: "faces", title: "Faces",
+      producers = [producer({ artifact: "lumiverb.image.faces", title: "Faces",
                               fields: [{ ...grouping![1], value: false }] })];
       renderSection();
       fireEvent.click(await screen.findByText("Settings · version 1"));
@@ -895,10 +895,10 @@ describe("Scene descriptions' Detail", () => {
     default: "normal", minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false,
     choices: ["low", "normal", "high"] });
   const sceneProducers = (value: string, below: number) => [
-    producer({ artifact: "scenes", title: "Scenes", media: ["video"], part_of: "scene_vision", level: 1,
+    producer({ artifact: "lumiverb.video.scenes", title: "Scenes", media: ["video"], part_of: "lumiverb.video.scene_descriptions", level: 1,
                fields: [detail(value)],
                counts: { applicable: 10, current: 10 - below, stale: 0, missing: 0, failing: 0, below } }),
-    producer({ artifact: "scene_vision", title: "Scene descriptions", media: ["video"] }),
+    producer({ artifact: "lumiverb.video.scene_descriptions", title: "Scene descriptions", media: ["video"] }),
   ];
 
   it("shows one Detail control inside Scene descriptions, scenes as a part of it", async () => {
@@ -917,7 +917,7 @@ describe("Scene descriptions' Detail", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "Normal" }));
     await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
     expect(sent.find((r) => r.method === "PUT")).toMatchObject(
-      { url: expect.stringContaining("/producers/scenes/settings"), body: { settings: { detail: null } } });
+      { url: expect.stringContaining("/producers/lumiverb.video.scenes/settings"), body: { settings: { detail: null } } });
   });
 
   it("counts the videos below this and redoes them only when asked, naming all", async () => {
@@ -926,7 +926,7 @@ describe("Scene descriptions' Detail", () => {
     expect(await screen.findByText("412 videos below this")).toBeTruthy();
     expect(sent.some((r) => r.url.includes("below/redo"))).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Redo 412 below this: Scenes" }));
-    await waitFor(() => expect(sent.some((r) => r.url.includes("/producers/scenes/below/redo"))).toBe(true));
+    await waitFor(() => expect(sent.some((r) => r.url.includes("/producers/lumiverb.video.scenes/below/redo"))).toBe(true));
     expect(sent.find((r) => r.url.includes("below/redo"))!.body).toEqual({ all: true });
   });
 
@@ -946,16 +946,16 @@ describe("Waiting for what it's made from", () => {
   // Scenes paused, they count nothing, which isn't being caught up. The
   // server says how many wait for Scenes (waits: needs), and whether it's paused.
   const sceneRow = (scenesPaused: boolean, missing: number, described = 0) => {
-    if (scenesPaused) paused.add("scenes");
+    if (scenesPaused) paused.add("lumiverb.video.scenes");
     return sceneProducers(missing, described, scenesPaused);
   };
   const sceneProducers = (missing: number, described: number, scenesPaused: boolean) => [
-    producer({ artifact: "scenes", title: "Scenes", media: ["video"], part_of: "scene_vision", paused: scenesPaused,
+    producer({ artifact: "lumiverb.video.scenes", title: "Scenes", media: ["video"], part_of: "lumiverb.video.scene_descriptions", paused: scenesPaused,
                counts: { applicable: 1500, current: 1500 - missing, stale: 0, missing, failing: 0 } }),
-    producer({ artifact: "scene_vision", title: "Scene descriptions", media: ["video"], needs: ["analysis_proxy", "scenes"],
+    producer({ artifact: "lumiverb.video.scene_descriptions", title: "Scene descriptions", media: ["video"], needs: ["lumiverb.video.analysis_proxy", "lumiverb.video.scenes"],
                counts: { applicable: described, current: described, stale: 0, missing: 0, failing: 0 },
-               waits: missing ? [{ reason: "needs", clips: missing, artifact: "scenes", paused: scenesPaused }] : [] }),
-    producer({ artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"],
+               waits: missing ? [{ reason: "needs", clips: missing, artifact: "lumiverb.video.scenes", paused: scenesPaused }] : [] }),
+    producer({ artifact: "lumiverb.video.analysis_proxy", title: "Analysis proxies", media: ["video"],
                counts: { applicable: 1500, current: 1500, stale: 0, missing: 0, failing: 0 } }),
   ];
 
@@ -989,7 +989,7 @@ describe("Why work waits (no silent waits)", () => {
   // Robert, Oct 12: analysis proxies stopped for hours and the row said nothing.
   // Each reason the server sends is said on the row, in one sentence.
   const proxies = (waits: Producer["waits"], over: Partial<Producer> = {}) => producer({
-    artifact: "analysis_proxy", title: "Analysis proxies", media: ["video"], settings: {}, fields: [],
+    artifact: "lumiverb.video.analysis_proxy", title: "Analysis proxies", media: ["video"], settings: {}, fields: [],
     counts: { applicable: 100, current: 60, stale: 0, missing: 40, failing: 0 }, waits, ...over });
 
   const lines = async (title: string) => {
@@ -1044,9 +1044,9 @@ describe("Why work waits (no silent waits)", () => {
   });
 
   it("says why, not 'Nothing to make yet.', when nothing it applies to can be made yet", async () => {
-    producers = [proxies([{ reason: "needs", clips: 9, artifact: "probe", paused: false }], {
+    producers = [proxies([{ reason: "needs", clips: 9, artifact: "lumiverb.video.format", paused: false }], {
       counts: { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0 } }),
-      producer({ artifact: "probe", title: "Video probes", media: ["video"], waits: [] })];
+      producer({ artifact: "lumiverb.video.format", title: "Video probes", media: ["video"], waits: [] })];
     renderSection();
     expect(await lines("Analysis proxies")).toEqual(["9 videos wait for Video probes first."]);
     expect(within(await row("Analysis proxies")).queryByText("Nothing to make yet.")).toBeNull();
@@ -1058,10 +1058,10 @@ describe("Face detection's levels", () => {
     value, default: fallback, minimum: null, maximum: null, unit: "", advanced: false, fixed: null, remakes: false,
     choices: ["off", "low", "normal", "high"] });
   const faceProducers = (photos: string, videos: string, photosBelow = 0) => [
-    producer({ artifact: "faces", title: "Faces", media: ["image"], level: 2, fields: [level("Photos", photos, "normal")],
+    producer({ artifact: "lumiverb.image.faces", title: "Faces", media: ["image"], level: 2, fields: [level("Photos", photos, "normal")],
                counts: photos === "off" ? { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0, below: 0 }
                  : { applicable: 10, current: 10 - photosBelow, stale: 0, missing: 0, failing: 0, below: photosBelow } }),
-    producer({ artifact: "video_faces", title: "Faces in videos", media: ["video"], part_of: "faces", level: 1,
+    producer({ artifact: "lumiverb.video.faces", title: "Faces in videos", media: ["video"], part_of: "lumiverb.image.faces", level: 1,
                fields: [level("Videos", videos, "low")],
                counts: videos === "off" ? { applicable: 0, current: 0, stale: 0, missing: 0, failing: 0, below: 0 }
                  : { applicable: 4, current: 4, stale: 0, missing: 0, failing: 0, below: 0 } }),
@@ -1072,7 +1072,8 @@ describe("Face detection's levels", () => {
     renderSection();
     const li = await row("Faces");
     const groups = within(li).getAllByRole("radiogroup");
-    expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual(["faces-level", "video_faces-level"]);
+    expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual(["lumiverb.image.faces-level",
+                                                                                   "lumiverb.video.faces-level"]);
     const photos = within(li).getByRole("radiogroup", { name: "Photos" });
     expect(within(photos).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Off", "Low", "Normal", "High"]);
     expect(within(photos).getByRole("radio", { name: "Normal" }).getAttribute("aria-checked")).toBe("true");
@@ -1087,7 +1088,7 @@ describe("Face detection's levels", () => {
     fireEvent.click(within(videos).getByRole("radio", { name: "Off" }));
     await waitFor(() => expect(sent.some((r) => r.method === "PUT")).toBe(true));
     expect(sent.find((r) => r.method === "PUT")).toMatchObject(
-      { url: expect.stringContaining("/producers/video_faces/settings"), body: { settings: { detail: "off" } } });
+      { url: expect.stringContaining("/producers/lumiverb.video.faces/settings"), body: { settings: { detail: "off" } } });
   });
 
   it("says Off plainly, not that there's nothing to make", async () => {

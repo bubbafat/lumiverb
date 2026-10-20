@@ -41,7 +41,7 @@ def _clip_with_faces(lib, name: str, label: str, n: int = 3) -> tuple[str, list[
     face_ids = plant_faces(client, asset_id, [
         {"bounding_box": {"x": 0.1 * i, "y": 0.1, "w": 0.1, "h": 0.1}, "detection_confidence": 0.9,
          "embedding": _embedding(label, i)} for i in range(n)],
-        headers=headers, lineage=_want(lib, "faces", sha),
+        headers=headers, lineage=_want(lib, "lumiverb.image.faces", sha),
         detection_model="insightface", detection_model_version="buffalo_l")
     return asset_id, face_ids
 

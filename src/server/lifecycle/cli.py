@@ -784,7 +784,7 @@ def _pausing(args: argparse.Namespace) -> int:
     from sqlalchemy import text
     from sqlalchemy.exc import SQLAlchemyError
 
-    from src.producers.names import said, short, typed
+    from src.producers.names import artifact_in, short, typed
     from src.server.api.errors import ApiError
     from src.server.api.routers import libraries as library_routes
     from src.server.api.routers import producers as producer_routes
@@ -807,7 +807,7 @@ def _pausing(args: argparse.Namespace) -> int:
         names = [PAUSE_ALL, PAUSE_SCANS, *pause_targets()]
         target, warning = typed(args.name, names)
         if target is None:
-            print(f"✗ Nothing here is called {args.name}: {', '.join(short(said(n)) for n in names)}",
+            print(f"✗ Nothing here is called {args.name}: {', '.join(short(artifact_in(n)) for n in names)}",
                   file=sys.stderr)
             return 2
         if warning:

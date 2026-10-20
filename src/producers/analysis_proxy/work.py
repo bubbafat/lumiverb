@@ -8,13 +8,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from src.producers.names import ANALYSIS_PROXY
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
 
 
 class Render(Work):
-    artifact = "analysis_proxy"
+    artifact = ANALYSIS_PROXY
 
     def __init__(self, acct, job) -> None:
         from src.processing.video.analysis_proxy import AnalysisProxySettings

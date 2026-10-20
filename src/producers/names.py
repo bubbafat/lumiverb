@@ -7,17 +7,17 @@ people in it) is named here. docs/data-names.md is written from both:
 ``uv run python -m src.producers --write``, never by hand.
 
 RENAMED is what each name was called before, by family (artifacts, lineage's
-producers, the scheduler's kinds, files). Until part 3 renames what's stored and
-sent, the server takes either spelling of what a client sends and keeps
-today's; each family's mapping applies only where that family is taken (one old
-word can be several things: `clip` is an artifact, an AI job and a model's id).
-Part 5 deletes it.
+producers, the scheduler's kinds, files; an installed plug-in's work was
+`plugin_<id>`). From part 3 every artifact, producer and kind is stored and
+sent as its name (the tenant migration f2a6c8e4b0d7 renamed what was stored,
+with a mapping of its own), and the old spellings are still taken on input,
+mapped to the names (`artifact_in`, `producer_in`, `kind_in`), each family's
+mapping only where that family is taken (one old word can be several things:
+`clip` is an artifact, an AI job and a model's id). Files keep their kinds
+until part 4 (`file_in`, `file_named`). Part 5 deletes RENAMED.
 
-From part 2 the clients send the names (`name_of`, `file_named`), and read what
-a server answers in either spelling, as the server reads what's sent
-(`artifact_in`, `file_in`, `producer_in`): a server before part 3 answers
-today's ids, one from part 3 the names. A person types a name, with or without
-`lumiverb.`, or an old word, which is warned of (`typed`).
+A person types a name, with or without `lumiverb.`, or an old word, which is
+warned of (`typed`).
 """
 
 from __future__ import annotations
@@ -134,14 +134,20 @@ RESERVED: frozenset[str] = frozenset({
 })
 
 
-def _artifact_of(name: str) -> str | None:
-    return next((old for old, new in ARTIFACTS.items() if new == name), None)
+# A plug-in's work before part 3: `plugin_` and its id, each dash an underscore (an id has none of its own).
+_ADDED = "plugin_"
+_ADDED_ID = re.compile(r"^plugin_([a-z][a-z0-9_]{0,39})$")
+
+
+def _plugin_id(value: str) -> str | None:
+    match = _ADDED_ID.match(value)
+    return match.group(1).replace("_", "-") if match else None
 
 
 def artifact_in(value: str) -> str:
-    """An artifact as a client sent it or a server answered it, by its id or its name: today's id (until
-    part 3)."""
-    return _artifact_of(value) or value
+    """An artifact as a client sent it or an older server answered it: its name. Its old id (`vision`), and an
+    installed plug-in's work as `plugin_<id>`, are taken until part 5; anything else is as it is."""
+    return ARTIFACTS.get(value) or _plugin_id(value) or value
 
 
 def file_in(value: str) -> str:
@@ -151,19 +157,31 @@ def file_in(value: str) -> str:
 
 
 def producer_in(artifact: str, producer: str) -> str:
-    """Lineage's producer for this artifact (by its id or its name), as a client sent it or a server answered
-    it, by today's id or its name: today's id. Any other (another producer, a person) is left as it is."""
+    """Lineage's producer for this artifact (by its name or its old id), as a client sent it: its name when it's
+    the old id of the producer that makes it now (`whisper`, of lumiverb.video.transcript), or `plugin_<id>` of
+    that plug-in's work. Any other (an older producer, a person, unknown) is left as it is."""
     artifact = artifact_in(artifact)
-    for (art, old), new in PRODUCERS.items():
-        if art == artifact and producer == new:
-            return old
+    if any(new == artifact and old == producer for (_, old), new in PRODUCERS.items()) \
+            or _plugin_id(producer) == artifact:
+        return artifact
     return producer
 
 
-def name_of(artifact: str) -> str:
-    """An artifact by its name, as a client sends it (today's id or its name, to its name). A plug-in's work
-    is as it is: `plugin_<id>` until part 3."""
-    return ARTIFACTS.get(artifact, artifact)
+# What a kind was called: a producer's (`render`) or its remakes' (`redo_render`). A producer's kind is its name
+# from part 3, its remakes' redo:<name>.
+REDO = "redo:"
+
+
+def remakes_of(name: str) -> str:
+    """The kind of a producer's remakes (redo:<name>)."""
+    return REDO + name
+
+
+def kind_in(value: str) -> str:
+    """A job's kind as a client sent it or an older server answered it: a name, or redo:<name>."""
+    if value.startswith("redo_"):
+        return remakes_of(kind_in(value.removeprefix("redo_")))
+    return KINDS.get(value) or _plugin_id(value) or value
 
 
 _FILE_NAMES: Mapping[str, str] = {old: new for new, old in FILES.items()}
@@ -174,9 +192,15 @@ def file_named(kind: str) -> str:
     return _FILE_NAMES.get(kind, kind)
 
 
+def made_by_file(kind: str) -> str:
+    """The name whose file this is (its kind until part 4): the name itself for its main file, the name it's
+    under for another (`thumbnail`, the preview's: lumiverb.preview)."""
+    name = file_named(kind)
+    return name if name in ARTIFACTS.values() else name.rpartition(".")[0]
+
+
 # The part of a name a person may leave out (`lumiverb pause image.description`).
 PREFIX = "lumiverb."
-_ADDED = "plugin_"
 
 
 def short(name: str) -> str:
@@ -184,25 +208,17 @@ def short(name: str) -> str:
     return name.removeprefix(PREFIX)
 
 
-def said(value: str) -> str:
-    """What a server's word means, whichever spelling it answers in: an artifact's name (a plug-in's work, its
-    plug-in's id); any other word (`all`, `upkeep`, `scans`) as it is."""
-    if value in ARTIFACTS:
-        return ARTIFACTS[value]
-    return value.removeprefix(_ADDED) if value.startswith(_ADDED) else value
-
-
 def typed(word: str, listed: Iterable[str]) -> tuple[str | None, str | None]:
     """What a person typed for a producer or switch: a name (with or without `lumiverb.`), a plug-in's id, or
     an old word (`vision`, `plugin_<id>`). Returns how the server lists it (listed: the server's own words,
     whichever spelling it answers in), or None when nothing listed is called that; and a warning naming what
     to type instead when it was an old word (from part 5 an old word is refused)."""
-    by_meaning = {said(x): x for x in listed}
+    by_meaning = {artifact_in(x): x for x in listed}
     if word in by_meaning:
         return by_meaning[word], None
     if PREFIX + word in by_meaning:
         return by_meaning[PREFIX + word], None
-    meant = ARTIFACTS.get(word) or (word.removeprefix(_ADDED) if word.startswith(_ADDED) else None)
+    meant = ARTIFACTS.get(word) or _plugin_id(word)
     if meant in by_meaning:
         return by_meaning[meant], f"{word} is called {short(meant)} now: type that (the old word goes in a later release)"
     return None, None

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 
+from src.producers.names import VIDEO_FORMAT
 from src.producers.runner import Failed, Work
 
 logger = logging.getLogger(__name__)
 
 
 class Probe(Work):
-    artifact = "probe"
+    artifact = VIDEO_FORMAT
 
     def make(self, clip: dict) -> dict:
         import subprocess

@@ -99,8 +99,8 @@ def _things(env, library_id: str) -> dict[str, str]:
     from tests.machine_lineage import made
 
     upload = _ok(env.client.post(f"/v1/assets/{clip}/uploads", headers=env.admin, json={
-        "artifact": "video_preview", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-        "lineage": made("video_preview")}))
+        "artifact": "lumiverb.video.preview", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "lineage": made("lumiverb.video.preview")}))
     ids = {"library_id": library_id, "asset_id": clip, "scan_id": scan_id, "upload_id": upload["upload_id"],
            "chunk_id": f"chk_{library_id}", "scene_id": f"scn_{library_id}", "face_id": f"fac_{library_id}"}
     with env.db.begin() as conn:

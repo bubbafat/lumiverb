@@ -202,7 +202,7 @@ def test_enrich_names_its_producer_and_libraries(monkeypatch) -> None:
 
 
 def test_enrich_asks_the_scheduler_and_says_what_it_has_to_do(monkeypatch) -> None:
-    answer = {"producers": [{"artifact": "faces", "title": "Faces", "missing": 3, "redo": 120, "retried": 1,
+    answer = {"producers": [{"artifact": "lumiverb.image.faces", "title": "Faces", "missing": 3, "redo": 120, "retried": 1,
                              "paused": False, "redo_stopped": True}]}
     result, client = _enrich(monkeypatch, "faces", "--library", "Footage", "--redo", answer=answer)
     assert result.exit_code == 0, result.output

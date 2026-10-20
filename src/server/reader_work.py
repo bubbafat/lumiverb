@@ -39,12 +39,15 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers.names import PREVIEW, sql_spelling
 from src.server.repository import lineage
 from src.server.repository.lineage import APPLIES, MADE, lineage_join
 from src.shared.producers import MADE_AT_SCAN as SCANNED
 from src.shared.producers import PRODUCERS
 
-PREVIEWS = "previews"
+# A clip's previews a scan makes (its preview, and a video's), by the preview's name (ADR-024: `previews` before
+# check-in protocol 2).
+PREVIEWS = PREVIEW
 # What a scan makes of each file it reads and uploads with its clip: the
 # preview and thumbnail (the proxy producer's), a video's 10-second preview.
 MADE_AT_SCAN = SCANNED
@@ -88,8 +91,8 @@ def page(session: Session, library_id: str, *, after: str | None, limit: int) ->
     now = listed(session, library_id)
     if not now.work:
         return []
-    columns = {f"w_{w}": previews_missing() if w == PREVIEWS else lineage.queued(w) for w in now.work}
-    columns |= {f"r_{a}": lineage.queued(a, redo=True) for a in now.remakes}
+    columns = {f"w_{sql_spelling(w)}": previews_missing() if w == PREVIEWS else lineage.queued(w) for w in now.work}
+    columns |= {f"r_{sql_spelling(a)}": lineage.queued(a, redo=True) for a in now.remakes}
     params: dict[str, Any] = {"lib": library_id, "after": after, "n": limit}
     for a, want in now.remakes.items():
         params |= lineage.redo_params(a, want)
@@ -103,5 +106,5 @@ def page(session: Session, library_id: str, *, after: str | None, limit: int) ->
     ), params).mappings().all()
     return [{"asset_id": r["asset_id"], "rel_path": r["rel_path"], "media_type": r["media_type"],
              "file_size": r["file_size"], "content_hash": r["content_hash"],
-             "work": [w for w in now.work if r[f"w_{w}"]],
-             "remakes": [a for a in now.remakes if r[f"r_{a}"]]} for r in rows]
+             "work": [w for w in now.work if r[f"w_{sql_spelling(w)}"]],
+             "remakes": [a for a in now.remakes if r[f"r_{sql_spelling(a)}"]]} for r in rows]

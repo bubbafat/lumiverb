@@ -176,7 +176,7 @@ def test_a_persons_location_counts_and_is_recorded_as_theirs(env):
     assert d["location"]["lat"] == 51.5 and d["location"]["source"] == "person"
     assert d["location"]["radius_m"] == 0 and d["location"]["status"] == "applied"
     with _db(env) as s:
-        assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'location'"),
+        assert s.execute(text("SELECT producer FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.location.guess'"),
                          {"a": bare}).scalar() == "person"
 
     r = env[0].request("DELETE", "/v1/assets/locations", json={"asset_ids": [bare]}, headers=env[1])
@@ -184,7 +184,7 @@ def test_a_persons_location_counts_and_is_recorded_as_theirs(env):
     assert bare not in _query(env, "has_gps:yes")
     assert _detail(env, bare)["location"] is None
     with _db(env) as s:
-        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a AND artifact = 'location'"),
+        assert s.execute(text("SELECT count(*) FROM artifact_lineage WHERE asset_id = :a AND artifact = 'lumiverb.location.guess'"),
                          {"a": bare}).scalar() == 0
 
 

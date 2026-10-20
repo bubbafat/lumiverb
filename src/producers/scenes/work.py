@@ -23,6 +23,7 @@ from typing import Any
 from src.processing.api import LumiverbAPIError
 from src.processing.video.scene_segmenter import SceneSegmenter
 from src.processing.video.video_scanner import SyncError, VideoScanner
+from src.producers.names import SCENES
 from src.producers.runner import Failed, Stopped, Waits, Work
 from src.producers.scenes.detail import FRAME_WIDTH, name_of, window_sec
 
@@ -109,7 +110,7 @@ def index_video_scenes(*, client: Any, source_path: Path, asset_id: str, duratio
 
 
 class Scenes(Work):
-    artifact = "scenes"
+    artifact = SCENES
 
     def __init__(self, acct, job) -> None:
         super().__init__(acct, job)

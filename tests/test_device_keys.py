@@ -82,7 +82,7 @@ def _reads(env, library_id: str, reader: str) -> None:
 
 def _check_in(env, headers: dict, *library_ids: str, **body):
     return env.client.post("/v1/readers/check-in", headers=headers, json={
-        "client": "Robert's Mac Studio", "version": "0.1.62", "protocol": 1,
+        "client": "Robert's Mac Studio", "version": "0.1.62", "protocol": 2,
         "libraries": [{"library_id": lib, "state": "idle"} for lib in library_ids], **body})
 
 
@@ -144,11 +144,11 @@ def test_a_device_scans_the_library_it_reads(env):
 
     # What it makes from the originals: probe facts, capture, an analysis proxy in chunks.
     assert env.client.put(f"/v1/assets/{clip}/video-facet", json={}, headers=device).status_code == 422  # by the gate
-    _ok(env.client.put(f"/v1/assets/{clip}/capture", json={"lineage": made("capture")}, headers=device))
+    _ok(env.client.put(f"/v1/assets/{clip}/capture", json={"lineage": made("lumiverb.capture_time")}, headers=device))
     data = playable(2.0)
     upload = _ok(env.client.post(f"/v1/assets/{clip}/uploads", headers=device, json={
-        "artifact": "analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-        "lineage": made("analysis_proxy")}))
+        "artifact": "lumiverb.video.analysis_proxy", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "lineage": made("lumiverb.video.analysis_proxy")}))
     _ok(env.client.put(upload["chunk_url"], params={"offset": 0}, content=data,
                        headers={**device, "Content-Type": "application/octet-stream"}))
     assert _ok(env.client.get(upload["chunk_url"], headers=device))["received"] == len(data)
@@ -175,8 +175,8 @@ def test_a_device_gets_nothing_of_a_library_it_doesnt_read(env):
     scan_id = _ok(env.client.post(f"/v1/libraries/{theirs}/scans", json={}, headers=env.editor))["scan_id"]
     data = playable()
     upload = _ok(env.client.post(f"/v1/assets/{clip}/uploads", headers=env.editor, json={
-        "artifact": "video_preview", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-        "lineage": made("video_preview")}))
+        "artifact": "lumiverb.video.preview", "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "lineage": made("lumiverb.video.preview")}))
 
     for headers in (device, others):  # this server's library; and mine is only mine
         library = theirs if headers is device else mine
@@ -184,7 +184,7 @@ def test_a_device_gets_nothing_of_a_library_it_doesnt_read(env):
         assert env.client.get(f"/v1/libraries/{library}/reader-changes", headers=headers).status_code == 404
     assert env.client.post(f"/v1/scans/{scan_id}/found", json={"files": []}, headers=device).status_code == 404
     assert env.client.delete(f"/v1/scans/{scan_id}", headers=device).status_code == 404
-    assert env.client.put(f"/v1/assets/{clip}/capture", json={"lineage": made("capture")},
+    assert env.client.put(f"/v1/assets/{clip}/capture", json={"lineage": made("lumiverb.capture_time")},
                           headers=device).status_code == 404
     assert env.client.post(f"/v1/assets/{clip}/artifacts/video_preview", headers=device,
                            files={"file": ("p.mp4", data, "video/mp4")},
@@ -310,6 +310,6 @@ def test_a_device_sends_by_id_or_by_name(env):
         {"asset_id": photo, "artifact": "lumiverb.image.description", "error": "unreadable"}]}))
     for kind in ("proxy", "lumiverb.preview"):
         _ok(env.client.post(f"/v1/assets/{photo}/artifacts/{kind}", headers=device, files={"file": jpeg()},
-                            data={"lineage": made_json("proxy")}))
+                            data={"lineage": made_json("lumiverb.preview")}))
     _not_for_devices(env.client.post(f"/v1/assets/{clip}/artifacts/lumiverb.video.scenes.picture", headers=device,
                                      files={"file": jpeg()}))

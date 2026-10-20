@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlmodel import Session
 
+from src.producers.names import remakes_of
 from src.server.repository import lineage
 from src.shared.producers import PRODUCERS
 from src.shared.waits import (
@@ -92,7 +93,7 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
     if artifact in paused.work:
         add(PAUSED, due)
     # The scheduler hands nothing out: not running, or not yet sure of the settings.
-    unlisted = next((status.unlisted[k] for k in (p.kind, f"redo_{p.kind}") if k in status.unlisted), None)
+    unlisted = next((status.unlisted[k] for k in (artifact, remakes_of(artifact)) if k in status.unlisted), None)
     if not live:
         add(SCHEDULER, due, why="not_running")
     elif not status.settings_ready:
@@ -138,7 +139,7 @@ def producer_waits(session: Session, artifact: str, want: dict[str, Any], *, cou
         held: dict[str, int] = {}
         scan_paused = False  # a library a scan comes first in has its scans paused
         for row in status.held:
-            if row.kind == p.kind and shown(row.library_id):
+            if row.kind == artifact and shown(row.library_id):
                 why = row.why if row.why in (SCAN, HELD, PLUGIN_DOWN) else HELD  # a code it doesn't know: held
                 held[why] = held.get(why, 0) + row.clips
                 scan_paused |= why == SCAN and row.clips > 0 and paused.scans_paused(row.library_id or None)

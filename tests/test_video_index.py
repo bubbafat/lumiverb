@@ -13,7 +13,7 @@ from src.producers.scenes.work import ChunkFailed, index_video_scenes
 
 # How the scenes are found, and their record: the producer's (the server's, as the scheduler read them).
 DETAIL = "normal"
-LINEAGE = ProducerSettings(None).lineage("scenes", None)
+LINEAGE = ProducerSettings(None).lineage("lumiverb.video.scenes", None)
 
 
 class _FakeResponse:

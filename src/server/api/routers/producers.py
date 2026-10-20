@@ -30,7 +30,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_serializer
 from sqlmodel import Session
 
-from src.producers import ADDED_PREFIX
 from src.producers.names import artifact_in, producer_in
 from src.server.api.content_hashes import ContentHash, why_not
 from src.server.api.dependencies import (
@@ -139,20 +138,20 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict
             "lineage_required",
             f"A machine write must say how it was made ({producer.title.lower()}): lineage (producer, version, "
             "settings_hash), as GET /v1/producers gives them.",
-            {"artifact": artifact, "expected": producer.producer})
-    made["producer"] = producer_in(artifact, made["producer"])  # by today's id or its name (ADR-024)
-    if made["producer"] != producer.producer:
+            {"artifact": artifact, "expected": producer.artifact})
+    made["producer"] = producer_in(artifact, made["producer"])  # by its name, or its old id until part 5 (ADR-024)
+    if made["producer"] != producer.artifact:
         raise InvalidChoiceError(
             "lineage_wrong_producer",
-            f"{made['producer']} isn't the producer of {producer.title.lower()}: {producer.producer} is.",
-            {"artifact": artifact, "sent": made["producer"], "expected": producer.producer})
+            f"{made['producer']} isn't the producer of {producer.title.lower()}: {producer.artifact} is.",
+            {"artifact": artifact, "sent": made["producer"], "expected": producer.artifact})
     if producer.level is not None and not (isinstance(made.get("level"), int)
                                            and made["level"] < len(producer.level.choices)):
         raise InvalidChoiceError(
             "lineage_required",
             f"A machine write of {producer.title.lower()} must say the {producer.level.label.lower()} it was"
             f" made at: lineage level, the index of one of {', '.join(producer.level.choices)}.",
-            {"artifact": artifact, "expected": producer.producer})
+            {"artifact": artifact, "expected": producer.artifact})
     return made
 
 
@@ -192,9 +191,12 @@ class SettingField(BaseModel):
 
 
 class ProducerItem(BaseModel):
-    artifact: str
-    producer: str
+    artifact: str  # the name of what it makes (ADR-024), a plug-in's work its plug-in's id
+    producer: str  # the same: a producer is named by what it makes (goes with ADR-024's part 5)
     version: str
+    # The names it's made from, of its own clip and of other clips (docs/data-names.md).
+    reads: list[str] = []
+    reads_others: list[str] = []
     title: str
     media: list[str]
     # All-or-nothing: its output must come from one model across the library.
@@ -367,10 +369,11 @@ def _with_state(item: ProducerItem, paused: lineage.Pauses, admin: bool) -> Prod
 def _item(artifact: str, want: dict[str, Any], waits: dict[str, Any], uses: dict[str, Any]) -> ProducerItem:
     p = PRODUCERS[artifact]
     values = {**want["settings"], **want.get("notches", {}), **uses}  # a notch as chosen, not what it stands for
-    installed = bool(p.plugin) and artifact.startswith(ADDED_PREFIX)  # an installed plug-in's work
+    installed = bool(p.plugin)  # an installed plug-in's work
     job_wait = waits.get(p.job) if p.job else None
     return ProducerItem(
-        artifact=artifact, producer=p.producer, version=p.version, title=p.title, media=list(p.media),
+        artifact=artifact, producer=artifact, version=p.version, title=p.title, media=list(p.media),
+        reads=list(p.reads), reads_others=list(p.reads_others),
         uniform=p.uniform, settings=want["settings"], settings_hash=want["settings_hash"],
         fields=[SettingField(key=s.key, label=s.label, kind=s.kind, value=values.get(s.key, s.default),
                              default=s.default, minimum=s.minimum, maximum=s.maximum, unit=s.unit,
@@ -470,7 +473,7 @@ def set_settings(
 
     artifact = artifact_in(artifact)
     p = producer_or_404(artifact)
-    if p.plugin and artifact.startswith(ADDED_PREFIX):
+    if p.plugin:
         raise InvalidChoiceError("setting_fixed", f"{p.title}: {SET_IN_PLUGINS}", {"plugin_id": p.plugin})
     lineage.lock_settings(session, artifact)  # one change at a time per producer
     values = dict(lineage.overrides(session, artifact))

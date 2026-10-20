@@ -70,8 +70,19 @@ def test_the_check_would_find_one():
         assert not CHECK.search(line), line
 
 
+def _artifact(path) -> str | None:
+    """The name of what the producer in this file's folder makes (its folder keeps its old word)."""
+    import importlib
+
+    folder = path.relative_to(PRODUCERS_DIR).parts[0]
+    if not (PRODUCERS_DIR / folder / "__init__.py").exists():
+        return None
+    spec = getattr(importlib.import_module(f"src.producers.{folder}"), "PRODUCER", None)
+    return spec.artifact if spec is not None else None
+
+
 def test_only_a_producer_that_reads_the_storage_asks_for_originals():
-    asking = {p.parent.name for p in _sources() if re.search(r"inputs\.originals?\(", p.read_text(encoding="utf-8"))}
+    asking = {_artifact(p) for p in _sources() if re.search(r"inputs\.originals?\(", p.read_text(encoding="utf-8"))}
     assert asking, "the check finds the ones that do"
     assert {a for a in asking if not PRODUCERS[a].storage} == set()
 
@@ -83,7 +94,7 @@ def test_each_work_asks_its_inputs_only_for_what_its_reads_name():
     handed = {**runner._INPUT_NAMES, "original": ORIGINAL, "originals": ORIGINAL}
     checked = set()
     for path in _sources():
-        artifact = path.relative_to(PRODUCERS_DIR).parts[0]
+        artifact = _artifact(path)
         if artifact not in PRODUCERS:
             continue
         code = "\n".join(line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines())
@@ -91,7 +102,8 @@ def test_each_work_asks_its_inputs_only_for_what_its_reads_name():
             if asked in handed:
                 assert handed[asked] in PRODUCERS[artifact].reads, (artifact, asked, PRODUCERS[artifact].reads)
                 checked.add(artifact)
-    assert {"clip", "probe", "scenes", "capture"} <= checked, "the check finds the ones that ask"
+    assert {"lumiverb.image.likeness", "lumiverb.video.format", "lumiverb.video.scenes", "lumiverb.capture_time"} \
+        <= checked, "the check finds the ones that ask"
 
 
 class _Asks(runner.Work):
@@ -106,12 +118,12 @@ class _Asks(runner.Work):
 def test_a_producer_that_doesnt_read_the_storage_is_refused_an_original():
     acct = MagicMock()
     acct.stopping = threading.Event()
-    job = Job("t1", "clip", 3, ({"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a.jpg"},))
-    work = type("ClipAsks", (_Asks,), {"artifact": "clip"})(acct, job)
+    job = Job("t1", "lumiverb.image.likeness", 3, ({"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a.jpg"},))
+    work = type("ClipAsks", (_Asks,), {"artifact": "lumiverb.image.likeness"})(acct, job)
     with pytest.raises(RuntimeError, match="doesn't read the originals"):
         work.make(job.items[0])
     acct.inputs.original.assert_not_called()
-    stored = type("ProbeAsks", (_Asks,), {"artifact": "probe"})(acct, job)
+    stored = type("ProbeAsks", (_Asks,), {"artifact": "lumiverb.video.format"})(acct, job)
     stored.make(job.items[0])
     acct.inputs.original.assert_called_once_with(job.items[0])
 
@@ -125,12 +137,12 @@ def test_a_producer_is_handed_only_what_its_reads_name():
     # ADR-024: a preview to a producer that reads lumiverb.preview, never to one that doesn't.
     acct = MagicMock()
     acct.stopping = threading.Event()
-    job = Job("t1", "transcript", 3, ({"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a.mov"},))
-    work = type("TranscriptAsks", (_AsksPreview,), {"artifact": "transcript"})(acct, job)
+    job = Job("t1", "lumiverb.video.transcript", 3, ({"asset_id": "ast_1", "library_id": "lib_1", "rel_path": "a.mov"},))
+    work = type("TranscriptAsks", (_AsksPreview,), {"artifact": "lumiverb.video.transcript"})(acct, job)
     with pytest.raises(RuntimeError, match=r"transcript doesn't read lumiverb\.preview"):
         work.make(job.items[0])
     acct.inputs.preview_bytes.assert_not_called()
-    reads = type("ClipAsks", (_AsksPreview,), {"artifact": "clip"})(acct, job)
+    reads = type("ClipAsks", (_AsksPreview,), {"artifact": "lumiverb.image.likeness"})(acct, job)
     reads.make(job.items[0])
     acct.inputs.preview_bytes.assert_called_once_with(job.items[0])
 

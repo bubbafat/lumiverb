@@ -29,10 +29,11 @@ class Models:
                  clip_factory: Callable[[str, str], Any] | None = None,
                  face_factory: Callable[[], Any] | None = None,
                  clock: Callable[[], float] = time.monotonic) -> None:
+        from src.producers.names import FACES
         from src.shared.producers import PRODUCERS
 
         # The face process does so many jobs' photos before a fresh one takes over.
-        self._face_clips = max(1, face_batches_per_process) * (batch or PRODUCERS["faces"].batch)
+        self._face_clips = max(1, face_batches_per_process) * (batch or PRODUCERS[FACES].batch)
         self._clip_factory = clip_factory or _clip
         self._face_factory = face_factory or self._face_detector
         self._clock = clock

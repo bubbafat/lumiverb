@@ -45,9 +45,10 @@ STATES = ("scanning", "idle", "paused", "away")
 REMAKES_HELD = ("battery", "metered")
 # How often a reader checks in (the answer says it).
 CHECK_IN_EVERY_SEC = 60
-# The conversation's version, and the oldest a reader may speak (426 reader_too_old below it).
-PROTOCOL = 1
-OLDEST_PROTOCOL = 1
+# The conversation's version, and the oldest a reader may speak (426 reader_too_old below it): 2, the names
+# (ADR-024 phase 1 part 3; a reader from before part 2 speaks 1, today's ids).
+PROTOCOL = 2
+OLDEST_PROTOCOL = 2
 # What a reader makes, whose settings and pauses it's told.
 READER_MAKES = (*MADE_AT_SCAN, *FROM_ORIGINALS)
 

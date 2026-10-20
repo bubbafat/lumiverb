@@ -9,6 +9,7 @@ from datetime import timedelta
 from sqlalchemy import func, insert, text
 from sqlmodel import Session, select
 
+from src.producers.names import SCENES, SCENE_DESCRIPTIONS
 from src.shared.utils import utcnow
 from src.server.models.tenant import (
     VideoIndexChunk,
@@ -85,7 +86,7 @@ class VideoSceneRepository:
         dropped with its chunks (None when no chunks were dropped). Commits."""
         row = self._session.execute(text(
             "SELECT a.video_indexed, l.producer, l.producer_version, l.settings_hash"
-            " FROM assets a LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = 'scenes'"
+            f" FROM assets a LEFT JOIN artifact_lineage l ON l.asset_id = a.asset_id AND l.artifact = '{SCENES}'"
             " WHERE a.asset_id = :a FOR UPDATE OF a"), {"a": asset_id}).first()
         if row is None or not row.video_indexed or (row.producer, row.producer_version, row.settings_hash) == (
                 made["producer"], str(made.get("version") or ""), made.get("settings_hash")):
@@ -129,7 +130,7 @@ class VideoSceneRepository:
         self._session.execute(text("UPDATE video_scenes SET staged = NULL WHERE asset_id = :a AND staged = 'found'"),
                               {"a": asset_id})
         if described is not None:
-            lineage.record(self._session, asset_id, "scene_vision", described, commit=False)
+            lineage.record(self._session, asset_id, SCENE_DESCRIPTIONS, described, commit=False)
         library_id = self._session.execute(text("SELECT library_id FROM assets WHERE asset_id = :a"),
                                            {"a": asset_id}).scalar()
         self._session.commit()

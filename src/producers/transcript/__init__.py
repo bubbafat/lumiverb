@@ -16,7 +16,7 @@ MAKES = Data(
 
 PRODUCER = ProducerSpec(
     makes=MAKES, reads=(names.ANALYSIS_PROXY, names.METADATA),
-    artifact="transcript", producer="whisper", version="1", media=VIDEO, unit="second", title="Transcripts", order=110,
+    artifact=names.TRANSCRIPT, version="1", media=VIDEO, unit="second", title="Transcripts", order=110,
     # The probe's duration first.
     applies="a.media_type = 'video' AND a.duration_sec IS NOT NULL",
     made="a.has_transcript IS NOT NULL",
@@ -24,6 +24,6 @@ PRODUCER = ProducerSpec(
         Setting("model", "small", "Model", kind="text", fixed=ITS_JOBS),
         Setting("vad_min_silence_ms", 500, "Shortest silence skipped", minimum=100, maximum=2000, unit="ms"),
     ),
-    kind="transcript", flag="missing_transcription", run="src.producers.transcript.work:Transcript",
+    run="src.producers.transcript.work:Transcript",
     pool=TRANSCRIPTS,
 )

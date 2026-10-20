@@ -166,7 +166,7 @@ def test_complete_chunk(video_api_client: tuple[TestClient, str, str, str, str])
                     "rep_frame_sha256": rep_frame_sha256,
                 }
             ],
-            "lineage": made("scenes"),
+            "lineage": made("lumiverb.video.scenes"),
         },
         headers=auth,
     )
@@ -262,7 +262,7 @@ def test_get_scenes_after_completion(video_api_client: tuple[TestClient, str, st
                     "tags": ["outdoor"],
                 }
             ],
-            "lineage": made("scenes"),
+            "lineage": made("lumiverb.video.scenes"),
         },
         headers=auth,
     )
@@ -292,7 +292,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
             "worker_id": chunk["worker_id"],
             "scenes": [{"scene_index": 0, "start_ms": 0, "end_ms": 5000, "rep_frame_ms": 2500,
                         "description": "Initial", "tags": []}],
-            "lineage": made("scenes"),
+            "lineage": made("lumiverb.video.scenes"),
         },
         headers=auth,
     )
@@ -311,7 +311,7 @@ def test_update_scene_vision(video_api_client: tuple[TestClient, str, str, str, 
             "model_version": "1",
             "description": "AI-generated description of the scene",
             "tags": ["indoor", "people"],
-            "lineage": made("scene_vision"),
+            "lineage": made("lumiverb.video.scene_descriptions"),
         },
         headers=auth,
     )
@@ -342,7 +342,7 @@ def _complete(client: TestClient, auth: dict, work: dict, starts: list[int]) -> 
         "worker_id": work["worker_id"],
         # A client that numbered them itself sent 0, 1, ... again on resume: ignored.
         "scenes": [{"scene_index": 0, "start_ms": s, "end_ms": s + 1000, "rep_frame_ms": s} for s in starts],
-        "lineage": made("scenes")})
+        "lineage": made("lumiverb.video.scenes")})
     assert r.status_code == 200, r.text
 
 
