@@ -47,6 +47,15 @@ SCOPES = ("account", "server")
 MEMORY_MB, MEMORY_MB_MAX = 1024, 16384
 DISK_MB, DISK_MB_MAX = 1000, 1_000_000
 TEXT_MAX = 4000
+BATCH, BATCH_MAX = 50, 500  # clips a work request, by default and at most
+# The fields each part of a manifest may have: any other is refused (docs/writing-a-plugin.md lists them).
+FIELDS = ("id", "version", "protocol", "title", "description", "author", "homepage", "run", "acknowledgment",
+          "credit", "downloads", "data_version", "internet", "memory_mb", "disk_mb", "check_settings", "settings",
+          "work", "lookups")
+SETTING_FIELDS = ("key", "type", "default", "label", "help", "minimum", "maximum", "unit", "pattern", "max_length",
+                  "choices", "scope", "advanced", "remakes")
+WORK_FIELDS = ("title", "version", "media", "inputs", "batch", "outputs")
+OUTPUT_FIELDS = ("key", "kind", "label", "searchable", "empty", "was")
 _TOO_BIG = 256 * 1024  # bytes: a manifest is a page of JSON
 _ID = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 _KEY = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
@@ -404,8 +413,7 @@ def _acknowledgment(data: Any, where: str, problems: list[str]) -> Acknowledgmen
 
 
 def _setting(data: Any, where: str, problems: list[str]) -> PluginSetting | None:
-    f = _Fields(data, where, problems, ("key", "type", "default", "label", "help", "minimum", "maximum", "unit",
-                                        "pattern", "max_length", "choices", "scope", "advanced", "remakes"))
+    f = _Fields(data, where, problems, SETTING_FIELDS)
     key = f.text("key", required=True, most=40)
     if key and not _KEY.match(key):
         f.bad("key", "lowercase letters, digits and underscores, starting with a letter")
@@ -469,14 +477,14 @@ def _setting(data: Any, where: str, problems: list[str]) -> PluginSetting | None
 
 
 def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
-    f = _Fields(data, where, problems, ("title", "version", "media", "inputs", "batch", "outputs"))
+    f = _Fields(data, where, problems, WORK_FIELDS)
     media = f.names("media", MEDIA) or MEDIA
     inputs = f.names("inputs", tuple(INPUTS))
     if "preview" in inputs and media != ("image",):
         f.bad("inputs", "preview is a photo's: its media is [\"image\"]")
     outputs: list[Output] = []
     for at, item in f.items("outputs", most=20):
-        o = _Fields(item, at, problems, ("key", "kind", "label", "searchable", "empty", "was"))
+        o = _Fields(item, at, problems, OUTPUT_FIELDS)
         key = o.text("key", required=True, most=40)
         if key and not _KEY.match(key):
             o.bad("key", "lowercase letters, digits and underscores, starting with a letter")
@@ -501,7 +509,7 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
     if set(was) & keys or len(set(was)) != len(was):
         f.bad("outputs", "a key one output was saved under (its was) is no other output's key, nor two outputs' was")
     return WorkSpec(title=f.text("title", required=True, most=80), version=f.version("version"), media=media,
-                    inputs=inputs, batch=f.whole("batch", 50, 1, 500), outputs=tuple(outputs))
+                    inputs=inputs, batch=f.whole("batch", BATCH, 1, BATCH_MAX), outputs=tuple(outputs))
 
 
 def _run(data: Any, folder: Path | None, problems: list[str]) -> tuple[str, ...]:
@@ -522,10 +530,7 @@ def _run(data: Any, folder: Path | None, problems: list[str]) -> tuple[str, ...]
 def parse(data: Any, folder: Path | None = None) -> Manifest:
     """A manifest from its JSON; ManifestError naming every problem. folder: where it is, to find its program in."""
     problems: list[str] = []
-    f = _Fields(data, "", problems, (
-        "id", "version", "protocol", "title", "description", "author", "homepage", "run", "acknowledgment",
-        "credit", "downloads", "data_version", "internet", "memory_mb", "disk_mb", "check_settings", "settings",
-        "work", "lookups"))
+    f = _Fields(data, "", problems, FIELDS)
     plugin_id = f.text("id", required=True, most=40)
     if plugin_id and not _ID.match(plugin_id):
         f.bad("id", "lowercase letters, digits and dashes, starting with a letter (it's in URLs and commands)")

@@ -318,6 +318,9 @@ Processing** like any other: how many clips it has made, what's left and
 why anything waits (its plug-in not running, say). Within half a minute of
 installing one, it starts on every clip in the accounts where it's on.
 
+To write one, read [Writing a plug-in](docs/writing-a-plugin.md): the
+manifest, how it's run, and every request it answers.
+
 **Place names (GeoNames)** is one of Lumiverb's own plug-ins: it comes
 installed, off until an account's admin turns it on (accepting GeoNames'
 CC BY 4.0 license). Turned on, it downloads about 600 MB of GeoNames' lists

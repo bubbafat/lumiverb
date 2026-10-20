@@ -118,11 +118,11 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "a plug-in's input (protocol 1)": {
         'faces': ('tests/test_plugin_manifest.py',),
-        'location': (
+        'location': ('docs/writing-a-plugin.md', 
             'docs/cursor-api.md', 'docs/data-names.md', 'src/plugins/manifest.py', 'tests/test_plugin_install.py',
             'tests/test_plugin_manifest.py',
         ),
-        'preview': (
+        'preview': ('docs/writing-a-plugin.md', 
             'docs/cursor-api.md', 'docs/data-names.md', 'src/plugins/manifest.py', 'src/producers/plugin_work.py',
             'tests/test_plugin_install.py', 'tests/test_plugin_manifest.py',
         ),
@@ -477,7 +477,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'plugin_geonames': ('tests/test_geonames_plugin_acceptance.py',),
     },
     'whose an error is': {
-        'clip': (
+        'clip': ('docs/writing-a-plugin.md', 
             'src/own_plugins/geonames/geonames.py', 'src/producers/plugin_work.py', 'src/producers/runner.py',
             'src/server/scheduler/service.py', 'tests/plugins/facts/facts.py', 'tests/test_geonames_program.py',
         ),
