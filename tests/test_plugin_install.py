@@ -241,6 +241,29 @@ def test_what_isnt_a_plug_in_or_isnt_its_own_is_refused(install, machine, tmp_pa
 
 
 @pytest.mark.slow
+def test_a_zip_on_this_machine_is_installed_as_its_folder_is(install, machine, tmp_path, capsys):  # noqa: F811
+    """A release's .zip (its one folder at the top), its SHA-256 said, and checked when given. A URL's is
+    downloaded then installed the same way (tests/test_plugin_fetch.py)."""
+    import hashlib
+    import zipfile
+
+    client, robert, _ = install
+    env, data = machine
+    folder = _hello(tmp_path)
+    archive = tmp_path / "hello-1.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                zf.write(path, f"hello-1/{path.relative_to(folder)}")
+    own = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert cli.main(["plugins", "install", str(archive), "--off", "--yes", "--sha256", "0" * 64, "--env", env]) == 1
+    assert f"Its SHA-256 is {own}" in capsys.readouterr().err and "hello" not in _listed(client, robert)
+    assert cli.main(["plugins", "install", str(archive), "--off", "--yes", "--sha256", own, "--env", env]) == 0
+    assert f"SHA-256 {own}" in capsys.readouterr().out
+    assert "hello" in _listed(client, robert) and (data / "plugins" / "hello" / "program" / "hello.py").is_file()
+
+
+@pytest.mark.slow
 def test_uninstalling_takes_it_away_and_the_log_keeps_everything(install, machine, tmp_path, monkeypatch):  # noqa: F811
     client, robert, _ = install
     env, data = machine

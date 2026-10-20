@@ -23,6 +23,14 @@ A plug-in is a folder: its program, anything the program needs, and `lumiverb-pl
 lumiverb-server plugins install FOLDER --on
 ```
 
+It can also be a `.zip` of that folder, on the machine or at an https URL, its manifest at the top or in the one folder at the top (as a release's `.zip` has it):
+
+```
+lumiverb-server plugins install https://example.com/weather-1.0.zip --on --sha256 SHA256
+```
+
+A download is HTTPS only (its redirects too), and its SHA-256 is said, and checked when given. The `.zip` is unpacked into a folder of its own first, refusing a name outside it, a link, or anything but files and folders; a file it marks executable stays so. Then it's installed as a folder is.
+
 `--on` turns it on by default for every account that hasn't chosen (`--off`: each account's admin turns it on). Lumiverb reads the manifest before any of the plug-in's code runs, shows what it reads and reaches, and asks the server admin to accept that. Then it copies the folder into the install (`DATA_DIR/plugins/<id>/program/`), read-only, swapped in whole. A folder holds at most 4 GiB and 100,000 files.
 
 ## The manifest
