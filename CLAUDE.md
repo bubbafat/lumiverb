@@ -129,7 +129,7 @@ Standard incantations work (`uvicorn src.server.api.main:app --reload`,
 - Multipart uploads. No webhooks, no source serving. Rate limiting only on login and password reset (`api/rate_limit.py`).
 - Routes match in **definition order** — static before parameterized.
 - **The API requires the user's say** for surprising outcomes: the request carries the choice (e.g. `remove_from_projects`, `with_clips`) or gets a 409 in the error envelope with the facts, so every client must ask (`api/errors.py` `DecisionRequiredError`; cursor-api.md "Decisions the API requires").
-- Deleting goes delete → trash → restore | delete forever, for assets and projects (libraries have a trash, no restore yet).
+- Deleting goes delete → trash → restore | delete forever, for assets, projects and libraries (a library's: `DELETE /v1/libraries/{id}`, `POST .../restore`, `POST /v1/libraries/empty-trash`).
 
 ---
 
