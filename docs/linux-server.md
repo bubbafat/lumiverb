@@ -229,7 +229,7 @@ sudo /opt/lumiverb/.venv/bin/lumiverb-server restore --env /etc/lumiverb/env BAC
 sudo systemctl start lumiverb-api lumiverb-scheduler
 ```
 
-`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). Restore refuses while a client is connected to the databases (the API and the scheduler name themselves: lumiverb-api, lumiverb-scheduler; PostgreSQL's own workers, such as autovacuum, don't count, and one closing gets 3 seconds to go), backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, and migrates to this version. Search is in the restored databases: there's nothing to remake.
+`lumiverb-server backup --env /etc/lumiverb/env` makes one now (`--before-upgrade`: an upgrade's, of which the 3 newest are kept however old). An update (`update.sh`) makes one itself before migrating, when the new version has anything to migrate (`backup --if-migrating`, as the service user, into the backups folder or else `DATA_DIR/backups`); one that can't be made is a warning in the update's log, and the update goes on. Restore refuses while a client is connected to the databases (the API and the scheduler name themselves: lumiverb-api, lumiverb-scheduler; PostgreSQL's own workers, such as autovacuum, don't count, and one closing gets 3 seconds to go), backs up what's there first (so it can be undone), restores each database beside the live one and swaps it in only once whole, and migrates to this version. Search is in the restored databases: there's nothing to remake.
 
 ## Where previews live
 
