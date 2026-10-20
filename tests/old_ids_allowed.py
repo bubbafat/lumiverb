@@ -147,7 +147,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         'exiftool': ('README.md', 'src/server/config.py',),
         'ffprobe': (
             'README.md', 'src/processing/ingest.py', 'src/processing/video/analysis_proxy.py',
-            'src/processing/video/audio.py', 'src/processing/video/clip_extractor.py', 'src/processing/video/probe.py',
+            'src/processing/video/audio.py', 'src/processing/video/probe.py',
             'src/processing/video/video_scanner.py', 'src/server/api/routers/playback.py',
             'src/server/uploaded_video.py', 'tests/test_analysis_proxy_render.py',
             'tests/test_browser_playable_video.py', 'tests/test_ingest_dimensions.py',
