@@ -18,7 +18,12 @@ from sqlmodel import Session
 from src.server.config import get_settings
 from src.server.database import get_control_engine
 from src.shared.utils import utcnow
-from src.server.repository.control_plane import PasswordResetTokenRepository, RevokedTokenRepository, UserRepository
+from src.server.repository.control_plane import (
+    PasswordResetTokenRepository,
+    RevokedTokenRepository,
+    TenantRepository,
+    UserRepository,
+)
 from src.server.api.rate_limit import login_limiter, forgot_password_limiter, reset_password_limiter
 from ulid import ULID
 
@@ -90,6 +95,12 @@ def _issue_jwt(user, jwt_secret: str, *, refresh_exp: int | None = None) -> str:
     return jwt.encode(payload, jwt_secret, algorithm=JWT_ALGORITHM)
 
 
+def _account_live(session: Session, user) -> None:
+    """403 account_deleted for someone whose account the server admin deleted: nobody signs in to it again."""
+    if TenantRepository(session).gone(user.tenant_id):
+        raise HTTPException(status_code=403, detail="This account was deleted")
+
+
 def token_user_is_current(user, claims: dict) -> bool:
     """The token was issued to this user as they are now: same tenant and
     token version. A user deleted, given another role or with a reset
@@ -128,6 +139,7 @@ def login(
 
     if not bcrypt.checkpw(password, user.password_hash.encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    _account_live(session, user)  # after the password: said only to someone who knows it
 
     token = _issue_jwt(user, settings.jwt_secret)
     user_repo.update_last_login(user.user_id)
@@ -182,6 +194,7 @@ def refresh_token(request: Request, session: Annotated[Session, Depends(_get_db)
     user = UserRepository(session).get_by_id(str(claims.get("sub", "")))
     if not token_user_is_current(user, claims):
         raise HTTPException(status_code=401, detail="Token has been revoked")
+    _account_live(session, user)
 
     # Revoke the old token so it can't be refreshed again (only one refresh wins).
     if not revoked_repo.revoke(old_jti):
@@ -317,6 +330,7 @@ def join(
     if consumed is None:
         raise ApiError(400, "invite_not_valid", INVITE_NOT_VALID)
     user, _ = consumed
+    _account_live(session, user)
     UserRepository(session).update_last_login(user.user_id)
     return LoginResponse(access_token=_issue_jwt(user, settings.jwt_secret))
 

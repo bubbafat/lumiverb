@@ -122,6 +122,12 @@ def test_delete_tenant_soft_deletes(admin_client: TestClient) -> None:
         f"/v1/admin/tenants/{tenant_id}",
         headers={"Authorization": "Bearer test-admin-secret"},
     )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "confirm_delete_account", "its name asked first"
+    r = admin_client.delete(
+        f"/v1/admin/tenants/{tenant_id}",
+        params={"confirm": "ToDelete"},
+        headers={"Authorization": "Bearer test-admin-secret"},
+    )
     assert r.status_code == 204
 
     list_r = admin_client.get(
@@ -181,10 +187,12 @@ def test_create_key_soft_deleted_tenant_returns_404(admin_client: TestClient) ->
     )
     assert create.status_code == 200
     tenant_id = create.json()["tenant_id"]
-    admin_client.delete(
+    r = admin_client.delete(
         f"/v1/admin/tenants/{tenant_id}",
+        params={"confirm": "ToDeleteForKeys"},
         headers={"Authorization": "Bearer test-admin-secret"},
     )
+    assert r.status_code == 204
 
     r = admin_client.post(
         f"/v1/admin/tenants/{tenant_id}/keys",

@@ -301,7 +301,7 @@ def _propagate_faces_all_tenants() -> dict:
     paused: list[str] = []
 
     with get_control_session() as ctrl:
-        tenants = TenantRepository(ctrl).list_all()
+        tenants = TenantRepository(ctrl).list_live()
 
     for tenant in tenants:
         try:
@@ -337,7 +337,7 @@ def _purge_expired_trash_all_tenants() -> dict:
     totals = {"clips": 0, "libraries": 0, "projects": 0}
     paused: list[str] = []
     with get_control_session() as ctrl:
-        tenants = TenantRepository(ctrl).list_all()
+        tenants = TenantRepository(ctrl).list_live()
     for tenant in tenants:
         try:
             with get_tenant_session(tenant.tenant_id) as session:
@@ -459,7 +459,7 @@ def _run_sweep_all_tenants(force: bool = False) -> dict:
     totals = {"synced": 0, "failed": 0, "transcripts_synced": 0, "transcripts_failed": 0, "facts_synced": 0}
 
     with get_control_session() as control_session:
-        tenants = TenantRepository(control_session).list_all()
+        tenants = TenantRepository(control_session).list_live()
 
     for tenant in tenants:
         try:
@@ -511,7 +511,7 @@ def _tenant_ids(scope: UpkeepScope) -> list[str]:
     from src.server.repository.control_plane import TenantRepository
 
     with get_control_session() as ctrl:
-        return [t.tenant_id for t in TenantRepository(ctrl).list_all()]
+        return [t.tenant_id for t in TenantRepository(ctrl).list_live()]
 
 
 @router.post("", response_model=UpkeepResult)

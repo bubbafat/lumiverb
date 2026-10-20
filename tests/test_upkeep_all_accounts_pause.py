@@ -43,7 +43,7 @@ def _accounts():
     def control_session():
         yield MagicMock()
 
-    tenants = [SimpleNamespace(tenant_id=t) for t in (PAUSED, BROKEN, RUNNING)]
+    tenants = [SimpleNamespace(tenant_id=t, status="active") for t in (PAUSED, BROKEN, RUNNING)]
     with patch("src.server.database.get_control_session", control_session), \
             patch("src.server.database.get_tenant_session", tenant_session), \
             patch("src.server.repository.control_plane.TenantRepository.list_all", return_value=tenants), \

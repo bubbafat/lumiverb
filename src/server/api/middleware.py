@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from src.server.api.dependencies import is_install_key
 from src.server.config import get_settings
 from src.server.database import get_control_session
-from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, UserRepository
+from src.server.repository.control_plane import ApiKeyRepository, PublicProjectRepository, PublicLibraryRepository, RevokedTokenRepository, TenantDbRoutingRepository, TenantRepository, UserRepository
 from src.server.repository.library_roles import MakerGoneError, person_of_key, person_of_user
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def _routed(session, pub) -> str | None:
     """A public link's account database: its routing row, as for every other
     request (src/server/database.py tenant_database_url). None when there's
     no such link, or its account is gone."""
-    if pub is None:
+    if pub is None or TenantRepository(session).gone(pub.tenant_id):
         return None
     routing = TenantDbRoutingRepository(session).get_by_tenant_id(pub.tenant_id)
     return routing.connection_string if routing else None
@@ -134,6 +134,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                         if not token_user_is_current(user, claims):
                             return _error_response(401, "token_revoked", "Token has been revoked")
                         role = user.role
+                        if TenantRepository(session).gone(tenant_id):
+                            return _error_response(401, "account_deleted", "This account was deleted")
                         routing_repo = TenantDbRoutingRepository(session)
                         routing = routing_repo.get_by_tenant_id(tenant_id)
                     if routing is None:
@@ -162,6 +164,8 @@ class TenantResolutionMiddleware(BaseHTTPMiddleware):
                     person = person_of_key(api_key, UserRepository(session))
                 except MakerGoneError:
                     return _error_response(401, "unauthorized", "Invalid or revoked API key")
+                if TenantRepository(session).gone(api_key.tenant_id):
+                    return _error_response(401, "account_deleted", "This account was deleted")
                 key_repo.touch_last_used(api_key.key_id)
                 routing_repo = TenantDbRoutingRepository(session)
                 routing = routing_repo.get_by_tenant_id(api_key.tenant_id)

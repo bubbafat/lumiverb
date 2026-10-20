@@ -14,6 +14,10 @@ from src.server.models.control_plane import ApiKey, PasswordResetToken, PublicLi
 from ulid import ULID
 
 
+# An account deleted by the server admin: kept, never reached (TenantRepository.gone).
+DELETED = "deleted"
+
+
 class TenantRepository:
     """Repository for tenants table."""
 
@@ -71,6 +75,23 @@ class TenantRepository:
         """Return all tenants."""
         stmt = select(Tenant)
         return list(self._session.exec(stmt).all())
+
+    def list_live(self) -> list[Tenant]:
+        """Every account but those deleted (the server admin's DELETE /v1/admin/tenants): what's worked on."""
+        return [t for t in self.list_all() if t.status != DELETED]
+
+    def gone(self, tenant_id: str) -> bool:
+        """No such account, or a deleted one: nothing of it is reached, signed in, by a key or a public link."""
+        tenant = self.get_by_id(tenant_id)
+        return tenant is None or tenant.status == DELETED
+
+    def rename(self, tenant_id: str, name: str) -> None:
+        tenant = self.get_by_id(tenant_id)
+        if tenant is None:
+            raise ValueError(f"Tenant not found: {tenant_id}")
+        tenant.name = name
+        self._session.add(tenant)
+        self._session.commit()
 
     def update_status(self, tenant_id: str, status: str) -> Tenant:
         """Update tenant status and return the tenant."""
@@ -408,6 +429,11 @@ class UserRepository:
     def list_by_tenant(self, tenant_id: str) -> list[User]:
         stmt = select(User).where(User.tenant_id == tenant_id).order_by(User.created_at.asc())
         return list(self._session.exec(stmt).all())
+
+    def count_by_tenant(self) -> dict[str, int]:
+        """How many people each account has, by its id."""
+        rows = self._session.exec(select(User.tenant_id, func.count()).group_by(User.tenant_id)).all()
+        return {tenant_id: int(n) for tenant_id, n in rows}
 
     def count_admins(self, tenant_id: str) -> int:
         stmt = select(User).where(User.tenant_id == tenant_id).where(User.role == "admin")
