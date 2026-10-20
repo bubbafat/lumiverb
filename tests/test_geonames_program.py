@@ -173,7 +173,9 @@ def as_today(g: GeoNames, python: str, today: dict) -> None:
         assert [_as_found(p) for p in g.places(typed, limit)] == found, typed
     for n, ((lat, lon, sure, radius_km), said) in enumerate(zip(q["facts"], today["facts"], strict=True)):
         outputs = g.work([_clip(n, lat, lon, sure)], radius_km)[f"clip{n}"]["outputs"]
-        assert {k: (v["text"] if v else None) for k, v in outputs.items()} == said, (lat, lon, sure, radius_km)
+        text = {k: (v["text"] if v else None) for k, v in outputs.items()}
+        # Today's answers are the Lightbox's lines, At and Near: its landmark and town now (ADR-024 phase 2).
+        assert {"at": text.pop("landmark"), "near": text.pop("town"), **text} == said, (lat, lon, sure, radius_km)
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +220,9 @@ def test_its_manifest_asks_what_place_names_asked_and_says_what_it_does() -> Non
     assert (mirror.key, mirror.scope, mirror.default) == ("mirror", "server", "")
     # Both searched (Robert, 2026-10-19: people search by landmarks more than towns); work.version stays 1, so
     # nothing is made again for it: the search sweep writes what's saved again (plugin_outputs.searched_again).
-    assert [(o.key, o.searchable, o.empty) for o in m.work.outputs] == [("at", True, ""),
-                                                                        ("near", True, "Not near a town")]
-    assert (m.version, m.work.version) == ("2", "1")
+    assert [(o.key, o.searchable, o.empty) for o in m.work.outputs] == [("landmark", True, ""),
+                                                                        ("town", True, "Not near a town")]
+    assert (m.version, m.work.version) == ("3", "1"), "3: its outputs renamed (ADR-024 phase 2), nothing made again"
     assert (m.work.inputs, m.lookups) == (("location",), ("places",))
 
 
@@ -316,7 +318,7 @@ def test_a_list_of_an_older_version_answers_searches_while_the_new_one_is_built(
             "clip0": {"error": {"whose": "plugin", "message": "A newer place list is being fetched"}}}, "work waits"
         mirror.release()
         g.until_ready()
-        assert g.work([_clip(0, *lists.PARIS)])["clip0"]["outputs"]["near"] == {"text": "Paris, Île-de-France, France"}
+        assert g.work([_clip(0, *lists.PARIS)])["clip0"]["outputs"]["town"] == {"text": "Paris, Île-de-France, France"}
     finally:
         g.stop()
         mirror.close()
@@ -428,8 +430,8 @@ def test_a_lookup_is_answered_while_it_works_through_a_batch(data, site) -> None
         worker.start()
         assert [p["name"] for p in g.places("zurich")] == ["Zürich", "Zürich (Kreis 7)"]
         worker.join(120)
-        assert len(done) == 200 and done["clip0"]["outputs"] == {"at": {"text": "Tour Eiffel"},
-                                                                 "near": {"text": "Paris, Île-de-France, France"}}
+        assert len(done) == 200 and done["clip0"]["outputs"] == {"landmark": {"text": "Tour Eiffel"},
+                                                                 "town": {"text": "Paris, Île-de-France, France"}}
     finally:
         g.stop()
 
@@ -453,8 +455,8 @@ def test_what_lumiverb_wont_show_is_cleaned_or_cut_and_what_it_says_passes_lumiv
         made = g.work([_clip(0, 35.2, 35.2), _clip(1, 35.3, 35.3)], radius_km=1)
         for clip in made.values():
             checked_outputs(g.manifest.work, clip["outputs"])  # and every fact
-        assert made["clip0"]["outputs"]["near"]["text"].endswith("…") and len(made["clip0"]["outputs"]["near"]["text"]) <= 200
-        assert made["clip1"]["outputs"]["at"] == {"text": "Tower iof/i Tags, Gizascript, Longland"}
+        assert made["clip0"]["outputs"]["town"]["text"].endswith("…") and len(made["clip0"]["outputs"]["town"]["text"]) <= 200
+        assert made["clip1"]["outputs"]["landmark"] == {"text": "Tower iof/i Tags, Gizascript, Longland"}
     finally:
         g.stop()
         mirror.close()
@@ -466,9 +468,9 @@ def test_a_clip_whose_location_it_cant_read_is_that_clips_error(data, site) -> N
         g.until_ready()
         made = g.work([_clip(0, *lists.PARIS), {"id": "odd", "location": {"lat": "north", "lon": 2}},
                        {"id": "nowhere"}])
-        assert made["clip0"]["outputs"]["near"] == {"text": "Paris, Île-de-France, France"}
+        assert made["clip0"]["outputs"]["town"] == {"text": "Paris, Île-de-France, France"}
         assert made["odd"]["error"]["whose"] == "clip" and "north" in made["odd"]["error"]["message"]
-        assert made["nowhere"] == {"outputs": {"at": None, "near": None}}
+        assert made["nowhere"] == {"outputs": {"landmark": None, "town": None}}
         assert g.places("x" * 300) == [] and g.post("/v1/lookups/places", {"id": "nope"}) == {"places": []}
         assert g.post("/v1/lookups/places", {"id": "6254976"})["places"][0]["kind"] == "monument"
     finally:

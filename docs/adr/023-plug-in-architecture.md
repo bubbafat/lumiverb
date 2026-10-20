@@ -152,6 +152,8 @@ A clip's outputs are shown and searched only while it's one of the work's media 
 
 Later kinds, each when a plug-in needs it: `tags` (words a clip is found and filtered by), `score` (a number in declared bounds, for sorting and filtering) and `suggestion` (a proposed location, capture time or name, shown as "Maybe: … Use this / No"; a person decides, and derived data never overwrites theirs, as ADR-016 requires).
 
+An output renamed in a newer version says the key it was saved under (`was`, ADR-024 phase 2): the search sweep renames what's saved under that, nothing made again.
+
 Outputs are kept by Lumiverb in the account's database (`plugin_outputs`: clip, plug-in, key, value, the inputs' hash, lineage). A plug-in has no storage in an account. Turning it off keeps its outputs and hides them. Removing it from the server removes them, after the server admin is asked.
 
 ### Lookups: what it adds to a screen

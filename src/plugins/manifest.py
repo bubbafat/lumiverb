@@ -162,6 +162,9 @@ class Output:
     searchable: bool = False
     # What's shown under its label when it has nothing to say for a clip ("Not near a town"): never searched.
     empty: str = ""
+    # The key it was saved under before a newer version renamed it (ADR-024 phase 2): what's saved under that
+    # is renamed to this by the search sweep (plugin_outputs.renamed_again), nothing made again.
+    was: str = ""
 
 
 @dataclass(frozen=True)
@@ -473,7 +476,7 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
         f.bad("inputs", "preview is a photo's: its media is [\"image\"]")
     outputs: list[Output] = []
     for at, item in f.items("outputs", most=20):
-        o = _Fields(item, at, problems, ("key", "kind", "label", "searchable", "empty"))
+        o = _Fields(item, at, problems, ("key", "kind", "label", "searchable", "empty", "was"))
         key = o.text("key", required=True, most=40)
         if key and not _KEY.match(key):
             o.bad("key", "lowercase letters, digits and underscores, starting with a letter")
@@ -486,9 +489,17 @@ def _work(data: Any, where: str, problems: list[str]) -> WorkSpec:
         empty = " ".join(said.split())
         if said and not plain(empty, EMPTY_MAX):
             o.bad("empty", f"plain text (no HTML), up to {EMPTY_MAX} characters")
-        outputs.append(Output(key, kind, o.text("label", required=True, most=80), o.boolean("searchable"), empty))
+        was = o.text("was", most=40)
+        if was and (not _KEY.match(was) or was == key):
+            o.bad("was", "the key it had before: lowercase letters, digits and underscores, not its own")
+        outputs.append(Output(key, kind, o.text("label", required=True, most=80), o.boolean("searchable"), empty,
+                              was))
     if not outputs:
         f.bad("outputs", "at least one")
+    keys = {x.key for x in outputs}
+    was = [x.was for x in outputs if x.was]
+    if set(was) & keys or len(set(was)) != len(was):
+        f.bad("outputs", "a key one output was saved under (its was) is no other output's key, nor two outputs' was")
     return WorkSpec(title=f.text("title", required=True, most=80), version=f.version("version"), media=media,
                     inputs=inputs, batch=f.whole("batch", 50, 1, 500), outputs=tuple(outputs))
 

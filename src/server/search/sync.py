@@ -304,13 +304,15 @@ def reset_synced(session: Session) -> None:
 
 
 def _sync_facts(session: Session) -> int:
-    """Each installed plug-in's saved facts whose search text isn't what it searches now, written again: how
-    many (commits)."""
+    """Each installed plug-in's saved facts under a key it renamed, renamed first, then those whose search text
+    isn't what it searches now, written again: how many (commits)."""
     from src.server.plugin_catalog import installed
     from src.server.repository.plugin_outputs import PluginOutputRepository
 
     repo = PluginOutputRepository(session)
-    n = sum(repo.searched_again(pid, p.manifest.work) for pid, p in installed().items() if p.manifest.work)
+    working = [(pid, p.manifest.work) for pid, p in installed().items() if p.manifest.work]
+    n = sum(repo.renamed_again(pid, work) for pid, work in working)
+    n += sum(repo.searched_again(pid, work) for pid, work in working)
     session.commit()
     return n
 
