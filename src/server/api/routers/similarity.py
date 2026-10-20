@@ -14,6 +14,7 @@ from src.server.api.dependencies import get_tenant_session
 from src.server.api.errors import ApiError
 from src.server.api.library_access import names
 from src.server.api.limits import MAX_IMAGE_B64, MAX_SIMILAR, MAX_SIMILAR_OFFSET
+from src.server.api.rate_limit import anonymous_search_limited
 from src.server.models.similarity import CameraSpec, DateRange, SimilarityScope
 from src.server.repository.assets import AssetEmbeddingRepository, AssetRepository
 from src.server.repository.libraries import LibraryRepository
@@ -109,7 +110,7 @@ class ImageSimilarityResponse(BaseModel):
     total: int
 
 
-@router.get("", response_model=SimilarityResponse)
+@router.get("", response_model=SimilarityResponse, dependencies=[Depends(anonymous_search_limited)])
 @names(sees=("query.asset_id", "query.library_id"))
 def find_similar(
     asset_id: str,

@@ -57,3 +57,14 @@ class RateLimiter:
 login_limiter = RateLimiter(max_requests=5, window_seconds=60)
 forgot_password_limiter = RateLimiter(max_requests=3, window_seconds=60)
 reset_password_limiter = RateLimiter(max_requests=5, window_seconds=60)
+# Searches by someone not signed in (a public library's or project's page): a person browsing asks a few a
+# minute (a page of results, its facets, more like this); a script asking without end is held to two a second.
+public_search_limiter = RateLimiter(max_requests=120, window_seconds=60)
+
+
+def anonymous_search_limited(request: Request) -> None:
+    """A route's dependency: a search from a public page (request.state.is_public_request, set by the
+    middleware for a caller who isn't signed in) counts against public_search_limiter, by address; 429 past it.
+    Signed in, nothing is counted."""
+    if getattr(request.state, "is_public_request", False):
+        public_search_limiter.check(request)
