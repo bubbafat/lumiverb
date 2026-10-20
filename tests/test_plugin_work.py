@@ -163,6 +163,9 @@ def test_its_work_makes_each_clips_facts_from_what_it_declares_and_nothing_else(
         "Facts", {"plugin_id": "facts", "title": "Facts", "on": True}, 2)
     assert [(x["key"], x["fixed"]) for x in row["fields"]] == [("word", "Set in Settings › Plug-ins")]
     assert _due(f) == [a, b], "not the clip with no location: it doesn't apply to that one"
+    assert row["counts"]["applicable"] == 2 and row["counts"]["lacking"] == [
+        {"name": "lumiverb.capture_time", "label": "date taken", "clips": 0},
+        {"name": "lumiverb.location", "label": "location", "clips": 1}], "counted apart, never missing"
     r = f.client.put("/v1/plugins/facts/server-settings", json={"settings": {"token": "s3cret"}}, headers=f.robert)
     assert r.status_code == 200, r.text
 

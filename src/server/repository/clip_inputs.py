@@ -62,6 +62,13 @@ _PARTS: dict[str, tuple[str, ...]] = {
 }
 # A clip without it isn't one the plug-in applies to.
 _HAS: dict[str, str] = {"location": SHOWS_LOCATION, "capture_time": "a.taken_at IS NOT NULL"}
+# Each of those, in a few words: "4,392 have no location".
+LACKING: dict[str, str] = {"location": "location", "capture_time": "date taken"}
+
+
+def has_sql(name: str) -> str | None:
+    """SQL on active_assets a: the clip has this input; None for one every clip has."""
+    return _HAS.get(name)
 
 
 def present_sql(inputs: Iterable[str]) -> str:

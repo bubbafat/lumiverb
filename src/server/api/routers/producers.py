@@ -154,6 +154,14 @@ def require_lineage(value: LineageIn | dict | str | None, artifact: str) -> dict
     return made
 
 
+class Lacking(BaseModel):
+    """Clips it doesn't apply to for want of what it reads (ADR-023): "4,392 have no location"."""
+
+    name: str  # what it reads (docs/data-names.md)
+    label: str  # in a few words: "location", "date taken"
+    clips: int
+
+
 class ProducerCounts(BaseModel):
     applicable: int  # clips it applies to
     current: int
@@ -165,6 +173,9 @@ class ProducerCounts(BaseModel):
     below: int = 0
     failing: int  # the last try failed (whether or not an older artifact exists)
     given_up: int = 0  # failing, and no longer tried (after 10 tries) until someone asks
+    # Clips of its media it doesn't apply to, by what they lack (an installed plug-in's: no location); not in
+    # applicable, never missing.
+    lacking: list[Lacking] = []
 
 
 class SettingField(BaseModel):
@@ -333,7 +344,8 @@ def list_producers(
             item.plugin["on"] = PluginRepository(session).is_on(item.plugin["plugin_id"])
         if counts:
             counted[artifact] = lineage.counts(session, artifact, want, library_id, asset_ids, within=visible)
-            item.counts = ProducerCounts(**counted[artifact])
+            item.counts = ProducerCounts(**counted[artifact], lacking=lineage.lacking(
+                session, artifact, library_id, asset_ids, within=visible))
         items.append(item)
     if counts:
         # What one producer waits for is another's count: every count first.

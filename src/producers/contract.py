@@ -218,6 +218,17 @@ class Data:
 
 
 @dataclass(frozen=True)
+class Lack:
+    """Clips a producer doesn't apply to for want of something they may never have (ADR-023: "4,392 have no
+    location"), which Settings → Processing counts: the name it reads, in a few words, and SQL on active_assets
+    a: a clip it would apply to but for lacking it."""
+
+    name: str
+    label: str  # "location": "4,392 have no location"
+    sql: str
+
+
+@dataclass(frozen=True)
 class ProducerSpec:
     # The name of what it makes (ADR-024: a lumiverb.* name; an installed plug-in's work, its plug-in's id). It's
     # also the producer recorded in lineage, the scheduler's job kind (its remakes': redo:<name>) and its work list.
@@ -265,6 +276,9 @@ class ProducerSpec:
     # The installed plug-in whose work it is (ADR-023: src/server/plugin_producers.py,
     # its applies only while that plug-in is on in the account). Lumiverb's own have none.
     plugin: str = ""
+    # What its clips may never have that it reads (an installed plug-in's location, its capture time): those
+    # without are counted apart (lineage.lacking), never as missing.
+    lacks: tuple[Lack, ...] = ()
     # Shown as a part of another producer (its artifact), not on its own:
     # Settings → Processing folds it into that producer's row.
     part_of: str = ""

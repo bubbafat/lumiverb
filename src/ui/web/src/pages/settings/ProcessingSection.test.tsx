@@ -458,6 +458,17 @@ describe("ProcessingSection", () => {
     expect((await row("Descriptions and tags")).textContent).toContain("Remaking 1 clip, after everything else.");
   });
 
+  it("says how many clips a producer skips for what they lack (ADR-023)", async () => {
+    producers = [producer({ counts: { applicable: 10, current: 10, stale: 0, missing: 0, failing: 0, lacking: [
+      { name: "lumiverb.capture_time", label: "date taken", clips: 0 },
+      { name: "lumiverb.location", label: "location", clips: 4392 },
+    ] } })];
+    renderSection();
+    const text = (await row("Descriptions and tags")).textContent;
+    expect(text).toContain("Not made for 4,392 that have no location.");
+    expect(text).not.toContain("date taken");
+  });
+
   it("shows why clips fail, and tries them again", async () => {
     producers = [producer({ counts: { applicable: 10, current: 6, stale: 0, missing: 1, failing: 3, given_up: 1 } })];
     failures = [

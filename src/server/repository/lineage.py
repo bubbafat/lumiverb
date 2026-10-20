@@ -324,6 +324,21 @@ def counts(session: Session, artifact: str, want: dict[str, Any], library_id: st
             "retrying": retrying}
 
 
+def lacking(session: Session, artifact: str, library_id: str | None = None, asset_ids: list[str] | None = None,
+            within: list[str] | None = None) -> list[dict[str, Any]]:
+    """The clips in sight it doesn't apply to for want of what it reads (its
+    lacks: ADR-023's "4,392 have no location"), each {name, label, clips},
+    in the order it declares them; [] for a producer that lacks nothing."""
+    lacks = PRODUCERS[artifact].lacks
+    if not lacks:
+        return []
+    row = session.execute(text(
+        "SELECT " + ", ".join(f"count(*) FILTER (WHERE {lack.sql})" for lack in lacks)
+        + f" FROM active_assets a WHERE {_scope_sql()}"
+    ), {"lib": library_id, "ids": asset_ids, "within": within}).one()
+    return [{"name": lack.name, "label": lack.label, "clips": int(n)} for lack, n in zip(lacks, row, strict=True)]
+
+
 def due_by_library(session: Session, artifact: str, want: dict[str, Any], library_ids: list[str], *,
                    redo: bool, asset_ids: list[str] | None = None) -> dict[str, int]:
     """Clips due in each of these libraries, as counts' due_new (and due_redo
